@@ -219,6 +219,107 @@ impl Entity {
     }
 }
 
+/// User intent - preserves raw input + structured understanding
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserIntent {
+    /// Raw user input (immutable)
+    pub raw_input: String,
+    /// Structured interpretation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub understood_as: Option<String>,
+    /// Key entities extracted
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub key_entities: Vec<Entity>,
+    /// Implicit expectations
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implicit_expectations: Vec<String>,
+    /// Timestamp
+    pub created_at: i64,
+}
+
+impl UserIntent {
+    /// Create from raw input
+    pub fn new(raw_input: impl Into<String>) -> Self {
+        Self {
+            raw_input: raw_input.into(),
+            understood_as: None,
+            key_entities: Vec::new(),
+            implicit_expectations: Vec::new(),
+            created_at: chrono::Utc::now().timestamp(),
+        }
+    }
+
+    /// Set structured understanding
+    pub fn understood_as(mut self, interpretation: impl Into<String>) -> Self {
+        self.understood_as = Some(interpretation.into());
+        self
+    }
+
+    /// Add an entity
+    pub fn with_entity(mut self, entity: Entity) -> Self {
+        self.key_entities.push(entity);
+        self
+    }
+
+    /// Add an implicit expectation
+    pub fn with_expectation(mut self, expectation: impl Into<String>) -> Self {
+        self.implicit_expectations.push(expectation.into());
+        self
+    }
+}
+
+/// Current goal in execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Goal {
+    /// Goal description
+    pub description: String,
+    /// Success criteria
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success_criteria: Option<String>,
+    /// Link to parent goal (for sub-goals)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_goal: Option<String>,
+    /// Goal status
+    pub status: GoalStatus,
+    /// Created timestamp
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub enum GoalStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Achieved,
+    Failed(String),
+    Superseded,
+}
+
+impl Goal {
+    /// Create a new goal
+    pub fn new(description: impl Into<String>) -> Self {
+        Self {
+            description: description.into(),
+            success_criteria: None,
+            parent_goal: None,
+            status: GoalStatus::Pending,
+            created_at: chrono::Utc::now().timestamp(),
+        }
+    }
+
+    /// Set success criteria
+    pub fn with_success_criteria(mut self, criteria: impl Into<String>) -> Self {
+        self.success_criteria = Some(criteria.into());
+        self
+    }
+
+    /// Set parent goal
+    pub fn with_parent(mut self, parent: impl Into<String>) -> Self {
+        self.parent_goal = Some(parent.into());
+        self
+    }
+}
+
 /// Tool call record for doom loop detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRecord {
@@ -287,5 +388,32 @@ mod tests {
         let entity = Entity::new("project", "Aether");
         assert_eq!(entity.entity_type, "project");
         assert_eq!(entity.value, "Aether");
+    }
+
+    #[test]
+    fn test_user_intent_creation() {
+        let intent = UserIntent::new("Help me deploy the project")
+            .understood_as("Deploy current project to remote server")
+            .with_entity(Entity::new("project", "Aether"))
+            .with_expectation("Don't break existing service");
+
+        assert_eq!(intent.raw_input, "Help me deploy the project");
+        assert_eq!(
+            intent.understood_as,
+            Some("Deploy current project to remote server".to_string())
+        );
+        assert_eq!(intent.key_entities.len(), 1);
+        assert_eq!(intent.implicit_expectations.len(), 1);
+    }
+
+    #[test]
+    fn test_goal_creation() {
+        let goal = Goal::new("Find project config files")
+            .with_success_criteria("Located Cargo.toml and verified build target")
+            .with_parent("Deploy project");
+
+        assert_eq!(goal.description, "Find project config files");
+        assert!(goal.success_criteria.is_some());
+        assert!(goal.parent_goal.is_some());
     }
 }
