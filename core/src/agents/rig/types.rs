@@ -164,6 +164,19 @@ pub struct ToolCallResult {
 
     /// Execution duration in milliseconds
     pub duration_ms: u64,
+
+    // === New fields for context retention ===
+    /// Result summary (human-readable)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+
+    /// Contribution to goal
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal_contribution: Option<String>,
+
+    /// Extracted knowledge fragments
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extracted_knowledge: Vec<crate::components::Knowledge>,
 }
 
 impl ToolCallResult {
@@ -181,6 +194,9 @@ impl ToolCallResult {
             success: true,
             error: None,
             duration_ms,
+            summary: None,
+            goal_contribution: None,
+            extracted_knowledge: Vec::new(),
         }
     }
 
@@ -198,7 +214,28 @@ impl ToolCallResult {
             success: false,
             error: Some(error.into()),
             duration_ms,
+            summary: None,
+            goal_contribution: None,
+            extracted_knowledge: Vec::new(),
         }
+    }
+
+    /// Set result summary
+    pub fn with_summary(mut self, summary: impl Into<String>) -> Self {
+        self.summary = Some(summary.into());
+        self
+    }
+
+    /// Set goal contribution
+    pub fn with_goal_contribution(mut self, contribution: impl Into<String>) -> Self {
+        self.goal_contribution = Some(contribution.into());
+        self
+    }
+
+    /// Add extracted knowledge
+    pub fn with_knowledge(mut self, knowledge: crate::components::Knowledge) -> Self {
+        self.extracted_knowledge.push(knowledge);
+        self
     }
 }
 
@@ -352,5 +389,19 @@ mod tests {
         assert_eq!(info.purpose, Some("Find configuration files to determine build method".to_string()));
         assert_eq!(info.expected_outcome, Some("List of config file paths".to_string()));
         assert_eq!(info.goal_relation, Some(GoalRelation::GathersInformation));
+    }
+
+    #[test]
+    fn test_tool_call_result_with_summary() {
+        use crate::components::Knowledge;
+
+        let result = ToolCallResult::success("call_123", "search_files", "Found 3 files", 150)
+            .with_summary("Located config files: Cargo.toml, .env, settings.json")
+            .with_goal_contribution("Config file locations confirmed")
+            .with_knowledge(Knowledge::new("config_path", "./Cargo.toml", "search_files"));
+
+        assert_eq!(result.summary, Some("Located config files: Cargo.toml, .env, settings.json".to_string()));
+        assert_eq!(result.goal_contribution, Some("Config file locations confirmed".to_string()));
+        assert_eq!(result.extracted_knowledge.len(), 1);
     }
 }
