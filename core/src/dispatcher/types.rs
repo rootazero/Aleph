@@ -191,6 +191,78 @@ impl ToolDiff {
     }
 }
 
+/// Structured metadata for enhanced tool descriptions
+///
+/// Groups all structured metadata that helps LLM make accurate
+/// tool selection decisions. This includes:
+/// - Precise capability enumeration
+/// - Explicitly unsuitable scenarios (prevent misuse)
+/// - Differentiation from similar tools
+/// - Typical use cases (positive examples)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StructuredToolMeta {
+    /// Core capabilities (precise enumeration)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<Capability>,
+
+    /// Explicitly unsuitable scenarios (prevent misuse)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_suitable_for: Vec<String>,
+
+    /// Differentiation from similar tools
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub differentiation: Vec<ToolDiff>,
+
+    /// Typical use cases (positive examples)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub use_when: Vec<String>,
+}
+
+impl StructuredToolMeta {
+    /// Check if this metadata is empty
+    pub fn is_empty(&self) -> bool {
+        self.capabilities.is_empty()
+            && self.not_suitable_for.is_empty()
+            && self.differentiation.is_empty()
+            && self.use_when.is_empty()
+    }
+
+    /// Format for LLM prompt
+    pub fn to_prompt(&self) -> String {
+        let mut parts = Vec::new();
+
+        if !self.capabilities.is_empty() {
+            let caps = self
+                .capabilities
+                .iter()
+                .map(|c| c.to_prompt())
+                .collect::<Vec<_>>()
+                .join("; ");
+            parts.push(format!("Can: {}", caps));
+        }
+
+        if !self.not_suitable_for.is_empty() {
+            parts.push(format!("NOT for: {}", self.not_suitable_for.join(", ")));
+        }
+
+        if !self.differentiation.is_empty() {
+            let diffs = self
+                .differentiation
+                .iter()
+                .map(|d| d.to_prompt())
+                .collect::<Vec<_>>()
+                .join("; ");
+            parts.push(diffs);
+        }
+
+        if !self.use_when.is_empty() {
+            parts.push(format!("Use when: {}", self.use_when.join("; ")));
+        }
+
+        parts.join(" | ")
+    }
+}
+
 impl ToolDefinition {
     /// Create a new tool definition
     #[allow(deprecated)]
@@ -701,6 +773,16 @@ pub struct UnifiedTool {
     /// Whether this tool was renamed due to a conflict
     #[serde(default)]
     pub was_renamed: bool,
+
+    // =========================================================================
+    // Structured Tool Description Fields (for LLM tool selection)
+    // =========================================================================
+    /// Structured metadata for enhanced tool descriptions
+    ///
+    /// Contains precise capability enumeration, differentiation from similar tools,
+    /// and usage guidance to help LLM make accurate tool selection decisions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_meta: Option<StructuredToolMeta>,
 }
 
 impl UnifiedTool {
@@ -743,6 +825,8 @@ impl UnifiedTool {
             // Conflict resolution defaults
             original_name: None,
             was_renamed: false,
+            // Structured description defaults
+            structured_meta: None,
         }
     }
 
@@ -896,6 +980,55 @@ impl UnifiedTool {
     /// Builder method: mark as renamed due to conflict
     pub fn with_was_renamed(mut self, renamed: bool) -> Self {
         self.was_renamed = renamed;
+        self
+    }
+
+    // =========================================================================
+    // Structured Tool Description Builder Methods (for LLM tool selection)
+    // =========================================================================
+
+    /// Builder method: add a capability
+    ///
+    /// Capabilities describe what this tool can do precisely.
+    /// Multiple capabilities can be added for tools with diverse functions.
+    pub fn with_capability(mut self, capability: Capability) -> Self {
+        let meta = self
+            .structured_meta
+            .get_or_insert_with(StructuredToolMeta::default);
+        meta.capabilities.push(capability);
+        self
+    }
+
+    /// Builder method: add a not-suitable-for scenario
+    ///
+    /// Explicitly states when NOT to use this tool, helping prevent misuse.
+    pub fn with_not_suitable_for(mut self, scenario: impl Into<String>) -> Self {
+        let meta = self
+            .structured_meta
+            .get_or_insert_with(StructuredToolMeta::default);
+        meta.not_suitable_for.push(scenario.into());
+        self
+    }
+
+    /// Builder method: add a differentiation from another tool
+    ///
+    /// Helps LLM distinguish this tool from similar tools.
+    pub fn with_differentiation(mut self, diff: ToolDiff) -> Self {
+        let meta = self
+            .structured_meta
+            .get_or_insert_with(StructuredToolMeta::default);
+        meta.differentiation.push(diff);
+        self
+    }
+
+    /// Builder method: add a use-when scenario
+    ///
+    /// Describes typical use cases (positive examples) for this tool.
+    pub fn with_use_when(mut self, scenario: impl Into<String>) -> Self {
+        let meta = self
+            .structured_meta
+            .get_or_insert_with(StructuredToolMeta::default);
+        meta.use_when.push(scenario.into());
         self
     }
 
@@ -1695,5 +1828,70 @@ mod tests {
             prompt,
             "vs search_content: this=matches names, that=matches content. Choose this when: know file name"
         );
+    }
+
+    // =========================================================================
+    // Task 7: StructuredToolMeta Tests
+    // =========================================================================
+
+    #[test]
+    fn test_unified_tool_with_structured_meta() {
+        let tool = UnifiedTool::new(
+            "builtin:search_files",
+            "search_files",
+            "Search for files by name pattern",
+            ToolSource::Builtin,
+        )
+        .with_capability(Capability::new("search", "file names", "project", "file paths"))
+        .with_not_suitable_for("searching file content")
+        .with_differentiation(ToolDiff::new(
+            "search_content",
+            "matches names",
+            "matches content",
+            "know file name",
+            "know content",
+        ))
+        .with_use_when("user mentions specific file name");
+
+        assert!(tool.structured_meta.is_some());
+        let meta = tool.structured_meta.unwrap();
+        assert_eq!(meta.capabilities.len(), 1);
+        assert_eq!(meta.not_suitable_for.len(), 1);
+        assert_eq!(meta.differentiation.len(), 1);
+        assert_eq!(meta.use_when.len(), 1);
+    }
+
+    #[test]
+    fn test_structured_tool_meta_is_empty() {
+        let meta = StructuredToolMeta::default();
+        assert!(meta.is_empty());
+
+        let meta_with_cap = StructuredToolMeta {
+            capabilities: vec![Capability::new("search", "files", "dir", "paths")],
+            ..Default::default()
+        };
+        assert!(!meta_with_cap.is_empty());
+    }
+
+    #[test]
+    fn test_structured_tool_meta_to_prompt() {
+        let meta = StructuredToolMeta {
+            capabilities: vec![Capability::new("search", "file names", "project", "file paths")],
+            not_suitable_for: vec!["searching file content".to_string()],
+            differentiation: vec![ToolDiff::new(
+                "search_content",
+                "matches names",
+                "matches content",
+                "know file name",
+                "know content",
+            )],
+            use_when: vec!["user mentions specific file name".to_string()],
+        };
+
+        let prompt = meta.to_prompt();
+        assert!(prompt.contains("Can:"));
+        assert!(prompt.contains("NOT for:"));
+        assert!(prompt.contains("vs search_content"));
+        assert!(prompt.contains("Use when:"));
     }
 }
