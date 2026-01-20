@@ -303,8 +303,8 @@ pub use crate::planner::{
 
 // Executor exports (unified 2-layer architecture)
 pub use crate::executor::{
-    ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult,
-    ToolCallRecord as ExecutorToolCallRecord,
+    ExecutionContext, ExecutionResult, ExecutorConfig, ExecutorError, TaskExecutionResult,
+    ToolCallRecord as ExecutorToolCallRecord, UnifiedExecutor,
 };
 
 // Event system exports (event-driven agentic loop)
