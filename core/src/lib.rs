@@ -68,6 +68,7 @@ pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 mod error;
 pub mod event; // NEW: Event-driven architecture for agentic loop
 mod event_handler;
+pub mod executor; // NEW: Unified executor for 2-layer architecture
 pub mod ffi; // FFI module - split AetherCore implementation
 pub mod generation;
 pub mod initialization {
@@ -298,6 +299,12 @@ pub use crate::generation::{
 // Planner exports (unified 2-layer architecture)
 pub use crate::planner::{
     ExecutionPlan, PlannedTask, PlannerConfig, PlannerError, ToolInfo, UnifiedPlanner,
+};
+
+// Executor exports (unified 2-layer architecture)
+pub use crate::executor::{
+    ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult,
+    ToolCallRecord as ExecutorToolCallRecord,
 };
 
 // Event system exports (event-driven agentic loop)
