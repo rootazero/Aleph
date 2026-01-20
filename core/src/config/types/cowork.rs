@@ -532,6 +532,14 @@ pub struct ModelRoutingConfigToml {
     /// Semantic cache configuration (P2 improvements)
     #[serde(default)]
     pub semantic_cache: SemanticCacheConfigToml,
+
+    /// A/B testing configuration (P3 improvements)
+    #[serde(default)]
+    pub ab_testing: ABTestingConfigToml,
+
+    /// Multi-model ensemble configuration (P3 improvements)
+    #[serde(default)]
+    pub ensemble: EnsembleConfigToml,
 }
 
 fn default_enable_pipelines() -> bool {
@@ -559,6 +567,8 @@ impl Default for ModelRoutingConfigToml {
             budget: super::dispatcher::BudgetConfigToml::default(),
             prompt_analysis: PromptAnalysisConfigToml::default(),
             semantic_cache: SemanticCacheConfigToml::default(),
+            ab_testing: ABTestingConfigToml::default(),
+            ensemble: EnsembleConfigToml::default(),
         }
     }
 }
@@ -724,6 +734,12 @@ impl ModelRoutingConfigToml {
 
         // Validate semantic cache configuration (P2 improvements)
         self.semantic_cache.validate()?;
+
+        // Validate A/B testing configuration (P3 improvements)
+        self.ab_testing.validate(available_profiles)?;
+
+        // Validate ensemble configuration (P3 improvements)
+        self.ensemble.validate(available_profiles)?;
 
         Ok(())
     }
@@ -2054,6 +2070,638 @@ fn default_async_storage() -> bool {
 }
 
 // =============================================================================
+// ABTestingConfigToml (P3)
+// =============================================================================
+
+/// A/B testing configuration from TOML
+///
+/// Configures A/B testing experiments for model routing decisions.
+///
+/// # Example TOML
+/// ```toml
+/// [cowork.model_routing.ab_testing]
+/// enabled = true
+/// max_concurrent_experiments = 10
+/// max_raw_outcomes = 100000
+///
+/// [[cowork.model_routing.ab_testing.experiments]]
+/// id = "opus-vs-sonnet-code"
+/// enabled = true
+/// traffic_percentage = 20
+/// [[cowork.model_routing.ab_testing.experiments.variants]]
+/// id = "control"
+/// model_override = "claude-opus"
+/// weight = 50
+/// [[cowork.model_routing.ab_testing.experiments.variants]]
+/// id = "treatment"
+/// model_override = "claude-sonnet"
+/// weight = 50
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ABTestingConfigToml {
+    /// Enable A/B testing
+    #[serde(default = "default_ab_testing_enabled")]
+    pub enabled: bool,
+
+    /// Maximum number of concurrent experiments
+    #[serde(default = "default_max_concurrent_experiments")]
+    pub max_concurrent_experiments: usize,
+
+    /// Maximum raw outcomes to retain per experiment
+    #[serde(default = "default_max_raw_outcomes")]
+    pub max_raw_outcomes: usize,
+
+    /// Minimum sample size before significance testing
+    #[serde(default = "default_min_sample_size")]
+    pub min_sample_size: usize,
+
+    /// Default significance level (alpha) for hypothesis testing
+    #[serde(default = "default_significance_level")]
+    pub significance_level: f64,
+
+    /// Experiments configuration
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub experiments: Vec<ExperimentConfigToml>,
+}
+
+impl Default for ABTestingConfigToml {
+    fn default() -> Self {
+        Self {
+            enabled: default_ab_testing_enabled(),
+            max_concurrent_experiments: default_max_concurrent_experiments(),
+            max_raw_outcomes: default_max_raw_outcomes(),
+            min_sample_size: default_min_sample_size(),
+            significance_level: default_significance_level(),
+            experiments: Vec::new(),
+        }
+    }
+}
+
+impl ABTestingConfigToml {
+    /// Validate A/B testing configuration
+    pub fn validate(&self, available_profiles: &[&str]) -> Result<(), String> {
+        if self.max_concurrent_experiments == 0 {
+            return Err("max_concurrent_experiments must be greater than 0".to_string());
+        }
+
+        if self.max_raw_outcomes == 0 {
+            return Err("max_raw_outcomes must be greater than 0".to_string());
+        }
+
+        if self.min_sample_size == 0 {
+            return Err("min_sample_size must be greater than 0".to_string());
+        }
+
+        if self.significance_level <= 0.0 || self.significance_level >= 1.0 {
+            return Err(format!(
+                "significance_level must be between 0.0 and 1.0 (exclusive), got {}",
+                self.significance_level
+            ));
+        }
+
+        // Check for duplicate experiment IDs
+        let mut seen_ids = std::collections::HashSet::new();
+        for exp in &self.experiments {
+            if !seen_ids.insert(&exp.id) {
+                return Err(format!("Duplicate experiment id: '{}'", exp.id));
+            }
+            exp.validate(available_profiles)?;
+        }
+
+        // Check concurrent experiment limit
+        let enabled_count = self.experiments.iter().filter(|e| e.enabled).count();
+        if enabled_count > self.max_concurrent_experiments {
+            return Err(format!(
+                "Too many enabled experiments ({}) exceeds max_concurrent_experiments ({})",
+                enabled_count, self.max_concurrent_experiments
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+/// Experiment configuration from TOML
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExperimentConfigToml {
+    /// Unique experiment identifier
+    pub id: String,
+
+    /// Whether experiment is enabled
+    #[serde(default = "default_experiment_enabled")]
+    pub enabled: bool,
+
+    /// Description of the experiment
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Percentage of traffic to include (0-100)
+    #[serde(default = "default_traffic_percentage")]
+    pub traffic_percentage: u8,
+
+    /// Assignment strategy: "user_id", "session_id", "request_id"
+    #[serde(default = "default_assignment_strategy")]
+    pub assignment_strategy: String,
+
+    /// Task intents to target (empty = all)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_intents: Vec<String>,
+
+    /// Metrics to track
+    #[serde(default = "default_tracked_metrics")]
+    pub metrics: Vec<String>,
+
+    /// Experiment variants
+    pub variants: Vec<VariantConfigToml>,
+
+    /// Start time (ISO 8601)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<String>,
+
+    /// End time (ISO 8601)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_time: Option<String>,
+}
+
+impl ExperimentConfigToml {
+    /// Validate experiment configuration
+    pub fn validate(&self, available_profiles: &[&str]) -> Result<(), String> {
+        if self.id.is_empty() {
+            return Err("Experiment id cannot be empty".to_string());
+        }
+
+        if self.traffic_percentage > 100 {
+            return Err(format!(
+                "Experiment '{}': traffic_percentage must be 0-100, got {}",
+                self.id, self.traffic_percentage
+            ));
+        }
+
+        let valid_strategies = ["user_id", "session_id", "request_id"];
+        if !valid_strategies.contains(&self.assignment_strategy.as_str()) {
+            return Err(format!(
+                "Experiment '{}': invalid assignment_strategy '{}'. Valid: {:?}",
+                self.id, self.assignment_strategy, valid_strategies
+            ));
+        }
+
+        if self.variants.is_empty() {
+            return Err(format!(
+                "Experiment '{}': at least one variant is required",
+                self.id
+            ));
+        }
+
+        if self.variants.len() < 2 {
+            return Err(format!(
+                "Experiment '{}': at least two variants are required for A/B testing",
+                self.id
+            ));
+        }
+
+        // Check for duplicate variant IDs
+        let mut seen_ids = std::collections::HashSet::new();
+        for variant in &self.variants {
+            if !seen_ids.insert(&variant.id) {
+                return Err(format!(
+                    "Experiment '{}': duplicate variant id '{}'",
+                    self.id, variant.id
+                ));
+            }
+            variant.validate(&self.id, available_profiles)?;
+        }
+
+        // Check weights sum to 100 (or at least > 0)
+        let total_weight: u32 = self.variants.iter().map(|v| v.weight as u32).sum();
+        if total_weight == 0 {
+            return Err(format!(
+                "Experiment '{}': total variant weights must be > 0",
+                self.id
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+/// Variant configuration from TOML
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariantConfigToml {
+    /// Unique variant identifier within experiment
+    pub id: String,
+
+    /// Model profile to use (overrides default routing)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
+
+    /// Weight for traffic distribution (relative to other variants)
+    #[serde(default = "default_variant_weight")]
+    pub weight: u8,
+
+    /// Whether this is the control variant
+    #[serde(default)]
+    pub is_control: bool,
+
+    /// Additional parameters to pass to model
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
+}
+
+impl VariantConfigToml {
+    /// Validate variant configuration
+    pub fn validate(&self, experiment_id: &str, available_profiles: &[&str]) -> Result<(), String> {
+        if self.id.is_empty() {
+            return Err(format!(
+                "Experiment '{}': variant id cannot be empty",
+                experiment_id
+            ));
+        }
+
+        // Validate model_override if specified
+        if let Some(ref model) = self.model_override {
+            let profile_set: std::collections::HashSet<&str> =
+                available_profiles.iter().copied().collect();
+            if !profile_set.contains(model.as_str()) {
+                return Err(format!(
+                    "Experiment '{}', variant '{}': model_override '{}' references unknown profile. Available: {:?}",
+                    experiment_id, self.id, model, available_profiles
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// A/B testing default functions
+fn default_ab_testing_enabled() -> bool {
+    false // Disabled by default
+}
+
+fn default_max_concurrent_experiments() -> usize {
+    10
+}
+
+fn default_max_raw_outcomes() -> usize {
+    100_000
+}
+
+fn default_min_sample_size() -> usize {
+    30
+}
+
+fn default_significance_level() -> f64 {
+    0.05
+}
+
+fn default_experiment_enabled() -> bool {
+    true
+}
+
+fn default_traffic_percentage() -> u8 {
+    10
+}
+
+fn default_assignment_strategy() -> String {
+    "user_id".to_string()
+}
+
+fn default_tracked_metrics() -> Vec<String> {
+    vec![
+        "latency".to_string(),
+        "cost".to_string(),
+        "success_rate".to_string(),
+    ]
+}
+
+fn default_variant_weight() -> u8 {
+    50
+}
+
+// =============================================================================
+// EnsembleConfigToml (P3)
+// =============================================================================
+
+/// Multi-model ensemble configuration from TOML
+///
+/// Configures ensemble execution for combining responses from multiple models.
+///
+/// # Example TOML
+/// ```toml
+/// [cowork.model_routing.ensemble]
+/// enabled = true
+/// default_mode = "best_of_n"
+/// default_timeout_secs = 60
+/// max_parallel_models = 5
+///
+/// [[cowork.model_routing.ensemble.strategies]]
+/// intent = "reasoning"
+/// mode = "consensus"
+/// models = ["claude-opus", "gpt-4o"]
+/// quality_threshold = 0.8
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnsembleConfigToml {
+    /// Enable ensemble execution
+    #[serde(default = "default_ensemble_enabled")]
+    pub enabled: bool,
+
+    /// Default ensemble mode: "disabled", "best_of_n", "voting", "consensus", "cascade"
+    #[serde(default = "default_ensemble_mode")]
+    pub default_mode: String,
+
+    /// Default timeout for parallel model execution (seconds)
+    #[serde(default = "default_ensemble_timeout")]
+    pub default_timeout_secs: u64,
+
+    /// Maximum number of models to run in parallel
+    #[serde(default = "default_max_parallel_models")]
+    pub max_parallel_models: usize,
+
+    /// Quality scorer to use: "length", "structure", "length_and_structure", "confidence"
+    #[serde(default = "default_quality_scorer")]
+    pub quality_scorer: String,
+
+    /// Minimum quality threshold for cascade early termination (0.0-1.0)
+    #[serde(default = "default_quality_threshold")]
+    pub quality_threshold: f64,
+
+    /// Consensus similarity threshold for voting/consensus modes (0.0-1.0)
+    #[serde(default = "default_consensus_threshold")]
+    pub consensus_threshold: f64,
+
+    /// Per-intent strategy configurations
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strategies: Vec<EnsembleStrategyConfigToml>,
+
+    /// Enable ensemble for high complexity prompts automatically
+    #[serde(default)]
+    pub high_complexity_ensemble: HighComplexityEnsembleConfigToml,
+}
+
+impl Default for EnsembleConfigToml {
+    fn default() -> Self {
+        Self {
+            enabled: default_ensemble_enabled(),
+            default_mode: default_ensemble_mode(),
+            default_timeout_secs: default_ensemble_timeout(),
+            max_parallel_models: default_max_parallel_models(),
+            quality_scorer: default_quality_scorer(),
+            quality_threshold: default_quality_threshold(),
+            consensus_threshold: default_consensus_threshold(),
+            strategies: Vec::new(),
+            high_complexity_ensemble: HighComplexityEnsembleConfigToml::default(),
+        }
+    }
+}
+
+impl EnsembleConfigToml {
+    /// Validate ensemble configuration
+    pub fn validate(&self, available_profiles: &[&str]) -> Result<(), String> {
+        let valid_modes = ["disabled", "best_of_n", "voting", "consensus", "cascade"];
+        if !valid_modes.contains(&self.default_mode.as_str()) {
+            return Err(format!(
+                "Invalid default_mode '{}'. Valid: {:?}",
+                self.default_mode, valid_modes
+            ));
+        }
+
+        if self.default_timeout_secs == 0 {
+            return Err("default_timeout_secs must be greater than 0".to_string());
+        }
+
+        if self.max_parallel_models == 0 {
+            return Err("max_parallel_models must be greater than 0".to_string());
+        }
+
+        let valid_scorers = ["length", "structure", "length_and_structure", "confidence", "relevance"];
+        if !valid_scorers.contains(&self.quality_scorer.as_str()) {
+            return Err(format!(
+                "Invalid quality_scorer '{}'. Valid: {:?}",
+                self.quality_scorer, valid_scorers
+            ));
+        }
+
+        if self.quality_threshold < 0.0 || self.quality_threshold > 1.0 {
+            return Err(format!(
+                "quality_threshold must be between 0.0 and 1.0, got {}",
+                self.quality_threshold
+            ));
+        }
+
+        if self.consensus_threshold < 0.0 || self.consensus_threshold > 1.0 {
+            return Err(format!(
+                "consensus_threshold must be between 0.0 and 1.0, got {}",
+                self.consensus_threshold
+            ));
+        }
+
+        // Validate strategies
+        for strategy in &self.strategies {
+            strategy.validate(available_profiles)?;
+        }
+
+        // Validate high complexity ensemble config
+        self.high_complexity_ensemble.validate(available_profiles)?;
+
+        Ok(())
+    }
+}
+
+/// Per-intent ensemble strategy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnsembleStrategyConfigToml {
+    /// Task intent to apply this strategy to
+    pub intent: String,
+
+    /// Ensemble mode for this intent
+    pub mode: String,
+
+    /// Models to use for ensemble (references model profile IDs)
+    pub models: Vec<String>,
+
+    /// Quality threshold override for this strategy
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_threshold: Option<f64>,
+
+    /// Quality scorer override
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_scorer: Option<String>,
+
+    /// Timeout override (seconds)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+impl EnsembleStrategyConfigToml {
+    /// Validate strategy configuration
+    pub fn validate(&self, available_profiles: &[&str]) -> Result<(), String> {
+        let profile_set: std::collections::HashSet<&str> =
+            available_profiles.iter().copied().collect();
+
+        if self.intent.is_empty() {
+            return Err("Strategy intent cannot be empty".to_string());
+        }
+
+        let valid_modes = ["disabled", "best_of_n", "voting", "consensus", "cascade"];
+        if !valid_modes.contains(&self.mode.as_str()) {
+            return Err(format!(
+                "Strategy '{}': invalid mode '{}'. Valid: {:?}",
+                self.intent, self.mode, valid_modes
+            ));
+        }
+
+        if self.models.is_empty() && self.mode != "disabled" {
+            return Err(format!(
+                "Strategy '{}': at least one model is required when mode is not 'disabled'",
+                self.intent
+            ));
+        }
+
+        for model in &self.models {
+            if !profile_set.contains(model.as_str()) {
+                return Err(format!(
+                    "Strategy '{}': model '{}' references unknown profile. Available: {:?}",
+                    self.intent, model, available_profiles
+                ));
+            }
+        }
+
+        if let Some(threshold) = self.quality_threshold {
+            if threshold < 0.0 || threshold > 1.0 {
+                return Err(format!(
+                    "Strategy '{}': quality_threshold must be between 0.0 and 1.0, got {}",
+                    self.intent, threshold
+                ));
+            }
+        }
+
+        if let Some(ref scorer) = self.quality_scorer {
+            let valid_scorers = ["length", "structure", "length_and_structure", "confidence", "relevance"];
+            if !valid_scorers.contains(&scorer.as_str()) {
+                return Err(format!(
+                    "Strategy '{}': invalid quality_scorer '{}'. Valid: {:?}",
+                    self.intent, scorer, valid_scorers
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// High complexity automatic ensemble configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HighComplexityEnsembleConfigToml {
+    /// Enable automatic ensemble for high complexity prompts
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Complexity threshold to trigger ensemble (0.0-1.0)
+    #[serde(default = "default_high_complexity_trigger")]
+    pub complexity_threshold: f64,
+
+    /// Ensemble mode for high complexity prompts
+    #[serde(default = "default_high_complexity_mode")]
+    pub mode: String,
+
+    /// Models to use for high complexity ensemble
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
+}
+
+impl Default for HighComplexityEnsembleConfigToml {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            complexity_threshold: default_high_complexity_trigger(),
+            mode: default_high_complexity_mode(),
+            models: Vec::new(),
+        }
+    }
+}
+
+impl HighComplexityEnsembleConfigToml {
+    /// Validate high complexity ensemble configuration
+    pub fn validate(&self, available_profiles: &[&str]) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        if self.complexity_threshold < 0.0 || self.complexity_threshold > 1.0 {
+            return Err(format!(
+                "high_complexity_ensemble.complexity_threshold must be between 0.0 and 1.0, got {}",
+                self.complexity_threshold
+            ));
+        }
+
+        let valid_modes = ["best_of_n", "voting", "consensus"];
+        if !valid_modes.contains(&self.mode.as_str()) {
+            return Err(format!(
+                "high_complexity_ensemble.mode must be one of {:?}, got '{}'",
+                valid_modes, self.mode
+            ));
+        }
+
+        if self.models.is_empty() {
+            return Err(
+                "high_complexity_ensemble.models cannot be empty when enabled".to_string()
+            );
+        }
+
+        let profile_set: std::collections::HashSet<&str> =
+            available_profiles.iter().copied().collect();
+        for model in &self.models {
+            if !profile_set.contains(model.as_str()) {
+                return Err(format!(
+                    "high_complexity_ensemble.models: '{}' references unknown profile. Available: {:?}",
+                    model, available_profiles
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// Ensemble default functions
+fn default_ensemble_enabled() -> bool {
+    false // Disabled by default
+}
+
+fn default_ensemble_mode() -> String {
+    "disabled".to_string()
+}
+
+fn default_ensemble_timeout() -> u64 {
+    60 // 60 seconds
+}
+
+fn default_max_parallel_models() -> usize {
+    5
+}
+
+fn default_quality_scorer() -> String {
+    "length_and_structure".to_string()
+}
+
+fn default_quality_threshold() -> f64 {
+    0.7
+}
+
+fn default_consensus_threshold() -> f64 {
+    0.6
+}
+
+fn default_high_complexity_trigger() -> f64 {
+    0.8
+}
+
+fn default_high_complexity_mode() -> String {
+    "consensus".to_string()
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -2654,5 +3302,310 @@ mod tests {
         assert!((limit.limit_usd - 50.0).abs() < 0.001);
         assert_eq!(limit.warning_thresholds.len(), 2);
         assert_eq!(limit.enforcement, crate::dispatcher::model_router::BudgetEnforcement::WarnOnly);
+    }
+
+    // =========================================================================
+    // ABTestingConfigToml Tests (P3)
+    // =========================================================================
+
+    #[test]
+    fn test_ab_testing_config_default() {
+        let config = ABTestingConfigToml::default();
+        assert!(!config.enabled);
+        assert_eq!(config.max_concurrent_experiments, 10);
+        assert_eq!(config.max_raw_outcomes, 100_000);
+        assert_eq!(config.min_sample_size, 30);
+        assert!((config.significance_level - 0.05).abs() < 0.001);
+        assert!(config.experiments.is_empty());
+    }
+
+    #[test]
+    fn test_ab_testing_config_validation() {
+        let mut config = ABTestingConfigToml::default();
+        let profiles: Vec<&str> = vec!["claude-opus", "claude-sonnet"];
+
+        // Default should be valid
+        assert!(config.validate(&profiles).is_ok());
+
+        // Invalid max_concurrent_experiments
+        config.max_concurrent_experiments = 0;
+        assert!(config.validate(&profiles).is_err());
+        config.max_concurrent_experiments = 10;
+
+        // Invalid significance_level
+        config.significance_level = 1.5;
+        assert!(config.validate(&profiles).is_err());
+        config.significance_level = 0.05;
+
+        // Valid experiment
+        let exp = ExperimentConfigToml {
+            id: "test-exp".to_string(),
+            enabled: true,
+            description: None,
+            traffic_percentage: 20,
+            assignment_strategy: "user_id".to_string(),
+            target_intents: vec![],
+            metrics: vec!["latency".to_string()],
+            variants: vec![
+                VariantConfigToml {
+                    id: "control".to_string(),
+                    model_override: Some("claude-opus".to_string()),
+                    weight: 50,
+                    is_control: true,
+                    parameters: None,
+                },
+                VariantConfigToml {
+                    id: "treatment".to_string(),
+                    model_override: Some("claude-sonnet".to_string()),
+                    weight: 50,
+                    is_control: false,
+                    parameters: None,
+                },
+            ],
+            start_time: None,
+            end_time: None,
+        };
+        config.experiments.push(exp);
+        assert!(config.validate(&profiles).is_ok());
+
+        // Invalid model reference
+        config.experiments[0].variants[0].model_override = Some("unknown-model".to_string());
+        assert!(config.validate(&profiles).is_err());
+    }
+
+    #[test]
+    fn test_ab_testing_experiment_validation() {
+        let profiles: Vec<&str> = vec!["claude-opus", "claude-sonnet"];
+
+        // Missing variants
+        let exp = ExperimentConfigToml {
+            id: "test".to_string(),
+            enabled: true,
+            description: None,
+            traffic_percentage: 10,
+            assignment_strategy: "user_id".to_string(),
+            target_intents: vec![],
+            metrics: vec![],
+            variants: vec![],
+            start_time: None,
+            end_time: None,
+        };
+        assert!(exp.validate(&profiles).is_err());
+
+        // Single variant (need at least 2)
+        let exp2 = ExperimentConfigToml {
+            id: "test".to_string(),
+            enabled: true,
+            description: None,
+            traffic_percentage: 10,
+            assignment_strategy: "user_id".to_string(),
+            target_intents: vec![],
+            metrics: vec![],
+            variants: vec![VariantConfigToml {
+                id: "control".to_string(),
+                model_override: None,
+                weight: 100,
+                is_control: true,
+                parameters: None,
+            }],
+            start_time: None,
+            end_time: None,
+        };
+        assert!(exp2.validate(&profiles).is_err());
+
+        // Invalid traffic percentage
+        let exp3 = ExperimentConfigToml {
+            id: "test".to_string(),
+            enabled: true,
+            description: None,
+            traffic_percentage: 150,
+            assignment_strategy: "user_id".to_string(),
+            target_intents: vec![],
+            metrics: vec![],
+            variants: vec![
+                VariantConfigToml {
+                    id: "a".to_string(),
+                    model_override: None,
+                    weight: 50,
+                    is_control: false,
+                    parameters: None,
+                },
+                VariantConfigToml {
+                    id: "b".to_string(),
+                    model_override: None,
+                    weight: 50,
+                    is_control: false,
+                    parameters: None,
+                },
+            ],
+            start_time: None,
+            end_time: None,
+        };
+        assert!(exp3.validate(&profiles).is_err());
+    }
+
+    // =========================================================================
+    // EnsembleConfigToml Tests (P3)
+    // =========================================================================
+
+    #[test]
+    fn test_ensemble_config_default() {
+        let config = EnsembleConfigToml::default();
+        assert!(!config.enabled);
+        assert_eq!(config.default_mode, "disabled");
+        assert_eq!(config.default_timeout_secs, 60);
+        assert_eq!(config.max_parallel_models, 5);
+        assert_eq!(config.quality_scorer, "length_and_structure");
+        assert!((config.quality_threshold - 0.7).abs() < 0.001);
+        assert!((config.consensus_threshold - 0.6).abs() < 0.001);
+        assert!(config.strategies.is_empty());
+    }
+
+    #[test]
+    fn test_ensemble_config_validation() {
+        let mut config = EnsembleConfigToml::default();
+        let profiles: Vec<&str> = vec!["claude-opus", "claude-sonnet", "gpt-4o"];
+
+        // Default should be valid
+        assert!(config.validate(&profiles).is_ok());
+
+        // Invalid mode
+        config.default_mode = "invalid_mode".to_string();
+        assert!(config.validate(&profiles).is_err());
+        config.default_mode = "best_of_n".to_string();
+
+        // Invalid timeout
+        config.default_timeout_secs = 0;
+        assert!(config.validate(&profiles).is_err());
+        config.default_timeout_secs = 60;
+
+        // Invalid quality scorer
+        config.quality_scorer = "invalid_scorer".to_string();
+        assert!(config.validate(&profiles).is_err());
+        config.quality_scorer = "length_and_structure".to_string();
+
+        // Invalid threshold
+        config.quality_threshold = 1.5;
+        assert!(config.validate(&profiles).is_err());
+        config.quality_threshold = 0.7;
+
+        // Valid strategy
+        let strategy = EnsembleStrategyConfigToml {
+            intent: "reasoning".to_string(),
+            mode: "consensus".to_string(),
+            models: vec!["claude-opus".to_string(), "gpt-4o".to_string()],
+            quality_threshold: None,
+            quality_scorer: None,
+            timeout_secs: None,
+        };
+        config.strategies.push(strategy);
+        assert!(config.validate(&profiles).is_ok());
+
+        // Invalid model in strategy
+        config.strategies[0].models.push("unknown-model".to_string());
+        assert!(config.validate(&profiles).is_err());
+    }
+
+    #[test]
+    fn test_high_complexity_ensemble_validation() {
+        let profiles: Vec<&str> = vec!["claude-opus", "claude-sonnet"];
+
+        let mut config = HighComplexityEnsembleConfigToml::default();
+        // Disabled by default, should be valid
+        assert!(config.validate(&profiles).is_ok());
+
+        // Enable but no models
+        config.enabled = true;
+        assert!(config.validate(&profiles).is_err());
+
+        // Add models
+        config.models = vec!["claude-opus".to_string(), "claude-sonnet".to_string()];
+        assert!(config.validate(&profiles).is_ok());
+
+        // Invalid threshold
+        config.complexity_threshold = 1.5;
+        assert!(config.validate(&profiles).is_err());
+        config.complexity_threshold = 0.8;
+
+        // Invalid mode
+        config.mode = "cascade".to_string(); // cascade not allowed for high complexity
+        assert!(config.validate(&profiles).is_err());
+    }
+
+    #[test]
+    fn test_ab_testing_toml_deserialization() {
+        let toml_str = r#"
+            enabled = true
+            max_concurrent_experiments = 5
+            significance_level = 0.01
+
+            [[experiments]]
+            id = "model-comparison"
+            enabled = true
+            traffic_percentage = 25
+            assignment_strategy = "session_id"
+
+            [[experiments.variants]]
+            id = "control"
+            model_override = "claude-opus"
+            weight = 50
+            is_control = true
+
+            [[experiments.variants]]
+            id = "treatment"
+            model_override = "claude-sonnet"
+            weight = 50
+        "#;
+
+        let config: ABTestingConfigToml = toml::from_str(toml_str).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.max_concurrent_experiments, 5);
+        assert!((config.significance_level - 0.01).abs() < 0.001);
+        assert_eq!(config.experiments.len(), 1);
+
+        let exp = &config.experiments[0];
+        assert_eq!(exp.id, "model-comparison");
+        assert_eq!(exp.traffic_percentage, 25);
+        assert_eq!(exp.assignment_strategy, "session_id");
+        assert_eq!(exp.variants.len(), 2);
+        assert!(exp.variants[0].is_control);
+    }
+
+    #[test]
+    fn test_ensemble_toml_deserialization() {
+        let toml_str = r#"
+            enabled = true
+            default_mode = "best_of_n"
+            default_timeout_secs = 30
+            quality_threshold = 0.8
+
+            [[strategies]]
+            intent = "code_generation"
+            mode = "voting"
+            models = ["claude-opus", "gpt-4o"]
+            quality_threshold = 0.9
+
+            [high_complexity_ensemble]
+            enabled = true
+            complexity_threshold = 0.85
+            mode = "consensus"
+            models = ["claude-opus", "claude-sonnet"]
+        "#;
+
+        let config: EnsembleConfigToml = toml::from_str(toml_str).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.default_mode, "best_of_n");
+        assert_eq!(config.default_timeout_secs, 30);
+        assert!((config.quality_threshold - 0.8).abs() < 0.001);
+        assert_eq!(config.strategies.len(), 1);
+
+        let strategy = &config.strategies[0];
+        assert_eq!(strategy.intent, "code_generation");
+        assert_eq!(strategy.mode, "voting");
+        assert_eq!(strategy.models.len(), 2);
+
+        assert!(config.high_complexity_ensemble.enabled);
+        assert!((config.high_complexity_ensemble.complexity_threshold - 0.85).abs() < 0.001);
+        assert_eq!(config.high_complexity_ensemble.mode, "consensus");
     }
 }

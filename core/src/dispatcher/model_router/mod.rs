@@ -127,7 +127,8 @@ pub use ab_testing::{
 
 // Multi-Model Ensemble (P3)
 pub use ensemble::{
-    ConfidenceMarkersScorer, EnsembleConfig, EnsembleMode, EnsembleResult, EnsembleStrategy,
+    ConfidenceMarkersScorer, EnsembleConfig, EnsembleDecision, EnsembleEngine, EnsembleEngineConfig,
+    EnsembleExecutionError, EnsembleMode, EnsembleRequest, EnsembleResult, EnsembleStrategy,
     EnsembleValidationError, LengthAndStructureScorer, LengthScorer, ModelExecutionResult,
     ParallelExecutor, QualityMetric, QualityScorer, RelevanceScorer, ResponseAggregator,
     StructureScorer, TokenUsage, create_scorer, jaccard_similarity,
