@@ -4,8 +4,12 @@
 
 use super::{AetherCore, AetherFfiError};
 use crate::agent::RigAgentManager;
+use crate::command::{CommandContext, CommandParser, ParsedCommand};
+use crate::dispatcher::ToolSourceType;
 use crate::intent::{AgentModePrompt, ExecutionIntent, IntentClassifier, ToolDescription};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
+use crate::skills::SkillsRegistry;
+use crate::utils::paths::get_skills_dir;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -132,45 +136,162 @@ impl AetherCore {
 
             handler.on_thinking();
 
-            // Check for explicit /agent command first (hybrid mode)
-            let (is_explicit_agent, task_input) = if input.trim().starts_with("/agent ") {
-                // Extract task description after "/agent "
-                let task = input
-                    .trim()
-                    .strip_prefix("/agent ")
-                    .unwrap_or(&input)
-                    .trim();
-                info!(task = %task, "Explicit /agent command detected");
-                (true, task.to_string())
-            } else if input.trim() == "/agent" {
-                // Just "/agent" without task - treat as conversational
-                (false, input.clone())
-            } else {
-                (false, input.clone())
-            };
+            // ================================================================
+            // UNIFIED SLASH COMMAND PARSING
+            // ================================================================
+            // Parse input as a slash command first. If it's a recognized command,
+            // process it according to its type. Otherwise, fall back to intent
+            // classification for regular conversational input.
 
-            // Get tool descriptions for agent prompt
+            let parsed_command = parse_slash_command(&input, &config);
+
+            // Get tool descriptions for agent prompt (used by multiple branches)
             let tool_descriptions = get_builtin_tool_descriptions();
 
-            // Determine agent mode: explicit command OR automatic classification
-            let processed_input = if is_explicit_agent {
-                // Explicit /agent command - always inject agent prompt with tools
-                let agent_prompt = AgentModePrompt::with_tools(tool_descriptions).generate();
+            // Process based on parsed command or fall back to intent classification
+            let processed_input = if let Some(ref cmd) = parsed_command {
+                match cmd.source_type {
+                    ToolSourceType::Builtin => {
+                        // Handle builtin commands
+                        match cmd.command_name.as_str() {
+                            "agent" => {
+                                // /agent command - inject agent mode prompt
+                                let task_input = cmd.arguments.clone().unwrap_or_default();
+                                info!(task = %task_input, "Explicit /agent command detected");
 
-                // Create a synthetic ExecutableTask for UI notification
-                let task = crate::intent::ExecutableTask {
-                    category: crate::intent::TaskCategory::General,
-                    action: task_input.clone(),
-                    target: None,
-                    confidence: 1.0, // Explicit command = full confidence
-                };
-                handler.on_agent_mode_detected((&task).into());
+                                let agent_prompt =
+                                    AgentModePrompt::with_tools(tool_descriptions).generate();
 
-                format!("{}\n\n---\n\n用户请求: {}", agent_prompt, task_input)
+                                // Notify UI of agent mode
+                                let task = crate::intent::ExecutableTask {
+                                    category: crate::intent::TaskCategory::General,
+                                    action: task_input.clone(),
+                                    target: None,
+                                    confidence: 1.0,
+                                };
+                                handler.on_agent_mode_detected((&task).into());
+
+                                format!("{}\n\n---\n\n用户请求: {}", agent_prompt, task_input)
+                            }
+                            "search" | "youtube" | "webfetch" => {
+                                // Other builtin tools - inject tool trigger prompt
+                                let tool_name = &cmd.command_name;
+                                let args = cmd.arguments.clone().unwrap_or_default();
+                                info!(tool = %tool_name, args = %args, "Builtin tool command");
+
+                                // Inject agent prompt with tool hint
+                                let agent_prompt =
+                                    AgentModePrompt::with_tools(tool_descriptions).generate();
+                                let tool_hint = match tool_name.as_str() {
+                                    "search" => format!(
+                                        "请使用 search 工具搜索以下内容: {}",
+                                        args
+                                    ),
+                                    "youtube" => format!(
+                                        "请使用 youtube 工具获取以下视频信息: {}",
+                                        args
+                                    ),
+                                    "webfetch" => format!(
+                                        "请使用 web_fetch 工具获取以下网页内容: {}",
+                                        args
+                                    ),
+                                    _ => args,
+                                };
+
+                                format!("{}\n\n---\n\n用户请求: {}", agent_prompt, tool_hint)
+                            }
+                            _ => {
+                                // Unknown builtin - treat as regular input
+                                input.clone()
+                            }
+                        }
+                    }
+                    ToolSourceType::Skill => {
+                        // Handle skill commands - inject skill instructions
+                        if let CommandContext::Skill {
+                            skill_id,
+                            instructions,
+                            display_name,
+                        } = &cmd.context
+                        {
+                            let user_input = cmd.arguments.clone().unwrap_or_default();
+                            info!(
+                                skill_id = %skill_id,
+                                skill_name = %display_name,
+                                "Skill command detected"
+                            );
+
+                            // Inject skill instructions as system context
+                            format!(
+                                "# Skill: {}\n\n{}\n\n---\n\n用户请求: {}",
+                                display_name, instructions, user_input
+                            )
+                        } else {
+                            // Fallback if context is wrong type
+                            input.clone()
+                        }
+                    }
+                    ToolSourceType::Custom => {
+                        // Handle custom commands - inject system prompt
+                        if let CommandContext::Custom {
+                            system_prompt,
+                            provider: _,
+                            pattern: _,
+                        } = &cmd.context
+                        {
+                            let user_input = cmd.arguments.clone().unwrap_or_default();
+                            info!(
+                                command = %cmd.command_name,
+                                "Custom command detected"
+                            );
+
+                            if let Some(prompt) = system_prompt {
+                                format!("{}\n\n---\n\n用户输入: {}", prompt, user_input)
+                            } else {
+                                user_input
+                            }
+                        } else {
+                            input.clone()
+                        }
+                    }
+                    ToolSourceType::Mcp => {
+                        // Handle MCP commands - inject tool trigger
+                        if let CommandContext::Mcp {
+                            server_name,
+                            tool_name: _,
+                        } = &cmd.context
+                        {
+                            let args = cmd.arguments.clone().unwrap_or_default();
+                            info!(
+                                server = %server_name,
+                                args = %args,
+                                "MCP command detected"
+                            );
+
+                            // Inject agent prompt with MCP tool hint
+                            let agent_prompt =
+                                AgentModePrompt::with_tools(tool_descriptions).generate();
+                            format!(
+                                "{}\n\n---\n\n请使用 {} 工具处理: {}",
+                                agent_prompt, server_name, args
+                            )
+                        } else {
+                            input.clone()
+                        }
+                    }
+                    ToolSourceType::Native => {
+                        // Legacy native tools - treat as regular input
+                        input.clone()
+                    }
+                }
             } else {
-                // Automatic classification for non-explicit inputs
+                // ================================================================
+                // NOT A COMMAND - USE INTENT CLASSIFICATION
+                // ================================================================
+                // No recognized slash command, fall back to automatic classification
+
                 let classifier = IntentClassifier::with_keyword_policy(&keyword_policy);
-                let intent = runtime.block_on(classifier.classify(&task_input));
+                let intent = runtime.block_on(classifier.classify(&input));
                 debug!(intent = ?intent, "Intent classification result");
 
                 if let ExecutionIntent::Executable(ref task) = intent {
@@ -182,11 +303,11 @@ impl AetherCore {
                     );
                     handler.on_agent_mode_detected(task.into());
 
-                    // Inject agent mode prompt with tools to guide AI into execution mode
+                    // Inject agent mode prompt with tools
                     let agent_prompt = AgentModePrompt::with_tools(tool_descriptions).generate();
-                    format!("{}\n\n---\n\n用户请求: {}", agent_prompt, task_input)
+                    format!("{}\n\n---\n\n用户请求: {}", agent_prompt, input)
                 } else {
-                    task_input.clone()
+                    input.clone()
                 }
             };
 
@@ -408,6 +529,45 @@ impl AetherCore {
                 .map_err(|e| AetherFfiError::Config(format!("OCR failed: {}", e)))
         })
     }
+}
+
+/// Parse user input as a slash command
+///
+/// This function creates a CommandParser and attempts to parse the input.
+/// It checks all command sources: builtin, skills, MCP, and custom rules.
+///
+/// # Arguments
+/// * `input` - User input to parse
+/// * `config` - Current configuration (for routing rules and MCP servers)
+///
+/// # Returns
+/// `Some(ParsedCommand)` if input is a recognized slash command, `None` otherwise
+fn parse_slash_command(
+    input: &str,
+    _config: &crate::agent::config::RigAgentConfig,
+) -> Option<ParsedCommand> {
+    // Build command parser with all sources
+    let mut parser = CommandParser::new();
+
+    // Add skills registry
+    if let Ok(skills_dir) = get_skills_dir() {
+        let skills_registry = SkillsRegistry::new(skills_dir);
+        if skills_registry.load_all().is_ok() {
+            parser = parser.with_skills_registry(Arc::new(skills_registry));
+        }
+    }
+
+    // Add routing rules for custom commands
+    // Note: We need to get full config to access routing rules
+    // For now, we'll use an empty vec if not available
+    // TODO: Pass routing rules from full_config
+
+    // Add MCP server names
+    // Note: MCP servers are managed separately, we'll check them if available
+    // TODO: Pass MCP server names from AetherCore
+
+    // Parse the input
+    parser.parse(input)
 }
 
 /// Helper function to store memory after AI response

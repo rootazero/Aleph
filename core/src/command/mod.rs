@@ -5,12 +5,15 @@
 // - Builtin commands (from config.toml rules with ^/ prefix)
 // - MCP tools (dynamic, from connected MCP servers)
 // - User prompts (from config.toml rules)
+// - Skills (from ~/.config/aether/skills/)
 //
 // The command tree is exposed via UniFFI for Swift UI rendering.
 
+mod parser;
 mod registry;
 mod types;
 
+pub use parser::{CommandContext, CommandParser, ParsedCommand};
 pub use registry::CommandRegistry;
 pub use types::{CommandExecutionResult, CommandNode, CommandType};
 
