@@ -4,7 +4,11 @@
 
 use super::{AetherCore, AetherFfiError};
 use crate::agent::RigAgentManager;
-use crate::command::{CommandContext, CommandParser, ParsedCommand};
+use crate::command::{
+    CommandContext, CommandParser, NaturalLanguageCommandDetector, ParsedCommand,
+    UnifiedCommandIndex,
+};
+use crate::config::RoutingRuleConfig;
 use crate::dispatcher::ToolSourceType;
 use crate::intent::{AgentModePrompt, ExecutionIntent, IntentClassifier, ToolDescription};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
@@ -115,9 +119,14 @@ impl AetherCore {
 
         // Clone keyword policy for enhanced L2 intent matching
         // Clone generation config for model aliases
-        let (keyword_policy, generation_config) = {
+        // Clone routing rules for NL command detection
+        let (keyword_policy, generation_config, routing_rules) = {
             let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
-            (full_config.policies.keyword.clone(), full_config.generation.clone())
+            (
+                full_config.policies.keyword.clone(),
+                full_config.generation.clone(),
+                full_config.rules.clone(),
+            )
         };
 
         // Clone conversation histories for multi-turn support
@@ -138,13 +147,16 @@ impl AetherCore {
             handler.on_thinking();
 
             // ================================================================
-            // UNIFIED SLASH COMMAND PARSING
+            // UNIFIED COMMAND PARSING (Slash + Natural Language)
             // ================================================================
-            // Parse input as a slash command first. If it's a recognized command,
-            // process it according to its type. Otherwise, fall back to intent
-            // classification for regular conversational input.
+            // Parse input as a command first. This supports:
+            // 1. Slash commands (e.g., "/agent do something")
+            // 2. Natural language commands (e.g., "使用 knowledge-graph 分析代码")
+            //
+            // If recognized as a command, process it according to its type.
+            // Otherwise, fall back to intent classification for regular input.
 
-            let parsed_command = parse_slash_command(&input, &config);
+            let parsed_command = parse_command(&input, &routing_rules);
 
             // Get tool descriptions for agent prompt (used by multiple branches)
             let tool_descriptions = get_builtin_tool_descriptions();
@@ -540,42 +552,59 @@ impl AetherCore {
     }
 }
 
-/// Parse user input as a slash command
+/// Parse user input as a command (slash or natural language)
 ///
-/// This function creates a CommandParser and attempts to parse the input.
+/// This function creates a CommandParser with NaturalLanguageCommandDetector
+/// and attempts to parse the input. It supports:
+/// 1. Slash commands (e.g., "/agent do something")
+/// 2. Natural language commands (e.g., "使用 knowledge-graph 分析代码")
+///
 /// It checks all command sources: builtin, skills, MCP, and custom rules.
 ///
 /// # Arguments
 /// * `input` - User input to parse
-/// * `config` - Current configuration (for routing rules and MCP servers)
+/// * `routing_rules` - Routing rules from config (for custom commands and NL triggers)
 ///
 /// # Returns
-/// `Some(ParsedCommand)` if input is a recognized slash command, `None` otherwise
-fn parse_slash_command(
-    input: &str,
-    _config: &crate::agent::config::RigAgentConfig,
-) -> Option<ParsedCommand> {
+/// `Some(ParsedCommand)` if input is a recognized command, `None` otherwise
+fn parse_command(input: &str, routing_rules: &[RoutingRuleConfig]) -> Option<ParsedCommand> {
     // Build command parser with all sources
     let mut parser = CommandParser::new();
 
-    // Add skills registry
-    if let Ok(skills_dir) = get_skills_dir() {
-        let skills_registry = SkillsRegistry::new(skills_dir);
-        if skills_registry.load_all().is_ok() {
-            parser = parser.with_skills_registry(Arc::new(skills_registry));
+    // Load skills registry
+    let skills_registry = if let Ok(skills_dir) = get_skills_dir() {
+        let registry = SkillsRegistry::new(skills_dir);
+        if registry.load_all().is_ok() {
+            Some(Arc::new(registry))
+        } else {
+            None
         }
+    } else {
+        None
+    };
+
+    // Add skills registry to parser
+    if let Some(ref registry) = skills_registry {
+        parser = parser.with_skills_registry(Arc::clone(registry));
     }
 
-    // Add routing rules for custom commands
-    // Note: We need to get full config to access routing rules
-    // For now, we'll use an empty vec if not available
-    // TODO: Pass routing rules from full_config
+    // Pass routing rules from config
+    parser = parser.with_routing_rules(routing_rules.to_vec());
 
-    // Add MCP server names
-    // Note: MCP servers are managed separately, we'll check them if available
-    // TODO: Pass MCP server names from AetherCore
+    // Build unified command index for NL detection
+    // This index aggregates trigger keywords from Skills and Custom commands
+    let index = UnifiedCommandIndex::build_all(
+        skills_registry.as_ref().map(|r| r.as_ref()),
+        Some(routing_rules),
+    );
 
-    // Parse the input
+    // Create NL detector with reasonable confidence threshold
+    // 0.3 means at least one keyword match with decent confidence
+    let nl_detector = NaturalLanguageCommandDetector::new(index).with_min_confidence(0.3);
+
+    parser = parser.with_nl_detector(nl_detector);
+
+    // Parse the input (handles both slash and NL commands)
     parser.parse(input)
 }
 
