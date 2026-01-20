@@ -11,7 +11,9 @@
 mod coordinator;
 mod error;
 
-pub use coordinator::{InitializationCoordinator, InitializationResult, InitPhase, InitProgressHandler};
+pub use coordinator::{
+    InitPhase, InitProgressHandler, InitializationCoordinator, InitializationResult,
+};
 pub use error::InitError;
 
 use crate::error::Result;

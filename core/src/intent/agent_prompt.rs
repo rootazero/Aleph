@@ -116,10 +116,7 @@ impl AgentModePrompt {
 
         for model_info in &self.generation_models {
             let caps = model_info.capabilities.join("/");
-            let mut model_desc = format!(
-                "- **{}** ({})",
-                model_info.provider_name, caps
-            );
+            let mut model_desc = format!("- **{}** ({})", model_info.provider_name, caps);
 
             if let Some(ref default) = model_info.default_model {
                 model_desc.push_str(&format!(" - 默认: {}", default));
@@ -181,8 +178,7 @@ impl AgentModePrompt {
 - **禁止未经确认直接执行文件移动/删除操作**
 - 必须先展示计划，等用户说"Y"或"确认"后才能执行
 - 如果用户说"N"或"取消"，则放弃操作"#,
-            tools_section,
-            models_section
+            tools_section, models_section
         )
     }
 

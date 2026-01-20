@@ -47,9 +47,7 @@ async fn test_full_subagent_lifecycle() {
 
     // 4. Simulate sub-agent iterations
     for i in 0..5 {
-        let count = handler
-            .increment_iteration(&request.child_session_id)
-            .await;
+        let count = handler.increment_iteration(&request.child_session_id).await;
         assert_eq!(count, Some(i + 1));
     }
 

@@ -18,13 +18,15 @@ build_macos() {
     cargo build --release --features uniffi
 
     # Generate Swift bindings
+    # Note: target directory is at workspace root, not core directory
     cargo run --bin uniffi-bindgen generate \
-        --library target/release/libaethecore.dylib \
+        --library "$ROOT_DIR/target/release/libaethecore.dylib" \
         --language swift \
         --out-dir "$ROOT_DIR/platforms/macos/Aether/Sources/Generated/"
 
-    # Copy library
-    cp target/release/libaethecore.dylib \
+    # Copy library (use /bin/rm and /bin/cp to avoid alias issues)
+    /bin/rm -f "$ROOT_DIR/platforms/macos/Aether/Frameworks/libaethecore.dylib"
+    /bin/cp "$ROOT_DIR/target/release/libaethecore.dylib" \
         "$ROOT_DIR/platforms/macos/Aether/Frameworks/"
 
     # Fix install_name for portability

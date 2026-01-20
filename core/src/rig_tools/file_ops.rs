@@ -137,10 +137,7 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         // Add Unix-specific paths
         #[cfg(unix)]
         {
-            denied_paths.extend([
-                "/etc/passwd".to_string(),
-                "/etc/shadow".to_string(),
-            ]);
+            denied_paths.extend(["/etc/passwd".to_string(), "/etc/shadow".to_string()]);
         }
 
         // Add Windows-specific sensitive paths

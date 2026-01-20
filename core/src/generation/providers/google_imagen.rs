@@ -152,10 +152,7 @@ impl GoogleImagenProvider {
 
     /// Get the full URL for the predict endpoint
     fn predict_url(&self) -> String {
-        format!(
-            "{}/v1beta/models/{}:predict",
-            self.endpoint, self.model
-        )
+        format!("{}/v1beta/models/{}:predict", self.endpoint, self.model)
     }
 
     /// Build the API request body from a GenerationRequest
@@ -172,17 +169,13 @@ impl GoogleImagenProvider {
         let aspect_ratio = self.determine_aspect_ratio(request);
 
         // Determine image size based on quality parameter or default
-        let image_size = request
-            .params
-            .quality
-            .as_ref()
-            .and_then(|q| {
-                if q.to_lowercase().contains("high") || q.to_lowercase().contains("ultra") {
-                    Some("2K".to_string())
-                } else {
-                    None
-                }
-            });
+        let image_size = request.params.quality.as_ref().and_then(|q| {
+            if q.to_lowercase().contains("high") || q.to_lowercase().contains("ultra") {
+                Some("2K".to_string())
+            } else {
+                None
+            }
+        });
 
         // Person generation setting
         let person_generation = request
@@ -257,20 +250,15 @@ impl GoogleImagenProvider {
                 return GenerationError::invalid_parameters(message, None);
             }
 
-            return GenerationError::provider(
-                message,
-                code.map(|c| c as u16),
-                "google-imagen",
-            );
+            return GenerationError::provider(message, code.map(|c| c as u16), "google-imagen");
         }
 
         // Handle based on status code
         match status.as_u16() {
             400 => GenerationError::invalid_parameters(body.to_string(), None),
-            401 | 403 => GenerationError::authentication(
-                "Invalid API key or unauthorized",
-                "google-imagen",
-            ),
+            401 | 403 => {
+                GenerationError::authentication("Invalid API key or unauthorized", "google-imagen")
+            }
             429 => GenerationError::rate_limit("Rate limit exceeded", None),
             404 => GenerationError::model_not_found(DEFAULT_MODEL, "google-imagen"),
             500..=599 => GenerationError::provider(
@@ -696,9 +684,8 @@ mod tests {
     #[test]
     fn test_determine_aspect_ratio_from_style() {
         let provider = GoogleImagenProvider::new("test-api-key", None, None);
-        let request = GenerationRequest::image("Test").with_params(
-            GenerationParams::builder().style("9:16").build(),
-        );
+        let request = GenerationRequest::image("Test")
+            .with_params(GenerationParams::builder().style("9:16").build());
 
         let ratio = provider.determine_aspect_ratio(&request);
         assert_eq!(ratio, "9:16");
@@ -709,16 +696,14 @@ mod tests {
         let provider = GoogleImagenProvider::new("test-api-key", None, None);
 
         // 16:9 ratio
-        let request = GenerationRequest::image("Test").with_params(
-            GenerationParams::builder().width(1920).height(1080).build(),
-        );
+        let request = GenerationRequest::image("Test")
+            .with_params(GenerationParams::builder().width(1920).height(1080).build());
         let ratio = provider.determine_aspect_ratio(&request);
         assert_eq!(ratio, "16:9");
 
         // 1:1 ratio
-        let request_square = GenerationRequest::image("Test").with_params(
-            GenerationParams::builder().width(1024).height(1024).build(),
-        );
+        let request_square = GenerationRequest::image("Test")
+            .with_params(GenerationParams::builder().width(1024).height(1024).build());
         let ratio_square = provider.determine_aspect_ratio(&request_square);
         assert_eq!(ratio_square, "1:1");
     }
@@ -775,7 +760,10 @@ mod tests {
         let error =
             GoogleImagenProvider::parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
 
-        assert!(matches!(error, GenerationError::ContentFilteredError { .. }));
+        assert!(matches!(
+            error,
+            GenerationError::ContentFilteredError { .. }
+        ));
     }
 
     // === Response parsing tests ===
@@ -792,7 +780,10 @@ mod tests {
         let response: GoogleImagenResponse = serde_json::from_str(json).unwrap();
 
         assert_eq!(response.predictions.len(), 1);
-        assert_eq!(response.predictions[0].mime_type, Some("image/png".to_string()));
+        assert_eq!(
+            response.predictions[0].mime_type,
+            Some("image/png".to_string())
+        );
         assert!(!response.predictions[0].bytes_base64_encoded.is_empty());
     }
 
@@ -860,7 +851,10 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(DEFAULT_ENDPOINT, "https://generativelanguage.googleapis.com");
+        assert_eq!(
+            DEFAULT_ENDPOINT,
+            "https://generativelanguage.googleapis.com"
+        );
         assert_eq!(DEFAULT_MODEL, "imagen-3.0-generate-002");
         assert_eq!(DEFAULT_TIMEOUT_SECS, 180);
         assert_eq!(DEFAULT_SAMPLE_COUNT, 1);

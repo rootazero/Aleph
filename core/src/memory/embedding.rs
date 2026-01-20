@@ -29,8 +29,6 @@ impl EmbeddingModel {
     ///
     /// # Returns
     /// * `Result<Self>` - New EmbeddingModel instance
-    ///
-    /// Note: fastembed manages its own model cache in ~/.cache/huggingface
     pub fn new(model_dir: PathBuf) -> Result<Self, AetherError> {
         Ok(Self {
             model: OnceCell::new(),

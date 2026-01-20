@@ -281,10 +281,9 @@ impl ReplicateProvider {
             return Err(Self::parse_error_response(status.as_u16(), &response_text));
         }
 
-        let prediction: PredictionResponse =
-            serde_json::from_str(&response_text).map_err(|e| {
-                GenerationError::serialization(format!("Failed to parse response: {}", e))
-            })?;
+        let prediction: PredictionResponse = serde_json::from_str(&response_text).map_err(|e| {
+            GenerationError::serialization(format!("Failed to parse response: {}", e))
+        })?;
 
         debug!(
             id = %prediction.id,
@@ -440,9 +439,11 @@ impl ReplicateProvider {
             404 => GenerationError::model_not_found("Model or prediction not found", "replicate"),
             422 => GenerationError::invalid_parameters(body.to_string(), None),
             429 => GenerationError::rate_limit("Rate limit exceeded", None),
-            500..=599 => {
-                GenerationError::provider(format!("Server error: {}", body), Some(status), "replicate")
-            }
+            500..=599 => GenerationError::provider(
+                format!("Server error: {}", body),
+                Some(status),
+                "replicate",
+            ),
             _ => GenerationError::provider(
                 format!("Unexpected error: {}", body),
                 Some(status),
@@ -963,8 +964,7 @@ mod tests {
 
     #[test]
     fn test_output_extraction_single_url() {
-        let output: serde_json::Value =
-            serde_json::json!("https://replicate.delivery/audio.mp3");
+        let output: serde_json::Value = serde_json::json!("https://replicate.delivery/audio.mp3");
 
         if let serde_json::Value::String(url) = &output {
             assert_eq!(url, "https://replicate.delivery/audio.mp3");
@@ -990,10 +990,7 @@ mod tests {
     fn test_error_handling_auth() {
         let error = ReplicateProvider::parse_error_response(401, "Invalid token");
 
-        assert!(matches!(
-            error,
-            GenerationError::AuthenticationError { .. }
-        ));
+        assert!(matches!(error, GenerationError::AuthenticationError { .. }));
     }
 
     #[test]

@@ -45,7 +45,7 @@ pub mod types;
 pub use error::{GenerationError, GenerationResult};
 pub use registry::GenerationProviderRegistry;
 pub use response_parser::{
-    has_generation_requests, parse_generation_requests, ParsedGenerationRequest, ParseResult,
+    has_generation_requests, parse_generation_requests, ParseResult, ParsedGenerationRequest,
 };
 pub use types::{
     GenerationData, GenerationMetadata, GenerationOutput, GenerationParams,

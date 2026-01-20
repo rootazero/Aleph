@@ -251,14 +251,15 @@ impl MidjourneyProvider {
         }
 
         // Parse response
-        let submit_response: SubmitResponse = serde_json::from_str(&response_text).map_err(|e| {
-            error!(
-                error = %e,
-                body = %response_text,
-                "Failed to parse Midjourney submit response"
-            );
-            GenerationError::serialization(format!("Failed to parse response: {}", e))
-        })?;
+        let submit_response: SubmitResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
+                error!(
+                    error = %e,
+                    body = %response_text,
+                    "Failed to parse Midjourney submit response"
+                );
+                GenerationError::serialization(format!("Failed to parse response: {}", e))
+            })?;
 
         // Check response code (1 = success)
         if submit_response.code != 1 {
@@ -346,7 +347,10 @@ impl MidjourneyProvider {
                         reason = %reason,
                         "Midjourney task failed"
                     );
-                    return Err(GenerationError::job_failed(reason, Some(task_id.to_string())));
+                    return Err(GenerationError::job_failed(
+                        reason,
+                        Some(task_id.to_string()),
+                    ));
                 }
                 "NOT_START" | "SUBMITTED" | "IN_PROGRESS" => {
                     if let Some(progress) = &task.progress {
@@ -376,12 +380,12 @@ impl MidjourneyProvider {
     async fn download_image(&self, image_url: &str) -> GenerationResult<Vec<u8>> {
         debug!(url = %image_url, "Downloading image from URL");
 
-        let response = self
-            .client
-            .get(image_url)
-            .send()
-            .await
-            .map_err(|e| GenerationError::download(format!("Failed to download image: {}", e), Some(image_url.to_string())))?;
+        let response = self.client.get(image_url).send().await.map_err(|e| {
+            GenerationError::download(
+                format!("Failed to download image: {}", e),
+                Some(image_url.to_string()),
+            )
+        })?;
 
         if !response.status().is_success() {
             return Err(GenerationError::download(
@@ -390,10 +394,12 @@ impl MidjourneyProvider {
             ));
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| GenerationError::download(format!("Failed to read image bytes: {}", e), Some(image_url.to_string())))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            GenerationError::download(
+                format!("Failed to read image bytes: {}", e),
+                Some(image_url.to_string()),
+            )
+        })?;
 
         Ok(bytes.to_vec())
     }
@@ -1034,16 +1040,20 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_auth() {
-        let error =
-            MidjourneyProvider::parse_error_response(reqwest::StatusCode::UNAUTHORIZED, "Unauthorized");
+        let error = MidjourneyProvider::parse_error_response(
+            reqwest::StatusCode::UNAUTHORIZED,
+            "Unauthorized",
+        );
 
         assert!(matches!(error, GenerationError::AuthenticationError { .. }));
     }
 
     #[test]
     fn test_parse_error_response_rate_limit() {
-        let error =
-            MidjourneyProvider::parse_error_response(reqwest::StatusCode::TOO_MANY_REQUESTS, "Rate limited");
+        let error = MidjourneyProvider::parse_error_response(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "Rate limited",
+        );
 
         assert!(matches!(error, GenerationError::RateLimitError { .. }));
     }
@@ -1051,9 +1061,13 @@ mod tests {
     #[test]
     fn test_parse_error_response_banned_content() {
         let body = r#"{"code": 21, "description": "Prompt contains banned words"}"#;
-        let error = MidjourneyProvider::parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
+        let error =
+            MidjourneyProvider::parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
 
-        assert!(matches!(error, GenerationError::ContentFilteredError { .. }));
+        assert!(matches!(
+            error,
+            GenerationError::ContentFilteredError { .. }
+        ));
     }
 
     #[test]
@@ -1084,8 +1098,7 @@ mod tests {
     fn test_provider_as_trait_object() {
         use std::sync::Arc;
 
-        let provider: Arc<dyn GenerationProvider> =
-            Arc::new(MidjourneyProvider::new("test-key"));
+        let provider: Arc<dyn GenerationProvider> = Arc::new(MidjourneyProvider::new("test-key"));
 
         assert_eq!(provider.name(), "midjourney");
         assert!(provider.supports(GenerationType::Image));

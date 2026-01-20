@@ -34,6 +34,16 @@ pub use crate::ffi::{
     AetherCore,
     AetherEventHandler,
     AetherFfiError,
+    // Generation types
+    GenerationDataFFI,
+    GenerationDataTypeFFI,
+    GenerationMetadataFFI,
+    GenerationOutputFFI,
+    GenerationParamsFFI,
+    GenerationProgressFFI,
+    GenerationProviderConfigFFI,
+    GenerationProviderInfoFFI,
+    GenerationTypeFFI,
     // Memory types
     MemoryItem,
     // Processing types
@@ -45,23 +55,10 @@ pub use crate::ffi::{
     SessionSummary,
     // Tool types
     ToolInfoFFI,
-    // Generation types
-    GenerationDataFFI,
-    GenerationDataTypeFFI,
-    GenerationMetadataFFI,
-    GenerationOutputFFI,
-    GenerationParamsFFI,
-    GenerationProgressFFI,
-    GenerationProviderConfigFFI,
-    GenerationProviderInfoFFI,
-    GenerationTypeFFI,
 };
 
 // Initialization (unified - init_unified module) - UniFFI only
 #[cfg(feature = "uniffi")]
 pub use crate::ffi::{
-    needs_first_time_init,
-    run_initialization,
-    InitProgressHandlerFFI,
-    InitResultFFI,
+    needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI,
 };

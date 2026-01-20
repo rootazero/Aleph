@@ -85,7 +85,7 @@ pub mod presets;
 pub mod rollback;
 pub mod task_category;
 
-pub use agent_prompt::{AgentModePrompt, ToolDescription};
+pub use agent_prompt::{AgentModePrompt, GenerationModelInfo, ToolDescription};
 pub use aggregator::{
     AggregatedIntent, AggregatorConfig, IntentAction, IntentAggregator, MissingParameter,
 };

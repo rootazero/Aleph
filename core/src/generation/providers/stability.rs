@@ -606,14 +606,20 @@ mod tests {
     #[test]
     fn test_default_model() {
         let provider = StabilityImageProvider::new("sk-test-key", None, None);
-        assert_eq!(provider.default_model(), Some("stable-diffusion-xl-1024-v1-0"));
+        assert_eq!(
+            provider.default_model(),
+            Some("stable-diffusion-xl-1024-v1-0")
+        );
 
         let custom_provider = StabilityImageProvider::new(
             "sk-test-key",
             None,
             Some("stable-diffusion-v1-6".to_string()),
         );
-        assert_eq!(custom_provider.default_model(), Some("stable-diffusion-v1-6"));
+        assert_eq!(
+            custom_provider.default_model(),
+            Some("stable-diffusion-v1-6")
+        );
     }
 
     // === Request building tests ===
@@ -758,7 +764,10 @@ mod tests {
 
         assert!(matches!(
             error,
-            GenerationError::ProviderError { status_code: Some(500), .. }
+            GenerationError::ProviderError {
+                status_code: Some(500),
+                ..
+            }
         ));
     }
 

@@ -9,19 +9,13 @@
 //
 // The command tree is exposed via UniFFI for Swift UI rendering.
 
-mod nl_detector;
 mod parser;
 mod registry;
 mod types;
-mod unified_index;
 
-pub use nl_detector::{
-    extract_explicit_command, DetectionType, NLDetection, NaturalLanguageCommandDetector,
-};
 pub use parser::{CommandContext, CommandParser, ParsedCommand};
 pub use registry::CommandRegistry;
 pub use types::{CommandExecutionResult, CommandNode, CommandTriggers, CommandType};
-pub use unified_index::{extract_keywords_from_description, IndexEntry, ScoredMatch, UnifiedCommandIndex};
 
 // Re-export builtin hint localization
 pub use registry::get_builtin_hint;

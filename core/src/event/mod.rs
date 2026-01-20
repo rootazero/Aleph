@@ -16,23 +16,39 @@ mod integration_test;
 pub use bus::{EventBus, EventBusConfig, EventBusError, EventSubscriber};
 pub use handler::{EventContext, EventHandler, EventHandlerRegistry, HandlerError};
 pub use types::{
-    AetherEvent, EventType, TimestampedEvent,
-    // Input events
-    InputEvent, InputContext,
-    // Planning events
-    PlanRequest, TaskPlan, PlanStep, StepStatus,
-    // Tool events
-    ToolCallRequest, ToolCallStarted, ToolCallResult, ToolCallError, ToolCallRetry, ErrorKind,
-    // Loop control
-    LoopState, StopReason,
-    // Session events
-    SessionInfo, SessionDiff, CompactionInfo,
-    // Sub-agent events
-    SubAgentRequest, SubAgentResult,
-    // User interaction
-    UserQuestion, UserResponse,
+    AetherEvent,
     // AI response
     AiResponse,
+    CompactionInfo,
+    ErrorKind,
+    EventType,
+    InputContext,
+    // Input events
+    InputEvent,
+    // Loop control
+    LoopState,
+    // Planning events
+    PlanRequest,
+    PlanStep,
+    SessionDiff,
+    // Session events
+    SessionInfo,
+    StepStatus,
+    StopReason,
+    // Sub-agent events
+    SubAgentRequest,
+    SubAgentResult,
+    TaskPlan,
+    TimestampedEvent,
     // Token usage
     TokenUsage,
+    ToolCallError,
+    // Tool events
+    ToolCallRequest,
+    ToolCallResult,
+    ToolCallRetry,
+    ToolCallStarted,
+    // User interaction
+    UserQuestion,
+    UserResponse,
 };

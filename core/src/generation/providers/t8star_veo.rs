@@ -141,37 +141,33 @@ impl T8StarVeoProvider {
         let url = self.submit_url();
 
         // Determine model - use request model or default
-        let model = request
-            .params
-            .model
-            .as_ref()
-            .unwrap_or(&self.model)
-            .clone();
+        let model = request.params.model.as_ref().unwrap_or(&self.model).clone();
 
         // Build request body
-        let body = if let Some(ref_image) = &request.params.reference_image {
-            // Image-to-video request
-            VeoSubmitRequest {
-                prompt: request.prompt.clone(),
-                model,
-                images: Some(vec![ref_image.clone()]),
-                enhance_prompt: Some(false),
-                enable_upsample: None,
-                aspect_ratio: self.determine_aspect_ratio(request),
-            }
-        } else {
-            // Text-to-video request
-            VeoSubmitRequest {
-                prompt: request.prompt.clone(),
-                model,
-                images: None,
-                enhance_prompt: Some(false),
-                enable_upsample: request.params.quality.as_ref().map(|q| {
-                    q.to_lowercase().contains("hd") || q.to_lowercase().contains("1080")
-                }),
-                aspect_ratio: self.determine_aspect_ratio(request),
-            }
-        };
+        let body =
+            if let Some(ref_image) = &request.params.reference_image {
+                // Image-to-video request
+                VeoSubmitRequest {
+                    prompt: request.prompt.clone(),
+                    model,
+                    images: Some(vec![ref_image.clone()]),
+                    enhance_prompt: Some(false),
+                    enable_upsample: None,
+                    aspect_ratio: self.determine_aspect_ratio(request),
+                }
+            } else {
+                // Text-to-video request
+                VeoSubmitRequest {
+                    prompt: request.prompt.clone(),
+                    model,
+                    images: None,
+                    enhance_prompt: Some(false),
+                    enable_upsample: request.params.quality.as_ref().map(|q| {
+                        q.to_lowercase().contains("hd") || q.to_lowercase().contains("1080")
+                    }),
+                    aspect_ratio: self.determine_aspect_ratio(request),
+                }
+            };
 
         debug!(url = %url, model = %body.model, "Submitting T8Star Veo task");
 
@@ -194,9 +190,10 @@ impl T8StarVeoProvider {
             })?;
 
         let status = response.status();
-        let response_text = response.text().await.map_err(|e| {
-            GenerationError::network(format!("Failed to read response: {}", e))
-        })?;
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| GenerationError::network(format!("Failed to read response: {}", e)))?;
 
         if !status.is_success() {
             error!(status = %status, body = %response_text, "T8Star Veo submit failed");
@@ -204,8 +201,8 @@ impl T8StarVeoProvider {
         }
 
         // Parse response
-        let submit_response: VeoSubmitResponse = serde_json::from_str(&response_text)
-            .map_err(|e| {
+        let submit_response: VeoSubmitResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
                 error!(error = %e, body = %response_text, "Failed to parse submit response");
                 GenerationError::serialization(format!("Failed to parse response: {}", e))
             })?;
@@ -267,9 +264,15 @@ impl T8StarVeoProvider {
                     return Ok(task);
                 }
                 "FAILURE" => {
-                    let reason = task.fail_reason.clone().unwrap_or_else(|| "Unknown error".to_string());
+                    let reason = task
+                        .fail_reason
+                        .clone()
+                        .unwrap_or_else(|| "Unknown error".to_string());
                     error!(task_id = %task_id, reason = %reason, "T8Star Veo task failed");
-                    return Err(GenerationError::job_failed(reason, Some(task_id.to_string())));
+                    return Err(GenerationError::job_failed(
+                        reason,
+                        Some(task_id.to_string()),
+                    ));
                 }
                 "NOT_START" | "IN_PROGRESS" => {
                     if let Some(progress) = &task.progress {
@@ -289,12 +292,10 @@ impl T8StarVeoProvider {
     async fn download_video(&self, url: &str) -> GenerationResult<Vec<u8>> {
         debug!(url = %url, "Downloading video");
 
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| GenerationError::network(format!("Failed to download video: {}", e)))?;
+        let response =
+            self.client.get(url).send().await.map_err(|e| {
+                GenerationError::network(format!("Failed to download video: {}", e))
+            })?;
 
         if !response.status().is_success() {
             return Err(GenerationError::network(format!(
@@ -303,9 +304,10 @@ impl T8StarVeoProvider {
             )));
         }
 
-        let bytes = response.bytes().await.map_err(|e| {
-            GenerationError::network(format!("Failed to read video bytes: {}", e))
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| GenerationError::network(format!("Failed to read video bytes: {}", e)))?;
 
         info!(size_bytes = bytes.len(), "Video downloaded successfully");
         Ok(bytes.to_vec())
@@ -344,13 +346,21 @@ impl T8StarVeoProvider {
             if let Some(message) = error_response.get("message").and_then(|m| m.as_str()) {
                 // Check for specific error types
                 let msg_lower = message.to_lowercase();
-                if msg_lower.contains("unauthorized") || msg_lower.contains("invalid") && msg_lower.contains("key") {
+                if msg_lower.contains("unauthorized")
+                    || msg_lower.contains("invalid") && msg_lower.contains("key")
+                {
                     return GenerationError::authentication(message, PROVIDER_NAME);
                 }
-                if msg_lower.contains("rate") || msg_lower.contains("limit") || msg_lower.contains("quota") {
+                if msg_lower.contains("rate")
+                    || msg_lower.contains("limit")
+                    || msg_lower.contains("quota")
+                {
                     return GenerationError::rate_limit(message, None);
                 }
-                if msg_lower.contains("banned") || msg_lower.contains("blocked") || msg_lower.contains("prohibited") {
+                if msg_lower.contains("banned")
+                    || msg_lower.contains("blocked")
+                    || msg_lower.contains("prohibited")
+                {
                     return GenerationError::content_filtered(message, Some("safety".to_string()));
                 }
             }
@@ -359,7 +369,9 @@ impl T8StarVeoProvider {
         // Fallback based on status code
         match status.as_u16() {
             400 => GenerationError::invalid_parameters(body.to_string(), None),
-            401 | 403 => GenerationError::authentication("Invalid API key or unauthorized", PROVIDER_NAME),
+            401 | 403 => {
+                GenerationError::authentication("Invalid API key or unauthorized", PROVIDER_NAME)
+            }
             429 => GenerationError::rate_limit("Rate limit exceeded", None),
             500..=599 => GenerationError::provider(
                 format!("T8Star server error: {}", body),
@@ -428,7 +440,10 @@ impl GenerationProvider for T8StarVeoProvider {
                 .with_size_bytes(video_bytes.len() as u64);
 
             // Add task ID to metadata
-            metadata.extra.insert("task_id".to_string(), serde_json::Value::String(task_id.clone()));
+            metadata.extra.insert(
+                "task_id".to_string(),
+                serde_json::Value::String(task_id.clone()),
+            );
 
             let data = GenerationData::bytes(video_bytes);
 
@@ -438,8 +453,8 @@ impl GenerationProvider for T8StarVeoProvider {
                 "T8Star Veo video generation completed"
             );
 
-            let mut output = GenerationOutput::new(GenerationType::Video, data)
-                .with_metadata(metadata);
+            let mut output =
+                GenerationOutput::new(GenerationType::Video, data).with_metadata(metadata);
 
             if let Some(id) = request_id {
                 output = output.with_request_id(id);
@@ -539,7 +554,9 @@ impl T8StarVeoProviderBuilder {
         let client = Client::builder()
             .timeout(Duration::from_secs(self.timeout_secs))
             .build()
-            .map_err(|e| GenerationError::network(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| {
+                GenerationError::network(format!("Failed to create HTTP client: {}", e))
+            })?;
 
         Ok(T8StarVeoProvider {
             name: PROVIDER_NAME.to_string(),
@@ -646,15 +663,14 @@ mod tests {
 
     #[test]
     fn test_builder_with_model() {
-        let builder = T8StarVeoProviderBuilder::new("key", "https://example.com")
-            .model("veo3.1-pro");
+        let builder =
+            T8StarVeoProviderBuilder::new("key", "https://example.com").model("veo3.1-pro");
         assert_eq!(builder.model, "veo3.1-pro");
     }
 
     #[test]
     fn test_builder_with_color() {
-        let builder = T8StarVeoProviderBuilder::new("key", "https://example.com")
-            .color("#00FF00");
+        let builder = T8StarVeoProviderBuilder::new("key", "https://example.com").color("#00FF00");
         assert_eq!(builder.color, "#00FF00");
     }
 
@@ -764,7 +780,10 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(provider.submit_url(), "https://ai.t8star.cn/v2/videos/generations");
+        assert_eq!(
+            provider.submit_url(),
+            "https://ai.t8star.cn/v2/videos/generations"
+        );
     }
 
     #[test]
@@ -868,7 +887,10 @@ mod tests {
 
         let response: VeoTaskResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.status, "FAILURE");
-        assert_eq!(response.fail_reason, Some("Content policy violation".to_string()));
+        assert_eq!(
+            response.fail_reason,
+            Some("Content policy violation".to_string())
+        );
     }
 
     // === Error parsing tests ===
@@ -897,7 +919,10 @@ mod tests {
             reqwest::StatusCode::BAD_REQUEST,
             r#"{"message": "Content blocked by safety filter"}"#,
         );
-        assert!(matches!(error, GenerationError::ContentFilteredError { .. }));
+        assert!(matches!(
+            error,
+            GenerationError::ContentFilteredError { .. }
+        ));
     }
 
     // === Send + Sync tests ===
@@ -912,8 +937,11 @@ mod tests {
     fn test_provider_as_trait_object() {
         use std::sync::Arc;
 
-        let provider: Arc<dyn GenerationProvider> =
-            Arc::new(T8StarVeoProviderBuilder::new("key", "https://example.com").build().unwrap());
+        let provider: Arc<dyn GenerationProvider> = Arc::new(
+            T8StarVeoProviderBuilder::new("key", "https://example.com")
+                .build()
+                .unwrap(),
+        );
 
         assert_eq!(provider.name(), "t8star-veo");
         assert!(provider.supports(GenerationType::Video));

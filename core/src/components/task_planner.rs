@@ -74,9 +74,7 @@ impl TaskPlanner {
             let parameters = self.extract_parameters(description);
 
             // Each step depends on the previous one (sequential execution)
-            let depends_on = previous_step_id
-                .map(|id| vec![id])
-                .unwrap_or_default();
+            let depends_on = previous_step_id.map(|id| vec![id]).unwrap_or_default();
 
             let step = PlanStep {
                 id: step_id.clone(),
@@ -244,9 +242,7 @@ impl TaskPlanner {
                 // Find the max depth of dependencies and add 1
                 step.depends_on
                     .iter()
-                    .filter_map(|dep_id| {
-                        steps.iter().position(|s| &s.id == dep_id)
-                    })
+                    .filter_map(|dep_id| steps.iter().position(|s| &s.id == dep_id))
                     .map(|_pos| {
                         // For sequential dependencies, depth = position
                         step.depends_on.len()
@@ -478,7 +474,9 @@ mod tests {
 
         assert!(params["paths"].is_array());
         let paths = params["paths"].as_array().unwrap();
-        assert!(paths.iter().any(|p| p.as_str() == Some("/home/user/doc.txt")));
+        assert!(paths
+            .iter()
+            .any(|p| p.as_str() == Some("/home/user/doc.txt")));
     }
 
     #[test]
@@ -489,7 +487,9 @@ mod tests {
 
         assert!(params["urls"].is_array());
         let urls = params["urls"].as_array().unwrap();
-        assert!(urls.iter().any(|u| u.as_str() == Some("https://example.com/api")));
+        assert!(urls
+            .iter()
+            .any(|u| u.as_str() == Some("https://example.com/api")));
     }
 
     #[test]
@@ -617,10 +617,7 @@ mod tests {
         let bus = EventBus::new();
         let ctx = EventContext::new(bus);
 
-        let request = create_plan_request(
-            "打开文件然后复制",
-            vec!["打开文件", "复制内容"],
-        );
+        let request = create_plan_request("打开文件然后复制", vec!["打开文件", "复制内容"]);
         let event = AetherEvent::PlanRequested(request);
         let result = planner.handle(&event, &ctx).await.unwrap();
 
@@ -639,10 +636,7 @@ mod tests {
         let bus = EventBus::new();
         let ctx = EventContext::new(bus);
 
-        let request = create_plan_request(
-            "搜索文件然后删除",
-            vec!["搜索配置文件", "删除旧文件"],
-        );
+        let request = create_plan_request("搜索文件然后删除", vec!["搜索配置文件", "删除旧文件"]);
         let event = AetherEvent::PlanRequested(request);
         let result = planner.handle(&event, &ctx).await.unwrap();
 

@@ -10,7 +10,6 @@
 //! then looks up the command in all registries to determine its type
 //! and associated context.
 
-use crate::command::nl_detector::{DetectionType, NLDetection, NaturalLanguageCommandDetector};
 use crate::command::CommandRegistry;
 use crate::config::RoutingRuleConfig;
 use crate::dispatcher::ToolSourceType;
@@ -94,9 +93,6 @@ pub struct CommandParser {
 
     /// Builtin command names
     builtin_commands: Vec<&'static str>,
-
-    /// Natural language command detector
-    nl_detector: Option<NaturalLanguageCommandDetector>,
 }
 
 impl CommandParser {
@@ -108,7 +104,6 @@ impl CommandParser {
             routing_rules: Vec::new(),
             mcp_server_names: Vec::new(),
             builtin_commands: vec!["agent", "search", "youtube", "webfetch"],
-            nl_detector: None,
         }
     }
 
@@ -136,30 +131,16 @@ impl CommandParser {
         self
     }
 
-    /// Set the natural language detector
-    pub fn with_nl_detector(mut self, detector: NaturalLanguageCommandDetector) -> Self {
-        self.nl_detector = Some(detector);
-        self
-    }
-
     /// Parse user input as a command
     ///
-    /// Returns `Some(ParsedCommand)` if the input is a valid command:
-    /// 1. Slash commands (starting with /) take precedence
-    /// 2. Natural language detection (if detector is configured)
+    /// Returns `Some(ParsedCommand)` if the input is a valid slash command
+    /// (starting with /).
     pub fn parse(&self, input: &str) -> Option<ParsedCommand> {
         let trimmed = input.trim();
 
-        // 1. Slash commands take precedence
+        // Only handle slash commands
         if trimmed.starts_with('/') {
             return self.parse_slash_command(trimmed);
-        }
-
-        // 2. Try natural language detection
-        if let Some(ref detector) = self.nl_detector {
-            if let Some(detection) = detector.detect(trimmed) {
-                return self.create_command_from_detection(detection, trimmed);
-            }
         }
 
         None
@@ -241,101 +222,16 @@ impl CommandParser {
         None
     }
 
-    /// Create ParsedCommand from NL detection result
-    fn create_command_from_detection(
-        &self,
-        detection: NLDetection,
-        original_input: &str,
-    ) -> Option<ParsedCommand> {
-        let arguments = detection.remaining_input.clone();
-
-        // First check skills
-        if let Some(ref skills_registry) = self.skills_registry {
-            if let Some(skill) = skills_registry.get_skill(&detection.command_name) {
-                return Some(ParsedCommand {
-                    source_type: ToolSourceType::Skill,
-                    command_name: detection.command_name,
-                    arguments,
-                    full_input: original_input.to_string(),
-                    context: CommandContext::Skill {
-                        skill_id: skill.id.clone(),
-                        instructions: skill.instructions.clone(),
-                        display_name: skill.frontmatter.name.clone(),
-                    },
-                });
-            }
-        }
-
-        // Check MCP servers
-        if self.mcp_server_names.contains(&detection.command_name) {
-            return Some(ParsedCommand {
-                source_type: ToolSourceType::Mcp,
-                command_name: detection.command_name.clone(),
-                arguments,
-                full_input: original_input.to_string(),
-                context: CommandContext::Mcp {
-                    server_name: detection.command_name,
-                    tool_name: None,
-                },
-            });
-        }
-
-        // Check custom rules
-        if let Some(rule) = self.find_matching_rule(&detection.command_name) {
-            return Some(ParsedCommand {
-                source_type: ToolSourceType::Custom,
-                command_name: detection.command_name,
-                arguments,
-                full_input: original_input.to_string(),
-                context: CommandContext::Custom {
-                    system_prompt: rule.system_prompt.clone(),
-                    provider: rule.provider.clone(),
-                    pattern: rule.regex.clone(),
-                },
-            });
-        }
-
-        // Check builtins
-        if self.builtin_commands.contains(&detection.command_name.as_str()) {
-            return Some(ParsedCommand {
-                source_type: ToolSourceType::Builtin,
-                command_name: detection.command_name.clone(),
-                arguments,
-                full_input: original_input.to_string(),
-                context: CommandContext::Builtin {
-                    tool_name: detection.command_name,
-                },
-            });
-        }
-
-        // For explicit detection, trust the index source type even without full context
-        // For implicit detection, only return if found in a registry above
-        if detection.detection_type == DetectionType::Explicit {
-            // Explicit detection means user explicitly named the command
-            // Trust the source type from index lookup
-            return Some(ParsedCommand {
-                source_type: detection.source_type,
-                command_name: detection.command_name,
-                arguments,
-                full_input: original_input.to_string(),
-                context: CommandContext::None,
-            });
-        }
-
-        // Implicit detection without registry match - not reliable enough
-        None
-    }
-
     /// Extract command name and arguments from input (without leading /)
     fn extract_parts(&self, input: &str) -> (String, Option<String>) {
         let parts: Vec<&str> = input.splitn(2, char::is_whitespace).collect();
 
-        let command_name = parts
-            .first()
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
+        let command_name = parts.first().map(|s| s.to_lowercase()).unwrap_or_default();
 
-        let arguments = parts.get(1).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let arguments = parts
+            .get(1)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         (command_name, arguments)
     }
@@ -503,7 +399,8 @@ When creating a knowledge graph, follow these steps:
 
     #[test]
     fn test_parse_mcp_command() {
-        let parser = CommandParser::new().with_mcp_servers(vec!["git".to_string(), "docker".to_string()]);
+        let parser =
+            CommandParser::new().with_mcp_servers(vec!["git".to_string(), "docker".to_string()]);
 
         let result = parser.parse("/git status");
         assert!(result.is_some());
@@ -581,37 +478,4 @@ When creating a knowledge graph, follow these steps:
         assert!(cmd.arguments.is_none());
     }
 
-    #[test]
-    fn test_parser_with_nl_detector_explicit() {
-        use crate::command::{CommandTriggers, NaturalLanguageCommandDetector, UnifiedCommandIndex};
-
-        let mut index = UnifiedCommandIndex::new();
-        let triggers = CommandTriggers::new(vec!["graph".to_string()], Vec::new());
-        index.add_command(ToolSourceType::Skill, "test-skill", &triggers);
-
-        let detector = NaturalLanguageCommandDetector::new(index);
-        let parser = CommandParser::new().with_nl_detector(detector);
-
-        // Should detect "使用 test-skill" as a command
-        let result = parser.parse("使用 test-skill 做点什么");
-        assert!(result.is_some());
-        let cmd = result.unwrap();
-        assert_eq!(cmd.command_name, "test-skill");
-    }
-
-    #[test]
-    fn test_parser_slash_command_takes_precedence() {
-        use crate::command::{NaturalLanguageCommandDetector, UnifiedCommandIndex};
-
-        let index = UnifiedCommandIndex::new();
-        let detector = NaturalLanguageCommandDetector::new(index);
-        let parser = CommandParser::new().with_nl_detector(detector);
-
-        // Slash commands should still work
-        let result = parser.parse("/search weather");
-        assert!(result.is_some());
-        let cmd = result.unwrap();
-        assert_eq!(cmd.command_name, "search");
-        assert_eq!(cmd.source_type, ToolSourceType::Builtin);
-    }
 }

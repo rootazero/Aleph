@@ -13,8 +13,7 @@ use tracing::info;
 impl AetherCore {
     /// List all installed skills
     pub fn list_skills(&self) -> Result<Vec<crate::skills::SkillInfo>, AetherFfiError> {
-        crate::skills::list_installed_skills()
-            .map_err(|e| AetherFfiError::Config(e.to_string()))
+        crate::skills::list_installed_skills().map_err(|e| AetherFfiError::Config(e.to_string()))
     }
 
     /// Install a skill from a GitHub URL

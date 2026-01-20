@@ -9,14 +9,20 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError,
+    AetherEvent,
     // Event data types
-    AiResponse, InputEvent, TaskPlan, ToolCallError, ToolCallResult,
+    AiResponse,
+    EventContext,
+    EventHandler,
+    EventType,
+    HandlerError,
+    InputEvent,
+    TaskPlan,
+    ToolCallError,
+    ToolCallResult,
 };
 
-use super::{
-    AiResponsePart, PlanPart, SessionPart, ToolCallPart, ToolCallStatus, UserInputPart,
-};
+use super::{AiResponsePart, PlanPart, SessionPart, ToolCallPart, ToolCallStatus, UserInputPart};
 
 // ============================================================================
 // SessionRecorder Component
@@ -39,8 +45,8 @@ impl SessionRecorder {
     ///
     /// Useful for testing or ephemeral sessions.
     pub fn new_in_memory() -> Result<Self, RecorderError> {
-        let conn = Connection::open_in_memory()
-            .map_err(|e| RecorderError::Database(e.to_string()))?;
+        let conn =
+            Connection::open_in_memory().map_err(|e| RecorderError::Database(e.to_string()))?;
 
         Self::init_schema(&conn)?;
 
@@ -53,8 +59,7 @@ impl SessionRecorder {
     ///
     /// Creates the database file if it doesn't exist.
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, RecorderError> {
-        let conn = Connection::open(db_path)
-            .map_err(|e| RecorderError::Database(e.to_string()))?;
+        let conn = Connection::open(db_path).map_err(|e| RecorderError::Database(e.to_string()))?;
 
         Self::init_schema(&conn)?;
 
@@ -85,7 +90,8 @@ impl SessionRecorder {
             )
             "#,
             [],
-        ).map_err(|e| RecorderError::Database(e.to_string()))?;
+        )
+        .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         // Create session_parts table
         conn.execute(
@@ -101,19 +107,22 @@ impl SessionRecorder {
             )
             "#,
             [],
-        ).map_err(|e| RecorderError::Database(e.to_string()))?;
+        )
+        .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         // Create index on session_id for efficient lookups
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_session_parts_session_id ON session_parts(session_id)",
             [],
-        ).map_err(|e| RecorderError::Database(e.to_string()))?;
+        )
+        .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         // Create index on parent_id for hierarchical queries
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_parent_id ON sessions(parent_id)",
             [],
-        ).map_err(|e| RecorderError::Database(e.to_string()))?;
+        )
+        .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         Ok(())
     }
@@ -122,11 +131,7 @@ impl SessionRecorder {
     ///
     /// Inserts a new session with the given ID and model.
     /// Sets created_at and updated_at to current timestamp.
-    pub fn create_session(
-        &self,
-        session_id: &str,
-        model: &str,
-    ) -> Result<(), RecorderError> {
+    pub fn create_session(&self, session_id: &str, model: &str) -> Result<(), RecorderError> {
         self.create_session_with_options(session_id, model, None, "main")
     }
 
@@ -140,7 +145,9 @@ impl SessionRecorder {
     ) -> Result<(), RecorderError> {
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| RecorderError::Lock(e.to_string()))?;
 
         conn.execute(
@@ -158,13 +165,12 @@ impl SessionRecorder {
     ///
     /// Updates the iteration count and updated_at timestamp.
     /// Optionally updates status and token count.
-    pub fn update_session(
-        &self,
-        session_id: &str,
-    ) -> Result<(), RecorderError> {
+    pub fn update_session(&self, session_id: &str) -> Result<(), RecorderError> {
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| RecorderError::Lock(e.to_string()))?;
 
         conn.execute(
@@ -174,7 +180,8 @@ impl SessionRecorder {
             WHERE id = ?2
             "#,
             params![now, session_id],
-        ).map_err(|e| RecorderError::Database(e.to_string()))?;
+        )
+        .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         Ok(())
     }
@@ -189,7 +196,9 @@ impl SessionRecorder {
     ) -> Result<(), RecorderError> {
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| RecorderError::Lock(e.to_string()))?;
 
         // Build dynamic update query
@@ -222,28 +231,15 @@ impl SessionRecorder {
             (Some(s), Some(ic), Some(tt)) => {
                 conn.execute(&query, params![now, s, ic, tt, session_id])
             }
-            (Some(s), Some(ic), None) => {
-                conn.execute(&query, params![now, s, ic, session_id])
-            }
-            (Some(s), None, Some(tt)) => {
-                conn.execute(&query, params![now, s, tt, session_id])
-            }
-            (Some(s), None, None) => {
-                conn.execute(&query, params![now, s, session_id])
-            }
-            (None, Some(ic), Some(tt)) => {
-                conn.execute(&query, params![now, ic, tt, session_id])
-            }
-            (None, Some(ic), None) => {
-                conn.execute(&query, params![now, ic, session_id])
-            }
-            (None, None, Some(tt)) => {
-                conn.execute(&query, params![now, tt, session_id])
-            }
-            (None, None, None) => {
-                conn.execute(&query, params![now, session_id])
-            }
-        }.map_err(|e| RecorderError::Database(e.to_string()))?;
+            (Some(s), Some(ic), None) => conn.execute(&query, params![now, s, ic, session_id]),
+            (Some(s), None, Some(tt)) => conn.execute(&query, params![now, s, tt, session_id]),
+            (Some(s), None, None) => conn.execute(&query, params![now, s, session_id]),
+            (None, Some(ic), Some(tt)) => conn.execute(&query, params![now, ic, tt, session_id]),
+            (None, Some(ic), None) => conn.execute(&query, params![now, ic, session_id]),
+            (None, None, Some(tt)) => conn.execute(&query, params![now, tt, session_id]),
+            (None, None, None) => conn.execute(&query, params![now, session_id]),
+        }
+        .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         Ok(())
     }
@@ -251,27 +247,27 @@ impl SessionRecorder {
     /// Append a session part to the database
     ///
     /// Gets the next sequence number for the session and inserts the part.
-    pub fn append_part(
-        &self,
-        session_id: &str,
-        part: &SessionPart,
-    ) -> Result<i64, RecorderError> {
+    pub fn append_part(&self, session_id: &str, part: &SessionPart) -> Result<i64, RecorderError> {
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| RecorderError::Lock(e.to_string()))?;
 
         // Get next sequence number for this session
-        let sequence: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_parts WHERE session_id = ?1",
-            params![session_id],
-            |row| row.get(0),
-        ).unwrap_or(1);
+        let sequence: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_parts WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(1);
 
         // Serialize part to JSON
         let part_type = part.type_name();
-        let part_data = serde_json::to_string(part)
-            .map_err(|e| RecorderError::Serialization(e.to_string()))?;
+        let part_data =
+            serde_json::to_string(part).map_err(|e| RecorderError::Serialization(e.to_string()))?;
 
         // Insert the part
         conn.execute(
@@ -280,7 +276,8 @@ impl SessionRecorder {
             VALUES (?1, ?2, ?3, ?4, ?5)
             "#,
             params![session_id, part_type, part_data, sequence, now],
-        ).map_err(|e| RecorderError::Database(e.to_string()))?;
+        )
+        .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         let id = conn.last_insert_rowid();
 
@@ -292,36 +289,26 @@ impl SessionRecorder {
     /// Returns None for events that don't map to session parts.
     pub fn event_to_part(event: &AetherEvent) -> Option<SessionPart> {
         match event {
-            AetherEvent::InputReceived(input) => {
-                Some(Self::input_to_part(input))
-            }
-            AetherEvent::ToolCallCompleted(result) => {
-                Some(Self::tool_result_to_part(result))
-            }
-            AetherEvent::ToolCallFailed(error) => {
-                Some(Self::tool_error_to_part(error))
-            }
-            AetherEvent::AiResponseGenerated(response) => {
-                Some(Self::ai_response_to_part(response))
-            }
-            AetherEvent::PlanCreated(plan) => {
-                Some(Self::plan_to_part(plan))
-            }
+            AetherEvent::InputReceived(input) => Some(Self::input_to_part(input)),
+            AetherEvent::ToolCallCompleted(result) => Some(Self::tool_result_to_part(result)),
+            AetherEvent::ToolCallFailed(error) => Some(Self::tool_error_to_part(error)),
+            AetherEvent::AiResponseGenerated(response) => Some(Self::ai_response_to_part(response)),
+            AetherEvent::PlanCreated(plan) => Some(Self::plan_to_part(plan)),
             // Events that don't map to session parts
-            AetherEvent::PlanRequested(_) |
-            AetherEvent::ToolCallRequested(_) |
-            AetherEvent::ToolCallStarted(_) |
-            AetherEvent::ToolCallRetrying(_) |
-            AetherEvent::LoopContinue(_) |
-            AetherEvent::LoopStop(_) |
-            AetherEvent::SessionCreated(_) |
-            AetherEvent::SessionUpdated(_) |
-            AetherEvent::SessionResumed(_) |
-            AetherEvent::SessionCompacted(_) |
-            AetherEvent::SubAgentStarted(_) |
-            AetherEvent::SubAgentCompleted(_) |
-            AetherEvent::UserQuestionAsked(_) |
-            AetherEvent::UserResponseReceived(_) => None,
+            AetherEvent::PlanRequested(_)
+            | AetherEvent::ToolCallRequested(_)
+            | AetherEvent::ToolCallStarted(_)
+            | AetherEvent::ToolCallRetrying(_)
+            | AetherEvent::LoopContinue(_)
+            | AetherEvent::LoopStop(_)
+            | AetherEvent::SessionCreated(_)
+            | AetherEvent::SessionUpdated(_)
+            | AetherEvent::SessionResumed(_)
+            | AetherEvent::SessionCompacted(_)
+            | AetherEvent::SubAgentStarted(_)
+            | AetherEvent::SubAgentCompleted(_)
+            | AetherEvent::UserQuestionAsked(_)
+            | AetherEvent::UserResponseReceived(_) => None,
         }
     }
 
@@ -329,9 +316,10 @@ impl SessionRecorder {
     fn input_to_part(input: &InputEvent) -> SessionPart {
         SessionPart::UserInput(UserInputPart {
             text: input.text.clone(),
-            context: input.context.as_ref().map(|ctx| {
-                serde_json::to_string(ctx).unwrap_or_default()
-            }),
+            context: input
+                .context
+                .as_ref()
+                .map(|ctx| serde_json::to_string(ctx).unwrap_or_default()),
             timestamp: input.timestamp,
         })
     }
@@ -384,12 +372,14 @@ impl SessionRecorder {
 
     /// Get all parts for a session
     pub fn get_session_parts(&self, session_id: &str) -> Result<Vec<SessionPart>, RecorderError> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| RecorderError::Lock(e.to_string()))?;
 
-        let mut stmt = conn.prepare(
-            "SELECT part_data FROM session_parts WHERE session_id = ?1 ORDER BY sequence"
-        ).map_err(|e| RecorderError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT part_data FROM session_parts WHERE session_id = ?1 ORDER BY sequence")
+            .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         let parts: Result<Vec<SessionPart>, _> = stmt
             .query_map(params![session_id], |row| {
@@ -410,11 +400,10 @@ impl SessionRecorder {
     }
 
     /// Get session info
-    pub fn get_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<SessionRecord>, RecorderError> {
-        let conn = self.conn.lock()
+    pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>, RecorderError> {
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| RecorderError::Lock(e.to_string()))?;
 
         let result = conn.query_row(
@@ -563,8 +552,8 @@ pub enum RecorderError {
 mod tests {
     use super::*;
     use crate::event::{
-        AiResponse, EventBus, InputContext, InputEvent, PlanStep, StepStatus, TaskPlan,
-        TokenUsage, ToolCallError, ToolCallResult, ErrorKind,
+        AiResponse, ErrorKind, EventBus, InputContext, InputEvent, PlanStep, StepStatus, TaskPlan,
+        TokenUsage, ToolCallError, ToolCallResult,
     };
 
     // ========================================================================
@@ -659,12 +648,8 @@ mod tests {
         recorder.create_session("session-001", "gpt-4").unwrap();
 
         // Update with all fields
-        let result = recorder.update_session_full(
-            "session-001",
-            Some("completed"),
-            Some(5),
-            Some(1000),
-        );
+        let result =
+            recorder.update_session_full("session-001", Some("completed"), Some(5), Some(1000));
         assert!(result.is_ok());
 
         let session = recorder.get_session("session-001").unwrap().unwrap();
@@ -841,7 +826,10 @@ mod tests {
 
         if let Some(SessionPart::AiResponse(response)) = part {
             assert_eq!(response.content, "Here is my response");
-            assert_eq!(response.reasoning, Some("I thought about it carefully".to_string()));
+            assert_eq!(
+                response.reasoning,
+                Some("I thought about it carefully".to_string())
+            );
             assert_eq!(response.timestamp, 1234567890);
         } else {
             panic!("Expected AiResponse part");

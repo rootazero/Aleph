@@ -231,7 +231,10 @@ pub fn create_provider(
             Arc::new(builder.build())
         }
         "t8star_veo" | "t8star-veo" => {
-            let base_url = config.base_url.clone().unwrap_or_else(|| "https://ai.t8star.cn".to_string());
+            let base_url = config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://ai.t8star.cn".to_string());
 
             let mut builder = T8StarVeoProvider::builder(&api_key, &base_url);
 
@@ -582,7 +585,10 @@ mod tests {
         use std::collections::HashMap;
 
         let mut models = HashMap::new();
-        models.insert("flux".to_string(), "black-forest-labs/flux-schnell".to_string());
+        models.insert(
+            "flux".to_string(),
+            "black-forest-labs/flux-schnell".to_string(),
+        );
         models.insert("sdxl".to_string(), "stability-ai/sdxl".to_string());
 
         let config = GenerationProviderConfig {

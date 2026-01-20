@@ -71,7 +71,10 @@ impl InitializationCoordinator {
         let config_dir =
             get_config_dir().map_err(|e| InitError::non_retryable("setup", e.to_string()))?;
 
-        Ok(Self { config_dir, handler })
+        Ok(Self {
+            config_dir,
+            handler,
+        })
     }
 
     /// Run the full initialization sequence
@@ -356,9 +359,9 @@ impl InitializationCoordinator {
         let mut handles = Vec::new();
 
         for id in runtime_ids {
-            let runtime = registry.get(id).ok_or_else(|| {
-                InitError::new("runtimes", format!("Unknown runtime: {}", id))
-            })?;
+            let runtime = registry
+                .get(id)
+                .ok_or_else(|| InitError::new("runtimes", format!("Unknown runtime: {}", id)))?;
 
             let handler = self.handler.clone();
             let runtime_id = id.to_string();
@@ -448,7 +451,10 @@ impl InitializationCoordinator {
 
         // Ensure skills directory exists
         tokio::fs::create_dir_all(&skills_dir).await.map_err(|e| {
-            InitError::new("skills", format!("Failed to create skills directory: {}", e))
+            InitError::new(
+                "skills",
+                format!("Failed to create skills directory: {}", e),
+            )
         })?;
 
         // Note: Built-in skills are copied from app bundle by the platform layer (Swift/C#)
@@ -471,7 +477,10 @@ impl InitializationCoordinator {
             warn!(error = %e, "Failed to load skills registry");
         }
 
-        info!(skill_count = registry.count(), "Skills directory initialized");
+        info!(
+            skill_count = registry.count(),
+            "Skills directory initialized"
+        );
         Ok(())
     }
 }

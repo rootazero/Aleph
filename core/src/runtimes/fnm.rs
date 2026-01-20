@@ -3,7 +3,10 @@
 //! Fast Node Manager - Node.js version manager.
 //! Manages a default Node.js installation under runtimes/fnm/versions/default/.
 
-use super::download::{download_file, extract_zip, get_github_latest_version, get_os, normalize_version, set_executable};
+use super::download::{
+    download_file, extract_zip, get_github_latest_version, get_os, normalize_version,
+    set_executable,
+};
 use super::manager::{RuntimeManager, UpdateInfo};
 use crate::error::{AetherError, Result};
 use std::path::PathBuf;
@@ -128,7 +131,9 @@ impl FnmRuntime {
         let output = Command::new(self.npm_path())
             .args(["install", "-g", package])
             .output()
-            .map_err(|e| AetherError::runtime("fnm", format!("Failed to install package: {}", e)))?;
+            .map_err(|e| {
+                AetherError::runtime("fnm", format!("Failed to install package: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -224,23 +229,35 @@ impl FnmRuntime {
                     // Ensure parent directory exists
                     if let Some(parent) = default_dir.parent() {
                         std::fs::create_dir_all(parent).map_err(|e| {
-                            AetherError::runtime("fnm", format!("Failed to create versions dir: {}", e))
+                            AetherError::runtime(
+                                "fnm",
+                                format!("Failed to create versions dir: {}", e),
+                            )
                         })?;
                     }
 
                     #[cfg(unix)]
                     {
-                        std::os::unix::fs::symlink(&installation_dir, &default_dir).map_err(|e| {
-                            AetherError::runtime("fnm", format!("Failed to create symlink: {}", e))
-                        })?;
+                        std::os::unix::fs::symlink(&installation_dir, &default_dir).map_err(
+                            |e| {
+                                AetherError::runtime(
+                                    "fnm",
+                                    format!("Failed to create symlink: {}", e),
+                                )
+                            },
+                        )?;
                     }
 
                     #[cfg(windows)]
                     {
                         // On Windows, create junction or copy
-                        std::os::windows::fs::symlink_dir(&installation_dir, &default_dir).map_err(|e| {
-                            AetherError::runtime("fnm", format!("Failed to create symlink: {}", e))
-                        })?;
+                        std::os::windows::fs::symlink_dir(&installation_dir, &default_dir)
+                            .map_err(|e| {
+                                AetherError::runtime(
+                                    "fnm",
+                                    format!("Failed to create symlink: {}", e),
+                                )
+                            })?;
                     }
 
                     debug!(version = %name, "Linked as default");
@@ -395,7 +412,10 @@ mod tests {
         let runtime = FnmRuntime::new(temp_dir.path().to_path_buf());
 
         assert!(runtime.fnm_binary().to_string_lossy().contains("fnm/fnm"));
-        assert!(runtime.fnm_binary_path().to_string_lossy().contains("fnm/fnm"));
+        assert!(runtime
+            .fnm_binary_path()
+            .to_string_lossy()
+            .contains("fnm/fnm"));
         assert!(runtime
             .node_path()
             .to_string_lossy()
@@ -450,7 +470,10 @@ mod integration_tests {
 
         // Verify installation
         assert!(runtime.is_fnm_binary_installed(), "fnm binary should exist");
-        assert!(runtime.is_installed(), "fnm and Node.js should be installed");
+        assert!(
+            runtime.is_installed(),
+            "fnm and Node.js should be installed"
+        );
 
         // Check fnm version
         let fnm_version = runtime.get_version();

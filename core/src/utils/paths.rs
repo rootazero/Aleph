@@ -86,21 +86,6 @@ pub fn get_cache_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("cache"))
 }
 
-/// Get the HuggingFace cache directory for fastembed models
-///
-/// Returns platform-specific path:
-/// - macOS: ~/Library/Caches/huggingface/hub/
-/// - Windows: %LOCALAPPDATA%\huggingface\hub\ or %USERPROFILE%\.cache\huggingface\hub\
-/// - Linux: ~/.cache/huggingface/hub/
-pub fn get_huggingface_cache_dir() -> Result<PathBuf> {
-    if let Some(cache_dir) = dirs::cache_dir() {
-        return Ok(cache_dir.join("huggingface").join("hub"));
-    }
-    // Fallback to Unix-style path
-    let home_dir = get_home_dir()?;
-    Ok(home_dir.join(".cache").join("huggingface").join("hub"))
-}
-
 /// Get the path for the memory database file
 ///
 /// Returns: `<config_dir>/memory.db`
@@ -114,9 +99,7 @@ pub fn get_memory_db_path() -> Result<PathBuf> {
 ///
 /// Creates the directory if it doesn't exist.
 pub fn get_embedding_model_dir() -> Result<PathBuf> {
-    let model_dir = get_config_dir()?
-        .join("models")
-        .join("bge-small-zh-v1.5");
+    let model_dir = get_config_dir()?.join("models").join("bge-small-zh-v1.5");
 
     // Create directory if it doesn't exist
     std::fs::create_dir_all(&model_dir)

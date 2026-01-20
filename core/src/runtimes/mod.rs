@@ -57,10 +57,7 @@ use std::path::PathBuf;
 pub fn get_runtimes_dir() -> Result<PathBuf> {
     let home_dir = get_home_dir()?;
 
-    Ok(home_dir
-        .join(".config")
-        .join("aether")
-        .join("runtimes"))
+    Ok(home_dir.join(".config").join("aether").join("runtimes"))
 }
 
 /// Get the user's home directory in a cross-platform way

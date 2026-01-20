@@ -129,8 +129,7 @@ mod tests {
 
     #[test]
     fn test_with_max_iterations() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "")
-            .with_max_iterations(20);
+        let agent = AgentDef::new("test", AgentMode::SubAgent, "").with_max_iterations(20);
 
         assert_eq!(agent.max_iterations, Some(20));
     }

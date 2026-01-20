@@ -2,7 +2,9 @@
 //!
 //! Single-binary runtime for YouTube video/audio downloading and transcript extraction.
 
-use super::download::{download_file, get_github_latest_version, normalize_version, set_executable};
+use super::download::{
+    download_file, get_github_latest_version, normalize_version, set_executable,
+};
 use super::manager::{RuntimeManager, UpdateInfo};
 use crate::error::{AetherError, Result};
 use crate::utils::paths::get_config_dir;
@@ -113,9 +115,7 @@ impl RuntimeManager for YtDlpRuntime {
             .ok()?;
 
         if output.status.success() {
-            let version = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             Some(version)
         } else {
             None
@@ -136,17 +136,13 @@ impl RuntimeManager for YtDlpRuntime {
             // Ensure parent directory exists
             if let Some(parent) = new_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
-                    AetherError::runtime(
-                        "yt-dlp",
-                        format!("Failed to create directory: {}", e),
-                    )
+                    AetherError::runtime("yt-dlp", format!("Failed to create directory: {}", e))
                 })?;
             }
 
             // Move the file
-            std::fs::rename(&old_path, &new_path).map_err(|e| {
-                AetherError::runtime("yt-dlp", format!("Failed to migrate: {}", e))
-            })?;
+            std::fs::rename(&old_path, &new_path)
+                .map_err(|e| AetherError::runtime("yt-dlp", format!("Failed to migrate: {}", e)))?;
 
             info!("yt-dlp migrated successfully");
         }

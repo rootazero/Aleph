@@ -3,7 +3,10 @@
 //! Python package manager and virtual environment tool.
 //! Manages a default Python environment under runtimes/uv/envs/default/.
 
-use super::download::{download_file, extract_tar_gz, get_github_latest_version, get_platform, normalize_version, set_executable};
+use super::download::{
+    download_file, extract_tar_gz, get_github_latest_version, get_platform, normalize_version,
+    set_executable,
+};
 use super::manager::{RuntimeManager, UpdateInfo};
 use crate::error::{AetherError, Result};
 use std::path::PathBuf;
@@ -87,7 +90,13 @@ impl UvRuntime {
         info!(package = %package, "Installing Python package");
 
         let output = Command::new(self.uv_binary())
-            .args(["pip", "install", "--python", self.python_path().to_str().unwrap_or("python"), package])
+            .args([
+                "pip",
+                "install",
+                "--python",
+                self.python_path().to_str().unwrap_or("python"),
+                package,
+            ])
             .output()
             .map_err(|e| AetherError::runtime("uv", format!("Failed to install package: {}", e)))?;
 

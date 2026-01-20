@@ -4,16 +4,18 @@
 #[cfg(test)]
 mod tests {
     use crate::event::*;
+    use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use async_trait::async_trait;
 
     /// Simulates IntentAnalyzer: receives InputReceived, publishes ToolCallRequested
     struct MockIntentAnalyzer;
 
     #[async_trait]
     impl EventHandler for MockIntentAnalyzer {
-        fn name(&self) -> &'static str { "MockIntentAnalyzer" }
+        fn name(&self) -> &'static str {
+            "MockIntentAnalyzer"
+        }
 
         fn subscriptions(&self) -> Vec<EventType> {
             vec![EventType::InputReceived]
@@ -42,7 +44,9 @@ mod tests {
 
     #[async_trait]
     impl EventHandler for MockToolExecutor {
-        fn name(&self) -> &'static str { "MockToolExecutor" }
+        fn name(&self) -> &'static str {
+            "MockToolExecutor"
+        }
 
         fn subscriptions(&self) -> Vec<EventType> {
             vec![EventType::ToolCallRequested]
@@ -76,7 +80,9 @@ mod tests {
 
     #[async_trait]
     impl EventHandler for MockLoopController {
-        fn name(&self) -> &'static str { "MockLoopController" }
+        fn name(&self) -> &'static str {
+            "MockLoopController"
+        }
 
         fn subscriptions(&self) -> Vec<EventType> {
             vec![EventType::ToolCallCompleted]
@@ -120,7 +126,7 @@ mod tests {
         registry.register(Arc::new(MockIntentAnalyzer));
         registry.register(Arc::new(MockToolExecutor));
         registry.register(Arc::new(MockLoopController {
-            iterations: iterations.clone()
+            iterations: iterations.clone(),
         }));
 
         // Subscribe to watch for LoopStop
@@ -138,13 +144,12 @@ mod tests {
             topic_id: None,
             context: None,
             timestamp: chrono::Utc::now().timestamp_millis(),
-        })).await;
+        }))
+        .await;
 
         // Wait for LoopStop with timeout
-        let result = tokio::time::timeout(
-            tokio::time::Duration::from_secs(2),
-            watcher.recv()
-        ).await;
+        let result =
+            tokio::time::timeout(tokio::time::Duration::from_secs(2), watcher.recv()).await;
 
         assert!(result.is_ok(), "Should receive LoopStop event");
         let event = result.unwrap().unwrap();
@@ -155,12 +160,13 @@ mod tests {
 
         // Check history
         let history = bus.history().await;
-        assert!(history.len() >= 4, "Should have at least 4 events in history");
+        assert!(
+            history.len() >= 4,
+            "Should have at least 4 events in history"
+        );
 
         // Verify event sequence: Input -> ToolCallRequested -> ToolCallCompleted -> LoopStop
-        let event_types: Vec<_> = history.iter()
-            .map(|e| e.event.event_type())
-            .collect();
+        let event_types: Vec<_> = history.iter().map(|e| e.event.event_type()).collect();
 
         assert!(event_types.contains(&EventType::InputReceived));
         assert!(event_types.contains(&EventType::ToolCallRequested));
@@ -169,10 +175,7 @@ mod tests {
         // Cleanup
         registry.stop(&ctx);
         for handle in handles {
-            let _ = tokio::time::timeout(
-                tokio::time::Duration::from_millis(100),
-                handle
-            ).await;
+            let _ = tokio::time::timeout(tokio::time::Duration::from_millis(100), handle).await;
         }
     }
 
@@ -190,7 +193,9 @@ mod tests {
 
         #[async_trait]
         impl EventHandler for SlowHandler {
-            fn name(&self) -> &'static str { "SlowHandler" }
+            fn name(&self) -> &'static str {
+                "SlowHandler"
+            }
 
             fn subscriptions(&self) -> Vec<EventType> {
                 vec![EventType::All]
@@ -210,14 +215,17 @@ mod tests {
         }
 
         let mut registry = EventHandlerRegistry::new();
-        registry.register(Arc::new(SlowHandler { counter: counter.clone() }));
+        registry.register(Arc::new(SlowHandler {
+            counter: counter.clone(),
+        }));
 
         let handles = registry.start(ctx.clone()).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Publish one event
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+            .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -228,10 +236,7 @@ mod tests {
 
         // Wait for handlers to stop
         for handle in handles {
-            let _ = tokio::time::timeout(
-                tokio::time::Duration::from_millis(200),
-                handle
-            ).await;
+            let _ = tokio::time::timeout(tokio::time::Duration::from_millis(200), handle).await;
         }
 
         // Verify handler processed at least one event before abort

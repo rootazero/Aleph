@@ -211,7 +211,10 @@ impl GoogleVeoProvider {
                     let q_lower = q.to_lowercase();
                     if q_lower.contains("4k") || q_lower.contains("ultra") {
                         Some("4k".to_string())
-                    } else if q_lower.contains("1080") || q_lower.contains("full") || q_lower.contains("high") {
+                    } else if q_lower.contains("1080")
+                        || q_lower.contains("full")
+                        || q_lower.contains("high")
+                    {
                         Some("1080p".to_string())
                     } else {
                         None
@@ -278,7 +281,13 @@ impl GoogleVeoProvider {
                     return dur;
                 }
                 // Round to nearest valid duration
-                return if dur <= 5 { 4 } else if dur <= 7 { 6 } else { 8 };
+                return if dur <= 5 {
+                    4
+                } else if dur <= 7 {
+                    6
+                } else {
+                    8
+                };
             } else {
                 // Veo 2: range 5-8
                 return dur.clamp(VEO2_DURATION_RANGE.0, VEO2_DURATION_RANGE.1);
@@ -346,7 +355,10 @@ impl GoogleVeoProvider {
             // Check for error in operation
             if let Some(ref error) = operation.error {
                 return Err(GenerationError::provider(
-                    error.message.clone().unwrap_or_else(|| "Operation failed".to_string()),
+                    error
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| "Operation failed".to_string()),
                     error.code,
                     "google-veo",
                 ));
@@ -403,12 +415,10 @@ impl GoogleVeoProvider {
     async fn download_video(&self, uri: &str) -> GenerationResult<Vec<u8>> {
         debug!(uri = %uri, "Downloading video from URI");
 
-        let response = self
-            .client
-            .get(uri)
-            .send()
-            .await
-            .map_err(|e| GenerationError::network(format!("Failed to download video: {}", e)))?;
+        let response =
+            self.client.get(uri).send().await.map_err(|e| {
+                GenerationError::network(format!("Failed to download video: {}", e))
+            })?;
 
         if !response.status().is_success() {
             return Err(GenerationError::network(format!(
@@ -643,8 +653,8 @@ impl GenerationProvider for GoogleVeoProvider {
             }
 
             // Parse response to get operation name
-            let predict_response: VeoPredictResponse =
-                serde_json::from_str(&response_text).map_err(|e| {
+            let predict_response: VeoPredictResponse = serde_json::from_str(&response_text)
+                .map_err(|e| {
                     error!(
                         error = %e,
                         body = %response_text,
@@ -919,7 +929,10 @@ mod tests {
         let body = provider.build_request_body(&request);
 
         assert_eq!(body.instances.len(), 1);
-        assert_eq!(body.instances[0].prompt, Some("A cat playing piano".to_string()));
+        assert_eq!(
+            body.instances[0].prompt,
+            Some("A cat playing piano".to_string())
+        );
         assert_eq!(body.parameters.aspect_ratio, Some("16:9".to_string()));
         assert_eq!(body.parameters.duration_seconds, Some(8));
     }
@@ -950,9 +963,8 @@ mod tests {
     #[test]
     fn test_determine_aspect_ratio_from_style() {
         let provider = GoogleVeoProvider::new("test-api-key", None, None);
-        let request = GenerationRequest::video("Test").with_params(
-            GenerationParams::builder().style("9:16").build(),
-        );
+        let request = GenerationRequest::video("Test")
+            .with_params(GenerationParams::builder().style("9:16").build());
 
         let ratio = provider.determine_aspect_ratio(&request);
         assert_eq!(ratio, "9:16");
@@ -963,21 +975,18 @@ mod tests {
         let provider = GoogleVeoProvider::new("test-api-key", None, None);
 
         // Valid duration
-        let request = GenerationRequest::video("Test").with_params(
-            GenerationParams::builder().duration_seconds(6.0).build(),
-        );
+        let request = GenerationRequest::video("Test")
+            .with_params(GenerationParams::builder().duration_seconds(6.0).build());
         assert_eq!(provider.determine_duration(&request), 6);
 
         // Clamped to min
-        let request_low = GenerationRequest::video("Test").with_params(
-            GenerationParams::builder().duration_seconds(3.0).build(),
-        );
+        let request_low = GenerationRequest::video("Test")
+            .with_params(GenerationParams::builder().duration_seconds(3.0).build());
         assert_eq!(provider.determine_duration(&request_low), 5);
 
         // Clamped to max
-        let request_high = GenerationRequest::video("Test").with_params(
-            GenerationParams::builder().duration_seconds(10.0).build(),
-        );
+        let request_high = GenerationRequest::video("Test")
+            .with_params(GenerationParams::builder().duration_seconds(10.0).build());
         assert_eq!(provider.determine_duration(&request_high), 8);
     }
 
@@ -990,20 +999,17 @@ mod tests {
         );
 
         // Exact match
-        let request = GenerationRequest::video("Test").with_params(
-            GenerationParams::builder().duration_seconds(6.0).build(),
-        );
+        let request = GenerationRequest::video("Test")
+            .with_params(GenerationParams::builder().duration_seconds(6.0).build());
         assert_eq!(provider.determine_duration(&request), 6);
 
         // Rounded to nearest
-        let request_5 = GenerationRequest::video("Test").with_params(
-            GenerationParams::builder().duration_seconds(5.0).build(),
-        );
+        let request_5 = GenerationRequest::video("Test")
+            .with_params(GenerationParams::builder().duration_seconds(5.0).build());
         assert_eq!(provider.determine_duration(&request_5), 4);
 
-        let request_7 = GenerationRequest::video("Test").with_params(
-            GenerationParams::builder().duration_seconds(7.0).build(),
-        );
+        let request_7 = GenerationRequest::video("Test")
+            .with_params(GenerationParams::builder().duration_seconds(7.0).build());
         assert_eq!(provider.determine_duration(&request_7), 6);
     }
 
@@ -1147,7 +1153,10 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(DEFAULT_ENDPOINT, "https://generativelanguage.googleapis.com");
+        assert_eq!(
+            DEFAULT_ENDPOINT,
+            "https://generativelanguage.googleapis.com"
+        );
         assert_eq!(DEFAULT_MODEL, "veo-2.0-generate-001");
         assert_eq!(DEFAULT_TIMEOUT_SECS, 600);
         assert_eq!(DEFAULT_DURATION_SECS, 8);

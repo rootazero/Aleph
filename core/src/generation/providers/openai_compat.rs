@@ -726,10 +726,14 @@ impl GenerationProvider for OpenAiCompatProvider {
                     .get(reference_image)
                     .send()
                     .await
-                    .map_err(|e| GenerationError::network(format!("Failed to download image: {}", e)))?
+                    .map_err(|e| {
+                        GenerationError::network(format!("Failed to download image: {}", e))
+                    })?
                     .bytes()
                     .await
-                    .map_err(|e| GenerationError::network(format!("Failed to read image bytes: {}", e)))?;
+                    .map_err(|e| {
+                        GenerationError::network(format!("Failed to read image bytes: {}", e))
+                    })?;
 
                 let part = reqwest::multipart::Part::bytes(image_bytes.to_vec())
                     .file_name("image.png")
@@ -1545,8 +1549,11 @@ mod tests {
             OpenAiCompatProvider::new("proxy", "key", "https://api.example.com", None).unwrap();
 
         // Video request should fail
-        let request = GenerationRequest::video("Edit this video")
-            .with_params(GenerationParams::builder().reference_image("base64data").build());
+        let request = GenerationRequest::video("Edit this video").with_params(
+            GenerationParams::builder()
+                .reference_image("base64data")
+                .build(),
+        );
 
         let result = provider.edit_image(request).await;
 

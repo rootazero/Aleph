@@ -147,10 +147,7 @@ pub fn check_embedding_model_exists() -> bool {
                         let model_onnx = snapshot_path.join("model.onnx");
                         let tokenizer_json = snapshot_path.join("tokenizer.json");
                         if model_onnx.exists() && tokenizer_json.exists() {
-                            tracing::debug!(
-                                "Embedding model found at: {:?}",
-                                snapshot_path
-                            );
+                            tracing::debug!("Embedding model found at: {:?}", snapshot_path);
                             return true;
                         }
                     }

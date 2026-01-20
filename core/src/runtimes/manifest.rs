@@ -229,7 +229,10 @@ mod tests {
 
         // Reload and verify
         let reloaded = Manifest::load_or_default(runtimes_dir).unwrap();
-        assert_eq!(reloaded.get_version("yt-dlp"), Some("2024.12.23".to_string()));
+        assert_eq!(
+            reloaded.get_version("yt-dlp"),
+            Some("2024.12.23".to_string())
+        );
     }
 
     #[test]

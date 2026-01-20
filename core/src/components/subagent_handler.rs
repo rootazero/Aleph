@@ -152,7 +152,11 @@ impl EventHandler for SubAgentHandler {
         vec![EventType::SubAgentStarted, EventType::SubAgentCompleted]
     }
 
-    async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<Vec<AetherEvent>, HandlerError> {
+    async fn handle(
+        &self,
+        event: &AetherEvent,
+        ctx: &EventContext,
+    ) -> Result<Vec<AetherEvent>, HandlerError> {
         match event {
             AetherEvent::SubAgentStarted(request) => self.handle_started(request, ctx).await,
             AetherEvent::SubAgentCompleted(result) => self.handle_completed(result, ctx).await,

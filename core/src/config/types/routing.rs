@@ -511,6 +511,13 @@ mod tests {
             triggers = ["翻译", "translate", "转换语言"]
         "#;
         let rule: RoutingRuleConfig = toml::from_str(toml).unwrap();
-        assert_eq!(rule.triggers, Some(vec!["翻译".to_string(), "translate".to_string(), "转换语言".to_string()]));
+        assert_eq!(
+            rule.triggers,
+            Some(vec![
+                "翻译".to_string(),
+                "translate".to_string(),
+                "转换语言".to_string()
+            ])
+        );
     }
 }

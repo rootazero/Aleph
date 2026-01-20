@@ -8,8 +8,8 @@ mod tests {
     use crate::components::*;
     use crate::event::{
         AetherEvent, ErrorKind, EventBus, EventContext, EventHandler, InputEvent, PlanRequest,
-        PlanStep, StepStatus, StopReason, TaskPlan, ToolCallError, ToolCallRequest, ToolCallResult,
-        TokenUsage,
+        PlanStep, StepStatus, StopReason, TaskPlan, TokenUsage, ToolCallError, ToolCallRequest,
+        ToolCallResult,
     };
 
     // ============================================================================
@@ -48,9 +48,7 @@ mod tests {
 
         for (index, (tool, description)) in steps.iter().enumerate() {
             let step_id = format!("step_{}", index + 1);
-            let depends_on = previous_step_id
-                .map(|id| vec![id])
-                .unwrap_or_default();
+            let depends_on = previous_step_id.map(|id| vec![id]).unwrap_or_default();
 
             let step = PlanStep {
                 id: step_id.clone(),
@@ -142,7 +140,9 @@ mod tests {
         let ctx = create_test_context();
 
         // Create a complex input with multi-step keywords
-        let input = create_test_input("First search for the file, then open it and finally edit the content");
+        let input = create_test_input(
+            "First search for the file, then open it and finally edit the content",
+        );
         let event = AetherEvent::InputReceived(input);
 
         // Handle the event
@@ -246,7 +246,10 @@ mod tests {
             assert_eq!(plan.steps.len(), 3, "Plan should have 3 steps");
 
             // Verify step dependencies (sequential)
-            assert!(plan.steps[0].depends_on.is_empty(), "First step should have no dependencies");
+            assert!(
+                plan.steps[0].depends_on.is_empty(),
+                "First step should have no dependencies"
+            );
             assert_eq!(
                 plan.steps[1].depends_on,
                 vec!["step_1"],
@@ -259,8 +262,14 @@ mod tests {
             );
 
             // Verify tool inference
-            assert_eq!(plan.steps[0].tool, "file_read", "打开文件 should map to file_read");
-            assert_eq!(plan.steps[1].tool, "file_copy", "复制内容 should map to file_copy");
+            assert_eq!(
+                plan.steps[0].tool, "file_read",
+                "打开文件 should map to file_read"
+            );
+            assert_eq!(
+                plan.steps[1].tool, "file_copy",
+                "复制内容 should map to file_copy"
+            );
             // "保存" defaults to chat since it doesn't match specific patterns
         }
     }
@@ -283,7 +292,11 @@ mod tests {
         let events = result.unwrap();
 
         if let AetherEvent::PlanCreated(plan) = &events[0] {
-            assert_eq!(plan.steps.len(), 1, "Should create single step from input text");
+            assert_eq!(
+                plan.steps.len(),
+                1,
+                "Should create single step from input text"
+            );
             assert_eq!(plan.steps[0].description, "搜索文件");
         }
     }
@@ -346,7 +359,10 @@ mod tests {
         let result = executor.handle(&event, &ctx).await;
 
         // Verify
-        assert!(result.is_ok(), "Handler should succeed (returning failure event)");
+        assert!(
+            result.is_ok(),
+            "Handler should succeed (returning failure event)"
+        );
         let events = result.unwrap();
 
         assert_eq!(events.len(), 1, "Should produce exactly one event");
@@ -361,7 +377,10 @@ mod tests {
                 ErrorKind::Aborted,
                 "Error kind should be Aborted"
             );
-            assert!(!error.is_retryable, "Aborted errors should not be retryable");
+            assert!(
+                !error.is_retryable,
+                "Aborted errors should not be retryable"
+            );
         }
     }
 
@@ -398,7 +417,10 @@ mod tests {
         );
 
         if let AetherEvent::ToolCallRequested(request) = &events[0] {
-            assert_eq!(request.tool, "search", "Should start with first step's tool");
+            assert_eq!(
+                request.tool, "search",
+                "Should start with first step's tool"
+            );
             assert_eq!(
                 request.plan_step_id,
                 Some("step_1".to_string()),
@@ -443,9 +465,7 @@ mod tests {
         let ctx = create_test_context();
 
         // First, set up a plan
-        let plan = create_test_plan(vec![
-            ("search", "Search for files"),
-        ]);
+        let plan = create_test_plan(vec![("search", "Search for files")]);
         controller.set_plan(plan).await;
 
         // Create a ToolCallFailed event
@@ -480,8 +500,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_recorder_persists_events() {
         // Setup
-        let recorder = SessionRecorder::new_in_memory()
-            .expect("Should create in-memory recorder");
+        let recorder = SessionRecorder::new_in_memory().expect("Should create in-memory recorder");
         let ctx = create_test_context();
 
         // Create a session first
@@ -501,7 +520,10 @@ mod tests {
         // Verify handler returns no events (recorder doesn't publish)
         assert!(result.is_ok(), "Handler should succeed");
         let events = result.unwrap();
-        assert!(events.is_empty(), "SessionRecorder should not publish events");
+        assert!(
+            events.is_empty(),
+            "SessionRecorder should not publish events"
+        );
 
         // Verify the event was persisted
         let parts = recorder
@@ -525,8 +547,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_recorder_persists_multiple_events() {
         // Setup
-        let recorder = SessionRecorder::new_in_memory()
-            .expect("Should create in-memory recorder");
+        let recorder = SessionRecorder::new_in_memory().expect("Should create in-memory recorder");
         let ctx = create_test_context();
 
         // Create a session
@@ -538,7 +559,8 @@ mod tests {
         let input_event = AetherEvent::InputReceived(create_test_input("User query"));
         recorder.handle(&input_event, &ctx).await.unwrap();
 
-        let tool_result = AetherEvent::ToolCallCompleted(create_tool_call_result("search", "Found results"));
+        let tool_result =
+            AetherEvent::ToolCallCompleted(create_tool_call_result("search", "Found results"));
         recorder.handle(&tool_result, &ctx).await.unwrap();
 
         // Verify all events were persisted
@@ -619,7 +641,10 @@ mod tests {
 
         // Step 6: LoopController processes ToolCallCompleted -> continues or completes
         let final_result = controller.handle(&executor_result[0], &ctx).await.unwrap();
-        assert!(!final_result.is_empty(), "Should produce continuation or completion events");
+        assert!(
+            !final_result.is_empty(),
+            "Should produce continuation or completion events"
+        );
 
         // Verify session was recorded
         let parts = recorder.get_session_parts(session_id).unwrap();
@@ -695,11 +720,18 @@ mod tests {
 
         // Handle ToolCallCompleted -> should continue to next step or complete
         let result2 = controller.handle(&completion1, &ctx).await.unwrap();
-        assert!(!result2.is_empty(), "Should produce events after step completion");
+        assert!(
+            !result2.is_empty(),
+            "Should produce events after step completion"
+        );
 
         // Should either continue with next step or complete the plan
-        let has_tool_request = result2.iter().any(|e| matches!(e, AetherEvent::ToolCallRequested(_)));
-        let has_loop_stop = result2.iter().any(|e| matches!(e, AetherEvent::LoopStop(_)));
+        let has_tool_request = result2
+            .iter()
+            .any(|e| matches!(e, AetherEvent::ToolCallRequested(_)));
+        let has_loop_stop = result2
+            .iter()
+            .any(|e| matches!(e, AetherEvent::LoopStop(_)));
 
         assert!(
             has_tool_request || has_loop_stop,
@@ -722,17 +754,29 @@ mod tests {
 
         // Each component should return empty when given non-subscribed event
         let analyzer_result = analyzer.handle(&stop_event, &ctx).await.unwrap();
-        assert!(analyzer_result.is_empty(), "IntentAnalyzer should ignore LoopStop");
+        assert!(
+            analyzer_result.is_empty(),
+            "IntentAnalyzer should ignore LoopStop"
+        );
 
         let planner_result = planner.handle(&stop_event, &ctx).await.unwrap();
-        assert!(planner_result.is_empty(), "TaskPlanner should ignore LoopStop");
+        assert!(
+            planner_result.is_empty(),
+            "TaskPlanner should ignore LoopStop"
+        );
 
         // LoopController doesn't subscribe to LoopStop
         let controller_result = controller.handle(&stop_event, &ctx).await.unwrap();
-        assert!(controller_result.is_empty(), "LoopController should ignore LoopStop");
+        assert!(
+            controller_result.is_empty(),
+            "LoopController should ignore LoopStop"
+        );
 
         let executor_result = executor.handle(&stop_event, &ctx).await.unwrap();
-        assert!(executor_result.is_empty(), "ToolExecutor should ignore LoopStop");
+        assert!(
+            executor_result.is_empty(),
+            "ToolExecutor should ignore LoopStop"
+        );
     }
 
     #[tokio::test]

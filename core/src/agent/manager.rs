@@ -669,8 +669,7 @@ impl RigAgentManager {
                         }
                         "document" | "file" => {
                             // Document content - handle based on mime_type
-                            let filename =
-                                attachment.filename.as_deref().unwrap_or("document");
+                            let filename = attachment.filename.as_deref().unwrap_or("document");
 
                             match attachment.mime_type.as_str() {
                                 "application/pdf" => {
@@ -684,38 +683,45 @@ impl RigAgentManager {
                                 }
                                 "text/plain" | "text/markdown" => {
                                     // Text files: decode base64 and add as text
-                                    if let Ok(decoded) =
-                                        base64::Engine::decode(
-                                            &base64::engine::general_purpose::STANDARD,
-                                            &attachment.data,
-                                        )
-                                    {
+                                    if let Ok(decoded) = base64::Engine::decode(
+                                        &base64::engine::general_purpose::STANDARD,
+                                        &attachment.data,
+                                    ) {
                                         if let Ok(text) = String::from_utf8(decoded) {
                                             let doc_content =
                                                 format!("\n\n--- {} ---\n{}", filename, text);
-                                            content_items
-                                                .push(UserContent::Text(Text { text: doc_content }));
-                                            debug!(filename = filename, "Added text document attachment");
+                                            content_items.push(UserContent::Text(Text {
+                                                text: doc_content,
+                                            }));
+                                            debug!(
+                                                filename = filename,
+                                                "Added text document attachment"
+                                            );
                                         } else {
-                                            warn!(filename = filename, "Failed to decode text as UTF-8");
+                                            warn!(
+                                                filename = filename,
+                                                "Failed to decode text as UTF-8"
+                                            );
                                         }
                                     } else {
-                                        warn!(filename = filename, "Failed to decode base64 content");
+                                        warn!(
+                                            filename = filename,
+                                            "Failed to decode base64 content"
+                                        );
                                     }
                                 }
                                 _ => {
                                     // Other document types: try to decode as text, fallback to skip
-                                    if let Ok(decoded) =
-                                        base64::Engine::decode(
-                                            &base64::engine::general_purpose::STANDARD,
-                                            &attachment.data,
-                                        )
-                                    {
+                                    if let Ok(decoded) = base64::Engine::decode(
+                                        &base64::engine::general_purpose::STANDARD,
+                                        &attachment.data,
+                                    ) {
                                         if let Ok(text) = String::from_utf8(decoded) {
                                             let doc_content =
                                                 format!("\n\n--- {} ---\n{}", filename, text);
-                                            content_items
-                                                .push(UserContent::Text(Text { text: doc_content }));
+                                            content_items.push(UserContent::Text(Text {
+                                                text: doc_content,
+                                            }));
                                             debug!(filename = filename, mime_type = %attachment.mime_type, "Added document as text");
                                         } else {
                                             warn!(

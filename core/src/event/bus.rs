@@ -95,10 +95,7 @@ impl EventBus {
             if history.len() > self.config.max_history_size {
                 let drain_count = history.len() - self.config.max_history_size;
                 history.drain(0..drain_count);
-                debug!(
-                    drain_count,
-                    "Trimmed event history"
-                );
+                debug!(drain_count, "Trimmed event history");
             }
         }
 
@@ -280,10 +277,12 @@ mod tests {
             topic_id: None,
             context: None,
             timestamp: 0,
-        })).await;
+        }))
+        .await;
 
         // Publish matching event
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+            .await;
 
         // Should only receive LoopStop
         let received = subscriber.try_recv().unwrap();
@@ -299,7 +298,8 @@ mod tests {
 
         assert_eq!(bus.subscriber_count(), 2);
 
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+            .await;
 
         // Both should receive
         let r1 = sub1.try_recv().unwrap();
@@ -313,8 +313,10 @@ mod tests {
     async fn test_event_history() {
         let bus = EventBus::new();
 
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
-        bus.publish(AetherEvent::LoopStop(StopReason::UserAborted)).await;
+        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+            .await;
+        bus.publish(AetherEvent::LoopStop(StopReason::UserAborted))
+            .await;
 
         let history = bus.history().await;
         assert_eq!(history.len(), 2);
@@ -332,7 +334,8 @@ mod tests {
         });
 
         for _ in 0..10 {
-            bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+            bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+                .await;
         }
 
         let history = bus.history().await;

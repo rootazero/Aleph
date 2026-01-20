@@ -34,9 +34,8 @@ pub struct ParseResult {
 }
 
 // Regex pattern for [GENERATE:type:provider:model:prompt]
-static GENERATE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]").unwrap()
-});
+static GENERATE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]").unwrap());
 
 /// Parse AI response for generation requests
 ///
@@ -68,10 +67,7 @@ pub fn parse_generation_requests(response: &str) -> ParseResult {
         });
 
         // Replace the generation tag with a user-friendly message
-        let replacement = format!(
-            "🎨 正在使用 {} ({}) 生成: {}",
-            provider, model, prompt
-        );
+        let replacement = format!("🎨 正在使用 {} ({}) 生成: {}", provider, model, prompt);
         cleaned_response = cleaned_response.replace(original_text, &replacement);
     }
 
@@ -92,7 +88,8 @@ mod tests {
 
     #[test]
     fn test_parse_single_request() {
-        let response = "好的，我来帮你生成一张图片。\n[GENERATE:image:midjourney:nanobanana:一只可爱的猫]";
+        let response =
+            "好的，我来帮你生成一张图片。\n[GENERATE:image:midjourney:nanobanana:一只可爱的猫]";
         let result = parse_generation_requests(response);
 
         assert_eq!(result.requests.len(), 1);
@@ -133,7 +130,9 @@ mod tests {
 
     #[test]
     fn test_has_generation_requests() {
-        assert!(has_generation_requests("[GENERATE:image:dalle:model:prompt]"));
+        assert!(has_generation_requests(
+            "[GENERATE:image:dalle:model:prompt]"
+        ));
         assert!(!has_generation_requests("no generation here"));
     }
 
@@ -143,6 +142,9 @@ mod tests {
         let result = parse_generation_requests(response);
 
         assert_eq!(result.requests.len(), 1);
-        assert_eq!(result.requests[0].prompt, "一只在海边奔跑的金毛猎犬，夕阳西下");
+        assert_eq!(
+            result.requests[0].prompt,
+            "一只在海边奔跑的金毛猎犬，夕阳西下"
+        );
     }
 }

@@ -86,11 +86,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             "web_fetch".into(),
             "search".into(),
         ])
-        .with_denied_tools(vec![
-            "write_file".into(),
-            "edit_file".into(),
-            "bash".into(),
-        ])
+        .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
         .with_max_iterations(20),
         // Coder agent - file operations
         AgentDef::new(
@@ -117,11 +113,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             "web_fetch".into(),
             "read_file".into(),
         ])
-        .with_denied_tools(vec![
-            "write_file".into(),
-            "edit_file".into(),
-            "bash".into(),
-        ])
+        .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
         .with_max_iterations(15),
     ]
 }

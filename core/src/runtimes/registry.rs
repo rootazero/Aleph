@@ -94,9 +94,10 @@ impl RuntimeRegistry {
     /// This is the primary way to access runtimes. It ensures the
     /// runtime is installed before returning.
     pub async fn require(&self, id: &str) -> Result<Arc<dyn RuntimeManager>> {
-        let runtime = self.runtimes.get(id).ok_or_else(|| {
-            AetherError::runtime("registry", format!("Unknown runtime: {}", id))
-        })?;
+        let runtime = self
+            .runtimes
+            .get(id)
+            .ok_or_else(|| AetherError::runtime("registry", format!("Unknown runtime: {}", id)))?;
 
         if !runtime.is_installed() {
             info!(runtime_id = %id, "Runtime not installed, installing...");
@@ -104,7 +105,9 @@ impl RuntimeRegistry {
             runtime.install().await?;
 
             // Update manifest
-            let version = runtime.get_version().unwrap_or_else(|| "unknown".to_string());
+            let version = runtime
+                .get_version()
+                .unwrap_or_else(|| "unknown".to_string());
             self.manifest.write().await.mark_installed(id, version)?;
 
             info!(runtime_id = %id, "Runtime installed successfully");
@@ -171,9 +174,10 @@ impl RuntimeRegistry {
 
     /// Update a specific runtime to the latest version
     pub async fn update(&self, id: &str) -> Result<()> {
-        let runtime = self.runtimes.get(id).ok_or_else(|| {
-            AetherError::runtime("registry", format!("Unknown runtime: {}", id))
-        })?;
+        let runtime = self
+            .runtimes
+            .get(id)
+            .ok_or_else(|| AetherError::runtime("registry", format!("Unknown runtime: {}", id)))?;
 
         if !runtime.is_installed() {
             return Err(AetherError::runtime(
@@ -186,7 +190,9 @@ impl RuntimeRegistry {
         runtime.update().await?;
 
         // Update manifest with new version
-        let version = runtime.get_version().unwrap_or_else(|| "unknown".to_string());
+        let version = runtime
+            .get_version()
+            .unwrap_or_else(|| "unknown".to_string());
         self.manifest.write().await.update_version(id, version)?;
 
         info!(runtime_id = %id, "Runtime updated successfully");

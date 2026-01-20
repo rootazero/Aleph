@@ -55,16 +55,42 @@ static CHINESE_ACTION_VERBS: &[&str] = &[
 
 /// English action verbs for multi-sentence detection
 static ENGLISH_ACTION_VERBS: &[&str] = &[
-    "create", "delete", "move", "copy", "modify", "edit", "open", "close", "save", "send",
-    "download", "upload", "install", "uninstall", "run", "execute", "search", "find", "organize",
-    "clean", "compress", "extract", "convert", "export", "import", "backup", "restore", "update",
-    "add", "generate", "build", "deploy",
+    "create",
+    "delete",
+    "move",
+    "copy",
+    "modify",
+    "edit",
+    "open",
+    "close",
+    "save",
+    "send",
+    "download",
+    "upload",
+    "install",
+    "uninstall",
+    "run",
+    "execute",
+    "search",
+    "find",
+    "organize",
+    "clean",
+    "compress",
+    "extract",
+    "convert",
+    "export",
+    "import",
+    "backup",
+    "restore",
+    "update",
+    "add",
+    "generate",
+    "build",
+    "deploy",
 ];
 
 /// Sentence boundary pattern
-static SENTENCE_BOUNDARY: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[。！？\.!?;；]").unwrap()
-});
+static SENTENCE_BOUNDARY: Lazy<Regex> = Lazy::new(|| Regex::new(r"[。！？\.!?;；]").unwrap());
 
 // ============================================================================
 // IntentAnalyzer Component
@@ -107,8 +133,12 @@ impl IntentAnalyzer {
     /// Check if text contains multi-step keywords (Chinese or English)
     pub fn has_multi_step_keywords(&self, text: &str) -> bool {
         let text_lower = text.to_lowercase();
-        CHINESE_MULTI_STEP_KEYWORDS.iter().any(|kw| text.contains(kw))
-            || ENGLISH_MULTI_STEP_KEYWORDS.iter().any(|kw| text_lower.contains(kw))
+        CHINESE_MULTI_STEP_KEYWORDS
+            .iter()
+            .any(|kw| text.contains(kw))
+            || ENGLISH_MULTI_STEP_KEYWORDS
+                .iter()
+                .any(|kw| text_lower.contains(kw))
     }
 
     /// Check if text contains multiple sentences with action verbs
@@ -204,21 +234,20 @@ impl IntentAnalyzer {
         for kw in ENGLISH_MULTI_STEP_KEYWORDS {
             result = result
                 .into_iter()
-                .flat_map(|s| {
-                    split_by_keyword_case_insensitive(&s, kw)
-                })
+                .flat_map(|s| split_by_keyword_case_insensitive(&s, kw))
                 .collect();
         }
 
         // Filter empty and very short segments
-        result
-            .into_iter()
-            .filter(|s| s.len() >= 2)
-            .collect()
+        result.into_iter().filter(|s| s.len() >= 2).collect()
     }
 
     /// Build a direct ToolCallRequest for simple requests
-    pub fn build_direct_call(&self, intent: &ExecutionIntent, input: &InputEvent) -> ToolCallRequest {
+    pub fn build_direct_call(
+        &self,
+        intent: &ExecutionIntent,
+        input: &InputEvent,
+    ) -> ToolCallRequest {
         match intent {
             ExecutionIntent::Executable(task) => {
                 // Build tool parameters inline
@@ -425,15 +454,27 @@ mod tests {
 
         // Chinese multi-step
         let steps = analyzer.extract_steps("打开文件然后复制内容接着保存");
-        assert!(steps.len() >= 2, "Expected at least 2 steps, got {:?}", steps);
+        assert!(
+            steps.len() >= 2,
+            "Expected at least 2 steps, got {:?}",
+            steps
+        );
 
         // English multi-step
         let steps = analyzer.extract_steps("download the file then extract it and then process");
-        assert!(steps.len() >= 2, "Expected at least 2 steps, got {:?}", steps);
+        assert!(
+            steps.len() >= 2,
+            "Expected at least 2 steps, got {:?}",
+            steps
+        );
 
         // Mixed
         let steps = analyzer.extract_steps("首先打开文件 then edit content 最后保存");
-        assert!(steps.len() >= 2, "Expected at least 2 steps, got {:?}", steps);
+        assert!(
+            steps.len() >= 2,
+            "Expected at least 2 steps, got {:?}",
+            steps
+        );
 
         // No keywords - should return original text
         let steps = analyzer.extract_steps("打开文件");

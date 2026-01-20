@@ -7,10 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError,
-    StopReason,
-};
+use crate::event::{AetherEvent, EventContext, EventHandler, EventType, HandlerError, StopReason};
 use crate::ffi::AetherEventHandler;
 
 /// CallbackBridge forwards events to the Swift layer
@@ -46,22 +43,22 @@ impl EventHandler for CallbackBridge {
         ]
     }
 
-    async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<Vec<AetherEvent>, HandlerError> {
+    async fn handle(
+        &self,
+        event: &AetherEvent,
+        ctx: &EventContext,
+    ) -> Result<Vec<AetherEvent>, HandlerError> {
         match event {
             AetherEvent::SessionCreated(info) => {
                 self.handler.on_session_started(info.id.clone());
             }
             AetherEvent::ToolCallStarted(info) => {
-                self.handler.on_tool_call_started(
-                    info.call_id.clone(),
-                    info.tool.clone(),
-                );
+                self.handler
+                    .on_tool_call_started(info.call_id.clone(), info.tool.clone());
             }
             AetherEvent::ToolCallCompleted(result) => {
-                self.handler.on_tool_call_completed(
-                    result.call_id.clone(),
-                    result.output.clone(),
-                );
+                self.handler
+                    .on_tool_call_completed(result.call_id.clone(), result.output.clone());
             }
             AetherEvent::ToolCallFailed(error) => {
                 self.handler.on_tool_call_failed(
@@ -75,11 +72,8 @@ impl EventHandler for CallbackBridge {
                     Some(tool) => format!("Running tool: {}", tool),
                     None => format!("Iteration {}", state.iteration),
                 };
-                self.handler.on_loop_progress(
-                    state.session_id.clone(),
-                    state.iteration,
-                    status,
-                );
+                self.handler
+                    .on_loop_progress(state.session_id.clone(), state.iteration, status);
             }
             AetherEvent::LoopStop(reason) => {
                 if let Some(session_id) = ctx.get_session_id().await {
@@ -97,9 +91,8 @@ impl EventHandler for CallbackBridge {
             }
             AetherEvent::PlanCreated(plan) => {
                 if let Some(session_id) = ctx.get_session_id().await {
-                    let steps: Vec<String> = plan.steps.iter()
-                        .map(|s| s.description.clone())
-                        .collect();
+                    let steps: Vec<String> =
+                        plan.steps.iter().map(|s| s.description.clone()).collect();
                     self.handler.on_plan_created(session_id, steps);
                 }
             }
@@ -136,9 +129,9 @@ impl EventHandler for CallbackBridge {
 mod tests {
     use super::*;
     use crate::event::{
-        EventBus, SessionInfo, TaskPlan, PlanStep, StepStatus,
-        ToolCallStarted, ToolCallResult, ToolCallError, ErrorKind,
-        LoopState, AiResponse, SubAgentRequest, SubAgentResult, TokenUsage,
+        AiResponse, ErrorKind, EventBus, LoopState, PlanStep, SessionInfo, StepStatus,
+        SubAgentRequest, SubAgentResult, TaskPlan, TokenUsage, ToolCallError, ToolCallResult,
+        ToolCallStarted,
     };
     use crate::event_handler::McpStartupReportFFI;
     use crate::intent::ExecutableTaskFFI;
@@ -304,7 +297,10 @@ mod tests {
             output: "test output".into(),
             started_at: 0,
             completed_at: 1,
-            token_usage: TokenUsage { input_tokens: 0, output_tokens: 0 },
+            token_usage: TokenUsage {
+                input_tokens: 0,
+                output_tokens: 0,
+            },
         });
 
         bridge.handle(&event, &ctx).await.unwrap();
@@ -352,16 +348,14 @@ mod tests {
 
         let event = AetherEvent::PlanCreated(TaskPlan {
             id: "plan-1".into(),
-            steps: vec![
-                PlanStep {
-                    id: "step-1".into(),
-                    description: "First step".into(),
-                    tool: "tool1".into(),
-                    parameters: serde_json::json!({}),
-                    depends_on: vec![],
-                    status: StepStatus::Pending,
-                },
-            ],
+            steps: vec![PlanStep {
+                id: "step-1".into(),
+                description: "First step".into(),
+                tool: "tool1".into(),
+                parameters: serde_json::json!({}),
+                depends_on: vec![],
+                status: StepStatus::Pending,
+            }],
             parallel_groups: vec![],
             current_step_index: 0,
         });

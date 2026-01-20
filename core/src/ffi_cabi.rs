@@ -81,7 +81,8 @@ pub type ErrorCallback = extern "C" fn(message: *const c_char, code: c_int);
 /// @param tool_name Name of the tool being executed
 /// @param status Tool status (0=started, 1=completed, 2=failed)
 /// @param result Tool result or error message
-pub type ToolCallback = extern "C" fn(tool_name: *const c_char, status: c_int, result: *const c_char);
+pub type ToolCallback =
+    extern "C" fn(tool_name: *const c_char, status: c_int, result: *const c_char);
 
 /// Callback function type for memory stored notification
 pub type MemoryStoredCallback = extern "C" fn();
@@ -100,7 +101,8 @@ pub type InitPhaseStartedCallback = extern "C" fn(phase: *const c_char, current:
 /// @param phase Phase name
 /// @param progress Progress 0.0 to 1.0
 /// @param message Status message (UTF-8, null-terminated)
-pub type InitPhaseProgressCallback = extern "C" fn(phase: *const c_char, progress: f64, message: *const c_char);
+pub type InitPhaseProgressCallback =
+    extern "C" fn(phase: *const c_char, progress: f64, message: *const c_char);
 
 /// Callback for initialization phase completed
 /// @param phase Phase name that completed
@@ -110,13 +112,15 @@ pub type InitPhaseCompletedCallback = extern "C" fn(phase: *const c_char);
 /// @param item Item being downloaded
 /// @param downloaded Bytes downloaded
 /// @param total Total bytes (0 if unknown)
-pub type InitDownloadProgressCallback = extern "C" fn(item: *const c_char, downloaded: u64, total: u64);
+pub type InitDownloadProgressCallback =
+    extern "C" fn(item: *const c_char, downloaded: u64, total: u64);
 
 /// Callback for initialization error
 /// @param phase Phase where error occurred
 /// @param message Error message
 /// @param is_retryable 1 if retry might succeed, 0 otherwise
-pub type InitErrorCallback = extern "C" fn(phase: *const c_char, message: *const c_char, is_retryable: c_int);
+pub type InitErrorCallback =
+    extern "C" fn(phase: *const c_char, message: *const c_char, is_retryable: c_int);
 
 // =============================================================================
 // Registered Callbacks (thread-safe storage)
@@ -205,7 +209,11 @@ pub unsafe extern "C" fn aether_init(config_path: *const c_char) -> c_int {
 /// * `0` if not initialized
 #[no_mangle]
 pub extern "C" fn aether_is_initialized() -> c_int {
-    if INITIALIZED.load(Ordering::SeqCst) { 1 } else { 0 }
+    if INITIALIZED.load(Ordering::SeqCst) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Free resources allocated by the Aether core library
@@ -645,7 +653,11 @@ pub unsafe extern "C" fn aether_test_provider_connection(
         return AETHER_ERR_NOT_INITIALIZED;
     }
 
-    if provider_name.is_null() || config_json.is_null() || out_success.is_null() || out_message.is_null() {
+    if provider_name.is_null()
+        || config_json.is_null()
+        || out_success.is_null()
+        || out_message.is_null()
+    {
         return AETHER_ERR_INVALID_ARG;
     }
 
@@ -1037,7 +1049,10 @@ pub unsafe extern "C" fn aether_update_mcp_server(config_json: *const c_char) ->
     };
 
     // TODO: Update actual MCP server
-    tracing::info!("aether_update_mcp_server called with config: {}", config_str);
+    tracing::info!(
+        "aether_update_mcp_server called with config: {}",
+        config_str
+    );
     AETHER_SUCCESS
 }
 
@@ -1291,7 +1306,10 @@ pub unsafe extern "C" fn aether_install_skills_from_zip(
     };
 
     // TODO: Install actual skills from ZIP
-    tracing::info!("aether_install_skills_from_zip called with path: {}", path_str);
+    tracing::info!(
+        "aether_install_skills_from_zip called with path: {}",
+        path_str
+    );
 
     // Return placeholder skill IDs
     let skill_ids = r#"{"skill_ids":[]}"#;
@@ -1355,7 +1373,12 @@ pub unsafe extern "C" fn aether_get_skills_dir(out_path: *mut *mut c_char) -> c_
             .unwrap_or_else(|_| "C:\\Aether\\skills".to_string())
     } else {
         dirs::data_local_dir()
-            .map(|p| p.join("aether").join("skills").to_string_lossy().to_string())
+            .map(|p| {
+                p.join("aether")
+                    .join("skills")
+                    .to_string_lossy()
+                    .to_string()
+            })
             .unwrap_or_else(|| "~/.local/share/aether/skills".to_string())
     };
 
@@ -1538,7 +1561,8 @@ pub unsafe extern "C" fn aether_test_generation_provider(
         return AETHER_ERR_NOT_INITIALIZED;
     }
 
-    if provider_id.is_null() || api_key.is_null() || out_success.is_null() || out_message.is_null() {
+    if provider_id.is_null() || api_key.is_null() || out_success.is_null() || out_message.is_null()
+    {
         return AETHER_ERR_INVALID_ARG;
     }
 
@@ -1817,7 +1841,8 @@ pub unsafe extern "C" fn aether_get_search_provider_config(
     };
 
     // TODO: Get actual provider config
-    let config = r#"{"api_key": null, "max_results": 10, "safe_search": true, "is_default": false}"#;
+    let config =
+        r#"{"api_key": null, "max_results": 10, "safe_search": true, "is_default": false}"#;
 
     match CString::new(config) {
         Ok(cstr) => {
@@ -1862,7 +1887,11 @@ pub unsafe extern "C" fn aether_update_search_provider(
     };
 
     // TODO: Update actual search provider config
-    tracing::info!("aether_update_search_provider: {} with {}", id_str, config_str);
+    tracing::info!(
+        "aether_update_search_provider: {} with {}",
+        id_str,
+        config_str
+    );
     AETHER_SUCCESS
 }
 
@@ -1888,7 +1917,8 @@ pub unsafe extern "C" fn aether_test_search_provider(
         return AETHER_ERR_NOT_INITIALIZED;
     }
 
-    if provider_id.is_null() || api_key.is_null() || out_success.is_null() || out_message.is_null() {
+    if provider_id.is_null() || api_key.is_null() || out_success.is_null() || out_message.is_null()
+    {
         return AETHER_ERR_INVALID_ARG;
     }
 
@@ -2412,7 +2442,8 @@ impl crate::init_unified::InitProgressHandler for CAbiProgressHandler {
     fn on_phase_progress(&self, phase: String, progress: f64, message: String) {
         if let Ok(cbs) = CALLBACKS.lock() {
             if let Some(cb) = cbs.init_phase_progress {
-                if let (Ok(phase_cstr), Ok(msg_cstr)) = (CString::new(phase), CString::new(message)) {
+                if let (Ok(phase_cstr), Ok(msg_cstr)) = (CString::new(phase), CString::new(message))
+                {
                     cb(phase_cstr.as_ptr(), progress, msg_cstr.as_ptr());
                 }
             }
@@ -2442,8 +2473,13 @@ impl crate::init_unified::InitProgressHandler for CAbiProgressHandler {
     fn on_error(&self, phase: String, message: String, is_retryable: bool) {
         if let Ok(cbs) = CALLBACKS.lock() {
             if let Some(cb) = cbs.init_error {
-                if let (Ok(phase_cstr), Ok(msg_cstr)) = (CString::new(phase), CString::new(message)) {
-                    cb(phase_cstr.as_ptr(), msg_cstr.as_ptr(), if is_retryable { 1 } else { 0 });
+                if let (Ok(phase_cstr), Ok(msg_cstr)) = (CString::new(phase), CString::new(message))
+                {
+                    cb(
+                        phase_cstr.as_ptr(),
+                        msg_cstr.as_ptr(),
+                        if is_retryable { 1 } else { 0 },
+                    );
                 }
             }
         }
@@ -2543,7 +2579,13 @@ mod tests {
         unsafe {
             assert_eq!(aether_init(std::ptr::null()), AETHER_ERR_INVALID_ARG);
             assert_eq!(
-                aether_process(std::ptr::null(), std::ptr::null(), std::ptr::null(), std::ptr::null(), 0),
+                aether_process(
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0
+                ),
                 AETHER_ERR_NOT_INITIALIZED
             );
         }

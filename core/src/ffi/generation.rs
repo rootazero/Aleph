@@ -398,16 +398,18 @@ impl AetherCore {
             .names()
             .iter()
             .filter_map(|name| {
-                registry.get(name).map(|provider| GenerationProviderInfoFFI {
-                    name: provider.name().to_string(),
-                    color: provider.color().to_string(),
-                    supported_types: provider
-                        .supported_types()
-                        .into_iter()
-                        .map(|t| t.into())
-                        .collect(),
-                    default_model: provider.default_model().map(|s| s.to_string()),
-                })
+                registry
+                    .get(name)
+                    .map(|provider| GenerationProviderInfoFFI {
+                        name: provider.name().to_string(),
+                        color: provider.color().to_string(),
+                        supported_types: provider
+                            .supported_types()
+                            .into_iter()
+                            .map(|t| t.into())
+                            .collect(),
+                        default_model: provider.default_model().map(|s| s.to_string()),
+                    })
             })
             .collect()
     }
@@ -559,7 +561,9 @@ impl AetherCore {
         let request = GenerationRequest::new(gen_type, prompt).with_params(generation_params);
 
         // Execute generation
-        let output = self.runtime.block_on(async { provider.generate(request).await });
+        let output = self
+            .runtime
+            .block_on(async { provider.generate(request).await });
 
         match output {
             Ok(output) => {
@@ -884,11 +888,7 @@ impl AetherCore {
         // Test by generating a simple image with minimal prompt
         // Don't specify size - let the API use its default (more compatible with different models)
         let test_request = GenerationRequest::new(GenerationType::Image, "a white dot")
-            .with_params(
-                crate::generation::GenerationParams::builder()
-                    .n(1)
-                    .build(),
-            );
+            .with_params(crate::generation::GenerationParams::builder().n(1).build());
 
         let result = self.runtime.block_on(async {
             // Use tokio timeout for safety (120 seconds for image generation)

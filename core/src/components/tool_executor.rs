@@ -6,8 +6,8 @@
 use async_trait::async_trait;
 
 use crate::event::{
-    AetherEvent, ErrorKind, EventContext, EventHandler, EventType, HandlerError, ToolCallError,
-    ToolCallRequest, ToolCallResult, ToolCallRetry, ToolCallStarted, TokenUsage,
+    AetherEvent, ErrorKind, EventContext, EventHandler, EventType, HandlerError, TokenUsage,
+    ToolCallError, ToolCallRequest, ToolCallResult, ToolCallRetry, ToolCallStarted,
 };
 
 // ============================================================================
@@ -75,7 +75,10 @@ enum ToolExecutionResult {
     /// Tool executed successfully
     Success { output: String },
     /// Tool execution failed
-    Failure { error: String, error_kind: ErrorKind },
+    Failure {
+        error: String,
+        error_kind: ErrorKind,
+    },
 }
 
 // ============================================================================
@@ -125,10 +128,7 @@ impl ToolExecutor {
         let multiplier = 1u64 << (attempt - 1).min(31); // Prevent overflow
 
         // Calculate delay with overflow protection
-        let delay = self
-            .retry_policy
-            .base_delay_ms
-            .saturating_mul(multiplier);
+        let delay = self.retry_policy.base_delay_ms.saturating_mul(multiplier);
 
         // Cap at max_delay_ms
         delay.min(self.retry_policy.max_delay_ms)
@@ -332,7 +332,9 @@ mod tests {
         assert_eq!(policy.max_delay_ms, 30000);
         assert!(policy.retryable_errors.contains(&ErrorKind::Timeout));
         assert!(policy.retryable_errors.contains(&ErrorKind::RateLimit));
-        assert!(policy.retryable_errors.contains(&ErrorKind::ServiceUnavailable));
+        assert!(policy
+            .retryable_errors
+            .contains(&ErrorKind::ServiceUnavailable));
         assert!(!policy.retryable_errors.contains(&ErrorKind::NotFound));
         assert!(!policy.retryable_errors.contains(&ErrorKind::InvalidInput));
     }
@@ -350,10 +352,14 @@ mod tests {
     fn test_retry_policy_with_retryable_error() {
         let policy = RetryPolicy::default().with_retryable_error(ErrorKind::ExecutionFailed);
 
-        assert!(policy.retryable_errors.contains(&ErrorKind::ExecutionFailed));
+        assert!(policy
+            .retryable_errors
+            .contains(&ErrorKind::ExecutionFailed));
 
         // Adding same error twice should not duplicate
-        let policy2 = policy.clone().with_retryable_error(ErrorKind::ExecutionFailed);
+        let policy2 = policy
+            .clone()
+            .with_retryable_error(ErrorKind::ExecutionFailed);
         let count = policy2
             .retryable_errors
             .iter()
@@ -566,18 +572,12 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // The ToolCallStarted event should have been published
-        let received = tokio::time::timeout(
-            tokio::time::Duration::from_millis(100),
-            subscriber.recv(),
-        )
-        .await;
+        let received =
+            tokio::time::timeout(tokio::time::Duration::from_millis(100), subscriber.recv()).await;
 
         assert!(received.is_ok());
         if let Ok(Ok(timestamped)) = received {
-            assert!(matches!(
-                timestamped.event,
-                AetherEvent::ToolCallStarted(_)
-            ));
+            assert!(matches!(timestamped.event, AetherEvent::ToolCallStarted(_)));
         }
 
         handle.await.unwrap().unwrap();

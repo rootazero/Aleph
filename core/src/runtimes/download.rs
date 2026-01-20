@@ -38,11 +38,10 @@ pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
             AetherError::runtime("download", format!("Failed to create HTTP client: {}", e))
         })?;
 
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| AetherError::runtime("download", format!("Download request failed: {}", e)))?;
+    let response =
+        client.get(url).send().await.map_err(|e| {
+            AetherError::runtime("download", format!("Download request failed: {}", e))
+        })?;
 
     if !response.status().is_success() {
         return Err(AetherError::runtime(
@@ -57,7 +56,10 @@ pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
         .map_err(|e| AetherError::runtime("download", format!("Failed to read response: {}", e)))?;
 
     std::fs::write(dest, &bytes).map_err(|e| {
-        AetherError::runtime("download", format!("Failed to write file {:?}: {}", dest, e))
+        AetherError::runtime(
+            "download",
+            format!("Failed to write file {:?}: {}", dest, e),
+        )
     })?;
 
     debug!(dest = ?dest, size = bytes.len(), "Download completed");
@@ -76,9 +78,8 @@ pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
 pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: usize) -> Result<()> {
     info!(archive = ?archive_path, dest = ?dest_dir, "Extracting tar.gz archive");
 
-    let file = File::open(archive_path).map_err(|e| {
-        AetherError::runtime("extract", format!("Failed to open archive: {}", e))
-    })?;
+    let file = File::open(archive_path)
+        .map_err(|e| AetherError::runtime("extract", format!("Failed to open archive: {}", e)))?;
 
     let buf_reader = BufReader::new(file);
     let gz_decoder = flate2::read::GzDecoder::new(buf_reader);
@@ -93,19 +94,16 @@ pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: us
     for entry in archive.entries().map_err(|e| {
         AetherError::runtime("extract", format!("Failed to read archive entries: {}", e))
     })? {
-        let mut entry = entry.map_err(|e| {
-            AetherError::runtime("extract", format!("Failed to read entry: {}", e))
-        })?;
+        let mut entry = entry
+            .map_err(|e| AetherError::runtime("extract", format!("Failed to read entry: {}", e)))?;
 
         let entry_path = entry.path().map_err(|e| {
             AetherError::runtime("extract", format!("Failed to get entry path: {}", e))
         })?;
 
         // Strip leading components from path
-        let stripped_path: std::path::PathBuf = entry_path
-            .components()
-            .skip(strip_components)
-            .collect();
+        let stripped_path: std::path::PathBuf =
+            entry_path.components().skip(strip_components).collect();
 
         // Skip if path is empty after stripping
         if stripped_path.as_os_str().is_empty() {
@@ -149,9 +147,8 @@ pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: us
 pub fn extract_zip(archive_path: &Path, dest_dir: &Path) -> Result<()> {
     info!(archive = ?archive_path, dest = ?dest_dir, "Extracting ZIP archive");
 
-    let file = File::open(archive_path).map_err(|e| {
-        AetherError::runtime("extract", format!("Failed to open archive: {}", e))
-    })?;
+    let file = File::open(archive_path)
+        .map_err(|e| AetherError::runtime("extract", format!("Failed to open archive: {}", e)))?;
 
     let mut archive = zip::ZipArchive::new(file).map_err(|e| {
         AetherError::runtime("extract", format!("Failed to read ZIP archive: {}", e))
@@ -301,11 +298,10 @@ pub async fn get_github_latest_version(owner: &str, repo: &str) -> Result<String
         .build()
         .map_err(|e| AetherError::runtime("github", format!("Failed to create client: {}", e)))?;
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| AetherError::runtime("github", format!("Failed to fetch release: {}", e)))?;
+    let response =
+        client.get(&url).send().await.map_err(|e| {
+            AetherError::runtime("github", format!("Failed to fetch release: {}", e))
+        })?;
 
     if !response.status().is_success() {
         return Err(AetherError::runtime(

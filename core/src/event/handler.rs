@@ -302,7 +302,9 @@ mod tests {
         let mut registry = EventHandlerRegistry::new();
         let counter = Arc::new(AtomicUsize::new(0));
 
-        registry.register(Arc::new(CountingHandler { count: counter.clone() }));
+        registry.register(Arc::new(CountingHandler {
+            count: counter.clone(),
+        }));
 
         assert_eq!(registry.handler_count(), 1);
     }
@@ -315,7 +317,9 @@ mod tests {
         let mut registry = EventHandlerRegistry::new();
         let counter = Arc::new(AtomicUsize::new(0));
 
-        registry.register(Arc::new(CountingHandler { count: counter.clone() }));
+        registry.register(Arc::new(CountingHandler {
+            count: counter.clone(),
+        }));
 
         let handles = registry.start(ctx.clone()).await;
 
@@ -328,7 +332,8 @@ mod tests {
             topic_id: None,
             context: None,
             timestamp: 0,
-        })).await;
+        }))
+        .await;
 
         // Give handler time to process
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -336,10 +341,7 @@ mod tests {
         // Stop and wait
         registry.stop(&ctx);
         for handle in handles {
-            let _ = tokio::time::timeout(
-                tokio::time::Duration::from_millis(100),
-                handle
-            ).await;
+            let _ = tokio::time::timeout(tokio::time::Duration::from_millis(100), handle).await;
         }
 
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -355,7 +357,9 @@ mod tests {
 
         // Register producing handler first, then counting handler
         registry.register(Arc::new(ProducingHandler));
-        registry.register(Arc::new(CountingHandler { count: counter.clone() }));
+        registry.register(Arc::new(CountingHandler {
+            count: counter.clone(),
+        }));
 
         let handles = registry.start(ctx.clone()).await;
 
@@ -367,17 +371,15 @@ mod tests {
             topic_id: None,
             context: None,
             timestamp: 0,
-        })).await;
+        }))
+        .await;
 
         // Give handlers time to process
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         registry.stop(&ctx);
         for handle in handles {
-            let _ = tokio::time::timeout(
-                tokio::time::Duration::from_millis(100),
-                handle
-            ).await;
+            let _ = tokio::time::timeout(tokio::time::Duration::from_millis(100), handle).await;
         }
 
         // CountingHandler should have received: InputReceived + LoopStop

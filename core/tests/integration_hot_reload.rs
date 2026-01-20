@@ -68,7 +68,13 @@ impl AetherEventHandler for MockEventHandler {
     fn on_loop_progress(&self, _session_id: String, _iteration: u32, _status: String) {}
     fn on_plan_created(&self, _session_id: String, _steps: Vec<String>) {}
     fn on_session_completed(&self, _session_id: String, _summary: String) {}
-    fn on_subagent_started(&self, _parent_session_id: String, _child_session_id: String, _agent_id: String) {}
+    fn on_subagent_started(
+        &self,
+        _parent_session_id: String,
+        _child_session_id: String,
+        _agent_id: String,
+    ) {
+    }
     fn on_subagent_completed(&self, _child_session_id: String, _success: bool, _summary: String) {}
     fn on_runtime_updates_available(&self, _updates: Vec<aethecore::RuntimeUpdateInfo>) {}
 }
@@ -311,11 +317,18 @@ impl AetherEventHandler for MockEventHandlerWrapper {
     fn on_session_completed(&self, session_id: String, summary: String) {
         self.0.on_session_completed(session_id, summary)
     }
-    fn on_subagent_started(&self, parent_session_id: String, child_session_id: String, agent_id: String) {
-        self.0.on_subagent_started(parent_session_id, child_session_id, agent_id)
+    fn on_subagent_started(
+        &self,
+        parent_session_id: String,
+        child_session_id: String,
+        agent_id: String,
+    ) {
+        self.0
+            .on_subagent_started(parent_session_id, child_session_id, agent_id)
     }
     fn on_subagent_completed(&self, child_session_id: String, success: bool, summary: String) {
-        self.0.on_subagent_completed(child_session_id, success, summary)
+        self.0
+            .on_subagent_completed(child_session_id, success, summary)
     }
     fn on_runtime_updates_available(&self, updates: Vec<aethecore::RuntimeUpdateInfo>) {
         self.0.on_runtime_updates_available(updates)

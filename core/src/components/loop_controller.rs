@@ -303,8 +303,7 @@ impl EventHandler for LoopController {
                 // Get the first executable step
                 if let Some(step) = self.get_next_step().await {
                     // Mark step as running
-                    self.update_step_status(&step.id, StepStatus::Running)
-                        .await;
+                    self.update_step_status(&step.id, StepStatus::Running).await;
 
                     // Convert to tool call request
                     let tool_request = self.step_to_tool_call(&step);
@@ -357,8 +356,7 @@ impl EventHandler for LoopController {
                 // Get next step
                 if let Some(step) = self.get_next_step().await {
                     // Mark step as running
-                    self.update_step_status(&step.id, StepStatus::Running)
-                        .await;
+                    self.update_step_status(&step.id, StepStatus::Running).await;
 
                     // Publish LoopContinue and ToolCallRequested
                     let loop_state = LoopState {
@@ -887,7 +885,10 @@ mod tests {
 
         // Should return LoopStop with EmptyPlan
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AetherEvent::LoopStop(StopReason::EmptyPlan)));
+        assert!(matches!(
+            result[0],
+            AetherEvent::LoopStop(StopReason::EmptyPlan)
+        ));
     }
 
     #[tokio::test]
@@ -910,7 +911,10 @@ mod tests {
 
         // Should return LoopStop with Error
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AetherEvent::LoopStop(StopReason::Error(_))));
+        assert!(matches!(
+            result[0],
+            AetherEvent::LoopStop(StopReason::Error(_))
+        ));
     }
 
     // ========================================================================

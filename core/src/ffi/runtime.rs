@@ -61,11 +61,7 @@ impl AetherCore {
     /// List all registered runtimes with their status
     pub fn list_runtimes(&self) -> Vec<RuntimeInfo> {
         match RuntimeRegistry::new() {
-            Ok(registry) => registry
-                .list()
-                .into_iter()
-                .map(RuntimeInfo::from)
-                .collect(),
+            Ok(registry) => registry.list().into_iter().map(RuntimeInfo::from).collect(),
             Err(e) => {
                 debug!(error = %e, "Failed to create RuntimeRegistry");
                 Vec::new()
@@ -221,16 +217,11 @@ impl AetherCore {
             let updates = registry.check_updates().await;
 
             if !updates.is_empty() {
-                info!(
-                    count = updates.len(),
-                    "Runtime updates available"
-                );
+                info!(count = updates.len(), "Runtime updates available");
 
                 // Convert to FFI types and notify UI
-                let ffi_updates: Vec<RuntimeUpdateInfo> = updates
-                    .into_iter()
-                    .map(RuntimeUpdateInfo::from)
-                    .collect();
+                let ffi_updates: Vec<RuntimeUpdateInfo> =
+                    updates.into_iter().map(RuntimeUpdateInfo::from).collect();
 
                 handler.on_runtime_updates_available(ffi_updates);
             } else {

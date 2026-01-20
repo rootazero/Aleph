@@ -13,9 +13,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
-use crate::components::types::{
-    ExecutionSession, SessionPart, SessionStatus, SummaryPart,
-};
+use crate::components::types::{ExecutionSession, SessionPart, SessionStatus, SummaryPart};
 use crate::event::{
     AetherEvent, CompactionInfo, EventContext, EventHandler, EventType, HandlerError,
 };
@@ -116,10 +114,7 @@ impl TokenTracker {
         model_limits.insert("gpt-4o".to_string(), ModelLimit::new(128000, 4096, 0.2));
 
         // Gemini models (32K context for Pro)
-        model_limits.insert(
-            "gemini-pro".to_string(),
-            ModelLimit::new(32000, 8192, 0.2),
-        );
+        model_limits.insert("gemini-pro".to_string(), ModelLimit::new(32000, 8192, 0.2));
         model_limits.insert(
             "gemini-1.5-pro".to_string(),
             ModelLimit::new(1000000, 8192, 0.2),
@@ -560,12 +555,20 @@ mod tests {
         let limit = ModelLimit::new(100000, 4096, 0.2);
         // 100000 * (1 - 0.2) = 80000 (allow for floating point precision)
         let threshold1 = limit.compaction_threshold();
-        assert!(threshold1 >= 79990 && threshold1 <= 80010, "Expected ~80000, got {}", threshold1);
+        assert!(
+            threshold1 >= 79990 && threshold1 <= 80010,
+            "Expected ~80000, got {}",
+            threshold1
+        );
 
         let limit2 = ModelLimit::new(200000, 4096, 0.1);
         // 200000 * (1 - 0.1) = 180000 (allow for floating point precision)
         let threshold2 = limit2.compaction_threshold();
-        assert!(threshold2 >= 179990 && threshold2 <= 180010, "Expected ~180000, got {}", threshold2);
+        assert!(
+            threshold2 >= 179990 && threshold2 <= 180010,
+            "Expected ~180000, got {}",
+            threshold2
+        );
     }
 
     // ========================================================================
@@ -871,7 +874,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handler_handles_tool_call_completed() {
-        use crate::event::{EventBus, ToolCallResult, TokenUsage};
+        use crate::event::{EventBus, TokenUsage, ToolCallResult};
 
         let compactor = SessionCompactor::new();
         let bus = EventBus::new();
