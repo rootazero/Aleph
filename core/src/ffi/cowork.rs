@@ -646,48 +646,142 @@ impl AetherCore {
     ///
     /// Returns the overall budget status including all configured limits,
     /// current spending, and warning/exceeded states.
-    ///
-    /// Note: Budget management is currently in preview. The configuration will
-    /// be integrated into the main config in a future release. For now, this
-    /// returns a disabled status unless budget limits are manually configured.
     pub fn cowork_get_budget_status(&self) -> crate::cowork_ffi::BudgetStatusFFI {
+        // Load config and get budget limits
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(_) => return crate::cowork_ffi::BudgetStatusFFI::disabled(),
+        };
+
+        // Get budget configuration from cowork.model_routing.budget
+        let budget_config = &config.cowork.model_routing.budget;
+
+        if !budget_config.enabled {
+            return crate::cowork_ffi::BudgetStatusFFI::disabled();
+        }
+
+        // Convert config limits to internal BudgetLimit types
+        let default_enforcement = &budget_config.default_enforcement;
+        let limits: Vec<crate::dispatcher::model_router::BudgetLimit> = budget_config
+            .limits
+            .iter()
+            .map(|l| l.to_budget_limit(default_enforcement))
+            .collect();
+
+        if limits.is_empty() {
+            return crate::cowork_ffi::BudgetStatusFFI::disabled();
+        }
+
+        // Create initial states for each limit
         // TODO: When BudgetManager is integrated into CoworkEngine, use actual states
-        // For now, return disabled status since budget config isn't in main config yet
-        //
-        // Future integration path:
-        // 1. Add ModelRouterConfigToml to CoworkConfigToml or DispatcherConfigToml
-        // 2. Load budget limits from config
-        // 3. Get actual BudgetManager state from CoworkEngine
-        crate::cowork_ffi::BudgetStatusFFI::disabled()
+        let mut states = std::collections::HashMap::new();
+        for limit in &limits {
+            states.insert(
+                limit.id.clone(),
+                crate::dispatcher::model_router::BudgetState::new(limit),
+            );
+        }
+
+        crate::cowork_ffi::BudgetStatusFFI::from_limits_and_states(&limits, &states)
     }
 
     /// Get budget status for a specific scope
     ///
     /// Returns budget limits and status that apply to the given scope.
-    ///
-    /// Note: Budget management is currently in preview. Returns disabled status
-    /// until budget configuration is integrated into the main config.
     pub fn cowork_get_budget_status_for_scope(
         &self,
-        _scope_type: String,
-        _scope_id: Option<String>,
+        scope_type: String,
+        scope_id: Option<String>,
     ) -> crate::cowork_ffi::BudgetStatusFFI {
-        // TODO: Implement when budget config is integrated
-        // Parse scope and filter limits accordingly
-        crate::cowork_ffi::BudgetStatusFFI::disabled()
+        // Parse scope
+        let scope = match scope_type.as_str() {
+            "global" => crate::dispatcher::model_router::BudgetScope::Global,
+            "project" => {
+                crate::dispatcher::model_router::BudgetScope::Project(scope_id.unwrap_or_default())
+            }
+            "session" => {
+                crate::dispatcher::model_router::BudgetScope::Session(scope_id.unwrap_or_default())
+            }
+            "model" => {
+                crate::dispatcher::model_router::BudgetScope::Model(scope_id.unwrap_or_default())
+            }
+            _ => return crate::cowork_ffi::BudgetStatusFFI::disabled(),
+        };
+
+        // Load config and get budget limits
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(_) => return crate::cowork_ffi::BudgetStatusFFI::disabled(),
+        };
+
+        let budget_config = &config.cowork.model_routing.budget;
+
+        if !budget_config.enabled {
+            return crate::cowork_ffi::BudgetStatusFFI::disabled();
+        }
+
+        // Convert config limits to internal BudgetLimit types
+        let default_enforcement = &budget_config.default_enforcement;
+        let all_limits: Vec<crate::dispatcher::model_router::BudgetLimit> = budget_config
+            .limits
+            .iter()
+            .map(|l| l.to_budget_limit(default_enforcement))
+            .collect();
+
+        // Filter to limits that apply to this scope
+        let applicable_limits: Vec<_> = all_limits
+            .into_iter()
+            .filter(|l| {
+                l.scope.contains(&scope)
+                    || l.scope == crate::dispatcher::model_router::BudgetScope::Global
+            })
+            .collect();
+
+        if applicable_limits.is_empty() {
+            return crate::cowork_ffi::BudgetStatusFFI::disabled();
+        }
+
+        // Create initial states for each limit
+        // TODO: When BudgetManager is integrated, use actual states
+        let mut states = std::collections::HashMap::new();
+        for limit in &applicable_limits {
+            states.insert(
+                limit.id.clone(),
+                crate::dispatcher::model_router::BudgetState::new(limit),
+            );
+        }
+
+        crate::cowork_ffi::BudgetStatusFFI::from_limits_and_states(&applicable_limits, &states)
     }
 
     /// Get a single budget limit status by ID
     ///
     /// Returns the status of a specific budget limit, or None if not found.
-    ///
-    /// Note: Budget management is currently in preview. Returns None
-    /// until budget configuration is integrated into the main config.
     pub fn cowork_get_budget_limit(
         &self,
-        _limit_id: String,
+        limit_id: String,
     ) -> Option<crate::cowork_ffi::BudgetLimitStatusFFI> {
-        // TODO: Implement when budget config is integrated
-        None
+        // Load config
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(_) => return None,
+        };
+
+        let budget_config = &config.cowork.model_routing.budget;
+
+        if !budget_config.enabled {
+            return None;
+        }
+
+        // Find the limit by ID
+        let limit_config = budget_config.limits.iter().find(|l| l.id == limit_id)?;
+
+        let default_enforcement = &budget_config.default_enforcement;
+        let limit = limit_config.to_budget_limit(default_enforcement);
+        let state = crate::dispatcher::model_router::BudgetState::new(&limit);
+
+        Some(crate::cowork_ffi::BudgetLimitStatusFFI::from_limit_and_state(
+            &limit, &state,
+        ))
     }
 }

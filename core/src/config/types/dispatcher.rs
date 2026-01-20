@@ -829,6 +829,22 @@ fn default_limit_period() -> String {
     "daily".to_string()
 }
 
+impl Default for BudgetLimitConfigToml {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            scope: default_limit_scope(),
+            scope_value: None,
+            period: default_limit_period(),
+            reset_hour: 0,
+            reset_day: 1,
+            limit_usd: 0.0,
+            warning_thresholds: Vec::new(),
+            enforcement: None,
+        }
+    }
+}
+
 impl BudgetLimitConfigToml {
     /// Validate the budget limit configuration
     pub fn validate(&self) -> std::result::Result<(), String> {

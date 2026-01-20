@@ -516,6 +516,14 @@ pub struct ModelRoutingConfigToml {
     /// Health check configuration
     #[serde(default)]
     pub health: HealthConfigToml,
+
+    /// Retry and failover configuration (P1 improvements)
+    #[serde(default)]
+    pub retry: super::dispatcher::RetryConfigToml,
+
+    /// Budget management configuration (P1 improvements)
+    #[serde(default)]
+    pub budget: super::dispatcher::BudgetConfigToml,
 }
 
 fn default_enable_pipelines() -> bool {
@@ -539,6 +547,8 @@ impl Default for ModelRoutingConfigToml {
             overrides: HashMap::new(),
             metrics: MetricsConfigToml::default(),
             health: HealthConfigToml::default(),
+            retry: super::dispatcher::RetryConfigToml::default(),
+            budget: super::dispatcher::BudgetConfigToml::default(),
         }
     }
 }
@@ -692,6 +702,12 @@ impl ModelRoutingConfigToml {
 
         // Validate health configuration
         self.health.validate()?;
+
+        // Validate retry configuration (P1 improvements)
+        self.retry.validate()?;
+
+        // Validate budget configuration (P1 improvements)
+        self.budget.validate()?;
 
         Ok(())
     }
@@ -2157,5 +2173,135 @@ mod tests {
         assert_eq!(config.cost_strategy, CostStrategy::Balanced);
         assert!(config.enable_pipelines);
         assert_eq!(config.default_model, Some("claude-sonnet".to_string()));
+    }
+
+    #[test]
+    fn test_model_routing_with_retry_budget_deserialization() {
+        let toml_str = r#"
+            code_generation = "claude-opus"
+            default_model = "claude-sonnet"
+
+            [retry]
+            enabled = true
+            max_attempts = 3
+            attempt_timeout_ms = 30000
+            total_timeout_ms = 120000
+            failover_on_non_retryable = true
+            retryable_errors = ["rate_limit", "timeout", "server_error"]
+
+            [retry.backoff]
+            strategy = "exponential_jitter"
+            initial_ms = 1000
+            max_ms = 30000
+            multiplier = 2.0
+            jitter_factor = 0.1
+
+            [budget]
+            enabled = true
+            default_enforcement = "warn_only"
+            estimation_safety_margin = 1.2
+
+            [[budget.limits]]
+            id = "daily-global"
+            scope = "global"
+            period = "daily"
+            reset_hour = 0
+            limit_usd = 10.0
+            warning_thresholds = [0.5, 0.8, 0.95]
+            enforcement = "soft_block"
+
+            [[budget.limits]]
+            id = "monthly-project"
+            scope = "project"
+            scope_value = "aether"
+            period = "monthly"
+            reset_day = 1
+            reset_hour = 0
+            limit_usd = 100.0
+            warning_thresholds = [0.7, 0.9]
+        "#;
+
+        let config: ModelRoutingConfigToml = toml::from_str(toml_str).unwrap();
+
+        // Verify basic routing config
+        assert_eq!(config.code_generation, Some("claude-opus".to_string()));
+        assert_eq!(config.default_model, Some("claude-sonnet".to_string()));
+
+        // Verify retry config
+        assert!(config.retry.enabled);
+        assert_eq!(config.retry.max_attempts, 3);
+        assert_eq!(config.retry.attempt_timeout_ms, 30000);
+        assert!(config.retry.failover_on_non_retryable);
+        assert_eq!(config.retry.retryable_errors.len(), 3);
+        assert!(config.retry.retryable_errors.contains(&"rate_limit".to_string()));
+        assert_eq!(config.retry.backoff.strategy, "exponential_jitter");
+        assert_eq!(config.retry.backoff.multiplier, 2.0);
+
+        // Verify budget config
+        assert!(config.budget.enabled);
+        assert_eq!(config.budget.default_enforcement, "warn_only");
+        assert!((config.budget.estimation_safety_margin - 1.2).abs() < 0.001);
+        assert_eq!(config.budget.limits.len(), 2);
+
+        // Verify first budget limit
+        let limit1 = &config.budget.limits[0];
+        assert_eq!(limit1.id, "daily-global");
+        assert_eq!(limit1.scope, "global");
+        assert_eq!(limit1.period, "daily");
+        assert!((limit1.limit_usd - 10.0).abs() < 0.001);
+        assert_eq!(limit1.warning_thresholds.len(), 3);
+        assert_eq!(limit1.enforcement, Some("soft_block".to_string()));
+
+        // Verify second budget limit
+        let limit2 = &config.budget.limits[1];
+        assert_eq!(limit2.id, "monthly-project");
+        assert_eq!(limit2.scope, "project");
+        assert_eq!(limit2.scope_value, Some("aether".to_string()));
+        assert_eq!(limit2.period, "monthly");
+        assert!((limit2.limit_usd - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_model_routing_retry_budget_validation() {
+        let mut config = ModelRoutingConfigToml::default();
+
+        // Default config should be valid
+        let available_profiles: Vec<&str> = vec![];
+        assert!(config.validate(&available_profiles).is_ok());
+
+        // Invalid retry config (max_attempts = 0)
+        config.retry.max_attempts = 0;
+        assert!(config.validate(&available_profiles).is_err());
+        config.retry.max_attempts = 3; // Reset
+
+        // Invalid budget config (negative limit)
+        let mut limit = crate::config::BudgetLimitConfigToml::default();
+        limit.id = "test".to_string();
+        limit.limit_usd = -10.0;
+        config.budget.limits.push(limit);
+        assert!(config.validate(&available_profiles).is_err());
+    }
+
+    #[test]
+    fn test_model_routing_to_budget_limit() {
+        let mut config = ModelRoutingConfigToml::default();
+        config.budget.enabled = true;
+        config.budget.default_enforcement = "warn_only".to_string();
+
+        let mut limit_config = crate::config::BudgetLimitConfigToml::default();
+        limit_config.id = "test-limit".to_string();
+        limit_config.scope = "global".to_string();
+        limit_config.period = "daily".to_string();
+        limit_config.limit_usd = 50.0;
+        limit_config.warning_thresholds = vec![0.8, 0.95];
+        config.budget.limits.push(limit_config);
+
+        let limit = config.budget.limits[0].to_budget_limit(&config.budget.default_enforcement);
+
+        assert_eq!(limit.id, "test-limit");
+        assert_eq!(limit.scope, crate::dispatcher::model_router::BudgetScope::Global);
+        assert!((limit.limit_usd - 50.0).abs() < 0.001);
+        assert_eq!(limit.warning_thresholds.len(), 2);
+        assert_eq!(limit.enforcement, crate::dispatcher::model_router::BudgetEnforcement::WarnOnly);
     }
 }
