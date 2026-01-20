@@ -101,6 +101,96 @@ pub struct ToolDefinition {
     pub category: ToolCategory,
 }
 
+// =============================================================================
+// Structured Tool Description Types (for LLM tool selection)
+// =============================================================================
+
+/// Capability description for structured tool definitions
+///
+/// Provides precise enumeration of what a tool can do, helping LLM
+/// make accurate tool selection decisions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Capability {
+    /// Action verb (e.g., "search", "read", "write")
+    pub action: String,
+    /// Target of action (e.g., "file names", "file content")
+    pub target: String,
+    /// Scope limitation (e.g., "project directory", "current file")
+    pub scope: String,
+    /// Output type (e.g., "list of paths", "file content string")
+    pub output: String,
+}
+
+impl Capability {
+    /// Create a new capability
+    pub fn new(
+        action: impl Into<String>,
+        target: impl Into<String>,
+        scope: impl Into<String>,
+        output: impl Into<String>,
+    ) -> Self {
+        Self {
+            action: action.into(),
+            target: target.into(),
+            scope: scope.into(),
+            output: output.into(),
+        }
+    }
+
+    /// Format for LLM prompt
+    pub fn to_prompt(&self) -> String {
+        format!(
+            "{} {} within {} → {}",
+            self.action, self.target, self.scope, self.output
+        )
+    }
+}
+
+/// Tool differentiation for distinguishing similar tools
+///
+/// Helps LLM choose between tools with overlapping functionality
+/// by explicitly stating when to use this tool vs. another.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDiff {
+    /// The other tool being compared
+    pub other_tool: String,
+    /// What this tool does (brief)
+    pub this_tool: String,
+    /// What the other tool does (brief)
+    pub other_is: String,
+    /// When to choose this tool
+    pub choose_this_when: String,
+    /// When to choose the other tool
+    pub choose_other_when: String,
+}
+
+impl ToolDiff {
+    /// Create a new tool differentiation
+    pub fn new(
+        other_tool: impl Into<String>,
+        this_tool: impl Into<String>,
+        other_is: impl Into<String>,
+        choose_this_when: impl Into<String>,
+        choose_other_when: impl Into<String>,
+    ) -> Self {
+        Self {
+            other_tool: other_tool.into(),
+            this_tool: this_tool.into(),
+            other_is: other_is.into(),
+            choose_this_when: choose_this_when.into(),
+            choose_other_when: choose_other_when.into(),
+        }
+    }
+
+    /// Format for LLM prompt
+    pub fn to_prompt(&self) -> String {
+        format!(
+            "vs {}: this={}, that={}. Choose this when: {}",
+            self.other_tool, self.this_tool, self.other_is, self.choose_this_when
+        )
+    }
+}
+
 impl ToolDefinition {
     /// Create a new tool definition
     #[allow(deprecated)]
@@ -1558,5 +1648,52 @@ mod tests {
 
         assert_eq!(tool.safety_level, ToolSafetyLevel::IrreversibleHighRisk);
         assert!(tool.requires_confirmation); // Auto-synced from safety level
+    }
+
+    // =========================================================================
+    // Task 6: Capability and ToolDiff Tests
+    // =========================================================================
+
+    #[test]
+    fn test_capability_creation() {
+        let cap = Capability::new("search", "file names", "project directory", "list of paths");
+        assert_eq!(cap.action, "search");
+        assert_eq!(cap.target, "file names");
+    }
+
+    #[test]
+    fn test_tool_diff_creation() {
+        let diff = ToolDiff::new(
+            "search_content",
+            "matches file name/path",
+            "matches file content",
+            "know file name",
+            "know content",
+        );
+        assert_eq!(diff.other_tool, "search_content");
+        assert_eq!(diff.choose_this_when, "know file name");
+    }
+
+    #[test]
+    fn test_capability_to_prompt() {
+        let cap = Capability::new("search", "file names", "project directory", "list of paths");
+        let prompt = cap.to_prompt();
+        assert_eq!(prompt, "search file names within project directory → list of paths");
+    }
+
+    #[test]
+    fn test_tool_diff_to_prompt() {
+        let diff = ToolDiff::new(
+            "search_content",
+            "matches names",
+            "matches content",
+            "know file name",
+            "know content",
+        );
+        let prompt = diff.to_prompt();
+        assert_eq!(
+            prompt,
+            "vs search_content: this=matches names, that=matches content. Choose this when: know file name"
+        );
     }
 }
