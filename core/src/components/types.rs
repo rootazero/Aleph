@@ -370,6 +370,18 @@ pub enum ExecutionPhase {
     Summarizing,
 }
 
+/// Context verbosity levels for prompt generation
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ContextVerbosity {
+    /// First request: full context
+    #[default]
+    Full,
+    /// Subsequent requests: incremental + key references only
+    Incremental,
+    /// Token-constrained: only core information
+    Minimal,
+}
+
 /// Execution context - semantic backbone through execution chain
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
@@ -442,6 +454,110 @@ impl ExecutionContext {
     /// Get knowledge by key
     pub fn get_knowledge(&self, key: &str) -> Option<&Knowledge> {
         self.acquired_knowledge.iter().find(|k| k.key == key)
+    }
+
+    /// Generate context string based on verbosity level
+    pub fn to_prompt(&self, verbosity: ContextVerbosity) -> String {
+        match verbosity {
+            ContextVerbosity::Full => self.to_full_prompt(),
+            ContextVerbosity::Incremental => self.to_incremental_prompt(),
+            ContextVerbosity::Minimal => self.to_minimal_prompt(),
+        }
+    }
+
+    /// Full context for first request
+    fn to_full_prompt(&self) -> String {
+        let mut parts = Vec::new();
+
+        // Original intent
+        parts.push(format!(
+            "**User Original Intent**: {}",
+            self.original_intent.raw_input
+        ));
+        if let Some(ref understood) = self.original_intent.understood_as {
+            parts.push(format!("**Understood As**: {}", understood));
+        }
+
+        // Implicit expectations
+        if !self.original_intent.implicit_expectations.is_empty() {
+            parts.push(format!(
+                "**Implicit Expectations**: {}",
+                self.original_intent.implicit_expectations.join("; ")
+            ));
+        }
+
+        // Current goal
+        parts.push(format!(
+            "**Current Goal**: {}",
+            self.current_goal.description
+        ));
+        if let Some(ref criteria) = self.current_goal.success_criteria {
+            parts.push(format!("**Success Criteria**: {}", criteria));
+        }
+
+        // Acquired knowledge
+        if !self.acquired_knowledge.is_empty() {
+            let knowledge_lines: Vec<String> = self
+                .acquired_knowledge
+                .iter()
+                .map(|k| {
+                    format!(
+                        "- {}: {} (source: {}, confidence: {:.0}%)",
+                        k.key,
+                        k.value,
+                        k.source,
+                        k.confidence * 100.0
+                    )
+                })
+                .collect();
+            parts.push(format!(
+                "**Acquired Information**:\n{}",
+                knowledge_lines.join("\n")
+            ));
+        }
+
+        // Decision history
+        if !self.decision_trail.is_empty() {
+            let decision_lines: Vec<String> = self
+                .decision_trail
+                .iter()
+                .enumerate()
+                .map(|(i, d)| format!("{}. {} - {}", i + 1, d.choice, d.reasoning))
+                .collect();
+            parts.push(format!(
+                "**Decision History**:\n{}",
+                decision_lines.join("\n")
+            ));
+        }
+
+        parts.join("\n\n")
+    }
+
+    /// Incremental context (recent changes only)
+    fn to_incremental_prompt(&self) -> String {
+        let mut parts = Vec::new();
+
+        // Current goal only
+        parts.push(format!("**Goal**: {}", self.current_goal.description));
+
+        // Recent knowledge (last 3 items)
+        let recent_knowledge: Vec<String> = self
+            .acquired_knowledge
+            .iter()
+            .rev()
+            .take(3)
+            .map(|k| format!("{}={}", k.key, k.value))
+            .collect();
+        if !recent_knowledge.is_empty() {
+            parts.push(format!("**Recent Info**: {}", recent_knowledge.join(", ")));
+        }
+
+        // Last decision
+        if let Some(last_decision) = self.decision_trail.last() {
+            parts.push(format!("**Last Decision**: {}", last_decision.choice));
+        }
+
+        parts.join("\n")
     }
 
     /// Generate context summary for LLM prompt (minimal version)
@@ -603,5 +719,23 @@ mod tests {
 
         assert_eq!(ctx.decision_trail.len(), 1);
         assert_eq!(ctx.decision_trail[0].choice, "Use search_files tool");
+    }
+
+    #[test]
+    fn test_context_verbosity_prompt_generation() {
+        let intent = UserIntent::new("Deploy project").understood_as("Deploy to server");
+        let goal = Goal::new("Find config");
+        let mut ctx = ExecutionContext::new(intent, goal);
+        ctx.add_knowledge(Knowledge::new("project_type", "rust", "analysis").with_confidence(0.95));
+        ctx.add_decision("Analyze project first", "Need to understand structure", vec![]);
+
+        let minimal = ctx.to_prompt(ContextVerbosity::Minimal);
+        assert!(minimal.contains("Find config"));
+        assert!(minimal.contains("project_type=rust"));
+
+        let full = ctx.to_prompt(ContextVerbosity::Full);
+        assert!(full.contains("Deploy project"));
+        assert!(full.contains("Deploy to server"));
+        assert!(full.contains("Decision History"));
     }
 }
