@@ -152,6 +152,73 @@ pub struct SummaryPart {
     pub compacted_at: i64,
 }
 
+// =============================================================================
+// Knowledge and Entity Types (for ExecutionContext)
+// =============================================================================
+
+/// Knowledge fragment extracted from tool results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Knowledge {
+    /// Knowledge key identifier
+    pub key: String,
+    /// Knowledge value
+    pub value: String,
+    /// Source of this knowledge (tool name or user input)
+    pub source: String,
+    /// Confidence level (0.0 - 1.0)
+    pub confidence: f32,
+    /// Timestamp when acquired
+    pub acquired_at: i64,
+}
+
+impl Knowledge {
+    /// Create a new knowledge fragment with default confidence
+    pub fn new(key: impl Into<String>, value: impl Into<String>, source: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            value: value.into(),
+            source: source.into(),
+            confidence: 0.9,
+            acquired_at: chrono::Utc::now().timestamp(),
+        }
+    }
+
+    /// Create with specific confidence
+    pub fn with_confidence(mut self, confidence: f32) -> Self {
+        self.confidence = confidence.clamp(0.0, 1.0);
+        self
+    }
+}
+
+/// Entity extracted from user input
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Entity {
+    /// Entity type (e.g., "file", "project", "server")
+    pub entity_type: String,
+    /// Entity value
+    pub value: String,
+    /// Optional metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+impl Entity {
+    /// Create a new entity
+    pub fn new(entity_type: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            entity_type: entity_type.into(),
+            value: value.into(),
+            metadata: None,
+        }
+    }
+
+    /// Add metadata
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+}
+
 /// Tool call record for doom loop detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRecord {
@@ -199,5 +266,26 @@ impl ComponentContext {
             abort_signal,
             session_id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_knowledge_creation() {
+        let knowledge = Knowledge::new("db_path", "./config/db.toml", "search_files");
+        assert_eq!(knowledge.key, "db_path");
+        assert_eq!(knowledge.value, "./config/db.toml");
+        assert_eq!(knowledge.source, "search_files");
+        assert!(knowledge.confidence >= 0.0 && knowledge.confidence <= 1.0);
+    }
+
+    #[test]
+    fn test_entity_creation() {
+        let entity = Entity::new("project", "Aether");
+        assert_eq!(entity.entity_type, "project");
+        assert_eq!(entity.value, "Aether");
     }
 }
