@@ -78,6 +78,7 @@ pub mod calibrator;
 pub mod classifier;
 pub mod context;
 pub mod defaults;
+pub mod execution_decider;
 pub mod ffi;
 pub mod keyword;
 pub mod parameters;
@@ -112,3 +113,9 @@ pub use rollback::{
     RollbackCapable, RollbackConfig, RollbackEntry, RollbackManager, RollbackResult,
 };
 pub use task_category::TaskCategory;
+
+// New unified decision layer
+pub use execution_decider::{
+    ContextSignals, DeciderConfig, DecisionLayer, DecisionMetadata, DecisionResult,
+    ExecutionIntentDecider, ExecutionMode, SlashCommand, ToolInvocation,
+};

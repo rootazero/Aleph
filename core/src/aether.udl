@@ -1411,11 +1411,23 @@ dictionary MemoryItem {
 enum TaskCategoryFFI {
   "General",            // General task (explicit /agent command)
   "FileOrganize",       // File organization (sort, classify)
+  "FileOperation",      // File operations (read, write, search)
   "FileTransfer",       // File transfer (move, copy)
   "FileCleanup",        // File cleanup (delete, archive)
   "CodeExecution",      // Code execution
+  "AppLaunch",          // Application launch
   "AppAutomation",      // Application automation
-  "DocumentGenerate",   // Document generation
+  "DocumentGeneration", // Document generation (new name)
+  "DocumentGenerate",   // Document generation (legacy alias)
+  "ImageGeneration",    // Image generation
+  "VideoGeneration",    // Video generation
+  "AudioGeneration",    // Audio generation
+  "SpeechGeneration",   // Speech generation (TTS)
+  "WebSearch",          // Web search
+  "WebFetch",           // Web fetch (page content)
+  "SystemInfo",         // System information queries
+  "MediaDownload",      // Media download (YouTube, etc.)
+  "TextProcessing",     // Text processing
   "DataProcess",        // Data processing
 };
 

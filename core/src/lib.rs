@@ -84,6 +84,7 @@ pub mod memory;
 pub mod metrics;
 pub mod payload; // Structured context protocol with capability support
 pub mod planner; // NEW: Unified planner for 2-layer architecture
+pub mod prompt; // NEW: Unified prompt management (executor/conversational)
 pub mod providers;
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
 pub mod runtimes; // NEW: Runtime manager for external tools (uv, fnm, yt-dlp)
@@ -241,6 +242,15 @@ pub use crate::intent::{
     TaskParameters,
     TaskParametersFFI,
     TimeContext,
+    // New unified execution decider
+    ContextSignals,
+    DeciderConfig,
+    DecisionLayer,
+    DecisionMetadata,
+    DecisionResult,
+    ExecutionIntentDecider,
+    ExecutionMode,
+    ToolInvocation,
 };
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::mcp::{
@@ -317,6 +327,11 @@ pub use crate::generation::{
 // Planner exports (unified 2-layer architecture)
 pub use crate::planner::{
     ExecutionPlan, PlannedTask, PlannerConfig, PlannerError, ToolInfo, UnifiedPlanner,
+};
+
+// Prompt exports (unified prompt management)
+pub use crate::prompt::{
+    ConversationalPrompt, ExecutorPrompt, PromptBuilder, PromptConfig, PromptTemplate, TemplateVar,
 };
 
 // Executor exports (unified 2-layer architecture)
