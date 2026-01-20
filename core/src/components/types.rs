@@ -320,6 +320,148 @@ impl Goal {
     }
 }
 
+/// Decision record for tracking reasoning
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionRecord {
+    /// What was decided
+    pub choice: String,
+    /// Why this choice was made
+    pub reasoning: String,
+    /// Alternatives that were considered
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<String>,
+    /// Timestamp
+    pub timestamp: i64,
+}
+
+impl DecisionRecord {
+    /// Create a new decision record
+    pub fn new(
+        choice: impl Into<String>,
+        reasoning: impl Into<String>,
+        alternatives: Vec<String>,
+    ) -> Self {
+        Self {
+            choice: choice.into(),
+            reasoning: reasoning.into(),
+            alternatives,
+            timestamp: chrono::Utc::now().timestamp(),
+        }
+    }
+}
+
+/// Execution phase
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub enum ExecutionPhase {
+    /// Understanding user intent
+    #[default]
+    Understanding,
+    /// Planning execution steps
+    Planning,
+    /// Executing tools
+    Executing,
+    /// Validating results
+    Validating,
+    /// Summarizing for user
+    Summarizing,
+}
+
+/// Execution context - semantic backbone through execution chain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionContext {
+    /// Unique context ID
+    pub id: String,
+    /// Original user intent (immutable)
+    pub original_intent: UserIntent,
+    /// Current goal (may refine as task decomposes)
+    pub current_goal: Goal,
+    /// Decision trail (why these choices were made)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decision_trail: Vec<DecisionRecord>,
+    /// Acquired knowledge (valuable results from tool calls)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acquired_knowledge: Vec<Knowledge>,
+    /// Current execution phase
+    pub phase: ExecutionPhase,
+    /// Created timestamp
+    pub created_at: i64,
+    /// Last updated timestamp
+    pub updated_at: i64,
+}
+
+impl ExecutionContext {
+    /// Create a new execution context
+    pub fn new(intent: UserIntent, goal: Goal) -> Self {
+        let now = chrono::Utc::now().timestamp();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            original_intent: intent,
+            current_goal: goal,
+            decision_trail: Vec::new(),
+            acquired_knowledge: Vec::new(),
+            phase: ExecutionPhase::Understanding,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// Add knowledge to the context
+    pub fn add_knowledge(&mut self, knowledge: Knowledge) {
+        self.acquired_knowledge.push(knowledge);
+        self.updated_at = chrono::Utc::now().timestamp();
+    }
+
+    /// Add a decision record
+    pub fn add_decision(
+        &mut self,
+        choice: impl Into<String>,
+        reasoning: impl Into<String>,
+        alternatives: Vec<String>,
+    ) {
+        self.decision_trail
+            .push(DecisionRecord::new(choice, reasoning, alternatives));
+        self.updated_at = chrono::Utc::now().timestamp();
+    }
+
+    /// Update current goal
+    pub fn set_goal(&mut self, goal: Goal) {
+        self.current_goal = goal;
+        self.updated_at = chrono::Utc::now().timestamp();
+    }
+
+    /// Update execution phase
+    pub fn set_phase(&mut self, phase: ExecutionPhase) {
+        self.phase = phase;
+        self.updated_at = chrono::Utc::now().timestamp();
+    }
+
+    /// Get knowledge by key
+    pub fn get_knowledge(&self, key: &str) -> Option<&Knowledge> {
+        self.acquired_knowledge.iter().find(|k| k.key == key)
+    }
+
+    /// Generate context summary for LLM prompt (minimal version)
+    pub fn to_minimal_prompt(&self) -> String {
+        let knowledge_str = self
+            .acquired_knowledge
+            .iter()
+            .filter(|k| k.confidence >= 0.8)
+            .map(|k| format!("{}={}", k.key, k.value))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        format!(
+            "Goal: {}\nKnown: {}",
+            self.current_goal.description,
+            if knowledge_str.is_empty() {
+                "(none)".to_string()
+            } else {
+                knowledge_str
+            }
+        )
+    }
+}
+
 /// Tool call record for doom loop detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRecord {
@@ -415,5 +557,47 @@ mod tests {
         assert_eq!(goal.description, "Find project config files");
         assert!(goal.success_criteria.is_some());
         assert!(goal.parent_goal.is_some());
+    }
+
+    #[test]
+    fn test_execution_context_creation() {
+        let intent = UserIntent::new("Deploy the project");
+        let goal = Goal::new("Find configuration");
+
+        let ctx = ExecutionContext::new(intent, goal);
+
+        assert_eq!(ctx.original_intent.raw_input, "Deploy the project");
+        assert_eq!(ctx.current_goal.description, "Find configuration");
+        assert!(ctx.decision_trail.is_empty());
+        assert!(ctx.acquired_knowledge.is_empty());
+        assert_eq!(ctx.phase, ExecutionPhase::Understanding);
+    }
+
+    #[test]
+    fn test_execution_context_add_knowledge() {
+        let intent = UserIntent::new("Test");
+        let goal = Goal::new("Test goal");
+        let mut ctx = ExecutionContext::new(intent, goal);
+
+        ctx.add_knowledge(Knowledge::new("key", "value", "test_tool"));
+
+        assert_eq!(ctx.acquired_knowledge.len(), 1);
+        assert_eq!(ctx.acquired_knowledge[0].key, "key");
+    }
+
+    #[test]
+    fn test_execution_context_add_decision() {
+        let intent = UserIntent::new("Test");
+        let goal = Goal::new("Test goal");
+        let mut ctx = ExecutionContext::new(intent, goal);
+
+        ctx.add_decision(
+            "Use search_files tool",
+            "Need to find config location first",
+            vec!["read_file".to_string(), "list_dir".to_string()],
+        );
+
+        assert_eq!(ctx.decision_trail.len(), 1);
+        assert_eq!(ctx.decision_trail[0].choice, "Use search_files tool");
     }
 }
