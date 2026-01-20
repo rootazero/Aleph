@@ -168,23 +168,25 @@ struct GlassButtonModifier: ViewModifier {
 // MARK: - Glass Message Bubble Modifier
 
 /// Modifier for message bubbles with glass effect.
+/// Both user and AI messages use the same primary glass style for visual consistency.
 struct GlassMessageBubbleModifier: ViewModifier {
 
     let isUser: Bool
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
+            // Use .regular glass effect for both user and AI messages
             content
                 .glassEffect(
-                    isUser ? .regular : .regular.tint(.secondary),
+                    .regular,
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                 )
         } else {
-            // Fallback for macOS 15-25
+            // Fallback for macOS 15-25: same opacity for both user and AI
             content
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.primary.opacity(isUser ? 0.12 : 0.08))
+                        .fill(Color.primary.opacity(0.12))
                 )
         }
     }
