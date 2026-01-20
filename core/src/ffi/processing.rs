@@ -1,17 +1,25 @@
 //! Processing methods for AetherCore
 //!
 //! This module contains AI processing methods: process, cancel, generate_topic_title, extract_text
+//!
+//! # Architecture (Simplified 2-Layer)
+//!
+//! - L1: Slash command check (immediate routing for /agent, /search, etc.)
+//! - L3: AI unified planner for everything else (conversational, single action, task graph)
 
 use super::{AetherCore, AetherFfiError};
 use crate::agent::RigAgentManager;
-use crate::command::{
-    CommandContext, CommandParser, NaturalLanguageCommandDetector, ParsedCommand,
-    UnifiedCommandIndex,
-};
+use crate::command::{CommandContext, CommandParser, ParsedCommand};
 use crate::config::RoutingRuleConfig;
+use crate::cowork::executor::{
+    CodeExecutor, ExecutorRegistry, FileOpsExecutor, PathPermissionChecker,
+};
 use crate::dispatcher::ToolSourceType;
-use crate::intent::{AgentModePrompt, ExecutionIntent, IntentClassifier, ToolDescription};
+use crate::executor::{ExecutionContext as ExecContext, ExecutorError, UnifiedExecutor};
+use crate::intent::{AgentModePrompt, ToolDescription};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
+use crate::planner::{ExecutionPlan, PlannerConfig, ToolInfo, UnifiedPlanner};
+use crate::providers::{create_provider, AiProvider};
 use crate::skills::SkillsRegistry;
 use crate::utils::paths::get_skills_dir;
 use std::path::PathBuf;
@@ -77,6 +85,11 @@ impl AetherCore {
     /// This method processes the input on a background thread and calls
     /// the appropriate handler callbacks during processing.
     ///
+    /// # Architecture (Simplified 2-Layer)
+    ///
+    /// - **L1**: Slash command check (immediate routing for /agent, /search, /skills, etc.)
+    /// - **L3**: AI unified planner for everything else (decides: conversational, single action, or task graph)
+    ///
     /// The operation can be cancelled by calling `cancel()`. When cancelled,
     /// the handler's `on_error` callback will be invoked with "Operation cancelled".
     ///
@@ -96,6 +109,7 @@ impl AetherCore {
         let app_context = options.app_context.clone();
         let window_title = options.window_title.clone();
         let topic_id = options.topic_id.clone();
+        let stream = options.stream;
 
         let handler = Arc::clone(&self.handler);
         // Acquire read lock to get current config (supports config reload)
@@ -117,15 +131,15 @@ impl AetherCore {
             .clone();
         let input_for_memory = input.clone();
 
-        // Clone keyword policy for enhanced L2 intent matching
         // Clone generation config for model aliases
-        // Clone routing rules for NL command detection
-        let (keyword_policy, generation_config, routing_rules) = {
+        // Clone routing rules for slash command parsing
+        // Clone full config for creating AI provider
+        let (generation_config, routing_rules, full_config_clone) = {
             let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
             (
-                full_config.policies.keyword.clone(),
                 full_config.generation.clone(),
                 full_config.rules.clone(),
+                full_config.clone(),
             )
         };
 
@@ -147,23 +161,25 @@ impl AetherCore {
             handler.on_thinking();
 
             // ================================================================
-            // UNIFIED COMMAND PARSING (Slash + Natural Language)
+            // L1: SLASH COMMAND CHECK
             // ================================================================
-            // Parse input as a command first. This supports:
-            // 1. Slash commands (e.g., "/agent do something")
-            // 2. Natural language commands (e.g., "使用 knowledge-graph 分析代码")
-            //
-            // If recognized as a command, process it according to its type.
-            // Otherwise, fall back to intent classification for regular input.
-
-            let parsed_command = parse_command(&input, &routing_rules);
+            // Only parse slash commands (starting with '/').
+            // For non-slash input, use the unified planner (L3).
+            let parsed_command = if input.starts_with('/') {
+                parse_slash_command(&input, &routing_rules)
+            } else {
+                None
+            };
 
             // Get tool descriptions for agent prompt (used by multiple branches)
             let tool_descriptions = get_builtin_tool_descriptions();
 
-            // Process based on parsed command or fall back to intent classification
-            let processed_input = if let Some(ref cmd) = parsed_command {
-                match cmd.source_type {
+            // If slash command is detected, handle it with existing logic
+            if let Some(ref cmd) = parsed_command {
+                // ================================================================
+                // SLASH COMMAND HANDLING (Existing Logic)
+                // ================================================================
+                let processed_input = match cmd.source_type {
                     ToolSourceType::Builtin => {
                         // Handle builtin commands
                         match cmd.command_name.as_str() {
@@ -172,10 +188,9 @@ impl AetherCore {
                                 let task_input = cmd.arguments.clone().unwrap_or_default();
                                 info!(task = %task_input, "Explicit /agent command detected");
 
-                                let agent_prompt =
-                                    AgentModePrompt::with_tools(tool_descriptions)
-                                        .with_generation_config(&generation_config)
-                                        .generate();
+                                let agent_prompt = AgentModePrompt::with_tools(tool_descriptions)
+                                    .with_generation_config(&generation_config)
+                                    .generate();
 
                                 // Notify UI of agent mode
                                 let task = crate::intent::ExecutableTask {
@@ -195,23 +210,17 @@ impl AetherCore {
                                 info!(tool = %tool_name, args = %args, "Builtin tool command");
 
                                 // Inject agent prompt with tool hint
-                                let agent_prompt =
-                                    AgentModePrompt::with_tools(tool_descriptions)
-                                        .with_generation_config(&generation_config)
-                                        .generate();
+                                let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
+                                    .with_generation_config(&generation_config)
+                                    .generate();
                                 let tool_hint = match tool_name.as_str() {
-                                    "search" => format!(
-                                        "请使用 search 工具搜索以下内容: {}",
-                                        args
-                                    ),
-                                    "youtube" => format!(
-                                        "请使用 youtube 工具获取以下视频信息: {}",
-                                        args
-                                    ),
-                                    "webfetch" => format!(
-                                        "请使用 web_fetch 工具获取以下网页内容: {}",
-                                        args
-                                    ),
+                                    "search" => format!("请使用 search 工具搜索以下内容: {}", args),
+                                    "youtube" => {
+                                        format!("请使用 youtube 工具获取以下视频信息: {}", args)
+                                    }
+                                    "webfetch" => {
+                                        format!("请使用 web_fetch 工具获取以下网页内容: {}", args)
+                                    }
                                     _ => args,
                                 };
 
@@ -244,7 +253,6 @@ impl AetherCore {
                                 display_name, instructions, user_input
                             )
                         } else {
-                            // Fallback if context is wrong type
                             input.clone()
                         }
                     }
@@ -286,10 +294,9 @@ impl AetherCore {
                             );
 
                             // Inject agent prompt with MCP tool hint
-                            let agent_prompt =
-                                AgentModePrompt::with_tools(tool_descriptions)
-                                        .with_generation_config(&generation_config)
-                                        .generate();
+                            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
+                                .with_generation_config(&generation_config)
+                                .generate();
                             format!(
                                 "{}\n\n---\n\n请使用 {} 工具处理: {}",
                                 agent_prompt, server_name, args
@@ -302,118 +309,115 @@ impl AetherCore {
                         // Legacy native tools - treat as regular input
                         input.clone()
                     }
-                }
+                };
+
+                // Execute with RigAgentManager (existing path for slash commands)
+                execute_with_agent_manager(
+                    &runtime,
+                    &processed_input,
+                    &config,
+                    tool_server_handle,
+                    registered_tools,
+                    &conversation_histories,
+                    &topic_id,
+                    attachments.as_deref(),
+                    &op_token,
+                    &handler,
+                    &memory_config,
+                    &memory_path,
+                    &input_for_memory,
+                    &app_context,
+                    &window_title,
+                );
             } else {
                 // ================================================================
-                // NOT A COMMAND - USE INTENT CLASSIFICATION
+                // L3: UNIFIED PLANNER + EXECUTOR (New Path)
                 // ================================================================
-                // No recognized slash command, fall back to automatic classification
+                // No slash command detected - use AI unified planner to decide
+                // the execution strategy (conversational, single action, or task graph).
+                info!(input_len = input.len(), "Using unified planner for non-slash input");
 
-                let classifier = IntentClassifier::with_keyword_policy(&keyword_policy);
-                let intent = runtime.block_on(classifier.classify(&input));
-                debug!(intent = ?intent, "Intent classification result");
+                // Create AI provider for planner
+                let planner_provider = create_planner_provider(&full_config_clone);
 
-                if let ExecutionIntent::Executable(ref task) = intent {
-                    info!(
-                        category = ?task.category,
-                        action = %task.action,
-                        confidence = task.confidence,
-                        "Agent execution mode detected (auto)"
-                    );
-                    handler.on_agent_mode_detected(task.into());
+                // Try to plan, or fallback to direct agent execution
+                let plan_opt = if let Some(provider) = planner_provider {
+                    // Create unified planner with available tools
+                    let tools = convert_tool_descriptions_to_tool_info(&tool_descriptions);
+                    let planner_config = PlannerConfig::default();
+                    let planner = UnifiedPlanner::with_config(Arc::clone(&provider), planner_config)
+                        .with_tools(tools);
 
-                    // Inject agent mode prompt with tools
-                    let agent_prompt = AgentModePrompt::with_tools(tool_descriptions)
-                                        .with_generation_config(&generation_config)
-                                        .generate();
-                    format!("{}\n\n---\n\n用户请求: {}", agent_prompt, input)
-                } else {
-                    input.clone()
-                }
-            };
-
-            // Create manager with shared ToolServerHandle (all tools persist across calls)
-            let manager =
-                RigAgentManager::with_shared_handle(config, tool_server_handle, registered_tools);
-
-            // Get or create conversation history for this topic
-            let topic_key = topic_id
-                .clone()
-                .unwrap_or_else(|| "single-turn".to_string());
-            let mut history = {
-                let histories = conversation_histories.read().unwrap();
-                histories.get(&topic_key).cloned().unwrap_or_default()
-            };
-            let history_len_before = history.len();
-
-            // Convert attachments for the async block
-            let attachments_ref = attachments.as_deref();
-
-            let result = runtime.block_on(async {
-                tokio::select! {
-                    biased;
-
-                    // Check for cancellation first (biased mode)
-                    _ = op_token.cancelled() => {
-                        Err(crate::error::AetherError::cancelled())
-                    }
-
-                    // Process with conversation history and attachments for multi-turn + multimodal support
-                    result = manager.process_with_history_and_attachments(&processed_input, &mut history, attachments_ref) => {
-                        result
-                    }
-                }
-            });
-
-            // Update conversation history after processing
-            // rig-core's with_history() mutates the history to add the current exchange
-            if history.len() > history_len_before {
-                let mut histories = conversation_histories.write().unwrap();
-                histories.insert(topic_key.clone(), history);
-                debug!(topic_id = %topic_key, "Conversation history updated");
-            }
-
-            match result {
-                Ok(response) => {
-                    // Store memory if enabled
-                    if memory_config.enabled {
-                        if let Some(ref db_path) = memory_path {
-                            let store_result = runtime.block_on(async {
-                                store_memory_after_response(
-                                    db_path,
-                                    &memory_config,
-                                    &input_for_memory,
-                                    &response.content,
-                                    app_context.as_deref(),
-                                    window_title.as_deref(),
-                                    topic_id.as_deref(),
-                                )
-                                .await
-                            });
-
-                            match store_result {
-                                Ok(memory_id) => {
-                                    info!(memory_id = %memory_id, "Memory stored successfully");
-                                    handler.on_memory_stored();
-                                }
-                                Err(e) => {
-                                    warn!(error = %e, "Failed to store memory (non-blocking)");
-                                }
+                    // Plan the execution
+                    let plan_result = runtime.block_on(async {
+                        tokio::select! {
+                            biased;
+                            _ = op_token.cancelled() => {
+                                Err(crate::planner::PlannerError::Timeout)
+                            }
+                            result = planner.plan(&input) => {
+                                result
                             }
                         }
-                    }
+                    });
 
-                    // If tokio::select! returned the result branch, the operation completed successfully
-                    handler.on_complete(response.content);
-                }
-                Err(e) => {
-                    // Check if the error is due to cancellation
-                    if op_token.is_cancelled() {
-                        handler.on_error("Operation cancelled".to_string());
-                    } else {
-                        error!(error = %e, "Processing failed");
-                        handler.on_error(e.to_string());
+                    match plan_result {
+                        Ok(plan) => {
+                            info!(plan_type = %plan.plan_type(), "Execution plan generated");
+                            Some(plan)
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Planner failed, falling back to conversational mode");
+                            None
+                        }
                     }
+                } else {
+                    warn!("No provider available for planner, using direct agent execution");
+                    None
+                };
+
+                // Execute plan or fallback to direct agent
+                if let Some(plan) = plan_opt {
+                    execute_plan(
+                        &runtime,
+                        plan,
+                        &input,
+                        &config,
+                        tool_server_handle,
+                        registered_tools,
+                        &conversation_histories,
+                        &topic_id,
+                        attachments.as_deref(),
+                        &op_token,
+                        &handler,
+                        &memory_config,
+                        &memory_path,
+                        &input_for_memory,
+                        &app_context,
+                        &window_title,
+                        stream,
+                        &generation_config,
+                        &tool_descriptions,
+                    );
+                } else {
+                    // Fallback to direct agent execution
+                    execute_with_agent_manager(
+                        &runtime,
+                        &input,
+                        &config,
+                        tool_server_handle,
+                        registered_tools,
+                        &conversation_histories,
+                        &topic_id,
+                        attachments.as_deref(),
+                        &op_token,
+                        &handler,
+                        &memory_config,
+                        &memory_path,
+                        &input_for_memory,
+                        &app_context,
+                        &window_title,
+                    );
                 }
             }
         });
@@ -552,22 +556,24 @@ impl AetherCore {
     }
 }
 
-/// Parse user input as a command (slash or natural language)
+/// Parse user input as a slash command
 ///
-/// This function creates a CommandParser with NaturalLanguageCommandDetector
-/// and attempts to parse the input. It supports:
-/// 1. Slash commands (e.g., "/agent do something")
-/// 2. Natural language commands (e.g., "使用 knowledge-graph 分析代码")
-///
-/// It checks all command sources: builtin, skills, MCP, and custom rules.
+/// This function creates a CommandParser and attempts to parse slash commands.
+/// It only handles explicit slash commands (starting with '/').
+/// Natural language command detection has been removed in favor of the unified planner.
 ///
 /// # Arguments
-/// * `input` - User input to parse
-/// * `routing_rules` - Routing rules from config (for custom commands and NL triggers)
+/// * `input` - User input to parse (should start with '/')
+/// * `routing_rules` - Routing rules from config (for custom commands)
 ///
 /// # Returns
-/// `Some(ParsedCommand)` if input is a recognized command, `None` otherwise
-fn parse_command(input: &str, routing_rules: &[RoutingRuleConfig]) -> Option<ParsedCommand> {
+/// `Some(ParsedCommand)` if input is a recognized slash command, `None` otherwise
+fn parse_slash_command(input: &str, routing_rules: &[RoutingRuleConfig]) -> Option<ParsedCommand> {
+    // Only process slash commands
+    if !input.starts_with('/') {
+        return None;
+    }
+
     // Build command parser with all sources
     let mut parser = CommandParser::new();
 
@@ -591,21 +597,370 @@ fn parse_command(input: &str, routing_rules: &[RoutingRuleConfig]) -> Option<Par
     // Pass routing rules from config
     parser = parser.with_routing_rules(routing_rules.to_vec());
 
-    // Build unified command index for NL detection
-    // This index aggregates trigger keywords from Skills and Custom commands
-    let index = UnifiedCommandIndex::build_all(
-        skills_registry.as_ref().map(|r| r.as_ref()),
-        Some(routing_rules),
+    // Parse the input (slash commands only, no NL detection)
+    parser.parse(input)
+}
+
+/// Create an AI provider for the planner
+///
+/// Uses the default provider configuration to create an AI provider instance.
+fn create_planner_provider(config: &crate::config::Config) -> Option<Arc<dyn AiProvider>> {
+    let default_provider_name = config.general.default_provider.as_ref()?;
+    let provider_config = config.providers.get(default_provider_name)?;
+
+    match create_provider(default_provider_name, provider_config.clone()) {
+        Ok(provider) => Some(provider),
+        Err(e) => {
+            warn!(error = %e, "Failed to create provider for planner");
+            None
+        }
+    }
+}
+
+/// Convert ToolDescription to ToolInfo for the planner
+fn convert_tool_descriptions_to_tool_info(descriptions: &[ToolDescription]) -> Vec<ToolInfo> {
+    descriptions
+        .iter()
+        .map(|d| ToolInfo::new(&d.name, &d.description))
+        .collect()
+}
+
+/// Execute a plan using the unified executor or fallback to agent manager
+#[allow(clippy::too_many_arguments)]
+fn execute_plan(
+    runtime: &tokio::runtime::Handle,
+    plan: ExecutionPlan,
+    original_input: &str,
+    config: &crate::agent::RigAgentConfig,
+    tool_server_handle: rig::tool::server::ToolServerHandle,
+    registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
+    conversation_histories: &Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>>,
+    topic_id: &Option<String>,
+    attachments: Option<&[crate::core::MediaAttachment]>,
+    op_token: &CancellationToken,
+    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
+    memory_config: &crate::config::MemoryConfig,
+    memory_path: &Option<String>,
+    input_for_memory: &str,
+    app_context: &Option<String>,
+    window_title: &Option<String>,
+    _stream: bool,
+    generation_config: &crate::config::GenerationConfig,
+    tool_descriptions: &[ToolDescription],
+) {
+    match plan {
+        ExecutionPlan::Conversational { enhanced_prompt } => {
+            // Conversational plan - use agent manager for direct response
+            let processed_input = enhanced_prompt.unwrap_or_else(|| original_input.to_string());
+            debug!("Executing conversational plan");
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                conversation_histories,
+                topic_id,
+                attachments,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                window_title,
+            );
+        }
+        ExecutionPlan::SingleAction {
+            tool_name,
+            parameters,
+            requires_confirmation,
+        } => {
+            // Single action plan - inject tool call instruction and use agent manager
+            info!(tool_name = %tool_name, requires_confirmation = requires_confirmation, "Executing single action plan");
+
+            if requires_confirmation {
+                // TODO: Add confirmation UI callback
+                handler.on_confirmation_required(format!(
+                    "Execute tool '{}'?",
+                    tool_name
+                ));
+            }
+
+            // Build prompt that instructs the agent to use the specific tool
+            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.to_vec())
+                .with_generation_config(generation_config)
+                .generate();
+
+            let params_str = serde_json::to_string_pretty(&parameters).unwrap_or_default();
+            let processed_input = format!(
+                "{}\n\n---\n\n用户请求: {}\n\n请使用 {} 工具，参数如下:\n{}",
+                agent_prompt, original_input, tool_name, params_str
+            );
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                conversation_histories,
+                topic_id,
+                attachments,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                window_title,
+            );
+        }
+        ExecutionPlan::TaskGraph {
+            tasks,
+            dependencies,
+            requires_confirmation,
+        } => {
+            // Task graph plan - use unified executor for multi-step execution
+            info!(
+                task_count = tasks.len(),
+                dependency_count = dependencies.len(),
+                requires_confirmation = requires_confirmation,
+                "Executing task graph plan"
+            );
+
+            if requires_confirmation {
+                // TODO: Add confirmation UI callback
+                let task_names: Vec<_> = tasks.iter().map(|t| t.description.as_str()).collect();
+                handler.on_confirmation_required(format!(
+                    "Execute {} tasks?\n{}",
+                    tasks.len(),
+                    task_names.join("\n")
+                ));
+            }
+
+            // Create agent manager for executor
+            let manager = RigAgentManager::with_shared_handle(
+                config.clone(),
+                tool_server_handle,
+                registered_tools,
+            );
+            let agent_manager = Arc::new(manager);
+
+            // Create executor registry with file ops and code executors
+            let mut executor_registry = ExecutorRegistry::new();
+
+            // Register FileOpsExecutor
+            let file_ops_executor = FileOpsExecutor::with_defaults();
+            executor_registry.register("file_ops", Arc::new(file_ops_executor));
+
+            // Register CodeExecutor with default settings
+            let permission_checker = PathPermissionChecker::default();
+            let code_executor = CodeExecutor::new(
+                true,                            // enabled
+                "bash".to_string(),              // default_runtime
+                300,                             // timeout_seconds
+                false,                           // sandbox_enabled (for now)
+                vec![],                          // allowed_runtimes (all)
+                true,                            // allow_network
+                vec![],                          // blocked_commands
+                permission_checker,
+                None,                            // working_directory
+                vec!["PATH".to_string(), "HOME".to_string()], // pass_env
+            );
+            executor_registry.register("code_exec", Arc::new(code_executor));
+
+            let executor_registry = Arc::new(executor_registry);
+
+            // Create unified executor
+            let executor = UnifiedExecutor::new(
+                agent_manager,
+                executor_registry,
+                Arc::clone(handler),
+            );
+
+            // Build execution context
+            let exec_context = ExecContext::new()
+                .with_stream(true);
+            let exec_context = if let Some(ref app) = app_context {
+                exec_context.with_app_context(app.clone())
+            } else {
+                exec_context
+            };
+            let exec_context = if let Some(ref title) = window_title {
+                exec_context.with_window_title(title.clone())
+            } else {
+                exec_context
+            };
+            let exec_context = if let Some(ref id) = topic_id {
+                exec_context.with_topic_id(id.clone())
+            } else {
+                exec_context
+            };
+
+            // Execute the task graph
+            let result = runtime.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = op_token.cancelled() => {
+                        Err(ExecutorError::Cancelled)
+                    }
+                    result = executor.execute_task_graph(tasks, dependencies, exec_context) => {
+                        result
+                    }
+                }
+            });
+
+            // Handle result
+            match result {
+                Ok(exec_result) => {
+                    // Store memory if enabled
+                    if memory_config.enabled {
+                        if let Some(ref db_path) = memory_path {
+                            let store_result = runtime.block_on(async {
+                                store_memory_after_response(
+                                    db_path,
+                                    memory_config,
+                                    input_for_memory,
+                                    &exec_result.content,
+                                    app_context.as_deref(),
+                                    window_title.as_deref(),
+                                    topic_id.as_deref(),
+                                )
+                                .await
+                            });
+
+                            match store_result {
+                                Ok(memory_id) => {
+                                    info!(memory_id = %memory_id, "Memory stored successfully");
+                                    handler.on_memory_stored();
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, "Failed to store memory (non-blocking)");
+                                }
+                            }
+                        }
+                    }
+
+                    handler.on_complete(exec_result.content);
+                }
+                Err(e) => {
+                    if op_token.is_cancelled() || e.is_cancelled() {
+                        handler.on_error("Operation cancelled".to_string());
+                    } else {
+                        error!(error = %e, "Task graph execution failed");
+                        handler.on_error(e.to_string());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Execute input using RigAgentManager (existing code path)
+#[allow(clippy::too_many_arguments)]
+fn execute_with_agent_manager(
+    runtime: &tokio::runtime::Handle,
+    processed_input: &str,
+    config: &crate::agent::RigAgentConfig,
+    tool_server_handle: rig::tool::server::ToolServerHandle,
+    registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
+    conversation_histories: &Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>>,
+    topic_id: &Option<String>,
+    attachments: Option<&[crate::core::MediaAttachment]>,
+    op_token: &CancellationToken,
+    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
+    memory_config: &crate::config::MemoryConfig,
+    memory_path: &Option<String>,
+    input_for_memory: &str,
+    app_context: &Option<String>,
+    window_title: &Option<String>,
+) {
+    // Create manager with shared ToolServerHandle (all tools persist across calls)
+    let manager = RigAgentManager::with_shared_handle(
+        config.clone(),
+        tool_server_handle,
+        registered_tools,
     );
 
-    // Create NL detector with reasonable confidence threshold
-    // 0.3 means at least one keyword match with decent confidence
-    let nl_detector = NaturalLanguageCommandDetector::new(index).with_min_confidence(0.3);
+    // Get or create conversation history for this topic
+    let topic_key = topic_id
+        .clone()
+        .unwrap_or_else(|| "single-turn".to_string());
+    let mut history = {
+        let histories = conversation_histories.read().unwrap();
+        histories.get(&topic_key).cloned().unwrap_or_default()
+    };
+    let history_len_before = history.len();
 
-    parser = parser.with_nl_detector(nl_detector);
+    let result = runtime.block_on(async {
+        tokio::select! {
+            biased;
 
-    // Parse the input (handles both slash and NL commands)
-    parser.parse(input)
+            // Check for cancellation first (biased mode)
+            _ = op_token.cancelled() => {
+                Err(crate::error::AetherError::cancelled())
+            }
+
+            // Process with conversation history and attachments for multi-turn + multimodal support
+            result = manager.process_with_history_and_attachments(processed_input, &mut history, attachments) => {
+                result
+            }
+        }
+    });
+
+    // Update conversation history after processing
+    // rig-core's with_history() mutates the history to add the current exchange
+    if history.len() > history_len_before {
+        let mut histories = conversation_histories.write().unwrap();
+        histories.insert(topic_key.clone(), history);
+        debug!(topic_id = %topic_key, "Conversation history updated");
+    }
+
+    match result {
+        Ok(response) => {
+            // Store memory if enabled
+            if memory_config.enabled {
+                if let Some(ref db_path) = memory_path {
+                    let store_result = runtime.block_on(async {
+                        store_memory_after_response(
+                            db_path,
+                            memory_config,
+                            input_for_memory,
+                            &response.content,
+                            app_context.as_deref(),
+                            window_title.as_deref(),
+                            topic_id.as_deref(),
+                        )
+                        .await
+                    });
+
+                    match store_result {
+                        Ok(memory_id) => {
+                            info!(memory_id = %memory_id, "Memory stored successfully");
+                            handler.on_memory_stored();
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to store memory (non-blocking)");
+                        }
+                    }
+                }
+            }
+
+            // If tokio::select! returned the result branch, the operation completed successfully
+            handler.on_complete(response.content);
+        }
+        Err(e) => {
+            // Check if the error is due to cancellation
+            if op_token.is_cancelled() {
+                handler.on_error("Operation cancelled".to_string());
+            } else {
+                error!(error = %e, "Processing failed");
+                handler.on_error(e.to_string());
+            }
+        }
+    }
 }
 
 /// Helper function to store memory after AI response

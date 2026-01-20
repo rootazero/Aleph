@@ -43,9 +43,11 @@ pub use self::generation::{
     GenerationParamsFFI, GenerationProgressFFI, GenerationProviderConfigFFI,
     GenerationProviderInfoFFI, GenerationTypeFFI,
 };
-pub use self::processing::ProcessOptions;
 #[cfg(feature = "uniffi")]
-pub use self::init::{needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI};
+pub use self::init::{
+    needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI,
+};
+pub use self::processing::ProcessOptions;
 pub use self::runtime::{RuntimeInfo, RuntimeUpdateInfo};
 pub use self::session::SessionSummary;
 
@@ -152,10 +154,37 @@ pub trait AetherEventHandler: Send + Sync {
     fn on_session_completed(&self, session_id: String, summary: String);
 
     /// Called when sub-agent is started
-    fn on_subagent_started(&self, parent_session_id: String, child_session_id: String, agent_id: String);
+    fn on_subagent_started(
+        &self,
+        parent_session_id: String,
+        child_session_id: String,
+        agent_id: String,
+    );
 
     /// Called when sub-agent completes
     fn on_subagent_completed(&self, child_session_id: String, success: bool, summary: String);
+
+    // ========================================================================
+    // UNIFIED PLANNER CALLBACKS (Phase 10)
+    // ========================================================================
+
+    /// Called when user confirmation is required before executing a task
+    ///
+    /// This callback allows the UI to prompt the user for confirmation before
+    /// executing potentially destructive or multi-step operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - Description of what will be executed
+    ///
+    /// # Default Implementation
+    ///
+    /// Default implementation does nothing (auto-confirm). Override to implement
+    /// confirmation UI.
+    fn on_confirmation_required(&self, _message: String) {
+        // Default: auto-confirm (no-op)
+        // UI implementations should override to show confirmation dialog
+    }
 }
 
 /// Tool information for UI display
@@ -266,8 +295,7 @@ pub struct AetherCore {
     /// Conversation histories keyed by topic_id for multi-turn support
     pub(crate) conversation_histories: Arc<RwLock<HashMap<String, Vec<Message>>>>,
     /// Generation provider registry for media generation (image, speech, etc.)
-    pub(crate) generation_registry:
-        Arc<RwLock<crate::generation::GenerationProviderRegistry>>,
+    pub(crate) generation_registry: Arc<RwLock<crate::generation::GenerationProviderRegistry>>,
 }
 
 impl AetherCore {
