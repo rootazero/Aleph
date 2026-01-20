@@ -6,7 +6,6 @@
 //  Extracted from HaloWindow for better separation of concerns.
 //
 
-import Foundation
 import AppKit
 
 /// Handles Phantom Flow clarification UI and keyboard events

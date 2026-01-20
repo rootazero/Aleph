@@ -7,7 +7,6 @@
 //  Delegates actual permission checks to PermissionChecker.
 //
 
-import Foundation
 import SwiftUI
 import Combine
 

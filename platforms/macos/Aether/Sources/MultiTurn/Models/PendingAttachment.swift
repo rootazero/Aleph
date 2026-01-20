@@ -6,7 +6,6 @@
 //
 
 import AppKit
-import Foundation
 
 // MARK: - FileType
 

@@ -6,7 +6,6 @@
 //  This is the Swift-side coordinator for in-place user interaction.
 //
 
-import Foundation
 import SwiftUI
 import Combine
 

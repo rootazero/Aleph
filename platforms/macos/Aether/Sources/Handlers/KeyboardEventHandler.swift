@@ -6,7 +6,6 @@
 //  This decouples keyboard handling from EventHandler for better testability.
 //
 
-import Foundation
 import AppKit
 
 // MARK: - KeyboardEventHandling Protocol

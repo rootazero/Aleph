@@ -8,7 +8,6 @@
 //  Use UnifiedConversationViewModel instead.
 //
 
-import Foundation
 import SwiftUI
 import Combine
 

@@ -6,7 +6,6 @@
 //  This handler works with the rig-core based AetherCore.
 //
 
-import Foundation
 import AppKit
 import SwiftUI
 

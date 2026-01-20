@@ -17,7 +17,6 @@
 //
 
 import Combine
-import Foundation
 import SwiftUI
 
 /// Manages command completion mode state and command list (Flat Namespace Mode)

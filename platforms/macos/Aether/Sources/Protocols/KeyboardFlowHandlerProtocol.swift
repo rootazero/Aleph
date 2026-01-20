@@ -6,7 +6,6 @@
 //  Enables separation of keyboard event handling from HaloWindow.
 //
 
-import Foundation
 import AppKit
 
 // MARK: - KeyboardFlowHandler Protocol

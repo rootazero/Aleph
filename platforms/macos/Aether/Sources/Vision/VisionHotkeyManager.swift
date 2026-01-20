@@ -1,6 +1,5 @@
 import AppKit
 import Carbon
-import Foundation
 
 // Debug file logger for crash investigation
 private func debugLog(_ message: String) {

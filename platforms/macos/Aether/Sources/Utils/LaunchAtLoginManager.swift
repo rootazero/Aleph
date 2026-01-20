@@ -6,7 +6,6 @@
 //  This allows Aether to start automatically when the user logs in.
 //
 
-import Foundation
 import Combine
 import AppKit
 import ServiceManagement

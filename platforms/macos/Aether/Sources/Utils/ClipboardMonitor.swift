@@ -6,7 +6,6 @@
 // and should be used as context for AI prompts.
 
 import Cocoa
-import Foundation
 
 /// Clipboard change event data
 struct ClipboardChange {

@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import Foundation
 import ScreenCaptureKit
 import UserNotifications
 import os.log
