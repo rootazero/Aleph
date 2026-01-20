@@ -35,6 +35,11 @@
 //! let plan = ExecutionPlan::task_graph(tasks, vec![(1, 0)]);
 //! ```
 
+mod prompt;
 mod types;
 
+pub use prompt::{
+    build_planning_prompt, format_tools_for_prompt, get_system_prompt_with_tools, ToolInfo,
+    PLANNING_SYSTEM_PROMPT,
+};
 pub use types::{ExecutionPlan, PlannedTask, PlannerError};
