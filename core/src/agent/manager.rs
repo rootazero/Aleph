@@ -15,7 +15,9 @@ use crate::core::MediaAttachment;
 use crate::error::{AetherError, Result};
 use crate::rig_tools::{FileOpsTool, SearchTool, WebFetchTool, YouTubeTool};
 use rig::client::CompletionClient;
-use rig::completion::message::{DocumentSourceKind, Image, ImageMediaType, Text, UserContent};
+use rig::completion::message::{
+    Document, DocumentMediaType, DocumentSourceKind, Image, ImageMediaType, Text, UserContent,
+};
 use rig::completion::{Message, Prompt};
 use rig::providers::{anthropic, openai};
 use rig::tool::server::{ToolServer, ToolServerHandle};
@@ -648,21 +650,90 @@ impl RigAgentManager {
         for attachment in attachments {
             match attachment.encoding.as_str() {
                 "base64" => {
-                    // Binary content (images) - only process if media_type is image
-                    if attachment.media_type == "image" {
-                        let media_type = match attachment.mime_type.as_str() {
-                            "image/png" => Some(ImageMediaType::PNG),
-                            "image/jpeg" => Some(ImageMediaType::JPEG),
-                            "image/gif" => Some(ImageMediaType::GIF),
-                            "image/webp" => Some(ImageMediaType::WEBP),
-                            _ => None,
-                        };
-                        content_items.push(UserContent::Image(Image {
-                            data: DocumentSourceKind::base64(&attachment.data),
-                            media_type,
-                            detail: None,
-                            additional_params: None,
-                        }));
+                    match attachment.media_type.as_str() {
+                        "image" => {
+                            // Binary content (images)
+                            let media_type = match attachment.mime_type.as_str() {
+                                "image/png" => Some(ImageMediaType::PNG),
+                                "image/jpeg" => Some(ImageMediaType::JPEG),
+                                "image/gif" => Some(ImageMediaType::GIF),
+                                "image/webp" => Some(ImageMediaType::WEBP),
+                                _ => None,
+                            };
+                            content_items.push(UserContent::Image(Image {
+                                data: DocumentSourceKind::base64(&attachment.data),
+                                media_type,
+                                detail: None,
+                                additional_params: None,
+                            }));
+                        }
+                        "document" | "file" => {
+                            // Document content - handle based on mime_type
+                            let filename =
+                                attachment.filename.as_deref().unwrap_or("document");
+
+                            match attachment.mime_type.as_str() {
+                                "application/pdf" => {
+                                    // PDF: use Document type (supported by Claude, Gemini)
+                                    content_items.push(UserContent::Document(Document {
+                                        data: DocumentSourceKind::base64(&attachment.data),
+                                        media_type: Some(DocumentMediaType::PDF),
+                                        additional_params: None,
+                                    }));
+                                    debug!(filename = filename, "Added PDF document attachment");
+                                }
+                                "text/plain" | "text/markdown" => {
+                                    // Text files: decode base64 and add as text
+                                    if let Ok(decoded) =
+                                        base64::Engine::decode(
+                                            &base64::engine::general_purpose::STANDARD,
+                                            &attachment.data,
+                                        )
+                                    {
+                                        if let Ok(text) = String::from_utf8(decoded) {
+                                            let doc_content =
+                                                format!("\n\n--- {} ---\n{}", filename, text);
+                                            content_items
+                                                .push(UserContent::Text(Text { text: doc_content }));
+                                            debug!(filename = filename, "Added text document attachment");
+                                        } else {
+                                            warn!(filename = filename, "Failed to decode text as UTF-8");
+                                        }
+                                    } else {
+                                        warn!(filename = filename, "Failed to decode base64 content");
+                                    }
+                                }
+                                _ => {
+                                    // Other document types: try to decode as text, fallback to skip
+                                    if let Ok(decoded) =
+                                        base64::Engine::decode(
+                                            &base64::engine::general_purpose::STANDARD,
+                                            &attachment.data,
+                                        )
+                                    {
+                                        if let Ok(text) = String::from_utf8(decoded) {
+                                            let doc_content =
+                                                format!("\n\n--- {} ---\n{}", filename, text);
+                                            content_items
+                                                .push(UserContent::Text(Text { text: doc_content }));
+                                            debug!(filename = filename, mime_type = %attachment.mime_type, "Added document as text");
+                                        } else {
+                                            warn!(
+                                                filename = filename,
+                                                mime_type = %attachment.mime_type,
+                                                "Binary document skipped (not UTF-8 decodable)"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            warn!(
+                                media_type = %attachment.media_type,
+                                "Unknown media_type for base64 attachment, skipping"
+                            );
+                        }
                     }
                 }
                 "utf8" => {
@@ -688,6 +759,25 @@ impl RigAgentManager {
         }
     }
 
+    /// Normalize base_url for OpenAI-compatible APIs
+    ///
+    /// Ensures the URL ends with `/v1` for proper endpoint construction.
+    /// rig-core appends `/chat/completions` directly to base_url, so we need
+    /// to ensure the URL includes the `/v1` segment.
+    ///
+    /// Examples:
+    /// - `https://ai.t8star.cn` -> `https://ai.t8star.cn/v1`
+    /// - `https://ai.t8star.cn/v1` -> `https://ai.t8star.cn/v1` (unchanged)
+    /// - `https://api.openai.com/v1/` -> `https://api.openai.com/v1`
+    fn normalize_openai_base_url(url: &str) -> String {
+        let url = url.trim_end_matches('/');
+        if url.ends_with("/v1") {
+            url.to_string()
+        } else {
+            format!("{}/v1", url)
+        }
+    }
+
     /// Create OpenAI client
     fn create_openai_client(&self) -> Result<openai::Client> {
         let api_key = self
@@ -697,9 +787,15 @@ impl RigAgentManager {
             .ok_or_else(|| AetherError::provider("OpenAI API key not configured"))?;
 
         if let Some(ref base_url) = self.config.base_url {
+            let normalized_url = Self::normalize_openai_base_url(base_url);
+            debug!(
+                original_url = %base_url,
+                normalized_url = %normalized_url,
+                "Normalizing OpenAI base URL"
+            );
             openai::Client::builder()
                 .api_key(api_key)
-                .base_url(base_url)
+                .base_url(&normalized_url)
                 .build()
                 .map_err(|e| {
                     AetherError::provider(format!("Failed to create OpenAI client: {}", e))
@@ -749,9 +845,17 @@ impl RigAgentManager {
             ))
         })?;
 
+        let normalized_url = Self::normalize_openai_base_url(base_url);
+        debug!(
+            original_url = %base_url,
+            normalized_url = %normalized_url,
+            provider = %self.config.provider,
+            "Normalizing custom provider base URL"
+        );
+
         openai::Client::builder()
             .api_key(api_key)
-            .base_url(base_url)
+            .base_url(&normalized_url)
             .build()
             .map_err(|e| AetherError::provider(format!("Failed to create client: {}", e)))
     }
