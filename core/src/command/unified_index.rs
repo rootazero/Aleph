@@ -7,6 +7,38 @@ use crate::command::CommandTriggers;
 use crate::dispatcher::ToolSourceType;
 use std::collections::HashMap;
 
+/// Stop words to exclude from auto-extraction
+const STOP_WORDS: &[&str] = &[
+    // English
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "to", "for", "and", "or", "but", "in", "on", "at", "by", "with",
+    "from", "as", "of", "this", "that", "it", "its", "can", "will",
+    // Chinese
+    "的", "是", "和", "与", "用", "来", "可以", "进行", "这个", "那个",
+    "一个", "在", "了", "有", "不", "也", "就", "都", "而", "及",
+];
+
+/// Extract keywords from a description string
+pub fn extract_keywords_from_description(description: &str) -> Vec<String> {
+    description
+        .split(|c: char| {
+            c.is_whitespace()
+                || c == ','
+                || c == '，'
+                || c == '。'
+                || c == '.'
+                || c == ';'
+                || c == '；'
+                || c == '、'
+        })
+        .map(|s| s.trim())
+        .filter(|w| !w.is_empty())
+        .filter(|w| w.chars().count() >= 2) // At least 2 characters
+        .filter(|w| !STOP_WORDS.contains(&w.to_lowercase().as_str()))
+        .map(|w| w.to_lowercase())
+        .collect()
+}
+
 /// An entry in the unified command index
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexEntry {
@@ -115,5 +147,35 @@ mod tests {
 
         assert!(!index.is_empty());
         assert_eq!(index.len(), 3); // 3 unique triggers
+    }
+
+    #[test]
+    fn test_extract_keywords_english() {
+        let keywords = extract_keywords_from_description("Generate knowledge graphs and analyze dependencies");
+        assert!(keywords.contains(&"generate".to_string()));
+        assert!(keywords.contains(&"knowledge".to_string()));
+        assert!(keywords.contains(&"graphs".to_string()));
+        assert!(keywords.contains(&"analyze".to_string()));
+        assert!(keywords.contains(&"dependencies".to_string()));
+        // Should not contain stop words
+        assert!(!keywords.contains(&"and".to_string()));
+    }
+
+    #[test]
+    fn test_extract_keywords_chinese() {
+        let keywords = extract_keywords_from_description("生成知识图谱，分析代码依赖关系");
+        // Chinese splits on punctuation, so we get segments
+        assert!(keywords.iter().any(|k| k.contains("生成")));
+        assert!(keywords.iter().any(|k| k.contains("知识图谱")));
+        assert!(keywords.iter().any(|k| k.contains("分析")));
+    }
+
+    #[test]
+    fn test_extract_keywords_filters_stop_words() {
+        let keywords = extract_keywords_from_description("the quick brown fox and the lazy dog");
+        assert!(!keywords.contains(&"the".to_string()));
+        assert!(!keywords.contains(&"and".to_string()));
+        assert!(keywords.contains(&"quick".to_string()));
+        assert!(keywords.contains(&"brown".to_string()));
     }
 }
