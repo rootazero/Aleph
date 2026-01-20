@@ -172,7 +172,13 @@ impl AetherCore {
             };
 
             // Get tool descriptions for agent prompt (used by multiple branches)
-            let tool_descriptions = get_builtin_tool_descriptions();
+            // Includes generate_image if image providers are configured
+            info!(
+                generation_providers_count = generation_config.providers.len(),
+                generation_providers = ?generation_config.providers.keys().collect::<Vec<_>>(),
+                "Checking generation config for tool descriptions"
+            );
+            let tool_descriptions = get_builtin_tool_descriptions(&generation_config);
 
             // If slash command is detected, handle it with existing logic
             if let Some(ref cmd) = parsed_command {
@@ -344,6 +350,14 @@ impl AetherCore {
                 let plan_opt = if let Some(provider) = planner_provider {
                     // Create unified planner with available tools
                     let tools = convert_tool_descriptions_to_tool_info(&tool_descriptions);
+
+                    // Log available tools for debugging
+                    info!(
+                        tools_count = tools.len(),
+                        tools = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+                        "Tools available for planner"
+                    );
+
                     let planner_config = PlannerConfig::default();
                     let planner = UnifiedPlanner::with_config(Arc::clone(&provider), planner_config)
                         .with_tools(tools);
@@ -650,27 +664,84 @@ fn execute_plan(
 ) {
     match plan {
         ExecutionPlan::Conversational { enhanced_prompt } => {
-            // Conversational plan - use agent manager for direct response
-            let processed_input = enhanced_prompt.unwrap_or_else(|| original_input.to_string());
-            debug!("Executing conversational plan");
+            // Check for special ASK_*_MODEL markers for media generation
+            let model_selection_prompt = match enhanced_prompt.as_deref() {
+                Some("ASK_IMAGE_MODEL") => {
+                    debug!("Asking user to select image model");
+                    Some(build_media_model_selection_prompt(
+                        generation_config,
+                        original_input,
+                        MediaGenerationType::Image,
+                    ))
+                }
+                Some("ASK_VIDEO_MODEL") => {
+                    debug!("Asking user to select video model");
+                    Some(build_media_model_selection_prompt(
+                        generation_config,
+                        original_input,
+                        MediaGenerationType::Video,
+                    ))
+                }
+                Some("ASK_AUDIO_MODEL") => {
+                    debug!("Asking user to select audio model");
+                    Some(build_media_model_selection_prompt(
+                        generation_config,
+                        original_input,
+                        MediaGenerationType::Audio,
+                    ))
+                }
+                Some("ASK_SPEECH_MODEL") => {
+                    debug!("Asking user to select speech model");
+                    Some(build_media_model_selection_prompt(
+                        generation_config,
+                        original_input,
+                        MediaGenerationType::Speech,
+                    ))
+                }
+                _ => None,
+            };
 
-            execute_with_agent_manager(
-                runtime,
-                &processed_input,
-                config,
-                tool_server_handle,
-                registered_tools,
-                conversation_histories,
-                topic_id,
-                attachments,
-                op_token,
-                handler,
-                memory_config,
-                memory_path,
-                input_for_memory,
-                app_context,
-                window_title,
-            );
+            if let Some(model_list) = model_selection_prompt {
+                execute_with_agent_manager(
+                    runtime,
+                    &model_list,
+                    config,
+                    tool_server_handle,
+                    registered_tools,
+                    conversation_histories,
+                    topic_id,
+                    attachments,
+                    op_token,
+                    handler,
+                    memory_config,
+                    memory_path,
+                    input_for_memory,
+                    app_context,
+                    window_title,
+                );
+            } else {
+                // Conversational plan - use agent manager for direct response
+                let processed_input = enhanced_prompt.unwrap_or_else(|| original_input.to_string());
+                debug!("Executing conversational plan");
+
+                execute_with_agent_manager(
+                    runtime,
+                    &processed_input,
+                    config,
+                    tool_server_handle,
+                    registered_tools,
+                    conversation_histories,
+                    topic_id,
+                    attachments,
+                    op_token,
+                    handler,
+                    memory_config,
+                    memory_path,
+                    input_for_memory,
+                    app_context,
+                    window_title,
+                );
+            }
         }
         ExecutionPlan::SingleAction {
             tool_name,
@@ -697,6 +768,13 @@ fn execute_plan(
             let processed_input = format!(
                 "{}\n\n---\n\n用户请求: {}\n\n请使用 {} 工具，参数如下:\n{}",
                 agent_prompt, original_input, tool_name, params_str
+            );
+
+            debug!(
+                tool_name = %tool_name,
+                parameters = %params_str,
+                processed_input_len = processed_input.len(),
+                "SingleAction: sending request to agent manager"
             );
 
             execute_with_agent_manager(
@@ -1021,8 +1099,13 @@ pub(crate) async fn store_memory_after_response(
 /// Get descriptions for built-in tools
 ///
 /// Returns tool descriptions for the agent prompt so AI knows what tools are available.
-fn get_builtin_tool_descriptions() -> Vec<ToolDescription> {
-    vec![
+/// Includes image generation tool if providers are configured.
+fn get_builtin_tool_descriptions(
+    generation_config: &crate::config::GenerationConfig,
+) -> Vec<ToolDescription> {
+    use crate::generation::GenerationType;
+
+    let mut tools = vec![
         ToolDescription::new(
             "file_ops",
             "文件系统操作 - 支持 list(列出目录)、read、write、move、copy、delete、mkdir、search、**organize**(一键按类型整理到 Images/Documents/Videos/Audio/Archives/Code/Others)、**batch_move**(批量移动匹配文件)"
@@ -1039,5 +1122,269 @@ fn get_builtin_tool_descriptions() -> Vec<ToolDescription> {
             "youtube",
             "YouTube视频信息 - 获取YouTube视频的标题、描述、字幕等信息"
         ),
-    ]
+    ];
+
+    // Add image generation tool if providers are configured
+    let all_providers: Vec<_> = generation_config.providers.iter().collect();
+    debug!(
+        all_providers_count = all_providers.len(),
+        "Listing all generation providers for debugging"
+    );
+    for (name, config) in &all_providers {
+        debug!(
+            provider = %name,
+            enabled = config.enabled,
+            capabilities = ?config.capabilities,
+            "Generation provider config"
+        );
+    }
+
+    let image_providers: Vec<String> = generation_config
+        .get_providers_for_type(GenerationType::Image)
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+
+    debug!(
+        image_providers_count = image_providers.len(),
+        image_providers = ?image_providers,
+        "Filtered image providers"
+    );
+
+    if !image_providers.is_empty() {
+        tools.push(ToolDescription::new(
+            "generate_image",
+            format!(
+                "Image generation - generate images from text descriptions. Available providers: {}. Use the provider parameter to specify which model to use.",
+                image_providers.join(", ")
+            )
+        ));
+        info!(
+            providers = ?image_providers,
+            "Added generate_image tool to agent capabilities"
+        );
+    }
+
+    // Add video generation tool if providers are configured
+    let video_providers: Vec<String> = generation_config
+        .get_providers_for_type(GenerationType::Video)
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+
+    if !video_providers.is_empty() {
+        tools.push(ToolDescription::new(
+            "generate_video",
+            format!(
+                "Video generation - generate videos from text descriptions. Available providers: {}. Use the provider parameter to specify which model to use.",
+                video_providers.join(", ")
+            )
+        ));
+        info!(
+            providers = ?video_providers,
+            "Added generate_video tool to agent capabilities"
+        );
+    }
+
+    // Add audio generation tool if providers are configured
+    let audio_providers: Vec<String> = generation_config
+        .get_providers_for_type(GenerationType::Audio)
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+
+    if !audio_providers.is_empty() {
+        tools.push(ToolDescription::new(
+            "generate_audio",
+            format!(
+                "Audio/music generation - generate music or audio from text descriptions. Available providers: {}. Use the provider parameter to specify which model to use.",
+                audio_providers.join(", ")
+            )
+        ));
+        info!(
+            providers = ?audio_providers,
+            "Added generate_audio tool to agent capabilities"
+        );
+    }
+
+    // Add speech generation tool if providers are configured
+    let speech_providers: Vec<String> = generation_config
+        .get_providers_for_type(GenerationType::Speech)
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+
+    if !speech_providers.is_empty() {
+        tools.push(ToolDescription::new(
+            "generate_speech",
+            format!(
+                "Speech/TTS generation - convert text to speech. Available providers: {}. Use the provider parameter to specify which model to use.",
+                speech_providers.join(", ")
+            )
+        ));
+        info!(
+            providers = ?speech_providers,
+            "Added generate_speech tool to agent capabilities"
+        );
+    }
+
+    tools
+}
+
+/// Media generation type for model selection
+#[derive(Debug, Clone, Copy)]
+enum MediaGenerationType {
+    Image,
+    Video,
+    Audio,
+    Speech,
+}
+
+impl MediaGenerationType {
+    /// Get the display name for this media type
+    fn display_name(&self) -> &'static str {
+        match self {
+            MediaGenerationType::Image => "image",
+            MediaGenerationType::Video => "video",
+            MediaGenerationType::Audio => "audio/music",
+            MediaGenerationType::Speech => "speech/TTS",
+        }
+    }
+
+    /// Get the tool name for this media type
+    fn tool_name(&self) -> &'static str {
+        match self {
+            MediaGenerationType::Image => "generate_image",
+            MediaGenerationType::Video => "generate_video",
+            MediaGenerationType::Audio => "generate_audio",
+            MediaGenerationType::Speech => "generate_speech",
+        }
+    }
+
+    /// Convert to crate::generation::GenerationType
+    fn to_generation_type(&self) -> crate::generation::GenerationType {
+        match self {
+            MediaGenerationType::Image => crate::generation::GenerationType::Image,
+            MediaGenerationType::Video => crate::generation::GenerationType::Video,
+            MediaGenerationType::Audio => crate::generation::GenerationType::Audio,
+            MediaGenerationType::Speech => crate::generation::GenerationType::Speech,
+        }
+    }
+
+    /// Get common aliases for this media type's providers
+    fn get_aliases(&self) -> &'static [(&'static str, &'static [&'static str])] {
+        match self {
+            MediaGenerationType::Image => &[
+                ("t8star-image", &["nanobanana", "nano-banana", "nano banana"]),
+                ("midjourney", &["mj", "MJ"]),
+                ("dalle", &["dall-e", "DALL-E", "dall·e"]),
+                ("stability", &["stable diffusion", "sd", "SD"]),
+                ("flux", &["FLUX"]),
+                ("ideogram", &["ideo"]),
+            ],
+            MediaGenerationType::Video => &[
+                ("runway", &["runwayml", "gen-3"]),
+                ("pika", &["pika labs"]),
+                ("sora", &[]),
+                ("kling", &[]),
+            ],
+            MediaGenerationType::Audio => &[
+                ("suno", &[]),
+                ("udio", &[]),
+                ("mubert", &[]),
+            ],
+            MediaGenerationType::Speech => &[
+                ("elevenlabs", &["11labs"]),
+                ("openai-tts", &["openai tts"]),
+            ],
+        }
+    }
+
+    /// Get example usage phrase for this media type
+    fn example_phrase(&self) -> &'static str {
+        match self {
+            MediaGenerationType::Image => "Use nanobanana to draw a cat",
+            MediaGenerationType::Video => "Use runway to create a video of flying birds",
+            MediaGenerationType::Audio => "Use suno to generate a jazz tune",
+            MediaGenerationType::Speech => "Use elevenlabs to read this aloud",
+        }
+    }
+}
+
+/// Build a prompt asking user to select a media generation model
+///
+/// When user requests media generation without specifying a model,
+/// this function generates a response listing available models.
+fn build_media_model_selection_prompt(
+    generation_config: &crate::config::GenerationConfig,
+    original_input: &str,
+    media_type: MediaGenerationType,
+) -> String {
+    // Get available providers for this media type
+    let providers: Vec<(&str, &crate::config::GenerationProviderConfig)> =
+        generation_config.get_providers_for_type(media_type.to_generation_type());
+
+    let type_name = media_type.display_name();
+
+    if providers.is_empty() {
+        return format!(
+            "You want to generate {}, but no {} generation models are configured. \
+             Please configure a provider with {} capability in your config.toml first.\n\n\
+             Original request: {}",
+            type_name, type_name, type_name, original_input
+        );
+    }
+
+    // Build model list with common aliases
+    let mut model_list = format!("## {} Generation Model Selection\n\n", type_name.to_uppercase());
+    model_list.push_str(&format!(
+        "I detected you want to generate {}. Please select which model to use:\n\n",
+        type_name
+    ));
+    model_list.push_str("**Available Models:**\n");
+
+    // Get aliases for this media type
+    let aliases = media_type.get_aliases();
+
+    for (idx, (name, config)) in providers.iter().enumerate() {
+        let model_name = config.model.as_deref().unwrap_or("default");
+
+        // Find aliases for this provider
+        let provider_aliases: Vec<&str> = aliases
+            .iter()
+            .find(|(prov, _)| prov == name)
+            .map(|(_, a)| a.to_vec())
+            .unwrap_or_default();
+
+        let alias_str = if provider_aliases.is_empty() {
+            String::new()
+        } else {
+            format!(" (aliases: {})", provider_aliases.join(", "))
+        };
+
+        model_list.push_str(&format!(
+            "{}. **{}**{} - model: {}\n",
+            idx + 1,
+            name,
+            alias_str,
+            model_name
+        ));
+    }
+
+    model_list.push_str("\n**How to use:**\n");
+    model_list.push_str(&format!(
+        "- Reply with the model name or number (e.g., \"1\" or \"{}\")\n",
+        providers.first().map(|(n, _)| *n).unwrap_or("provider")
+    ));
+    model_list.push_str(&format!(
+        "- Or rephrase your request with the model name (e.g., \"{}\")\n",
+        media_type.example_phrase()
+    ));
+    model_list.push_str(&format!("\n**Your original request:** {}", original_input));
+
+    // Wrap as a system instruction for the agent to respond with this
+    format!(
+        "Please respond to the user with this message, asking them to select a {} generation model:\n\n{}",
+        type_name, model_list
+    )
 }

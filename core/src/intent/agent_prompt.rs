@@ -109,26 +109,20 @@ impl AgentModePrompt {
             return String::new();
         }
 
-        let mut lines = vec!["\n\n### 可用生成模型\n".to_string()];
-        lines.push("当用户请求生成图像/视频/音频时，使用以下格式输出：".to_string());
-        lines.push("`[GENERATE:类型:provider:模型:提示词]`\n".to_string());
-        lines.push("例如：`[GENERATE:image:midjourney:nanobanana:一只可爱的猫]`\n".to_string());
+        let mut lines = vec!["\n\n### Media Generation Models\n".to_string()];
+        lines.push("**Use generate_image tool for image generation**".to_string());
+        lines.push("".to_string());
+        lines.push("**Model Alias Mapping (Important):**".to_string());
+        lines.push("- \"nanobanana\" / \"nano-banana\" / \"nano banana\" → provider: \"t8star-image\"".to_string());
+        lines.push("".to_string());
+        lines.push("Available generation providers:".to_string());
 
         for model_info in &self.generation_models {
             let caps = model_info.capabilities.join("/");
             let mut model_desc = format!("- **{}** ({})", model_info.provider_name, caps);
 
             if let Some(ref default) = model_info.default_model {
-                model_desc.push_str(&format!(" - 默认: {}", default));
-            }
-
-            if !model_info.aliases.is_empty() {
-                let alias_list: Vec<String> = model_info
-                    .aliases
-                    .iter()
-                    .map(|(alias, actual)| format!("{} → {}", alias, actual))
-                    .collect();
-                model_desc.push_str(&format!("\n  别名: {}", alias_list.join(", ")));
+                model_desc.push_str(&format!(" - default model: {}", default));
             }
 
             lines.push(model_desc);
@@ -149,35 +143,50 @@ impl AgentModePrompt {
                 .iter()
                 .map(|t| format!("- **{}**: {}", t.name, t.description))
                 .collect();
-            format!("\n\n### 可用工具\n\n{}", tool_list.join("\n"))
+            format!("\n\n### Available Tools\n\n{}", tool_list.join("\n"))
         };
 
         let models_section = self.generate_models_section();
 
         format!(
-            r#"## Agent执行模式
+            r#"## Agent Execution Mode
 
-你是一个能够执行任务的AI助手。你必须使用工具来完成用户请求。{}{}
+You are a task-executing AI assistant. You MUST use tools to complete user requests.{}{}
 
-### 行为规则（必须严格遵守）
+### Core Principle
 
-1. **先分析** - 使用 file_ops 的 list 操作查看文件夹内容
-2. **展示计划并等待确认** - 分析完成后，必须：
-   - 列出将要执行的操作（如：将 X 个图片移动到 Images 文件夹）
-   - 明确询问用户"是否执行？(Y/N)"
-   - **等待用户回复确认后才能执行**
-3. **用户确认后执行** - 只有收到用户明确确认（如"Y"、"是"、"确认"、"执行"）后，才能调用 organize/batch_move/move/delete 等操作
-4. **批量操作** - 执行时优先使用:
-   - `organize`: 一键按类型整理到 Images/Documents/Videos/Audio/Archives/Code/Others
-   - `batch_move`: 批量移动匹配模式的文件
-5. **报告结果** - 执行后报告整理结果
+**You MUST actually execute tool calls, NOT just describe how to do it.**
 
-### 重要提示
+### Behavior Rules
 
-- 你可以直接访问用户的本地文件系统
-- **禁止未经确认直接执行文件移动/删除操作**
-- 必须先展示计划，等用户说"Y"或"确认"后才能执行
-- 如果用户说"N"或"取消"，则放弃操作"#,
+**Choose the correct execution method based on task type:**
+
+#### 1. Simple Tasks (Single Tool Call)
+- **Execute directly** - Call the appropriate tool immediately
+- Example: User says "draw a cat", directly call generate_image tool
+
+#### 2. Multi-Step Complex Tasks (Requires Multiple Tools)
+- **Execute step by step** - Call required tools sequentially, actually executing each step
+- **NEVER just describe steps** - Do not just describe "Step 1, Step 2..." and let user do it
+- **Continue to next step after completing each** - Until task is complete
+- Example: User says "analyze document and draw knowledge graph"
+  1. First use file_ops to read document content
+  2. Analyze and extract key concepts
+  3. Call generate_image for each section/topic
+  4. Integrate results and present
+
+#### 3. File Operation Tasks (Involving Move/Delete)
+- **Analyze first, then confirm** - Use file_ops to view content, show plan, wait for user confirmation
+- **Execute batch after confirmation** - Use organize, batch_move and other batch operations
+
+### Important Notes
+
+- You have direct access to user's local filesystem
+- **MUST actually execute tool calls** - Never just give text instructions for user to do manually
+- Only file move/delete operations require user confirmation
+- Image generation, search, web fetch and other read-only operations execute directly
+- **Do NOT over-ask** - If you can infer user intent, execute the task directly
+- **Be proactive** - Complete tasks autonomously, minimize unnecessary confirmation requests"#,
             tools_section, models_section
         )
     }
@@ -186,21 +195,28 @@ impl AgentModePrompt {
     pub fn generate_compact(&self) -> String {
         let mut prompt = r#"## Agent Mode
 
-You are a task-executing AI assistant with available tools. You MUST use tools to complete tasks.
+You are a task-executing AI assistant. You MUST actually call tools to complete tasks - never just describe steps.
 
 **Available Tools:**
 - file_ops: File operations (list, read, write, move, copy, delete, mkdir, search, batch_move, organize)
+- generate_image: Generate images from text prompts
 - search: Web search
 - web_fetch: Fetch web page content
 
-**Rules:**
-1. Use tools proactively - don't just describe
-2. Analyze first (file_ops list), then execute
-3. **Use batch operations**: 'organize' for auto-sorting, 'batch_move' for pattern-based moves
-4. Confirm before delete operations
-5. Report results after execution
+**Critical Rule:**
+- You MUST execute tool calls, NOT just describe what to do
+- For multi-step tasks: execute each step sequentially using actual tool calls
+- NEVER give "Step 1, Step 2..." descriptions without executing
 
-**Important:** You CAN access local files. Use 'organize' to auto-sort files by type in one call!"#.to_string();
+**Execution Rules:**
+1. Simple tasks: Execute tool immediately
+2. Multi-step tasks: Execute each step, then continue to next
+3. File move/delete: Confirm with user first
+
+**Important:**
+- Actually execute tools. Do not just describe steps for user to do manually.
+- Be proactive - execute tasks autonomously without excessive questioning.
+- Only ask for confirmation on destructive operations (delete, move files)."#.to_string();
 
         // Add generation models if available
         if !self.generation_models.is_empty() {
@@ -232,22 +248,22 @@ mod tests {
     fn test_agent_prompt_generation() {
         let prompt = AgentModePrompt::new();
         let text = prompt.generate();
-        assert!(text.contains("Agent执行模式"));
-        assert!(text.contains("使用工具来完成用户请求"));
-        assert!(text.contains("行为规则"));
+        assert!(text.contains("Agent Execution Mode"));
+        assert!(text.contains("use tools to complete user requests"));
+        assert!(text.contains("Behavior Rules"));
     }
 
     #[test]
     fn test_agent_prompt_contains_behavior_rules() {
         let prompt = AgentModePrompt::new();
         let text = prompt.generate();
-        assert!(text.contains("先分析"));
-        assert!(text.contains("批量操作"));
-        assert!(text.contains("organize"));
-        assert!(text.contains("报告结果"));
-        // Verify confirmation workflow
-        assert!(text.contains("等待确认"));
-        assert!(text.contains("禁止未经确认"));
+        assert!(text.contains("Simple Tasks"));
+        assert!(text.contains("Multi-Step Complex Tasks"));
+        assert!(text.contains("File Operation Tasks"));
+        assert!(text.contains("MUST actually execute tool calls"));
+        assert!(text.contains("NEVER just describe steps"));
+        // Verify confirmation only for file operations
+        assert!(text.contains("Only file move/delete operations require user confirmation"));
     }
 
     #[test]
@@ -255,7 +271,7 @@ mod tests {
         let prompt = AgentModePrompt::new();
         let text = prompt.generate_compact();
         assert!(text.contains("Agent Mode"));
-        assert!(text.contains("Use tools proactively"));
+        assert!(text.contains("Be proactive"));
         // Compact version has hardcoded tool list
         assert!(text.contains("file_ops"));
     }
@@ -270,7 +286,7 @@ mod tests {
         let text = prompt.generate();
 
         // Should contain tool section
-        assert!(text.contains("可用工具"));
+        assert!(text.contains("Available Tools"));
         assert!(text.contains("test_tool"));
         assert!(text.contains("A test tool for testing"));
         assert!(text.contains("another_tool"));
@@ -282,8 +298,10 @@ mod tests {
         let prompt = AgentModePrompt::new();
         let text = prompt.generate();
         // Should still have important instructions
-        assert!(text.contains("你可以直接访问用户的本地文件系统"));
-        assert!(text.contains("file_ops"));
+        assert!(text.contains("direct access to user's local filesystem"));
+        assert!(text.contains("MUST actually execute tool calls"));
+        // Multi-step tasks should be executed
+        assert!(text.contains("Execute step by step"));
     }
 
     #[test]

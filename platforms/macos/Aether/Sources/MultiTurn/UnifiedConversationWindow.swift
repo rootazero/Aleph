@@ -33,6 +33,9 @@ final class UnifiedConversationWindow: NSWindow {
     /// ESC key monitor
     private var escapeMonitor: Any?
 
+    /// Notification observers for progress tracking
+    private var notificationObservers: [NSObjectProtocol] = []
+
     /// Callbacks
     var onSubmit: ((String, [PendingAttachment]) -> Void)?
     var onCancel: (() -> Void)?
@@ -55,12 +58,14 @@ final class UnifiedConversationWindow: NSWindow {
         setupHostingView()
         setupCallbacks()
         setupEscapeHandler()
+        setupNotificationObservers()
     }
 
     deinit {
         if let monitor = escapeMonitor {
             NSEvent.removeMonitor(monitor)
         }
+        removeNotificationObservers()
     }
 
     // MARK: - Window Setup
@@ -131,6 +136,59 @@ final class UnifiedConversationWindow: NSWindow {
             }
             return event
         }
+    }
+
+    // MARK: - Notification Observers
+
+    private func setupNotificationObservers() {
+        // Plan created - set up steps
+        let planObserver = NotificationCenter.default.addObserver(
+            forName: .agenticPlanCreated,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let steps = notification.userInfo?["steps"] as? [String] else { return }
+            self?.viewModel.setPlanSteps(steps)
+        }
+        notificationObservers.append(planObserver)
+
+        // Tool call started
+        let startedObserver = NotificationCenter.default.addObserver(
+            forName: .agenticToolCallStarted,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let toolName = notification.userInfo?["toolName"] as? String else { return }
+            self?.viewModel.setToolCallStarted(toolName)
+        }
+        notificationObservers.append(startedObserver)
+
+        // Tool call completed
+        let completedObserver = NotificationCenter.default.addObserver(
+            forName: .agenticToolCallCompleted,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.viewModel.setToolCallCompleted()
+        }
+        notificationObservers.append(completedObserver)
+
+        // Tool call failed
+        let failedObserver = NotificationCenter.default.addObserver(
+            forName: .agenticToolCallFailed,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.viewModel.setToolCallFailed()
+        }
+        notificationObservers.append(failedObserver)
+    }
+
+    private func removeNotificationObservers() {
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        notificationObservers.removeAll()
     }
 
     // MARK: - Positioning

@@ -8,7 +8,7 @@ use rig::tool::Tool;
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tracing::{debug, info};
 
@@ -70,8 +70,11 @@ pub struct ImageGenerateOutput {
 }
 
 /// Image generation tool using GenerationProviderRegistry
+///
+/// The registry is wrapped in `Arc<RwLock<>>` for thread-safe access
+/// since it may be shared across multiple tool instances.
 pub struct ImageGenerateTool {
-    registry: Arc<GenerationProviderRegistry>,
+    registry: Arc<RwLock<GenerationProviderRegistry>>,
 }
 
 impl ImageGenerateTool {
@@ -82,7 +85,7 @@ impl ImageGenerateTool {
     pub const DESCRIPTION: &'static str = "Generate an image from a text description. Use this when you need to create visual content based on a prompt.";
 
     /// Create a new ImageGenerateTool with the given provider registry
-    pub fn new(registry: Arc<GenerationProviderRegistry>) -> Self {
+    pub fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
         Self { registry }
     }
 
@@ -92,29 +95,36 @@ impl ImageGenerateTool {
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting image generation");
 
-        // Find provider
-        let (provider_name, provider) = if let Some(name) = &args.provider {
-            let provider = self
-                .registry
-                .get(name)
-                .ok_or_else(|| ToolError::InvalidArgs(format!("Provider '{}' not found", name)))?;
+        // Find provider (using scoped block to ensure lock is dropped before await)
+        let (provider_name, provider) = {
+            // Acquire read lock on registry
+            let registry = self.registry.read().map_err(|e| {
+                ToolError::Execution(format!("Failed to acquire registry lock: {}", e))
+            })?;
 
-            // Check if provider supports image generation
-            if !provider.supports(GenerationType::Image) {
-                return Err(ToolError::InvalidArgs(format!(
-                    "Provider '{}' does not support image generation",
-                    name
-                )));
+            if let Some(name) = &args.provider {
+                let provider = registry
+                    .get(name)
+                    .ok_or_else(|| ToolError::InvalidArgs(format!("Provider '{}' not found", name)))?;
+
+                // Check if provider supports image generation
+                if !provider.supports(GenerationType::Image) {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "Provider '{}' does not support image generation",
+                        name
+                    )));
+                }
+
+                (name.clone(), provider)
+            } else {
+                // Find first provider that supports image generation
+                registry
+                    .first_for_type(GenerationType::Image)
+                    .ok_or_else(|| {
+                        ToolError::InvalidArgs("No image generation provider available".to_string())
+                    })?
             }
-
-            (name.clone(), provider)
-        } else {
-            // Find first provider that supports image generation
-            self.registry
-                .first_for_type(GenerationType::Image)
-                .ok_or_else(|| {
-                    ToolError::InvalidArgs("No image generation provider available".to_string())
-                })?
+            // Lock is dropped here at end of block
         };
 
         debug!(provider = %provider_name, "Using provider for image generation");
@@ -138,7 +148,10 @@ impl ImageGenerateTool {
         let request = GenerationRequest::image(&args.prompt).with_params(params);
 
         // Execute generation
-        let output = provider.generate(request).await.map_err(ToolError::from)?;
+        let output: crate::generation::GenerationOutput = provider
+            .generate(request)
+            .await
+            .map_err(ToolError::from)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -250,11 +263,11 @@ mod tests {
     use super::*;
     use crate::generation::MockGenerationProvider;
 
-    fn create_test_registry() -> Arc<GenerationProviderRegistry> {
+    fn create_test_registry() -> Arc<RwLock<GenerationProviderRegistry>> {
         let mut registry = GenerationProviderRegistry::new();
         let mock = Arc::new(MockGenerationProvider::image_only("mock-dalle"));
         registry.register("mock-dalle".to_string(), mock).unwrap();
-        Arc::new(registry)
+        Arc::new(RwLock::new(registry))
     }
 
     #[test]
@@ -346,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_image_no_provider_available() {
-        let registry = Arc::new(GenerationProviderRegistry::new());
+        let registry = Arc::new(RwLock::new(GenerationProviderRegistry::new()));
         let tool = ImageGenerateTool::new(registry);
 
         let args = ImageGenerateArgs {

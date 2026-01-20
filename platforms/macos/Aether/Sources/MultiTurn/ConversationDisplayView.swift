@@ -175,51 +175,5 @@ struct ConversationDisplayView: View {
 }
 
 // MARK: - MessageBubbleView
-
-/// Individual message bubble with glass effect
-struct MessageBubbleView: View {
-    let message: ConversationMessage
-    let onCopy: () -> Void
-
-    @State private var isHovering = false
-
-    private var isUser: Bool {
-        message.role == .user
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if isUser { Spacer(minLength: 40) }
-
-            VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-                // Message content with glass bubble effect
-                Text(message.content)
-                    .font(.system(size: 13))
-                    .liquidGlassText()
-                    .textSelection(.enabled)
-                    .padding(12)
-                    .glassBubble(isUser: isUser)
-
-                // Copy button (on hover)
-                if isHovering {
-                    Button(action: onCopy) {
-                        HStack(spacing: 2) {
-                            Image(systemName: "doc.on.doc")
-                            Text("Copy")
-                        }
-                        .font(.caption2)
-                        .liquidGlassSecondaryText()
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            if !isUser { Spacer(minLength: 40) }
-        }
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovering = hovering
-            }
-        }
-    }
-}
+// NOTE: MessageBubbleView has been moved to Views/MessageBubbleView.swift
+// with support for inline images and download functionality.

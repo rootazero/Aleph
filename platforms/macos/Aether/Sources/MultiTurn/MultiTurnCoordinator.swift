@@ -240,6 +240,7 @@ final class MultiTurnCoordinator {
     }
 
     /// Start typewriter output streaming
+    /// Uses batch updates to avoid O(n²) UI rendering performance issues
     private func startTypewriterOutput(response: String, topic: Topic, userInput: String, isFirstMessage: Bool, speed: Int) {
         // Cancel any existing typewriter task
         typewriterTask?.cancel()
@@ -253,10 +254,17 @@ final class MultiTurnCoordinator {
         // Calculate delay between characters (speed is chars/second)
         let charDelay = 1.0 / Double(max(speed, 1))
 
+        // Batch update configuration to reduce UI re-renders
+        // Instead of updating on every character (O(n²)), we batch updates
+        let batchSize = 50           // Update every 50 characters
+        let throttleInterval = 0.05  // Minimum 50ms between updates
+
         typewriterTask = Task { @MainActor in
             var currentText = ""
+            var lastUpdateTime = Date()
+            let responseChars = Array(response)
 
-            for char in response {
+            for (index, char) in responseChars.enumerated() {
                 // Check for cancellation
                 if Task.isCancelled {
                     print("[MultiTurnCoordinator] Typewriter cancelled")
@@ -264,7 +272,18 @@ final class MultiTurnCoordinator {
                 }
 
                 currentText.append(char)
-                unifiedWindow.viewModel.updateStreamingText(currentText)
+
+                // Batch update: every batchSize chars OR every throttleInterval OR last char
+                let timeSinceLastUpdate = Date().timeIntervalSince(lastUpdateTime)
+                let isLastChar = index == responseChars.count - 1
+                let shouldUpdate = (index + 1) % batchSize == 0
+                    || timeSinceLastUpdate >= throttleInterval
+                    || isLastChar
+
+                if shouldUpdate {
+                    unifiedWindow.viewModel.updateStreamingText(currentText)
+                    lastUpdateTime = Date()
+                }
 
                 // Wait for next character
                 try? await Task.sleep(nanoseconds: UInt64(charDelay * 1_000_000_000))

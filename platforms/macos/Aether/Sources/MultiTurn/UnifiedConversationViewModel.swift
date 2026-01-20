@@ -40,6 +40,17 @@ final class UnifiedConversationViewModel {
     var streamingMessageId: String?
     var streamingText: String = ""
 
+    // MARK: - Progress Tracking (for multi-turn agentic tasks)
+
+    /// Currently executing tool name (nil when not executing)
+    var currentToolCall: String?
+
+    /// Task plan steps for multi-step tasks
+    var planSteps: [PlanStep] = []
+
+    /// Current step index in the plan
+    var currentStepIndex: Int = 0
+
     // MARK: - Attachment Data
 
     /// Pending attachments to send with next message
@@ -382,16 +393,20 @@ final class UnifiedConversationViewModel {
     }
 
     func updateStreamingText(_ text: String) {
+        // Only update streamingText - do NOT update messages array during streaming
+        // This avoids triggering SwiftUI's expensive array diff and re-render
+        // The streaming message is displayed separately using StreamingMessageBubble
         streamingText = text
-        if let messageId = streamingMessageId,
-           let index = messages.firstIndex(where: { $0.id == messageId }) {
-            messages[index].content = text
-        }
     }
 
     func finishStreamingMessage() {
         if let messageId = streamingMessageId,
-           messages.contains(where: { $0.id == messageId }) {
+           let index = messages.firstIndex(where: { $0.id == messageId }) {
+            // Update the message content in the array ONLY when streaming finishes
+            // This triggers a single re-render with the final content
+            messages[index].content = streamingText
+
+            // Persist to store
             ConversationStore.shared.updateMessageContent(
                 messageId: messageId,
                 content: streamingText
@@ -448,9 +463,53 @@ final class UnifiedConversationViewModel {
         isLoading = false
         errorMessage = nil
         displayState = .empty
+        resetProgress()
     }
 
     func clear() {
         reset()
+    }
+
+    /// Reset progress tracking state
+    func resetProgress() {
+        currentToolCall = nil
+        planSteps = []
+        currentStepIndex = 0
+    }
+
+    /// Update tool call status
+    func setToolCallStarted(_ toolName: String) {
+        currentToolCall = toolName
+        // Update current step status to running
+        if currentStepIndex < planSteps.count {
+            planSteps[currentStepIndex].status = .running
+        }
+    }
+
+    /// Mark tool call as completed
+    func setToolCallCompleted() {
+        // Update current step status to completed
+        if currentStepIndex < planSteps.count {
+            planSteps[currentStepIndex].status = .completed
+        }
+        currentToolCall = nil
+        currentStepIndex += 1
+    }
+
+    /// Mark tool call as failed
+    func setToolCallFailed() {
+        // Update current step status to failed
+        if currentStepIndex < planSteps.count {
+            planSteps[currentStepIndex].status = .failed
+        }
+        currentToolCall = nil
+    }
+
+    /// Set plan steps from notification
+    func setPlanSteps(_ steps: [String]) {
+        planSteps = steps.enumerated().map { index, description in
+            PlanStep(id: "step_\(index)", description: description)
+        }
+        currentStepIndex = 0
     }
 }

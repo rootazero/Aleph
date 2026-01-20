@@ -15,8 +15,12 @@ struct ConversationAreaView: View {
     let maxHeight: CGFloat
 
     @State private var contentHeight: CGFloat = 0
+    @State private var lastReportedHeight: CGFloat = 0
+    @State private var heightUpdateTask: Task<Void, Never>?
 
     private let titleBarHeight: CGFloat = 44
+    private let heightUpdateThreshold: CGFloat = 10  // Only report if change > 10pt
+    private let heightUpdateDelay: UInt64 = 100_000_000  // 100ms debounce
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,8 +38,13 @@ struct ConversationAreaView: View {
                 emptyState
             }
 
-            // Loading indicator
-            if viewModel.isLoading {
+            // Progress indicator for multi-turn tasks
+            if !viewModel.planSteps.isEmpty || viewModel.currentToolCall != nil {
+                progressIndicator
+            }
+
+            // Loading indicator (show only if no plan steps)
+            if viewModel.isLoading && viewModel.planSteps.isEmpty {
                 loadingIndicator
             }
 
@@ -78,12 +87,31 @@ struct ConversationAreaView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 12) {
+                    // Display completed messages (not streaming)
                     ForEach(viewModel.messages) { message in
-                        MessageBubbleView(
-                            message: message,
-                            onCopy: { viewModel.copyMessage(message) }
+                        // Skip the streaming message in ForEach - it's displayed separately below
+                        if message.id != viewModel.streamingMessageId {
+                            MessageBubbleView(
+                                message: message,
+                                onCopy: { viewModel.copyMessage(message) }
+                            )
+                            .id(message.id)
+                        }
+                    }
+
+                    // Display streaming message separately with high-performance view
+                    if let streamingId = viewModel.streamingMessageId {
+                        StreamingMessageBubble(
+                            messageId: streamingId,
+                            content: viewModel.streamingText,
+                            isUser: false,
+                            isStreaming: true,
+                            onCopy: {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(viewModel.streamingText, forType: .string)
+                            }
                         )
-                        .id(message.id)
+                        .id(streamingId)
                     }
                 }
                 .padding(12)
@@ -92,19 +120,16 @@ struct ConversationAreaView: View {
                         Color.clear
                             .onChange(of: geometry.size.height) { _, newHeight in
                                 contentHeight = newHeight
-                                let total = titleBarHeight + 1 + newHeight +
-                                    (viewModel.isLoading ? 30 : 0)
-                                viewModel.reportHeightChange(total)
+                                // Debounce height updates to prevent window jitter
+                                debouncedHeightUpdate(newHeight)
                             }
                             .onAppear {
                                 // Report initial height when view appears
-                                // (e.g., switching back from command list)
-                                DispatchQueue.main.async {
-                                    contentHeight = geometry.size.height
-                                    let total = titleBarHeight + 1 + geometry.size.height +
-                                        (viewModel.isLoading ? 30 : 0)
-                                    viewModel.reportHeightChange(total)
-                                }
+                                contentHeight = geometry.size.height
+                                let total = titleBarHeight + 1 + geometry.size.height +
+                                    (viewModel.isLoading ? 30 : 0)
+                                lastReportedHeight = total
+                                viewModel.reportHeightChange(total)
                             }
                     }
                 )
@@ -114,6 +139,12 @@ struct ConversationAreaView: View {
                     withAnimation {
                         proxy.scrollTo(lastId, anchor: .bottom)
                     }
+                }
+            }
+            // Scroll when streaming text updates significantly
+            .onChange(of: viewModel.streamingText.count / 100) { _, _ in
+                if let streamingId = viewModel.streamingMessageId {
+                    proxy.scrollTo(streamingId, anchor: .bottom)
                 }
             }
         }
@@ -135,6 +166,79 @@ struct ConversationAreaView: View {
         .frame(maxWidth: .infinity)
         .frame(height: 100)
         .padding()
+    }
+
+    // MARK: - Progress Indicator
+
+    private var progressIndicator: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Current tool execution
+            if let toolName = viewModel.currentToolCall {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .frame(width: 16, height: 16)
+
+                    Text("🔧 \(toolName)")
+                        .font(.caption)
+                        .liquidGlassText()
+                }
+            }
+
+            // Plan steps (if any)
+            if !viewModel.planSteps.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(viewModel.planSteps) { step in
+                        HStack(spacing: 6) {
+                            // Status icon
+                            stepStatusIcon(step.status)
+                                .frame(width: 14, height: 14)
+
+                            // Description
+                            Text(step.description)
+                                .font(.caption)
+                                .foregroundColor(stepTextColor(step.status))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial.opacity(0.3))
+    }
+
+    @ViewBuilder
+    private func stepStatusIcon(_ status: StepStatus) -> some View {
+        switch status {
+        case .pending:
+            Circle()
+                .stroke(GlassColors.secondaryText, lineWidth: 1.5)
+        case .running:
+            ProgressView()
+                .scaleEffect(0.5)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .foregroundColor(.red)
+        }
+    }
+
+    private func stepTextColor(_ status: StepStatus) -> Color {
+        switch status {
+        case .pending:
+            return GlassColors.secondaryText
+        case .running:
+            return GlassColors.text
+        case .completed:
+            return .green.opacity(0.8)
+        case .failed:
+            return .red.opacity(0.8)
+        }
     }
 
     // MARK: - Loading Indicator
@@ -162,5 +266,34 @@ struct ConversationAreaView: View {
         .padding(10)
         .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
         .padding(12)
+    }
+
+    // MARK: - Height Update Debouncing
+
+    /// Debounced height update to prevent window jitter
+    private func debouncedHeightUpdate(_ newHeight: CGFloat) {
+        // Cancel previous pending update
+        heightUpdateTask?.cancel()
+
+        let total = titleBarHeight + 1 + newHeight + (viewModel.isLoading ? 30 : 0)
+
+        // Skip if change is too small (prevents micro-adjustments causing jitter)
+        let heightDiff = abs(total - lastReportedHeight)
+        if heightDiff < heightUpdateThreshold && lastReportedHeight > 0 {
+            return
+        }
+
+        // Debounce: wait before applying update
+        heightUpdateTask = Task {
+            try? await Task.sleep(nanoseconds: heightUpdateDelay)
+
+            // Check if cancelled
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                lastReportedHeight = total
+                viewModel.reportHeightChange(total)
+            }
+        }
     }
 }

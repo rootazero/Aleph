@@ -488,26 +488,36 @@ pub fn init_core(
     // Each operation will get a fresh token via reset_cancel_token()
     let current_op_token = Arc::new(RwLock::new(CancellationToken::new()));
 
+    // Initialize generation provider registry from config FIRST
+    // (needed for BuiltinToolConfig to include ImageGenerateTool)
+    let generation_registry = generation::init_generation_providers(&full_config);
+
     // Extract search tool configuration from config file
-    let builtin_tool_config = if let Some(ref search_config) = full_config.search {
-        if search_config.enabled {
-            // Get Tavily API key if configured
-            let tavily_api_key = search_config
-                .backends
-                .get("tavily")
-                .and_then(|backend| backend.api_key.clone())
-                .filter(|key| !key.is_empty());
+    let builtin_tool_config = {
+        let tavily_api_key = if let Some(ref search_config) = full_config.search {
+            if search_config.enabled {
+                // Get Tavily API key if configured
+                let key = search_config
+                    .backends
+                    .get("tavily")
+                    .and_then(|backend| backend.api_key.clone())
+                    .filter(|key| !key.is_empty());
 
-            if tavily_api_key.is_some() {
-                info!("Tavily API key found in config file");
+                if key.is_some() {
+                    info!("Tavily API key found in config file");
+                }
+                key
+            } else {
+                None
             }
-
-            BuiltinToolConfig { tavily_api_key }
         } else {
-            BuiltinToolConfig::default()
+            None
+        };
+
+        BuiltinToolConfig {
+            tavily_api_key,
+            generation_registry: Some(generation_registry.clone()),
         }
-    } else {
-        BuiltinToolConfig::default()
     };
 
     // Create shared ToolServerHandle with built-in tools for hot-reload support
@@ -521,9 +531,6 @@ pub fn init_core(
         tools = ?registered_tools.read().unwrap(),
         "Created shared ToolServerHandle with built-in tools"
     );
-
-    // Initialize generation provider registry from config
-    let generation_registry = generation::init_generation_providers(&full_config);
 
     let core = Arc::new(AetherCore {
         config_holder,

@@ -1118,7 +1118,7 @@ mod tests {
 
         let intent = ExecutionIntent::Executable(ExecutableTask {
             category: TaskCategory::FileOrganize,
-            action: "整理文件".to_string(),
+            action: "organize files".to_string(),
             target: None,
             confidence: 0.9,
         });
@@ -1129,9 +1129,9 @@ mod tests {
         assert!(prompt.contains("Base prompt."));
 
         // Should contain agent mode prompt (simplified version - rig-core handles tool definitions)
-        assert!(prompt.contains("Agent执行模式"));
-        assert!(prompt.contains("使用工具来完成用户请求"));
-        assert!(prompt.contains("行为规则"));
+        assert!(prompt.contains("Agent Execution Mode"));
+        assert!(prompt.contains("use tools to complete user requests"));
+        assert!(prompt.contains("Behavior Rules"));
     }
 
     #[test]
@@ -1148,7 +1148,7 @@ mod tests {
         assert!(prompt.contains("Base prompt."));
 
         // Should NOT contain agent mode prompt
-        assert!(!prompt.contains("Agent执行模式"));
+        assert!(!prompt.contains("Agent Execution Mode"));
     }
 
     #[test]
@@ -1159,7 +1159,7 @@ mod tests {
 
         // Should contain only base prompt
         assert_eq!(prompt, "Base prompt.");
-        assert!(!prompt.contains("Agent执行模式"));
+        assert!(!prompt.contains("Agent Execution Mode"));
     }
 
     #[test]
@@ -1171,7 +1171,7 @@ mod tests {
         let capabilities = vec![CapabilityDeclaration::search()];
         let intent = ExecutionIntent::Executable(ExecutableTask {
             category: TaskCategory::FileOrganize,
-            action: "整理文件".to_string(),
+            action: "organize files".to_string(),
             target: None,
             confidence: 0.9,
         });
@@ -1182,6 +1182,6 @@ mod tests {
         // Should contain all three: base prompt, capabilities, and agent mode
         assert!(prompt.contains("Base prompt."));
         assert!(prompt.contains("## CRITICAL: Proactive Search Decision System"));
-        assert!(prompt.contains("Agent执行模式"));
+        assert!(prompt.contains("Agent Execution Mode"));
     }
 }

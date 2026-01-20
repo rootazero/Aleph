@@ -108,7 +108,8 @@ impl UnifiedPlanner {
 
         let response = match result {
             Ok(Ok(response)) => {
-                debug!("LLM response: {}", response);
+                info!(response_len = response.len(), "Planner LLM response received");
+                debug!("LLM response content: {}", response);
                 response
             }
             Ok(Err(e)) => {
@@ -128,7 +129,8 @@ impl UnifiedPlanner {
         // Extract JSON from response
         let json_str = extract_json(response).map_err(|e| PlannerError::parse_error(e))?;
 
-        debug!("Extracted JSON: {}", json_str);
+        info!(json_len = json_str.len(), "Extracted plan JSON from response");
+        debug!("Extracted JSON content: {}", json_str);
 
         // Parse as RawPlanResponse
         let raw: RawPlanResponse =
@@ -150,6 +152,12 @@ impl UnifiedPlanner {
                     .ok_or_else(|| PlannerError::parse_error("Missing tool_name for single_action"))?;
                 let parameters = raw.parameters.unwrap_or(serde_json::Value::Null);
                 let requires_confirmation = raw.requires_confirmation.unwrap_or(false);
+
+                info!(
+                    tool_name = %tool_name,
+                    parameters = %parameters,
+                    "Planner decided: single_action"
+                );
 
                 // Apply config override for destructive operations
                 let requires_confirmation = if self.config.require_confirmation_for_destructive {
