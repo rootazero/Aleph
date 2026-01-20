@@ -259,10 +259,21 @@ pub use crate::vision::{
 };
 // Cowork FFI exports (task orchestration)
 pub use crate::cowork_ffi::{
+    // Budget management types (Model Router P1)
+    BudgetEnforcementFFI,
+    BudgetLimitStatusFFI,
+    BudgetPeriodFFI,
+    BudgetScopeFFI,
+    BudgetStatusFFI,
+    // P2: Semantic Cache types
+    CacheHitTypeFFI,
+    CacheStatsFFI,
     // Model Router types
     CapabilityMappingFFI,
     // Base Cowork types
     CodeExecConfigFFI,
+    // P2: Prompt Analysis types
+    ContextSizeFFI,
     CoworkConfigFFI,
     CoworkExecutionState,
     CoworkExecutionSummaryFFI,
@@ -274,36 +285,25 @@ pub use crate::cowork_ffi::{
     CoworkTaskGraphFFI,
     CoworkTaskStatusState,
     CoworkTaskTypeCategory,
+    DomainFFI,
     FfiProgressSubscriber,
     FileOpsConfigFFI,
     // Health monitoring types
     HealthStatisticsFFI,
-    ModelHealthStatusFFI,
-    ModelHealthSummaryFFI,
+    LanguageFFI,
     // Model profile types
     ModelCapabilityFFI,
     ModelCostStrategyFFI,
     ModelCostTierFFI,
+    ModelHealthStatusFFI,
+    ModelHealthSummaryFFI,
     ModelLatencyTierFFI,
     ModelProfileFFI,
     ModelRoutingRulesFFI,
-    StageResultFFI,
-    TaskTypeMappingFFI,
-    // Budget management types (Model Router P1)
-    BudgetEnforcementFFI,
-    BudgetLimitStatusFFI,
-    BudgetPeriodFFI,
-    BudgetScopeFFI,
-    BudgetStatusFFI,
-    // P2: Prompt Analysis types
-    ContextSizeFFI,
-    DomainFFI,
-    LanguageFFI,
     PromptFeaturesFFI,
     ReasoningLevelFFI,
-    // P2: Semantic Cache types
-    CacheHitTypeFFI,
-    CacheStatsFFI,
+    StageResultFFI,
+    TaskTypeMappingFFI,
 };
 
 // Generation exports (media generation providers)
@@ -401,10 +401,22 @@ pub use crate::components::{
 // Agent system exports (unified: rig-core agent + sub-agent delegation)
 pub use crate::agents::{
     // Sub-agent delegation
-    builtin_agents, AgentDef, AgentMode, AgentRegistry, TaskTool, TaskToolError, TaskToolResult,
+    builtin_agents,
     // Rig-core AI agent (re-exported from agents::rig)
-    AgentConfig, AgentResponse, BuiltinToolConfig, ChatMessage, ConversationHistory, MessageRole,
-    RigAgentConfig, RigAgentManager,
+    AgentConfig,
+    AgentDef,
+    AgentMode,
+    AgentRegistry,
+    AgentResponse,
+    BuiltinToolConfig,
+    ChatMessage,
+    ConversationHistory,
+    MessageRole,
+    RigAgentConfig,
+    RigAgentManager,
+    TaskTool,
+    TaskToolError,
+    TaskToolResult,
 };
 // Note: ToolCallInfo/ToolCallResult from agents::rig::types are internal;
 // use crate::event::ToolCallResult for event system

@@ -13,7 +13,9 @@ use tracing::{debug, info};
 
 use super::prompt::{build_planning_prompt, get_system_prompt_with_tools, ToolInfo};
 use super::types::{ExecutionPlan, PlannedTask, PlannerError};
-use crate::dispatcher::cowork_types::{AiTask, AppAuto, CodeExec, DocGen, FileOp, Language, TaskType};
+use crate::dispatcher::cowork_types::{
+    AiTask, AppAuto, CodeExec, DocGen, FileOp, Language, TaskType,
+};
 use crate::providers::AiProvider;
 
 /// Configuration for the unified planner

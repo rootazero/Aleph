@@ -183,7 +183,10 @@ pub trait MetricsCollector: Send + Sync {
 #[derive(Debug)]
 enum CollectorCommand {
     Record(CallRecord),
-    Feedback { call_id: String, feedback: UserFeedback },
+    Feedback {
+        call_id: String,
+        feedback: UserFeedback,
+    },
     Flush,
 }
 
@@ -346,10 +349,7 @@ impl HybridMetricsCollector {
 
         // Spawn background processor
         tokio::spawn(Self::process_commands(
-            command_rx,
-            records,
-            aggregated,
-            config,
+            command_rx, records, aggregated, config,
         ));
 
         collector

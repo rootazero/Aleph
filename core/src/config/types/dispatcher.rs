@@ -611,7 +611,12 @@ impl Default for BackoffConfigToml {
 impl BackoffConfigToml {
     /// Validate the backoff configuration
     pub fn validate(&self) -> std::result::Result<(), String> {
-        let valid_strategies = ["constant", "exponential", "exponential_jitter", "rate_limit_aware"];
+        let valid_strategies = [
+            "constant",
+            "exponential",
+            "exponential_jitter",
+            "rate_limit_aware",
+        ];
         if !valid_strategies.contains(&self.strategy.as_str()) {
             return Err(format!(
                 "backoff.strategy must be one of {:?}, got '{}'",
@@ -869,10 +874,7 @@ impl BudgetLimitConfigToml {
         }
 
         if self.limit_usd <= 0.0 {
-            return Err(format!(
-                "budget.limits[{}].limit_usd must be > 0",
-                self.id
-            ));
+            return Err(format!("budget.limits[{}].limit_usd must be > 0", self.id));
         }
 
         for threshold in &self.warning_thresholds {
@@ -902,7 +904,9 @@ impl BudgetLimitConfigToml {
         &self,
         default_enforcement: &str,
     ) -> crate::dispatcher::model_router::BudgetLimit {
-        use crate::dispatcher::model_router::{BudgetEnforcement, BudgetLimit, BudgetPeriod, BudgetScope};
+        use crate::dispatcher::model_router::{
+            BudgetEnforcement, BudgetLimit, BudgetPeriod, BudgetScope,
+        };
 
         let scope = match self.scope.as_str() {
             "global" => BudgetScope::Global,

@@ -65,9 +65,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::ab_testing::{
-    ABTestingEngine, ExperimentOutcome, TrackedMetric, VariantAssignment,
-};
+use super::ab_testing::{ABTestingEngine, ExperimentOutcome, TrackedMetric, VariantAssignment};
 use super::ensemble::{
     EnsembleConfig, EnsembleDecision, EnsembleEngine, EnsembleEngineConfig, EnsembleRequest,
     EnsembleResult,
@@ -261,8 +259,8 @@ pub struct P3IntelligentRouter {
 impl P3IntelligentRouter {
     /// Create a new P3 router
     pub fn new(config: P3RouterConfig) -> Result<Self, P3RouterError> {
-        let p2_router = P2IntelligentRouter::new(config.p2_config.clone())
-            .map_err(P3RouterError::P2Error)?;
+        let p2_router =
+            P2IntelligentRouter::new(config.p2_config.clone()).map_err(P3RouterError::P2Error)?;
 
         let ab_engine = if config.ab_testing_enabled {
             Some(Arc::new(ABTestingEngine::new(vec![])))
@@ -488,7 +486,12 @@ impl P3IntelligentRouter {
         user_id: Option<&str>,
         p2_decision: &RoutingDecision,
         _context: &HashMap<String, String>,
-    ) -> (Option<VariantAssignment>, bool, ModelProfile, Option<ModelProfile>) {
+    ) -> (
+        Option<VariantAssignment>,
+        bool,
+        ModelProfile,
+        Option<ModelProfile>,
+    ) {
         let original_model = p2_decision.selected_model.clone();
 
         let Some(ref engine) = self.ab_engine else {
@@ -524,7 +527,12 @@ impl P3IntelligentRouter {
             let mut overridden_model = original_model.clone();
             overridden_model.id = model_override.clone();
             // Note: In production, would look up full profile from matcher
-            (Some(assignment), true, overridden_model, Some(original_model))
+            (
+                Some(assignment),
+                true,
+                overridden_model,
+                Some(original_model),
+            )
         } else {
             (Some(assignment), false, original_model, None)
         }
@@ -685,5 +693,98 @@ mod tests {
         };
         let router = P3IntelligentRouter::new(config).unwrap();
         assert!(router.ensemble_engine().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_p3_router_with_both_enabled() {
+        let config = P3RouterConfig {
+            ab_testing_enabled: true,
+            ensemble_enabled: true,
+            ..Default::default()
+        };
+        let router = P3IntelligentRouter::new(config).unwrap();
+        assert!(router.ab_engine().is_some());
+        assert!(router.ensemble_engine().is_some());
+    }
+
+    #[test]
+    fn test_p3_router_error_display() {
+        let error = P3RouterError::EnsembleError("execution failed".to_string());
+        assert!(error.to_string().contains("Ensemble execution error"));
+
+        let error = P3RouterError::ABTestingError("assignment failed".to_string());
+        assert!(error.to_string().contains("A/B testing error"));
+
+        let error = P3RouterError::ConfigError("invalid config".to_string());
+        assert!(error.to_string().contains("Configuration error"));
+    }
+
+    #[test]
+    fn test_user_id_modes() {
+        assert!(matches!(UserIdMode::Provided, UserIdMode::Provided));
+        assert!(matches!(UserIdMode::SessionBased, UserIdMode::SessionBased));
+        assert!(matches!(UserIdMode::RequestBased, UserIdMode::RequestBased));
+    }
+
+    #[test]
+    fn test_p3_router_event_variants() {
+        // Test that all event variants can be created
+        let event1 = P3RouterEvent::CacheHit {
+            prompt_hash: "abc123".to_string(),
+            model_id: "claude-opus".to_string(),
+        };
+        assert!(matches!(event1, P3RouterEvent::CacheHit { .. }));
+
+        let event2 = P3RouterEvent::ExperimentAssigned {
+            experiment_id: "exp-1".to_string(),
+            variant_id: "variant-a".to_string(),
+            user_id: "user-123".to_string(),
+        };
+        assert!(matches!(event2, P3RouterEvent::ExperimentAssigned { .. }));
+
+        let event3 = P3RouterEvent::EnsembleTriggered {
+            models: vec!["model-a".to_string(), "model-b".to_string()],
+            mode: "best_of_n".to_string(),
+            reason: "high complexity".to_string(),
+        };
+        assert!(matches!(event3, P3RouterEvent::EnsembleTriggered { .. }));
+
+        let event4 = P3RouterEvent::OutcomeRecorded {
+            experiment_id: "exp-1".to_string(),
+            variant_id: "variant-a".to_string(),
+            latency_ms: 150,
+            success: true,
+        };
+        assert!(matches!(event4, P3RouterEvent::OutcomeRecorded { .. }));
+    }
+
+    #[test]
+    fn test_p3_pre_route_result_variants() {
+        use super::super::semantic_cache::{CacheEntry, CacheHit, CacheHitType, CacheMetadata};
+
+        // Test CacheHit variant
+        let entry = CacheEntry {
+            id: "test-id".to_string(),
+            prompt_hash: "hash".to_string(),
+            prompt_preview: "prompt".to_string(),
+            embedding: vec![0.1, 0.2, 0.3],
+            response: CachedResponse::new("response".to_string(), 100, 50, 0.001),
+            model_used: "model".to_string(),
+            created_at: std::time::SystemTime::now(),
+            expires_at: None,
+            hit_count: 0,
+            last_accessed: std::time::SystemTime::now(),
+            metadata: CacheMetadata::default(),
+        };
+
+        let cache_hit = CacheHit {
+            entry,
+            similarity: 1.0,
+            hit_type: CacheHitType::Exact,
+        };
+
+        let result = P3PreRouteResult::CacheHit(cache_hit);
+        assert!(result.is_cache_hit());
+        assert!(!result.requires_ensemble());
     }
 }

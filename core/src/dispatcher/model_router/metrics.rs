@@ -434,8 +434,8 @@ impl LatencyStats {
 
         let combined_count = self.count + other.count;
         let delta = other.mean - self.mean;
-        let combined_mean =
-            (self.mean * self.count as f64 + other.mean * other.count as f64) / combined_count as f64;
+        let combined_mean = (self.mean * self.count as f64 + other.mean * other.count as f64)
+            / combined_count as f64;
 
         // Parallel algorithm for combining variances
         let combined_m2 = self.m2
@@ -672,7 +672,7 @@ pub struct WindowConfig {
 impl Default for WindowConfig {
     fn default() -> Self {
         Self {
-            short_term: Duration::from_secs(5 * 60),       // 5 minutes
+            short_term: Duration::from_secs(5 * 60),      // 5 minutes
             medium_term: Duration::from_secs(60 * 60),    // 1 hour
             long_term: Duration::from_secs(24 * 60 * 60), // 24 hours
         }

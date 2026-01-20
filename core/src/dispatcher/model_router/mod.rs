@@ -43,14 +43,14 @@ mod matcher;
 mod metrics;
 mod orchestrated_router;
 mod orchestrator;
-mod profiles;
 mod p2_router;
 mod p3_router;
+mod profiles;
 mod prompt_analyzer;
 mod retry;
-mod semantic_cache;
 mod rules;
 mod scoring;
+mod semantic_cache;
 mod transition_engine;
 
 pub use collector::{
@@ -58,6 +58,15 @@ pub use collector::{
     MetricsError, RingBuffer,
 };
 pub use context::TaskContextManager;
+pub use health::{
+    CallPermission, CircuitBreakerConfig, CircuitBreakerState, CircuitState, DegradationReason,
+    ErrorType, HealthConfig, HealthError, HealthEvent, HealthStatus, ModelHealth,
+    ModelHealthSummary, ProbeConfig, ProbeEndpoint, RateLimitInfo, UnhealthyReason,
+};
+pub use health_manager::{HealthManager, HealthStatistics};
+pub use intelligent_routing::{
+    IntelligentRouter, IntelligentRoutingConfig, IntelligentRoutingResult,
+};
 pub use intent::TaskIntent;
 pub use matcher::{FallbackProvider, ModelMatcher, ModelRouter, RoutingError};
 pub use metrics::{
@@ -67,24 +76,16 @@ pub use metrics::{
 pub use profiles::{Capability, CostTier, LatencyTier, ModelProfile};
 pub use rules::{CostStrategy, ModelRoutingRules};
 pub use scoring::{DynamicScorer, ScoreResult, ScoringConfig};
-pub use health::{
-    CallPermission, CircuitBreakerConfig, CircuitBreakerState, CircuitState, DegradationReason,
-    ErrorType, HealthConfig, HealthError, HealthEvent, HealthStatus, ModelHealth,
-    ModelHealthSummary, ProbeConfig, ProbeEndpoint, RateLimitInfo, UnhealthyReason,
-};
 pub use transition_engine::{CallResult, HealthTransitionEngine, TransitionResult};
-pub use health_manager::{HealthManager, HealthStatistics};
-pub use intelligent_routing::{IntelligentRouter, IntelligentRoutingConfig, IntelligentRoutingResult};
 
 // Retry and Failover (P1)
-pub use retry::{BackoffStrategy, RetryPolicy, RetryableOutcome};
 pub use failover::{FailoverChain, FailoverConfig, FailoverSelectionMode};
+pub use retry::{BackoffStrategy, RetryPolicy, RetryableOutcome};
 
 // Budget Management (P1)
 pub use budget::{
-    BudgetCheckResult, BudgetEnforcement, BudgetEvent, BudgetLimit, BudgetManager,
-    BudgetPeriod, BudgetScope, BudgetState, CostEstimate, CostEstimator, ModelPricing,
-    PricingSource,
+    BudgetCheckResult, BudgetEnforcement, BudgetEvent, BudgetLimit, BudgetManager, BudgetPeriod,
+    BudgetScope, BudgetState, CostEstimate, CostEstimator, ModelPricing, PricingSource,
 };
 
 // Retry Orchestrator (P1)
@@ -107,8 +108,8 @@ pub use prompt_analyzer::{
 
 // Semantic Cache (P2)
 pub use semantic_cache::{
-    CacheEntry, CacheHit, CacheHitType, CacheMetadata, CacheStats, CachedResponse,
-    EmbeddingError, EvictionPolicy, FastEmbedEmbedder, InMemoryVectorStore, SemanticCacheConfig,
+    CacheEntry, CacheHit, CacheHitType, CacheMetadata, CacheStats, CachedResponse, EmbeddingError,
+    EvictionPolicy, FastEmbedEmbedder, InMemoryVectorStore, SemanticCacheConfig,
     SemanticCacheError, SemanticCacheManager, TextEmbedder,
 };
 
@@ -121,18 +122,17 @@ pub use p2_router::{
 pub use ab_testing::{
     ABTestingEngine, AssignmentStrategy, ExperimentConfig, ExperimentId, ExperimentOutcome,
     ExperimentReport, ExperimentStatus, ExperimentValidationError, MetricStats, MetricSummary,
-    OutcomeTracker, SignificanceCalculator, SignificanceResult, TrackedMetric,
-    TrafficSplitManager, VariantAssignment, VariantConfig, VariantId, VariantStats,
-    VariantSummary,
+    OutcomeTracker, SignificanceCalculator, SignificanceResult, TrackedMetric, TrafficSplitManager,
+    VariantAssignment, VariantConfig, VariantId, VariantStats, VariantSummary,
 };
 
 // Multi-Model Ensemble (P3)
 pub use ensemble::{
-    ConfidenceMarkersScorer, EnsembleConfig, EnsembleDecision, EnsembleEngine, EnsembleEngineConfig,
-    EnsembleExecutionError, EnsembleMode, EnsembleRequest, EnsembleResult, EnsembleStrategy,
-    EnsembleValidationError, LengthAndStructureScorer, LengthScorer, ModelExecutionResult,
-    ParallelExecutor, QualityMetric, QualityScorer, RelevanceScorer, ResponseAggregator,
-    StructureScorer, TokenUsage, create_scorer, jaccard_similarity,
+    create_scorer, jaccard_similarity, ConfidenceMarkersScorer, EnsembleConfig, EnsembleDecision,
+    EnsembleEngine, EnsembleEngineConfig, EnsembleExecutionError, EnsembleMode, EnsembleRequest,
+    EnsembleResult, EnsembleStrategy, EnsembleValidationError, LengthAndStructureScorer,
+    LengthScorer, ModelExecutionResult, ParallelExecutor, QualityMetric, QualityScorer,
+    RelevanceScorer, ResponseAggregator, StructureScorer, TokenUsage,
 };
 
 // P3 Intelligent Router (P3) - Integrates A/B Testing + Ensemble with P2

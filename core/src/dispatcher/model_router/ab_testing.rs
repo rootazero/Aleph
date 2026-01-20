@@ -515,10 +515,7 @@ pub struct TrafficSplitManager {
 impl TrafficSplitManager {
     /// Create a new traffic split manager
     pub fn new(experiments: Vec<ExperimentConfig>, strategy: AssignmentStrategy) -> Self {
-        let experiments_map = experiments
-            .into_iter()
-            .map(|e| (e.id.clone(), e))
-            .collect();
+        let experiments_map = experiments.into_iter().map(|e| (e.id.clone(), e)).collect();
 
         Self {
             experiments: experiments_map,
@@ -602,7 +599,11 @@ impl TrafficSplitManager {
             }
 
             // Check if this request falls into the experiment's traffic sample
-            if self.is_in_traffic_sample(&assignment_key, &experiment.id, experiment.traffic_percentage) {
+            if self.is_in_traffic_sample(
+                &assignment_key,
+                &experiment.id,
+                experiment.traffic_percentage,
+            ) {
                 // Assign to a variant
                 if let Some(variant) = self.select_variant(&assignment_key, experiment) {
                     return Some(VariantAssignment::from_configs(experiment, variant));
@@ -621,17 +622,9 @@ impl TrafficSplitManager {
         request_id: &str,
     ) -> String {
         match self.strategy {
-            AssignmentStrategy::UserId => {
-                user_id
-                    .or(session_id)
-                    .unwrap_or(request_id)
-                    .to_string()
-            }
+            AssignmentStrategy::UserId => user_id.or(session_id).unwrap_or(request_id).to_string(),
             AssignmentStrategy::SessionId => {
-                session_id
-                    .or(user_id)
-                    .unwrap_or(request_id)
-                    .to_string()
+                session_id.or(user_id).unwrap_or(request_id).to_string()
             }
             AssignmentStrategy::RequestId => request_id.to_string(),
         }
@@ -907,9 +900,7 @@ impl OutcomeTracker {
         // Update aggregated stats
         {
             let mut stats = self.stats.write().unwrap();
-            let experiment_stats = stats
-                .entry(outcome.experiment_id.clone())
-                .or_default();
+            let experiment_stats = stats.entry(outcome.experiment_id.clone()).or_default();
             let variant_stats = experiment_stats
                 .entry(outcome.variant_id.clone())
                 .or_default();
@@ -933,11 +924,7 @@ impl OutcomeTracker {
     }
 
     /// Get statistics for a specific variant
-    pub fn get_variant_stats(
-        &self,
-        experiment_id: &str,
-        variant_id: &str,
-    ) -> Option<VariantStats> {
+    pub fn get_variant_stats(&self, experiment_id: &str, variant_id: &str) -> Option<VariantStats> {
         let stats = self.stats.read().unwrap();
         stats
             .get(experiment_id)
@@ -1242,9 +1229,7 @@ impl SignificanceCalculator {
         // Stirling's approximation with correction terms
         let x = x - 1.0;
         let tmp = x + 5.5;
-        let ser = 1.000000000190015
-            + 76.18009172947146 / (x + 1.0)
-            - 86.50532032941677 / (x + 2.0)
+        let ser = 1.000000000190015 + 76.18009172947146 / (x + 1.0) - 86.50532032941677 / (x + 2.0)
             + 24.01409824083091 / (x + 3.0)
             - 1.231739572450155 / (x + 4.0)
             + 0.1208650973866179e-2 / (x + 5.0)
@@ -1310,8 +1295,16 @@ impl From<&MetricStats> for MetricSummary {
         Self {
             mean: stats.mean(),
             std_dev: stats.std_dev(),
-            min: if stats.min.is_infinite() { 0.0 } else { stats.min },
-            max: if stats.max.is_infinite() { 0.0 } else { stats.max },
+            min: if stats.min.is_infinite() {
+                0.0
+            } else {
+                stats.min
+            },
+            max: if stats.max.is_infinite() {
+                0.0
+            } else {
+                stats.max
+            },
             count: stats.count,
         }
     }
@@ -1355,10 +1348,7 @@ pub struct ExperimentReport {
 
 impl ExperimentReport {
     /// Generate a report from experiment config and stats
-    pub fn generate(
-        config: &ExperimentConfig,
-        stats: &HashMap<VariantId, VariantStats>,
-    ) -> Self {
+    pub fn generate(config: &ExperimentConfig, stats: &HashMap<VariantId, VariantStats>) -> Self {
         let total_samples: u64 = stats.values().map(|v| v.sample_count).sum();
 
         // Determine status
@@ -1658,8 +1648,8 @@ mod tests {
         ));
 
         // Invalid: only one variant
-        let one_variant = ExperimentConfig::new("test")
-            .add_variant(VariantConfig::control("model-a"));
+        let one_variant =
+            ExperimentConfig::new("test").add_variant(VariantConfig::control("model-a"));
         assert!(matches!(
             one_variant.validate(),
             Err(ExperimentValidationError::InsufficientVariants { .. })
@@ -1718,7 +1708,13 @@ mod tests {
 
         for i in 0..total {
             if manager
-                .assign(None, None, &format!("req-{}", i), &TaskIntent::GeneralChat, None)
+                .assign(
+                    None,
+                    None,
+                    &format!("req-{}", i),
+                    &TaskIntent::GeneralChat,
+                    None,
+                )
                 .is_some()
             {
                 in_experiment += 1;
@@ -1814,7 +1810,10 @@ mod tests {
 
         assert_eq!(control_stats.sample_count, 1);
         assert_eq!(
-            control_stats.get_metric(&TrackedMetric::LatencyMs).unwrap().mean(),
+            control_stats
+                .get_metric(&TrackedMetric::LatencyMs)
+                .unwrap()
+                .mean(),
             150.0
         );
     }
@@ -1843,16 +1842,20 @@ mod tests {
         let mut treatment = MetricStats::new();
 
         // Control: mean ~100, low variance
-        for v in [98.0, 99.0, 100.0, 101.0, 102.0, 99.0, 100.0, 101.0, 100.0, 99.0,
-                  98.0, 99.0, 100.0, 101.0, 102.0, 99.0, 100.0, 101.0, 100.0, 99.0,
-                  98.0, 99.0, 100.0, 101.0, 102.0, 99.0, 100.0, 101.0, 100.0, 99.0] {
+        for v in [
+            98.0, 99.0, 100.0, 101.0, 102.0, 99.0, 100.0, 101.0, 100.0, 99.0, 98.0, 99.0, 100.0,
+            101.0, 102.0, 99.0, 100.0, 101.0, 100.0, 99.0, 98.0, 99.0, 100.0, 101.0, 102.0, 99.0,
+            100.0, 101.0, 100.0, 99.0,
+        ] {
             control.record(v);
         }
 
         // Treatment: mean ~110, similar variance (significant difference)
-        for v in [108.0, 109.0, 110.0, 111.0, 112.0, 109.0, 110.0, 111.0, 110.0, 109.0,
-                  108.0, 109.0, 110.0, 111.0, 112.0, 109.0, 110.0, 111.0, 110.0, 109.0,
-                  108.0, 109.0, 110.0, 111.0, 112.0, 109.0, 110.0, 111.0, 110.0, 109.0] {
+        for v in [
+            108.0, 109.0, 110.0, 111.0, 112.0, 109.0, 110.0, 111.0, 110.0, 109.0, 108.0, 109.0,
+            110.0, 111.0, 112.0, 109.0, 110.0, 111.0, 110.0, 109.0, 108.0, 109.0, 110.0, 111.0,
+            112.0, 109.0, 110.0, 111.0, 110.0, 109.0,
+        ] {
             treatment.record(v);
         }
 
@@ -1883,7 +1886,9 @@ mod tests {
         // Simulate some requests
         for i in 0..100 {
             let request_id = format!("req-{}", i);
-            if let Some(assignment) = engine.assign(None, None, &request_id, &TaskIntent::GeneralChat, None) {
+            if let Some(assignment) =
+                engine.assign(None, None, &request_id, &TaskIntent::GeneralChat, None)
+            {
                 let latency = if assignment.variant_id == "control" {
                     100.0 + (i as f64 % 20.0)
                 } else {
@@ -1913,7 +1918,10 @@ mod tests {
 
     #[test]
     fn test_tracked_metric_parsing() {
-        assert_eq!(TrackedMetric::from_str("latency_ms"), TrackedMetric::LatencyMs);
+        assert_eq!(
+            TrackedMetric::from_str("latency_ms"),
+            TrackedMetric::LatencyMs
+        );
         assert_eq!(TrackedMetric::from_str("LATENCY"), TrackedMetric::LatencyMs);
         assert_eq!(TrackedMetric::from_str("cost_usd"), TrackedMetric::CostUsd);
         assert_eq!(

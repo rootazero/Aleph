@@ -437,10 +437,7 @@ pub enum OrchestratorEvent {
     },
 
     /// Budget warning
-    BudgetWarning {
-        request_id: String,
-        message: String,
-    },
+    BudgetWarning { request_id: String, message: String },
 }
 
 // =============================================================================
@@ -628,7 +625,9 @@ impl RetryOrchestrator {
         if self.config.budget_checks_enabled {
             if let Some(budget_mgr) = &self.budget_manager {
                 let estimate = self.estimate_cost(&current_model, &request).await;
-                let check = budget_mgr.check_budget(&request.budget_scope, &estimate).await;
+                let check = budget_mgr
+                    .check_budget(&request.budget_scope, &estimate)
+                    .await;
 
                 match &check {
                     BudgetCheckResult::HardBlocked { .. } => {
@@ -739,7 +738,9 @@ impl RetryOrchestrator {
             let attempt_start = Instant::now();
             let timeout = retry_policy.attempt_timeout();
 
-            let result = tokio::time::timeout(timeout, executor(current_model.clone(), request.clone())).await;
+            let result =
+                tokio::time::timeout(timeout, executor(current_model.clone(), request.clone()))
+                    .await;
 
             let attempt_duration = attempt_start.elapsed();
 
@@ -791,7 +792,8 @@ impl RetryOrchestrator {
 
             if should_retry {
                 // Calculate backoff delay
-                let delay = backoff.delay_for_attempt(retries_for_current_model - 1, rate_limit_hint);
+                let delay =
+                    backoff.delay_for_attempt(retries_for_current_model - 1, rate_limit_hint);
 
                 self.emit_event(OrchestratorEvent::RetryAttempt {
                     request_id: request.id.clone(),
@@ -867,7 +869,8 @@ impl RetryOrchestrator {
     {
         // Create a single-model failover chain
         let chain = FailoverChain::new(&request.preferred_model);
-        self.execute(request.without_failover(), &chain, executor).await
+        self.execute(request.without_failover(), &chain, executor)
+            .await
     }
 
     // =========================================================================
@@ -897,10 +900,7 @@ impl RetryOrchestrator {
     }
 
     /// Get health statuses for models in failover chain
-    async fn get_health_statuses(
-        &self,
-        chain: &FailoverChain,
-    ) -> HashMap<String, HealthStatus> {
+    async fn get_health_statuses(&self, chain: &FailoverChain) -> HashMap<String, HealthStatus> {
         let mut statuses = HashMap::new();
 
         if let Some(health_mgr) = &self.health_manager {
@@ -1119,8 +1119,8 @@ mod tests {
         let request = ExecutionRequest::new("req-1", "gpt-4o", TaskIntent::CodeGeneration)
             .with_retry_policy(RetryPolicy::new().with_max_attempts(1)); // Only 1 attempt per model
 
-        let chain = FailoverChain::new("gpt-4o")
-            .with_alternatives(vec!["claude-sonnet".to_string()]);
+        let chain =
+            FailoverChain::new("gpt-4o").with_alternatives(vec!["claude-sonnet".to_string()]);
 
         let result = orchestrator
             .execute(request, &chain, move |model, _req| {
@@ -1159,8 +1159,8 @@ mod tests {
     #[tokio::test]
     async fn test_orchestrator_non_retryable_error() {
         let orchestrator = RetryOrchestrator::with_defaults();
-        let request = ExecutionRequest::new("req-1", "gpt-4o", TaskIntent::CodeGeneration)
-            .without_failover();
+        let request =
+            ExecutionRequest::new("req-1", "gpt-4o", TaskIntent::CodeGeneration).without_failover();
         let chain = FailoverChain::new("gpt-4o");
 
         let result: ExecutionResult<String> = orchestrator

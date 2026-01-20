@@ -276,8 +276,10 @@ impl HealthManager {
         states
             .iter()
             .filter(|(_, h)| {
-                matches!(h.status, HealthStatus::Unhealthy | HealthStatus::CircuitOpen)
-                    && h.circuit_breaker.allows_request()
+                matches!(
+                    h.status,
+                    HealthStatus::Unhealthy | HealthStatus::CircuitOpen
+                ) && h.circuit_breaker.allows_request()
             })
             .map(|(id, _)| id.clone())
             .collect()
@@ -404,7 +406,10 @@ mod tests {
 
         // First failure: Unknown -> Unhealthy
         manager.record_failure("test-model", error.clone()).await;
-        assert_eq!(manager.get_status("test-model").await, HealthStatus::Unhealthy);
+        assert_eq!(
+            manager.get_status("test-model").await,
+            HealthStatus::Unhealthy
+        );
 
         // More failures to trigger circuit breaker
         for _ in 0..3 {
@@ -477,13 +482,23 @@ mod tests {
         manager
             .record_success("test-model", Duration::from_millis(100), None)
             .await;
-        assert_eq!(manager.get_status("test-model").await, HealthStatus::Healthy);
+        assert_eq!(
+            manager.get_status("test-model").await,
+            HealthStatus::Healthy
+        );
 
         manager
-            .set_status("test-model", HealthStatus::Degraded, "Maintenance".to_string())
+            .set_status(
+                "test-model",
+                HealthStatus::Degraded,
+                "Maintenance".to_string(),
+            )
             .await;
 
-        assert_eq!(manager.get_status("test-model").await, HealthStatus::Degraded);
+        assert_eq!(
+            manager.get_status("test-model").await,
+            HealthStatus::Degraded
+        );
     }
 
     #[tokio::test]
@@ -493,10 +508,16 @@ mod tests {
         manager
             .record_success("test-model", Duration::from_millis(100), None)
             .await;
-        assert_eq!(manager.get_status("test-model").await, HealthStatus::Healthy);
+        assert_eq!(
+            manager.get_status("test-model").await,
+            HealthStatus::Healthy
+        );
 
         manager.reset("test-model").await;
-        assert_eq!(manager.get_status("test-model").await, HealthStatus::Unknown);
+        assert_eq!(
+            manager.get_status("test-model").await,
+            HealthStatus::Unknown
+        );
     }
 
     #[tokio::test]
@@ -534,7 +555,9 @@ mod tests {
         let event = rx.try_recv();
         assert!(event.is_ok());
         match event.unwrap() {
-            HealthEvent::RateLimitWarning { remaining_percent, .. } => {
+            HealthEvent::RateLimitWarning {
+                remaining_percent, ..
+            } => {
                 assert!((remaining_percent - 0.1).abs() < 0.001);
             }
             _ => panic!("Expected RateLimitWarning event"),
@@ -585,7 +608,9 @@ mod tests {
 
         let events = manager.check_cooldowns().await;
         // Should transition to HalfOpen
-        assert!(!events.is_empty() || manager.get_status("test-model").await == HealthStatus::HalfOpen);
+        assert!(
+            !events.is_empty() || manager.get_status("test-model").await == HealthStatus::HalfOpen
+        );
     }
 
     #[test]

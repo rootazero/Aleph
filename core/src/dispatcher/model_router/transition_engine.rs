@@ -223,7 +223,11 @@ impl HealthTransitionEngine {
     }
 
     /// Unknown → Unhealthy on first failure
-    fn unknown_to_unhealthy(&self, health: &mut ModelHealth, result: &CallResult) -> TransitionResult {
+    fn unknown_to_unhealthy(
+        &self,
+        health: &mut ModelHealth,
+        result: &CallResult,
+    ) -> TransitionResult {
         let old_status = health.status;
         health.set_status(HealthStatus::Unhealthy);
         health.unhealthy_reason = Some(UnhealthyReason::ConsecutiveFailures {
@@ -499,9 +503,8 @@ impl HealthTransitionEngine {
             // If healthy, transition to degraded
             if health.status == HealthStatus::Healthy {
                 health.set_status(HealthStatus::Degraded);
-                health.degradation_reason = Some(DegradationReason::NearRateLimit {
-                    remaining_percent,
-                });
+                health.degradation_reason =
+                    Some(DegradationReason::NearRateLimit { remaining_percent });
             }
 
             return Some(HealthEvent::RateLimitWarning {
@@ -706,7 +709,10 @@ mod tests {
             let transition = engine.evaluate(&mut health, &result);
 
             if i < 2 {
-                assert!(transition.new_status.is_none() || transition.new_status != Some(HealthStatus::CircuitOpen));
+                assert!(
+                    transition.new_status.is_none()
+                        || transition.new_status != Some(HealthStatus::CircuitOpen)
+                );
             } else {
                 assert_eq!(transition.new_status, Some(HealthStatus::CircuitOpen));
                 assert!(transition.circuit_changed);
@@ -721,8 +727,7 @@ mod tests {
         health.status = HealthStatus::CircuitOpen;
         health.circuit_breaker.state = CircuitState::Open;
         // Set cooldown to past
-        health.circuit_breaker.next_attempt_at =
-            Some(SystemTime::now() - Duration::from_secs(1));
+        health.circuit_breaker.next_attempt_at = Some(SystemTime::now() - Duration::from_secs(1));
 
         let transition = engine.check_cooldown(&mut health);
 
@@ -788,17 +793,11 @@ mod tests {
         assert_eq!(health.status, HealthStatus::CircuitOpen);
 
         // First open: base cooldown (30s) with open_count = 1
-        let first_cooldown = health
-            .circuit_breaker
-            .calculate_cooldown(30)
-            .as_secs();
+        let first_cooldown = health.circuit_breaker.calculate_cooldown(30).as_secs();
 
         // Simulate another open - should have longer cooldown due to open_count = 2
         health.circuit_breaker.open_count = 2;
-        let second_cooldown = health
-            .circuit_breaker
-            .calculate_cooldown(30)
-            .as_secs();
+        let second_cooldown = health.circuit_breaker.calculate_cooldown(30).as_secs();
 
         assert!(second_cooldown > first_cooldown);
     }
@@ -814,7 +813,9 @@ mod tests {
 
         assert!(event.is_some());
         match event.unwrap() {
-            HealthEvent::RateLimitWarning { remaining_percent, .. } => {
+            HealthEvent::RateLimitWarning {
+                remaining_percent, ..
+            } => {
                 assert!((remaining_percent - 0.1).abs() < 0.001);
             }
             _ => panic!("Expected RateLimitWarning"),

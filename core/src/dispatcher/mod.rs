@@ -54,12 +54,12 @@ mod registry;
 mod types;
 
 // === Task Orchestration (formerly cowork) ===
+pub mod cowork_types;
 pub mod executor;
 pub mod model_router;
 pub mod monitor;
 pub mod planner;
 pub mod scheduler;
-pub mod cowork_types;
 
 mod engine;
 
@@ -83,6 +83,11 @@ pub use types::{
 };
 
 // === Re-exports: Task Orchestration ===
+pub use cowork_types::{
+    AiTask, AppAuto, CodeExec, DocGen, ExecutionSummary, FileOp, GraphValidationError, Language,
+    Task, TaskCountByStatus, TaskDependency, TaskGraph, TaskGraphMeta,
+    TaskResult as CoworkTaskResult, TaskStatus, TaskType,
+};
 pub use engine::{CoworkConfig, CoworkEngine, ExecutionState};
 pub use executor::{ExecutionContext, ExecutorRegistry, NoopExecutor, TaskExecutor};
 pub use model_router::{
@@ -92,11 +97,6 @@ pub use model_router::{
 pub use monitor::{ProgressEvent, ProgressMonitor, ProgressSubscriber, TaskMonitor};
 pub use planner::{LlmTaskPlanner, TaskPlanner};
 pub use scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
-pub use cowork_types::{
-    AiTask, AppAuto, CodeExec, DocGen, ExecutionSummary, FileOp, GraphValidationError, Language,
-    Task, TaskCountByStatus, TaskDependency, TaskGraph, TaskGraphMeta, TaskResult as CoworkTaskResult,
-    TaskStatus, TaskType,
-};
 
 #[cfg(test)]
 mod tests {

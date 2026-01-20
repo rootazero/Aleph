@@ -218,21 +218,19 @@ impl FailoverChain {
 
             FailoverSelectionMode::HealthPriority => {
                 // Return healthiest model
-                candidates
-                    .into_iter()
-                    .min_by_key(|m| {
-                        health_statuses
-                            .get(m)
-                            .map(|s| s.priority())
-                            .unwrap_or(u8::MAX)
-                    })
+                candidates.into_iter().min_by_key(|m| {
+                    health_statuses
+                        .get(m)
+                        .map(|s| s.priority())
+                        .unwrap_or(u8::MAX)
+                })
             }
 
             FailoverSelectionMode::CostPriority => {
                 // Return cheapest healthy model
-                candidates.into_iter().min_by_key(|m| {
-                    cost_tiers.get(m).copied().unwrap_or(CostTier::High)
-                })
+                candidates
+                    .into_iter()
+                    .min_by_key(|m| cost_tiers.get(m).copied().unwrap_or(CostTier::High))
             }
 
             FailoverSelectionMode::Balanced => {
@@ -240,7 +238,9 @@ impl FailoverChain {
                 candidates.into_iter().min_by(|a, b| {
                     let a_score = self.balanced_score(a, health_statuses, cost_tiers);
                     let b_score = self.balanced_score(b, health_statuses, cost_tiers);
-                    a_score.partial_cmp(&b_score).unwrap_or(std::cmp::Ordering::Equal)
+                    a_score
+                        .partial_cmp(&b_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
             }
         }
@@ -512,10 +512,7 @@ mod tests {
     #[test]
     fn test_next_model_ordered() {
         let chain = FailoverChain::new("gpt-4o")
-            .with_alternatives(vec![
-                "claude-sonnet".to_string(),
-                "gpt-4o-mini".to_string(),
-            ])
+            .with_alternatives(vec!["claude-sonnet".to_string(), "gpt-4o-mini".to_string()])
             .with_selection_mode(FailoverSelectionMode::Ordered);
 
         let health_statuses: HashMap<String, HealthStatus> = [
@@ -534,10 +531,7 @@ mod tests {
     #[test]
     fn test_next_model_health_priority() {
         let chain = FailoverChain::new("gpt-4o")
-            .with_alternatives(vec![
-                "claude-sonnet".to_string(),
-                "gpt-4o-mini".to_string(),
-            ])
+            .with_alternatives(vec!["claude-sonnet".to_string(), "gpt-4o-mini".to_string()])
             .with_selection_mode(FailoverSelectionMode::HealthPriority);
 
         let health_statuses: HashMap<String, HealthStatus> = [
@@ -556,10 +550,7 @@ mod tests {
     #[test]
     fn test_next_model_cost_priority() {
         let chain = FailoverChain::new("gpt-4o")
-            .with_alternatives(vec![
-                "claude-sonnet".to_string(),
-                "gpt-4o-mini".to_string(),
-            ])
+            .with_alternatives(vec!["claude-sonnet".to_string(), "gpt-4o-mini".to_string()])
             .with_selection_mode(FailoverSelectionMode::CostPriority);
 
         let health_statuses: HashMap<String, HealthStatus> = [
@@ -583,10 +574,7 @@ mod tests {
     #[test]
     fn test_next_model_skips_failed() {
         let chain = FailoverChain::new("gpt-4o")
-            .with_alternatives(vec![
-                "claude-sonnet".to_string(),
-                "gpt-4o-mini".to_string(),
-            ])
+            .with_alternatives(vec!["claude-sonnet".to_string(), "gpt-4o-mini".to_string()])
             .with_selection_mode(FailoverSelectionMode::Ordered);
 
         let health_statuses: HashMap<String, HealthStatus> = [
@@ -606,10 +594,7 @@ mod tests {
     #[test]
     fn test_next_model_skips_unhealthy() {
         let chain = FailoverChain::new("gpt-4o")
-            .with_alternatives(vec![
-                "claude-sonnet".to_string(),
-                "gpt-4o-mini".to_string(),
-            ])
+            .with_alternatives(vec!["claude-sonnet".to_string(), "gpt-4o-mini".to_string()])
             .with_selection_mode(FailoverSelectionMode::Ordered);
 
         let health_statuses: HashMap<String, HealthStatus> = [
@@ -627,14 +612,13 @@ mod tests {
 
     #[test]
     fn test_next_model_all_exhausted() {
-        let chain = FailoverChain::new("gpt-4o")
-            .with_alternatives(vec!["claude-sonnet".to_string()]);
+        let chain =
+            FailoverChain::new("gpt-4o").with_alternatives(vec!["claude-sonnet".to_string()]);
 
-        let health_statuses: HashMap<String, HealthStatus> = [
-            ("claude-sonnet".to_string(), HealthStatus::CircuitOpen),
-        ]
-        .into_iter()
-        .collect();
+        let health_statuses: HashMap<String, HealthStatus> =
+            [("claude-sonnet".to_string(), HealthStatus::CircuitOpen)]
+                .into_iter()
+                .collect();
 
         let cost_tiers: HashMap<String, CostTier> = HashMap::new();
 
@@ -646,7 +630,10 @@ mod tests {
     fn test_failover_config_default() {
         let config = FailoverConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.default_selection_mode, FailoverSelectionMode::HealthPriority);
+        assert_eq!(
+            config.default_selection_mode,
+            FailoverSelectionMode::HealthPriority
+        );
         assert_eq!(config.max_alternatives, 5);
     }
 
@@ -675,8 +662,14 @@ mod tests {
     #[test]
     fn test_selection_mode_as_str() {
         assert_eq!(FailoverSelectionMode::Ordered.as_str(), "ordered");
-        assert_eq!(FailoverSelectionMode::HealthPriority.as_str(), "health_priority");
-        assert_eq!(FailoverSelectionMode::CostPriority.as_str(), "cost_priority");
+        assert_eq!(
+            FailoverSelectionMode::HealthPriority.as_str(),
+            "health_priority"
+        );
+        assert_eq!(
+            FailoverSelectionMode::CostPriority.as_str(),
+            "cost_priority"
+        );
         assert_eq!(FailoverSelectionMode::Balanced.as_str(), "balanced");
     }
 

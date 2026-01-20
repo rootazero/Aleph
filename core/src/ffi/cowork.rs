@@ -780,8 +780,279 @@ impl AetherCore {
         let limit = limit_config.to_budget_limit(default_enforcement);
         let state = crate::dispatcher::model_router::BudgetState::new(&limit);
 
-        Some(crate::cowork_ffi::BudgetLimitStatusFFI::from_limit_and_state(
-            &limit, &state,
-        ))
+        Some(crate::cowork_ffi::BudgetLimitStatusFFI::from_limit_and_state(&limit, &state))
+    }
+
+    // =========================================================================
+    // A/B Testing (Model Router P3)
+    // =========================================================================
+
+    /// Get A/B testing status overview
+    ///
+    /// Returns the overall A/B testing status including all active experiments,
+    /// their configurations, and current statistics.
+    pub fn cowork_get_ab_testing_status(&self) -> crate::cowork_ffi::ABTestingStatusFFI {
+        // Load config to check if A/B testing is enabled
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(_) => return crate::cowork_ffi::ABTestingStatusFFI::disabled(),
+        };
+
+        let ab_config = &config.cowork.model_routing.ab_testing;
+
+        if !ab_config.enabled {
+            return crate::cowork_ffi::ABTestingStatusFFI::disabled();
+        }
+
+        // TODO: When ABTestingEngine is integrated into CoworkEngine, use actual engine
+        // For now, return configured experiments count
+        let experiment_count = ab_config.experiments.len();
+
+        if experiment_count == 0 {
+            return crate::cowork_ffi::ABTestingStatusFFI {
+                enabled: true,
+                total_experiments: 0,
+                active_experiments: 0,
+                experiments: Vec::new(),
+                status_emoji: "⚪".to_string(),
+                status_message: "No experiments configured".to_string(),
+            };
+        }
+
+        crate::cowork_ffi::ABTestingStatusFFI {
+            enabled: true,
+            total_experiments: experiment_count as u32,
+            active_experiments: ab_config.experiments.iter().filter(|e| e.enabled).count() as u32,
+            experiments: Vec::new(), // Would populate from actual engine
+            status_emoji: "🧪".to_string(),
+            status_message: format!("{} experiment(s) configured", experiment_count),
+        }
+    }
+
+    /// Get a list of active experiment IDs
+    ///
+    /// Returns the IDs of all currently active experiments that are
+    /// accepting traffic and recording outcomes.
+    pub fn cowork_get_active_experiments(&self) -> Vec<String> {
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(_) => return Vec::new(),
+        };
+
+        let ab_config = &config.cowork.model_routing.ab_testing;
+
+        if !ab_config.enabled {
+            return Vec::new();
+        }
+
+        ab_config
+            .experiments
+            .iter()
+            .filter(|e| e.enabled)
+            .map(|e| e.id.clone())
+            .collect()
+    }
+
+    /// Get detailed report for a specific experiment
+    ///
+    /// Returns full statistics and significance tests for the specified experiment.
+    /// Returns None if the experiment doesn't exist or A/B testing is disabled.
+    pub fn cowork_get_experiment_report(
+        &self,
+        experiment_id: String,
+    ) -> Option<crate::cowork_ffi::ExperimentReportFFI> {
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(_) => return None,
+        };
+
+        let ab_config = &config.cowork.model_routing.ab_testing;
+
+        if !ab_config.enabled {
+            return None;
+        }
+
+        // Check if experiment exists in config
+        let _experiment = ab_config
+            .experiments
+            .iter()
+            .find(|e| e.id == experiment_id)?;
+
+        // TODO: When ABTestingEngine is integrated, get actual report
+        // For now, return None as we don't have real data
+        None
+    }
+
+    /// Enable an experiment
+    ///
+    /// Activates an experiment to start accepting traffic.
+    /// Note: This is a runtime change and does not persist to config.
+    pub fn cowork_enable_experiment(&self, experiment_id: String) -> Result<(), AetherFfiError> {
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(e) => return Err(AetherFfiError::Config(e.to_string())),
+        };
+
+        let ab_config = &config.cowork.model_routing.ab_testing;
+
+        if !ab_config.enabled {
+            return Err(AetherFfiError::Config(
+                "A/B testing is disabled".to_string(),
+            ));
+        }
+
+        // Check if experiment exists
+        if !ab_config.experiments.iter().any(|e| e.id == experiment_id) {
+            return Err(AetherFfiError::Config(format!(
+                "Experiment '{}' not found",
+                experiment_id
+            )));
+        }
+
+        // TODO: When ABTestingEngine is integrated, enable the experiment
+        // For now, just validate the request
+        Ok(())
+    }
+
+    /// Disable an experiment
+    ///
+    /// Pauses an experiment to stop accepting traffic.
+    /// Note: This is a runtime change and does not persist to config.
+    pub fn cowork_disable_experiment(&self, experiment_id: String) -> Result<(), AetherFfiError> {
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(e) => return Err(AetherFfiError::Config(e.to_string())),
+        };
+
+        let ab_config = &config.cowork.model_routing.ab_testing;
+
+        if !ab_config.enabled {
+            return Err(AetherFfiError::Config(
+                "A/B testing is disabled".to_string(),
+            ));
+        }
+
+        // Check if experiment exists
+        if !ab_config.experiments.iter().any(|e| e.id == experiment_id) {
+            return Err(AetherFfiError::Config(format!(
+                "Experiment '{}' not found",
+                experiment_id
+            )));
+        }
+
+        // TODO: When ABTestingEngine is integrated, disable the experiment
+        // For now, just validate the request
+        Ok(())
+    }
+
+    // =========================================================================
+    // Ensemble (Model Router P3)
+    // =========================================================================
+
+    /// Get ensemble status overview
+    ///
+    /// Returns the current ensemble configuration and statistics.
+    pub fn cowork_get_ensemble_status(&self) -> crate::cowork_ffi::EnsembleStatusFFI {
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(_) => return crate::cowork_ffi::EnsembleStatusFFI::disabled(),
+        };
+
+        let ensemble_config = &config.cowork.model_routing.ensemble;
+
+        if !ensemble_config.enabled {
+            return crate::cowork_ffi::EnsembleStatusFFI::disabled();
+        }
+
+        // Convert config to FFI summary
+        let mode_ffi = match ensemble_config.default_mode.as_str() {
+            "best_of_n" => crate::cowork_ffi::EnsembleModeFFI::BestOfN,
+            "voting" => crate::cowork_ffi::EnsembleModeFFI::Voting,
+            "consensus" => crate::cowork_ffi::EnsembleModeFFI::Consensus,
+            "cascade" => crate::cowork_ffi::EnsembleModeFFI::Cascade,
+            _ => crate::cowork_ffi::EnsembleModeFFI::Disabled,
+        };
+
+        let quality_metric_ffi = match ensemble_config.quality_scorer.as_str() {
+            "length" => crate::cowork_ffi::QualityMetricFFI::Length,
+            "structure" => crate::cowork_ffi::QualityMetricFFI::Structure,
+            "length_and_structure" => crate::cowork_ffi::QualityMetricFFI::LengthAndStructure,
+            "confidence_markers" | "confidence" => {
+                crate::cowork_ffi::QualityMetricFFI::ConfidenceMarkers
+            }
+            "relevance" => crate::cowork_ffi::QualityMetricFFI::Relevance,
+            _ => crate::cowork_ffi::QualityMetricFFI::LengthAndStructure,
+        };
+
+        // Collect all models from strategies and high complexity config
+        let mut all_models: Vec<String> = ensemble_config
+            .strategies
+            .iter()
+            .flat_map(|s| s.models.iter().cloned())
+            .collect();
+        all_models.extend(
+            ensemble_config
+                .high_complexity_ensemble
+                .models
+                .iter()
+                .cloned(),
+        );
+        all_models.sort();
+        all_models.dedup();
+
+        let config_summary = crate::cowork_ffi::EnsembleConfigSummaryFFI {
+            enabled: true,
+            mode: mode_ffi,
+            mode_display: ensemble_config.default_mode.clone(),
+            models: all_models.clone(),
+            quality_metric: quality_metric_ffi,
+            timeout_ms: ensemble_config.default_timeout_secs * 1000, // Convert to ms
+            high_complexity_enabled: ensemble_config.high_complexity_ensemble.enabled,
+            complexity_threshold: ensemble_config
+                .high_complexity_ensemble
+                .complexity_threshold,
+        };
+
+        // TODO: When EnsembleEngine is integrated, get actual stats
+        let stats = crate::cowork_ffi::EnsembleStatsFFI::empty();
+
+        let model_count = all_models.len();
+        let (emoji, message) = if model_count > 0 {
+            (
+                "🔀".to_string(),
+                format!(
+                    "Ensemble with {} models ({} mode)",
+                    model_count, ensemble_config.default_mode
+                ),
+            )
+        } else {
+            (
+                "⚠️".to_string(),
+                "Ensemble enabled but no models configured".to_string(),
+            )
+        };
+
+        crate::cowork_ffi::EnsembleStatusFFI {
+            config: config_summary,
+            stats,
+            status_emoji: emoji,
+            status_message: message,
+        }
+    }
+
+    /// Get ensemble configuration summary
+    ///
+    /// Returns the current ensemble configuration for display.
+    pub fn cowork_get_ensemble_config(&self) -> crate::cowork_ffi::EnsembleConfigSummaryFFI {
+        let status = self.cowork_get_ensemble_status();
+        status.config
+    }
+
+    /// Get ensemble execution statistics
+    ///
+    /// Returns statistics about ensemble executions.
+    pub fn cowork_get_ensemble_stats(&self) -> crate::cowork_ffi::EnsembleStatsFFI {
+        let status = self.cowork_get_ensemble_status();
+        status.stats
     }
 }

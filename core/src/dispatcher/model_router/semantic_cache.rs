@@ -269,10 +269,7 @@ pub enum EvictionPolicy {
     /// Least Frequently Used
     Lfu,
     /// Hybrid combining age and hit count
-    Hybrid {
-        age_weight: f64,
-        hits_weight: f64,
-    },
+    Hybrid { age_weight: f64, hits_weight: f64 },
 }
 
 impl Default for EvictionPolicy {
@@ -415,7 +412,8 @@ impl FastEmbedEmbedder {
             }
         };
 
-        let init_options = fastembed::InitOptions::new(model_type).with_show_download_progress(false);
+        let init_options =
+            fastembed::InitOptions::new(model_type).with_show_download_progress(false);
 
         let model = fastembed::TextEmbedding::try_new(init_options).map_err(|e| {
             EmbeddingError::ModelLoadFailed(format!("Failed to load fastembed model: {}", e))
@@ -441,7 +439,9 @@ impl FastEmbedEmbedder {
 impl TextEmbedder for FastEmbedEmbedder {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         if text.is_empty() {
-            return Err(EmbeddingError::InvalidInput("Empty text provided".to_string()));
+            return Err(EmbeddingError::InvalidInput(
+                "Empty text provided".to_string(),
+            ));
         }
 
         let texts = vec![text.to_string()];
@@ -724,7 +724,11 @@ impl InMemoryVectorStore {
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Evict bottom entries
-        let to_evict: Vec<String> = scored.into_iter().take(remaining).map(|(id, _)| id).collect();
+        let to_evict: Vec<String> = scored
+            .into_iter()
+            .take(remaining)
+            .map(|(id, _)| id)
+            .collect();
 
         for id in &to_evict {
             if let Some(entry) = entries.remove(id) {
@@ -746,11 +750,7 @@ impl InMemoryVectorStore {
         stats.expired_entries = entries.values().filter(|e| e.is_expired()).count();
 
         // Calculate oldest entry age
-        stats.oldest_entry_age_secs = entries
-            .values()
-            .map(|e| e.age_secs())
-            .max()
-            .unwrap_or(0);
+        stats.oldest_entry_age_secs = entries.values().map(|e| e.age_secs()).max().unwrap_or(0);
 
         // Approximate size (rough estimate)
         stats.total_size_bytes = entries
@@ -804,10 +804,7 @@ impl SemanticCacheManager {
     }
 
     /// Create with a custom embedder (for testing)
-    pub fn with_embedder(
-        embedder: Arc<dyn TextEmbedder>,
-        config: SemanticCacheConfig,
-    ) -> Self {
+    pub fn with_embedder(embedder: Arc<dyn TextEmbedder>, config: SemanticCacheConfig) -> Self {
         let store = InMemoryVectorStore::new(config.clone());
 
         Self {
@@ -1043,12 +1040,17 @@ mod tests {
         async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
             // Generate a deterministic embedding based on text hash
             let hash = hash_prompt(text);
-            let seed: u64 = hash.bytes().take(8).fold(0u64, |acc, b| acc * 256 + b as u64);
+            let seed: u64 = hash
+                .bytes()
+                .take(8)
+                .fold(0u64, |acc, b| acc * 256 + b as u64);
 
             let mut embedding = Vec::with_capacity(self.dimensions);
             let mut x = seed;
             for _ in 0..self.dimensions {
-                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 embedding.push((x as f32 / u64::MAX as f32) * 2.0 - 1.0);
             }
 
@@ -1136,10 +1138,14 @@ mod tests {
         let cache = create_test_cache();
 
         let prompt = "What is Rust?";
-        let response = CachedResponse::new("Rust is a programming language".to_string(), 50, 100, 0.001);
+        let response =
+            CachedResponse::new("Rust is a programming language".to_string(), 50, 100, 0.001);
 
         // Store
-        cache.store(prompt, &response, "test-model", None, None).await.unwrap();
+        cache
+            .store(prompt, &response, "test-model", None, None)
+            .await
+            .unwrap();
 
         // Lookup (exact match)
         let hit = cache.lookup(prompt).await.unwrap();
@@ -1166,7 +1172,10 @@ mod tests {
         let prompt = "Test prompt";
         let response = CachedResponse::new("Test response".to_string(), 10, 50, 0.001);
 
-        cache.store(prompt, &response, "test-model", None, None).await.unwrap();
+        cache
+            .store(prompt, &response, "test-model", None, None)
+            .await
+            .unwrap();
 
         // Verify it exists
         let hit = cache.lookup(prompt).await.unwrap();
@@ -1188,7 +1197,10 @@ mod tests {
         for i in 0..5 {
             let prompt = format!("Prompt {}", i);
             let response = CachedResponse::new(format!("Response {}", i), 10, 50, 0.001);
-            cache.store(&prompt, &response, "test-model", None, None).await.unwrap();
+            cache
+                .store(&prompt, &response, "test-model", None, None)
+                .await
+                .unwrap();
         }
 
         assert_eq!(cache.entry_count().await, 5);
@@ -1203,9 +1215,20 @@ mod tests {
     async fn test_cache_stats() {
         let cache = create_test_cache();
 
-        let response = CachedResponse::new("Response text that is long enough".to_string(), 10, 50, 0.001);
-        cache.store("prompt1", &response, "model", None, None).await.unwrap();
-        cache.store("prompt2", &response, "model", None, None).await.unwrap();
+        let response = CachedResponse::new(
+            "Response text that is long enough".to_string(),
+            10,
+            50,
+            0.001,
+        );
+        cache
+            .store("prompt1", &response, "model", None, None)
+            .await
+            .unwrap();
+        cache
+            .store("prompt2", &response, "model", None, None)
+            .await
+            .unwrap();
 
         // Lookup to generate hits/misses
         cache.lookup("prompt1").await.unwrap();
@@ -1231,7 +1254,10 @@ mod tests {
         let response = CachedResponse::new("Response".to_string(), 10, 50, 0.001);
 
         // Store should be a no-op when disabled
-        cache.store("prompt", &response, "model", None, None).await.unwrap();
+        cache
+            .store("prompt", &response, "model", None, None)
+            .await
+            .unwrap();
 
         // Lookup should return None when disabled
         let hit = cache.lookup("prompt").await.unwrap();
@@ -1244,14 +1270,26 @@ mod tests {
 
         // Short response should not be cached
         let short_response = CachedResponse::new("Hi".to_string(), 1, 10, 0.001);
-        cache.store("prompt", &short_response, "model", None, None).await.unwrap();
+        cache
+            .store("prompt", &short_response, "model", None, None)
+            .await
+            .unwrap();
 
         let hit = cache.lookup("prompt").await.unwrap();
         assert!(hit.is_none()); // Not cached due to min length
 
         // Longer response should be cached
-        let long_response = CachedResponse::new("This is a sufficiently long response that exceeds the minimum length requirement".to_string(), 20, 50, 0.001);
-        cache.store("prompt2", &long_response, "model", None, None).await.unwrap();
+        let long_response = CachedResponse::new(
+            "This is a sufficiently long response that exceeds the minimum length requirement"
+                .to_string(),
+            20,
+            50,
+            0.001,
+        );
+        cache
+            .store("prompt2", &long_response, "model", None, None)
+            .await
+            .unwrap();
 
         let hit = cache.lookup("prompt2").await.unwrap();
         assert!(hit.is_some());

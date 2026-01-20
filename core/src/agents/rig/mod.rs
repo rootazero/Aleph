@@ -34,8 +34,8 @@
 //! ```
 
 pub mod config;
-mod message_history;
 pub mod manager;
+mod message_history;
 mod types;
 
 pub use config::RigAgentConfig;

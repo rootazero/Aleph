@@ -186,7 +186,10 @@ impl BudgetPeriod {
                 next
             }
 
-            Self::Weekly { reset_day, reset_hour } => {
+            Self::Weekly {
+                reset_day,
+                reset_hour,
+            } => {
                 let target_weekday = match *reset_day {
                     0 => Weekday::Mon,
                     1 => Weekday::Tue,
@@ -218,7 +221,10 @@ impl BudgetPeriod {
                 next
             }
 
-            Self::Monthly { reset_day, reset_hour } => {
+            Self::Monthly {
+                reset_day,
+                reset_hour,
+            } => {
                 let day = (*reset_day).max(1);
                 let hour = *reset_hour as u32;
 
@@ -272,7 +278,9 @@ fn last_day_of_month(year: i32, month: u32) -> u8 {
     let next_month = if month == 12 { 1 } else { month + 1 };
     let next_year = if month == 12 { year + 1 } else { year };
 
-    let first_of_next = Utc.with_ymd_and_hms(next_year, next_month, 1, 0, 0, 0).unwrap();
+    let first_of_next = Utc
+        .with_ymd_and_hms(next_year, next_month, 1, 0, 0, 0)
+        .unwrap();
     let last = first_of_next - chrono::Duration::days(1);
     last.day() as u8
 }
@@ -371,11 +379,9 @@ impl BudgetLimit {
 
     /// Builder: set warning thresholds
     pub fn with_warning_thresholds(mut self, thresholds: Vec<f64>) -> Self {
-        self.warning_thresholds = thresholds
-            .into_iter()
-            .map(|t| t.clamp(0.0, 1.0))
-            .collect();
-        self.warning_thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        self.warning_thresholds = thresholds.into_iter().map(|t| t.clamp(0.0, 1.0)).collect();
+        self.warning_thresholds
+            .sort_by(|a, b| a.partial_cmp(b).unwrap());
         self
     }
 
@@ -503,9 +509,7 @@ impl BudgetState {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum BudgetCheckResult {
     /// OK to proceed
-    Allowed {
-        remaining_usd: f64,
-    },
+    Allowed { remaining_usd: f64 },
 
     /// Warning threshold crossed but allowed
     Warning {
@@ -555,16 +559,26 @@ impl BudgetCheckResult {
             Self::Allowed { remaining_usd } => {
                 format!("Budget OK: ${:.2} remaining", remaining_usd)
             }
-            Self::Warning { threshold, remaining_usd, message } => {
-                message.clone()
-            }
-            Self::SoftBlocked { limit_id, spent_usd, limit_usd } => {
+            Self::Warning {
+                threshold,
+                remaining_usd,
+                message,
+            } => message.clone(),
+            Self::SoftBlocked {
+                limit_id,
+                spent_usd,
+                limit_usd,
+            } => {
                 format!(
                     "Budget limit '{}' exceeded: ${:.2}/${:.2}",
                     limit_id, spent_usd, limit_usd
                 )
             }
-            Self::HardBlocked { limit_id, spent_usd, limit_usd } => {
+            Self::HardBlocked {
+                limit_id,
+                spent_usd,
+                limit_usd,
+            } => {
                 format!(
                     "Hard budget limit '{}' exceeded: ${:.2}/${:.2}",
                     limit_id, spent_usd, limit_usd
@@ -725,7 +739,8 @@ impl CostEstimator {
 
     /// Set pricing from cost tier
     pub fn set_pricing_from_tier(&mut self, model_id: impl Into<String>, tier: CostTier) {
-        self.pricing.insert(model_id.into(), ModelPricing::from_cost_tier(tier));
+        self.pricing
+            .insert(model_id.into(), ModelPricing::from_cost_tier(tier));
     }
 
     /// Get pricing for a model
@@ -781,14 +796,16 @@ impl CostEstimator {
 
             if record.input_tokens > 0 {
                 let input_cost_est = actual_cost * input_ratio;
-                let actual_input_per_1m = (input_cost_est / record.input_tokens as f64) * 1_000_000.0;
+                let actual_input_per_1m =
+                    (input_cost_est / record.input_tokens as f64) * 1_000_000.0;
                 pricing.input_price_per_1m =
                     pricing.input_price_per_1m * (1.0 - alpha) + actual_input_per_1m * alpha;
             }
 
             if record.output_tokens > 0 {
                 let output_cost_est = actual_cost * output_ratio;
-                let actual_output_per_1m = (output_cost_est / record.output_tokens as f64) * 1_000_000.0;
+                let actual_output_per_1m =
+                    (output_cost_est / record.output_tokens as f64) * 1_000_000.0;
                 pricing.output_price_per_1m =
                     pricing.output_price_per_1m * (1.0 - alpha) + actual_output_per_1m * alpha;
             }
@@ -818,9 +835,7 @@ pub enum BudgetEvent {
         limit_usd: f64,
     },
     /// Budget reset occurred
-    Reset {
-        limit_id: String,
-    },
+    Reset { limit_id: String },
     /// Cost recorded
     CostRecorded {
         limit_id: String,
@@ -946,12 +961,8 @@ impl BudgetManager {
                 let new_percent = would_spend / limit.limit_usd;
                 for &threshold in &limit.warning_thresholds {
                     if new_percent >= threshold && !state.warnings_fired.contains(&threshold) {
-                        warning_to_fire = Some((
-                            limit.id.clone(),
-                            threshold,
-                            would_spend,
-                            limit.limit_usd,
-                        ));
+                        warning_to_fire =
+                            Some((limit.id.clone(), threshold, would_spend, limit.limit_usd));
                         break;
                     }
                 }
@@ -1181,8 +1192,13 @@ mod tests {
     #[test]
     fn test_budget_scope_priority() {
         assert!(BudgetScope::Global.priority() < BudgetScope::Project("a".into()).priority());
-        assert!(BudgetScope::Project("a".into()).priority() < BudgetScope::Session("a".into()).priority());
-        assert!(BudgetScope::Session("a".into()).priority() < BudgetScope::Model("a".into()).priority());
+        assert!(
+            BudgetScope::Project("a".into()).priority()
+                < BudgetScope::Session("a".into()).priority()
+        );
+        assert!(
+            BudgetScope::Session("a".into()).priority() < BudgetScope::Model("a".into()).priority()
+        );
     }
 
     #[test]
@@ -1266,8 +1282,7 @@ mod tests {
 
     #[test]
     fn test_budget_state_warnings() {
-        let limit = BudgetLimit::new("test", 10.0)
-            .with_warning_thresholds(vec![0.5, 0.8]);
+        let limit = BudgetLimit::new("test", 10.0).with_warning_thresholds(vec![0.5, 0.8]);
         let mut state = BudgetState::new(&limit);
 
         state.record_cost(6.0, &limit); // 60%
@@ -1347,7 +1362,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_budget_manager_check() {
-        let limits = vec![BudgetLimit::new("daily", 10.0).with_enforcement(BudgetEnforcement::SoftBlock)];
+        let limits =
+            vec![BudgetLimit::new("daily", 10.0).with_enforcement(BudgetEnforcement::SoftBlock)];
 
         let manager = BudgetManager::new(limits);
 
@@ -1366,10 +1382,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_budget_manager_blocked() {
-        let limits = vec![
-            BudgetLimit::new("daily", 0.01) // Very low limit
-                .with_enforcement(BudgetEnforcement::HardBlock),
-        ];
+        let limits = vec![BudgetLimit::new("daily", 0.01) // Very low limit
+            .with_enforcement(BudgetEnforcement::HardBlock)];
 
         let manager = BudgetManager::new(limits);
 

@@ -459,7 +459,8 @@ mod tests {
 
     #[test]
     fn test_retry_policy_server_error() {
-        let policy = RetryPolicy::new().with_retryable_outcomes(vec![RetryableOutcome::ServerError]);
+        let policy =
+            RetryPolicy::new().with_retryable_outcomes(vec![RetryableOutcome::ServerError]);
 
         assert!(policy.should_retry(&CallOutcome::ApiError { status_code: 500 }));
         assert!(policy.should_retry(&CallOutcome::ApiError { status_code: 502 }));
@@ -490,7 +491,9 @@ mod tests {
     fn test_retry_policy_aggressive() {
         let policy = RetryPolicy::aggressive();
         assert_eq!(policy.max_attempts, 5);
-        assert!(policy.retryable_outcomes.contains(&RetryableOutcome::ServerError));
+        assert!(policy
+            .retryable_outcomes
+            .contains(&RetryableOutcome::ServerError));
     }
 
     #[test]
@@ -504,22 +507,46 @@ mod tests {
     fn test_backoff_constant() {
         let backoff = BackoffStrategy::constant_ms(100);
 
-        assert_eq!(backoff.delay_for_attempt(0, None), Duration::from_millis(100));
-        assert_eq!(backoff.delay_for_attempt(1, None), Duration::from_millis(100));
-        assert_eq!(backoff.delay_for_attempt(5, None), Duration::from_millis(100));
+        assert_eq!(
+            backoff.delay_for_attempt(0, None),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            backoff.delay_for_attempt(1, None),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            backoff.delay_for_attempt(5, None),
+            Duration::from_millis(100)
+        );
     }
 
     #[test]
     fn test_backoff_exponential() {
         let backoff = BackoffStrategy::exponential_ms(100, 5000);
 
-        assert_eq!(backoff.delay_for_attempt(0, None), Duration::from_millis(100));
-        assert_eq!(backoff.delay_for_attempt(1, None), Duration::from_millis(200));
-        assert_eq!(backoff.delay_for_attempt(2, None), Duration::from_millis(400));
-        assert_eq!(backoff.delay_for_attempt(3, None), Duration::from_millis(800));
+        assert_eq!(
+            backoff.delay_for_attempt(0, None),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            backoff.delay_for_attempt(1, None),
+            Duration::from_millis(200)
+        );
+        assert_eq!(
+            backoff.delay_for_attempt(2, None),
+            Duration::from_millis(400)
+        );
+        assert_eq!(
+            backoff.delay_for_attempt(3, None),
+            Duration::from_millis(800)
+        );
 
         // Should cap at max
-        assert_eq!(backoff.delay_for_attempt(10, None), Duration::from_millis(5000));
+        assert_eq!(
+            backoff.delay_for_attempt(10, None),
+            Duration::from_millis(5000)
+        );
     }
 
     #[test]
@@ -547,7 +574,10 @@ mod tests {
 
         // With hint, use hint
         let hint = Duration::from_secs(30);
-        assert_eq!(backoff.delay_for_attempt(0, Some(hint)), Duration::from_secs(30));
+        assert_eq!(
+            backoff.delay_for_attempt(0, Some(hint)),
+            Duration::from_secs(30)
+        );
     }
 
     #[test]

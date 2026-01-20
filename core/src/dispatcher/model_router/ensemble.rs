@@ -431,7 +431,11 @@ impl EnsembleStrategy {
     }
 
     /// Get configuration for a given intent and complexity
-    pub fn get_config(&self, intent: &TaskIntent, complexity: Option<f64>) -> Option<&EnsembleConfig> {
+    pub fn get_config(
+        &self,
+        intent: &TaskIntent,
+        complexity: Option<f64>,
+    ) -> Option<&EnsembleConfig> {
         // First check complexity threshold
         if let (Some(threshold), Some(comp), Some(config)) = (
             self.complexity_threshold,
@@ -683,17 +687,22 @@ impl ParallelExecutor {
                     let start = Instant::now();
 
                     match timeout(timeout_duration, executor(model_id.clone())).await {
-                        Ok(Ok((response, tokens, cost))) => {
-                            ModelExecutionResult::success(&model_id, response, start.elapsed().as_millis() as u64)
-                                .with_tokens(tokens.input_tokens, tokens.output_tokens)
-                                .with_cost(cost)
-                        }
-                        Ok(Err(error)) => {
-                            ModelExecutionResult::failure(&model_id, error, start.elapsed().as_millis() as u64)
-                        }
-                        Err(_) => {
-                            ModelExecutionResult::timeout(&model_id_clone, timeout_duration.as_millis() as u64)
-                        }
+                        Ok(Ok((response, tokens, cost))) => ModelExecutionResult::success(
+                            &model_id,
+                            response,
+                            start.elapsed().as_millis() as u64,
+                        )
+                        .with_tokens(tokens.input_tokens, tokens.output_tokens)
+                        .with_cost(cost),
+                        Ok(Err(error)) => ModelExecutionResult::failure(
+                            &model_id,
+                            error,
+                            start.elapsed().as_millis() as u64,
+                        ),
+                        Err(_) => ModelExecutionResult::timeout(
+                            &model_id_clone,
+                            timeout_duration.as_millis() as u64,
+                        ),
                     }
                 }
             })
@@ -1015,7 +1024,11 @@ impl EnsembleResult {
     /// Get total tokens used
     pub fn total_tokens(&self) -> TokenUsage {
         let input: u32 = self.all_results.iter().map(|r| r.tokens.input_tokens).sum();
-        let output: u32 = self.all_results.iter().map(|r| r.tokens.output_tokens).sum();
+        let output: u32 = self
+            .all_results
+            .iter()
+            .map(|r| r.tokens.output_tokens)
+            .sum();
         TokenUsage::new(input, output)
     }
 }
@@ -1055,7 +1068,11 @@ impl ResponseAggregator {
     }
 
     /// Aggregate using best-of-n strategy
-    pub fn best_of_n(&self, mut results: Vec<ModelExecutionResult>, prompt: &str) -> EnsembleResult {
+    pub fn best_of_n(
+        &self,
+        mut results: Vec<ModelExecutionResult>,
+        prompt: &str,
+    ) -> EnsembleResult {
         // Score all successful results
         self.score_results(&mut results, prompt);
 
@@ -1096,7 +1113,11 @@ impl ResponseAggregator {
     }
 
     /// Aggregate using consensus detection
-    pub fn consensus(&self, mut results: Vec<ModelExecutionResult>, prompt: &str) -> EnsembleResult {
+    pub fn consensus(
+        &self,
+        mut results: Vec<ModelExecutionResult>,
+        prompt: &str,
+    ) -> EnsembleResult {
         self.score_results(&mut results, prompt);
 
         let successful: Vec<_> = results.iter().filter(|r| r.has_response()).collect();
@@ -1140,10 +1161,7 @@ impl ResponseAggregator {
         let groups = self.group_by_similarity(&successful);
 
         // Find largest group
-        let largest_group = groups
-            .iter()
-            .max_by_key(|g| g.len())
-            .unwrap();
+        let largest_group = groups.iter().max_by_key(|g| g.len()).unwrap();
 
         // Select best from largest group
         let best = largest_group
@@ -1448,7 +1466,11 @@ impl EnsembleEngine {
         }
 
         // Check intent-specific strategy
-        if let Some(config) = self.config.strategy.get_config(&request.intent, request.complexity) {
+        if let Some(config) = self
+            .config
+            .strategy
+            .get_config(&request.intent, request.complexity)
+        {
             // Apply budget filter if set
             let available_models = if let Some(max_budget) = self.config.max_budget_usd {
                 self.filter_models_by_budget(&config.models, max_budget)
@@ -1533,10 +1555,7 @@ impl EnsembleEngine {
         let successful_count = results.iter().filter(|r| r.response.is_some()).count();
         if successful_count == 0 {
             return Err(EnsembleExecutionError::AllModelsFailed {
-                errors: results
-                    .iter()
-                    .filter_map(|r| r.error.clone())
-                    .collect(),
+                errors: results.iter().filter_map(|r| r.error.clone()).collect(),
             });
         }
 
@@ -1568,7 +1587,8 @@ impl EnsembleEngine {
 
             let result = match result_data {
                 Ok((response, tokens, cost)) => {
-                    let mut r = ModelExecutionResult::success(model_id.clone(), &response, latency_ms);
+                    let mut r =
+                        ModelExecutionResult::success(model_id.clone(), &response, latency_ms);
                     r.tokens = tokens;
                     r.cost_usd = cost;
 
@@ -1580,8 +1600,10 @@ impl EnsembleEngine {
                         // Calculate stats before moving all_results
                         let total_cost: f64 = all_results.iter().map(|r| r.cost_usd).sum();
                         let total_latency: u64 = all_results.iter().map(|r| r.latency_ms).sum();
-                        let successful_count = all_results.iter().filter(|r| r.response.is_some()).count();
-                        let failed_count = all_results.iter().filter(|r| r.response.is_none()).count();
+                        let successful_count =
+                            all_results.iter().filter(|r| r.response.is_some()).count();
+                        let failed_count =
+                            all_results.iter().filter(|r| r.response.is_none()).count();
                         return Ok(EnsembleResult {
                             response,
                             selected_model: model_id.clone(),
@@ -1604,13 +1626,13 @@ impl EnsembleEngine {
         }
 
         // No model met threshold, return best response
-        let successful: Vec<_> = all_results.iter().filter(|r| r.response.is_some()).collect();
+        let successful: Vec<_> = all_results
+            .iter()
+            .filter(|r| r.response.is_some())
+            .collect();
         if successful.is_empty() {
             return Err(EnsembleExecutionError::AllModelsFailed {
-                errors: all_results
-                    .iter()
-                    .filter_map(|r| r.error.clone())
-                    .collect(),
+                errors: all_results.iter().filter_map(|r| r.error.clone()).collect(),
             });
         }
 
@@ -1645,7 +1667,12 @@ impl EnsembleEngine {
     }
 
     /// Aggregate results based on ensemble mode
-    fn aggregate(&self, config: &EnsembleConfig, prompt: &str, results: Vec<ModelExecutionResult>) -> EnsembleResult {
+    fn aggregate(
+        &self,
+        config: &EnsembleConfig,
+        prompt: &str,
+        results: Vec<ModelExecutionResult>,
+    ) -> EnsembleResult {
         match &config.mode {
             EnsembleMode::Disabled => {
                 // Should not reach here, but return first successful
@@ -1661,7 +1688,9 @@ impl EnsembleEngine {
             EnsembleMode::Consensus { min_agreement: _ } => {
                 self.aggregator.consensus(results, prompt)
             }
-            EnsembleMode::Cascade { quality_threshold: _ } => {
+            EnsembleMode::Cascade {
+                quality_threshold: _,
+            } => {
                 // Cascade should use execute_cascade, but fallback to best_of_n
                 self.aggregator.best_of_n(results, prompt)
             }
@@ -1732,36 +1761,41 @@ mod tests {
         assert_eq!(EnsembleMode::Disabled.min_models(), 1);
         assert_eq!(EnsembleMode::BestOfN { n: 3 }.min_models(), 3);
         assert_eq!(EnsembleMode::Voting.min_models(), 3);
-        assert_eq!(EnsembleMode::Consensus { min_agreement: 0.7 }.min_models(), 2);
-        assert_eq!(EnsembleMode::Cascade { quality_threshold: 0.8 }.min_models(), 2);
+        assert_eq!(
+            EnsembleMode::Consensus { min_agreement: 0.7 }.min_models(),
+            2
+        );
+        assert_eq!(
+            EnsembleMode::Cascade {
+                quality_threshold: 0.8
+            }
+            .min_models(),
+            2
+        );
     }
 
     #[test]
     fn test_ensemble_config_validation() {
         // Valid config
-        let valid = EnsembleConfig::best_of_n(2)
-            .with_models(vec!["model-a", "model-b"]);
+        let valid = EnsembleConfig::best_of_n(2).with_models(vec!["model-a", "model-b"]);
         assert!(valid.validate().is_ok());
 
         // Invalid: not enough models
-        let insufficient = EnsembleConfig::best_of_n(3)
-            .with_models(vec!["model-a", "model-b"]);
+        let insufficient = EnsembleConfig::best_of_n(3).with_models(vec!["model-a", "model-b"]);
         assert!(matches!(
             insufficient.validate(),
             Err(EnsembleValidationError::InsufficientModels { .. })
         ));
 
         // Invalid: duplicate models
-        let duplicates = EnsembleConfig::best_of_n(2)
-            .with_models(vec!["model-a", "model-a"]);
+        let duplicates = EnsembleConfig::best_of_n(2).with_models(vec!["model-a", "model-a"]);
         assert!(matches!(
             duplicates.validate(),
             Err(EnsembleValidationError::DuplicateModels)
         ));
 
         // Invalid: zero timeout
-        let mut zero_timeout = EnsembleConfig::best_of_n(2)
-            .with_models(vec!["model-a", "model-b"]);
+        let mut zero_timeout = EnsembleConfig::best_of_n(2).with_models(vec!["model-a", "model-b"]);
         zero_timeout.timeout_ms = 0;
         assert!(matches!(
             zero_timeout.validate(),
@@ -1784,7 +1818,9 @@ mod tests {
 
         // Intent-specific lookup
         assert!(strategy.get_config(&TaskIntent::Reasoning, None).is_some());
-        assert!(strategy.get_config(&TaskIntent::GeneralChat, None).is_none());
+        assert!(strategy
+            .get_config(&TaskIntent::GeneralChat, None)
+            .is_none());
 
         // High complexity overrides intent
         let config = strategy.get_config(&TaskIntent::GeneralChat, Some(0.9));
@@ -1874,7 +1910,11 @@ I'm confident this is correct.
     fn test_response_aggregator_best_of_n() {
         let results = vec![
             ModelExecutionResult::success("model-a", "Short", 100),
-            ModelExecutionResult::success("model-b", "This is a longer response with more content and details", 150),
+            ModelExecutionResult::success(
+                "model-b",
+                "This is a longer response with more content and details",
+                150,
+            ),
             ModelExecutionResult::failure("model-c", "Error", 50),
         ];
 
@@ -1891,9 +1931,21 @@ I'm confident this is correct.
     #[test]
     fn test_response_aggregator_consensus() {
         let results = vec![
-            ModelExecutionResult::success("model-a", "The answer is 42 because of the meaning of life", 100),
-            ModelExecutionResult::success("model-b", "The answer is 42 due to the meaning of everything", 120),
-            ModelExecutionResult::success("model-c", "Something completely different about cats", 80),
+            ModelExecutionResult::success(
+                "model-a",
+                "The answer is 42 because of the meaning of life",
+                100,
+            ),
+            ModelExecutionResult::success(
+                "model-b",
+                "The answer is 42 due to the meaning of everything",
+                120,
+            ),
+            ModelExecutionResult::success(
+                "model-c",
+                "Something completely different about cats",
+                80,
+            ),
         ];
 
         let aggregator = ResponseAggregator::new(&QualityMetric::LengthAndStructure)
@@ -1923,8 +1975,7 @@ I'm confident this is correct.
 
     #[tokio::test]
     async fn test_parallel_executor() {
-        let executor = ParallelExecutor::new(Duration::from_secs(5))
-            .with_max_concurrency(3);
+        let executor = ParallelExecutor::new(Duration::from_secs(5)).with_max_concurrency(3);
 
         let models = vec![
             "model-a".to_string(),
@@ -1972,10 +2023,7 @@ I'm confident this is correct.
     async fn test_parallel_executor_partial_failure() {
         let executor = ParallelExecutor::new(Duration::from_secs(5));
 
-        let models = vec![
-            "good-model".to_string(),
-            "bad-model".to_string(),
-        ];
+        let models = vec!["good-model".to_string(), "bad-model".to_string()];
 
         let results = executor
             .execute_parallel(&models, |model_id| async move {
@@ -2000,7 +2048,10 @@ I'm confident this is correct.
     #[test]
     fn test_quality_metric_parsing() {
         assert_eq!(QualityMetric::from_str("length"), QualityMetric::Length);
-        assert_eq!(QualityMetric::from_str("STRUCTURE"), QualityMetric::Structure);
+        assert_eq!(
+            QualityMetric::from_str("STRUCTURE"),
+            QualityMetric::Structure
+        );
         assert_eq!(
             QualityMetric::from_str("length_and_structure"),
             QualityMetric::LengthAndStructure

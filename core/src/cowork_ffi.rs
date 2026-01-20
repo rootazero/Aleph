@@ -5,16 +5,28 @@
 
 use std::sync::Arc;
 
-use crate::dispatcher::model_router::{
-    Capability, CostStrategy, CostTier, HealthStatistics, HealthStatus, LatencyTier,
-    ModelHealthSummary, ModelProfile, ModelRoutingRules, StageResult,
-    // Budget types
-    BudgetScope, BudgetPeriod, BudgetEnforcement, BudgetState, BudgetLimit,
-};
-use crate::dispatcher::monitor::{ProgressEvent, ProgressSubscriber};
 use crate::dispatcher::cowork_types::{
     ExecutionSummary, Task, TaskDependency, TaskGraph, TaskStatus, TaskType,
 };
+use crate::dispatcher::model_router::{
+    BudgetEnforcement,
+    BudgetLimit,
+    BudgetPeriod,
+    // Budget types
+    BudgetScope,
+    BudgetState,
+    Capability,
+    CostStrategy,
+    CostTier,
+    HealthStatistics,
+    HealthStatus,
+    LatencyTier,
+    ModelHealthSummary,
+    ModelProfile,
+    ModelRoutingRules,
+    StageResult,
+};
+use crate::dispatcher::monitor::{ProgressEvent, ProgressSubscriber};
 use crate::dispatcher::{CoworkConfig, ExecutionState};
 
 // ============================================================================
@@ -995,9 +1007,15 @@ impl BudgetStatusFFI {
         }
 
         let (status_emoji, status_message) = if exceeded_count > 0 {
-            ("🔴".to_string(), format!("{} budget(s) exceeded", exceeded_count))
+            (
+                "🔴".to_string(),
+                format!("{} budget(s) exceeded", exceeded_count),
+            )
         } else if warning_count > 0 {
-            ("🟡".to_string(), format!("{} budget warning(s)", warning_count))
+            (
+                "🟡".to_string(),
+                format!("{} budget warning(s)", warning_count),
+            )
         } else {
             ("🟢".to_string(), "All budgets healthy".to_string())
         };
@@ -1008,7 +1026,11 @@ impl BudgetStatusFFI {
             exceeded_count,
             warning_count,
             total_spent_usd: total_spent,
-            min_remaining_usd: if min_remaining == f64::MAX { 0.0 } else { min_remaining },
+            min_remaining_usd: if min_remaining == f64::MAX {
+                0.0
+            } else {
+                min_remaining
+            },
             limits: limit_statuses,
             status_emoji,
             status_message,
@@ -1116,7 +1138,9 @@ impl From<crate::dispatcher::model_router::Domain> for DomainFFI {
                 crate::dispatcher::model_router::TechnicalDomain::DataScience => {
                     DomainFFI::TechnicalDataScience
                 }
-                crate::dispatcher::model_router::TechnicalDomain::Other(_) => DomainFFI::TechnicalOther,
+                crate::dispatcher::model_router::TechnicalDomain::Other(_) => {
+                    DomainFFI::TechnicalOther
+                }
             },
         }
     }
@@ -1187,7 +1211,9 @@ impl From<crate::dispatcher::model_router::CacheHitType> for CacheHitTypeFFI {
     fn from(hit_type: crate::dispatcher::model_router::CacheHitType) -> Self {
         match hit_type {
             crate::dispatcher::model_router::CacheHitType::Exact => CacheHitTypeFFI::Exact,
-            crate::dispatcher::model_router::CacheHitType::Semantic { .. } => CacheHitTypeFFI::Semantic,
+            crate::dispatcher::model_router::CacheHitType::Semantic { .. } => {
+                CacheHitTypeFFI::Semantic
+            }
         }
     }
 }
@@ -1240,6 +1266,430 @@ impl CacheStatsFFI {
             exact_hits: 0,
             semantic_hits: 0,
             evictions: 0,
+        }
+    }
+}
+
+// ============================================================================
+// P3: A/B Testing FFI Types
+// ============================================================================
+
+/// Experiment status for FFI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExperimentStatusFFI {
+    Running,
+    Paused,
+    Completed,
+    InsufficientData,
+}
+
+impl From<crate::dispatcher::model_router::ExperimentStatus> for ExperimentStatusFFI {
+    fn from(status: crate::dispatcher::model_router::ExperimentStatus) -> Self {
+        match status {
+            crate::dispatcher::model_router::ExperimentStatus::Running => {
+                ExperimentStatusFFI::Running
+            }
+            crate::dispatcher::model_router::ExperimentStatus::Paused => {
+                ExperimentStatusFFI::Paused
+            }
+            crate::dispatcher::model_router::ExperimentStatus::Completed => {
+                ExperimentStatusFFI::Completed
+            }
+            crate::dispatcher::model_router::ExperimentStatus::InsufficientData => {
+                ExperimentStatusFFI::InsufficientData
+            }
+        }
+    }
+}
+
+/// A/B experiment summary for FFI (simplified view for UI)
+#[derive(Debug, Clone)]
+pub struct ExperimentSummaryFFI {
+    /// Unique experiment ID
+    pub id: String,
+    /// Human-readable name
+    pub name: String,
+    /// Current status
+    pub status: ExperimentStatusFFI,
+    /// Status as display string
+    pub status_display: String,
+    /// Whether the experiment is enabled
+    pub enabled: bool,
+    /// Traffic percentage (0-100)
+    pub traffic_percentage: u8,
+    /// Number of variants
+    pub variant_count: u32,
+    /// Total samples collected
+    pub total_samples: u64,
+    /// Duration in seconds since start
+    pub duration_secs: u64,
+    /// Target intent filter (if any)
+    pub target_intent: Option<String>,
+}
+
+impl From<&crate::dispatcher::model_router::ExperimentReport> for ExperimentSummaryFFI {
+    fn from(report: &crate::dispatcher::model_router::ExperimentReport) -> Self {
+        Self {
+            id: report.experiment_id.clone(),
+            name: report.experiment_name.clone(),
+            status: report.status.into(),
+            status_display: report.status.display_name().to_string(),
+            enabled: report.status != crate::dispatcher::model_router::ExperimentStatus::Paused,
+            traffic_percentage: 0, // Not available in report, would need config
+            variant_count: report.variant_summaries.len() as u32,
+            total_samples: report.total_samples,
+            duration_secs: report.duration_secs,
+            target_intent: None, // Not available in report
+        }
+    }
+}
+
+/// Variant summary for FFI
+#[derive(Debug, Clone)]
+pub struct VariantSummaryFFI {
+    /// Variant ID
+    pub id: String,
+    /// Variant name
+    pub name: String,
+    /// Sample count
+    pub sample_count: u64,
+    /// Sample percentage of total
+    pub sample_percentage: f64,
+    /// Mean latency (if tracked)
+    pub mean_latency_ms: Option<f64>,
+    /// Mean cost (if tracked)
+    pub mean_cost_usd: Option<f64>,
+    /// Success rate (if tracked)
+    pub success_rate: Option<f64>,
+}
+
+impl From<&crate::dispatcher::model_router::VariantSummary> for VariantSummaryFFI {
+    fn from(summary: &crate::dispatcher::model_router::VariantSummary) -> Self {
+        let mean_latency = summary
+            .metrics
+            .get(&crate::dispatcher::model_router::TrackedMetric::LatencyMs)
+            .map(|m| m.mean);
+        let mean_cost = summary
+            .metrics
+            .get(&crate::dispatcher::model_router::TrackedMetric::CostUsd)
+            .map(|m| m.mean);
+        let success_rate = summary
+            .metrics
+            .get(&crate::dispatcher::model_router::TrackedMetric::SuccessRate)
+            .map(|m| m.mean);
+
+        Self {
+            id: summary.variant_id.clone(),
+            name: summary.variant_name.clone(),
+            sample_count: summary.sample_count,
+            sample_percentage: summary.sample_percentage,
+            mean_latency_ms: mean_latency,
+            mean_cost_usd: mean_cost,
+            success_rate,
+        }
+    }
+}
+
+/// Significance test result for FFI
+#[derive(Debug, Clone)]
+pub struct SignificanceResultFFI {
+    /// Metric being compared
+    pub metric_name: String,
+    /// Control variant ID
+    pub control_id: String,
+    /// Control mean value
+    pub control_mean: f64,
+    /// Treatment variant ID
+    pub treatment_id: String,
+    /// Treatment mean value
+    pub treatment_mean: f64,
+    /// P-value from t-test
+    pub p_value: f64,
+    /// Whether result is statistically significant
+    pub is_significant: bool,
+    /// Relative change percentage
+    pub relative_change_percent: f64,
+    /// Effect size (Cohen's d)
+    pub effect_size: f64,
+}
+
+impl From<&crate::dispatcher::model_router::SignificanceResult> for SignificanceResultFFI {
+    fn from(result: &crate::dispatcher::model_router::SignificanceResult) -> Self {
+        Self {
+            metric_name: result.metric.display_name(),
+            control_id: result.control_id.clone(),
+            control_mean: result.control_mean,
+            treatment_id: result.treatment_id.clone(),
+            treatment_mean: result.treatment_mean,
+            p_value: result.p_value,
+            is_significant: result.is_significant,
+            relative_change_percent: result.relative_change * 100.0,
+            effect_size: result.cohens_d,
+        }
+    }
+}
+
+/// Full experiment report for FFI
+#[derive(Debug, Clone)]
+pub struct ExperimentReportFFI {
+    /// Basic experiment info
+    pub summary: ExperimentSummaryFFI,
+    /// Per-variant summaries
+    pub variants: Vec<VariantSummaryFFI>,
+    /// Significance test results
+    pub significance_tests: Vec<SignificanceResultFFI>,
+    /// Automated recommendation (if any)
+    pub recommendation: Option<String>,
+}
+
+impl From<&crate::dispatcher::model_router::ExperimentReport> for ExperimentReportFFI {
+    fn from(report: &crate::dispatcher::model_router::ExperimentReport) -> Self {
+        Self {
+            summary: report.into(),
+            variants: report
+                .variant_summaries
+                .iter()
+                .map(VariantSummaryFFI::from)
+                .collect(),
+            significance_tests: report
+                .significance_tests
+                .iter()
+                .map(SignificanceResultFFI::from)
+                .collect(),
+            recommendation: report.recommendation.clone(),
+        }
+    }
+}
+
+/// A/B testing overview for FFI
+#[derive(Debug, Clone)]
+pub struct ABTestingStatusFFI {
+    /// Whether A/B testing is enabled
+    pub enabled: bool,
+    /// Total number of experiments
+    pub total_experiments: u32,
+    /// Number of active experiments
+    pub active_experiments: u32,
+    /// List of experiment summaries
+    pub experiments: Vec<ExperimentSummaryFFI>,
+    /// Status emoji for quick display
+    pub status_emoji: String,
+    /// Human-readable status message
+    pub status_message: String,
+}
+
+impl ABTestingStatusFFI {
+    /// Create a disabled A/B testing status
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            total_experiments: 0,
+            active_experiments: 0,
+            experiments: Vec::new(),
+            status_emoji: "⚫".to_string(),
+            status_message: "A/B testing disabled".to_string(),
+        }
+    }
+
+    /// Create from experiment reports
+    pub fn from_reports(reports: &[crate::dispatcher::model_router::ExperimentReport]) -> Self {
+        if reports.is_empty() {
+            return Self {
+                enabled: true,
+                total_experiments: 0,
+                active_experiments: 0,
+                experiments: Vec::new(),
+                status_emoji: "⚪".to_string(),
+                status_message: "No experiments configured".to_string(),
+            };
+        }
+
+        let active_count = reports
+            .iter()
+            .filter(|r| r.status == crate::dispatcher::model_router::ExperimentStatus::Running)
+            .count() as u32;
+
+        let (emoji, message) = if active_count > 0 {
+            (
+                "🧪".to_string(),
+                format!("{} experiment(s) running", active_count),
+            )
+        } else {
+            ("⏸️".to_string(), "No active experiments".to_string())
+        };
+
+        Self {
+            enabled: true,
+            total_experiments: reports.len() as u32,
+            active_experiments: active_count,
+            experiments: reports.iter().map(ExperimentSummaryFFI::from).collect(),
+            status_emoji: emoji,
+            status_message: message,
+        }
+    }
+}
+
+// ============================================================================
+// P3: Ensemble FFI Types
+// ============================================================================
+
+/// Ensemble mode for FFI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnsembleModeFFI {
+    Disabled,
+    BestOfN,
+    Voting,
+    Consensus,
+    Cascade,
+}
+
+impl From<crate::dispatcher::model_router::EnsembleMode> for EnsembleModeFFI {
+    fn from(mode: crate::dispatcher::model_router::EnsembleMode) -> Self {
+        match mode {
+            crate::dispatcher::model_router::EnsembleMode::Disabled => EnsembleModeFFI::Disabled,
+            crate::dispatcher::model_router::EnsembleMode::BestOfN { .. } => {
+                EnsembleModeFFI::BestOfN
+            }
+            crate::dispatcher::model_router::EnsembleMode::Voting { .. } => EnsembleModeFFI::Voting,
+            crate::dispatcher::model_router::EnsembleMode::Consensus { .. } => {
+                EnsembleModeFFI::Consensus
+            }
+            crate::dispatcher::model_router::EnsembleMode::Cascade { .. } => {
+                EnsembleModeFFI::Cascade
+            }
+        }
+    }
+}
+
+/// Quality metric for FFI
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QualityMetricFFI {
+    Length,
+    Structure,
+    LengthAndStructure,
+    ConfidenceMarkers,
+    Relevance,
+    Custom { name: String },
+}
+
+impl From<&crate::dispatcher::model_router::QualityMetric> for QualityMetricFFI {
+    fn from(metric: &crate::dispatcher::model_router::QualityMetric) -> Self {
+        match metric {
+            crate::dispatcher::model_router::QualityMetric::Length => QualityMetricFFI::Length,
+            crate::dispatcher::model_router::QualityMetric::Structure => {
+                QualityMetricFFI::Structure
+            }
+            crate::dispatcher::model_router::QualityMetric::LengthAndStructure => {
+                QualityMetricFFI::LengthAndStructure
+            }
+            crate::dispatcher::model_router::QualityMetric::ConfidenceMarkers => {
+                QualityMetricFFI::ConfidenceMarkers
+            }
+            crate::dispatcher::model_router::QualityMetric::Relevance => {
+                QualityMetricFFI::Relevance
+            }
+            crate::dispatcher::model_router::QualityMetric::Custom(name) => {
+                QualityMetricFFI::Custom { name: name.clone() }
+            }
+        }
+    }
+}
+
+/// Ensemble configuration summary for FFI
+#[derive(Debug, Clone)]
+pub struct EnsembleConfigSummaryFFI {
+    /// Whether ensemble is enabled
+    pub enabled: bool,
+    /// Current ensemble mode
+    pub mode: EnsembleModeFFI,
+    /// Mode as display string
+    pub mode_display: String,
+    /// Models configured for ensemble
+    pub models: Vec<String>,
+    /// Default quality metric
+    pub quality_metric: QualityMetricFFI,
+    /// Default timeout in milliseconds
+    pub timeout_ms: u64,
+    /// Whether high complexity triggers ensemble
+    pub high_complexity_enabled: bool,
+    /// Complexity threshold for auto-triggering
+    pub complexity_threshold: f64,
+}
+
+impl EnsembleConfigSummaryFFI {
+    /// Create a disabled ensemble config summary
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            mode: EnsembleModeFFI::Disabled,
+            mode_display: "Disabled".to_string(),
+            models: Vec::new(),
+            quality_metric: QualityMetricFFI::LengthAndStructure,
+            timeout_ms: 30000,
+            high_complexity_enabled: false,
+            complexity_threshold: 0.8,
+        }
+    }
+}
+
+/// Ensemble execution statistics for FFI
+#[derive(Debug, Clone)]
+pub struct EnsembleStatsFFI {
+    /// Total ensemble executions
+    pub total_executions: u64,
+    /// Number of successful executions
+    pub successful_executions: u64,
+    /// Average latency in milliseconds
+    pub avg_latency_ms: f64,
+    /// Average cost in USD
+    pub avg_cost_usd: f64,
+    /// Average confidence score
+    pub avg_confidence: f64,
+    /// Number of high consensus results
+    pub high_consensus_count: u64,
+    /// Number of low consensus results
+    pub low_consensus_count: u64,
+    /// Most used aggregation method
+    pub most_used_method: String,
+}
+
+impl EnsembleStatsFFI {
+    /// Create empty ensemble stats
+    pub fn empty() -> Self {
+        Self {
+            total_executions: 0,
+            successful_executions: 0,
+            avg_latency_ms: 0.0,
+            avg_cost_usd: 0.0,
+            avg_confidence: 0.0,
+            high_consensus_count: 0,
+            low_consensus_count: 0,
+            most_used_method: "none".to_string(),
+        }
+    }
+}
+
+/// Overall ensemble status for FFI
+#[derive(Debug, Clone)]
+pub struct EnsembleStatusFFI {
+    /// Configuration summary
+    pub config: EnsembleConfigSummaryFFI,
+    /// Execution statistics
+    pub stats: EnsembleStatsFFI,
+    /// Status emoji for quick display
+    pub status_emoji: String,
+    /// Human-readable status message
+    pub status_message: String,
+}
+
+impl EnsembleStatusFFI {
+    /// Create a disabled ensemble status
+    pub fn disabled() -> Self {
+        Self {
+            config: EnsembleConfigSummaryFFI::disabled(),
+            stats: EnsembleStatsFFI::empty(),
+            status_emoji: "⚫".to_string(),
+            status_message: "Ensemble disabled".to_string(),
         }
     }
 }
@@ -1990,19 +2440,34 @@ mod tests {
         // Project scope
         let project = BudgetScope::Project("test-project".to_string());
         let ffi: BudgetScopeFFI = (&project).into();
-        assert_eq!(ffi, BudgetScopeFFI::Project { id: "test-project".to_string() });
+        assert_eq!(
+            ffi,
+            BudgetScopeFFI::Project {
+                id: "test-project".to_string()
+            }
+        );
         let back: BudgetScope = ffi.into();
         assert_eq!(back, project);
 
         // Session scope
         let session = BudgetScope::Session("session-123".to_string());
         let ffi: BudgetScopeFFI = (&session).into();
-        assert_eq!(ffi, BudgetScopeFFI::Session { id: "session-123".to_string() });
+        assert_eq!(
+            ffi,
+            BudgetScopeFFI::Session {
+                id: "session-123".to_string()
+            }
+        );
 
         // Model scope
         let model = BudgetScope::Model("claude-opus".to_string());
         let ffi: BudgetScopeFFI = (&model).into();
-        assert_eq!(ffi, BudgetScopeFFI::Model { id: "claude-opus".to_string() });
+        assert_eq!(
+            ffi,
+            BudgetScopeFFI::Model {
+                id: "claude-opus".to_string()
+            }
+        );
     }
 
     #[test]
@@ -2028,8 +2493,14 @@ mod tests {
 
         let enforcements = [
             (BudgetEnforcement::WarnOnly, BudgetEnforcementFFI::WarnOnly),
-            (BudgetEnforcement::SoftBlock, BudgetEnforcementFFI::SoftBlock),
-            (BudgetEnforcement::HardBlock, BudgetEnforcementFFI::HardBlock),
+            (
+                BudgetEnforcement::SoftBlock,
+                BudgetEnforcementFFI::SoftBlock,
+            ),
+            (
+                BudgetEnforcement::HardBlock,
+                BudgetEnforcementFFI::HardBlock,
+            ),
         ];
 
         for (enforcement, expected_ffi) in enforcements {
@@ -2043,7 +2514,9 @@ mod tests {
 
     #[test]
     fn test_budget_limit_status_ffi_creation() {
-        use crate::dispatcher::model_router::{BudgetLimit, BudgetPeriod, BudgetScope, BudgetState};
+        use crate::dispatcher::model_router::{
+            BudgetLimit, BudgetPeriod, BudgetScope, BudgetState,
+        };
 
         let limit = BudgetLimit::new("daily-global", 10.0)
             .with_scope(BudgetScope::Global)
@@ -2081,7 +2554,9 @@ mod tests {
 
     #[test]
     fn test_budget_status_ffi_from_limits() {
-        use crate::dispatcher::model_router::{BudgetLimit, BudgetPeriod, BudgetScope, BudgetState};
+        use crate::dispatcher::model_router::{
+            BudgetLimit, BudgetPeriod, BudgetScope, BudgetState,
+        };
         use std::collections::HashMap;
 
         // Create some test limits

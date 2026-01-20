@@ -387,11 +387,7 @@ impl OrchestratedRouter {
     /// 3. Builds failover chain
     /// 4. Executes with retry orchestrator
     /// 5. Records cost on success
-    pub async fn execute<T, F, Fut>(
-        &self,
-        request: RoutingRequest,
-        executor: F,
-    ) -> RoutingResult<T>
+    pub async fn execute<T, F, Fut>(&self, request: RoutingRequest, executor: F) -> RoutingResult<T>
     where
         T: Clone + Send + 'static,
         F: Fn(String, ExecutionRequest) -> Fut + Send + Sync,
@@ -457,11 +453,10 @@ impl OrchestratedRouter {
                             message: message.clone(),
                         }
                     }
-                    BudgetCheckResult::SoftBlocked { .. } | BudgetCheckResult::HardBlocked { .. } => {
-                        BudgetCheckResultSummary::Blocked {
-                            reason: check_result.message(),
-                        }
-                    }
+                    BudgetCheckResult::SoftBlocked { .. }
+                    | BudgetCheckResult::HardBlocked { .. } => BudgetCheckResultSummary::Blocked {
+                        reason: check_result.message(),
+                    },
                 };
 
                 let _ = self.event_tx.send(RouterEvent::BudgetChecked {
@@ -504,7 +499,9 @@ impl OrchestratedRouter {
             input_tokens: request.input_tokens,
             estimated_output_tokens: request.estimated_output_tokens,
             budget_scope: request.budget_scope.clone(),
-            retry_policy: request.retry_policy.or(Some(self.config.default_retry_policy.clone())),
+            retry_policy: request
+                .retry_policy
+                .or(Some(self.config.default_retry_policy.clone())),
             backoff_strategy: request
                 .backoff_strategy
                 .or(Some(self.config.default_backoff.clone())),
@@ -513,7 +510,10 @@ impl OrchestratedRouter {
         };
 
         // 5. Execute with orchestrator
-        let execution = self.orchestrator.execute(exec_request, &failover_chain, executor).await;
+        let execution = self
+            .orchestrator
+            .execute(exec_request, &failover_chain, executor)
+            .await;
 
         // 6. Emit completion event
         let _ = self.event_tx.send(RouterEvent::ExecutionCompleted {
@@ -610,7 +610,9 @@ impl OrchestratedRouter {
         // Build simple failover chain with just the specified model
         let failover_chain = FailoverChain::new(model_id);
 
-        self.orchestrator.execute(exec_request, &failover_chain, executor).await
+        self.orchestrator
+            .execute(exec_request, &failover_chain, executor)
+            .await
     }
 
     // =========================================================================
@@ -621,19 +623,18 @@ impl OrchestratedRouter {
     async fn select_primary_model(&self, request: &RoutingRequest) -> Result<String, RoutingError> {
         // If preferred model specified and healthy, use it
         if let Some(preferred) = &request.preferred_model {
-            if !self.config.enable_health_check
-                || self.health_manager.can_call(preferred).await
-            {
+            if !self.config.enable_health_check || self.health_manager.can_call(preferred).await {
                 return Ok(preferred.clone());
             }
         }
 
         // Otherwise route by intent
-        let profile = self.matcher.route_by_intent(&request.intent).ok_or_else(|| {
-            RoutingError::NoModelAvailable {
+        let profile = self
+            .matcher
+            .route_by_intent(&request.intent)
+            .ok_or_else(|| RoutingError::NoModelAvailable {
                 task_type: request.intent.to_task_type().to_string(),
-            }
-        })?;
+            })?;
 
         // If health check enabled, verify model is healthy
         if self.config.enable_health_check && !self.health_manager.can_call(&profile.id).await {

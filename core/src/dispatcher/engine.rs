@@ -6,6 +6,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
+use super::cowork_types::{ExecutionSummary, Task, TaskGraph, TaskResult, TaskStatus, TaskType};
 use super::executor::{ExecutionContext, ExecutorRegistry, NoopExecutor};
 use super::model_router::{
     ModelMatcher, ModelProfile, ModelRouter, ModelRoutingRules, TaskContextManager,
@@ -13,7 +14,6 @@ use super::model_router::{
 use super::monitor::{ProgressMonitor, ProgressSubscriber, TaskMonitor};
 use super::planner::{LlmTaskPlanner, TaskPlanner};
 use super::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
-use super::cowork_types::{ExecutionSummary, Task, TaskGraph, TaskResult, TaskStatus, TaskType};
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
 
@@ -1001,11 +1001,11 @@ mod tests {
         let event_count = Arc::new(AtomicUsize::new(0));
         let count_clone = event_count.clone();
 
-        engine.subscribe(Arc::new(crate::dispatcher::monitor::CallbackSubscriber::new(
-            move |_| {
+        engine.subscribe(Arc::new(
+            crate::dispatcher::monitor::CallbackSubscriber::new(move |_| {
                 count_clone.fetch_add(1, Ordering::SeqCst);
-            },
-        )));
+            }),
+        ));
 
         let graph = create_test_graph();
         engine.execute(graph).await.unwrap();
@@ -1064,8 +1064,8 @@ mod tests {
     // Model Routing Tests
     // =========================================================================
 
-    use crate::dispatcher::model_router::{Capability, CostTier, LatencyTier};
     use crate::dispatcher::cowork_types::AiTask;
+    use crate::dispatcher::model_router::{Capability, CostTier, LatencyTier};
 
     fn create_test_profiles() -> Vec<ModelProfile> {
         vec![

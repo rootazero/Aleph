@@ -21,10 +21,10 @@ use super::types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
 };
 use crate::agents::RigAgentManager;
+use crate::dispatcher::cowork_types::{TaskGraph, TaskStatus};
 use crate::dispatcher::executor::ExecutionContext as CoworkExecutionContext;
 use crate::dispatcher::executor::ExecutorRegistry;
 use crate::dispatcher::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
-use crate::dispatcher::cowork_types::{TaskGraph, TaskStatus};
 use crate::ffi::AetherEventHandler;
 use crate::planner::{ExecutionPlan, PlannedTask};
 

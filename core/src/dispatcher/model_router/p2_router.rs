@@ -298,9 +298,7 @@ impl P2IntelligentRouter {
     }
 
     /// Get cache statistics
-    pub async fn cache_stats(
-        &self,
-    ) -> Option<super::semantic_cache::CacheStats> {
+    pub async fn cache_stats(&self) -> Option<super::semantic_cache::CacheStats> {
         match &self.cache {
             Some(cache) => Some(cache.stats().await),
             None => None,
@@ -352,10 +350,7 @@ impl P2IntelligentRouter {
 
         // Technical programming domain → CodeGeneration
         if let Domain::Technical(ref tech) = features.domain {
-            if matches!(
-                tech,
-                super::prompt_analyzer::TechnicalDomain::Programming
-            ) {
+            if matches!(tech, super::prompt_analyzer::TechnicalDomain::Programming) {
                 return (TaskIntent::CodeGeneration, true);
             }
         }
@@ -431,7 +426,9 @@ impl P2IntelligentRouter {
             return matcher
                 .route_by_intent(intent)
                 .map(|p| (p, "Fallback to basic intent routing".to_string()))
-                .ok_or_else(|| P2RouterError::RoutingFailed("No model available for intent".to_string()));
+                .ok_or_else(|| {
+                    P2RouterError::RoutingFailed("No model available for intent".to_string())
+                });
         }
 
         // Sort by language preference if configured
@@ -439,7 +436,9 @@ impl P2IntelligentRouter {
             candidates.sort_by(|a, b| {
                 let score_a = self.language_affinity(a, &features.primary_language);
                 let score_b = self.language_affinity(b, &features.primary_language);
-                score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+                score_b
+                    .partial_cmp(&score_a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
 

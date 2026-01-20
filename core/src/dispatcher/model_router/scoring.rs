@@ -62,10 +62,8 @@ impl Default for ScoringConfig {
 impl ScoringConfig {
     /// Validate and normalize weights to sum to 1.0
     pub fn normalize(&mut self) {
-        let sum = self.latency_weight
-            + self.cost_weight
-            + self.reliability_weight
-            + self.quality_weight;
+        let sum =
+            self.latency_weight + self.cost_weight + self.reliability_weight + self.quality_weight;
 
         if sum > 0.0 {
             self.latency_weight /= sum;
@@ -436,7 +434,11 @@ mod tests {
             .with_latency_tier(latency)
     }
 
-    fn create_test_metrics(model_id: &str, success_rate: f64, latency_p95: f64) -> MultiWindowMetrics {
+    fn create_test_metrics(
+        model_id: &str,
+        success_rate: f64,
+        latency_p95: f64,
+    ) -> MultiWindowMetrics {
         let mut metrics = MultiWindowMetrics::new(model_id);
 
         // Simulate calls to set metrics
@@ -491,8 +493,7 @@ mod tests {
         let mut profile = create_test_profile("model-a", CostTier::Medium, LatencyTier::Medium);
         profile.capabilities = vec![Capability::CodeGeneration];
 
-        let score_match =
-            scorer.score(&profile, None, &TaskIntent::CodeGeneration);
+        let score_match = scorer.score(&profile, None, &TaskIntent::CodeGeneration);
         let score_no_match = scorer.score(&profile, None, &TaskIntent::TextAnalysis);
 
         assert!(score_match > score_no_match);
@@ -541,8 +542,11 @@ mod tests {
 
         // Unreliable model
         let unreliable_metrics = create_test_metrics("model", 0.80, 2000.0);
-        let unreliable_score =
-            scorer.score(&profile, Some(&unreliable_metrics), &TaskIntent::GeneralChat);
+        let unreliable_score = scorer.score(
+            &profile,
+            Some(&unreliable_metrics),
+            &TaskIntent::GeneralChat,
+        );
 
         assert!(reliable_score > unreliable_score);
     }
@@ -595,7 +599,10 @@ mod tests {
 
         let mut all_metrics = std::collections::HashMap::new();
         all_metrics.insert("fast".to_string(), create_test_metrics("fast", 0.99, 500.0));
-        all_metrics.insert("cheap".to_string(), create_test_metrics("cheap", 0.95, 5000.0));
+        all_metrics.insert(
+            "cheap".to_string(),
+            create_test_metrics("cheap", 0.95, 5000.0),
+        );
         all_metrics.insert(
             "balanced".to_string(),
             create_test_metrics("balanced", 0.97, 2000.0),

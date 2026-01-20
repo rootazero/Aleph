@@ -1349,7 +1349,8 @@ impl ScoringConfigToml {
 
     /// Validate scoring configuration
     pub fn validate(&self) -> Result<(), String> {
-        let total = self.latency_weight + self.cost_weight + self.reliability_weight + self.quality_weight;
+        let total =
+            self.latency_weight + self.cost_weight + self.reliability_weight + self.quality_weight;
         if (total - 1.0).abs() > 0.01 {
             tracing::warn!(
                 total = total,
@@ -1617,9 +1618,7 @@ impl CircuitBreakerConfigToml {
     /// Validate circuit breaker configuration
     pub fn validate(&self) -> Result<(), String> {
         if self.failure_threshold == 0 {
-            return Err(
-                "circuit_breaker.failure_threshold must be greater than 0".to_string(),
-            );
+            return Err("circuit_breaker.failure_threshold must be greater than 0".to_string());
         }
 
         if self.cooldown_secs == 0 {
@@ -1627,9 +1626,7 @@ impl CircuitBreakerConfigToml {
         }
 
         if self.half_open_successes == 0 {
-            return Err(
-                "circuit_breaker.half_open_successes must be greater than 0".to_string(),
-            );
+            return Err("circuit_breaker.half_open_successes must be greater than 0".to_string());
         }
 
         Ok(())
@@ -2474,7 +2471,13 @@ impl EnsembleConfigToml {
             return Err("max_parallel_models must be greater than 0".to_string());
         }
 
-        let valid_scorers = ["length", "structure", "length_and_structure", "confidence", "relevance"];
+        let valid_scorers = [
+            "length",
+            "structure",
+            "length_and_structure",
+            "confidence",
+            "relevance",
+        ];
         if !valid_scorers.contains(&self.quality_scorer.as_str()) {
             return Err(format!(
                 "Invalid quality_scorer '{}'. Valid: {:?}",
@@ -2577,7 +2580,13 @@ impl EnsembleStrategyConfigToml {
         }
 
         if let Some(ref scorer) = self.quality_scorer {
-            let valid_scorers = ["length", "structure", "length_and_structure", "confidence", "relevance"];
+            let valid_scorers = [
+                "length",
+                "structure",
+                "length_and_structure",
+                "confidence",
+                "relevance",
+            ];
             if !valid_scorers.contains(&scorer.as_str()) {
                 return Err(format!(
                     "Strategy '{}': invalid quality_scorer '{}'. Valid: {:?}",
@@ -2644,9 +2653,7 @@ impl HighComplexityEnsembleConfigToml {
         }
 
         if self.models.is_empty() {
-            return Err(
-                "high_complexity_ensemble.models cannot be empty when enabled".to_string()
-            );
+            return Err("high_complexity_ensemble.models cannot be empty when enabled".to_string());
         }
 
         let profile_set: std::collections::HashSet<&str> =
@@ -3232,7 +3239,10 @@ mod tests {
         assert_eq!(config.retry.attempt_timeout_ms, 30000);
         assert!(config.retry.failover_on_non_retryable);
         assert_eq!(config.retry.retryable_errors.len(), 3);
-        assert!(config.retry.retryable_errors.contains(&"rate_limit".to_string()));
+        assert!(config
+            .retry
+            .retryable_errors
+            .contains(&"rate_limit".to_string()));
         assert_eq!(config.retry.backoff.strategy, "exponential_jitter");
         assert_eq!(config.retry.backoff.multiplier, 2.0);
 
@@ -3298,10 +3308,16 @@ mod tests {
         let limit = config.budget.limits[0].to_budget_limit(&config.budget.default_enforcement);
 
         assert_eq!(limit.id, "test-limit");
-        assert_eq!(limit.scope, crate::dispatcher::model_router::BudgetScope::Global);
+        assert_eq!(
+            limit.scope,
+            crate::dispatcher::model_router::BudgetScope::Global
+        );
         assert!((limit.limit_usd - 50.0).abs() < 0.001);
         assert_eq!(limit.warning_thresholds.len(), 2);
-        assert_eq!(limit.enforcement, crate::dispatcher::model_router::BudgetEnforcement::WarnOnly);
+        assert_eq!(
+            limit.enforcement,
+            crate::dispatcher::model_router::BudgetEnforcement::WarnOnly
+        );
     }
 
     // =========================================================================
@@ -3502,7 +3518,9 @@ mod tests {
         assert!(config.validate(&profiles).is_ok());
 
         // Invalid model in strategy
-        config.strategies[0].models.push("unknown-model".to_string());
+        config.strategies[0]
+            .models
+            .push("unknown-model".to_string());
         assert!(config.validate(&profiles).is_err());
     }
 

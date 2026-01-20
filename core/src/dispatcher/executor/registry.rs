@@ -103,8 +103,8 @@ impl Default for ExecutorRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::executor::NoopExecutor;
     use crate::dispatcher::cowork_types::{FileOp, TaskType};
+    use crate::dispatcher::executor::NoopExecutor;
     use std::path::PathBuf;
 
     #[test]

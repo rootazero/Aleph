@@ -413,8 +413,7 @@ impl Default for PromptAnalyzerConfig {
 // =============================================================================
 
 /// Regex for detecting code blocks (markdown fenced code)
-static CODE_BLOCK_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"```[\s\S]*?```").unwrap());
+static CODE_BLOCK_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"```[\s\S]*?```").unwrap());
 
 /// Regex for detecting inline code
 static INLINE_CODE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`[^`]+`").unwrap());
@@ -425,8 +424,7 @@ static CODE_PATTERN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Regex for detecting Chinese characters
-static CHINESE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[\u4e00-\u9fff]").unwrap());
+static CHINESE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\u4e00-\u9fff]").unwrap());
 
 /// Regex for detecting Japanese characters (Hiragana and Katakana)
 static JAPANESE_REGEX: LazyLock<Regex> =
@@ -437,8 +435,7 @@ static KOREAN_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\uac00-\ud7af\u1100-\u11ff]").unwrap());
 
 /// Regex for detecting questions
-static QUESTION_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[?？]").unwrap());
+static QUESTION_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[?？]").unwrap());
 
 /// Regex for detecting imperative verbs at start of sentences
 static IMPERATIVE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -447,7 +444,10 @@ static IMPERATIVE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Regex for multi-step indicators
 static MULTI_STEP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:and then|first.*then|step \d|步骤|然后|首先.*然后|第[一二三四五六七八九十\d]+步)").unwrap()
+    Regex::new(
+        r"(?i)(?:and then|first.*then|step \d|步骤|然后|首先.*然后|第[一二三四五六七八九十\d]+步)",
+    )
+    .unwrap()
 });
 
 // =============================================================================
@@ -934,7 +934,8 @@ mod tests {
     fn test_language_detection_mixed() {
         let analyzer = create_analyzer();
         // Use a prompt with more balanced language mix
-        let features = analyzer.analyze("请帮我 write some code to implement sorting algorithm 用于排序数据");
+        let features =
+            analyzer.analyze("请帮我 write some code to implement sorting algorithm 用于排序数据");
         // The detection can vary based on character ratios - accept any reasonable result
         assert!(
             features.primary_language == Language::Mixed
@@ -1017,7 +1018,8 @@ Please explain it.
     #[test]
     fn test_reasoning_level_chinese() {
         let analyzer = create_analyzer();
-        let features = analyzer.analyze("请分析并解释为什么快速排序在最坏情况下是O(n²)。逐步推理。");
+        let features =
+            analyzer.analyze("请分析并解释为什么快速排序在最坏情况下是O(n²)。逐步推理。");
         assert!(matches!(
             features.reasoning_level,
             ReasoningLevel::Medium | ReasoningLevel::High

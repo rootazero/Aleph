@@ -141,7 +141,9 @@ impl<'a> IntelligentRouter<'a> {
         intent: &TaskIntent,
     ) -> Result<IntelligentRoutingResult, RoutingError> {
         let all_metrics = self.collector.all_metrics().await;
-        let candidates = self.get_metrics_scored_candidates(intent, &all_metrics).await;
+        let candidates = self
+            .get_metrics_scored_candidates(intent, &all_metrics)
+            .await;
 
         if candidates.is_empty() {
             // Fall back to basic intent routing
@@ -324,8 +326,8 @@ impl<'a> IntelligentRouter<'a> {
             let metrics_score = self.scorer.score(profile, metrics, intent);
 
             // Compute final combined score
-            let final_score = self.config.health_weight * health_score
-                + self.config.score_weight * metrics_score;
+            let final_score =
+                self.config.health_weight * health_score + self.config.score_weight * metrics_score;
 
             if final_score < self.config.min_score_threshold {
                 continue;
@@ -378,7 +380,10 @@ impl<'a> IntelligentRouter<'a> {
     }
 
     /// Select a candidate for exploration (prefer underused models)
-    fn select_exploration_candidate(&self, candidates: &[ScoredCandidate]) -> Option<ScoredCandidate> {
+    fn select_exploration_candidate(
+        &self,
+        candidates: &[ScoredCandidate],
+    ) -> Option<ScoredCandidate> {
         if candidates.is_empty() {
             return None;
         }

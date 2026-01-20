@@ -104,7 +104,6 @@ impl CostTier {
     }
 }
 
-
 impl std::fmt::Display for CostTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -129,7 +128,6 @@ pub enum LatencyTier {
     /// Slow response (>10s typical)
     Slow,
 }
-
 
 impl std::fmt::Display for LatencyTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

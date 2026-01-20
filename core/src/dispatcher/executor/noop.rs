@@ -134,13 +134,13 @@ mod tests {
             path: PathBuf::from("/tmp")
         })));
 
-        assert!(
-            executor.can_execute(&TaskType::AiInference(crate::dispatcher::cowork_types::AiTask {
+        assert!(executor.can_execute(&TaskType::AiInference(
+            crate::dispatcher::cowork_types::AiTask {
                 prompt: "test".into(),
                 requires_privacy: false,
                 has_images: false,
                 output_format: None,
-            }))
-        );
+            }
+        )));
     }
 }
