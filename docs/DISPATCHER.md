@@ -69,22 +69,15 @@ Tool source is indicated via UI badges (System, MCP, Skill, Custom), not command
 
 ---
 
-## Single Source of Truth (BUILTIN_COMMANDS)
+## Tool Registry
 
-The 3 builtin commands are defined in `dispatcher/builtin_defs.rs`:
+Tools are registered and managed through the ToolRegistry in `dispatcher/registry.rs`:
 
-```rust
-pub const BUILTIN_COMMANDS: &[BuiltinCommandDef] = &[
-    BuiltinCommandDef { name: "search", ... },
-    BuiltinCommandDef { name: "video", ... },
-    BuiltinCommandDef { name: "chat", ... },
-];
-```
+- **Native tools**: Registered via `executor/builtin_registry.rs`
+- **MCP tools**: Dynamic registration from MCP servers
+- **Skills**: Registered from skill definitions
 
-Used by:
-- `ToolRegistry.register_builtin_tools()` - for tool metadata
-- `get_builtin_routing_rules()` - for routing config
-- Config module - for default rules
+The registry provides unified access to all tool sources through a flat namespace.
 
 ---
 
@@ -227,23 +220,28 @@ try core.refreshTools()
 
 | Component | Location |
 |-----------|----------|
-| Dispatcher module | `Aether/core/src/dispatcher/` |
-| Builtin definitions | `dispatcher/builtin_defs.rs` |
+| **Dispatcher module** | `core/src/dispatcher/` |
 | Tool Registry | `dispatcher/registry.rs` |
-| L3 Router | `dispatcher/l3_router.rs` |
-| Prompt Builder | `dispatcher/prompt_builder.rs` |
-| Confirmation | `dispatcher/confirmation.rs` |
+| Dispatcher Engine | `dispatcher/engine.rs` |
+| Confirmation | `dispatcher/confirmation.rs`, `dispatcher/async_confirmation.rs` |
 | Integration | `dispatcher/integration.rs` |
-| L3 Agent Planning | `routing/planner.rs`, `routing/executor.rs` |
-| Quick Heuristics | `routing/heuristics.rs` |
-| Tool Handlers | `tools/handler.rs`, `tools/params/` |
-| Agent Loop | `agent/executor.rs` |
-| Rollback Support | `routing/rollback.rs` |
-| Swift event handler | `Sources/EventHandler.swift` |
-| Swift notifications | `Sources/Notifications.swift` |
-| Swift Plan UI | `Components/PlanConfirmationView.swift`, `Components/PlanProgressView.swift` |
-| Command completion | `Sources/Utils/CommandCompletionManager.swift` |
+| **Task Planning** | `dispatcher/planner/` (llm.rs, prompt.rs) |
+| **Task Execution** | `dispatcher/executor/` (file_ops.rs, code_exec.rs, permission.rs) |
+| **DAG Scheduling** | `dispatcher/scheduler/` |
+| **Progress Monitoring** | `dispatcher/monitor/` |
+| **Model Router** | `dispatcher/model_router/` (core/, health/, resilience/, intelligent/, advanced/) |
+| **Cowork Types** | `dispatcher/cowork_types/` |
+| **Thinker (LLM Decision)** | `thinker/` (prompt_builder.rs, decision_parser.rs, model_router.rs) |
+| **Intent Detection** | `intent/detection/` (classifier.rs, ai_detector.rs) |
+| **Intent Routing** | `intent/decision/router.rs` |
+| Rollback Support | `intent/support/rollback.rs` |
+| **Agent Loop** | `agent_loop/` (decision.rs, state.rs, guards.rs) |
+| **Executor** | `executor/` (single_step.rs, builtin_registry.rs) |
+| **Rig Tools** | `rig_tools/` (search.rs, web_fetch.rs, file_ops.rs, youtube.rs) |
+| Swift event handler | `platforms/macos/Aether/Sources/EventHandler.swift` |
+| Swift notifications | `platforms/macos/Aether/Sources/Notifications.swift` |
+| Command completion | `platforms/macos/Aether/Sources/Utils/CommandCompletionManager.swift` |
 
 ---
 
-**Last Updated**: 2026-01-11
+**Last Updated**: 2026-01-21
