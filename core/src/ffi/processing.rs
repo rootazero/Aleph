@@ -1157,9 +1157,25 @@ impl LlmTaskExecutor {
 #[async_trait::async_trait]
 impl GraphTaskExecutor for LlmTaskExecutor {
     async fn execute(&self, task: &Task, context: &str) -> crate::error::Result<TaskOutput> {
+        // Truncate context if too large
+        const MAX_CONTEXT_CHARS: usize = 50_000;
+        let context_to_use = if context.len() > MAX_CONTEXT_CHARS {
+            warn!(
+                task_id = %task.id,
+                actual_len = context.len(),
+                "Context too large, truncating to {} chars",
+                MAX_CONTEXT_CHARS
+            );
+            // Safe UTF-8 truncation
+            let truncated: String = context.chars().take(MAX_CONTEXT_CHARS).collect();
+            truncated
+        } else {
+            context.to_string()
+        };
+
         let prompt = format!(
             "{}\n\n请执行以下任务:\n任务: {}\n描述: {}\n\n请直接给出结果。",
-            context,
+            context_to_use,
             task.name,
             task.description.as_deref().unwrap_or("无"),
         );
@@ -1204,9 +1220,9 @@ impl ExecutionCallback for FfiExecutionCallback {
 
     async fn on_confirmation_required(&self, _plan: &TaskPlan) -> UserDecision {
         self.handler
-            .on_stream_chunk("此任务包含高风险操作，是否继续执行？\n".to_string());
-        // For now, auto-confirm. Real implementation would wait for user input.
-        UserDecision::Confirmed
+            .on_stream_chunk("⚠️ 此任务包含高风险操作，需要用户确认（当前未实现，已自动取消）\n".to_string());
+        // SAFETY: Default to Cancelled until real confirmation is implemented
+        UserDecision::Cancelled
     }
 
     async fn on_task_start(&self, _task_id: &str, task_name: &str) {
@@ -1295,10 +1311,16 @@ fn run_dag_execution(
         Ok(exec_result) => {
             if exec_result.cancelled {
                 handler.on_error("用户取消了任务执行".to_string());
+                return;
             } else if !exec_result.failed_tasks.is_empty() {
                 handler.on_error(format!("部分任务失败: {:?}", exec_result.failed_tasks));
+                return;
             }
-            handler.on_complete("".to_string());
+            let summary = format!(
+                "所有任务已完成 ({} 个任务成功)",
+                exec_result.completed_tasks.len()
+            );
+            handler.on_complete(summary);
         }
         Err(e) => {
             handler.on_error(format!("DAG 执行失败: {}", e));
