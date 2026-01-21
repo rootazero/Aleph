@@ -17,6 +17,14 @@
 //! ModelProfile (selected)
 //! ```
 //!
+//! # Module Structure
+//!
+//! - **core/**: Core routing (matcher, profiles, rules, scoring)
+//! - **health/**: Health monitoring (status, manager, metrics, collector)
+//! - **resilience/**: Fault tolerance (retry, failover, budget, orchestrator)
+//! - **intelligent/**: Smart routing P2 (prompt analyzer, semantic cache)
+//! - **advanced/**: Advanced features P3 (A/B testing, ensemble)
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -29,116 +37,64 @@
 //! let profile = matcher.route(&task)?;
 //! ```
 
-mod ab_testing;
-mod budget;
-mod collector;
-mod context;
-mod ensemble;
-mod failover;
-mod health;
-mod health_manager;
-mod intelligent_routing;
-mod intent;
-mod matcher;
-mod metrics;
-mod orchestrated_router;
-mod orchestrator;
-mod p2_router;
-mod p3_router;
-mod profiles;
-mod prompt_analyzer;
-mod retry;
-mod rules;
-mod scoring;
-mod semantic_cache;
-mod transition_engine;
+// Submodules
+pub mod advanced;
+pub mod core;
+pub mod health;
+pub mod intelligent;
+pub mod resilience;
 
-pub use collector::{
-    HybridMetricsCollector, InMemoryMetricsCollector, MetricsCollector, MetricsConfig,
-    MetricsError, RingBuffer,
+// Re-export from core
+pub use core::{
+    Capability, CostStrategy, CostTier, DynamicScorer, FallbackProvider, LatencyTier,
+    ModelMatcher, ModelProfile, ModelRouter, ModelRoutingRules, RoutingError, ScoreResult,
+    ScoringConfig, TaskContextManager, TaskIntent,
 };
-pub use context::TaskContextManager;
+
+// Re-export from health
 pub use health::{
-    CallPermission, CircuitBreakerConfig, CircuitBreakerState, CircuitState, DegradationReason,
-    ErrorType, HealthConfig, HealthError, HealthEvent, HealthStatus, ModelHealth,
-    ModelHealthSummary, ProbeConfig, ProbeEndpoint, RateLimitInfo, UnhealthyReason,
-};
-pub use health_manager::{HealthManager, HealthStatistics};
-pub use intelligent_routing::{
-    IntelligentRouter, IntelligentRoutingConfig, IntelligentRoutingResult,
-};
-pub use intent::TaskIntent;
-pub use matcher::{FallbackProvider, ModelMatcher, ModelRouter, RoutingError};
-pub use metrics::{
-    CallOutcome, CallRecord, CostStats, ErrorDistribution, IntentMetrics, LatencyStats,
-    ModelMetrics, MultiWindowMetrics, RateLimitState, UserFeedback, WindowConfig,
-};
-pub use profiles::{Capability, CostTier, LatencyTier, ModelProfile};
-pub use rules::{CostStrategy, ModelRoutingRules};
-pub use scoring::{DynamicScorer, ScoreResult, ScoringConfig};
-pub use transition_engine::{CallResult, HealthTransitionEngine, TransitionResult};
-
-// Retry and Failover (P1)
-pub use failover::{FailoverChain, FailoverConfig, FailoverSelectionMode};
-pub use retry::{BackoffStrategy, RetryPolicy, RetryableOutcome};
-
-// Budget Management (P1)
-pub use budget::{
-    BudgetCheckResult, BudgetEnforcement, BudgetEvent, BudgetLimit, BudgetManager, BudgetPeriod,
-    BudgetScope, BudgetState, CostEstimate, CostEstimator, ModelPricing, PricingSource,
+    CallOutcome, CallPermission, CallRecord, CallResult, CircuitBreakerConfig, CircuitBreakerState,
+    CircuitState, CostStats, DegradationReason, ErrorDistribution, ErrorType, HealthConfig,
+    HealthError, HealthEvent, HealthManager, HealthStatistics, HealthStatus,
+    HealthTransitionEngine, HybridMetricsCollector, InMemoryMetricsCollector, IntentMetrics,
+    LatencyStats, MetricsCollector, MetricsConfig, MetricsError, ModelHealth, ModelHealthSummary,
+    ModelMetrics, MultiWindowMetrics, ProbeConfig, ProbeEndpoint, RateLimitInfo, RateLimitState,
+    RingBuffer, TransitionResult, UnhealthyReason, UserFeedback, WindowConfig,
 };
 
-// Retry Orchestrator (P1)
-pub use orchestrator::{
-    AttemptRecord, ExecutionError, ExecutionRequest, ExecutionResult, OrchestratorConfig,
-    OrchestratorEvent, RetryOrchestrator,
+// Re-export from resilience (P1)
+pub use resilience::{
+    AttemptRecord, BackoffStrategy, BudgetCheckResult, BudgetCheckResultSummary, BudgetEnforcement,
+    BudgetEvent, BudgetLimit, BudgetManager, BudgetPeriod, BudgetScope, BudgetState, CostEstimate,
+    CostEstimator, ExecutionError, ExecutionRequest, ExecutionResult, FailoverChain,
+    FailoverConfig, FailoverSelectionMode, ModelPricing, OrchestratedRouter,
+    OrchestratedRouterConfig, OrchestratorConfig, OrchestratorEvent, PricingSource, RetryOrchestrator,
+    RetryPolicy, RetryableOutcome, RouterEvent, RoutingExecutionError, RoutingRequest,
+    RoutingResult,
 };
 
-// Orchestrated Router (P1) - Full integration
-pub use orchestrated_router::{
-    BudgetCheckResultSummary, OrchestratedRouter, OrchestratedRouterConfig, RouterEvent,
-    RoutingExecutionError, RoutingRequest, RoutingResult,
+// Re-export from intelligent (P2)
+pub use intelligent::{
+    CacheEntry, CacheHit, CacheHitType, CacheMetadata, CacheStats, CachedResponse,
+    ComplexityWeights, ContextSize, Domain, EmbeddingError, EvictionPolicy, FastEmbedEmbedder,
+    InMemoryVectorStore, IntelligentRouter, IntelligentRoutingConfig, IntelligentRoutingResult,
+    Language, P2IntelligentRouter, P2RouterConfig, P2RouterError, PreRouteResult, PromptAnalysisError,
+    PromptAnalyzer, PromptAnalyzerConfig, PromptFeatures, ReasoningLevel, RoutingDecision,
+    SemanticCacheConfig, SemanticCacheError, SemanticCacheManager, TechnicalDomain, TextEmbedder,
 };
 
-// Prompt Analyzer (P2)
-pub use prompt_analyzer::{
-    ComplexityWeights, ContextSize, Domain, Language, PromptAnalysisError, PromptAnalyzer,
-    PromptAnalyzerConfig, PromptFeatures, ReasoningLevel, TechnicalDomain,
-};
-
-// Semantic Cache (P2)
-pub use semantic_cache::{
-    CacheEntry, CacheHit, CacheHitType, CacheMetadata, CacheStats, CachedResponse, EmbeddingError,
-    EvictionPolicy, FastEmbedEmbedder, InMemoryVectorStore, SemanticCacheConfig,
-    SemanticCacheError, SemanticCacheManager, TextEmbedder,
-};
-
-// P2 Intelligent Router (P2) - Integrates Prompt Analysis + Semantic Cache
-pub use p2_router::{
-    P2IntelligentRouter, P2RouterConfig, P2RouterError, PreRouteResult, RoutingDecision,
-};
-
-// A/B Testing Framework (P3)
-pub use ab_testing::{
-    ABTestingEngine, AssignmentStrategy, ExperimentConfig, ExperimentId, ExperimentOutcome,
-    ExperimentReport, ExperimentStatus, ExperimentValidationError, MetricStats, MetricSummary,
-    OutcomeTracker, SignificanceCalculator, SignificanceResult, TrackedMetric, TrafficSplitManager,
-    VariantAssignment, VariantConfig, VariantId, VariantStats, VariantSummary,
-};
-
-// Multi-Model Ensemble (P3)
-pub use ensemble::{
-    create_scorer, jaccard_similarity, ConfidenceMarkersScorer, EnsembleConfig, EnsembleDecision,
+// Re-export from advanced (P3)
+pub use advanced::{
+    ABTestingEngine, AssignmentStrategy, ConfidenceMarkersScorer, EnsembleConfig, EnsembleDecision,
     EnsembleEngine, EnsembleEngineConfig, EnsembleExecutionError, EnsembleMode, EnsembleRequest,
-    EnsembleResult, EnsembleStrategy, EnsembleValidationError, LengthAndStructureScorer,
-    LengthScorer, ModelExecutionResult, ParallelExecutor, QualityMetric, QualityScorer,
-    RelevanceScorer, ResponseAggregator, StructureScorer, TokenUsage,
-};
-
-// P3 Intelligent Router (P3) - Integrates A/B Testing + Ensemble with P2
-pub use p3_router::{
-    P3EnsembleDecision, P3IntelligentRouter, P3PreRouteResult, P3RouterConfig, P3RouterError,
-    P3RouterEvent, P3RoutingDecision, UserIdMode,
+    EnsembleResult, EnsembleStrategy, EnsembleValidationError, ExperimentConfig, ExperimentId,
+    ExperimentOutcome, ExperimentReport, ExperimentStatus, ExperimentValidationError,
+    LengthAndStructureScorer, LengthScorer, MetricStats, MetricSummary, ModelExecutionResult,
+    OutcomeTracker, P3EnsembleDecision, P3IntelligentRouter, P3PreRouteResult, P3RouterConfig,
+    P3RouterError, P3RouterEvent, P3RoutingDecision, ParallelExecutor, QualityMetric, QualityScorer,
+    RelevanceScorer, ResponseAggregator, SignificanceCalculator, SignificanceResult,
+    StructureScorer, TokenUsage, TrackedMetric, TrafficSplitManager, UserIdMode, VariantAssignment,
+    VariantConfig, VariantId, VariantStats, VariantSummary, create_scorer, jaccard_similarity,
 };
 
 // Re-export StageResult from cowork_types module for backward compatibility

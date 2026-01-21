@@ -3,9 +3,7 @@
 //! This module provides failover chain configuration and model selection
 //! strategies for resilient routing when primary models are unavailable.
 
-use super::health::HealthStatus;
-use super::health_manager::HealthManager;
-use super::profiles::{Capability, CostTier, ModelProfile};
+use crate::dispatcher::model_router::{Capability, CostTier, HealthManager, HealthStatus, ModelProfile};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 

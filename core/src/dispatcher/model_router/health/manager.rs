@@ -3,10 +3,10 @@
 //! This module provides centralized health management for AI models,
 //! including state tracking, event broadcasting, and recovery probing.
 
-use super::health::{
+use super::status::{
     HealthConfig, HealthError, HealthEvent, HealthStatus, ModelHealth, ModelHealthSummary,
 };
-use super::transition_engine::{CallResult, HealthTransitionEngine};
+use super::transition::{CallResult, HealthTransitionEngine};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;

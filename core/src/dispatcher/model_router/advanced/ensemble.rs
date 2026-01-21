@@ -49,7 +49,7 @@
 //! }).await;
 //! ```
 
-use super::{ModelProfile, TaskIntent};
+use crate::dispatcher::model_router::{ModelProfile, TaskIntent};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;

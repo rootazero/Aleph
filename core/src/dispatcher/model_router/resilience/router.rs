@@ -18,19 +18,16 @@
 //! ```
 
 use super::budget::{BudgetCheckResult, BudgetManager, BudgetScope};
-use super::collector::MetricsCollector;
 use super::failover::{FailoverChain, FailoverSelectionMode};
-use super::health_manager::HealthManager;
-use super::matcher::{ModelMatcher, ModelRouter, RoutingError};
-use super::metrics::CallOutcome;
 use super::orchestrator::{
     ExecutionError, ExecutionRequest, ExecutionResult, OrchestratorConfig, OrchestratorEvent,
     RetryOrchestrator,
 };
-use super::profiles::{Capability, ModelProfile};
 use super::retry::{BackoffStrategy, RetryPolicy};
-use super::scoring::DynamicScorer;
-use super::TaskIntent;
+use crate::dispatcher::model_router::{
+    CallOutcome, Capability, DynamicScorer, HealthManager, MetricsCollector, ModelMatcher,
+    ModelProfile, ModelRouter, RoutingError, TaskIntent,
+};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -726,11 +723,11 @@ impl OrchestratedRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::model_router::collector::{InMemoryMetricsCollector, MetricsConfig};
-    use crate::dispatcher::model_router::health::HealthConfig;
-    use crate::dispatcher::model_router::profiles::{CostTier, LatencyTier};
-    use crate::dispatcher::model_router::rules::ModelRoutingRules;
-    use crate::dispatcher::model_router::scoring::ScoringConfig;
+    use crate::dispatcher::model_router::health::collector::{InMemoryMetricsCollector, MetricsConfig};
+    use crate::dispatcher::model_router::health::status::HealthConfig;
+    use crate::dispatcher::model_router::core::profiles::{CostTier, LatencyTier};
+    use crate::dispatcher::model_router::core::rules::ModelRoutingRules;
+    use crate::dispatcher::model_router::core::scoring::ScoringConfig;
 
     fn create_test_profiles() -> Vec<ModelProfile> {
         vec![

@@ -11,12 +11,10 @@
 
 use super::budget::{BudgetCheckResult, BudgetManager, BudgetScope, CostEstimate};
 use super::failover::FailoverChain;
-use super::health::HealthStatus;
-use super::health_manager::HealthManager;
-use super::metrics::CallOutcome;
-use super::profiles::ModelProfile;
 use super::retry::{BackoffStrategy, RetryPolicy};
-use super::TaskIntent;
+use crate::dispatcher::model_router::{
+    CallOutcome, HealthManager, HealthStatus, ModelProfile, TaskIntent,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
@@ -923,7 +921,7 @@ impl RetryOrchestrator {
     async fn get_cost_tiers(
         &self,
         chain: &FailoverChain,
-    ) -> HashMap<String, super::profiles::CostTier> {
+    ) -> HashMap<String, crate::dispatcher::model_router::CostTier> {
         let profiles = self.profiles.read().await;
         let mut tiers = HashMap::new();
 

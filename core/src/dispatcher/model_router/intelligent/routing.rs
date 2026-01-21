@@ -3,12 +3,10 @@
 //! This module extends ModelMatcher with health-aware and metrics-aware routing
 //! capabilities for optimal model selection.
 
-use super::collector::MetricsCollector;
-use super::health_manager::HealthManager;
-use super::matcher::{ModelMatcher, ModelRouter, RoutingError};
-use super::profiles::ModelProfile;
-use super::scoring::DynamicScorer;
-use super::TaskIntent;
+use crate::dispatcher::model_router::{
+    DynamicScorer, HealthManager, MetricsCollector, ModelMatcher, ModelProfile, ModelRouter,
+    RoutingError, TaskIntent,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -275,7 +273,7 @@ impl<'a> IntelligentRouter<'a> {
     async fn get_metrics_scored_candidates(
         &self,
         intent: &TaskIntent,
-        all_metrics: &HashMap<String, super::metrics::MultiWindowMetrics>,
+        all_metrics: &HashMap<String, crate::dispatcher::model_router::MultiWindowMetrics>,
     ) -> Vec<ScoredCandidate> {
         let profiles = self.matcher.profiles();
         let mut candidates = Vec::new();
@@ -308,7 +306,7 @@ impl<'a> IntelligentRouter<'a> {
     async fn get_combined_candidates(
         &self,
         intent: &TaskIntent,
-        all_metrics: &HashMap<String, super::metrics::MultiWindowMetrics>,
+        all_metrics: &HashMap<String, crate::dispatcher::model_router::MultiWindowMetrics>,
     ) -> Vec<ScoredCandidate> {
         let profiles = self.matcher.profiles();
         let mut candidates = Vec::new();
@@ -351,7 +349,7 @@ impl<'a> IntelligentRouter<'a> {
 
     /// Compute health score for a model (0.0-1.0)
     async fn compute_health_score(&self, model_id: &str) -> f64 {
-        use super::health::HealthStatus;
+        use crate::dispatcher::model_router::HealthStatus;
 
         let status = self.health_manager.get_status(model_id).await;
         match status {
@@ -491,11 +489,11 @@ impl ModelMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::model_router::collector::{InMemoryMetricsCollector, MetricsConfig};
-    use crate::dispatcher::model_router::health::{ErrorType, HealthConfig, HealthError};
-    use crate::dispatcher::model_router::profiles::{Capability, CostTier, LatencyTier};
-    use crate::dispatcher::model_router::rules::ModelRoutingRules;
-    use crate::dispatcher::model_router::scoring::ScoringConfig;
+    use crate::dispatcher::model_router::health::collector::{InMemoryMetricsCollector, MetricsConfig};
+    use crate::dispatcher::model_router::health::status::{ErrorType, HealthConfig, HealthError};
+    use crate::dispatcher::model_router::core::profiles::{Capability, CostTier, LatencyTier};
+    use crate::dispatcher::model_router::core::rules::ModelRoutingRules;
+    use crate::dispatcher::model_router::core::scoring::ScoringConfig;
     use std::time::Duration;
 
     fn create_test_profiles() -> Vec<ModelProfile> {

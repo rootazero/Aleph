@@ -3,7 +3,7 @@
 //! This module implements the state machine for health status transitions,
 //! including circuit breaker logic and transition rule evaluation.
 
-use super::health::{
+use super::status::{
     CircuitState, DegradationReason, HealthConfig, HealthError, HealthEvent, HealthStatus,
     ModelHealth, UnhealthyReason,
 };
@@ -480,7 +480,7 @@ impl HealthTransitionEngine {
         limit: u32,
         reset_at: Option<SystemTime>,
     ) -> Option<HealthEvent> {
-        use super::health::RateLimitInfo;
+        use super::status::RateLimitInfo;
 
         let info = RateLimitInfo::new(remaining, limit, reset_at);
         let remaining_percent = info.remaining_percent();

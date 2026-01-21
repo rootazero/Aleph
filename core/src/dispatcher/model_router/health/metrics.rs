@@ -3,7 +3,7 @@
 //! This module provides data structures for collecting and aggregating
 //! runtime metrics from AI model API calls to enable data-driven routing.
 
-use super::TaskIntent;
+use crate::dispatcher::model_router::TaskIntent;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};

@@ -54,15 +54,13 @@
 
 use std::sync::Arc;
 
-use super::matcher::{ModelMatcher, ModelRouter};
-use super::profiles::{Capability, ModelProfile};
 use super::prompt_analyzer::{
     Domain, Language, PromptAnalyzer, PromptAnalyzerConfig, PromptFeatures, ReasoningLevel,
 };
 use super::semantic_cache::{
     CacheHit, CacheMetadata, CachedResponse, SemanticCacheConfig, SemanticCacheManager,
 };
-use super::TaskIntent;
+use crate::dispatcher::model_router::{Capability, ModelMatcher, ModelProfile, ModelRouter, TaskIntent};
 
 // =============================================================================
 // Configuration
@@ -519,8 +517,8 @@ pub enum P2RouterError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::model_router::profiles::{CostTier, LatencyTier};
-    use crate::dispatcher::model_router::rules::{CostStrategy, ModelRoutingRules};
+    use crate::dispatcher::model_router::core::profiles::{CostTier, LatencyTier};
+    use crate::dispatcher::model_router::core::rules::{CostStrategy, ModelRoutingRules};
     use crate::dispatcher::model_router::ContextSize;
 
     fn create_test_profiles() -> Vec<ModelProfile> {

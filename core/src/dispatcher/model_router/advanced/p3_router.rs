@@ -70,11 +70,10 @@ use super::ensemble::{
     EnsembleConfig, EnsembleDecision, EnsembleEngine, EnsembleEngineConfig, EnsembleRequest,
     EnsembleResult,
 };
-use super::matcher::ModelMatcher;
-use super::p2_router::{P2IntelligentRouter, P2RouterConfig, P2RouterError, RoutingDecision};
-use super::profiles::ModelProfile;
-use super::semantic_cache::{CacheHit, CacheMetadata, CachedResponse};
-use super::TaskIntent;
+use crate::dispatcher::model_router::{
+    CacheHit, CacheMetadata, CachedResponse, ModelMatcher, ModelProfile, P2IntelligentRouter,
+    P2RouterConfig, P2RouterError, RoutingDecision, TaskIntent,
+};
 
 // =============================================================================
 // Configuration
@@ -299,13 +298,13 @@ impl P3IntelligentRouter {
             .map_err(P3RouterError::P2Error)?;
 
         // If cache hit, return immediately
-        if let super::p2_router::PreRouteResult::CacheHit(hit) = p2_result {
+        if let crate::dispatcher::model_router::PreRouteResult::CacheHit(hit) = p2_result {
             return Ok(P3PreRouteResult::CacheHit(hit));
         }
 
         // Get the P2 routing decision
         let p2_decision = match p2_result {
-            super::p2_router::PreRouteResult::RoutingDecision(d) => d,
+            crate::dispatcher::model_router::PreRouteResult::RoutingDecision(d) => d,
             _ => unreachable!(),
         };
 
@@ -462,7 +461,7 @@ impl P3IntelligentRouter {
     // =========================================================================
 
     /// Get cache reference from P2 router
-    fn p2_router_cache(&self) -> Option<Arc<super::semantic_cache::SemanticCacheManager>> {
+    fn p2_router_cache(&self) -> Option<Arc<crate::dispatcher::model_router::SemanticCacheManager>> {
         // Note: This requires P2IntelligentRouter to expose cache
         // For now, return None - cache operations are done via P2 router
         None
@@ -624,7 +623,7 @@ mod tests {
 
     #[test]
     fn test_p3_pre_route_result_checks() {
-        use super::super::semantic_cache::{CacheEntry, CacheHit, CacheHitType, CacheMetadata};
+        use crate::dispatcher::model_router::intelligent::semantic_cache::{CacheEntry, CacheHit, CacheHitType, CacheMetadata};
 
         // Create a test CacheEntry manually
         let entry = CacheEntry {
@@ -748,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_p3_pre_route_result_variants() {
-        use super::super::semantic_cache::{CacheEntry, CacheHit, CacheHitType, CacheMetadata};
+        use crate::dispatcher::model_router::intelligent::semantic_cache::{CacheEntry, CacheHit, CacheHitType, CacheMetadata};
 
         // Test CacheHit variant
         let entry = CacheEntry {

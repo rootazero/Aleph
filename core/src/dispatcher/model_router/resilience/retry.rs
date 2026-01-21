@@ -3,7 +3,7 @@
 //! This module provides configuration types for retry behavior and backoff
 //! delay calculation strategies for resilient API call execution.
 
-use super::CallOutcome;
+use crate::dispatcher::model_router::CallOutcome;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

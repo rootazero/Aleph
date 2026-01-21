@@ -49,7 +49,7 @@
 //! }
 //! ```
 
-use super::{CostStrategy, PromptFeatures, TaskIntent};
+use crate::dispatcher::model_router::{CostStrategy, PromptFeatures, TaskIntent};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
 use std::collections::{HashMap, VecDeque};

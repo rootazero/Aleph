@@ -3,9 +3,9 @@
 //! This module provides scoring algorithms to rank models based on
 //! runtime metrics for intelligent routing decisions.
 
-use super::metrics::{ModelMetrics, MultiWindowMetrics};
 use super::profiles::{CostTier, LatencyTier, ModelProfile};
 use super::TaskIntent;
+use crate::dispatcher::model_router::health::metrics::{ModelMetrics, MultiWindowMetrics};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================

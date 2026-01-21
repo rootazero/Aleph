@@ -4,8 +4,7 @@
 //! It tracks spending in real-time, enforces configurable limits at multiple scopes,
 //! and provides visibility into budget status for UI display.
 
-use super::metrics::CallRecord;
-use super::profiles::CostTier;
+use crate::dispatcher::model_router::{CallRecord, CostTier};
 use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

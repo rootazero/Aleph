@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 
-use super::TaskIntent;
+use crate::dispatcher::model_router::TaskIntent;
 
 // =============================================================================
 // Core Types
