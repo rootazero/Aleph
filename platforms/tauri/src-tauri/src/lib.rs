@@ -1,5 +1,6 @@
 mod commands;
 mod error;
+mod shortcuts;
 mod tray;
 
 use tauri::Manager;
@@ -26,6 +27,11 @@ pub fn run() {
         .setup(|app| {
             // Create system tray
             let _tray = tray::create_tray(app.handle())?;
+
+            // Register global shortcuts
+            if let Err(e) = shortcuts::register_shortcuts(app.handle()) {
+                tracing::error!("Failed to register shortcuts: {:?}", e);
+            }
 
             // Get windows
             let halo_window = app.get_webview_window("halo");

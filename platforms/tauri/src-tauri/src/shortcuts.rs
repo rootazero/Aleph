@@ -1,0 +1,68 @@
+use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+use crate::commands::show_halo_window;
+use crate::error::Result;
+
+/// Register global shortcuts for the application
+pub fn register_shortcuts<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
+    let manager = app.global_shortcut();
+
+    // Register Ctrl+Alt+Space (or Cmd+Option+Space on macOS) to show Halo
+    let show_halo_shortcut = Shortcut::new(
+        Some(Modifiers::CONTROL | Modifiers::ALT),
+        Code::Space,
+    );
+
+    let app_handle = app.clone();
+    manager
+        .on_shortcut(show_halo_shortcut, move |_app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                tracing::info!("Global shortcut triggered: Show Halo");
+                let handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = show_halo_window(handle).await {
+                        tracing::error!("Failed to show halo window: {:?}", e);
+                    }
+                });
+            }
+        })
+        .map_err(|e| crate::error::AetherError::Unknown(e.to_string()))?;
+
+    // Register Ctrl+Alt+/ (or Cmd+Option+/ on macOS) for command completion
+    let command_shortcut = Shortcut::new(
+        Some(Modifiers::CONTROL | Modifiers::ALT),
+        Code::Slash,
+    );
+
+    let app_handle2 = app.clone();
+    manager
+        .on_shortcut(command_shortcut, move |_app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                tracing::info!("Global shortcut triggered: Command completion");
+                // Emit event to frontend
+                if let Some(window) = app_handle2.get_webview_window("halo") {
+                    let _ = window.emit("shortcut:command", ());
+                }
+            }
+        })
+        .map_err(|e| crate::error::AetherError::Unknown(e.to_string()))?;
+
+    tracing::info!("Global shortcuts registered successfully");
+    tracing::info!("  - Ctrl+Alt+Space: Show Halo");
+    tracing::info!("  - Ctrl+Alt+/: Command completion");
+
+    Ok(())
+}
+
+/// Unregister all global shortcuts
+#[allow(dead_code)]
+pub fn unregister_shortcuts<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
+    let manager = app.global_shortcut();
+    manager
+        .unregister_all()
+        .map_err(|e| crate::error::AetherError::Unknown(e.to_string()))?;
+
+    tracing::info!("Global shortcuts unregistered");
+    Ok(())
+}
