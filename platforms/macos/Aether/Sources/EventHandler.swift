@@ -745,7 +745,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         Task { @MainActor [weak self] in
             guard let self = self, let core = self.core else {
                 print("[EventHandler] Error: EventHandler or core is nil, auto-cancelling")
-                self?.core?.confirmTaskPlan(planId: planId, confirmed: false)
+                _ = self?.core?.confirmTaskPlan(planId: planId, confirmed: false)
                 return
             }
 
@@ -784,6 +784,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     }
 
     /// Show a confirmation dialog for the DAG task plan (Halo mode)
+    @MainActor
     private func showPlanConfirmationDialogWithInfo(planId: String, planInfo: PlanConfirmationInfo, core: AetherCore) {
         // Create a simple alert for confirmation
         let alert = NSAlert()
