@@ -3,27 +3,15 @@
 //! Provides capability-based security, path sandboxing, and resource quotas.
 
 mod capability;
+mod gate;
 
 pub use capability::{Capability, CapabilityLevel};
+pub use gate::{CapabilityDenied, CapabilityGate};
 
 // ===== Placeholder types for future implementation =====
 // These will be properly implemented in subsequent tasks
 
-use std::collections::HashSet;
 use std::path::PathBuf;
-
-/// Gate that controls capability access
-///
-/// TODO: Implement in Task 1.x
-#[derive(Debug, Clone, Default)]
-pub struct CapabilityGate {
-    /// Capabilities that are allowed
-    pub allowed: HashSet<Capability>,
-    /// Capabilities that require confirmation
-    pub confirmation_required: HashSet<Capability>,
-    /// Capabilities that are blocked
-    pub blocked: HashSet<Capability>,
-}
 
 /// Sandbox for path access control
 ///
