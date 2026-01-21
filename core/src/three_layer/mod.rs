@@ -26,9 +26,11 @@
 //! ]);
 //! ```
 
+pub mod orchestrator;
 pub mod safety;
 
 // Re-exports for convenience
+pub use orchestrator::{GuardChecker, GuardViolation};
 pub use safety::{
     Capability, CapabilityDenied, CapabilityGate, CapabilityLevel, PathSandbox, SandboxViolation,
 };
