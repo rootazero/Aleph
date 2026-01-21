@@ -89,7 +89,7 @@ For AI-powered analysis or generation:
 ```
 
 ### image_generation
-For generating images using AI models:
+For generating images using AI models (DALL-E, Stable Diffusion, Midjourney, Nano Banana, Flux, SDXL, etc.):
 ```json
 {
   "type": "image_generation",
@@ -99,10 +99,11 @@ For generating images using AI models:
   "output_path": "/optional/path/to/save/image.png"
 }
 ```
+Common models: dall-e-3, dall-e-2, stable-diffusion-xl, stable-diffusion-3, midjourney, nano-banana, nano-banana-2, flux-pro, flux-dev, flux-schnell
 Note: Use ONLY providers and models from the "Available Image Generation Providers" section below.
 
 ### video_generation
-For generating videos using AI models:
+For generating videos using AI models (Veo, Veo3, Runway, Pika, Sora, Kling, etc.):
 ```json
 {
   "type": "video_generation",
@@ -113,10 +114,11 @@ For generating videos using AI models:
   "duration": 10
 }
 ```
+Common models: veo, veo2, veo3, runway-gen3, runway-gen2, pika-1.0, pika-1.5, sora, kling, minimax
 Note: Use ONLY providers and models from the "Available Video Generation Providers" section below.
 
 ### audio_generation
-For generating audio using AI models (TTS, music, sound effects):
+For generating audio using AI models - includes TTS (text-to-speech), music generation, and sound effects (OpenAI TTS, Azure TTS, ElevenLabs, Suno, Udio, etc.):
 ```json
 {
   "type": "audio_generation",
@@ -127,6 +129,7 @@ For generating audio using AI models (TTS, music, sound effects):
   "voice": "optional_voice_name"
 }
 ```
+Common models: tts-1, tts-1-hd (OpenAI), eleven_multilingual_v2, eleven_turbo_v2 (ElevenLabs), azure-tts, suno-v3, suno-v4, udio, bark, musicgen
 Note: Use ONLY providers and models from the "Available Audio Generation Providers" section below.
 
 ## Rules
