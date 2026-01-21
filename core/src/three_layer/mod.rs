@@ -35,4 +35,4 @@ pub use orchestrator::{GuardChecker, GuardViolation, OrchestratorState};
 pub use safety::{
     Capability, CapabilityDenied, CapabilityGate, CapabilityLevel, PathSandbox, SandboxViolation,
 };
-pub use skill::{SkillDefinition, SkillNode, SkillNodeType};
+pub use skill::{SkillDefinition, SkillNode, SkillNodeType, SkillRegistry};
