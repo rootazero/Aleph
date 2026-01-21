@@ -33,6 +33,7 @@ pub mod skill;
 // Re-exports for convenience
 pub use orchestrator::{GuardChecker, GuardViolation, OrchestratorState};
 pub use safety::{
-    Capability, CapabilityDenied, CapabilityGate, CapabilityLevel, PathSandbox, SandboxViolation,
+    Capability, CapabilityDenied, CapabilityGate, CapabilityLevel, PathSandbox, QuotaExceeded,
+    QuotaTracker, QuotaUsage, ResourceQuota, SandboxViolation,
 };
 pub use skill::{SkillDefinition, SkillNode, SkillNodeType, SkillRegistry};
