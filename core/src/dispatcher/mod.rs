@@ -63,6 +63,9 @@ pub mod scheduler;
 
 mod engine;
 
+// === Task Context ===
+pub mod context;
+
 // === Task Analysis ===
 pub mod analyzer;
 
@@ -103,6 +106,9 @@ pub use model_router::{
 pub use monitor::{ProgressEvent, ProgressMonitor, ProgressSubscriber, TaskMonitor};
 pub use planner::{LlmTaskPlanner, TaskPlanner};
 pub use scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
+
+// === Re-exports: Task Context ===
+pub use context::{OutputType, TaskContext, TaskOutput};
 
 // === Re-exports: Task Analysis ===
 pub use analyzer::{AnalysisResult, TaskAnalyzer};
