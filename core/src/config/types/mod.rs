@@ -13,10 +13,10 @@
 //! - `video`: Video transcript settings (VideoConfig)
 //! - `skills`: Claude Agent Skills settings (SkillsConfig)
 //! - `dispatcher`: Dispatcher Layer settings (DispatcherConfigToml)
-//! - `cowork`: Cowork task orchestration settings (CoworkConfigToml)
+//! - `agent`: Agent task orchestration settings (AgentConfigToml)
 //! - `orchestrator`: Three-Layer Control orchestrator settings (OrchestratorConfig, OrchestratorGuards)
 
-pub mod cowork;
+pub mod agent;
 pub mod dispatcher;
 pub mod general;
 pub mod generation;
@@ -33,7 +33,7 @@ pub mod video;
 
 // Re-export all types for backward compatibility
 // Users can still use `use crate::config::XXX` instead of `use crate::config::types::XXX`
-pub use cowork::*;
+pub use agent::*;
 pub use dispatcher::*;
 pub use general::*;
 pub use generation::*;

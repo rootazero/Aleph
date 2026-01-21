@@ -89,9 +89,10 @@ pub struct Config {
     /// Dispatcher Layer configuration (intelligent tool routing)
     #[serde(default)]
     pub dispatcher: DispatcherConfigToml,
-    /// Cowork task orchestration configuration
-    #[serde(default)]
-    pub cowork: CoworkConfigToml,
+    /// Agent task orchestration configuration (renamed from cowork)
+    /// Supports both [agent] and [cowork] sections for backward compatibility
+    #[serde(default, alias = "cowork")]
+    pub agent: CoworkConfigToml,
     /// Policies configuration (mechanism-policy separation)
     /// Contains configurable behavioral parameters extracted from mechanism code
     #[serde(default)]
@@ -185,7 +186,7 @@ impl Default for Config {
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),
             dispatcher: DispatcherConfigToml::default(),
-            cowork: CoworkConfigToml::default(),
+            agent: CoworkConfigToml::default(),
             policies: PoliciesConfig::default(),
             generation: GenerationConfig::default(),
             orchestrator: OrchestratorConfig::default(),
@@ -852,31 +853,31 @@ impl Config {
             }
         }
 
-        // Validate Cowork config
-        if let Err(e) = self.cowork.validate() {
-            error!(error = %e, "Cowork config validation failed");
+        // Validate Agent config
+        if let Err(e) = self.agent.validate() {
+            error!(error = %e, "Agent config validation failed");
             return Err(AetherError::invalid_config(e));
         }
 
         // Validate planner_provider exists if specified
-        if let Some(ref provider_name) = self.cowork.planner_provider {
+        if let Some(ref provider_name) = self.agent.planner_provider {
             if !self.providers.contains_key(provider_name) {
                 error!(
                     provider = %provider_name,
-                    "Cowork planner_provider not found in providers"
+                    "Agent planner_provider not found in providers"
                 );
                 return Err(AetherError::invalid_config(format!(
-                    "Cowork planner_provider '{}' not found in providers",
+                    "Agent planner_provider '{}' not found in providers",
                     provider_name
                 )));
             }
         }
 
         debug!(
-            enabled = self.cowork.enabled,
-            require_confirmation = self.cowork.require_confirmation,
-            max_parallelism = self.cowork.max_parallelism,
-            "Cowork config validated"
+            enabled = self.agent.enabled,
+            require_confirmation = self.agent.require_confirmation,
+            max_parallelism = self.agent.max_parallelism,
+            "Agent config validated"
         );
 
         info!(

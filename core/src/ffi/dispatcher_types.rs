@@ -32,7 +32,7 @@ use crate::dispatcher::model_router::{
     StageResult,
 };
 use crate::dispatcher::monitor::{ProgressEvent, ProgressSubscriber};
-use crate::dispatcher::{CoworkConfig, ExecutionState};
+use crate::dispatcher::{AgentConfig, ExecutionState};
 
 // ============================================================================
 // FFI Enums
@@ -283,8 +283,8 @@ pub struct CoworkConfigFFI {
     pub dry_run: bool,
 }
 
-impl From<CoworkConfig> for CoworkConfigFFI {
-    fn from(config: CoworkConfig) -> Self {
+impl From<AgentConfig> for CoworkConfigFFI {
+    fn from(config: AgentConfig) -> Self {
         Self {
             enabled: config.enabled,
             require_confirmation: config.require_confirmation,
@@ -295,7 +295,7 @@ impl From<CoworkConfig> for CoworkConfigFFI {
     }
 }
 
-impl From<CoworkConfigFFI> for CoworkConfig {
+impl From<CoworkConfigFFI> for AgentConfig {
     fn from(config: CoworkConfigFFI) -> Self {
         Self {
             enabled: config.enabled,
@@ -349,8 +349,8 @@ impl Default for CodeExecConfigFFI {
     }
 }
 
-impl From<crate::config::types::cowork::CodeExecConfigToml> for CodeExecConfigFFI {
-    fn from(config: crate::config::types::cowork::CodeExecConfigToml) -> Self {
+impl From<crate::config::types::agent::CodeExecConfigToml> for CodeExecConfigFFI {
+    fn from(config: crate::config::types::agent::CodeExecConfigToml) -> Self {
         Self {
             enabled: config.enabled,
             default_runtime: config.default_runtime,
@@ -365,7 +365,7 @@ impl From<crate::config::types::cowork::CodeExecConfigToml> for CodeExecConfigFF
     }
 }
 
-impl From<CodeExecConfigFFI> for crate::config::types::cowork::CodeExecConfigToml {
+impl From<CodeExecConfigFFI> for crate::config::types::agent::CodeExecConfigToml {
     fn from(config: CodeExecConfigFFI) -> Self {
         Self {
             enabled: config.enabled,
@@ -411,8 +411,8 @@ impl Default for FileOpsConfigFFI {
     }
 }
 
-impl From<crate::config::types::cowork::FileOpsConfigToml> for FileOpsConfigFFI {
-    fn from(config: crate::config::types::cowork::FileOpsConfigToml) -> Self {
+impl From<crate::config::types::agent::FileOpsConfigToml> for FileOpsConfigFFI {
+    fn from(config: crate::config::types::agent::FileOpsConfigToml) -> Self {
         Self {
             enabled: config.enabled,
             allowed_paths: config.allowed_paths,
@@ -424,7 +424,7 @@ impl From<crate::config::types::cowork::FileOpsConfigToml> for FileOpsConfigFFI 
     }
 }
 
-impl From<FileOpsConfigFFI> for crate::config::types::cowork::FileOpsConfigToml {
+impl From<FileOpsConfigFFI> for crate::config::types::agent::FileOpsConfigToml {
     fn from(config: FileOpsConfigFFI) -> Self {
         Self {
             enabled: config.enabled,
@@ -1979,7 +1979,7 @@ mod tests {
 
     #[test]
     fn test_config_conversion() {
-        let config = CoworkConfig {
+        let config = AgentConfig {
             enabled: true,
             require_confirmation: false,
             max_parallelism: 8,
@@ -1992,7 +1992,7 @@ mod tests {
         assert_eq!(ffi_config.max_parallelism, 8);
         assert_eq!(ffi_config.dry_run, true);
 
-        let converted_back = CoworkConfig::from(ffi_config);
+        let converted_back = AgentConfig::from(ffi_config);
         assert_eq!(converted_back.enabled, config.enabled);
         assert_eq!(converted_back.max_parallelism, config.max_parallelism);
     }

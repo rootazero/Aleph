@@ -1,12 +1,12 @@
-//! Cowork configuration types
+//! Agent configuration types
 //!
-//! Contains Cowork task orchestration configuration:
-//! - CoworkConfigToml: Main configuration for the Cowork engine
+//! Contains Agent task orchestration configuration:
+//! - CoworkConfigToml: Main configuration for the Agent engine
 //! - FileOpsConfigToml: File operations executor configuration
 //! - ModelProfileConfigToml: AI model profile configuration
 //! - ModelRoutingConfigToml: Multi-model routing configuration
 //!
-//! Cowork is a multi-task orchestration system that decomposes complex requests
+//! Agent is the core AI task orchestration system that decomposes complex requests
 //! into DAG-structured task graphs and executes them with parallel scheduling.
 
 use crate::dispatcher::model_router::{
@@ -20,14 +20,14 @@ use std::collections::HashMap;
 // CoworkConfigToml
 // =============================================================================
 
-/// Cowork task orchestration configuration
+/// Agent task orchestration configuration
 ///
-/// Configures the Cowork engine for multi-task orchestration.
+/// Configures the Agent engine for multi-task orchestration.
 /// This includes task decomposition, parallel execution, and confirmation settings.
 ///
 /// # Example TOML
 /// ```toml
-/// [cowork]
+/// [agent]
 /// enabled = true
 /// require_confirmation = true
 /// max_parallelism = 4
@@ -37,8 +37,8 @@ use std::collections::HashMap;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoworkConfigToml {
-    /// Enable Cowork task orchestration
-    #[serde(default = "default_cowork_enabled")]
+    /// Enable Agent task orchestration
+    #[serde(default = "default_agent_enabled")]
     pub enabled: bool,
 
     /// Require user confirmation before executing task graphs
@@ -252,12 +252,12 @@ impl CodeExecConfigToml {
     pub fn validate(&self) -> Result<(), String> {
         // Validate timeout
         if self.timeout_seconds == 0 {
-            return Err("cowork.code_exec.timeout_seconds must be greater than 0".to_string());
+            return Err("agent.code_exec.timeout_seconds must be greater than 0".to_string());
         }
         if self.timeout_seconds > 3600 {
             tracing::warn!(
                 timeout = self.timeout_seconds,
-                "cowork.code_exec.timeout_seconds is very high (>1 hour)"
+                "agent.code_exec.timeout_seconds is very high (>1 hour)"
             );
         }
 
@@ -269,7 +269,7 @@ impl CodeExecConfigToml {
             if !valid_runtimes.contains(&runtime.as_str()) {
                 tracing::warn!(
                     runtime = runtime,
-                    "cowork.code_exec.allowed_runtimes contains unknown runtime"
+                    "agent.code_exec.allowed_runtimes contains unknown runtime"
                 );
             }
         }
@@ -278,7 +278,7 @@ impl CodeExecConfigToml {
         for pattern in &self.blocked_commands {
             if regex::Regex::new(pattern).is_err() {
                 return Err(format!(
-                    "cowork.code_exec.blocked_commands contains invalid regex: '{}'",
+                    "agent.code_exec.blocked_commands contains invalid regex: '{}'",
                     pattern
                 ));
             }
@@ -403,7 +403,7 @@ impl ModelProfileConfigToml {
         // Validate provider is not empty
         if self.provider.is_empty() {
             return Err(format!(
-                "cowork.model_profiles.{}.provider cannot be empty",
+                "agent.model_profiles.{}.provider cannot be empty",
                 profile_id
             ));
         }
@@ -411,7 +411,7 @@ impl ModelProfileConfigToml {
         // Validate model is not empty
         if self.model.is_empty() {
             return Err(format!(
-                "cowork.model_profiles.{}.model cannot be empty",
+                "agent.model_profiles.{}.model cannot be empty",
                 profile_id
             ));
         }
@@ -430,7 +430,7 @@ impl ModelProfileConfigToml {
         if let Some(max_ctx) = self.max_context {
             if max_ctx == 0 {
                 return Err(format!(
-                    "cowork.model_profiles.{}.max_context must be greater than 0",
+                    "agent.model_profiles.{}.max_context must be greater than 0",
                     profile_id
                 ));
             }
@@ -693,7 +693,7 @@ impl ModelRoutingConfigToml {
             if let Some(ref model_id) = model {
                 if !profile_set.contains(model_id.as_str()) {
                     return Err(format!(
-                        "cowork.model_routing.{} references unknown profile '{}'. Available: {:?}",
+                        "agent.model_routing.{} references unknown profile '{}'. Available: {:?}",
                         field, model_id, available_profiles
                     ));
                 }
@@ -716,7 +716,7 @@ impl ModelRoutingConfigToml {
         for (task_type, model_id) in &self.overrides {
             if !profile_set.contains(model_id.as_str()) {
                 return Err(format!(
-                    "cowork.model_routing.overrides.{} references unknown profile '{}'. Available: {:?}",
+                    "agent.model_routing.overrides.{} references unknown profile '{}'. Available: {:?}",
                     task_type, model_id, available_profiles
                 ));
             }
@@ -818,7 +818,7 @@ fn default_code_exec_pass_env() -> Vec<String> {
 // Default Functions
 // =============================================================================
 
-pub fn default_cowork_enabled() -> bool {
+pub fn default_agent_enabled() -> bool {
     true
 }
 
@@ -933,7 +933,7 @@ fn parse_file_size(s: &str) -> Result<u64, String> {
 impl Default for CoworkConfigToml {
     fn default() -> Self {
         Self {
-            enabled: default_cowork_enabled(),
+            enabled: default_agent_enabled(),
             require_confirmation: default_require_confirmation(),
             max_parallelism: default_max_parallelism(),
             dry_run: default_dry_run(),
@@ -973,7 +973,7 @@ impl FileOpsConfigToml {
         if self.max_file_size > 10 * 1024 * 1024 * 1024 {
             tracing::warn!(
                 max_file_size = self.max_file_size,
-                "cowork.file_ops.max_file_size is very large (>10GB)"
+                "agent.file_ops.max_file_size is very large (>10GB)"
             );
         }
 
@@ -981,7 +981,7 @@ impl FileOpsConfigToml {
         for path in &self.allowed_paths {
             if glob::Pattern::new(path).is_err() {
                 return Err(format!(
-                    "cowork.file_ops.allowed_paths contains invalid glob pattern: '{}'",
+                    "agent.file_ops.allowed_paths contains invalid glob pattern: '{}'",
                     path
                 ));
             }
@@ -990,7 +990,7 @@ impl FileOpsConfigToml {
         for path in &self.denied_paths {
             if glob::Pattern::new(path).is_err() {
                 return Err(format!(
-                    "cowork.file_ops.denied_paths contains invalid glob pattern: '{}'",
+                    "agent.file_ops.denied_paths contains invalid glob pattern: '{}'",
                     path
                 ));
             }
@@ -1018,9 +1018,9 @@ impl FileOpsConfigToml {
 impl CoworkConfigToml {
     /// Convert to engine configuration
     ///
-    /// This creates a CoworkConfig suitable for the CoworkEngine.
-    pub fn to_engine_config(&self) -> crate::dispatcher::CoworkConfig {
-        crate::dispatcher::CoworkConfig {
+    /// This creates an AgentConfig suitable for the AgentEngine.
+    pub fn to_engine_config(&self) -> crate::dispatcher::AgentConfig {
+        crate::dispatcher::AgentConfig {
             enabled: self.enabled,
             require_confirmation: self.require_confirmation,
             max_parallelism: self.max_parallelism,
@@ -1036,32 +1036,32 @@ impl CoworkConfigToml {
     pub fn validate(&self) -> Result<(), String> {
         // Validate max_parallelism
         if self.max_parallelism == 0 {
-            return Err("cowork.max_parallelism must be greater than 0".to_string());
+            return Err("agent.max_parallelism must be greater than 0".to_string());
         }
         if self.max_parallelism > 32 {
             // Warning but not error
             tracing::warn!(
                 max_parallelism = self.max_parallelism,
-                "cowork.max_parallelism is very high (>32), this may cause resource issues"
+                "agent.max_parallelism is very high (>32), this may cause resource issues"
             );
         }
 
         // Validate auto_execute_threshold
         if !(0.0..=1.0).contains(&self.auto_execute_threshold) {
             return Err(format!(
-                "cowork.auto_execute_threshold must be between 0.0 and 1.0, got {}",
+                "agent.auto_execute_threshold must be between 0.0 and 1.0, got {}",
                 self.auto_execute_threshold
             ));
         }
 
         // Validate max_tasks_per_graph
         if self.max_tasks_per_graph == 0 {
-            return Err("cowork.max_tasks_per_graph must be greater than 0".to_string());
+            return Err("agent.max_tasks_per_graph must be greater than 0".to_string());
         }
         if self.max_tasks_per_graph > 100 {
             tracing::warn!(
                 max_tasks = self.max_tasks_per_graph,
-                "cowork.max_tasks_per_graph is very high (>100), this may indicate a problem"
+                "agent.max_tasks_per_graph is very high (>100), this may indicate a problem"
             );
         }
 
@@ -1077,7 +1077,7 @@ impl CoworkConfigToml {
         for cat in &self.allowed_categories {
             if !valid_categories.contains(&cat.as_str()) {
                 return Err(format!(
-                    "cowork.allowed_categories contains unknown category '{}'. Valid: {:?}",
+                    "agent.allowed_categories contains unknown category '{}'. Valid: {:?}",
                     cat, valid_categories
                 ));
             }
@@ -1086,7 +1086,7 @@ impl CoworkConfigToml {
         for cat in &self.blocked_categories {
             if !valid_categories.contains(&cat.as_str()) {
                 return Err(format!(
-                    "cowork.blocked_categories contains unknown category '{}'. Valid: {:?}",
+                    "agent.blocked_categories contains unknown category '{}'. Valid: {:?}",
                     cat, valid_categories
                 ));
             }
@@ -1253,13 +1253,13 @@ impl MetricsConfigToml {
     pub fn validate(&self) -> Result<(), String> {
         if self.buffer_size == 0 {
             return Err(
-                "cowork.model_routing.metrics.buffer_size must be greater than 0".to_string(),
+                "agent.model_routing.metrics.buffer_size must be greater than 0".to_string(),
             );
         }
 
         if self.exploration_rate < 0.0 || self.exploration_rate > 1.0 {
             return Err(format!(
-                "cowork.model_routing.metrics.exploration_rate must be between 0.0 and 1.0, got {}",
+                "agent.model_routing.metrics.exploration_rate must be between 0.0 and 1.0, got {}",
                 self.exploration_rate
             ));
         }
@@ -1554,13 +1554,13 @@ impl HealthConfigToml {
     pub fn validate(&self) -> Result<(), String> {
         if self.failure_threshold == 0 {
             return Err(
-                "cowork.model_routing.health.failure_threshold must be greater than 0".to_string(),
+                "agent.model_routing.health.failure_threshold must be greater than 0".to_string(),
             );
         }
 
         if self.recovery_successes == 0 {
             return Err(
-                "cowork.model_routing.health.recovery_successes must be greater than 0".to_string(),
+                "agent.model_routing.health.recovery_successes must be greater than 0".to_string(),
             );
         }
 

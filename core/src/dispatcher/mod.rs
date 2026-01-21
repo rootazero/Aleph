@@ -33,15 +33,15 @@
 //! ```rust,ignore
 //! use aethecore::dispatcher::{
 //!     ToolRegistry, UnifiedTool, ToolSource,
-//!     CoworkEngine, CoworkConfig, ModelRouter
+//!     AgentEngine, AgentConfig, ModelRouter
 //! };
 //!
 //! // Create tool registry
 //! let registry = ToolRegistry::new();
 //! registry.refresh_all().await;
 //!
-//! // Create cowork engine for task orchestration
-//! let engine = CoworkEngine::new(config, provider);
+//! // Create agent engine for task orchestration
+//! let engine = AgentEngine::new(config, provider);
 //! let graph = engine.plan("Organize my downloads folder").await?;
 //! let summary = engine.execute(graph).await?;
 //! ```
@@ -101,7 +101,7 @@ pub use cowork_types::{
     GraphValidationError, ImageGenTask, Language, Task, TaskCountByStatus, TaskDependency,
     TaskGraph, TaskGraphMeta, TaskResult as CoworkTaskResult, TaskStatus, TaskType, VideoGenTask,
 };
-pub use engine::{CoworkConfig, CoworkEngine, ExecutionState};
+pub use engine::{AgentConfig, AgentEngine, CoworkConfig, CoworkEngine, ExecutionState};
 pub use executor::{ExecutionContext, ExecutorRegistry, NoopExecutor, TaskExecutor};
 pub use model_router::{
     Capability, CostStrategy, CostTier, FallbackProvider, LatencyTier, ModelMatcher, ModelProfile,

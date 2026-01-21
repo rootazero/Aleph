@@ -1,4 +1,6 @@
-//! CoworkEngine - unified API for task orchestration
+//! AgentEngine - unified API for task orchestration
+//!
+//! Renamed from CoworkEngine to reflect the agent-centric architecture.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,10 +19,12 @@ use super::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
 
-/// Configuration for the Cowork engine
+/// Configuration for the Agent engine
+///
+/// Renamed from CoworkConfig to reflect the agent-centric architecture.
 #[derive(Debug, Clone)]
-pub struct CoworkConfig {
-    /// Whether Cowork is enabled
+pub struct AgentConfig {
+    /// Whether Agent task orchestration is enabled
     pub enabled: bool,
 
     /// Whether to require user confirmation before execution
@@ -45,7 +49,11 @@ pub struct CoworkConfig {
     pub routing_rules: Option<ModelRoutingRules>,
 }
 
-impl Default for CoworkConfig {
+/// Type alias for backward compatibility
+#[deprecated(since = "0.1.0", note = "Use AgentConfig instead")]
+pub type CoworkConfig = AgentConfig;
+
+impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             enabled: true,
@@ -60,7 +68,7 @@ impl Default for CoworkConfig {
     }
 }
 
-impl CoworkConfig {
+impl AgentConfig {
     /// Create config with model routing enabled
     pub fn with_model_routing(
         mut self,
@@ -93,11 +101,12 @@ pub enum ExecutionState {
     Completed,
 }
 
-/// The main Cowork engine
+/// The main Agent engine
 ///
 /// Provides a unified API for planning and executing task graphs.
-pub struct CoworkEngine {
-    config: CoworkConfig,
+/// Renamed from CoworkEngine to reflect the agent-centric architecture.
+pub struct AgentEngine {
+    config: AgentConfig,
     planner: Arc<dyn TaskPlanner>,
     scheduler: RwLock<DagScheduler>,
     executors: ExecutorRegistry,
@@ -111,9 +120,13 @@ pub struct CoworkEngine {
     provider: Option<Arc<dyn AiProvider>>,
 }
 
-impl CoworkEngine {
-    /// Create a new CoworkEngine
-    pub fn new(config: CoworkConfig, provider: Arc<dyn AiProvider>) -> Self {
+/// Type alias for backward compatibility
+#[deprecated(since = "0.1.0", note = "Use AgentEngine instead")]
+pub type CoworkEngine = AgentEngine;
+
+impl AgentEngine {
+    /// Create a new AgentEngine
+    pub fn new(config: AgentConfig, provider: Arc<dyn AiProvider>) -> Self {
         let scheduler_config = SchedulerConfig {
             max_parallelism: config.max_parallelism,
             max_task_retries: config.max_task_retries,
@@ -148,8 +161,8 @@ impl CoworkEngine {
         }
     }
 
-    /// Create a CoworkEngine with a custom planner
-    pub fn with_planner(config: CoworkConfig, planner: Arc<dyn TaskPlanner>) -> Self {
+    /// Create an AgentEngine with a custom planner
+    pub fn with_planner(config: AgentConfig, planner: Arc<dyn TaskPlanner>) -> Self {
         let scheduler_config = SchedulerConfig {
             max_parallelism: config.max_parallelism,
             max_task_retries: config.max_task_retries,
@@ -183,9 +196,9 @@ impl CoworkEngine {
         }
     }
 
-    /// Create a CoworkEngine with a custom planner and provider
+    /// Create an AgentEngine with a custom planner and provider
     pub fn with_planner_and_provider(
-        config: CoworkConfig,
+        config: AgentConfig,
         planner: Arc<dyn TaskPlanner>,
         provider: Arc<dyn AiProvider>,
     ) -> Self {
@@ -232,7 +245,7 @@ impl CoworkEngine {
     /// This should be called after creating the engine to enable file operations.
     pub fn register_file_ops_executor(
         &mut self,
-        config: crate::config::types::cowork::FileOpsConfigToml,
+        config: crate::config::types::agent::FileOpsConfigToml,
     ) {
         if config.enabled {
             let executor = config.create_executor();
@@ -249,8 +262,8 @@ impl CoworkEngine {
     /// Code execution is disabled by default for security reasons.
     pub fn register_code_executor(
         &mut self,
-        config: crate::config::types::cowork::CodeExecConfigToml,
-        file_ops_config: &crate::config::types::cowork::FileOpsConfigToml,
+        config: crate::config::types::agent::CodeExecConfigToml,
+        file_ops_config: &crate::config::types::agent::FileOpsConfigToml,
     ) {
         if config.enabled {
             // Create permission checker from file_ops config (shared permission model)
@@ -289,7 +302,7 @@ impl CoworkEngine {
     /// * `Err` - If planning fails
     pub async fn plan(&self, request: &str) -> Result<TaskGraph> {
         if !self.config.enabled {
-            return Err(AetherError::config("Cowork is disabled"));
+            return Err(AetherError::config("Agent task orchestration is disabled"));
         }
 
         info!("Planning task: {}", request);
@@ -327,7 +340,7 @@ impl CoworkEngine {
         providers: &GenerationProviders,
     ) -> Result<TaskGraph> {
         if !self.config.enabled {
-            return Err(AetherError::config("Cowork is disabled"));
+            return Err(AetherError::config("Agent task orchestration is disabled"));
         }
 
         info!("Planning task with providers: {}", request);
@@ -356,7 +369,7 @@ impl CoworkEngine {
     /// * `Err` - If execution fails
     pub async fn execute(&self, mut graph: TaskGraph) -> Result<ExecutionSummary> {
         if !self.config.enabled {
-            return Err(AetherError::config("Cowork is disabled"));
+            return Err(AetherError::config("Agent task orchestration is disabled"));
         }
 
         info!(
@@ -714,7 +727,7 @@ impl CoworkEngine {
     /// * `Err` - If execution fails
     pub async fn execute_with_routing(&self, mut graph: TaskGraph) -> Result<ExecutionSummary> {
         if !self.config.enabled {
-            return Err(AetherError::config("Cowork is disabled"));
+            return Err(AetherError::config("Agent task orchestration is disabled"));
         }
 
         // If model routing is not enabled, fall back to regular execution
@@ -1019,7 +1032,7 @@ mod tests {
     #[tokio::test]
     async fn test_engine_execute() {
         // Create a mock provider (we won't use it for execution)
-        let config = CoworkConfig {
+        let config = AgentConfig {
             enabled: true,
             require_confirmation: false,
             max_parallelism: 2,
@@ -1028,7 +1041,7 @@ mod tests {
         };
 
         // Create engine with mock planner
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         let graph = create_test_graph();
         let summary = engine.execute(graph).await.unwrap();
@@ -1040,8 +1053,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_engine_progress_events() {
-        let config = CoworkConfig::default();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let config = AgentConfig::default();
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         let event_count = Arc::new(AtomicUsize::new(0));
         let count_clone = event_count.clone();
@@ -1061,8 +1074,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_engine_cancel() {
-        let config = CoworkConfig::default();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let config = AgentConfig::default();
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         // Test cancel mechanism
         assert!(!engine.is_cancelled());
@@ -1080,8 +1093,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_engine_pause_resume() {
-        let config = CoworkConfig::default();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let config = AgentConfig::default();
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         // Test pause/resume mechanism
         assert!(!engine.is_paused());
@@ -1129,19 +1142,19 @@ mod tests {
         ]
     }
 
-    fn create_routing_config() -> CoworkConfig {
+    fn create_routing_config() -> AgentConfig {
         let profiles = create_test_profiles();
         let rules = ModelRoutingRules::new("claude-sonnet")
             .with_task_type("code_generation", "claude-opus")
             .with_task_type("quick_tasks", "claude-haiku");
 
-        CoworkConfig::default().with_model_routing(profiles, rules)
+        AgentConfig::default().with_model_routing(profiles, rules)
     }
 
     #[test]
     fn test_engine_model_routing_enabled() {
         let config = create_routing_config();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         assert!(engine.has_model_routing());
         assert!(engine.model_matcher().is_some());
@@ -1149,8 +1162,8 @@ mod tests {
 
     #[test]
     fn test_engine_model_routing_disabled() {
-        let config = CoworkConfig::default();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let config = AgentConfig::default();
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         assert!(!engine.has_model_routing());
         assert!(engine.model_matcher().is_none());
@@ -1159,7 +1172,7 @@ mod tests {
     #[test]
     fn test_engine_route_task() {
         let config = create_routing_config();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         let task = Task::new(
             "t1",
@@ -1180,7 +1193,7 @@ mod tests {
     #[test]
     fn test_engine_model_profiles() {
         let config = create_routing_config();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         let profiles = engine.model_profiles();
         assert_eq!(profiles.len(), 3);
@@ -1189,8 +1202,8 @@ mod tests {
     #[tokio::test]
     async fn test_engine_execute_with_routing_fallback() {
         // When model routing is disabled, execute_with_routing should fall back to execute
-        let config = CoworkConfig::default();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let config = AgentConfig::default();
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         let graph = create_test_graph();
         let summary = engine.execute_with_routing(graph).await.unwrap();
@@ -1204,7 +1217,7 @@ mod tests {
         use crate::dispatcher::model_router::TaskIntent;
 
         let config = create_routing_config();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         // Test routing by intent
         let profile = engine
@@ -1224,7 +1237,7 @@ mod tests {
         use crate::config::RoutingRuleConfig;
 
         let config = create_routing_config();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         // Test routing from a rule with intent_type
         let rule = RoutingRuleConfig::command("^/code", "anthropic", None)
@@ -1245,8 +1258,8 @@ mod tests {
         use crate::dispatcher::model_router::TaskIntent;
 
         // When model routing is disabled, should return error
-        let config = CoworkConfig::default();
-        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+        let config = AgentConfig::default();
+        let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));
 
         let result = engine.route_by_intent(&TaskIntent::CodeGeneration, None);
         assert!(result.is_err());

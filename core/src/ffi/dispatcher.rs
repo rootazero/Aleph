@@ -40,7 +40,7 @@ impl AetherCore {
             // because FullConfig doesn't expose cowork settings directly
             let _config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
             match Config::load() {
-                Ok(cfg) => cfg.cowork.to_engine_config(),
+                Ok(cfg) => cfg.agent.to_engine_config(),
                 Err(_) => crate::dispatcher::CoworkConfig::default(),
             }
         };
@@ -150,66 +150,80 @@ impl AetherCore {
         Ok(crate::ffi::dispatcher_types::CoworkTaskGraphFFI::from(&graph))
     }
 
-    /// Extract generation providers from config for planning
+    /// Extract generation providers from registry for planning
+    ///
+    /// This method reads from the generation_registry (which contains actually
+    /// registered and working providers) and combines it with config to get
+    /// model information.
     fn extract_generation_providers(&self) -> crate::dispatcher::GenerationProviders {
         use crate::generation::GenerationType;
 
         let mut providers = crate::dispatcher::GenerationProviders::default();
 
-        // Load config
-        let config = match Config::load() {
-            Ok(cfg) => cfg,
-            Err(_) => return providers,
-        };
+        // Get providers from the registry (these are actually registered and working)
+        let registry = self.generation_registry.read().unwrap_or_else(|e| {
+            tracing::warn!("Generation registry lock poisoned, recovering");
+            e.into_inner()
+        });
 
-        // Extract image providers
-        for (name, prov_config) in config.generation.get_providers_for_type(GenerationType::Image) {
-            let models: Vec<String> = if prov_config.models.is_empty() {
-                // Use default model if available
-                prov_config
-                    .model
-                    .as_ref()
-                    .map(|m| vec![m.clone()])
-                    .unwrap_or_default()
-            } else {
-                prov_config.models.keys().cloned().collect()
-            };
-            if !models.is_empty() {
-                providers.image.push((name.to_string(), models));
+        // Get config for model information
+        let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Process each registered provider
+        for provider_name in registry.names() {
+            if let Some(provider) = registry.get(&provider_name) {
+                let supported_types = provider.supported_types();
+
+                // Get models from config (if available) or use default_model from provider
+                let models: Vec<String> = if let Some(prov_config) =
+                    full_config.generation.providers.get(&provider_name)
+                {
+                    if prov_config.models.is_empty() {
+                        // Use default model from config or provider
+                        if let Some(model) = prov_config.model.as_ref() {
+                            vec![model.clone()]
+                        } else if let Some(model) = provider.default_model() {
+                            vec![model.to_string()]
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        // Use configured model aliases/names
+                        prov_config.models.keys().cloned().collect()
+                    }
+                } else {
+                    // No config, use default_model from provider
+                    provider
+                        .default_model()
+                        .map(|m| vec![m.to_string()])
+                        .unwrap_or_default()
+                };
+
+                if models.is_empty() {
+                    continue;
+                }
+
+                // Add to appropriate provider list based on supported types
+                if supported_types.contains(&GenerationType::Image) {
+                    providers.image.push((provider_name.clone(), models.clone()));
+                }
+                if supported_types.contains(&GenerationType::Video) {
+                    providers.video.push((provider_name.clone(), models.clone()));
+                }
+                if supported_types.contains(&GenerationType::Audio)
+                    || supported_types.contains(&GenerationType::Speech)
+                {
+                    providers.audio.push((provider_name.clone(), models));
+                }
             }
         }
 
-        // Extract video providers
-        for (name, prov_config) in config.generation.get_providers_for_type(GenerationType::Video) {
-            let models: Vec<String> = if prov_config.models.is_empty() {
-                prov_config
-                    .model
-                    .as_ref()
-                    .map(|m| vec![m.clone()])
-                    .unwrap_or_default()
-            } else {
-                prov_config.models.keys().cloned().collect()
-            };
-            if !models.is_empty() {
-                providers.video.push((name.to_string(), models));
-            }
-        }
-
-        // Extract audio providers
-        for (name, prov_config) in config.generation.get_providers_for_type(GenerationType::Audio) {
-            let models: Vec<String> = if prov_config.models.is_empty() {
-                prov_config
-                    .model
-                    .as_ref()
-                    .map(|m| vec![m.clone()])
-                    .unwrap_or_default()
-            } else {
-                prov_config.models.keys().cloned().collect()
-            };
-            if !models.is_empty() {
-                providers.audio.push((name.to_string(), models));
-            }
-        }
+        info!(
+            image_providers = providers.image.len(),
+            video_providers = providers.video.len(),
+            audio_providers = providers.audio.len(),
+            "Extracted generation providers from registry"
+        );
 
         providers
     }
@@ -324,7 +338,7 @@ impl AetherCore {
     pub fn cowork_get_code_exec_config(&self) -> crate::ffi::dispatcher_types::CodeExecConfigFFI {
         // Load from config file or return defaults
         match crate::config::Config::load() {
-            Ok(cfg) => crate::ffi::dispatcher_types::CodeExecConfigFFI::from(cfg.cowork.code_exec),
+            Ok(cfg) => crate::ffi::dispatcher_types::CodeExecConfigFFI::from(cfg.agent.code_exec),
             Err(_) => crate::ffi::dispatcher_types::CodeExecConfigFFI::default(),
         }
     }
@@ -339,7 +353,7 @@ impl AetherCore {
             .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
 
         // Update code_exec section
-        full_config.cowork.code_exec = config.into();
+        full_config.agent.code_exec = config.into();
 
         // Save to file
         full_config
@@ -356,7 +370,7 @@ impl AetherCore {
     pub fn cowork_get_file_ops_config(&self) -> crate::ffi::dispatcher_types::FileOpsConfigFFI {
         // Load from config file or return defaults
         match crate::config::Config::load() {
-            Ok(cfg) => crate::ffi::dispatcher_types::FileOpsConfigFFI::from(cfg.cowork.file_ops),
+            Ok(cfg) => crate::ffi::dispatcher_types::FileOpsConfigFFI::from(cfg.agent.file_ops),
             Err(_) => crate::ffi::dispatcher_types::FileOpsConfigFFI::default(),
         }
     }
@@ -371,7 +385,7 @@ impl AetherCore {
             .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
 
         // Update file_ops section
-        full_config.cowork.file_ops = config.into();
+        full_config.agent.file_ops = config.into();
 
         // Save to file
         full_config
@@ -389,7 +403,7 @@ impl AetherCore {
         // Load from config file or return empty
         match crate::config::Config::load() {
             Ok(cfg) => cfg
-                .cowork
+                .agent
                 .get_model_profiles()
                 .into_iter()
                 .map(crate::ffi::dispatcher_types::ModelProfileFFI::from)
@@ -403,7 +417,7 @@ impl AetherCore {
         // Load from config file or return defaults
         match crate::config::Config::load() {
             Ok(cfg) => {
-                crate::ffi::dispatcher_types::ModelRoutingRulesFFI::from(cfg.cowork.get_routing_rules())
+                crate::ffi::dispatcher_types::ModelRoutingRulesFFI::from(cfg.agent.get_routing_rules())
             }
             Err(_) => crate::ffi::dispatcher_types::ModelRoutingRulesFFI::from(
                 crate::dispatcher::ModelRoutingRules::default(),
@@ -424,7 +438,7 @@ impl AetherCore {
             .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
 
         // Insert or update the profile in HashMap (key = profile_id)
-        let config_profile = crate::config::types::cowork::ModelProfileConfigToml {
+        let config_profile = crate::config::types::agent::ModelProfileConfigToml {
             provider: profile.provider,
             model: profile.model,
             capabilities: profile.capabilities,
@@ -436,7 +450,7 @@ impl AetherCore {
         };
 
         full_config
-            .cowork
+            .agent
             .model_profiles
             .insert(profile_id.clone(), config_profile);
 
@@ -457,7 +471,7 @@ impl AetherCore {
 
         // Remove the profile from HashMap
         if full_config
-            .cowork
+            .agent
             .model_profiles
             .remove(&profile_id)
             .is_none()
@@ -490,27 +504,27 @@ impl AetherCore {
         // Update built-in task type fields or use overrides for custom types
         match task_type.as_str() {
             "code_generation" => {
-                full_config.cowork.model_routing.code_generation = Some(model_id.clone())
+                full_config.agent.model_routing.code_generation = Some(model_id.clone())
             }
-            "code_review" => full_config.cowork.model_routing.code_review = Some(model_id.clone()),
+            "code_review" => full_config.agent.model_routing.code_review = Some(model_id.clone()),
             "image_analysis" => {
-                full_config.cowork.model_routing.image_analysis = Some(model_id.clone())
+                full_config.agent.model_routing.image_analysis = Some(model_id.clone())
             }
             "video_understanding" => {
-                full_config.cowork.model_routing.video_understanding = Some(model_id.clone())
+                full_config.agent.model_routing.video_understanding = Some(model_id.clone())
             }
             "long_document" => {
-                full_config.cowork.model_routing.long_document = Some(model_id.clone())
+                full_config.agent.model_routing.long_document = Some(model_id.clone())
             }
-            "quick_tasks" => full_config.cowork.model_routing.quick_tasks = Some(model_id.clone()),
+            "quick_tasks" => full_config.agent.model_routing.quick_tasks = Some(model_id.clone()),
             "privacy_sensitive" => {
-                full_config.cowork.model_routing.privacy_sensitive = Some(model_id.clone())
+                full_config.agent.model_routing.privacy_sensitive = Some(model_id.clone())
             }
-            "reasoning" => full_config.cowork.model_routing.reasoning = Some(model_id.clone()),
+            "reasoning" => full_config.agent.model_routing.reasoning = Some(model_id.clone()),
             _ => {
                 // Use overrides for custom task types
                 full_config
-                    .cowork
+                    .agent
                     .model_routing
                     .overrides
                     .insert(task_type.clone(), model_id.clone());
@@ -535,50 +549,50 @@ impl AetherCore {
         // Clear built-in task type fields or remove from overrides
         let removed = match task_type.as_str() {
             "code_generation" => full_config
-                .cowork
+                .agent
                 .model_routing
                 .code_generation
                 .take()
                 .is_some(),
             "code_review" => full_config
-                .cowork
+                .agent
                 .model_routing
                 .code_review
                 .take()
                 .is_some(),
             "image_analysis" => full_config
-                .cowork
+                .agent
                 .model_routing
                 .image_analysis
                 .take()
                 .is_some(),
             "video_understanding" => full_config
-                .cowork
+                .agent
                 .model_routing
                 .video_understanding
                 .take()
                 .is_some(),
             "long_document" => full_config
-                .cowork
+                .agent
                 .model_routing
                 .long_document
                 .take()
                 .is_some(),
             "quick_tasks" => full_config
-                .cowork
+                .agent
                 .model_routing
                 .quick_tasks
                 .take()
                 .is_some(),
             "privacy_sensitive" => full_config
-                .cowork
+                .agent
                 .model_routing
                 .privacy_sensitive
                 .take()
                 .is_some(),
-            "reasoning" => full_config.cowork.model_routing.reasoning.take().is_some(),
+            "reasoning" => full_config.agent.model_routing.reasoning.take().is_some(),
             _ => full_config
-                .cowork
+                .agent
                 .model_routing
                 .overrides
                 .remove(&task_type)
@@ -612,7 +626,7 @@ impl AetherCore {
 
         // Convert FFI strategy to internal CostStrategy enum
         let cost_strategy = crate::dispatcher::CostStrategy::from(strategy);
-        full_config.cowork.model_routing.cost_strategy = cost_strategy;
+        full_config.agent.model_routing.cost_strategy = cost_strategy;
 
         // Save to file
         full_config
@@ -630,7 +644,7 @@ impl AetherCore {
             .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
 
         // Validate that the model exists in HashMap
-        if !full_config.cowork.model_profiles.contains_key(&model_id) {
+        if !full_config.agent.model_profiles.contains_key(&model_id) {
             return Err(AetherFfiError::Config(format!(
                 "Model profile '{}' not found",
                 model_id
@@ -638,7 +652,7 @@ impl AetherCore {
         }
 
         // Update default model
-        full_config.cowork.model_routing.default_model = Some(model_id.clone());
+        full_config.agent.model_routing.default_model = Some(model_id.clone());
 
         // Save to file
         full_config
@@ -663,7 +677,7 @@ impl AetherCore {
         // For now, generate summaries from configured model profiles
         match crate::config::Config::load() {
             Ok(cfg) => cfg
-                .cowork
+                .agent
                 .get_model_profiles()
                 .into_iter()
                 .map(|profile| crate::ffi::dispatcher_types::ModelHealthSummaryFFI {
@@ -692,7 +706,7 @@ impl AetherCore {
         // For now, return Unknown status if model exists
         match crate::config::Config::load() {
             Ok(cfg) => {
-                if cfg.cowork.model_profiles.contains_key(&model_id) {
+                if cfg.agent.model_profiles.contains_key(&model_id) {
                     Some(crate::ffi::dispatcher_types::ModelHealthSummaryFFI {
                         model_id,
                         status: crate::ffi::dispatcher_types::ModelHealthStatusFFI::Unknown,
@@ -718,7 +732,7 @@ impl AetherCore {
         // TODO: Integrate with HealthManager when it's added to CoworkEngine
         // For now, return statistics based on configured model count
         let total = match crate::config::Config::load() {
-            Ok(cfg) => cfg.cowork.model_profiles.len() as u32,
+            Ok(cfg) => cfg.agent.model_profiles.len() as u32,
             Err(_) => 0,
         };
 
@@ -750,7 +764,7 @@ impl AetherCore {
         };
 
         // Get budget configuration from cowork.model_routing.budget
-        let budget_config = &config.cowork.model_routing.budget;
+        let budget_config = &config.agent.model_routing.budget;
 
         if !budget_config.enabled {
             return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled();
@@ -810,7 +824,7 @@ impl AetherCore {
             Err(_) => return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled(),
         };
 
-        let budget_config = &config.cowork.model_routing.budget;
+        let budget_config = &config.agent.model_routing.budget;
 
         if !budget_config.enabled {
             return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled();
@@ -863,7 +877,7 @@ impl AetherCore {
             Err(_) => return None,
         };
 
-        let budget_config = &config.cowork.model_routing.budget;
+        let budget_config = &config.agent.model_routing.budget;
 
         if !budget_config.enabled {
             return None;
@@ -894,7 +908,7 @@ impl AetherCore {
             Err(_) => return crate::ffi::dispatcher_types::ABTestingStatusFFI::disabled(),
         };
 
-        let ab_config = &config.cowork.model_routing.ab_testing;
+        let ab_config = &config.agent.model_routing.ab_testing;
 
         if !ab_config.enabled {
             return crate::ffi::dispatcher_types::ABTestingStatusFFI::disabled();
@@ -935,7 +949,7 @@ impl AetherCore {
             Err(_) => return Vec::new(),
         };
 
-        let ab_config = &config.cowork.model_routing.ab_testing;
+        let ab_config = &config.agent.model_routing.ab_testing;
 
         if !ab_config.enabled {
             return Vec::new();
@@ -962,7 +976,7 @@ impl AetherCore {
             Err(_) => return None,
         };
 
-        let ab_config = &config.cowork.model_routing.ab_testing;
+        let ab_config = &config.agent.model_routing.ab_testing;
 
         if !ab_config.enabled {
             return None;
@@ -989,7 +1003,7 @@ impl AetherCore {
             Err(e) => return Err(AetherFfiError::Config(e.to_string())),
         };
 
-        let ab_config = &config.cowork.model_routing.ab_testing;
+        let ab_config = &config.agent.model_routing.ab_testing;
 
         if !ab_config.enabled {
             return Err(AetherFfiError::Config(
@@ -1020,7 +1034,7 @@ impl AetherCore {
             Err(e) => return Err(AetherFfiError::Config(e.to_string())),
         };
 
-        let ab_config = &config.cowork.model_routing.ab_testing;
+        let ab_config = &config.agent.model_routing.ab_testing;
 
         if !ab_config.enabled {
             return Err(AetherFfiError::Config(
@@ -1054,7 +1068,7 @@ impl AetherCore {
             Err(_) => return crate::ffi::dispatcher_types::EnsembleStatusFFI::disabled(),
         };
 
-        let ensemble_config = &config.cowork.model_routing.ensemble;
+        let ensemble_config = &config.agent.model_routing.ensemble;
 
         if !ensemble_config.enabled {
             return crate::ffi::dispatcher_types::EnsembleStatusFFI::disabled();
