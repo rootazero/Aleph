@@ -9,7 +9,7 @@ use std::fmt;
 ///
 /// Each capability represents a specific type of operation that may be
 /// restricted based on security policies.
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Capability {
     // ===== File System =====
     /// Read files (safe by default)
@@ -43,7 +43,7 @@ pub enum Capability {
 }
 
 /// Security level for a capability
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CapabilityLevel {
     /// No confirmation needed
     Safe,

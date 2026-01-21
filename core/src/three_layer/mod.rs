@@ -28,9 +28,11 @@
 
 pub mod orchestrator;
 pub mod safety;
+pub mod skill;
 
 // Re-exports for convenience
 pub use orchestrator::{GuardChecker, GuardViolation, OrchestratorState};
 pub use safety::{
     Capability, CapabilityDenied, CapabilityGate, CapabilityLevel, PathSandbox, SandboxViolation,
 };
+pub use skill::{SkillDefinition, SkillNode, SkillNodeType};
