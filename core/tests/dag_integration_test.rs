@@ -7,7 +7,7 @@ use aethecore::dispatcher::{
     DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpCallback as DagNoOpCallback,
     RiskEvaluator, RiskLevel, TaskContext, TaskOutput, UserDecision,
 };
-use aethecore::dispatcher::cowork_types::{AiTask, CodeExec, Language, Task, TaskGraph, TaskType};
+use aethecore::dispatcher::agent_types::{AiTask, CodeExec, Language, Task, TaskGraph, TaskType};
 use aethecore::dispatcher::scheduler::DagScheduler;
 use aethecore::Result;
 use async_trait::async_trait;

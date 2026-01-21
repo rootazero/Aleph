@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 use super::{SchedulerConfig, TaskScheduler};
 use crate::dispatcher::callback::{DagTaskPlan, ExecutionCallback, UserDecision};
 use crate::dispatcher::context::{TaskContext, TaskOutput};
-use crate::dispatcher::cowork_types::{Task, TaskGraph, TaskResult, TaskStatus};
+use crate::dispatcher::agent_types::{Task, TaskGraph, TaskResult, TaskStatus};
 use crate::dispatcher::risk::RiskEvaluator;
 use crate::error::Result;
 
@@ -30,6 +30,8 @@ pub struct ExecutionResult {
     pub failed_tasks: Vec<String>,
     /// Whether execution was cancelled by user
     pub cancelled: bool,
+    /// Task context containing full outputs (for accessing complete results)
+    pub context: Option<TaskContext>,
 }
 
 impl ExecutionResult {
@@ -40,6 +42,7 @@ impl ExecutionResult {
             completed_tasks: Vec::new(),
             failed_tasks: Vec::new(),
             cancelled: false,
+            context: None,
         }
     }
 
@@ -51,6 +54,47 @@ impl ExecutionResult {
     /// Get total executed tasks count
     pub fn total_executed(&self) -> usize {
         self.completed_tasks.len() + self.failed_tasks.len()
+    }
+
+    /// Get detailed summary including task results
+    ///
+    /// Returns a formatted string with each task's name and full output.
+    /// This is useful for displaying the complete results to the user.
+    pub fn detailed_summary(&self) -> String {
+        let mut parts = Vec::new();
+
+        if let Some(ctx) = &self.context {
+            // Build task results using completed_tasks order and variables for full content
+            // This approach works even if history has been trimmed
+            for task_id in &self.completed_tasks {
+                if let Some(output) = ctx.variables().get(task_id) {
+                    let full_content = match &output.value {
+                        serde_json::Value::String(s) => s.clone(),
+                        v => v.to_string(),
+                    };
+                    // Use summary as title if available, otherwise use task_id
+                    let title = output.summary.as_deref().unwrap_or(task_id);
+                    // Truncate title to first line or 50 chars for readability
+                    let title_short = title.lines().next().unwrap_or(title);
+                    let title_short = if title_short.len() > 50 {
+                        format!("{}...", &title_short[..47])
+                    } else {
+                        title_short.to_string()
+                    };
+                    parts.push(format!("### {}\n\n{}", title_short, full_content));
+                }
+            }
+        }
+
+        if parts.is_empty() {
+            format!(
+                "完成 {} 个任务，失败 {} 个",
+                self.completed_tasks.len(),
+                self.failed_tasks.len()
+            )
+        } else {
+            parts.join("\n\n---\n\n")
+        }
     }
 }
 
@@ -449,7 +493,10 @@ impl DagScheduler {
             }
         }
 
-        // 6. Generate summary and notify completion
+        // 6. Store context in result for accessing full outputs
+        result.context = Some(context);
+
+        // 7. Generate summary and notify completion
         let summary = format!(
             "Completed: {}, Failed: {}, Total: {}",
             result.completed_tasks.len(),
@@ -535,7 +582,7 @@ async fn execute_with_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{FileOp, TaskResult, TaskStatus, TaskType};
+    use crate::dispatcher::agent_types::{FileOp, TaskResult, TaskStatus, TaskType};
     use std::path::PathBuf;
 
     fn create_task(id: &str) -> Task {

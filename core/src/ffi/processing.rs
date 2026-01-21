@@ -36,7 +36,7 @@ use crate::dispatcher::{
     AnalysisResult, DagScheduler, ExecutionCallback, TaskAnalyzer, TaskContext,
     DagTaskDisplayStatus, DagTaskPlan, TaskOutput, UserDecision,
 };
-use crate::dispatcher::cowork_types::{Task, TaskGraph};
+use crate::dispatcher::agent_types::{Task, TaskGraph};
 use crate::dispatcher::scheduler::GraphTaskExecutor;
 
 /// Processing options
@@ -1140,7 +1140,7 @@ fn create_provider_from_config(
         model: config.model.clone(),
         base_url: config.base_url.clone(),
         color: "#808080".to_string(), // Default gray
-        timeout_seconds: 30,
+        timeout_seconds: config.timeout_seconds, // Use config timeout instead of hardcoded value
         enabled: true,
         max_tokens: Some(config.max_tokens),
         temperature: Some(config.temperature),
@@ -1163,7 +1163,7 @@ fn create_provider_from_config(
 // DAG Scheduler Integration
 // ============================================================================
 
-use crate::dispatcher::cowork_types::TaskType;
+use crate::dispatcher::agent_types::TaskType;
 use crate::generation::{
     GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
@@ -1194,7 +1194,7 @@ impl DagTaskExecutor {
     async fn execute_image_generation(
         &self,
         task: &Task,
-        image_gen: &crate::dispatcher::cowork_types::ImageGenTask,
+        image_gen: &crate::dispatcher::agent_types::ImageGenTask,
     ) -> crate::error::Result<TaskOutput> {
         info!(
             task_id = %task.id,
@@ -1246,7 +1246,7 @@ impl DagTaskExecutor {
     async fn execute_video_generation(
         &self,
         task: &Task,
-        video_gen: &crate::dispatcher::cowork_types::VideoGenTask,
+        video_gen: &crate::dispatcher::agent_types::VideoGenTask,
     ) -> crate::error::Result<TaskOutput> {
         info!(
             task_id = %task.id,
@@ -1298,7 +1298,7 @@ impl DagTaskExecutor {
     async fn execute_audio_generation(
         &self,
         task: &Task,
-        audio_gen: &crate::dispatcher::cowork_types::AudioGenTask,
+        audio_gen: &crate::dispatcher::agent_types::AudioGenTask,
     ) -> crate::error::Result<TaskOutput> {
         info!(
             task_id = %task.id,
@@ -1619,11 +1619,9 @@ fn run_dag_execution(
                 handler.on_error(format!("部分任务失败: {:?}", exec_result.failed_tasks));
                 return;
             }
-            let summary = format!(
-                "所有任务已完成 ({} 个任务成功)",
-                exec_result.completed_tasks.len()
-            );
-            handler.on_complete(summary);
+            // Use detailed_summary to include full task results
+            let detailed = exec_result.detailed_summary();
+            handler.on_complete(detailed);
         }
         Err(e) => {
             handler.on_error(format!("DAG 执行失败: {}", e));
