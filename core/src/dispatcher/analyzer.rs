@@ -8,6 +8,35 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, info};
 
+/// Multi-step indicator patterns
+const MULTI_STEP_PATTERNS: &[&str] = &[
+    // Chinese patterns
+    "然后",
+    "之后",
+    "接着",
+    "最后",
+    "步骤",
+    "分步",
+    "依次",
+    "首先",
+    "其次",
+    // English patterns (case will be checked insensitively)
+    "first",
+    "then",
+    "after",
+    "finally",
+    "next",
+    "step",
+    "following",
+    // Symbol patterns
+    "→",
+    "->",
+    "=>",
+];
+
+/// Minimum length threshold for single-step heuristic
+const SINGLE_STEP_LENGTH_THRESHOLD: usize = 10;
+
 use crate::dispatcher::cowork_types::TaskGraph;
 use crate::dispatcher::planner::{LlmTaskPlanner, TaskPlanner};
 use crate::error::{AetherError, Result};
@@ -69,36 +98,23 @@ impl TaskAnalyzer {
 
     /// Quick heuristic to skip LLM call for obvious single-step tasks
     pub fn is_likely_single_step(&self, input: &str) -> bool {
-        // First check for multi-step indicators (these override length check)
-        // Chinese patterns
-        let chinese_patterns = [
-            "然后", "之后", "接着", "最后", "步骤", "分步", "依次", "首先", "其次",
-        ];
-        if chinese_patterns.iter().any(|p| input.contains(p)) {
-            return false;
-        }
+        let input_lower = input.to_lowercase();
 
-        // English patterns (case insensitive)
-        let english_patterns = ["first", "then", "after", "finally", "next", "step", "following"];
-        let lower_input = input.to_lowercase();
-        if english_patterns.iter().any(|p| lower_input.contains(p)) {
-            return false;
-        }
-
-        // Symbol patterns
-        let symbol_patterns = ["→", "->", "=>"];
-        if symbol_patterns.iter().any(|p| input.contains(p)) {
-            return false;
+        // Check for multi-step patterns first
+        for pattern in MULTI_STEP_PATTERNS {
+            if input_lower.contains(&pattern.to_lowercase()) {
+                return false;
+            }
         }
 
         // If no multi-step patterns found, use length heuristic
-        // Short inputs without patterns are likely single-step
+        // Short inputs without patterns are definitely single-step
         let len = input.chars().count();
-        if len < 10 {
+        if len < SINGLE_STEP_LENGTH_THRESHOLD {
             return true;
         }
 
-        // Medium-length inputs without patterns are likely single-step
+        // Medium/long inputs without patterns are also likely single-step
         true
     }
 
@@ -209,18 +225,20 @@ fn extract_json(response: &str) -> Result<String> {
 
     // Try to find JSON in ```json code block
     if let Some(start) = trimmed.find("```json") {
-        let json_start = start + 7;
-        if let Some(end) = trimmed[json_start..].find("```") {
-            return Ok(trimmed[json_start..json_start + end].trim().to_string());
+        let after_marker = &trimmed[start + 7..];
+        if let Some(end) = after_marker.find("```") {
+            return Ok(after_marker[..end].trim().to_string());
         }
     }
 
     // Try to find JSON in generic ``` code block
     if let Some(start) = trimmed.find("```") {
-        let json_start = trimmed[start + 3..].find('\n').map(|n| start + 4 + n);
-        if let Some(json_start) = json_start {
-            if let Some(end) = trimmed[json_start..].find("```") {
-                return Ok(trimmed[json_start..json_start + end].trim().to_string());
+        let after_marker = &trimmed[start + 3..];
+        // Skip the language identifier line
+        if let Some(newline) = after_marker.find('\n') {
+            let content = &after_marker[newline + 1..];
+            if let Some(end) = content.find("```") {
+                return Ok(content[..end].trim().to_string());
             }
         }
     }
@@ -237,13 +255,9 @@ fn extract_json(response: &str) -> Result<String> {
         }
     }
 
-    Err(AetherError::Other {
-        message: "Could not extract JSON from response".to_string(),
-        suggestion: Some(
-            "The AI did not return a valid task analysis. Try rephrasing your request."
-                .to_string(),
-        ),
-    })
+    Err(AetherError::other(
+        "Could not extract JSON from response",
+    ))
 }
 
 #[cfg(test)]
