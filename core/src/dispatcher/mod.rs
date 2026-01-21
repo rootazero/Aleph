@@ -66,6 +66,9 @@ mod engine;
 // === Task Analysis ===
 pub mod analyzer;
 
+// === Risk Evaluation ===
+pub mod risk;
+
 // === Re-exports: Tool Management ===
 pub use async_confirmation::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
@@ -103,6 +106,9 @@ pub use scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
 
 // === Re-exports: Task Analysis ===
 pub use analyzer::{AnalysisResult, TaskAnalyzer};
+
+// === Re-exports: Risk Evaluation ===
+pub use risk::{RiskEvaluator, RiskLevel};
 
 #[cfg(test)]
 mod tests {
