@@ -15,7 +15,7 @@ use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use super::{ExecutionContext, PathPermissionChecker, TaskExecutor};
-use crate::dispatcher::cowork_types::{CodeExec, Language, Task, TaskResult, TaskType};
+use crate::dispatcher::agent_types::{CodeExec, Language, Task, TaskResult, TaskType};
 use crate::error::{AetherError, Result};
 
 /// Maximum stdout size (10MB)

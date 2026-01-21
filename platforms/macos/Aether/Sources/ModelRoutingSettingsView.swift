@@ -314,10 +314,10 @@ struct ModelRoutingSettingsView: View {
         errorMessage = nil
 
         // Load profiles for picker options
-        profiles = core.coworkGetModelProfiles()
+        profiles = core.agentGetModelProfiles()
 
         // Load routing rules
-        let rules = core.coworkGetRoutingRules()
+        let rules = core.agentGetRoutingRules()
         routingRules = rules
 
         // Set state from rules
@@ -354,11 +354,11 @@ struct ModelRoutingSettingsView: View {
 
         do {
             // Update cost strategy
-            try core.coworkUpdateCostStrategy(strategy: costStrategy)
+            try core.agentUpdateCostStrategy(strategy: costStrategy)
 
             // Update default model
             if !defaultModel.isEmpty {
-                try core.coworkUpdateDefaultModel(modelId: defaultModel)
+                try core.agentUpdateDefaultModel(modelId: defaultModel)
             }
 
             // Update task type mappings
@@ -375,10 +375,10 @@ struct ModelRoutingSettingsView: View {
 
             for (taskType, modelId) in mappings {
                 if !modelId.isEmpty {
-                    try core.coworkUpdateRoutingRule(taskType: taskType, modelId: modelId)
+                    try core.agentUpdateRoutingRule(taskType: taskType, modelId: modelId)
                 } else {
                     // Try to delete the rule (ignore if not found)
-                    try? core.coworkDeleteRoutingRule(taskType: taskType)
+                    try? core.agentDeleteRoutingRule(taskType: taskType)
                 }
             }
 

@@ -55,7 +55,7 @@ mod types;
 
 // === Task Orchestration (formerly cowork) ===
 pub mod callback;
-pub mod cowork_types;
+pub mod agent_types;
 pub mod executor;
 pub mod model_router;
 pub mod monitor;
@@ -96,7 +96,7 @@ pub use types::{
 pub use callback::{
     DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpCallback, UserDecision,
 };
-pub use cowork_types::{
+pub use agent_types::{
     AiTask, AppAuto, AudioGenTask, CodeExec, DocGen, ExecutionSummary, FileOp,
     GraphValidationError, ImageGenTask, Language, Task, TaskCountByStatus, TaskDependency,
     TaskGraph, TaskGraphMeta, TaskResult as CoworkTaskResult, TaskStatus, TaskType, VideoGenTask,

@@ -77,6 +77,7 @@ impl AetherEventHandler for MockEventHandler {
     }
     fn on_subagent_completed(&self, _child_session_id: String, _success: bool, _summary: String) {}
     fn on_runtime_updates_available(&self, _updates: Vec<aethecore::RuntimeUpdateInfo>) {}
+    fn on_plan_confirmation_required(&self, _plan_id: String, _plan: aethecore::DagTaskPlan) {}
 }
 
 /// Create a test MCP server configuration
@@ -332,5 +333,8 @@ impl AetherEventHandler for MockEventHandlerWrapper {
     }
     fn on_runtime_updates_available(&self, updates: Vec<aethecore::RuntimeUpdateInfo>) {
         self.0.on_runtime_updates_available(updates)
+    }
+    fn on_plan_confirmation_required(&self, plan_id: String, plan: aethecore::DagTaskPlan) {
+        self.0.on_plan_confirmation_required(plan_id, plan)
     }
 }

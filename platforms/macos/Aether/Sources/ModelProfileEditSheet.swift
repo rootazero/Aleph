@@ -242,7 +242,7 @@ struct ModelProfileEditSheet: View {
         )
 
         do {
-            try core.coworkUpdateModelProfile(profile: newProfile)
+            try core.agentUpdateModelProfile(profile: newProfile)
             onSave()
             isPresented = false
         } catch {

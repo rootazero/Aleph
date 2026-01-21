@@ -142,8 +142,8 @@ struct RootContentView: View {
             return L("settings.mcp.title")
         case .skills:
             return L("settings.skills.title")
-        case .cowork:
-            return L("settings.cowork.title")
+        case .agent:
+            return L("settings.agent.title")
         case .policies:
             return L("settings.policies.title")
         }
@@ -172,8 +172,8 @@ struct RootContentView: View {
             return L("settings.mcp.description")
         case .skills:
             return L("settings.skills.description")
-        case .cowork:
-            return L("settings.cowork.description")
+        case .agent:
+            return L("settings.agent.description")
         case .policies:
             return L("settings.policies.description")
         }
@@ -300,7 +300,7 @@ struct RootContentView: View {
                 placeholderView("Skills management requires AetherCore initialization")
             }
 
-        case .cowork:
+        case .agent:
             // core used for agent settings
             if let core = core {
                 AgentSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)

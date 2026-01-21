@@ -6,7 +6,7 @@ mod dag;
 
 pub use dag::{DagScheduler, ExecutionResult, GraphTaskExecutor};
 
-use crate::dispatcher::cowork_types::{Task, TaskGraph};
+use crate::dispatcher::agent_types::{Task, TaskGraph};
 
 /// Configuration for the scheduler
 #[derive(Debug, Clone)]

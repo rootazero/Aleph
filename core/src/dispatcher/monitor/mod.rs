@@ -9,7 +9,7 @@ mod progress;
 pub use events::*;
 pub use progress::{CallbackSubscriber, ProgressMonitor};
 
-use crate::dispatcher::cowork_types::{Task, TaskGraph, TaskResult};
+use crate::dispatcher::agent_types::{Task, TaskGraph, TaskResult};
 
 /// Trait for subscribing to progress events
 pub trait ProgressSubscriber: Send + Sync {

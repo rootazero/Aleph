@@ -3,7 +3,7 @@
 //! This module provides context management for multi-model pipeline execution,
 //! including result storage, dependency resolution, and task enrichment.
 
-use crate::dispatcher::cowork_types::{Task, TaskResult, TaskType};
+use crate::dispatcher::agent_types::{Task, TaskResult, TaskType};
 use crate::memory::VectorDatabase;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -477,7 +477,7 @@ mod duration_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::AiTask;
+    use crate::dispatcher::agent_types::AiTask;
 
     fn create_test_task(id: &str, name: &str) -> Task {
         Task::new(

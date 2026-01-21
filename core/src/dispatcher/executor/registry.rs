@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use super::{ExecutionContext, TaskExecutor};
-use crate::dispatcher::cowork_types::{Task, TaskResult, TaskType};
+use crate::dispatcher::agent_types::{Task, TaskResult, TaskType};
 use crate::error::{AetherError, Result};
 
 /// Registry for task executors
@@ -103,7 +103,7 @@ impl Default for ExecutorRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{FileOp, TaskType};
+    use crate::dispatcher::agent_types::{FileOp, TaskType};
     use crate::dispatcher::executor::NoopExecutor;
     use std::path::PathBuf;
 

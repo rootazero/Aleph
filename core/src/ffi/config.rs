@@ -39,7 +39,7 @@ impl AetherCore {
         };
 
         // Extract provider settings (same logic as init_core)
-        let (provider, model, api_key, base_url, system_prompt, temperature, max_tokens) = {
+        let (provider, model, api_key, base_url, system_prompt, temperature, max_tokens, timeout_seconds) = {
             let default_provider = full_config.get_default_provider();
             if let Some(ref name) = default_provider {
                 if let Some(provider_config) = full_config.providers.get(name) {
@@ -52,6 +52,7 @@ impl AetherCore {
                         None::<String>,
                         provider_config.temperature,
                         provider_config.max_tokens,
+                        provider_config.timeout_seconds,
                     )
                 } else {
                     info!(provider = %name, "Default provider config not found, using defaults");
@@ -63,6 +64,7 @@ impl AetherCore {
                         None,
                         None,
                         None,
+                        30u64, // Default timeout
                     )
                 }
             } else {
@@ -75,6 +77,7 @@ impl AetherCore {
                     None,
                     None,
                     None,
+                    30u64, // Default timeout
                 )
             }
         };
@@ -86,6 +89,7 @@ impl AetherCore {
             temperature: temperature.unwrap_or(0.7),
             max_tokens: max_tokens.unwrap_or(4096),
             max_turns: 50, // Default to 50 turns for complex multi-step tasks
+            timeout_seconds, // Use timeout from provider config
             system_prompt: system_prompt
                 .unwrap_or_else(|| "You are Aether, an intelligent assistant.".to_string()),
             api_key,

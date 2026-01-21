@@ -1,16 +1,16 @@
 //
-//  CoworkConfirmationView.swift
+//  AgentConfirmationView.swift
 //  Aether
 //
-//  SwiftUI component for confirming Cowork task graph execution.
+//  SwiftUI component for confirming Task graph execution.
 //  Displays task DAG structure, dependencies, and safety information.
 //
 
 import SwiftUI
 
-/// View for confirming Cowork task graph execution
-struct CoworkConfirmationView: View {
-    let taskGraph: CoworkTaskGraphFfi
+/// View for confirming Task graph execution
+struct TaskGraphConfirmationView: View {
+    let taskGraph: AgentTaskGraphFfi
     let onExecute: () -> Void
     let onCancel: () -> Void
 
@@ -57,7 +57,7 @@ struct CoworkConfirmationView: View {
         }
         // Accessibility
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(Text("Cowork confirmation with \(taskGraph.tasks.count) tasks"))
+        .accessibilityLabel(Text("Task graph confirmation with \(taskGraph.tasks.count) tasks"))
         .accessibilityHint(Text("Press Enter to execute, Escape to cancel"))
     }
 
@@ -77,7 +77,7 @@ struct CoworkConfirmationView: View {
             Spacer()
 
             // Task count badge
-            Text("\(taskGraph.tasks.count) \(L("cowork.tasks", default: "tasks"))")
+            Text("\(taskGraph.tasks.count) \(L("agent.taskgraph.tasks", default: "tasks"))")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 8)
@@ -109,7 +109,7 @@ struct CoworkConfirmationView: View {
         .cornerRadius(8)
     }
 
-    private func taskRow(task: CoworkTaskFfi, index: Int, isLast: Bool) -> some View {
+    private func taskRow(task: AgentTaskFfi, index: Int, isLast: Bool) -> some View {
         HStack(spacing: 10) {
             // Task number with type icon
             ZStack {
@@ -144,7 +144,7 @@ struct CoworkConfirmationView: View {
                 Image(systemName: "arrow.down.circle")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
-                    .help(L("cowork.has_dependencies", default: "Has dependencies"))
+                    .help(L("agent.taskgraph.has_dependencies", default: "Has dependencies"))
             }
         }
         .padding(.vertical, 4)
@@ -163,19 +163,19 @@ struct CoworkConfirmationView: View {
             statisticItem(
                 icon: "list.bullet",
                 value: "\(taskGraph.tasks.count)",
-                label: L("cowork.total_tasks", default: "Tasks")
+                label: L("agent.taskgraph.total_tasks", default: "Tasks")
             )
 
             statisticItem(
                 icon: "arrow.triangle.branch",
                 value: "\(taskGraph.edges.count)",
-                label: L("cowork.dependencies", default: "Dependencies")
+                label: L("agent.taskgraph.dependencies", default: "Dependencies")
             )
 
             statisticItem(
                 icon: "cpu",
                 value: parallelismEstimate,
-                label: L("cowork.parallelism", default: "Parallel")
+                label: L("agent.taskgraph.parallelism", default: "Parallel")
             )
         }
         .frame(maxWidth: .infinity)
@@ -227,7 +227,7 @@ struct CoworkConfirmationView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
                             .font(.system(size: 11))
-                        Text(L("cowork.button.execute", default: "Execute"))
+                        Text(L("agent.taskgraph.button.execute", default: "Execute"))
                             .font(.system(size: 13, weight: .semibold))
                     }
                     .foregroundColor(.white)
@@ -272,7 +272,7 @@ struct CoworkConfirmationView: View {
 
     // MARK: - Helpers
 
-    private func taskTypeIcon(_ type: CoworkTaskTypeCategory) -> String {
+    private func taskTypeIcon(_ type: AgentTaskTypeCategory) -> String {
         switch type {
         case .fileOperation:
             return "doc"
@@ -293,7 +293,7 @@ struct CoworkConfirmationView: View {
         }
     }
 
-    private func taskTypeColor(_ type: CoworkTaskTypeCategory) -> Color {
+    private func taskTypeColor(_ type: AgentTaskTypeCategory) -> Color {
         switch type {
         case .fileOperation:
             return .blue
@@ -339,13 +339,13 @@ private func L(_ key: String, default defaultValue: String) -> String {
 // MARK: - Preview
 
 #Preview("Cowork Confirmation") {
-    CoworkConfirmationView(
-        taskGraph: CoworkTaskGraphFfi(
+    TaskGraphConfirmationView(
+        taskGraph: AgentTaskGraphFfi(
             id: "graph-123",
             title: "Process Documents",
             originalRequest: "Help me organize and summarize these PDF files",
             tasks: [
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-1",
                     name: "List PDF files",
                     description: "Find all PDF files in the directory",
@@ -354,7 +354,7 @@ private func L(_ key: String, default defaultValue: String) -> String {
                     progress: 0.0,
                     errorMessage: nil
                 ),
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-2",
                     name: "Extract text",
                     description: "Extract text content from PDFs",
@@ -363,7 +363,7 @@ private func L(_ key: String, default defaultValue: String) -> String {
                     progress: 0.0,
                     errorMessage: nil
                 ),
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-3",
                     name: "Summarize content",
                     description: "Generate summary using AI",
@@ -374,8 +374,8 @@ private func L(_ key: String, default defaultValue: String) -> String {
                 ),
             ],
             edges: [
-                CoworkTaskDependencyFfi(fromTaskId: "task-1", toTaskId: "task-2"),
-                CoworkTaskDependencyFfi(fromTaskId: "task-2", toTaskId: "task-3"),
+                AgentTaskDependencyFfi(fromTaskId: "task-1", toTaskId: "task-2"),
+                AgentTaskDependencyFfi(fromTaskId: "task-2", toTaskId: "task-3"),
             ]
         ),
         onExecute: { print("Execute") },

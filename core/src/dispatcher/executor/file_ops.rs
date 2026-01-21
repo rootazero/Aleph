@@ -16,7 +16,7 @@ use tracing::{debug, info};
 
 use super::permission::PathPermissionChecker;
 use super::{ExecutionContext, TaskExecutor};
-use crate::dispatcher::cowork_types::{FileOp, Task, TaskResult, TaskType};
+use crate::dispatcher::agent_types::{FileOp, Task, TaskResult, TaskType};
 use crate::error::{AetherError, Result};
 
 /// File metadata returned by operations

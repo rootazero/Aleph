@@ -8,7 +8,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-use super::cowork_types::{ExecutionSummary, Task, TaskGraph, TaskResult, TaskStatus, TaskType};
+use super::agent_types::{ExecutionSummary, Task, TaskGraph, TaskResult, TaskStatus, TaskType};
 use super::executor::{ExecutionContext, ExecutorRegistry, NoopExecutor};
 use super::model_router::{
     ModelMatcher, ModelProfile, ModelRouter, ModelRoutingRules, TaskContextManager,
@@ -993,7 +993,7 @@ impl AgentEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{FileOp, Task, TaskType};
+    use crate::dispatcher::agent_types::{FileOp, Task, TaskType};
     use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
 
@@ -1114,7 +1114,7 @@ mod tests {
     // Model Routing Tests
     // =========================================================================
 
-    use crate::dispatcher::cowork_types::AiTask;
+    use crate::dispatcher::agent_types::AiTask;
     use crate::dispatcher::model_router::{Capability, CostTier, LatencyTier};
 
     fn create_test_profiles() -> Vec<ModelProfile> {

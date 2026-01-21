@@ -106,6 +106,13 @@ struct ProviderEditPanel: View {
         return selectedPreset?.id == "custom" || providerType == "custom"
     }
 
+    /// Check if current provider is a preset provider (cannot be deleted)
+    private var isPresetProvider: Bool {
+        guard let preset = selectedPreset else { return false }
+        // Check if the preset ID exists in the static preset list
+        return PresetProviders.all.contains { $0.id == preset.id }
+    }
+
     /// Check if provider has API key configured
     private var hasApiKey: Bool {
         guard let provider = currentProvider else { return false }
@@ -212,8 +219,8 @@ struct ProviderEditPanel: View {
     @ViewBuilder
     private var editModeFormContent: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-            // Delete button for existing providers (top-right corner)
-            if !isAddingNew, let provider = currentProvider {
+            // Delete button for custom providers only (preset providers cannot be deleted)
+            if !isAddingNew, let provider = currentProvider, !isPresetProvider {
                 HStack {
                     Spacer()
 

@@ -1,7 +1,7 @@
 //! Dispatcher FFI Methods for AetherCore
 //!
 //! This module contains FFI methods for the Dispatcher layer:
-//! - Task orchestration: cowork_plan, cowork_execute, etc.
+//! - Task orchestration: agent_plan, agent_execute, etc.
 //! - Model routing: get_model_profiles, update_routing_rule, etc.
 //! - Budget management: get_budget_status, etc.
 //! - A/B testing and ensemble: get_ab_testing_status, get_ensemble_status, etc.
@@ -91,15 +91,15 @@ impl AetherCore {
     }
 
     /// Get Cowork configuration (FFI method name kept for Swift compatibility)
-    pub fn cowork_get_config(&self) -> crate::ffi::dispatcher_types::CoworkConfigFFI {
+    pub fn agent_get_config(&self) -> crate::ffi::dispatcher_types::AgentConfigFFI {
         // Return current config or default
-        crate::ffi::dispatcher_types::CoworkConfigFFI::from(crate::dispatcher::AgentConfig::default())
+        crate::ffi::dispatcher_types::AgentConfigFFI::from(crate::dispatcher::AgentConfig::default())
     }
 
     /// Update Cowork configuration
-    pub fn cowork_update_config(
+    pub fn agent_update_config(
         &self,
-        config: crate::ffi::dispatcher_types::CoworkConfigFFI,
+        config: crate::ffi::dispatcher_types::AgentConfigFFI,
     ) -> Result<(), AetherFfiError> {
         // For now, this would reinitialize the engine with new config
         // Reset the engine so it gets recreated with new config
@@ -116,10 +116,10 @@ impl AetherCore {
     }
 
     /// Plan a task from natural language request
-    pub fn cowork_plan(
+    pub fn agent_plan(
         &self,
         request: String,
-    ) -> Result<crate::ffi::dispatcher_types::CoworkTaskGraphFFI, AetherFfiError> {
+    ) -> Result<crate::ffi::dispatcher_types::AgentTaskGraphFFI, AetherFfiError> {
         let engine = self.get_or_create_agent_engine()?;
 
         info!(request = %request, "Planning Cowork task");
@@ -147,7 +147,7 @@ impl AetherCore {
         }
         .map_err(|e| AetherFfiError::Provider(format!("Planning failed: {}", e)))?;
 
-        Ok(crate::ffi::dispatcher_types::CoworkTaskGraphFFI::from(&graph))
+        Ok(crate::ffi::dispatcher_types::AgentTaskGraphFFI::from(&graph))
     }
 
     /// Extract generation providers from registry for planning
@@ -229,10 +229,10 @@ impl AetherCore {
     }
 
     /// Execute a task graph
-    pub fn cowork_execute(
+    pub fn agent_execute(
         &self,
-        graph_ffi: crate::ffi::dispatcher_types::CoworkTaskGraphFFI,
-    ) -> Result<crate::ffi::dispatcher_types::CoworkExecutionSummaryFFI, AetherFfiError> {
+        graph_ffi: crate::ffi::dispatcher_types::AgentTaskGraphFFI,
+    ) -> Result<crate::ffi::dispatcher_types::AgentExecutionSummaryFFI, AetherFfiError> {
         let engine = self.get_or_create_agent_engine()?;
 
         info!(graph_id = %graph_ffi.id, "Executing Cowork task graph");
@@ -265,22 +265,22 @@ impl AetherCore {
             .block_on(async { engine.execute(graph).await })
             .map_err(|e| AetherFfiError::Provider(format!("Execution failed: {}", e)))?;
 
-        Ok(crate::ffi::dispatcher_types::CoworkExecutionSummaryFFI::from(summary))
+        Ok(crate::ffi::dispatcher_types::AgentExecutionSummaryFFI::from(summary))
     }
 
     /// Get current execution state
-    pub fn cowork_get_state(&self) -> crate::ffi::dispatcher_types::CoworkExecutionState {
+    pub fn agent_get_state(&self) -> crate::ffi::dispatcher_types::AgentExecutionState {
         if let Ok(engine) = self.get_or_create_agent_engine() {
             self.runtime.block_on(async {
-                crate::ffi::dispatcher_types::CoworkExecutionState::from(engine.state().await)
+                crate::ffi::dispatcher_types::AgentExecutionState::from(engine.state().await)
             })
         } else {
-            crate::ffi::dispatcher_types::CoworkExecutionState::Idle
+            crate::ffi::dispatcher_types::AgentExecutionState::Idle
         }
     }
 
     /// Pause execution
-    pub fn cowork_pause(&self) {
+    pub fn agent_pause(&self) {
         if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.pause();
             info!("Cowork execution paused");
@@ -288,7 +288,7 @@ impl AetherCore {
     }
 
     /// Resume execution
-    pub fn cowork_resume(&self) {
+    pub fn agent_resume(&self) {
         if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.resume();
             info!("Cowork execution resumed");
@@ -296,7 +296,7 @@ impl AetherCore {
     }
 
     /// Cancel execution
-    pub fn cowork_cancel(&self) {
+    pub fn agent_cancel(&self) {
         if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.cancel();
             info!("Cowork execution cancelled");
@@ -304,7 +304,7 @@ impl AetherCore {
     }
 
     /// Check if execution is paused
-    pub fn cowork_is_paused(&self) -> bool {
+    pub fn agent_is_paused(&self) -> bool {
         if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.is_paused()
         } else {
@@ -313,7 +313,7 @@ impl AetherCore {
     }
 
     /// Check if execution is cancelled
-    pub fn cowork_is_cancelled(&self) -> bool {
+    pub fn agent_is_cancelled(&self) -> bool {
         if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.is_cancelled()
         } else {
@@ -322,10 +322,10 @@ impl AetherCore {
     }
 
     /// Subscribe to progress events
-    pub fn cowork_subscribe(&self, handler: Box<dyn crate::ffi::dispatcher_types::CoworkProgressHandler>) {
+    pub fn agent_subscribe(&self, handler: Box<dyn crate::ffi::dispatcher_types::AgentProgressHandler>) {
         if let Ok(engine) = self.get_or_create_agent_engine() {
             // Convert Box to Arc for internal use
-            let handler_arc: Arc<dyn crate::ffi::dispatcher_types::CoworkProgressHandler> = Arc::from(handler);
+            let handler_arc: Arc<dyn crate::ffi::dispatcher_types::AgentProgressHandler> = Arc::from(handler);
             let subscriber = Arc::new(crate::ffi::dispatcher_types::FfiProgressSubscriber::new(handler_arc));
             engine.subscribe(subscriber);
             info!("Cowork progress subscriber added");
@@ -335,7 +335,7 @@ impl AetherCore {
     // ===== CODE EXECUTION CONFIG =====
 
     /// Get code execution configuration
-    pub fn cowork_get_code_exec_config(&self) -> crate::ffi::dispatcher_types::CodeExecConfigFFI {
+    pub fn agent_get_code_exec_config(&self) -> crate::ffi::dispatcher_types::CodeExecConfigFFI {
         // Load from config file or return defaults
         match crate::config::Config::load() {
             Ok(cfg) => crate::ffi::dispatcher_types::CodeExecConfigFFI::from(cfg.agent.code_exec),
@@ -344,7 +344,7 @@ impl AetherCore {
     }
 
     /// Update code execution configuration
-    pub fn cowork_update_code_exec_config(
+    pub fn agent_update_code_exec_config(
         &self,
         config: crate::ffi::dispatcher_types::CodeExecConfigFFI,
     ) -> Result<(), AetherFfiError> {
@@ -367,7 +367,7 @@ impl AetherCore {
     // ===== FILE OPERATIONS CONFIG =====
 
     /// Get file operations configuration
-    pub fn cowork_get_file_ops_config(&self) -> crate::ffi::dispatcher_types::FileOpsConfigFFI {
+    pub fn agent_get_file_ops_config(&self) -> crate::ffi::dispatcher_types::FileOpsConfigFFI {
         // Load from config file or return defaults
         match crate::config::Config::load() {
             Ok(cfg) => crate::ffi::dispatcher_types::FileOpsConfigFFI::from(cfg.agent.file_ops),
@@ -376,7 +376,7 @@ impl AetherCore {
     }
 
     /// Update file operations configuration
-    pub fn cowork_update_file_ops_config(
+    pub fn agent_update_file_ops_config(
         &self,
         config: crate::ffi::dispatcher_types::FileOpsConfigFFI,
     ) -> Result<(), AetherFfiError> {
@@ -399,7 +399,7 @@ impl AetherCore {
     // ===== MODEL ROUTER =====
 
     /// Get all configured model profiles
-    pub fn cowork_get_model_profiles(&self) -> Vec<crate::ffi::dispatcher_types::ModelProfileFFI> {
+    pub fn agent_get_model_profiles(&self) -> Vec<crate::ffi::dispatcher_types::ModelProfileFFI> {
         // Load from config file or return empty
         match crate::config::Config::load() {
             Ok(cfg) => cfg
@@ -413,7 +413,7 @@ impl AetherCore {
     }
 
     /// Get model routing rules
-    pub fn cowork_get_routing_rules(&self) -> crate::ffi::dispatcher_types::ModelRoutingRulesFFI {
+    pub fn agent_get_routing_rules(&self) -> crate::ffi::dispatcher_types::ModelRoutingRulesFFI {
         // Load from config file or return defaults
         match crate::config::Config::load() {
             Ok(cfg) => {
@@ -426,7 +426,7 @@ impl AetherCore {
     }
 
     /// Update a model profile (add or modify)
-    pub fn cowork_update_model_profile(
+    pub fn agent_update_model_profile(
         &self,
         profile: crate::ffi::dispatcher_types::ModelProfileFFI,
     ) -> Result<(), AetherFfiError> {
@@ -464,7 +464,7 @@ impl AetherCore {
     }
 
     /// Delete a model profile by ID
-    pub fn cowork_delete_model_profile(&self, profile_id: String) -> Result<(), AetherFfiError> {
+    pub fn agent_delete_model_profile(&self, profile_id: String) -> Result<(), AetherFfiError> {
         // Load current config
         let mut full_config = crate::config::Config::load()
             .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
@@ -492,7 +492,7 @@ impl AetherCore {
     }
 
     /// Update a task type to model mapping
-    pub fn cowork_update_routing_rule(
+    pub fn agent_update_routing_rule(
         &self,
         task_type: String,
         model_id: String,
@@ -541,7 +541,7 @@ impl AetherCore {
     }
 
     /// Delete a task type mapping
-    pub fn cowork_delete_routing_rule(&self, task_type: String) -> Result<(), AetherFfiError> {
+    pub fn agent_delete_routing_rule(&self, task_type: String) -> Result<(), AetherFfiError> {
         // Load current config
         let mut full_config = crate::config::Config::load()
             .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
@@ -616,7 +616,7 @@ impl AetherCore {
     }
 
     /// Update cost strategy
-    pub fn cowork_update_cost_strategy(
+    pub fn agent_update_cost_strategy(
         &self,
         strategy: crate::ffi::dispatcher_types::ModelCostStrategyFFI,
     ) -> Result<(), AetherFfiError> {
@@ -638,7 +638,7 @@ impl AetherCore {
     }
 
     /// Update default model
-    pub fn cowork_update_default_model(&self, model_id: String) -> Result<(), AetherFfiError> {
+    pub fn agent_update_default_model(&self, model_id: String) -> Result<(), AetherFfiError> {
         // Load current config
         let mut full_config = crate::config::Config::load()
             .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
@@ -670,7 +670,7 @@ impl AetherCore {
     /// Returns a list of health summaries for all models being tracked by the health manager.
     /// Each summary includes the model's current health status, any degradation/error reasons,
     /// and consecutive success/failure counts.
-    pub fn cowork_get_model_health_summaries(
+    pub fn agent_get_model_health_summaries(
         &self,
     ) -> Vec<crate::ffi::dispatcher_types::ModelHealthSummaryFFI> {
         // TODO: Integrate with HealthManager when it's added to AgentEngine
@@ -698,7 +698,7 @@ impl AetherCore {
     ///
     /// Returns the health summary for a specific model by ID, or None if the model
     /// is not found in the health tracking system.
-    pub fn cowork_get_model_health(
+    pub fn agent_get_model_health(
         &self,
         model_id: String,
     ) -> Option<crate::ffi::dispatcher_types::ModelHealthSummaryFFI> {
@@ -728,7 +728,7 @@ impl AetherCore {
     ///
     /// Returns aggregate statistics about the health status of all tracked models,
     /// including counts of healthy, degraded, unhealthy, and circuit-open models.
-    pub fn cowork_get_health_statistics(&self) -> crate::ffi::dispatcher_types::HealthStatisticsFFI {
+    pub fn agent_get_health_statistics(&self) -> crate::ffi::dispatcher_types::HealthStatisticsFFI {
         // TODO: Integrate with HealthManager when it's added to AgentEngine
         // For now, return statistics based on configured model count
         let total = match crate::config::Config::load() {
@@ -756,7 +756,7 @@ impl AetherCore {
     ///
     /// Returns the overall budget status including all configured limits,
     /// current spending, and warning/exceeded states.
-    pub fn cowork_get_budget_status(&self) -> crate::ffi::dispatcher_types::BudgetStatusFFI {
+    pub fn agent_get_budget_status(&self) -> crate::ffi::dispatcher_types::BudgetStatusFFI {
         // Load config and get budget limits
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
@@ -798,7 +798,7 @@ impl AetherCore {
     /// Get budget status for a specific scope
     ///
     /// Returns budget limits and status that apply to the given scope.
-    pub fn cowork_get_budget_status_for_scope(
+    pub fn agent_get_budget_status_for_scope(
         &self,
         scope_type: String,
         scope_id: Option<String>,
@@ -867,7 +867,7 @@ impl AetherCore {
     /// Get a single budget limit status by ID
     ///
     /// Returns the status of a specific budget limit, or None if not found.
-    pub fn cowork_get_budget_limit(
+    pub fn agent_get_budget_limit(
         &self,
         limit_id: String,
     ) -> Option<crate::ffi::dispatcher_types::BudgetLimitStatusFFI> {
@@ -901,7 +901,7 @@ impl AetherCore {
     ///
     /// Returns the overall A/B testing status including all active experiments,
     /// their configurations, and current statistics.
-    pub fn cowork_get_ab_testing_status(&self) -> crate::ffi::dispatcher_types::ABTestingStatusFFI {
+    pub fn agent_get_ab_testing_status(&self) -> crate::ffi::dispatcher_types::ABTestingStatusFFI {
         // Load config to check if A/B testing is enabled
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
@@ -943,7 +943,7 @@ impl AetherCore {
     ///
     /// Returns the IDs of all currently active experiments that are
     /// accepting traffic and recording outcomes.
-    pub fn cowork_get_active_experiments(&self) -> Vec<String> {
+    pub fn agent_get_active_experiments(&self) -> Vec<String> {
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
             Err(_) => return Vec::new(),
@@ -967,7 +967,7 @@ impl AetherCore {
     ///
     /// Returns full statistics and significance tests for the specified experiment.
     /// Returns None if the experiment doesn't exist or A/B testing is disabled.
-    pub fn cowork_get_experiment_report(
+    pub fn agent_get_experiment_report(
         &self,
         experiment_id: String,
     ) -> Option<crate::ffi::dispatcher_types::ExperimentReportFFI> {
@@ -997,7 +997,7 @@ impl AetherCore {
     ///
     /// Activates an experiment to start accepting traffic.
     /// Note: This is a runtime change and does not persist to config.
-    pub fn cowork_enable_experiment(&self, experiment_id: String) -> Result<(), AetherFfiError> {
+    pub fn agent_enable_experiment(&self, experiment_id: String) -> Result<(), AetherFfiError> {
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
             Err(e) => return Err(AetherFfiError::Config(e.to_string())),
@@ -1028,7 +1028,7 @@ impl AetherCore {
     ///
     /// Pauses an experiment to stop accepting traffic.
     /// Note: This is a runtime change and does not persist to config.
-    pub fn cowork_disable_experiment(&self, experiment_id: String) -> Result<(), AetherFfiError> {
+    pub fn agent_disable_experiment(&self, experiment_id: String) -> Result<(), AetherFfiError> {
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
             Err(e) => return Err(AetherFfiError::Config(e.to_string())),
@@ -1062,7 +1062,7 @@ impl AetherCore {
     /// Get ensemble status overview
     ///
     /// Returns the current ensemble configuration and statistics.
-    pub fn cowork_get_ensemble_status(&self) -> crate::ffi::dispatcher_types::EnsembleStatusFFI {
+    pub fn agent_get_ensemble_status(&self) -> crate::ffi::dispatcher_types::EnsembleStatusFFI {
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
             Err(_) => return crate::ffi::dispatcher_types::EnsembleStatusFFI::disabled(),
@@ -1153,16 +1153,16 @@ impl AetherCore {
     /// Get ensemble configuration summary
     ///
     /// Returns the current ensemble configuration for display.
-    pub fn cowork_get_ensemble_config(&self) -> crate::ffi::dispatcher_types::EnsembleConfigSummaryFFI {
-        let status = self.cowork_get_ensemble_status();
+    pub fn agent_get_ensemble_config(&self) -> crate::ffi::dispatcher_types::EnsembleConfigSummaryFFI {
+        let status = self.agent_get_ensemble_status();
         status.config
     }
 
     /// Get ensemble execution statistics
     ///
     /// Returns statistics about ensemble executions.
-    pub fn cowork_get_ensemble_stats(&self) -> crate::ffi::dispatcher_types::EnsembleStatsFFI {
-        let status = self.cowork_get_ensemble_status();
+    pub fn agent_get_ensemble_stats(&self) -> crate::ffi::dispatcher_types::EnsembleStatsFFI {
+        let status = self.agent_get_ensemble_status();
         status.stats
     }
 

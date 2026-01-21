@@ -1249,115 +1249,115 @@ interface AetherCore {
 
     // ===== COWORK TASK ORCHESTRATION =====
 
-    // Get Cowork configuration
-    CoworkConfigFFI cowork_get_config();
+    // Get Agent configuration
+    AgentConfigFFI agent_get_config();
 
-    // Update Cowork configuration
+    // Update Agent configuration
     [Throws=AetherFfiError]
-    void cowork_update_config(CoworkConfigFFI config);
+    void agent_update_config(AgentConfigFFI config);
 
     // Plan a task from natural language request
     // Returns a task graph that can be reviewed before execution
     [Throws=AetherFfiError]
-    CoworkTaskGraphFFI cowork_plan(string request);
+    AgentTaskGraphFFI agent_plan(string request);
 
     // Execute a task graph
     // Returns execution summary when complete
     [Throws=AetherFfiError]
-    CoworkExecutionSummaryFFI cowork_execute(CoworkTaskGraphFFI graph);
+    AgentExecutionSummaryFFI agent_execute(AgentTaskGraphFFI graph);
 
     // Get current execution state
-    CoworkExecutionState cowork_get_state();
+    AgentExecutionState agent_get_state();
 
     // Pause execution (running tasks complete, no new tasks start)
-    void cowork_pause();
+    void agent_pause();
 
     // Resume execution after pause
-    void cowork_resume();
+    void agent_resume();
 
     // Cancel execution (running tasks complete, then terminates)
-    void cowork_cancel();
+    void agent_cancel();
 
     // Check if execution is paused
-    boolean cowork_is_paused();
+    boolean agent_is_paused();
 
     // Check if execution is cancelled
-    boolean cowork_is_cancelled();
+    boolean agent_is_cancelled();
 
     // Subscribe to progress events
-    void cowork_subscribe(CoworkProgressHandler handler);
+    void agent_subscribe(AgentProgressHandler handler);
 
     // ===== CODE EXECUTION CONFIG =====
 
     // Get code execution configuration
-    CodeExecConfigFFI cowork_get_code_exec_config();
+    CodeExecConfigFFI agent_get_code_exec_config();
 
     // Update code execution configuration
     [Throws=AetherFfiError]
-    void cowork_update_code_exec_config(CodeExecConfigFFI config);
+    void agent_update_code_exec_config(CodeExecConfigFFI config);
 
     // ===== FILE OPERATIONS CONFIG =====
 
     // Get file operations configuration
-    FileOpsConfigFFI cowork_get_file_ops_config();
+    FileOpsConfigFFI agent_get_file_ops_config();
 
     // Update file operations configuration
     [Throws=AetherFfiError]
-    void cowork_update_file_ops_config(FileOpsConfigFFI config);
+    void agent_update_file_ops_config(FileOpsConfigFFI config);
 
     // ===== MODEL ROUTER =====
 
     // Get all configured model profiles
-    sequence<ModelProfileFFI> cowork_get_model_profiles();
+    sequence<ModelProfileFFI> agent_get_model_profiles();
 
     // Get model routing rules
-    ModelRoutingRulesFFI cowork_get_routing_rules();
+    ModelRoutingRulesFFI agent_get_routing_rules();
 
     // Update a model profile (add or modify)
     [Throws=AetherFfiError]
-    void cowork_update_model_profile(ModelProfileFFI profile);
+    void agent_update_model_profile(ModelProfileFFI profile);
 
     // Delete a model profile by ID
     [Throws=AetherFfiError]
-    void cowork_delete_model_profile(string profile_id);
+    void agent_delete_model_profile(string profile_id);
 
     // Update a task type to model mapping
     [Throws=AetherFfiError]
-    void cowork_update_routing_rule(string task_type, string model_id);
+    void agent_update_routing_rule(string task_type, string model_id);
 
     // Delete a task type mapping
     [Throws=AetherFfiError]
-    void cowork_delete_routing_rule(string task_type);
+    void agent_delete_routing_rule(string task_type);
 
     // Update cost strategy
     [Throws=AetherFfiError]
-    void cowork_update_cost_strategy(ModelCostStrategyFFI strategy);
+    void agent_update_cost_strategy(ModelCostStrategyFFI strategy);
 
     // Update default model
     [Throws=AetherFfiError]
-    void cowork_update_default_model(string model_id);
+    void agent_update_default_model(string model_id);
 
     // ===== MODEL HEALTH MONITORING (model-router-intelligence) =====
 
     // Get health summary for all tracked models
-    sequence<ModelHealthSummaryFFI> cowork_get_model_health_summaries();
+    sequence<ModelHealthSummaryFFI> agent_get_model_health_summaries();
 
     // Get health summary for a specific model
-    ModelHealthSummaryFFI? cowork_get_model_health(string model_id);
+    ModelHealthSummaryFFI? agent_get_model_health(string model_id);
 
     // Get overall health statistics
-    HealthStatisticsFFI cowork_get_health_statistics();
+    HealthStatisticsFFI agent_get_health_statistics();
 
     // ===== BUDGET MANAGEMENT (model-router-p1-improvements) =====
 
     // Get budget status overview
-    BudgetStatusFFI cowork_get_budget_status();
+    BudgetStatusFFI agent_get_budget_status();
 
     // Get budget status for a specific scope
-    BudgetStatusFFI cowork_get_budget_status_for_scope(string scope_type, string? scope_id);
+    BudgetStatusFFI agent_get_budget_status_for_scope(string scope_type, string? scope_id);
 
     // Get a single budget limit status by ID
-    BudgetLimitStatusFFI? cowork_get_budget_limit(string limit_id);
+    BudgetLimitStatusFFI? agent_get_budget_limit(string limit_id);
 
     // ===== SESSION MANAGEMENT (Phase 5) =====
 
@@ -1549,7 +1549,7 @@ dictionary RuntimeUpdateInfo {
   string latest_version;    // Latest available version
 };
 
-// ===== MODEL ROUTER TYPES (add-cowork-model-router) =====
+// ===== MODEL ROUTER TYPES (add-agent-model-router) =====
 
 // Model capability tags for characterizing model strengths
 enum ModelCapabilityFFI {
@@ -1729,10 +1729,10 @@ dictionary BudgetStatusFFI {
 
 // ===== END BUDGET MANAGEMENT =====
 
-// ===== COWORK TASK ORCHESTRATION (add-cowork-task-orchestration) =====
+// ===== COWORK TASK ORCHESTRATION (add-agent-task-orchestration) =====
 
-// Cowork execution state
-enum CoworkExecutionState {
+// Agent execution state
+enum AgentExecutionState {
   "Idle",                 // Not executing
   "Planning",             // Planning a task
   "AwaitingConfirmation", // Waiting for user confirmation
@@ -1742,8 +1742,8 @@ enum CoworkExecutionState {
   "Completed",            // Execution completed
 };
 
-// Cowork task status state (simplified for FFI)
-enum CoworkTaskStatusState {
+// Agent task status state (simplified for FFI)
+enum AgentTaskStatusState {
   "Pending",    // Task waiting to execute
   "Running",    // Task currently executing
   "Completed",  // Task completed successfully
@@ -1751,8 +1751,8 @@ enum CoworkTaskStatusState {
   "Cancelled",  // Task was cancelled
 };
 
-// Cowork task type category
-enum CoworkTaskTypeCategory {
+// Agent task type category
+enum AgentTaskTypeCategory {
   "FileOperation",        // File system operations
   "CodeExecution",        // Code/script execution
   "DocumentGeneration",   // Document generation (Excel, PDF, etc.)
@@ -1763,9 +1763,9 @@ enum CoworkTaskTypeCategory {
   "AudioGeneration",      // Audio generation (TTS, music, sound effects)
 };
 
-// Cowork configuration
-dictionary CoworkConfigFFI {
-  boolean enabled;               // Whether Cowork is enabled
+// Agent configuration
+dictionary AgentConfigFFI {
+  boolean enabled;               // Whether Agent is enabled
   boolean require_confirmation;  // Require user confirmation before execution
   u32 max_parallelism;           // Max parallel tasks
   u32 max_task_retries;          // Max retry attempts for failed tasks
@@ -1795,34 +1795,34 @@ dictionary FileOpsConfigFFI {
   boolean require_confirmation_for_delete;   // Require confirmation for delete
 };
 
-// Cowork task (simplified for FFI)
-dictionary CoworkTaskFFI {
+// Agent task (simplified for FFI)
+dictionary AgentTaskFFI {
   string id;                         // Unique task identifier
   string name;                       // Human-readable name
   string? description;               // Optional description
-  CoworkTaskTypeCategory task_type;  // Task type category
-  CoworkTaskStatusState status;      // Current status
+  AgentTaskTypeCategory task_type;  // Task type category
+  AgentTaskStatusState status;      // Current status
   f32 progress;                      // Progress (0.0 - 1.0)
   string? error_message;             // Error message if failed
 };
 
-// Cowork task dependency
-dictionary CoworkTaskDependencyFFI {
+// Agent task dependency
+dictionary AgentTaskDependencyFFI {
   string from_task_id;  // Predecessor task ID
   string to_task_id;    // Successor task ID
 };
 
-// Cowork task graph (simplified for FFI)
-dictionary CoworkTaskGraphFFI {
+// Agent task graph (simplified for FFI)
+dictionary AgentTaskGraphFFI {
   string id;                                   // Graph unique identifier
   string title;                                // Graph title
   string? original_request;                    // Original user request
-  sequence<CoworkTaskFFI> tasks;               // All tasks in the graph
-  sequence<CoworkTaskDependencyFFI> edges;     // Task dependencies
+  sequence<AgentTaskFFI> tasks;               // All tasks in the graph
+  sequence<AgentTaskDependencyFFI> edges;     // Task dependencies
 };
 
-// Cowork execution summary
-dictionary CoworkExecutionSummaryFFI {
+// Agent execution summary
+dictionary AgentExecutionSummaryFFI {
   string graph_id;           // Graph ID that was executed
   u32 total_tasks;           // Total number of tasks
   u32 completed_tasks;       // Successfully completed tasks
@@ -1832,8 +1832,8 @@ dictionary CoworkExecutionSummaryFFI {
   sequence<string> errors;   // Error messages from failed tasks
 };
 
-// Cowork progress event type
-enum CoworkProgressEventType {
+// Agent progress event type
+enum AgentProgressEventType {
   "TaskStarted",      // Task execution started
   "TaskProgress",     // Task progress update
   "TaskCompleted",    // Task completed successfully
@@ -1843,9 +1843,9 @@ enum CoworkProgressEventType {
   "GraphCompleted",   // Entire graph completed
 };
 
-// Cowork progress event (for real-time updates)
-dictionary CoworkProgressEventFFI {
-  CoworkProgressEventType event_type;  // Event type
+// Agent progress event (for real-time updates)
+dictionary AgentProgressEventFFI {
+  AgentProgressEventType event_type;  // Event type
   string? task_id;                     // Task ID (if task-related)
   string? task_name;                   // Task name (if task-related)
   f32 progress;                        // Progress value (0.0 - 1.0)
@@ -1853,8 +1853,8 @@ dictionary CoworkProgressEventFFI {
   string? error;                       // Error message (for failed events)
 };
 
-// Callback interface for Cowork progress events
-callback interface CoworkProgressHandler {
+// Callback interface for Agent progress events
+callback interface AgentProgressHandler {
   // Called when a progress event occurs
-  void on_progress_event(CoworkProgressEventFFI event);
+  void on_progress_event(AgentProgressEventFFI event);
 };

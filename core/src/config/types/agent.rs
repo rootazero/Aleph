@@ -2853,7 +2853,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cowork_config_includes_file_ops() {
+    fn test_agent_config_includes_file_ops() {
         let config = CoworkConfigToml::default();
         assert!(config.file_ops.enabled);
         assert!(config.file_ops.require_confirmation_for_write);
@@ -3057,7 +3057,7 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_cowork_config_model_profiles() {
+    fn test_agent_config_model_profiles() {
         let mut config = CoworkConfigToml::default();
 
         // Add model profiles
@@ -3103,7 +3103,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cowork_config_model_routing_validation() {
+    fn test_agent_config_model_routing_validation() {
         let mut config = CoworkConfigToml::default();
 
         // Add a model profile
@@ -3131,7 +3131,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cowork_config_get_routing_rules() {
+    fn test_agent_config_get_routing_rules() {
         let mut config = CoworkConfigToml::default();
 
         config.model_routing = ModelRoutingConfigToml {

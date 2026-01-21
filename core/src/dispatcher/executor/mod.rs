@@ -16,7 +16,7 @@ pub use registry::ExecutorRegistry;
 
 use async_trait::async_trait;
 
-use crate::dispatcher::cowork_types::{Task, TaskResult, TaskType};
+use crate::dispatcher::agent_types::{Task, TaskResult, TaskType};
 use crate::error::Result;
 
 /// Context provided to executors during task execution

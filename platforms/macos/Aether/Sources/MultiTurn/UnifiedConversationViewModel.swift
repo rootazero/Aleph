@@ -54,6 +54,14 @@ final class UnifiedConversationViewModel {
     /// Current step index in the plan
     var currentStepIndex: Int = 0
 
+    // MARK: - DAG Plan Confirmation (inline in conversation)
+
+    /// Pending plan confirmation (shown inline in conversation area)
+    var pendingPlanConfirmation: PendingPlanConfirmation?
+
+    /// Core reference for plan confirmation callback (set by notification handler)
+    var planConfirmationCore: AetherCore?
+
     // MARK: - Attachment Data
 
     /// Pending attachments to send with next message
@@ -467,6 +475,7 @@ final class UnifiedConversationViewModel {
         errorMessage = nil
         displayState = .empty
         resetProgress()
+        clearPendingPlanConfirmation()
     }
 
     func clear() {
@@ -514,5 +523,53 @@ final class UnifiedConversationViewModel {
             PlanStep(id: "step_\(index)", description: description)
         }
         currentStepIndex = 0
+    }
+
+    // MARK: - Plan Confirmation Methods
+
+    /// Set pending plan confirmation (shown inline in conversation)
+    func setPendingPlanConfirmation(_ confirmation: PendingPlanConfirmation, core: AetherCore) {
+        self.pendingPlanConfirmation = confirmation
+        self.planConfirmationCore = core
+        // Ensure we're showing the conversation to display the confirmation
+        if displayState == .empty {
+            displayState = .conversation
+        }
+    }
+
+    /// Confirm the pending plan
+    func confirmPendingPlan() {
+        guard let confirmation = pendingPlanConfirmation,
+              let core = planConfirmationCore else { return }
+
+        let success = core.confirmTaskPlan(planId: confirmation.planId, confirmed: true)
+        if !success {
+            print("[UnifiedViewModel] Warning: Plan confirmation may have expired: \(confirmation.planId)")
+        }
+
+        // Clear the pending confirmation
+        pendingPlanConfirmation = nil
+        planConfirmationCore = nil
+    }
+
+    /// Cancel the pending plan
+    func cancelPendingPlan() {
+        guard let confirmation = pendingPlanConfirmation,
+              let core = planConfirmationCore else { return }
+
+        let success = core.confirmTaskPlan(planId: confirmation.planId, confirmed: false)
+        if !success {
+            print("[UnifiedViewModel] Warning: Plan confirmation may have expired: \(confirmation.planId)")
+        }
+
+        // Clear the pending confirmation
+        pendingPlanConfirmation = nil
+        planConfirmationCore = nil
+    }
+
+    /// Clear pending plan confirmation without sending decision (for reset)
+    func clearPendingPlanConfirmation() {
+        pendingPlanConfirmation = nil
+        planConfirmationCore = nil
     }
 }

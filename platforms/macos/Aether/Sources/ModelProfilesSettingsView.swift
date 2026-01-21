@@ -328,7 +328,7 @@ struct ModelProfilesSettingsView: View {
 
         isLoading = true
         errorMessage = nil
-        profiles = core.coworkGetModelProfiles()
+        profiles = core.agentGetModelProfiles()
         isLoading = false
     }
 
@@ -336,7 +336,7 @@ struct ModelProfilesSettingsView: View {
         guard let core = core else { return }
 
         do {
-            try core.coworkDeleteModelProfile(profileId: profile.id)
+            try core.agentDeleteModelProfile(profileId: profile.id)
             loadProfiles()
         } catch {
             errorMessage = error.localizedDescription

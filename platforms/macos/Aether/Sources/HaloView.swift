@@ -90,20 +90,20 @@ struct HaloView: View {
                     onCancel: viewModel.callbacks.planConfirmationOnCancel
                 )
 
-            case .coworkConfirmation(let taskGraph):
-                CoworkConfirmationView(
+            case .taskGraphConfirmation(let taskGraph):
+                TaskGraphConfirmationView(
                     taskGraph: taskGraph,
-                    onExecute: { viewModel.callbacks.coworkConfirmationOnExecute?() },
-                    onCancel: { viewModel.callbacks.coworkConfirmationOnCancel?() }
+                    onExecute: { viewModel.callbacks.taskGraphConfirmationOnExecute?() },
+                    onCancel: { viewModel.callbacks.taskGraphConfirmationOnCancel?() }
                 )
 
-            case .coworkProgress(let taskGraph, let state):
-                CoworkProgressView(
+            case .taskGraphProgress(let taskGraph, let state):
+                TaskGraphProgressView(
                     taskGraph: taskGraph,
                     executionState: state,
-                    onPause: viewModel.callbacks.coworkOnPause,
-                    onResume: viewModel.callbacks.coworkOnResume,
-                    onCancel: viewModel.callbacks.coworkOnCancel
+                    onPause: viewModel.callbacks.taskGraphOnPause,
+                    onResume: viewModel.callbacks.taskGraphOnResume,
+                    onCancel: viewModel.callbacks.taskGraphOnCancel
                 )
 
             case .agentPlan(let planId, let title, let operations, let summary):

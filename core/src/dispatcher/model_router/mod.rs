@@ -97,5 +97,5 @@ pub use advanced::{
     VariantConfig, VariantId, VariantStats, VariantSummary, create_scorer, jaccard_similarity,
 };
 
-// Re-export StageResult from cowork_types module for backward compatibility
-pub use super::cowork_types::StageResult;
+// Re-export StageResult from agent_types module for backward compatibility
+pub use super::agent_types::StageResult;

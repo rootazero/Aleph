@@ -113,6 +113,17 @@ struct ConversationAreaView: View {
                         )
                         .id(streamingId)
                     }
+
+                    // Display inline plan confirmation if pending
+                    if let confirmation = viewModel.pendingPlanConfirmation {
+                        PlanConfirmationBubbleView(
+                            confirmation: confirmation,
+                            onConfirm: { viewModel.confirmPendingPlan() },
+                            onCancel: { viewModel.cancelPendingPlan() }
+                        )
+                        .id("plan_confirmation_\(confirmation.planId)")
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    }
                 }
                 .padding(12)
                 .background(
@@ -145,6 +156,14 @@ struct ConversationAreaView: View {
             .onChange(of: viewModel.streamingText.count / 100) { _, _ in
                 if let streamingId = viewModel.streamingMessageId {
                     proxy.scrollTo(streamingId, anchor: .bottom)
+                }
+            }
+            // Scroll to confirmation when it appears
+            .onChange(of: viewModel.pendingPlanConfirmation?.planId) { _, newId in
+                if let planId = newId {
+                    withAnimation {
+                        proxy.scrollTo("plan_confirmation_\(planId)", anchor: .bottom)
+                    }
                 }
             }
         }

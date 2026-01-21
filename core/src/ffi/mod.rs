@@ -433,12 +433,14 @@ pub fn init_core(
     };
 
     // Extract provider settings from loaded config
-    let (provider, model, api_key, base_url, system_prompt, temperature, max_tokens) = {
+    // provider_name is the config key (e.g., "t8star"), provider_type is the protocol (e.g., "openai")
+    let (provider_name_for_log, provider, model, api_key, base_url, system_prompt, temperature, max_tokens, timeout_seconds) = {
         let default_provider = full_config.get_default_provider();
         if let Some(ref name) = default_provider {
             if let Some(provider_config) = full_config.providers.get(name) {
                 let provider_type = provider_config.infer_provider_type(name);
                 (
+                    Some(name.clone()),
                     provider_type,
                     provider_config.model.clone(),
                     provider_config.api_key.clone(),
@@ -446,11 +448,13 @@ pub fn init_core(
                     None::<String>, // Provider-level system_prompt not in ProviderConfig
                     provider_config.temperature,
                     provider_config.max_tokens,
+                    provider_config.timeout_seconds,
                 )
             } else {
                 // Default provider name exists but config not found
                 info!(provider = %name, "Default provider config not found, using defaults");
                 (
+                    None,
                     "openai".to_string(),
                     "gpt-4o".to_string(),
                     None,
@@ -458,12 +462,14 @@ pub fn init_core(
                     None,
                     None,
                     None,
+                    30u64, // Default timeout
                 )
             }
         } else {
             // No default provider configured
             info!("No default provider configured, using openai defaults");
             (
+                None,
                 "openai".to_string(),
                 "gpt-4o".to_string(),
                 None,
@@ -471,6 +477,7 @@ pub fn init_core(
                 None,
                 None,
                 None,
+                30u64, // Default timeout
             )
         }
     };
@@ -482,17 +489,20 @@ pub fn init_core(
         temperature: temperature.unwrap_or(0.7),
         max_tokens: max_tokens.unwrap_or(4096),
         max_turns: 50, // Default to 50 turns for complex multi-step tasks
+        timeout_seconds, // Use timeout from provider config
         system_prompt: system_prompt
             .unwrap_or_else(|| "You are Aether, an intelligent assistant.".to_string()),
         api_key,
         base_url,
     };
 
+    // Log with both provider_name (config key) and provider_type (protocol) for clarity
     info!(
-        provider = %rig_config.provider,
+        provider_name = provider_name_for_log.as_deref().unwrap_or("(default)"),
+        provider_type = %rig_config.provider,
         model = %rig_config.model,
         has_api_key = rig_config.api_key.is_some(),
-        has_base_url = rig_config.base_url.is_some(),
+        base_url = rig_config.base_url.as_deref().unwrap_or("(default)"),
         "RigAgentConfig loaded from config file"
     );
 

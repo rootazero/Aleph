@@ -22,7 +22,7 @@ enum SettingsTab: Hashable {
     case search
     case mcp
     case skills
-    case cowork
+    case agent
     case policies
 }
 

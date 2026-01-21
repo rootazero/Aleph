@@ -41,7 +41,7 @@ const MULTI_STEP_PATTERNS: &[&str] = &[
 /// Minimum length threshold for single-step heuristic
 const SINGLE_STEP_LENGTH_THRESHOLD: usize = 10;
 
-use crate::dispatcher::cowork_types::TaskGraph;
+use crate::dispatcher::agent_types::TaskGraph;
 use crate::dispatcher::planner::{LlmTaskPlanner, TaskPlanner};
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
@@ -139,13 +139,29 @@ impl TaskAnalyzer {
     /// Build GenerationProviders from config for the planner
     fn build_generation_providers(&self) -> GenerationProviders {
         let Some(config) = &self.generation_config else {
+            debug!("build_generation_providers: generation_config is None");
             return GenerationProviders::default();
         };
+
+        debug!(
+            "build_generation_providers: generation_config has {} providers",
+            config.providers.len()
+        );
 
         let mut providers = GenerationProviders::default();
 
         // Image providers
-        for (name, provider_config) in config.get_providers_for_type(GenerationType::Image) {
+        let image_providers_from_config = config.get_providers_for_type(GenerationType::Image);
+        debug!(
+            "build_generation_providers: found {} image providers from config",
+            image_providers_from_config.len()
+        );
+
+        for (name, provider_config) in image_providers_from_config {
+            debug!(
+                "build_generation_providers: processing image provider '{}', model={:?}, models_keys={:?}",
+                name, provider_config.model, provider_config.models.keys().collect::<Vec<_>>()
+            );
             let mut models = Vec::new();
             // Add default model if set
             if let Some(ref model) = provider_config.model {
@@ -154,6 +170,10 @@ impl TaskAnalyzer {
             // Add all model aliases
             models.extend(provider_config.models.keys().cloned());
             if !models.is_empty() {
+                debug!(
+                    "build_generation_providers: adding image provider '{}' with models {:?}",
+                    name, models
+                );
                 providers.image.push((name.to_string(), models));
             }
         }
@@ -181,6 +201,13 @@ impl TaskAnalyzer {
                 providers.audio.push((name.to_string(), models));
             }
         }
+
+        debug!(
+            "build_generation_providers: final result - image={}, video={}, audio={}",
+            providers.image.len(),
+            providers.video.len(),
+            providers.audio.len()
+        );
 
         providers
     }
@@ -220,12 +247,26 @@ risk 值: "low"（分析、生成文本） 或 "high"（调用API、执行代码
             AnalysisResponse::Multi { tasks } => {
                 // Use planner with providers if available to ensure correct provider names
                 let providers = self.build_generation_providers();
-                let task_graph = if providers.image.is_empty()
-                    && providers.video.is_empty()
-                    && providers.audio.is_empty()
-                {
+                let has_providers = !providers.image.is_empty()
+                    || !providers.video.is_empty()
+                    || !providers.audio.is_empty();
+
+                info!(
+                    "parse_analysis_response: has_providers={}, image={}, video={}, audio={}",
+                    has_providers,
+                    providers.image.len(),
+                    providers.video.len(),
+                    providers.audio.len()
+                );
+
+                let task_graph = if !has_providers {
+                    info!("parse_analysis_response: using plan() without providers");
                     self.planner.plan(original_input).await?
                 } else {
+                    info!(
+                        "parse_analysis_response: using plan_with_providers() with {:?}",
+                        providers.image
+                    );
                     self.planner
                         .plan_with_providers(original_input, &providers)
                         .await?

@@ -58,11 +58,11 @@ enum HaloState {
     /// Plan execution progress (multi-step execution)
     case planProgress(progressInfo: PlanProgressInfo)
 
-    /// Cowork task graph confirmation (multi-task orchestration)
-    case coworkConfirmation(taskGraph: CoworkTaskGraphFfi)
+    /// Task graph confirmation (multi-task orchestration)
+    case taskGraphConfirmation(taskGraph: AgentTaskGraphFfi)
 
-    /// Cowork task graph execution progress
-    case coworkProgress(taskGraph: CoworkTaskGraphFfi, state: CoworkExecutionState)
+    /// Agent task graph execution progress
+    case taskGraphProgress(taskGraph: AgentTaskGraphFfi, state: AgentExecutionState)
 
     /// Agent plan confirmation (Cursor-style)
     case agentPlan(
@@ -131,15 +131,15 @@ enum HaloState {
         return false
     }
 
-    /// Check if state is cowork confirmation
-    var isCoworkConfirmation: Bool {
-        if case .coworkConfirmation = self { return true }
+    /// Check if state is task graph confirmation
+    var isTaskGraphConfirmation: Bool {
+        if case .taskGraphConfirmation = self { return true }
         return false
     }
 
-    /// Check if state is cowork progress
-    var isCoworkProgress: Bool {
-        if case .coworkProgress = self { return true }
+    /// Check if state is task graph progress
+    var isTaskGraphProgress: Bool {
+        if case .taskGraphProgress = self { return true }
         return false
     }
 
@@ -242,9 +242,9 @@ extension HaloState: Equatable {
             return lInfo == rInfo
         case (.planProgress(let lInfo), .planProgress(let rInfo)):
             return lInfo == rInfo
-        case (.coworkConfirmation(let lGraph), .coworkConfirmation(let rGraph)):
+        case (.taskGraphConfirmation(let lGraph), .taskGraphConfirmation(let rGraph)):
             return lGraph == rGraph
-        case (.coworkProgress(let lGraph, let lState), .coworkProgress(let rGraph, let rState)):
+        case (.taskGraphProgress(let lGraph, let lState), .taskGraphProgress(let rGraph, let rState)):
             return lGraph == rGraph && lState == rState
         case (.agentPlan(let lId, let lTitle, let lOps, let lSummary),
               .agentPlan(let rId, let rTitle, let rOps, let rSummary)):
@@ -302,11 +302,11 @@ class HaloStateCallbacks {
     var toolConfirmationOnCancel: (() -> Void)?
     var planConfirmationOnExecute: (() -> Void)?
     var planConfirmationOnCancel: (() -> Void)?
-    var coworkConfirmationOnExecute: (() -> Void)?
-    var coworkConfirmationOnCancel: (() -> Void)?
-    var coworkOnPause: (() -> Void)?
-    var coworkOnResume: (() -> Void)?
-    var coworkOnCancel: (() -> Void)?
+    var taskGraphConfirmationOnExecute: (() -> Void)?
+    var taskGraphConfirmationOnCancel: (() -> Void)?
+    var taskGraphOnPause: (() -> Void)?
+    var taskGraphOnResume: (() -> Void)?
+    var taskGraphOnCancel: (() -> Void)?
     // Agent mode callbacks
     var agentPlanOnExecute: (() -> Void)?
     var agentPlanOnCancel: (() -> Void)?
@@ -322,11 +322,11 @@ class HaloStateCallbacks {
         toolConfirmationOnCancel = nil
         planConfirmationOnExecute = nil
         planConfirmationOnCancel = nil
-        coworkConfirmationOnExecute = nil
-        coworkConfirmationOnCancel = nil
-        coworkOnPause = nil
-        coworkOnResume = nil
-        coworkOnCancel = nil
+        taskGraphConfirmationOnExecute = nil
+        taskGraphConfirmationOnCancel = nil
+        taskGraphOnPause = nil
+        taskGraphOnResume = nil
+        taskGraphOnCancel = nil
         // Reset agent callbacks
         agentPlanOnExecute = nil
         agentPlanOnCancel = nil

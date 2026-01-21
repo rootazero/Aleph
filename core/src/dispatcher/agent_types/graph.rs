@@ -371,7 +371,7 @@ pub enum GraphValidationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{FileOp, TaskType};
+    use crate::dispatcher::agent_types::{FileOp, TaskType};
     use std::path::PathBuf;
 
     fn create_file_task(id: &str, name: &str) -> Task {

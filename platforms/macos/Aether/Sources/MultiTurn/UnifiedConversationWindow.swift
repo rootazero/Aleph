@@ -76,7 +76,7 @@ final class UnifiedConversationWindow: NSWindow {
     // MARK: - Window Setup
 
     private func setupWindow() {
-        level = .floating
+        level = .normal
         backgroundColor = .clear
         isOpaque = false
         hasShadow = true
@@ -198,12 +198,12 @@ final class UnifiedConversationWindow: NSWindow {
         }
         notificationObservers.append(failedObserver)
 
-        // DAG plan confirmation required
+        // DAG plan confirmation required - show inline in conversation
         let dagConfirmObserver = NotificationCenter.default.addObserver(
             forName: .dagPlanConfirmationRequired,
             object: nil,
             queue: .main
-        ) { notification in
+        ) { [weak self] notification in
             // Extract data from notification BEFORE MainActor block to avoid Sendable issues
             guard let planId = notification.userInfo?["planId"] as? String,
                   let core = notification.userInfo?["core"] as? AetherCore else {
@@ -211,47 +211,30 @@ final class UnifiedConversationWindow: NSWindow {
                 return
             }
 
-            // Build informative text from planInfo (outside MainActor to avoid Sendable issues)
-            var infoText = ""
-            if let info = notification.userInfo?["planInfo"] as? EventHandler.PlanConfirmationInfo {
-                infoText = "\(info.title)\n\n"
-                infoText += NSLocalizedString("dag.tasks_header", comment: "") + ":\n"
-                for (index, task) in info.tasks.enumerated() {
-                    let riskIcon = task.riskLevel == "high" ? "⚠️" : "✓"
-                    infoText += "\(index + 1). \(riskIcon) \(task.name)\n"
-                }
-                let hasHighRiskTasks = info.tasks.contains { $0.riskLevel == "high" }
-                if hasHighRiskTasks {
-                    infoText += "\n" + NSLocalizedString("dag.high_risk_warning", comment: "")
-                }
-            } else {
-                infoText = NSLocalizedString("dag.confirm_message", comment: "")
+            // Extract plan info to create PendingPlanConfirmation
+            guard let info = notification.userInfo?["planInfo"] as? EventHandler.PlanConfirmationInfo else {
+                print("[UnifiedConversationWindow] Missing planInfo in notification")
+                return
             }
 
-            // Store Sendable values for use in MainActor block
-            let confirmTitle = NSLocalizedString("dag.confirm_title", comment: "")
-            let executeTitle = NSLocalizedString("dag.confirm_execute", comment: "")
-            let cancelTitle = NSLocalizedString("dag.confirm_cancel", comment: "")
+            // Convert to Sendable format for MainActor block
+            let title = info.title
+            let tasks: [(id: String, name: String, riskLevel: String)] = info.tasks
 
             MainActor.assumeIsolated {
-                // Show confirmation dialog
-                let alert = NSAlert()
-                alert.messageText = confirmTitle
-                alert.informativeText = infoText
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: executeTitle)
-                alert.addButton(withTitle: cancelTitle)
+                guard let self = self else { return }
 
-                let response = alert.runModal()
-                let confirmed = response == .alertFirstButtonReturn
+                // Create pending confirmation and set in ViewModel
+                let confirmation = PendingPlanConfirmation(
+                    planId: planId,
+                    title: title,
+                    tasks: tasks
+                )
 
-                print("[UnifiedConversationWindow] DAG plan confirmation: planId=\(planId), confirmed=\(confirmed)")
+                print("[UnifiedConversationWindow] Showing inline plan confirmation: planId=\(planId), tasks=\(tasks.count)")
 
-                // Send decision back to Rust
-                let success = core.confirmTaskPlan(planId: planId, confirmed: confirmed)
-                if !success {
-                    print("[UnifiedConversationWindow] Warning: Plan confirmation may have expired: \(planId)")
-                }
+                // Set the pending confirmation in ViewModel (will be displayed inline in conversation)
+                self.viewModel.setPendingPlanConfirmation(confirmation, core: core)
             }
         }
         notificationObservers.append(dagConfirmObserver)

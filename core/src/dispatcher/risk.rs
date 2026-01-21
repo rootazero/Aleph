@@ -6,7 +6,7 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
-use crate::dispatcher::cowork_types::{FileOp, Task, TaskGraph, TaskType};
+use crate::dispatcher::agent_types::{FileOp, Task, TaskGraph, TaskType};
 
 /// Risk level for task execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,7 +147,7 @@ impl Default for RiskEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{AiTask, AppAuto, CodeExec, DocGen, Language};
+    use crate::dispatcher::agent_types::{AiTask, AppAuto, CodeExec, DocGen, Language};
     use std::path::PathBuf;
 
     fn create_task(id: &str, name: &str, task_type: TaskType) -> Task {

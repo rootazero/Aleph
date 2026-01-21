@@ -2002,7 +2002,7 @@ pub unsafe extern "C" fn aether_test_search_provider(
 /// * `0` on success
 /// * Error code on failure
 #[no_mangle]
-pub unsafe extern "C" fn aether_get_cowork_config(
+pub unsafe extern "C" fn aether_get_agent_config(
     out_json: *mut *mut c_char,
     out_len: *mut usize,
 ) -> c_int {
@@ -2048,7 +2048,7 @@ pub unsafe extern "C" fn aether_get_cowork_config(
 /// * `0` on success
 /// * Error code on failure
 #[no_mangle]
-pub unsafe extern "C" fn aether_update_cowork_config(config_json: *const c_char) -> c_int {
+pub unsafe extern "C" fn aether_update_agent_config(config_json: *const c_char) -> c_int {
     if !INITIALIZED.load(Ordering::SeqCst) {
         return AETHER_ERR_NOT_INITIALIZED;
     }
@@ -2063,7 +2063,7 @@ pub unsafe extern "C" fn aether_update_cowork_config(config_json: *const c_char)
     };
 
     // TODO: Update actual cowork config via ffi/cowork.rs
-    tracing::info!("aether_update_cowork_config: {}", config_str);
+    tracing::info!("aether_update_agent_config: {}", config_str);
     AETHER_SUCCESS
 }
 

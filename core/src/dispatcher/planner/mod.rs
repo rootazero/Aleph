@@ -11,7 +11,7 @@ pub use prompt::GenerationProviders;
 
 use async_trait::async_trait;
 
-use crate::dispatcher::cowork_types::TaskGraph;
+use crate::dispatcher::agent_types::TaskGraph;
 use crate::error::Result;
 
 /// Trait for task planners

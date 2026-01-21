@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use crate::dispatcher::cowork_types::{
+use crate::dispatcher::agent_types::{
     ExecutionSummary, Task, TaskDependency, TaskGraph, TaskStatus, TaskType,
 };
 use crate::dispatcher::model_router::{
@@ -40,7 +40,7 @@ use crate::dispatcher::{AgentConfig, ExecutionState};
 
 /// Execution state for FFI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CoworkExecutionState {
+pub enum AgentExecutionState {
     Idle,
     Planning,
     AwaitingConfirmation,
@@ -50,23 +50,23 @@ pub enum CoworkExecutionState {
     Completed,
 }
 
-impl From<ExecutionState> for CoworkExecutionState {
+impl From<ExecutionState> for AgentExecutionState {
     fn from(state: ExecutionState) -> Self {
         match state {
-            ExecutionState::Idle => CoworkExecutionState::Idle,
-            ExecutionState::Planning => CoworkExecutionState::Planning,
-            ExecutionState::AwaitingConfirmation => CoworkExecutionState::AwaitingConfirmation,
-            ExecutionState::Executing => CoworkExecutionState::Executing,
-            ExecutionState::Paused => CoworkExecutionState::Paused,
-            ExecutionState::Cancelled => CoworkExecutionState::Cancelled,
-            ExecutionState::Completed => CoworkExecutionState::Completed,
+            ExecutionState::Idle => AgentExecutionState::Idle,
+            ExecutionState::Planning => AgentExecutionState::Planning,
+            ExecutionState::AwaitingConfirmation => AgentExecutionState::AwaitingConfirmation,
+            ExecutionState::Executing => AgentExecutionState::Executing,
+            ExecutionState::Paused => AgentExecutionState::Paused,
+            ExecutionState::Cancelled => AgentExecutionState::Cancelled,
+            ExecutionState::Completed => AgentExecutionState::Completed,
         }
     }
 }
 
 /// Task status state for FFI (simplified)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CoworkTaskStatusState {
+pub enum AgentTaskStatusState {
     Pending,
     Running,
     Completed,
@@ -74,21 +74,21 @@ pub enum CoworkTaskStatusState {
     Cancelled,
 }
 
-impl From<&TaskStatus> for CoworkTaskStatusState {
+impl From<&TaskStatus> for AgentTaskStatusState {
     fn from(status: &TaskStatus) -> Self {
         match status {
-            TaskStatus::Pending => CoworkTaskStatusState::Pending,
-            TaskStatus::Running { .. } => CoworkTaskStatusState::Running,
-            TaskStatus::Completed { .. } => CoworkTaskStatusState::Completed,
-            TaskStatus::Failed { .. } => CoworkTaskStatusState::Failed,
-            TaskStatus::Cancelled => CoworkTaskStatusState::Cancelled,
+            TaskStatus::Pending => AgentTaskStatusState::Pending,
+            TaskStatus::Running { .. } => AgentTaskStatusState::Running,
+            TaskStatus::Completed { .. } => AgentTaskStatusState::Completed,
+            TaskStatus::Failed { .. } => AgentTaskStatusState::Failed,
+            TaskStatus::Cancelled => AgentTaskStatusState::Cancelled,
         }
     }
 }
 
 /// Task type category for FFI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CoworkTaskTypeCategory {
+pub enum AgentTaskTypeCategory {
     FileOperation,
     CodeExecution,
     DocumentGeneration,
@@ -99,24 +99,24 @@ pub enum CoworkTaskTypeCategory {
     AudioGeneration,
 }
 
-impl From<&TaskType> for CoworkTaskTypeCategory {
+impl From<&TaskType> for AgentTaskTypeCategory {
     fn from(task_type: &TaskType) -> Self {
         match task_type {
-            TaskType::FileOperation(_) => CoworkTaskTypeCategory::FileOperation,
-            TaskType::CodeExecution(_) => CoworkTaskTypeCategory::CodeExecution,
-            TaskType::DocumentGeneration(_) => CoworkTaskTypeCategory::DocumentGeneration,
-            TaskType::AppAutomation(_) => CoworkTaskTypeCategory::AppAutomation,
-            TaskType::AiInference(_) => CoworkTaskTypeCategory::AiInference,
-            TaskType::ImageGeneration(_) => CoworkTaskTypeCategory::ImageGeneration,
-            TaskType::VideoGeneration(_) => CoworkTaskTypeCategory::VideoGeneration,
-            TaskType::AudioGeneration(_) => CoworkTaskTypeCategory::AudioGeneration,
+            TaskType::FileOperation(_) => AgentTaskTypeCategory::FileOperation,
+            TaskType::CodeExecution(_) => AgentTaskTypeCategory::CodeExecution,
+            TaskType::DocumentGeneration(_) => AgentTaskTypeCategory::DocumentGeneration,
+            TaskType::AppAutomation(_) => AgentTaskTypeCategory::AppAutomation,
+            TaskType::AiInference(_) => AgentTaskTypeCategory::AiInference,
+            TaskType::ImageGeneration(_) => AgentTaskTypeCategory::ImageGeneration,
+            TaskType::VideoGeneration(_) => AgentTaskTypeCategory::VideoGeneration,
+            TaskType::AudioGeneration(_) => AgentTaskTypeCategory::AudioGeneration,
         }
     }
 }
 
 /// Progress event type for FFI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CoworkProgressEventType {
+pub enum AgentProgressEventType {
     TaskStarted,
     TaskProgress,
     TaskCompleted,
@@ -275,7 +275,7 @@ impl From<ModelCostStrategyFFI> for CostStrategy {
 
 /// Cowork configuration for FFI
 #[derive(Debug, Clone)]
-pub struct CoworkConfigFFI {
+pub struct AgentConfigFFI {
     pub enabled: bool,
     pub require_confirmation: bool,
     pub max_parallelism: u32,
@@ -283,7 +283,7 @@ pub struct CoworkConfigFFI {
     pub dry_run: bool,
 }
 
-impl From<AgentConfig> for CoworkConfigFFI {
+impl From<AgentConfig> for AgentConfigFFI {
     fn from(config: AgentConfig) -> Self {
         Self {
             enabled: config.enabled,
@@ -295,8 +295,8 @@ impl From<AgentConfig> for CoworkConfigFFI {
     }
 }
 
-impl From<CoworkConfigFFI> for AgentConfig {
-    fn from(config: CoworkConfigFFI) -> Self {
+impl From<AgentConfigFFI> for AgentConfig {
+    fn from(config: AgentConfigFFI) -> Self {
         Self {
             enabled: config.enabled,
             require_confirmation: config.require_confirmation,
@@ -1712,17 +1712,17 @@ impl EnsembleStatusFFI {
 
 /// Cowork task for FFI (simplified)
 #[derive(Debug, Clone)]
-pub struct CoworkTaskFFI {
+pub struct AgentTaskFFI {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    pub task_type: CoworkTaskTypeCategory,
-    pub status: CoworkTaskStatusState,
+    pub task_type: AgentTaskTypeCategory,
+    pub status: AgentTaskStatusState,
     pub progress: f32,
     pub error_message: Option<String>,
 }
 
-impl From<&Task> for CoworkTaskFFI {
+impl From<&Task> for AgentTaskFFI {
     fn from(task: &Task) -> Self {
         let error_message = if let TaskStatus::Failed { error, .. } = &task.status {
             Some(error.clone())
@@ -1734,8 +1734,8 @@ impl From<&Task> for CoworkTaskFFI {
             id: task.id.clone(),
             name: task.name.clone(),
             description: task.description.clone(),
-            task_type: CoworkTaskTypeCategory::from(&task.task_type),
-            status: CoworkTaskStatusState::from(&task.status),
+            task_type: AgentTaskTypeCategory::from(&task.task_type),
+            status: AgentTaskStatusState::from(&task.status),
             progress: task.progress(),
             error_message,
         }
@@ -1744,12 +1744,12 @@ impl From<&Task> for CoworkTaskFFI {
 
 /// Cowork task dependency for FFI
 #[derive(Debug, Clone)]
-pub struct CoworkTaskDependencyFFI {
+pub struct AgentTaskDependencyFFI {
     pub from_task_id: String,
     pub to_task_id: String,
 }
 
-impl From<&TaskDependency> for CoworkTaskDependencyFFI {
+impl From<&TaskDependency> for AgentTaskDependencyFFI {
     fn from(dep: &TaskDependency) -> Self {
         Self {
             from_task_id: dep.from.clone(),
@@ -1760,25 +1760,25 @@ impl From<&TaskDependency> for CoworkTaskDependencyFFI {
 
 /// Cowork task graph for FFI
 #[derive(Debug, Clone)]
-pub struct CoworkTaskGraphFFI {
+pub struct AgentTaskGraphFFI {
     pub id: String,
     pub title: String,
     pub original_request: Option<String>,
-    pub tasks: Vec<CoworkTaskFFI>,
-    pub edges: Vec<CoworkTaskDependencyFFI>,
+    pub tasks: Vec<AgentTaskFFI>,
+    pub edges: Vec<AgentTaskDependencyFFI>,
 }
 
-impl From<&TaskGraph> for CoworkTaskGraphFFI {
+impl From<&TaskGraph> for AgentTaskGraphFFI {
     fn from(graph: &TaskGraph) -> Self {
         Self {
             id: graph.id.clone(),
             title: graph.metadata.title.clone(),
             original_request: graph.metadata.original_request.clone(),
-            tasks: graph.tasks.iter().map(CoworkTaskFFI::from).collect(),
+            tasks: graph.tasks.iter().map(AgentTaskFFI::from).collect(),
             edges: graph
                 .edges
                 .iter()
-                .map(CoworkTaskDependencyFFI::from)
+                .map(AgentTaskDependencyFFI::from)
                 .collect(),
         }
     }
@@ -1786,7 +1786,7 @@ impl From<&TaskGraph> for CoworkTaskGraphFFI {
 
 /// Cowork execution summary for FFI
 #[derive(Debug, Clone)]
-pub struct CoworkExecutionSummaryFFI {
+pub struct AgentExecutionSummaryFFI {
     pub graph_id: String,
     pub total_tasks: u32,
     pub completed_tasks: u32,
@@ -1796,7 +1796,7 @@ pub struct CoworkExecutionSummaryFFI {
     pub errors: Vec<String>,
 }
 
-impl From<ExecutionSummary> for CoworkExecutionSummaryFFI {
+impl From<ExecutionSummary> for AgentExecutionSummaryFFI {
     fn from(summary: ExecutionSummary) -> Self {
         Self {
             graph_id: summary.graph_id,
@@ -1812,8 +1812,8 @@ impl From<ExecutionSummary> for CoworkExecutionSummaryFFI {
 
 /// Cowork progress event for FFI
 #[derive(Debug, Clone)]
-pub struct CoworkProgressEventFFI {
-    pub event_type: CoworkProgressEventType,
+pub struct AgentProgressEventFFI {
+    pub event_type: AgentProgressEventType,
     pub task_id: Option<String>,
     pub task_name: Option<String>,
     pub progress: f32,
@@ -1821,11 +1821,11 @@ pub struct CoworkProgressEventFFI {
     pub error: Option<String>,
 }
 
-impl From<&ProgressEvent> for CoworkProgressEventFFI {
+impl From<&ProgressEvent> for AgentProgressEventFFI {
     fn from(event: &ProgressEvent) -> Self {
         match event {
             ProgressEvent::TaskStarted { task_id, task_name } => Self {
-                event_type: CoworkProgressEventType::TaskStarted,
+                event_type: AgentProgressEventType::TaskStarted,
                 task_id: Some(task_id.clone()),
                 task_name: Some(task_name.clone()),
                 progress: 0.0,
@@ -1837,7 +1837,7 @@ impl From<&ProgressEvent> for CoworkProgressEventFFI {
                 progress,
                 message,
             } => Self {
-                event_type: CoworkProgressEventType::TaskProgress,
+                event_type: AgentProgressEventType::TaskProgress,
                 task_id: Some(task_id.clone()),
                 task_name: None,
                 progress: *progress,
@@ -1847,7 +1847,7 @@ impl From<&ProgressEvent> for CoworkProgressEventFFI {
             ProgressEvent::TaskCompleted {
                 task_id, task_name, ..
             } => Self {
-                event_type: CoworkProgressEventType::TaskCompleted,
+                event_type: AgentProgressEventType::TaskCompleted,
                 task_id: Some(task_id.clone()),
                 task_name: Some(task_name.clone()),
                 progress: 1.0,
@@ -1859,7 +1859,7 @@ impl From<&ProgressEvent> for CoworkProgressEventFFI {
                 task_name,
                 error,
             } => Self {
-                event_type: CoworkProgressEventType::TaskFailed,
+                event_type: AgentProgressEventType::TaskFailed,
                 task_id: Some(task_id.clone()),
                 task_name: Some(task_name.clone()),
                 progress: 0.0,
@@ -1867,7 +1867,7 @@ impl From<&ProgressEvent> for CoworkProgressEventFFI {
                 error: Some(error.clone()),
             },
             ProgressEvent::TaskCancelled { task_id, task_name } => Self {
-                event_type: CoworkProgressEventType::TaskCancelled,
+                event_type: AgentProgressEventType::TaskCancelled,
                 task_id: Some(task_id.clone()),
                 task_name: Some(task_name.clone()),
                 progress: 0.0,
@@ -1880,7 +1880,7 @@ impl From<&ProgressEvent> for CoworkProgressEventFFI {
                 running_tasks,
                 pending_tasks,
             } => Self {
-                event_type: CoworkProgressEventType::GraphProgress,
+                event_type: AgentProgressEventType::GraphProgress,
                 task_id: Some(graph_id.clone()),
                 task_name: None,
                 progress: *overall_progress,
@@ -1896,7 +1896,7 @@ impl From<&ProgressEvent> for CoworkProgressEventFFI {
                 completed_tasks,
                 failed_tasks,
             } => Self {
-                event_type: CoworkProgressEventType::GraphCompleted,
+                event_type: AgentProgressEventType::GraphCompleted,
                 task_id: Some(graph_id.clone()),
                 task_name: None,
                 progress: 1.0,
@@ -1915,26 +1915,26 @@ impl From<&ProgressEvent> for CoworkProgressEventFFI {
 // ============================================================================
 
 /// Progress handler callback interface for FFI
-pub trait CoworkProgressHandler: Send + Sync {
+pub trait AgentProgressHandler: Send + Sync {
     /// Called when a progress event occurs
-    fn on_progress_event(&self, event: CoworkProgressEventFFI);
+    fn on_progress_event(&self, event: AgentProgressEventFFI);
 }
 
 /// Adapter to bridge FFI callback to internal ProgressSubscriber
 pub struct FfiProgressSubscriber {
-    handler: Arc<dyn CoworkProgressHandler>,
+    handler: Arc<dyn AgentProgressHandler>,
 }
 
 impl FfiProgressSubscriber {
     /// Create a new FFI progress subscriber
-    pub fn new(handler: Arc<dyn CoworkProgressHandler>) -> Self {
+    pub fn new(handler: Arc<dyn AgentProgressHandler>) -> Self {
         Self { handler }
     }
 }
 
 impl ProgressSubscriber for FfiProgressSubscriber {
     fn on_event(&self, event: ProgressEvent) {
-        let ffi_event = CoworkProgressEventFFI::from(&event);
+        let ffi_event = AgentProgressEventFFI::from(&event);
         self.handler.on_progress_event(ffi_event);
     }
 }
@@ -1942,38 +1942,38 @@ impl ProgressSubscriber for FfiProgressSubscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{FileOp, TaskResult};
+    use crate::dispatcher::agent_types::{FileOp, TaskResult};
     use std::path::PathBuf;
 
     #[test]
     fn test_execution_state_conversion() {
         assert_eq!(
-            CoworkExecutionState::from(ExecutionState::Idle),
-            CoworkExecutionState::Idle
+            AgentExecutionState::from(ExecutionState::Idle),
+            AgentExecutionState::Idle
         );
         assert_eq!(
-            CoworkExecutionState::from(ExecutionState::Executing),
-            CoworkExecutionState::Executing
+            AgentExecutionState::from(ExecutionState::Executing),
+            AgentExecutionState::Executing
         );
     }
 
     #[test]
     fn test_task_status_conversion() {
         assert_eq!(
-            CoworkTaskStatusState::from(&TaskStatus::Pending),
-            CoworkTaskStatusState::Pending
+            AgentTaskStatusState::from(&TaskStatus::Pending),
+            AgentTaskStatusState::Pending
         );
         assert_eq!(
-            CoworkTaskStatusState::from(&TaskStatus::running(0.5)),
-            CoworkTaskStatusState::Running
+            AgentTaskStatusState::from(&TaskStatus::running(0.5)),
+            AgentTaskStatusState::Running
         );
         assert_eq!(
-            CoworkTaskStatusState::from(&TaskStatus::completed(TaskResult::default())),
-            CoworkTaskStatusState::Completed
+            AgentTaskStatusState::from(&TaskStatus::completed(TaskResult::default())),
+            AgentTaskStatusState::Completed
         );
         assert_eq!(
-            CoworkTaskStatusState::from(&TaskStatus::failed("error")),
-            CoworkTaskStatusState::Failed
+            AgentTaskStatusState::from(&TaskStatus::failed("error")),
+            AgentTaskStatusState::Failed
         );
     }
 
@@ -1987,7 +1987,7 @@ mod tests {
             ..Default::default()
         };
 
-        let ffi_config = CoworkConfigFFI::from(config.clone());
+        let ffi_config = AgentConfigFFI::from(config.clone());
         assert_eq!(ffi_config.enabled, true);
         assert_eq!(ffi_config.max_parallelism, 8);
         assert_eq!(ffi_config.dry_run, true);
@@ -2008,12 +2008,12 @@ mod tests {
         )
         .with_description("A test task");
 
-        let ffi_task = CoworkTaskFFI::from(&task);
+        let ffi_task = AgentTaskFFI::from(&task);
         assert_eq!(ffi_task.id, "task_1");
         assert_eq!(ffi_task.name, "Test Task");
         assert_eq!(ffi_task.description, Some("A test task".to_string()));
-        assert_eq!(ffi_task.task_type, CoworkTaskTypeCategory::FileOperation);
-        assert_eq!(ffi_task.status, CoworkTaskStatusState::Pending);
+        assert_eq!(ffi_task.task_type, AgentTaskTypeCategory::FileOperation);
+        assert_eq!(ffi_task.status, AgentTaskStatusState::Pending);
         assert_eq!(ffi_task.progress, 0.0);
     }
 
@@ -2038,7 +2038,7 @@ mod tests {
         ));
         graph.add_dependency("task_1", "task_2");
 
-        let ffi_graph = CoworkTaskGraphFFI::from(&graph);
+        let ffi_graph = AgentTaskGraphFFI::from(&graph);
         assert_eq!(ffi_graph.id, "graph_1");
         assert_eq!(ffi_graph.title, "Test Graph");
         assert_eq!(ffi_graph.original_request, Some("Do something".to_string()));
@@ -2055,8 +2055,8 @@ mod tests {
             task_name: "Test Task".to_string(),
         };
 
-        let ffi_event = CoworkProgressEventFFI::from(&event);
-        assert_eq!(ffi_event.event_type, CoworkProgressEventType::TaskStarted);
+        let ffi_event = AgentProgressEventFFI::from(&event);
+        assert_eq!(ffi_event.event_type, AgentProgressEventType::TaskStarted);
         assert_eq!(ffi_event.task_id, Some("task_1".to_string()));
         assert_eq!(ffi_event.task_name, Some("Test Task".to_string()));
     }

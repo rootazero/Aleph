@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use tracing::{debug, info};
 
 use super::{ProgressEvent, ProgressSubscriber, TaskMonitor};
-use crate::dispatcher::cowork_types::{Task, TaskGraph, TaskResult};
+use crate::dispatcher::agent_types::{Task, TaskGraph, TaskResult};
 
 /// Thread-safe progress monitor with subscriber support
 pub struct ProgressMonitor {
@@ -149,7 +149,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{FileOp, TaskType};
+    use crate::dispatcher::agent_types::{FileOp, TaskType};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -5,7 +5,7 @@ use std::time::Duration;
 use tracing::debug;
 
 use super::{ExecutionContext, TaskExecutor};
-use crate::dispatcher::cowork_types::{Task, TaskResult, TaskType};
+use crate::dispatcher::agent_types::{Task, TaskResult, TaskType};
 use crate::error::Result;
 
 /// A no-operation executor that returns mock results
@@ -83,7 +83,7 @@ impl TaskExecutor for NoopExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{FileOp, TaskType};
+    use crate::dispatcher::agent_types::{FileOp, TaskType};
     use std::path::PathBuf;
 
     #[tokio::test]
@@ -135,7 +135,7 @@ mod tests {
         })));
 
         assert!(executor.can_execute(&TaskType::AiInference(
-            crate::dispatcher::cowork_types::AiTask {
+            crate::dispatcher::agent_types::AiTask {
                 prompt: "test".into(),
                 requires_privacy: false,
                 has_images: false,

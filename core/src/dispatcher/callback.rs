@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 
-use crate::dispatcher::cowork_types::TaskGraph;
+use crate::dispatcher::agent_types::TaskGraph;
 use crate::dispatcher::risk::{RiskEvaluator, RiskLevel};
 
 // ============================================================================
@@ -134,19 +134,19 @@ impl DagTaskPlan {
 
                 // Convert status
                 let status = match &task.status {
-                    crate::dispatcher::cowork_types::TaskStatus::Pending => {
+                    crate::dispatcher::agent_types::TaskStatus::Pending => {
                         DagTaskDisplayStatus::Pending
                     }
-                    crate::dispatcher::cowork_types::TaskStatus::Running { .. } => {
+                    crate::dispatcher::agent_types::TaskStatus::Running { .. } => {
                         DagTaskDisplayStatus::Running
                     }
-                    crate::dispatcher::cowork_types::TaskStatus::Completed { .. } => {
+                    crate::dispatcher::agent_types::TaskStatus::Completed { .. } => {
                         DagTaskDisplayStatus::Completed
                     }
-                    crate::dispatcher::cowork_types::TaskStatus::Failed { .. } => {
+                    crate::dispatcher::agent_types::TaskStatus::Failed { .. } => {
                         DagTaskDisplayStatus::Failed
                     }
-                    crate::dispatcher::cowork_types::TaskStatus::Cancelled => {
+                    crate::dispatcher::agent_types::TaskStatus::Cancelled => {
                         DagTaskDisplayStatus::Cancelled
                     }
                 };
@@ -345,7 +345,7 @@ impl ExecutionCallback for NoOpCallback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{FileOp, Task, TaskGraph, TaskType};
+    use crate::dispatcher::agent_types::{FileOp, Task, TaskGraph, TaskType};
     use std::path::PathBuf;
 
     fn create_file_task(id: &str, name: &str, file_op: FileOp) -> Task {

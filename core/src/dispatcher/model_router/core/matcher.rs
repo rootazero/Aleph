@@ -6,7 +6,7 @@
 use super::{
     Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules, TaskIntent,
 };
-use crate::dispatcher::cowork_types::{Task, TaskType};
+use crate::dispatcher::agent_types::{Task, TaskType};
 use std::collections::HashMap;
 
 /// Error type for model routing operations
@@ -586,7 +586,7 @@ impl ModelRouter for ModelMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::cowork_types::{AiTask, CodeExec, FileOp, Language};
+    use crate::dispatcher::agent_types::{AiTask, CodeExec, FileOp, Language};
     use std::path::PathBuf;
 
     fn create_test_profiles() -> Vec<ModelProfile> {

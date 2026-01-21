@@ -145,6 +145,16 @@ pub enum AetherError {
     #[error("Operation cancelled")]
     Cancelled,
 
+    /// Task requires additional user input to complete
+    /// This is returned when an LLM response indicates it cannot proceed
+    /// without more information from the user.
+    #[error("Task '{task_name}' needs additional input: {message}")]
+    MissingInput {
+        task_id: String,
+        task_name: String,
+        message: String,
+    },
+
     /// Runtime manager error (uv, fnm, yt-dlp, etc.)
     #[error("Runtime error [{runtime_id}]: {message}")]
     RuntimeError {
@@ -318,7 +328,8 @@ impl AetherError {
             | AetherError::GitError(_)
             | AetherError::McpToolNotFound(_)
             | AetherError::McpTimeout
-            | AetherError::Cancelled => None,
+            | AetherError::Cancelled
+            | AetherError::MissingInput { .. } => None,
         }
     }
 
@@ -448,6 +459,22 @@ impl AetherError {
                 format!(
                     "Runtime '{}' error: {}. Check Settings → Runtimes for details.",
                     runtime_id, message
+                )
+            }
+            AetherError::MissingInput {
+                task_name,
+                message,
+                ..
+            } => {
+                format!(
+                    "任务 '{}' 需要更多信息才能继续执行。请提供所需内容后重试。\n详情: {}",
+                    task_name,
+                    // Truncate message if too long
+                    if message.len() > 200 {
+                        format!("{}...", &message[..200])
+                    } else {
+                        message.clone()
+                    }
                 )
             }
         }

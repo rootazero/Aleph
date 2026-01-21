@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::prompt::{build_user_prompt, build_user_prompt_with_providers, GenerationProviders, PLANNING_SYSTEM_PROMPT};
 use super::TaskPlanner;
-use crate::dispatcher::cowork_types::{
+use crate::dispatcher::agent_types::{
     AiTask, AppAuto, AudioGenTask, CodeExec, DocGen, FileOp, ImageGenTask, Language, Task,
     TaskDependency, TaskGraph, TaskType, VideoGenTask,
 };

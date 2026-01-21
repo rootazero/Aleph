@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::dispatcher::cowork_types::TaskResult;
+use crate::dispatcher::agent_types::TaskResult;
 
 /// Progress events emitted during task execution
 #[derive(Debug, Clone, Serialize, Deserialize)]

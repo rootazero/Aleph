@@ -1,17 +1,17 @@
 //
-//  CoworkProgressView.swift
+//  AgentProgressView.swift
 //  Aether
 //
-//  SwiftUI component for displaying Cowork task graph execution progress.
+//  SwiftUI component for displaying Task graph execution progress.
 //  Shows DAG structure, task status, and execution controls.
 //
 
 import SwiftUI
 
-/// View for displaying Cowork task graph execution progress
-struct CoworkProgressView: View {
-    let taskGraph: CoworkTaskGraphFfi
-    let executionState: CoworkExecutionState
+/// View for displaying Task graph execution progress
+struct TaskGraphProgressView: View {
+    let taskGraph: AgentTaskGraphFfi
+    let executionState: AgentExecutionState
     let onPause: (() -> Void)?
     let onResume: (() -> Void)?
     let onCancel: (() -> Void)?
@@ -65,7 +65,7 @@ struct CoworkProgressView: View {
         }
         // Accessibility
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(Text("Cowork progress: \(completedCount) of \(taskGraph.tasks.count) tasks"))
+        .accessibilityLabel(Text("Task graph progress: \(completedCount) of \(taskGraph.tasks.count) tasks"))
         .accessibilityValue(Text(executionState.displayName))
     }
 
@@ -175,7 +175,7 @@ struct CoworkProgressView: View {
         .cornerRadius(8)
     }
 
-    private func taskRow(task: CoworkTaskFfi) -> some View {
+    private func taskRow(task: AgentTaskFfi) -> some View {
         HStack(spacing: 10) {
             // Status icon
             taskStatusIcon(status: task.status)
@@ -213,7 +213,7 @@ struct CoworkProgressView: View {
     }
 
     @ViewBuilder
-    private func taskStatusIcon(status: CoworkTaskStatusState) -> some View {
+    private func taskStatusIcon(status: AgentTaskStatusState) -> some View {
         switch status {
         case .pending:
             Circle()
@@ -246,7 +246,7 @@ struct CoworkProgressView: View {
             HStack(spacing: 6) {
                 Image(systemName: "pause.circle.fill")
                     .foregroundColor(.orange)
-                Text(L("cowork.status.paused", default: "Paused"))
+                Text(L("agent.taskgraph.status.paused", default: "Paused"))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.orange)
             }
@@ -255,7 +255,7 @@ struct CoworkProgressView: View {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundColor(.green)
-                Text(L("cowork.status.completed", default: "Completed"))
+                Text(L("agent.taskgraph.status.completed", default: "Completed"))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.green)
             }
@@ -264,7 +264,7 @@ struct CoworkProgressView: View {
             HStack(spacing: 6) {
                 Image(systemName: "slash.circle.fill")
                     .foregroundColor(.red)
-                Text(L("cowork.status.cancelled", default: "Cancelled"))
+                Text(L("agent.taskgraph.status.cancelled", default: "Cancelled"))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.red)
             }
@@ -275,11 +275,11 @@ struct CoworkProgressView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.red)
-                        Text(L("cowork.status.has_errors", default: "Some tasks failed"))
+                        Text(L("agent.taskgraph.status.has_errors", default: "Some tasks failed"))
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(.red)
                     }
-                    Text("\(failedCount) \(L("cowork.tasks_failed", default: "tasks failed"))")
+                    Text("\(failedCount) \(L("agent.taskgraph.tasks_failed", default: "tasks failed"))")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -397,17 +397,17 @@ struct CoworkProgressView: View {
         if let runningTask = taskGraph.tasks.first(where: { $0.status == .running }) {
             return runningTask.name
         } else if executionState == .completed {
-            return L("cowork.all_completed", default: "All tasks completed")
+            return L("agent.taskgraph.all_completed", default: "All tasks completed")
         } else if executionState == .paused {
-            return L("cowork.paused", default: "Execution paused")
+            return L("agent.taskgraph.paused", default: "Execution paused")
         } else if executionState == .cancelled {
-            return L("cowork.cancelled", default: "Execution cancelled")
+            return L("agent.taskgraph.cancelled", default: "Execution cancelled")
         } else {
-            return L("cowork.waiting", default: "Waiting...")
+            return L("agent.taskgraph.waiting", default: "Waiting...")
         }
     }
 
-    private func taskTypeIcon(_ type: CoworkTaskTypeCategory) -> String {
+    private func taskTypeIcon(_ type: AgentTaskTypeCategory) -> String {
         switch type {
         case .fileOperation:
             return "doc"
@@ -428,7 +428,7 @@ struct CoworkProgressView: View {
         }
     }
 
-    private func taskTypeColor(_ type: CoworkTaskTypeCategory) -> Color {
+    private func taskTypeColor(_ type: AgentTaskTypeCategory) -> Color {
         switch type {
         case .fileOperation:
             return .blue
@@ -452,7 +452,7 @@ struct CoworkProgressView: View {
 
 // MARK: - Execution State Display Name
 
-extension CoworkExecutionState {
+extension AgentExecutionState {
     var displayName: String {
         switch self {
         case .idle: return "Idle"
@@ -477,13 +477,13 @@ private func L(_ key: String, default defaultValue: String) -> String {
 // MARK: - Preview
 
 #Preview("Cowork Executing") {
-    CoworkProgressView(
-        taskGraph: CoworkTaskGraphFfi(
+    TaskGraphProgressView(
+        taskGraph: AgentTaskGraphFfi(
             id: "graph-123",
             title: "Process Documents",
             originalRequest: "Help me organize and summarize these PDF files",
             tasks: [
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-1",
                     name: "List PDF files",
                     description: "Find all PDF files",
@@ -492,7 +492,7 @@ private func L(_ key: String, default defaultValue: String) -> String {
                     progress: 1.0,
                     errorMessage: nil
                 ),
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-2",
                     name: "Extract text",
                     description: "Extract text content",
@@ -501,7 +501,7 @@ private func L(_ key: String, default defaultValue: String) -> String {
                     progress: 0.45,
                     errorMessage: nil
                 ),
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-3",
                     name: "Summarize content",
                     description: "Generate summary",
@@ -523,13 +523,13 @@ private func L(_ key: String, default defaultValue: String) -> String {
 }
 
 #Preview("Cowork Completed") {
-    CoworkProgressView(
-        taskGraph: CoworkTaskGraphFfi(
+    TaskGraphProgressView(
+        taskGraph: AgentTaskGraphFfi(
             id: "graph-456",
             title: "Process Documents",
             originalRequest: nil,
             tasks: [
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-1",
                     name: "List PDF files",
                     description: nil,
@@ -538,7 +538,7 @@ private func L(_ key: String, default defaultValue: String) -> String {
                     progress: 1.0,
                     errorMessage: nil
                 ),
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-2",
                     name: "Extract text",
                     description: nil,
@@ -547,7 +547,7 @@ private func L(_ key: String, default defaultValue: String) -> String {
                     progress: 1.0,
                     errorMessage: nil
                 ),
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-3",
                     name: "Summarize content",
                     description: nil,
@@ -569,13 +569,13 @@ private func L(_ key: String, default defaultValue: String) -> String {
 }
 
 #Preview("Cowork With Errors") {
-    CoworkProgressView(
-        taskGraph: CoworkTaskGraphFfi(
+    TaskGraphProgressView(
+        taskGraph: AgentTaskGraphFfi(
             id: "graph-789",
             title: "Process Documents",
             originalRequest: nil,
             tasks: [
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-1",
                     name: "List PDF files",
                     description: nil,
@@ -584,7 +584,7 @@ private func L(_ key: String, default defaultValue: String) -> String {
                     progress: 1.0,
                     errorMessage: nil
                 ),
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-2",
                     name: "Extract text",
                     description: nil,
@@ -593,7 +593,7 @@ private func L(_ key: String, default defaultValue: String) -> String {
                     progress: 0.0,
                     errorMessage: "File not found"
                 ),
-                CoworkTaskFfi(
+                AgentTaskFfi(
                     id: "task-3",
                     name: "Summarize content",
                     description: nil,

@@ -18,6 +18,9 @@ pub struct RigAgentConfig {
     /// Max turns for tool calling loop (prevents MaxDepthError)
     #[serde(default = "default_max_turns")]
     pub max_turns: usize,
+    /// Request timeout in seconds
+    #[serde(default = "default_timeout_seconds")]
+    pub timeout_seconds: u64,
     /// System prompt
     #[serde(default)]
     pub system_prompt: String,
@@ -41,6 +44,10 @@ fn default_max_turns() -> usize {
     50 // Allows complex multi-step tasks like file organization
 }
 
+fn default_timeout_seconds() -> u64 {
+    30 // Default 30 seconds, can be overridden by user config
+}
+
 impl Default for RigAgentConfig {
     fn default() -> Self {
         Self {
@@ -49,6 +56,7 @@ impl Default for RigAgentConfig {
             temperature: default_temperature(),
             max_tokens: default_max_tokens(),
             max_turns: default_max_turns(),
+            timeout_seconds: default_timeout_seconds(),
             system_prompt: "You are Aether, an intelligent assistant.".to_string(),
             api_key: None,
             base_url: None,

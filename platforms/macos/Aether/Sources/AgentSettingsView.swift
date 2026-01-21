@@ -152,15 +152,15 @@ struct AgentSettingsView: View {
 
     private var enabledSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.enabled"), systemImage: "power")
+            Label(L("settings.agent.enabled"), systemImage: "power")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.enabled_description"))
+            Text(L("settings.agent.enabled_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Toggle(L("settings.cowork.enabled_toggle"), isOn: $enabled)
+            Toggle(L("settings.agent.enabled_toggle"), isOn: $enabled)
                 .toggleStyle(.switch)
                 .padding(.top, DesignTokens.Spacing.xs)
         }
@@ -171,15 +171,15 @@ struct AgentSettingsView: View {
 
     private var confirmationSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.confirmation"), systemImage: "checkmark.shield")
+            Label(L("settings.agent.confirmation"), systemImage: "checkmark.shield")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.confirmation_description"))
+            Text(L("settings.agent.confirmation_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Toggle(L("settings.cowork.confirmation_toggle"), isOn: $requireConfirmation)
+            Toggle(L("settings.agent.confirmation_toggle"), isOn: $requireConfirmation)
                 .toggleStyle(.switch)
                 .padding(.top, DesignTokens.Spacing.xs)
                 .disabled(!enabled)
@@ -192,11 +192,11 @@ struct AgentSettingsView: View {
 
     private var parallelismSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.parallelism"), systemImage: "arrow.trianglehead.branch")
+            Label(L("settings.agent.parallelism"), systemImage: "arrow.trianglehead.branch")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.parallelism_description"))
+            Text(L("settings.agent.parallelism_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -222,7 +222,7 @@ struct AgentSettingsView: View {
             HStack(spacing: DesignTokens.Spacing.xs) {
                 Image(systemName: "info.circle")
                     .foregroundColor(DesignTokens.Colors.textSecondary)
-                Text(L("settings.cowork.parallelism_hint"))
+                Text(L("settings.agent.parallelism_hint"))
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
@@ -235,15 +235,15 @@ struct AgentSettingsView: View {
 
     private var dryRunSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.dry_run"), systemImage: "eye")
+            Label(L("settings.agent.dry_run"), systemImage: "eye")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.dry_run_description"))
+            Text(L("settings.agent.dry_run_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Toggle(L("settings.cowork.dry_run_toggle"), isOn: $dryRun)
+            Toggle(L("settings.agent.dry_run_toggle"), isOn: $dryRun)
                 .toggleStyle(.switch)
                 .padding(.top, DesignTokens.Spacing.xs)
                 .disabled(!enabled)
@@ -253,7 +253,7 @@ struct AgentSettingsView: View {
                 HStack(spacing: DesignTokens.Spacing.xs) {
                     Image(systemName: "exclamationmark.triangle")
                         .foregroundColor(.orange)
-                    Text(L("settings.cowork.dry_run_warning"))
+                    Text(L("settings.agent.dry_run_warning"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(.orange)
                 }
@@ -345,11 +345,11 @@ struct AgentSettingsView: View {
             Divider()
                 .padding(.vertical, DesignTokens.Spacing.md)
 
-            Label(L("settings.cowork.file_ops.title"), systemImage: "folder")
+            Label(L("settings.agent.file_ops.title"), systemImage: "folder")
                 .font(DesignTokens.Typography.title)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.file_ops.description"))
+            Text(L("settings.agent.file_ops.description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
         }
@@ -357,15 +357,15 @@ struct AgentSettingsView: View {
 
     private var fileOpsEnabledSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.file_ops.enabled"), systemImage: "checkmark.circle")
+            Label(L("settings.agent.file_ops.enabled"), systemImage: "checkmark.circle")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.file_ops.enabled_description"))
+            Text(L("settings.agent.file_ops.enabled_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Toggle(L("settings.cowork.file_ops.enabled_toggle"), isOn: $fileOpsEnabled)
+            Toggle(L("settings.agent.file_ops.enabled_toggle"), isOn: $fileOpsEnabled)
                 .toggleStyle(.switch)
                 .padding(.top, DesignTokens.Spacing.xs)
                 .disabled(!enabled)
@@ -378,15 +378,15 @@ struct AgentSettingsView: View {
 
     private var allowedPathsSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.file_ops.allowed_paths"), systemImage: "checkmark.shield")
+            Label(L("settings.agent.file_ops.allowed_paths"), systemImage: "checkmark.shield")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.file_ops.allowed_paths_description"))
+            Text(L("settings.agent.file_ops.allowed_paths_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            PathListEditor(paths: $fileOpsAllowedPaths, placeholder: L("settings.cowork.file_ops.add_allowed_path"))
+            PathListEditor(paths: $fileOpsAllowedPaths, placeholder: L("settings.agent.file_ops.add_allowed_path"))
         }
         .padding(DesignTokens.Spacing.md)
         .background(DesignTokens.Colors.cardBackground)
@@ -395,21 +395,21 @@ struct AgentSettingsView: View {
 
     private var deniedPathsSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.file_ops.denied_paths"), systemImage: "xmark.shield")
+            Label(L("settings.agent.file_ops.denied_paths"), systemImage: "xmark.shield")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.file_ops.denied_paths_description"))
+            Text(L("settings.agent.file_ops.denied_paths_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            PathListEditor(paths: $fileOpsDeniedPaths, placeholder: L("settings.cowork.file_ops.add_denied_path"))
+            PathListEditor(paths: $fileOpsDeniedPaths, placeholder: L("settings.agent.file_ops.add_denied_path"))
 
             // Security note about default denied paths
             HStack(spacing: DesignTokens.Spacing.xs) {
                 Image(systemName: "info.circle")
                     .foregroundColor(DesignTokens.Colors.textSecondary)
-                Text(L("settings.cowork.file_ops.default_denied_note"))
+                Text(L("settings.agent.file_ops.default_denied_note"))
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
@@ -422,15 +422,15 @@ struct AgentSettingsView: View {
 
     private var maxFileSizeSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.file_ops.max_file_size"), systemImage: "doc.badge.ellipsis")
+            Label(L("settings.agent.file_ops.max_file_size"), systemImage: "doc.badge.ellipsis")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.file_ops.max_file_size_description"))
+            Text(L("settings.agent.file_ops.max_file_size_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Picker(L("settings.cowork.file_ops.max_file_size_picker"), selection: $fileOpsMaxFileSize) {
+            Picker(L("settings.agent.file_ops.max_file_size_picker"), selection: $fileOpsMaxFileSize) {
                 Text("10 MB").tag(UInt64(10 * 1024 * 1024))
                 Text("50 MB").tag(UInt64(50 * 1024 * 1024))
                 Text("100 MB").tag(UInt64(100 * 1024 * 1024))
@@ -447,17 +447,17 @@ struct AgentSettingsView: View {
 
     private var fileOpsConfirmationsSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.file_ops.confirmations"), systemImage: "hand.raised")
+            Label(L("settings.agent.file_ops.confirmations"), systemImage: "hand.raised")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.file_ops.confirmations_description"))
+            Text(L("settings.agent.file_ops.confirmations_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
             // Confirm write toggle
             HStack {
-                Label(L("settings.cowork.file_ops.confirm_write"), systemImage: "pencil")
+                Label(L("settings.agent.file_ops.confirm_write"), systemImage: "pencil")
                     .font(DesignTokens.Typography.body)
                     .foregroundColor(DesignTokens.Colors.textPrimary)
 
@@ -472,7 +472,7 @@ struct AgentSettingsView: View {
 
             // Confirm delete toggle
             HStack {
-                Label(L("settings.cowork.file_ops.confirm_delete"), systemImage: "trash")
+                Label(L("settings.agent.file_ops.confirm_delete"), systemImage: "trash")
                     .font(DesignTokens.Typography.body)
                     .foregroundColor(DesignTokens.Colors.textPrimary)
 
@@ -487,7 +487,7 @@ struct AgentSettingsView: View {
             HStack(spacing: DesignTokens.Spacing.xs) {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundColor(.orange)
-                Text(L("settings.cowork.file_ops.confirmations_warning"))
+                Text(L("settings.agent.file_ops.confirmations_warning"))
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(.orange)
             }
@@ -505,11 +505,11 @@ struct AgentSettingsView: View {
             Divider()
                 .padding(.vertical, DesignTokens.Spacing.md)
 
-            Label(L("settings.cowork.code_exec.title"), systemImage: "terminal")
+            Label(L("settings.agent.code_exec.title"), systemImage: "terminal")
                 .font(DesignTokens.Typography.title)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.code_exec.description"))
+            Text(L("settings.agent.code_exec.description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
         }
@@ -517,15 +517,15 @@ struct AgentSettingsView: View {
 
     private var codeExecEnabledSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.code_exec.enabled"), systemImage: "play.circle")
+            Label(L("settings.agent.code_exec.enabled"), systemImage: "play.circle")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.code_exec.enabled_description"))
+            Text(L("settings.agent.code_exec.enabled_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Toggle(L("settings.cowork.code_exec.enabled_toggle"), isOn: $codeExecEnabled)
+            Toggle(L("settings.agent.code_exec.enabled_toggle"), isOn: $codeExecEnabled)
                 .toggleStyle(.switch)
                 .padding(.top, DesignTokens.Spacing.xs)
                 .disabled(!enabled)
@@ -534,7 +534,7 @@ struct AgentSettingsView: View {
             HStack(spacing: DesignTokens.Spacing.xs) {
                 Image(systemName: "exclamationmark.shield")
                     .foregroundColor(.orange)
-                Text(L("settings.cowork.code_exec.security_warning"))
+                Text(L("settings.agent.code_exec.security_warning"))
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(.orange)
             }
@@ -548,15 +548,15 @@ struct AgentSettingsView: View {
 
     private var sandboxSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.code_exec.sandbox"), systemImage: "shield.lefthalf.filled")
+            Label(L("settings.agent.code_exec.sandbox"), systemImage: "shield.lefthalf.filled")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.code_exec.sandbox_description"))
+            Text(L("settings.agent.code_exec.sandbox_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Toggle(L("settings.cowork.code_exec.sandbox_toggle"), isOn: $sandboxEnabled)
+            Toggle(L("settings.agent.code_exec.sandbox_toggle"), isOn: $sandboxEnabled)
                 .toggleStyle(.switch)
                 .padding(.top, DesignTokens.Spacing.xs)
 
@@ -566,7 +566,7 @@ struct AgentSettingsView: View {
                     .padding(.vertical, DesignTokens.Spacing.xs)
 
                 HStack {
-                    Label(L("settings.cowork.code_exec.network"), systemImage: "network")
+                    Label(L("settings.agent.code_exec.network"), systemImage: "network")
                         .font(DesignTokens.Typography.body)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
@@ -577,7 +577,7 @@ struct AgentSettingsView: View {
                         .labelsHidden()
                 }
 
-                Text(L("settings.cowork.code_exec.network_description"))
+                Text(L("settings.agent.code_exec.network_description"))
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
@@ -589,11 +589,11 @@ struct AgentSettingsView: View {
 
     private var timeoutSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.code_exec.timeout"), systemImage: "clock")
+            Label(L("settings.agent.code_exec.timeout"), systemImage: "clock")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.code_exec.timeout_description"))
+            Text(L("settings.agent.code_exec.timeout_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -621,15 +621,15 @@ struct AgentSettingsView: View {
 
     private var runtimeSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.cowork.code_exec.runtime"), systemImage: "gearshape.2")
+            Label(L("settings.agent.code_exec.runtime"), systemImage: "gearshape.2")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.cowork.code_exec.runtime_description"))
+            Text(L("settings.agent.code_exec.runtime_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Picker(L("settings.cowork.code_exec.runtime_picker"), selection: $defaultRuntime) {
+            Picker(L("settings.agent.code_exec.runtime_picker"), selection: $defaultRuntime) {
                 Text("Shell (bash/zsh)").tag("shell")
                 Text("Python").tag("python")
                 Text("Node.js").tag("node")
@@ -676,7 +676,7 @@ struct AgentSettingsView: View {
         guard let core = core else { return }
 
         // Load agent config
-        let config = core.coworkGetConfig()
+        let config = core.agentGetConfig()
 
         enabled = config.enabled
         requireConfirmation = config.requireConfirmation
@@ -692,7 +692,7 @@ struct AgentSettingsView: View {
         savedDryRun = config.dryRun
 
         // Load code execution config
-        let codeExecConfig = core.coworkGetCodeExecConfig()
+        let codeExecConfig = core.agentGetCodeExecConfig()
 
         codeExecEnabled = codeExecConfig.enabled
         sandboxEnabled = codeExecConfig.sandboxEnabled
@@ -708,7 +708,7 @@ struct AgentSettingsView: View {
         savedDefaultRuntime = codeExecConfig.defaultRuntime
 
         // Load file operations config
-        let fileOpsConfig = core.coworkGetFileOpsConfig()
+        let fileOpsConfig = core.agentGetFileOpsConfig()
 
         fileOpsEnabled = fileOpsConfig.enabled
         fileOpsAllowedPaths = fileOpsConfig.allowedPaths
@@ -742,7 +742,7 @@ struct AgentSettingsView: View {
 
         do {
             // Save agent config
-            let newConfig = CoworkConfigFfi(
+            let newConfig = AgentConfigFfi(
                 enabled: enabled,
                 requireConfirmation: requireConfirmation,
                 maxParallelism: maxParallelism,
@@ -750,7 +750,7 @@ struct AgentSettingsView: View {
                 dryRun: dryRun
             )
 
-            try core.coworkUpdateConfig(config: newConfig)
+            try core.agentUpdateConfig(config: newConfig)
 
             // Save code execution config
             let newCodeExecConfig = CodeExecConfigFfi(
@@ -765,7 +765,7 @@ struct AgentSettingsView: View {
                 blockedCommands: []
             )
 
-            try core.coworkUpdateCodeExecConfig(config: newCodeExecConfig)
+            try core.agentUpdateCodeExecConfig(config: newCodeExecConfig)
 
             // Save file operations config
             let newFileOpsConfig = FileOpsConfigFfi(
@@ -777,7 +777,7 @@ struct AgentSettingsView: View {
                 requireConfirmationForDelete: fileOpsConfirmDelete
             )
 
-            try core.coworkUpdateFileOpsConfig(config: newFileOpsConfig)
+            try core.agentUpdateFileOpsConfig(config: newFileOpsConfig)
 
             print("Agent settings saved successfully")
 
@@ -913,7 +913,7 @@ struct PathListEditor: View {
                     .foregroundColor(DesignTokens.Colors.accentBlue)
             }
             .buttonStyle(.plain)
-            .help(L("settings.cowork.file_ops.browse"))
+            .help(L("settings.agent.file_ops.browse"))
 
             Button {
                 addPath()
