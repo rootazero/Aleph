@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 /// Configuration for the Three-Layer Orchestrator
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestratorConfig {
-    /// Enable three-layer control architecture (default: false)
-    #[serde(default)]
+    /// Enable three-layer control architecture (default: true)
+    ///
+    /// When enabled, uses the new Agent Loop + IntentRouter architecture.
+    /// When disabled, falls back to legacy RequestOrchestrator (deprecated).
+    #[serde(default = "default_use_three_layer_control")]
     pub use_three_layer_control: bool,
 
     /// Hard constraint guards
@@ -14,10 +17,14 @@ pub struct OrchestratorConfig {
     pub guards: OrchestratorGuards,
 }
 
+fn default_use_three_layer_control() -> bool {
+    true // New path is now the default
+}
+
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
-            use_three_layer_control: false,
+            use_three_layer_control: default_use_three_layer_control(),
             guards: OrchestratorGuards::default(),
         }
     }
@@ -105,7 +112,8 @@ mod tests {
     fn test_orchestrator_config_defaults() {
         let config = OrchestratorConfig::default();
 
-        assert!(!config.use_three_layer_control);
+        // New path is now the default
+        assert!(config.use_three_layer_control);
         assert_eq!(config.guards.max_rounds, 12);
         assert_eq!(config.guards.max_tool_calls, 30);
         assert_eq!(config.guards.max_tokens, 100_000);
@@ -127,7 +135,8 @@ mod tests {
         let config = OrchestratorConfig::default();
         let toml = toml::to_string(&config).unwrap();
 
-        assert!(toml.contains("use_three_layer_control = false"));
+        // New path is now the default
+        assert!(toml.contains("use_three_layer_control = true"));
         assert!(toml.contains("max_rounds = 12"));
     }
 }

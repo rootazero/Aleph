@@ -41,6 +41,7 @@ use crate::agent_loop::{
     AgentLoop, LoopConfig, LoopResult, RequestContext as AgentRequestContext,
 };
 use crate::compressor::NoOpCompressor;
+use crate::executor::{BuiltinToolRegistry, SingleStepExecutor};
 use crate::ffi::FfiLoopCallback;
 use crate::intent::{DirectMode, IntentRouter, RouteResult, ThinkingContext};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
@@ -183,26 +184,41 @@ impl AetherCore {
             // ================================================================
             // Check if three-layer control is enabled
             if use_three_layer_control {
-                // New path: ThreeLayerOrchestrator (Phase 4+ implementation)
-                // Currently returns placeholder - full implementation pending
-                info!("Three-layer control enabled but not yet fully implemented");
-                handler.on_error(
-                    "ThreeLayerOrchestrator is not yet fully implemented. \
-                     Set orchestrator.use_three_layer_control = false to use legacy orchestrator."
-                        .to_string(),
+                // New path: Agent Loop with Three-Layer Control
+                info!("Processing via Agent Loop (three-layer control)");
+                process_with_agent_loop(
+                    &runtime,
+                    &input,
+                    &app_context,
+                    &window_title,
+                    &config,
+                    tool_server_handle,
+                    registered_tools,
+                    &conversation_histories,
+                    &topic_id,
+                    attachments.as_deref(),
+                    &op_token,
+                    &handler,
+                    &memory_config,
+                    &memory_path,
+                    &input_for_memory,
+                    &generation_config,
+                    &routing_rules,
                 );
                 return;
             }
 
             // ================================================================
-            // RequestOrchestrator-based processing (Legacy Path)
+            // RequestOrchestrator-based processing (Legacy Path) - DEPRECATED
             // ================================================================
-            // All processing goes through the orchestrator which handles:
-            // - Builtin commands (/screenshot, /search, etc.)
-            // - Skills (/skill_name with instructions)
-            // - MCP commands (/mcp_server)
-            // - Custom commands (from routing rules)
-            // - Natural language tasks (Execute or Converse mode)
+            // This path is deprecated and will be removed in a future version.
+            // Set orchestrator.use_three_layer_control = true to use the new
+            // Agent Loop architecture (now the default).
+            warn!(
+                "Using deprecated RequestOrchestrator path. \
+                 This will be removed in a future version. \
+                 Set orchestrator.use_three_layer_control = true to use the new Agent Loop."
+            );
             info!("Processing via RequestOrchestrator (legacy)");
             #[allow(deprecated)]
             process_with_orchestrator(
@@ -1012,7 +1028,6 @@ fn process_with_orchestrator(
 ///                         │ (repeat until done)     │
 ///                         └─────────────────────────┘
 /// ```
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 fn process_with_agent_loop(
     runtime: &tokio::runtime::Handle,
@@ -1336,9 +1351,9 @@ fn run_agent_loop(
     let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));
     let thinker = Arc::new(Thinker::new(provider_registry, ThinkerConfig::default()));
 
-    // Create a simple executor that delegates to the existing RigAgentManager
-    // For now, use a placeholder that will be replaced with proper SingleStepExecutor
-    let executor = Arc::new(PlaceholderExecutor);
+    // Create executor with builtin tool registry
+    let tool_registry = Arc::new(BuiltinToolRegistry::new());
+    let executor = Arc::new(SingleStepExecutor::new(tool_registry));
 
     // Create compressor (rule-based for now)
     let compressor = Arc::new(NoOpCompressor);
@@ -1447,32 +1462,3 @@ fn create_provider_from_config(
         .map_err(|e| e.to_string())
 }
 
-/// Placeholder executor for Agent Loop
-/// TODO: Replace with proper SingleStepExecutor once ToolRegistry is implemented
-struct PlaceholderExecutor;
-
-#[async_trait::async_trait]
-impl crate::agent_loop::ExecutorTrait for PlaceholderExecutor {
-    async fn execute(&self, action: &crate::agent_loop::Action) -> crate::agent_loop::ActionResult {
-        match action {
-            crate::agent_loop::Action::ToolCall { tool_name, .. } => {
-                // For now, return a placeholder result
-                // TODO: Integrate with actual tool execution via ToolServerHandle
-                warn!(tool_name = %tool_name, "PlaceholderExecutor: tool execution not implemented");
-                crate::agent_loop::ActionResult::ToolError {
-                    error: "Tool execution not yet implemented in Agent Loop".to_string(),
-                    retryable: false,
-                }
-            }
-            crate::agent_loop::Action::UserInteraction { question, .. } => {
-                crate::agent_loop::ActionResult::UserResponse {
-                    response: format!("Awaiting response for: {}", question),
-                }
-            }
-            crate::agent_loop::Action::Completion { .. } => {
-                crate::agent_loop::ActionResult::Completed
-            }
-            crate::agent_loop::Action::Failure { .. } => crate::agent_loop::ActionResult::Failed,
-        }
-    }
-}

@@ -24,9 +24,9 @@ pub mod web_fetch;
 pub mod youtube;
 
 pub use error::ToolError;
-pub use file_ops::FileOpsTool;
-pub use generation::{ImageGenerateTool, SpeechGenerateTool};
+pub use file_ops::{FileOpsArgs, FileOpsTool};
+pub use generation::{ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool};
 pub use mcp_wrapper::McpToolWrapper;
-pub use search::SearchTool;
-pub use web_fetch::WebFetchTool;
-pub use youtube::YouTubeTool;
+pub use search::{SearchArgs, SearchTool};
+pub use web_fetch::{WebFetchArgs, WebFetchTool};
+pub use youtube::{YouTubeArgs, YouTubeTool};
