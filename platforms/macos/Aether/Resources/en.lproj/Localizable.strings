@@ -201,48 +201,6 @@
 // MARK: - Provider Help Text
 "provider.help.copy_to_clipboard" = "Copy to clipboard";
 
-// MARK: - Settings Window - Routing Tab
-"settings.routing.title" = "Routing Rules";
-"settings.routing.description" = "Define how clipboard content is routed to AI providers based on patterns.";
-"settings.routing.add_rule" = "Add Rule";
-"settings.routing.edit_rule" = "Edit Rule";
-"settings.routing.delete_rule" = "Delete Rule";
-"settings.routing.export_rules" = "Export Rules";
-"settings.routing.import_rules" = "Import Rules";
-"settings.routing.import_export_help" = "Import/Export Rules";
-"settings.routing.loading" = "Loading rules...";
-"settings.routing.no_rules" = "No routing rules configured";
-"settings.routing.no_rules_message" = "Add your first rule to start routing clipboard content";
-"settings.routing.footer_info" = "Rules are evaluated top-to-bottom. Drag to reorder priority.";
-"settings.routing.delete_rule_message" = "Are you sure you want to delete the rule with pattern '%@'?";
-"settings.routing.pattern" = "Pattern:";
-"settings.routing.provider" = "Provider:";
-"settings.routing.prompt" = "Prompt:";
-"settings.routing.not_configured" = "(not configured)";
-"settings.routing.edit_rule_help" = "Edit rule";
-"settings.routing.delete_rule_help" = "Delete rule";
-"settings.routing.default_provider_hint" = "When no rules match, the default provider will be used:";
-"settings.routing.no_default_provider_hint" = "No default provider set. Please set a default provider in the Providers tab.";
-"settings.routing.no_provider" = "No provider";
-"settings.routing.type.command" = "Command";
-"settings.routing.type.keyword" = "Keyword";
-"settings.routing.keyword_hint" = "All-match: prompt added to matched requests";
-"settings.routing.editor.rule_type" = "Rule Type";
-"settings.routing.editor.command_description" = "Routes to a specific AI provider when user types /command";
-"settings.routing.editor.keyword_description" = "Adds system prompt when content contains the keyword";
-"settings.routing.editor.command_name" = "Command Name";
-"settings.routing.editor.command_placeholder" = "e.g., draw, translate, code";
-"settings.routing.editor.command_help" = "Enter the command name without the slash. Example: 'draw' will match '/draw ...'";
-"settings.routing.editor.keyword_name" = "Keyword";
-"settings.routing.editor.keyword_placeholder" = "e.g., urgent, code, review";
-"settings.routing.editor.keyword_help" = "Enter the keyword to match. Example: 'urgent' will match any text containing 'urgent'";
-"settings.routing.editor.no_providers" = "No providers configured. Add a provider in the Providers tab first.";
-"settings.routing.editor.prompt_help_command" = "Custom instructions for this command. Leave empty to use default.";
-"settings.routing.editor.prompt_help_keyword" = "System prompt to add when this keyword matches. Required for keyword rules.";
-"settings.routing.editor.preview" = "Preview";
-"settings.routing.editor.generated_pattern" = "Generated Pattern:";
-"settings.routing.editor.example_match" = "Example Match:";
-
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "Keyboard Shortcuts";
 "settings.shortcuts.description" = "Configure global keyboard shortcuts for Aether.";
@@ -666,16 +624,6 @@
 "logs.empty.first_run" = "No log files found. Logs will appear here after Aether performs operations.";
 "logs.empty.no_logs" = "No log files found. Logs will appear here after Aether performs operations.";
 
-// MARK: - Routing Alerts
-"alert.routing.export_title" = "Export Successful";
-"alert.routing.export_message" = "Routing rules exported to %@";
-"alert.routing.import_title" = "Import Routing Rules";
-"alert.routing.import_message" = "Found %d rule(s). How would you like to import them?";
-"alert.routing.import_success_append" = "Import Successful";
-"alert.routing.import_success_append_message" = "Added %d rule(s) to existing rules";
-"alert.routing.import_success_replace" = "Import Successful";
-"alert.routing.import_success_replace_message" = "Replaced all rules with %d imported rule(s)";
-
 // MARK: - About Dialog
 "alert.about.title" = "Aether";
 "alert.about.message" = "AI Middleware for macOS\nVersion %@\n\nBrings AI intelligence to your cursor.";
@@ -714,50 +662,6 @@
 "halo.input_mode.title" = "Select Mode";
 "halo.input_mode.replace" = "Replace";
 "halo.input_mode.append" = "Append";
-
-// MARK: - Routing View - Preset Rules
-"settings.routing.preset_commands" = "Preset Rules";
-"settings.routing.preset_commands_subtitle" = "Built-in system rules provided by Aether. Cannot be edited or deleted.";
-"settings.routing.preset_badge" = "System";
-"settings.routing.implemented" = "Available";
-"settings.routing.coming_soon" = "Coming Soon";
-
-// MARK: - Routing View - Custom Rules
-"settings.routing.custom_rules" = "Custom Rules";
-"settings.routing.custom_rules_subtitle" = "User-defined routing rules. Drag to reorder priority (higher rules are evaluated first).";
-"settings.routing.no_custom_rules" = "No Custom Rules";
-"settings.routing.no_custom_rules_message" = "Click 'Add Rule' above to create custom routing patterns.";
-"settings.routing.add_command_rule" = "Add Command Rule";
-"settings.routing.add_keyword_rule" = "Add Keyword Rule";
-"settings.routing.command_rules_title" = "Command Rules";
-"settings.routing.keyword_rules_title" = "Keyword Rules";
-"settings.routing.no_command_rules" = "No command rules";
-"settings.routing.no_keyword_rules" = "No keyword rules";
-"settings.routing.section_divider" = "Keyword Rules";
-"settings.routing.add" = "Add";
-
-// MARK: - Preset Rule Descriptions and Usage
-"settings.routing.usage" = "Usage:";
-"settings.routing.subcommands" = "Subcommands";
-
-"settings.routing.preset.search.description" = "Web search capability - Use search engines to find up-to-date information";
-"settings.routing.preset.search.usage" = "/search <query>";
-
-"settings.routing.preset.mcp.description" = "Model Context Protocol integration - Connect to external tools and services";
-"settings.routing.preset.mcp.usage" = "/mcp <tool> [params]";
-"settings.routing.preset.mcp.sub.list" = "List available MCP tools";
-"settings.routing.preset.mcp.sub.tool" = "Execute specific MCP tool";
-
-"settings.routing.preset.skills.description" = "Skills - Execute custom workflows and automations";
-"settings.routing.preset.skills.usage" = "/skill <name>";
-"settings.routing.preset.skills.sub.list" = "List available skills";
-"settings.routing.preset.skills.sub.skill" = "Execute specific skill";
-
-"settings.routing.preset.video.description" = "YouTube Video Analysis - Extract and analyze video content via transcripts";
-"settings.routing.preset.video.usage" = "/video <YouTube URL>";
-
-"settings.routing.preset.chat.description" = "Multi-turn Conversation - Start a conversation session with follow-up questions";
-"settings.routing.preset.chat.usage" = "/chat <message>";
 
 // MARK: - Command Mode (add-command-completion-system)
 "command.mode.title" = "Command Mode";
@@ -999,23 +903,6 @@
 "settings.model_routing.latency.fast" = "Fast";
 "settings.model_routing.latency.medium" = "Medium";
 "settings.model_routing.latency.slow" = "Slow";
-
-// Model Routing Rules
-"settings.model_routing.routing.title" = "Routing Rules";
-"settings.model_routing.routing.configure" = "Configure";
-"settings.model_routing.routing.cost_strategy" = "Cost Strategy";
-"settings.model_routing.routing.cost_strategy_description" = "Choose how to balance cost and quality when routing tasks.";
-"settings.model_routing.routing.cost_strategy_picker" = "Strategy";
-"settings.model_routing.routing.default_model" = "Default Model";
-"settings.model_routing.routing.default_model_description" = "Model to use when no specific routing rule matches.";
-"settings.model_routing.routing.default_model_picker" = "Select Model";
-"settings.model_routing.routing.none" = "None";
-"settings.model_routing.routing.auto" = "Auto";
-"settings.model_routing.routing.pipelines" = "Multi-Model Pipelines";
-"settings.model_routing.routing.pipelines_description" = "Enable using different models for different stages of complex tasks.";
-"settings.model_routing.routing.pipelines_toggle" = "Enable Pipelines";
-"settings.model_routing.routing.task_mappings" = "Task Type Mappings";
-"settings.model_routing.routing.task_mappings_description" = "Assign specific models to handle different types of tasks.";
 
 // Cost Strategy Descriptions
 "settings.model_routing.strategy.cheapest" = "Cheapest";

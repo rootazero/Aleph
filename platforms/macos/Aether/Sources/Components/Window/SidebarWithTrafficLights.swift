@@ -192,7 +192,6 @@ struct SidebarWithTrafficLights: View {
             NavigationItemConfig(tab: .general, iconName: "gear", titleKey: "settings.general.title"),
             NavigationItemConfig(tab: .providers, iconName: "brain.head.profile", titleKey: "settings.providers.title"),
             NavigationItemConfig(tab: .generation, iconName: "photo.artframe", titleKey: "settings.generation.title"),
-            NavigationItemConfig(tab: .routing, iconName: "arrow.triangle.branch", titleKey: "settings.routing.title"),
             NavigationItemConfig(tab: .shortcuts, iconName: "command", titleKey: "settings.shortcuts.title"),
             NavigationItemConfig(tab: .behavior, iconName: "slider.horizontal.3", titleKey: "settings.behavior.title"),
             NavigationItemConfig(tab: .memory, iconName: "brain", titleKey: "settings.memory.title"),
@@ -224,7 +223,6 @@ private struct NavigationItemConfig {
         case .general: return "General"
         case .providers: return "Providers"
         case .generation: return "Generation"
-        case .routing: return "Routing"
         case .shortcuts: return "Shortcuts"
         case .behavior: return "Behavior"
         case .memory: return "Memory"
@@ -312,7 +310,7 @@ private struct SidebarNavigationItem: View {
 #Preview("Sidebar - All States") {
     HStack(spacing: 20) {
         SidebarWithTrafficLights(selectedTab: .constant(.general))
-        SidebarWithTrafficLights(selectedTab: .constant(.routing))
+        SidebarWithTrafficLights(selectedTab: .constant(.shortcuts))
             .preferredColorScheme(.dark)
     }
     .frame(height: 600)

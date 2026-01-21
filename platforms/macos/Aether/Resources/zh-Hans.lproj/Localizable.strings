@@ -201,48 +201,6 @@
 // MARK: - Provider Help Text
 "provider.help.copy_to_clipboard" = "复制到剪贴板";
 
-// MARK: - Settings Window - Routing Tab
-"settings.routing.title" = "路由规则";
-"settings.routing.description" = "定义如何根据模式将对话内容路由到 AI 提供商。";
-"settings.routing.add_rule" = "添加规则";
-"settings.routing.edit_rule" = "编辑规则";
-"settings.routing.delete_rule" = "删除规则";
-"settings.routing.export_rules" = "导出规则";
-"settings.routing.import_rules" = "导入规则";
-"settings.routing.import_export_help" = "导入/导出规则";
-"settings.routing.loading" = "加载规则中...";
-"settings.routing.no_rules" = "未配置路由规则";
-"settings.routing.no_rules_message" = "添加您的第一条规则以开始路由剪贴板内容";
-"settings.routing.footer_info" = "规则从上到下依次评估。拖动可重新排列优先级。";
-"settings.routing.delete_rule_message" = "您确定要删除模式为「%@」的规则吗？";
-"settings.routing.pattern" = "模式：";
-"settings.routing.provider" = "提供商：";
-"settings.routing.prompt" = "提示词：";
-"settings.routing.not_configured" = "（未配置）";
-"settings.routing.edit_rule_help" = "编辑规则";
-"settings.routing.delete_rule_help" = "删除规则";
-"settings.routing.default_provider_hint" = "当没有规则匹配时，将使用默认提供商：";
-"settings.routing.no_default_provider_hint" = "未设置默认提供商。请在提供商标签页中设置默认提供商。";
-"settings.routing.no_provider" = "无提供商";
-"settings.routing.type.command" = "命令";
-"settings.routing.type.keyword" = "关键词";
-"settings.routing.keyword_hint" = "多重匹配: 提示会添加到匹配的请求中";
-"settings.routing.editor.rule_type" = "规则类型";
-"settings.routing.editor.command_description" = "当用户输入 /命令 时，路由到指定的 AI 提供商";
-"settings.routing.editor.keyword_description" = "当内容包含关键词时，添加系统提示";
-"settings.routing.editor.command_name" = "命令名称";
-"settings.routing.editor.command_placeholder" = "例如：draw, translate, code";
-"settings.routing.editor.command_help" = "输入命令名（不含斜杠）。例如：输入 'draw' 将匹配 '/draw ...'";
-"settings.routing.editor.keyword_name" = "关键词";
-"settings.routing.editor.keyword_placeholder" = "例如：紧急, 代码, 审查";
-"settings.routing.editor.keyword_help" = "输入要匹配的关键词。例如：'紧急' 将匹配任何包含 '紧急' 的文本";
-"settings.routing.editor.no_providers" = "未配置提供商。请先在提供商标签页中添加提供商。";
-"settings.routing.editor.prompt_help_command" = "此命令的自定义指令。留空则使用默认值。";
-"settings.routing.editor.prompt_help_keyword" = "关键词匹配时添加的系统提示。关键词规则必须填写。";
-"settings.routing.editor.preview" = "预览";
-"settings.routing.editor.generated_pattern" = "生成的正则：";
-"settings.routing.editor.example_match" = "匹配示例：";
-
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "快捷键";
 "settings.shortcuts.description" = "配置 Aether 的全局快捷键。";
@@ -668,16 +626,6 @@
 "logs.empty.first_run" = "未找到日志文件。Aether 执行操作后，日志将显示在此处。";
 "logs.empty.no_logs" = "未找到日志文件。Aether 执行操作后，日志将显示在此处。";
 
-// MARK: - Routing Alerts
-"alert.routing.export_title" = "导出成功";
-"alert.routing.export_message" = "路由规则已导出到 %@";
-"alert.routing.import_title" = "导入路由规则";
-"alert.routing.import_message" = "找到 %d 条规则。您希望如何导入它们？";
-"alert.routing.import_success_append" = "导入成功";
-"alert.routing.import_success_append_message" = "已将 %d 条规则添加到现有规则";
-"alert.routing.import_success_replace" = "导入成功";
-"alert.routing.import_success_replace_message" = "已用 %d 条导入的规则替换所有规则";
-
 // MARK: - About Dialog
 "alert.about.title" = "Aether";
 "alert.about.message" = "macOS AI 中间件\n版本 %@\n\n将 AI 智能带到您的光标。";
@@ -716,50 +664,6 @@
 "halo.input_mode.title" = "选择模式";
 "halo.input_mode.replace" = "替换";
 "halo.input_mode.append" = "追加";
-
-// MARK: - Routing View - Preset Rules
-"settings.routing.preset_commands" = "预设规则";
-"settings.routing.preset_commands_subtitle" = "Aether 内置的系统规则，无法编辑或删除。";
-"settings.routing.preset_badge" = "系统";
-"settings.routing.implemented" = "可用";
-"settings.routing.coming_soon" = "即将推出";
-
-// MARK: - Routing View - Custom Rules
-"settings.routing.custom_rules" = "自定义规则";
-"settings.routing.custom_rules_subtitle" = "用户定义的路由规则。拖动可重新排列优先级（优先级高的规则先评估）。";
-"settings.routing.no_custom_rules" = "无自定义规则";
-"settings.routing.no_custom_rules_message" = "点击上方「添加规则」来创建自定义路由模式。";
-"settings.routing.add_command_rule" = "添加命令规则";
-"settings.routing.add_keyword_rule" = "添加关键词规则";
-"settings.routing.command_rules_title" = "命令规则";
-"settings.routing.keyword_rules_title" = "关键词规则";
-"settings.routing.no_command_rules" = "暂无命令规则";
-"settings.routing.no_keyword_rules" = "暂无关键词规则";
-"settings.routing.section_divider" = "关键词规则区";
-"settings.routing.add" = "添加";
-
-// MARK: - Preset Rule Descriptions and Usage
-"settings.routing.usage" = "用法：";
-"settings.routing.subcommands" = "子命令";
-
-"settings.routing.preset.search.description" = "网络搜索功能 - 使用搜索引擎查找最新信息";
-"settings.routing.preset.search.usage" = "/search <查询内容>";
-
-"settings.routing.preset.mcp.description" = "模型上下文协议集成 - 连接到外部工具和服务";
-"settings.routing.preset.mcp.usage" = "/mcp <工具名> [参数]";
-"settings.routing.preset.mcp.sub.list" = "列出可用的 MCP 工具";
-"settings.routing.preset.mcp.sub.tool" = "执行指定的 MCP 工具";
-
-"settings.routing.preset.skills.description" = "Skills - 执行自定义工作流和自动化";
-"settings.routing.preset.skills.usage" = "/skill <Skill 名>";
-"settings.routing.preset.skills.sub.list" = "列出可用的 Skills";
-"settings.routing.preset.skills.sub.skill" = "执行指定的 Skill";
-
-"settings.routing.preset.video.description" = "YouTube 视频分析 - 通过字幕提取和分析视频内容";
-"settings.routing.preset.video.usage" = "/video <YouTube 链接>";
-
-"settings.routing.preset.chat.description" = "多轮对话 - 开始支持追问的对话会话";
-"settings.routing.preset.chat.usage" = "/chat <消息>";
 
 // MARK: - Command Mode (add-command-completion-system)
 "command.mode.title" = "命令模式";
@@ -1001,23 +905,6 @@
 "settings.model_routing.latency.fast" = "快";
 "settings.model_routing.latency.medium" = "中";
 "settings.model_routing.latency.slow" = "慢";
-
-// 模型路由规则
-"settings.model_routing.routing.title" = "路由规则";
-"settings.model_routing.routing.configure" = "配置";
-"settings.model_routing.routing.cost_strategy" = "成本策略";
-"settings.model_routing.routing.cost_strategy_description" = "选择如何在路由任务时平衡成本和质量。";
-"settings.model_routing.routing.cost_strategy_picker" = "策略";
-"settings.model_routing.routing.default_model" = "默认模型";
-"settings.model_routing.routing.default_model_description" = "当没有匹配的路由规则时使用的模型。";
-"settings.model_routing.routing.default_model_picker" = "选择模型";
-"settings.model_routing.routing.none" = "无";
-"settings.model_routing.routing.auto" = "自动";
-"settings.model_routing.routing.pipelines" = "多模型管道";
-"settings.model_routing.routing.pipelines_description" = "允许在复杂任务的不同阶段使用不同的模型。";
-"settings.model_routing.routing.pipelines_toggle" = "启用管道";
-"settings.model_routing.routing.task_mappings" = "任务类型映射";
-"settings.model_routing.routing.task_mappings_description" = "为不同类型的任务指定特定的模型。";
 
 // 成本策略描述
 "settings.model_routing.strategy.cheapest" = "最便宜";

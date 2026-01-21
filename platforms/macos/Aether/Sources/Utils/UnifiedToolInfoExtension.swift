@@ -95,24 +95,6 @@ extension ToolSourceType {
     }
 }
 
-// MARK: - UnifiedToolInfo to PresetRule Conversion
-
-extension UnifiedToolInfo {
-    /// Convert to PresetRule for backward compatibility with existing UI
-    func toPresetRule() -> PresetRule {
-        PresetRule(
-            command: command,
-            description: description,
-            descriptionKey: localizationKey.map { "\($0).description" } ?? "",
-            isImplemented: isActive,
-            icon: iconName,
-            usage: usage ?? command,
-            usageKey: localizationKey.map { "\($0).usage" } ?? "",
-            subcommands: []  // Subcommands are loaded separately via getSubtoolsFromRegistry
-        )
-    }
-}
-
 // MARK: - Array Extension for Sorting
 
 extension Array where Element == UnifiedToolInfo {

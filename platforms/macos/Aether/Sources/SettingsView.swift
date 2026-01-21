@@ -15,7 +15,6 @@ enum SettingsTab: Hashable {
     case general
     case providers
     case generation  // Image/Video/Audio generation providers
-    case routing
     case shortcuts
     case behavior
     case memory

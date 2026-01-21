@@ -65,7 +65,6 @@ struct AgentSettingsView: View {
 
     // Model routing sheets
     @State private var isShowingModelProfiles = false
-    @State private var isShowingModelRouting = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -104,9 +103,6 @@ struct AgentSettingsView: View {
         )
         .sheet(isPresented: $isShowingModelProfiles) {
             ModelProfilesSettingsView(core: core, isPresented: $isShowingModelProfiles)
-        }
-        .sheet(isPresented: $isShowingModelRouting) {
-            ModelRoutingSettingsView(core: core, isPresented: $isShowingModelRouting)
         }
     }
 
@@ -297,31 +293,6 @@ struct AgentSettingsView: View {
                     Spacer()
 
                     Text(L("settings.model_routing.profiles.manage"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                    Image(systemName: "chevron.right")
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                }
-                .padding(DesignTokens.Spacing.md)
-                .background(DesignTokens.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(!enabled)
-
-            // Routing Rules Button
-            Button {
-                isShowingModelRouting = true
-            } label: {
-                HStack {
-                    Label(L("settings.model_routing.routing.title"), systemImage: "arrow.triangle.branch")
-                        .font(DesignTokens.Typography.body)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                    Spacer()
-
-                    Text(L("settings.model_routing.routing.configure"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
 

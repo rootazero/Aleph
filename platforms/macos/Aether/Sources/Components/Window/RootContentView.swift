@@ -128,8 +128,6 @@ struct RootContentView: View {
             return L("settings.providers.title")
         case .generation:
             return L("settings.generation.title")
-        case .routing:
-            return L("settings.routing.title")
         case .shortcuts:
             return L("settings.shortcuts.title")
         case .behavior:
@@ -160,8 +158,6 @@ struct RootContentView: View {
             return L("settings.providers.description")
         case .generation:
             return L("settings.generation.description")
-        case .routing:
-            return L("settings.routing.description")
         case .shortcuts:
             return L("settings.shortcuts.description")
         case .behavior:
@@ -251,15 +247,6 @@ struct RootContentView: View {
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Generation provider management requires AetherCore initialization")
-            }
-
-        case .routing:
-            // core used for routing management
-            if let core = core {
-                RoutingView(core: core, providers: providers, hasUnsavedChanges: $hasAnyUnsavedChanges)
-                    .id(configReloadTrigger)
-            } else {
-                placeholderView("Routing management requires AetherCore initialization")
             }
 
         case .shortcuts:
