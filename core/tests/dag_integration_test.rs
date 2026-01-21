@@ -4,12 +4,10 @@
 //! working together for multi-step task execution.
 
 use aethecore::dispatcher::{
-    ExecutionCallback, NoOpCallback as DagNoOpCallback,
-    RiskEvaluator, RiskLevel, TaskContext, TaskDisplayStatus, TaskInfo,
-    TaskOutput, UserDecision,
+    DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpCallback as DagNoOpCallback,
+    RiskEvaluator, RiskLevel, TaskContext, TaskOutput, UserDecision,
 };
-use aethecore::dispatcher::callback::TaskPlan;
-use aethecore::dispatcher::cowork_types::{Task, TaskGraph, TaskType, AiTask, CodeExec, Language};
+use aethecore::dispatcher::cowork_types::{AiTask, CodeExec, Language, Task, TaskGraph, TaskType};
 use aethecore::dispatcher::scheduler::DagScheduler;
 use aethecore::Result;
 use async_trait::async_trait;
@@ -68,11 +66,11 @@ impl CollectingCallback {
 
 #[async_trait]
 impl ExecutionCallback for CollectingCallback {
-    async fn on_plan_ready(&self, _plan: &TaskPlan) {
+    async fn on_plan_ready(&self, _plan: &DagTaskPlan) {
         self.plan_ready_count.fetch_add(1, Ordering::SeqCst);
     }
 
-    async fn on_confirmation_required(&self, _plan: &TaskPlan) -> UserDecision {
+    async fn on_confirmation_required(&self, _plan: &DagTaskPlan) -> UserDecision {
         UserDecision::Confirmed
     }
 
@@ -192,7 +190,7 @@ fn test_task_context_explicit_reference() {
     assert!(prompt.contains("Analysis complete"));
 }
 
-// MARK: - TaskPlan Tests
+// MARK: - DagTaskPlan Tests
 
 #[test]
 fn test_task_plan_from_graph() {
@@ -202,7 +200,7 @@ fn test_task_plan_from_graph() {
     graph.add_task(ai_task("t2", "Second task", "Task 2"));
     graph.add_dependency("t1", "t2");
 
-    let plan = TaskPlan::from_graph(&graph, false);
+    let plan = DagTaskPlan::from_graph(&graph, false);
 
     assert_eq!(plan.id, "plan_1");
     assert_eq!(plan.title, "Test Plan");
@@ -217,37 +215,37 @@ fn test_task_plan_high_risk_detection() {
     // Add a code execution task (high risk)
     graph.add_task(code_task("t1", "Run code", "print('hello')"));
 
-    let plan = TaskPlan::from_graph(&graph, true);
+    let plan = DagTaskPlan::from_graph(&graph, true);
 
     assert!(plan.has_high_risk_tasks());
     assert!(plan.requires_confirmation);
 }
 
-// MARK: - TaskInfo Tests
+// MARK: - DagTaskInfo Tests
 
 #[test]
 fn test_task_info_creation() {
-    let info = TaskInfo::new(
+    let info = DagTaskInfo::new(
         "task_1",
         "Read file",
-        TaskDisplayStatus::Pending,
+        DagTaskDisplayStatus::Pending,
         RiskLevel::Low,
         vec!["task_0".to_string()],
     );
 
     assert_eq!(info.id, "task_1");
     assert_eq!(info.name, "Read file");
-    assert_eq!(info.status, TaskDisplayStatus::Pending);
+    assert_eq!(info.status, DagTaskDisplayStatus::Pending);
     assert_eq!(info.risk_level, "low");
     assert_eq!(info.dependencies, vec!["task_0"]);
 }
 
 #[test]
 fn test_task_info_high_risk() {
-    let info = TaskInfo::new(
+    let info = DagTaskInfo::new(
         "task_1",
         "Execute command",
-        TaskDisplayStatus::Running,
+        DagTaskDisplayStatus::Running,
         RiskLevel::High,
         vec![],
     );
@@ -255,15 +253,15 @@ fn test_task_info_high_risk() {
     assert_eq!(info.risk_level, "high");
 }
 
-// MARK: - TaskDisplayStatus Tests
+// MARK: - DagTaskDisplayStatus Tests
 
 #[test]
 fn test_task_display_status_display() {
-    assert_eq!(TaskDisplayStatus::Pending.to_string(), "pending");
-    assert_eq!(TaskDisplayStatus::Running.to_string(), "running");
-    assert_eq!(TaskDisplayStatus::Completed.to_string(), "completed");
-    assert_eq!(TaskDisplayStatus::Failed.to_string(), "failed");
-    assert_eq!(TaskDisplayStatus::Cancelled.to_string(), "cancelled");
+    assert_eq!(DagTaskDisplayStatus::Pending.to_string(), "pending");
+    assert_eq!(DagTaskDisplayStatus::Running.to_string(), "running");
+    assert_eq!(DagTaskDisplayStatus::Completed.to_string(), "completed");
+    assert_eq!(DagTaskDisplayStatus::Failed.to_string(), "failed");
+    assert_eq!(DagTaskDisplayStatus::Cancelled.to_string(), "cancelled");
 }
 
 // MARK: - NoOpCallback Tests
@@ -271,7 +269,7 @@ fn test_task_display_status_display() {
 #[tokio::test]
 async fn test_noop_callback_all_methods() {
     let callback = DagNoOpCallback;
-    let plan = TaskPlan {
+    let plan = DagTaskPlan {
         id: "test".to_string(),
         title: "Test Plan".to_string(),
         tasks: vec![],
@@ -317,6 +315,7 @@ async fn test_dag_scheduler_linear_execution() {
         executor.clone(),
         callback.clone(),
         context,
+        None,
     )
     .await;
 
@@ -365,6 +364,7 @@ async fn test_dag_scheduler_parallel_execution() {
         executor.clone(),
         callback.clone(),
         context,
+        None,
     )
     .await;
 
@@ -398,7 +398,7 @@ fn test_full_workflow_risk_evaluation() {
     assert!(has_high_risk);
 
     // Create plan with confirmation required
-    let plan = TaskPlan::from_graph(&graph, has_high_risk);
+    let plan = DagTaskPlan::from_graph(&graph, has_high_risk);
     assert!(plan.requires_confirmation);
     assert!(plan.has_high_risk_tasks());
 }

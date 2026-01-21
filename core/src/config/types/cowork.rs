@@ -77,6 +77,11 @@ pub struct CoworkConfigToml {
     #[serde(default = "default_task_timeout_seconds")]
     pub task_timeout_seconds: u64,
 
+    /// Maximum number of retry attempts for failed tasks
+    /// Range: 1-10 (default: 3)
+    #[serde(default = "default_max_task_retries")]
+    pub max_task_retries: u32,
+
     /// Enable sandboxed execution for code tasks
     /// When true, code execution tasks run in isolated environment
     #[serde(default = "default_sandbox_enabled")]
@@ -841,6 +846,10 @@ pub fn default_task_timeout_seconds() -> u64 {
     300 // 5 minutes default
 }
 
+pub fn default_max_task_retries() -> u32 {
+    3 // 3 retries by default
+}
+
 pub fn default_sandbox_enabled() -> bool {
     true
 }
@@ -932,6 +941,7 @@ impl Default for CoworkConfigToml {
             auto_execute_threshold: default_auto_execute_threshold(),
             max_tasks_per_graph: default_max_tasks_per_graph(),
             task_timeout_seconds: default_task_timeout_seconds(),
+            max_task_retries: default_max_task_retries(),
             sandbox_enabled: default_sandbox_enabled(),
             allowed_categories: Vec::new(),
             blocked_categories: Vec::new(),
@@ -1014,6 +1024,7 @@ impl CoworkConfigToml {
             enabled: self.enabled,
             require_confirmation: self.require_confirmation,
             max_parallelism: self.max_parallelism,
+            max_task_retries: self.max_task_retries,
             dry_run: self.dry_run,
             enable_pipelines: self.model_routing.enable_pipelines,
             model_profiles: self.get_model_profiles(),

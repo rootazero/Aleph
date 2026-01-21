@@ -231,9 +231,6 @@ impl TaskScheduler for DagScheduler {
 // execute_graph - Full DAG execution with retry and callbacks
 // ============================================================================
 
-/// Default maximum retry attempts for task execution
-const DEFAULT_MAX_RETRIES: u32 = 2;
-
 impl DagScheduler {
     /// Execute entire TaskGraph with callbacks
     ///
@@ -261,7 +258,7 @@ impl DagScheduler {
     /// let context = TaskContext::new("User request");
     ///
     /// let result = DagScheduler::execute_graph(
-    ///     graph, executor, callback, context
+    ///     graph, executor, callback, context, None
     /// ).await?;
     /// ```
     pub async fn execute_graph(
@@ -269,6 +266,7 @@ impl DagScheduler {
         executor: Arc<dyn GraphTaskExecutor>,
         callback: Arc<dyn ExecutionCallback>,
         mut context: TaskContext,
+        config: Option<SchedulerConfig>,
     ) -> Result<ExecutionResult> {
         let graph_id = graph.id.clone();
         let mut result = ExecutionResult::new(&graph_id);
@@ -299,7 +297,9 @@ impl DagScheduler {
         }
 
         // 4. Create scheduler with Arc<Mutex> for async context
-        let scheduler = Arc::new(Mutex::new(DagScheduler::new()));
+        let scheduler_config = config.unwrap_or_default();
+        let max_task_retries = scheduler_config.max_task_retries;
+        let scheduler = Arc::new(Mutex::new(DagScheduler::with_config(scheduler_config)));
 
         // 5. DAG scheduling loop
         loop {
@@ -379,7 +379,7 @@ impl DagScheduler {
                                 &executor,
                                 &callback,
                                 &prompt_context,
-                                DEFAULT_MAX_RETRIES,
+                                max_task_retries,
                             )
                             .await;
 
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_scheduler_parallel() {
-        let scheduler = DagScheduler::with_config(SchedulerConfig { max_parallelism: 4 });
+        let scheduler = DagScheduler::with_config(SchedulerConfig { max_parallelism: 4, ..Default::default() });
         let mut graph = TaskGraph::new("test", "Parallel Test");
 
         // Four independent tasks
@@ -600,7 +600,7 @@ mod tests {
 
     #[test]
     fn test_scheduler_parallelism_limit() {
-        let scheduler = DagScheduler::with_config(SchedulerConfig { max_parallelism: 2 });
+        let scheduler = DagScheduler::with_config(SchedulerConfig { max_parallelism: 2, ..Default::default() });
         let mut graph = TaskGraph::new("test", "Limited Parallel Test");
 
         graph.add_task(create_task("a"));
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn test_scheduler_diamond_dependency() {
-        let mut scheduler = DagScheduler::with_config(SchedulerConfig { max_parallelism: 4 });
+        let mut scheduler = DagScheduler::with_config(SchedulerConfig { max_parallelism: 4, ..Default::default() });
         let mut graph = TaskGraph::new("test", "Diamond Test");
 
         //     a
@@ -744,7 +744,7 @@ mod tests {
         let callback = Arc::new(NoOpCallback);
         let context = TaskContext::new("Test user request");
 
-        let result = DagScheduler::execute_graph(graph, executor, callback, context)
+        let result = DagScheduler::execute_graph(graph, executor, callback, context, None)
             .await
             .unwrap();
 
@@ -768,7 +768,7 @@ mod tests {
         let callback = Arc::new(NoOpCallback);
         let context = TaskContext::new("Test parallel execution");
 
-        let result = DagScheduler::execute_graph(graph, executor, callback, context)
+        let result = DagScheduler::execute_graph(graph, executor, callback, context, None)
             .await
             .unwrap();
 
@@ -788,7 +788,7 @@ mod tests {
         let callback = Arc::new(NoOpCallback);
         let context = TaskContext::new("Test failure handling");
 
-        let result = DagScheduler::execute_graph(graph, executor, callback, context)
+        let result = DagScheduler::execute_graph(graph, executor, callback, context, None)
             .await
             .unwrap();
 
@@ -817,7 +817,7 @@ mod tests {
         let callback = Arc::new(NoOpCallback);
         let context = TaskContext::new("Test diamond execution");
 
-        let result = DagScheduler::execute_graph(graph, executor, callback, context)
+        let result = DagScheduler::execute_graph(graph, executor, callback, context, None)
             .await
             .unwrap();
 

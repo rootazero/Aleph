@@ -13,11 +13,16 @@ use crate::dispatcher::cowork_types::{Task, TaskGraph};
 pub struct SchedulerConfig {
     /// Maximum number of tasks to run in parallel
     pub max_parallelism: usize,
+    /// Maximum number of retry attempts for failed tasks
+    pub max_task_retries: u32,
 }
 
 impl Default for SchedulerConfig {
     fn default() -> Self {
-        Self { max_parallelism: 4 }
+        Self {
+            max_parallelism: 4,
+            max_task_retries: 3,
+        }
     }
 }
 

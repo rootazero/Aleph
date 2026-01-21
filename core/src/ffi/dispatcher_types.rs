@@ -279,6 +279,7 @@ pub struct CoworkConfigFFI {
     pub enabled: bool,
     pub require_confirmation: bool,
     pub max_parallelism: u32,
+    pub max_task_retries: u32,
     pub dry_run: bool,
 }
 
@@ -288,6 +289,7 @@ impl From<CoworkConfig> for CoworkConfigFFI {
             enabled: config.enabled,
             require_confirmation: config.require_confirmation,
             max_parallelism: config.max_parallelism as u32,
+            max_task_retries: config.max_task_retries,
             dry_run: config.dry_run,
         }
     }
@@ -299,6 +301,7 @@ impl From<CoworkConfigFFI> for CoworkConfig {
             enabled: config.enabled,
             require_confirmation: config.require_confirmation,
             max_parallelism: config.max_parallelism as usize,
+            max_task_retries: config.max_task_retries,
             dry_run: config.dry_run,
             enable_pipelines: false,
             model_profiles: Vec::new(),

@@ -29,6 +29,9 @@ pub struct CoworkConfig {
     /// Maximum number of tasks to run in parallel
     pub max_parallelism: usize,
 
+    /// Maximum number of retry attempts for failed tasks
+    pub max_task_retries: u32,
+
     /// Whether to run in dry-run mode (no actual execution)
     pub dry_run: bool,
 
@@ -48,6 +51,7 @@ impl Default for CoworkConfig {
             enabled: true,
             require_confirmation: true,
             max_parallelism: 4,
+            max_task_retries: 3,
             dry_run: false,
             enable_pipelines: false,
             model_profiles: Vec::new(),
@@ -112,6 +116,7 @@ impl CoworkEngine {
     pub fn new(config: CoworkConfig, provider: Arc<dyn AiProvider>) -> Self {
         let scheduler_config = SchedulerConfig {
             max_parallelism: config.max_parallelism,
+            max_task_retries: config.max_task_retries,
         };
 
         let mut executors = ExecutorRegistry::new();
@@ -147,6 +152,7 @@ impl CoworkEngine {
     pub fn with_planner(config: CoworkConfig, planner: Arc<dyn TaskPlanner>) -> Self {
         let scheduler_config = SchedulerConfig {
             max_parallelism: config.max_parallelism,
+            max_task_retries: config.max_task_retries,
         };
 
         let mut executors = ExecutorRegistry::new();
@@ -185,6 +191,7 @@ impl CoworkEngine {
     ) -> Self {
         let scheduler_config = SchedulerConfig {
             max_parallelism: config.max_parallelism,
+            max_task_retries: config.max_task_retries,
         };
 
         let mut executors = ExecutorRegistry::new();

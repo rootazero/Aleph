@@ -660,7 +660,7 @@ fn process_with_agent_loop(
         std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
     >,
     _topic_id: &Option<String>,
-    _attachments: Option<&[crate::core::MediaAttachment]>,
+    attachments: Option<&[crate::core::MediaAttachment]>,
     op_token: &CancellationToken,
     handler: &Arc<dyn crate::ffi::AetherEventHandler>,
     memory_config: &crate::config::MemoryConfig,
@@ -775,6 +775,20 @@ fn process_with_agent_loop(
                         requires_confirmation,
                         "Multi-step task - using DAG scheduler"
                     );
+
+                    // Build input with attachment content for DAG context
+                    let dag_input = if let Some(attachment_text) =
+                        extract_attachment_text(attachments)
+                    {
+                        info!(
+                            attachment_len = attachment_text.len(),
+                            "Including attachment text in DAG context"
+                        );
+                        format!("{}\n\n{}", input, attachment_text)
+                    } else {
+                        input.to_string()
+                    };
+
                     run_dag_execution(
                         runtime,
                         task_graph,
@@ -782,8 +796,9 @@ fn process_with_agent_loop(
                         provider,
                         op_token,
                         handler,
-                        input,
+                        &dag_input,
                         generation_registry,
+                        None, // Use default max_task_retries from SchedulerConfig
                     );
                 }
                 Err(e) => {
@@ -1373,6 +1388,21 @@ impl DagTaskExecutor {
         );
 
         let response = self.provider.process(&prompt, None).await?;
+
+        // Check if LLM response indicates missing required input
+        if response_needs_user_input(&response) {
+            warn!(
+                task_id = %task.id,
+                task_name = %task.name,
+                "LLM response indicates missing required input"
+            );
+            return Err(crate::error::AetherError::MissingInput {
+                task_id: task.id.clone(),
+                task_name: task.name.clone(),
+                message: response,
+            });
+        }
+
         Ok(TaskOutput::text(response))
     }
 }
@@ -1545,6 +1575,7 @@ fn run_dag_execution(
     handler: &Arc<dyn crate::ffi::AetherEventHandler>,
     user_input: &str,
     generation_registry: &Arc<std::sync::RwLock<GenerationProviderRegistry>>,
+    max_task_retries: Option<u32>,
 ) {
     // Check if already cancelled
     if op_token.is_cancelled() {
@@ -1567,8 +1598,16 @@ fn run_dag_execution(
         // Create context
         let context = TaskContext::new(&user_input);
 
+        // Build scheduler config with custom retries if provided
+        let scheduler_config = max_task_retries.map(|retries| {
+            crate::dispatcher::SchedulerConfig {
+                max_parallelism: 4,
+                max_task_retries: retries,
+            }
+        });
+
         // Execute graph
-        DagScheduler::execute_graph(task_graph, executor, callback, context).await
+        DagScheduler::execute_graph(task_graph, executor, callback, context, scheduler_config).await
     });
 
     match result {
@@ -1590,5 +1629,125 @@ fn run_dag_execution(
             handler.on_error(format!("DAG 执行失败: {}", e));
         }
     }
+}
+
+/// Extract text content from attachments for DAG task context
+///
+/// This function extracts readable text content from attachments (e.g., markdown files,
+/// text files) so that DAG tasks can access the attachment content.
+/// Binary attachments (images, PDFs) are skipped.
+fn extract_attachment_text(attachments: Option<&[crate::core::MediaAttachment]>) -> Option<String> {
+    let attachments = attachments?;
+    if attachments.is_empty() {
+        return None;
+    }
+
+    let mut text_parts = Vec::new();
+
+    for attachment in attachments {
+        // Only process text-based attachments
+        if attachment.encoding == "base64" {
+            match attachment.mime_type.as_str() {
+                "text/plain" | "text/markdown" | "text/x-markdown" | "application/json" => {
+                    // Decode base64 to text
+                    if let Ok(decoded) = base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &attachment.data,
+                    ) {
+                        if let Ok(text) = String::from_utf8(decoded) {
+                            let filename = attachment.filename.as_deref().unwrap_or("attachment");
+                            text_parts.push(format!(
+                                "=== 附件内容: {} ===\n{}\n=== 附件结束 ===",
+                                filename, text
+                            ));
+                            debug!(filename = filename, "Extracted text from attachment for DAG context");
+                        }
+                    }
+                }
+                _ => {
+                    // Skip binary attachments (images, PDFs, etc.)
+                    debug!(
+                        mime_type = %attachment.mime_type,
+                        "Skipping binary attachment for DAG context"
+                    );
+                }
+            }
+        }
+    }
+
+    if text_parts.is_empty() {
+        None
+    } else {
+        Some(text_parts.join("\n\n"))
+    }
+}
+
+/// Check if LLM response indicates that it needs more user input to complete the task
+///
+/// This function detects common patterns in LLM responses that indicate:
+/// - Missing required information
+/// - Request for user to provide data
+/// - Inability to proceed without additional input
+///
+/// When detected, the task should be marked as failed/needs-input rather than completed.
+fn response_needs_user_input(response: &str) -> bool {
+    // Chinese indicators for "needs input"
+    let chinese_indicators = [
+        "缺少",           // missing
+        "请提供",         // please provide
+        "需要你提供",      // need you to provide
+        "需要提供",        // need to provide
+        "请把",           // please put/give
+        "请给出",         // please give
+        "没有提供",        // not provided
+        "未提供",         // not provided
+        "无法完成",        // cannot complete
+        "无法执行",        // cannot execute
+        "无法继续",        // cannot continue
+        "缺失",           // lacking
+        "不完整",         // incomplete
+        "请输入",         // please input
+        "请粘贴",         // please paste
+        "你还没有",        // you haven't yet
+        "仍未提供",        // still not provided
+        "仍然缺少",        // still missing
+    ];
+
+    // English indicators for "needs input"
+    let english_indicators = [
+        "please provide",
+        "need you to provide",
+        "missing",
+        "required input",
+        "cannot complete",
+        "cannot proceed",
+        "unable to",
+        "not provided",
+        "incomplete",
+        "please paste",
+        "please input",
+        "you haven't",
+        "still missing",
+    ];
+
+    let lower_response = response.to_lowercase();
+
+    // Check Chinese indicators
+    for indicator in &chinese_indicators {
+        if response.contains(indicator) {
+            debug!(indicator = indicator, "Detected missing input indicator in response");
+            return true;
+        }
+    }
+
+    // Check English indicators
+    for indicator in &english_indicators {
+        if lower_response.contains(indicator) {
+            debug!(indicator = indicator, "Detected missing input indicator in response");
+            return true;
+        }
+    }
+
+    false
 }
 
