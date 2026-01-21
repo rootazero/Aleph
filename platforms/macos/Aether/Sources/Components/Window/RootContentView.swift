@@ -301,12 +301,12 @@ struct RootContentView: View {
             }
 
         case .cowork:
-            // core used for cowork settings
+            // core used for agent settings
             if let core = core {
-                CoworkSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
+                AgentSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Cowork settings requires AetherCore initialization")
+                placeholderView("Agent settings requires AetherCore initialization")
             }
 
         case .policies:

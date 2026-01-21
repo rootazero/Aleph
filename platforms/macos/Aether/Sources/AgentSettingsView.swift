@@ -1,16 +1,16 @@
 //
-//  CoworkSettingsView.swift
+//  AgentSettingsView.swift
 //  Aether
 //
-//  Cowork task orchestration configuration UI.
-//  Allows users to configure the Cowork engine settings.
+//  Agent task orchestration configuration UI.
+//  Allows users to configure the Agent engine settings.
 //
 
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Cowork settings view for task orchestration configuration
-struct CoworkSettingsView: View {
+/// Agent settings view for task orchestration configuration
+struct AgentSettingsView: View {
     // Dependencies
     let core: AetherCore?
     @Binding var hasUnsavedChanges: Bool
@@ -19,6 +19,7 @@ struct CoworkSettingsView: View {
     @State private var enabled: Bool = true
     @State private var requireConfirmation: Bool = true
     @State private var maxParallelism: UInt32 = 4
+    @State private var maxTaskRetries: UInt32 = 3
     @State private var dryRun: Bool = false
 
     // Code execution configuration state
@@ -40,6 +41,7 @@ struct CoworkSettingsView: View {
     @State private var savedEnabled: Bool = true
     @State private var savedRequireConfirmation: Bool = true
     @State private var savedMaxParallelism: UInt32 = 4
+    @State private var savedMaxTaskRetries: UInt32 = 3
     @State private var savedDryRun: Bool = false
 
     // Saved code execution state
@@ -81,7 +83,7 @@ struct CoworkSettingsView: View {
             loadSettings()
             syncUnsavedChanges()
         }
-        .applyCoworkChangeTracking(
+        .applyAgentChangeTracking(
             enabled: enabled,
             requireConfirmation: requireConfirmation,
             maxParallelism: maxParallelism,
@@ -647,6 +649,7 @@ struct CoworkSettingsView: View {
         return enabled != savedEnabled ||
                requireConfirmation != savedRequireConfirmation ||
                maxParallelism != savedMaxParallelism ||
+               maxTaskRetries != savedMaxTaskRetries ||
                dryRun != savedDryRun ||
                codeExecEnabled != savedCodeExecEnabled ||
                sandboxEnabled != savedSandboxEnabled ||
@@ -672,18 +675,20 @@ struct CoworkSettingsView: View {
     private func loadSettings() {
         guard let core = core else { return }
 
-        // Load cowork config
+        // Load agent config
         let config = core.coworkGetConfig()
 
         enabled = config.enabled
         requireConfirmation = config.requireConfirmation
         maxParallelism = config.maxParallelism
+        maxTaskRetries = config.maxTaskRetries
         dryRun = config.dryRun
 
         // Store saved values
         savedEnabled = config.enabled
         savedRequireConfirmation = config.requireConfirmation
         savedMaxParallelism = config.maxParallelism
+        savedMaxTaskRetries = config.maxTaskRetries
         savedDryRun = config.dryRun
 
         // Load code execution config
@@ -736,11 +741,12 @@ struct CoworkSettingsView: View {
         }
 
         do {
-            // Save cowork config
+            // Save agent config
             let newConfig = CoworkConfigFfi(
                 enabled: enabled,
                 requireConfirmation: requireConfirmation,
                 maxParallelism: maxParallelism,
+                maxTaskRetries: maxTaskRetries,
                 dryRun: dryRun
             )
 
@@ -773,13 +779,14 @@ struct CoworkSettingsView: View {
 
             try core.coworkUpdateFileOpsConfig(config: newFileOpsConfig)
 
-            print("Cowork settings saved successfully")
+            print("Agent settings saved successfully")
 
             await MainActor.run {
                 // Update saved state to match current state
                 savedEnabled = enabled
                 savedRequireConfirmation = requireConfirmation
                 savedMaxParallelism = maxParallelism
+                savedMaxTaskRetries = maxTaskRetries
                 savedDryRun = dryRun
 
                 // Update saved code exec state
@@ -801,7 +808,7 @@ struct CoworkSettingsView: View {
                 errorMessage = nil
             }
         } catch {
-            print("Failed to save cowork settings: \(error)")
+            print("Failed to save agent settings: \(error)")
             await MainActor.run {
                 errorMessage = error.localizedDescription
                 isSaving = false
@@ -814,6 +821,7 @@ struct CoworkSettingsView: View {
         enabled = savedEnabled
         requireConfirmation = savedRequireConfirmation
         maxParallelism = savedMaxParallelism
+        maxTaskRetries = savedMaxTaskRetries
         dryRun = savedDryRun
 
         // Revert code exec settings
@@ -963,7 +971,7 @@ struct PathListEditor: View {
 // MARK: - Change Tracking Modifier
 
 /// View modifier to consolidate onChange tracking and avoid compiler type-check timeout
-private struct CoworkChangeTrackingModifier: ViewModifier {
+private struct AgentChangeTrackingModifier: ViewModifier {
     let enabled: Bool
     let requireConfirmation: Bool
     let maxParallelism: UInt32
@@ -1005,7 +1013,7 @@ private struct CoworkChangeTrackingModifier: ViewModifier {
 
 private extension View {
     // swiftlint:disable:next function_parameter_count
-    func applyCoworkChangeTracking(
+    func applyAgentChangeTracking(
         enabled: Bool,
         requireConfirmation: Bool,
         maxParallelism: UInt32,
@@ -1024,7 +1032,7 @@ private extension View {
         isSaving: Bool,
         onUpdate: @escaping () -> Void
     ) -> some View {
-        modifier(CoworkChangeTrackingModifier(
+        modifier(AgentChangeTrackingModifier(
             enabled: enabled,
             requireConfirmation: requireConfirmation,
             maxParallelism: maxParallelism,
@@ -1049,7 +1057,7 @@ private extension View {
 // MARK: - Preview
 
 #Preview {
-    CoworkSettingsView(
+    AgentSettingsView(
         core: nil,
         hasUnsavedChanges: .constant(false)
     )
