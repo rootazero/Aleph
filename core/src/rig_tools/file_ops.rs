@@ -118,6 +118,13 @@ impl FileOpsTool {
 - batch_move: Move ALL files matching a pattern to destination (e.g., pattern="*.jpg" moves all JPGs)
 - organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Others)
 
+PATH RESOLUTION:
+- Relative paths (e.g., "output.pdf", "images/photo.jpg") → resolved to ~/.config/aether/output/
+- Home paths (e.g., "~/Desktop/file.txt") → expanded to user's home directory
+- Absolute paths (e.g., "/Users/name/file.txt") → used as-is
+
+DEFAULT OUTPUT: When generating files (PDFs, images, translations), use relative paths like "article.pdf" or "translated.txt". They will be saved to the default output directory (~/.config/aether/output/), which is always writable.
+
 IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead of multiple 'move' calls!"#;
 
     /// Create a new FileOpsTool with default settings
@@ -157,6 +164,11 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
     }
 
     /// Check if path is allowed
+    ///
+    /// Path resolution rules:
+    /// 1. Absolute paths (starting with `/`) - used as-is
+    /// 2. Home paths (starting with `~`) - expanded to home directory
+    /// 3. Relative paths - resolved relative to output directory (~/.config/aether/output/)
     fn check_path(&self, path: &Path) -> Result<PathBuf, ToolError> {
         // Expand ~ to home directory
         let expanded = if path.starts_with("~") {
@@ -164,6 +176,13 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                 ToolError::InvalidArgs("Cannot determine home directory".to_string())
             })?;
             home.join(path.strip_prefix("~").unwrap())
+        } else if path.is_relative() {
+            // Relative paths are resolved to the output directory
+            // This ensures files are written to a known writable location
+            let output_dir = crate::utils::paths::get_output_dir().map_err(|e| {
+                ToolError::Execution(format!("Failed to get output directory: {}", e))
+            })?;
+            output_dir.join(path)
         } else {
             path.to_path_buf()
         };

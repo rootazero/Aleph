@@ -4601,12 +4601,14 @@ public func FfiConverterTypeFullConfig_lower(_ value: FullConfig) -> RustBuffer 
 public struct GeneralConfig {
     public var defaultProvider: String?
     public var language: String?
+    public var outputDir: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultProvider: String?, language: String?) {
+    public init(defaultProvider: String?, language: String?, outputDir: String?) {
         self.defaultProvider = defaultProvider
         self.language = language
+        self.outputDir = outputDir
     }
 }
 
@@ -4620,12 +4622,16 @@ extension GeneralConfig: Equatable, Hashable {
         if lhs.language != rhs.language {
             return false
         }
+        if lhs.outputDir != rhs.outputDir {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(defaultProvider)
         hasher.combine(language)
+        hasher.combine(outputDir)
     }
 }
 
@@ -4638,13 +4644,15 @@ public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
         return
             try GeneralConfig(
                 defaultProvider: FfiConverterOptionString.read(from: &buf), 
-                language: FfiConverterOptionString.read(from: &buf)
+                language: FfiConverterOptionString.read(from: &buf), 
+                outputDir: FfiConverterOptionString.read(from: &buf)
         )
     }
 
     public static func write(_ value: GeneralConfig, into buf: inout [UInt8]) {
         FfiConverterOptionString.write(value.defaultProvider, into: &buf)
         FfiConverterOptionString.write(value.language, into: &buf)
+        FfiConverterOptionString.write(value.outputDir, into: &buf)
     }
 }
 

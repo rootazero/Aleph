@@ -216,6 +216,7 @@ impl InitializationCoordinator {
             self.config_dir.clone(),
             self.config_dir.join("logs"),
             self.config_dir.join("cache"),
+            self.config_dir.join("output"), // Default output directory for generated files
             self.config_dir.join("skills"),
             self.config_dir.join("models"),
             self.config_dir.join("runtimes"),

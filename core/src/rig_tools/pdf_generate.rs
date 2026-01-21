@@ -127,11 +127,15 @@ Features:\n\
 - Markdown support (headings, paragraphs, lists, code blocks, bold, italic)\n\
 - Configurable page size (A4, Letter, A3, or custom)\n\
 - Adjustable font size, line spacing, and margins\n\n\
+PATH RESOLUTION:\n\
+- Relative paths (e.g., \"article.pdf\") → saved to ~/.config/aether/output/\n\
+- Home paths (e.g., \"~/Desktop/doc.pdf\") → expanded to user's home directory\n\
+- Absolute paths (e.g., \"/Users/name/doc.pdf\") → used as-is\n\n\
+DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs. They will be saved to the default output directory (~/.config/aether/output/), which is always writable.\n\n\
 Examples:\n\
-- Simple text: {\"content\": \"Hello World\", \"output_path\": \"/tmp/hello.pdf\"}\n\
-- With title: {\"content\": \"Document content\", \"output_path\": \"/tmp/doc.pdf\", \"title\": \"My Document\"}\n\
-- Markdown: {\"content\": \"# Heading\", \"output_path\": \"/tmp/doc.pdf\", \"format\": \"markdown\"}\n\
-- Custom size: {\"content\": \"...\", \"output_path\": \"/tmp/doc.pdf\", \"font_size\": 14, \"margin_mm\": 25}";
+- Simple: {\"content\": \"Hello World\", \"output_path\": \"hello.pdf\"}\n\
+- With title: {\"content\": \"Document content\", \"output_path\": \"doc.pdf\", \"title\": \"My Document\"}\n\
+- Markdown: {\"content\": \"# Heading\", \"output_path\": \"doc.pdf\", \"format\": \"markdown\"}";
 
     /// Create a new PDF generation tool
     pub fn new() -> Self {
@@ -490,8 +494,13 @@ Examples:\n\
         }
 
         // Determine output path
-        let output_path = if args.output_path.starts_with('/') || args.output_path.starts_with('~')
-        {
+        // Path resolution rules:
+        // 1. Absolute paths (starting with `/`) - used as-is
+        // 2. Home paths (starting with `~`) - expanded to home directory
+        // 3. Relative paths - resolved to output directory (~/.config/aether/output/)
+        let output_path = if args.output_path.starts_with('/') {
+            PathBuf::from(&args.output_path)
+        } else if args.output_path.starts_with('~') {
             PathBuf::from(
                 args.output_path
                     .replace('~', dirs::home_dir().unwrap_or_default().to_str().unwrap_or("")),
@@ -499,7 +508,11 @@ Examples:\n\
         } else if let Some(ref dir) = self.default_output_dir {
             dir.join(&args.output_path)
         } else {
-            PathBuf::from(&args.output_path)
+            // Use the default output directory for relative paths
+            let output_dir = crate::utils::paths::get_output_dir().map_err(|e| {
+                ToolError::Execution(format!("Failed to get output directory: {}", e))
+            })?;
+            output_dir.join(&args.output_path)
         };
 
         // Create parent directories if needed

@@ -133,3 +133,30 @@ pub fn get_runtimes_dir() -> Result<PathBuf> {
 pub fn get_models_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("models"))
 }
+
+/// Get the output directory for generated files
+///
+/// This directory is used as the default destination for AI-generated content
+/// such as images, PDFs, translated documents, etc. Using a dedicated output
+/// directory avoids permission issues and provides a consistent location for
+/// all generated artifacts.
+///
+/// Returns: `<config_dir>/output/`
+///
+/// The directory is created if it doesn't exist.
+pub fn get_output_dir() -> Result<PathBuf> {
+    let output_dir = get_config_dir()?.join("output");
+
+    // Create directory if it doesn't exist
+    if !output_dir.exists() {
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| AetherError::config(format!("Failed to create output directory: {}", e)))?;
+    }
+
+    Ok(output_dir)
+}
+
+/// Get output directory path as String (for UniFFI export)
+pub fn get_output_dir_string() -> Result<String> {
+    Ok(get_output_dir()?.to_string_lossy().to_string())
+}

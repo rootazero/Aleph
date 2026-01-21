@@ -200,6 +200,7 @@ dictionary McpStartupReportFFI {
 dictionary GeneralConfig {
   string? default_provider;
   string? language;
+  string? output_dir;
 };
 
 dictionary MemoryConfig {

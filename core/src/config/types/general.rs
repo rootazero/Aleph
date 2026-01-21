@@ -21,6 +21,12 @@ pub struct GeneralConfig {
     /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Custom output directory for generated files (images, PDFs, etc.)
+    /// If None, uses default: ~/.config/aether/output/
+    /// This directory is used as the default destination when AI generates files
+    /// without specifying an absolute path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
 }
 
 // =============================================================================
