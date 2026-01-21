@@ -1,6 +1,11 @@
-//! Cowork FFI bindings
+//! Dispatcher FFI Types
 //!
-//! This module provides FFI-safe wrapper types for the Cowork task orchestration system.
+//! This module provides FFI-safe wrapper types for the Dispatcher layer:
+//! - Task orchestration (scheduler, executor, planner)
+//! - Model routing (profiles, rules, health monitoring)
+//! - Budget management
+//! - A/B testing and ensemble
+//!
 //! These types are designed to work with UniFFI for Swift/Kotlin interop.
 
 use std::sync::Arc;

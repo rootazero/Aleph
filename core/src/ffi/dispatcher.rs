@@ -1,6 +1,10 @@
-//! Cowork task orchestration methods for AetherCore
+//! Dispatcher FFI Methods for AetherCore
 //!
-//! This module contains Cowork-related methods: cowork_plan, cowork_execute, etc.
+//! This module contains FFI methods for the Dispatcher layer:
+//! - Task orchestration: cowork_plan, cowork_execute, etc.
+//! - Model routing: get_model_profiles, update_routing_rule, etc.
+//! - Budget management: get_budget_status, etc.
+//! - A/B testing and ensemble: get_ab_testing_status, get_ensemble_status, etc.
 
 use super::{AetherCore, AetherFfiError};
 use crate::config::Config;
@@ -87,15 +91,15 @@ impl AetherCore {
     }
 
     /// Get Cowork configuration
-    pub fn cowork_get_config(&self) -> crate::cowork_ffi::CoworkConfigFFI {
+    pub fn cowork_get_config(&self) -> crate::ffi::dispatcher_types::CoworkConfigFFI {
         // Return current config or default
-        crate::cowork_ffi::CoworkConfigFFI::from(crate::dispatcher::CoworkConfig::default())
+        crate::ffi::dispatcher_types::CoworkConfigFFI::from(crate::dispatcher::CoworkConfig::default())
     }
 
     /// Update Cowork configuration
     pub fn cowork_update_config(
         &self,
-        config: crate::cowork_ffi::CoworkConfigFFI,
+        config: crate::ffi::dispatcher_types::CoworkConfigFFI,
     ) -> Result<(), AetherFfiError> {
         // For now, this would reinitialize the engine with new config
         // Reset the engine so it gets recreated with new config
@@ -115,7 +119,7 @@ impl AetherCore {
     pub fn cowork_plan(
         &self,
         request: String,
-    ) -> Result<crate::cowork_ffi::CoworkTaskGraphFFI, AetherFfiError> {
+    ) -> Result<crate::ffi::dispatcher_types::CoworkTaskGraphFFI, AetherFfiError> {
         let engine = self.get_or_create_cowork_engine()?;
 
         info!(request = %request, "Planning Cowork task");
@@ -125,14 +129,14 @@ impl AetherCore {
             .block_on(async { engine.plan(&request).await })
             .map_err(|e| AetherFfiError::Provider(format!("Planning failed: {}", e)))?;
 
-        Ok(crate::cowork_ffi::CoworkTaskGraphFFI::from(&graph))
+        Ok(crate::ffi::dispatcher_types::CoworkTaskGraphFFI::from(&graph))
     }
 
     /// Execute a task graph
     pub fn cowork_execute(
         &self,
-        graph_ffi: crate::cowork_ffi::CoworkTaskGraphFFI,
-    ) -> Result<crate::cowork_ffi::CoworkExecutionSummaryFFI, AetherFfiError> {
+        graph_ffi: crate::ffi::dispatcher_types::CoworkTaskGraphFFI,
+    ) -> Result<crate::ffi::dispatcher_types::CoworkExecutionSummaryFFI, AetherFfiError> {
         let engine = self.get_or_create_cowork_engine()?;
 
         info!(graph_id = %graph_ffi.id, "Executing Cowork task graph");
@@ -155,17 +159,17 @@ impl AetherCore {
             .block_on(async { engine.execute(graph).await })
             .map_err(|e| AetherFfiError::Provider(format!("Execution failed: {}", e)))?;
 
-        Ok(crate::cowork_ffi::CoworkExecutionSummaryFFI::from(summary))
+        Ok(crate::ffi::dispatcher_types::CoworkExecutionSummaryFFI::from(summary))
     }
 
     /// Get current execution state
-    pub fn cowork_get_state(&self) -> crate::cowork_ffi::CoworkExecutionState {
+    pub fn cowork_get_state(&self) -> crate::ffi::dispatcher_types::CoworkExecutionState {
         if let Ok(engine) = self.get_or_create_cowork_engine() {
             self.runtime.block_on(async {
-                crate::cowork_ffi::CoworkExecutionState::from(engine.state().await)
+                crate::ffi::dispatcher_types::CoworkExecutionState::from(engine.state().await)
             })
         } else {
-            crate::cowork_ffi::CoworkExecutionState::Idle
+            crate::ffi::dispatcher_types::CoworkExecutionState::Idle
         }
     }
 
@@ -212,11 +216,11 @@ impl AetherCore {
     }
 
     /// Subscribe to progress events
-    pub fn cowork_subscribe(&self, handler: Box<dyn crate::cowork_ffi::CoworkProgressHandler>) {
+    pub fn cowork_subscribe(&self, handler: Box<dyn crate::ffi::dispatcher_types::CoworkProgressHandler>) {
         if let Ok(engine) = self.get_or_create_cowork_engine() {
             // Convert Box to Arc for internal use
-            let handler_arc: Arc<dyn crate::cowork_ffi::CoworkProgressHandler> = Arc::from(handler);
-            let subscriber = Arc::new(crate::cowork_ffi::FfiProgressSubscriber::new(handler_arc));
+            let handler_arc: Arc<dyn crate::ffi::dispatcher_types::CoworkProgressHandler> = Arc::from(handler);
+            let subscriber = Arc::new(crate::ffi::dispatcher_types::FfiProgressSubscriber::new(handler_arc));
             engine.subscribe(subscriber);
             info!("Cowork progress subscriber added");
         }
@@ -225,18 +229,18 @@ impl AetherCore {
     // ===== CODE EXECUTION CONFIG =====
 
     /// Get code execution configuration
-    pub fn cowork_get_code_exec_config(&self) -> crate::cowork_ffi::CodeExecConfigFFI {
+    pub fn cowork_get_code_exec_config(&self) -> crate::ffi::dispatcher_types::CodeExecConfigFFI {
         // Load from config file or return defaults
         match crate::config::Config::load() {
-            Ok(cfg) => crate::cowork_ffi::CodeExecConfigFFI::from(cfg.cowork.code_exec),
-            Err(_) => crate::cowork_ffi::CodeExecConfigFFI::default(),
+            Ok(cfg) => crate::ffi::dispatcher_types::CodeExecConfigFFI::from(cfg.cowork.code_exec),
+            Err(_) => crate::ffi::dispatcher_types::CodeExecConfigFFI::default(),
         }
     }
 
     /// Update code execution configuration
     pub fn cowork_update_code_exec_config(
         &self,
-        config: crate::cowork_ffi::CodeExecConfigFFI,
+        config: crate::ffi::dispatcher_types::CodeExecConfigFFI,
     ) -> Result<(), AetherFfiError> {
         // Load current config
         let mut full_config = crate::config::Config::load()
@@ -257,18 +261,18 @@ impl AetherCore {
     // ===== FILE OPERATIONS CONFIG =====
 
     /// Get file operations configuration
-    pub fn cowork_get_file_ops_config(&self) -> crate::cowork_ffi::FileOpsConfigFFI {
+    pub fn cowork_get_file_ops_config(&self) -> crate::ffi::dispatcher_types::FileOpsConfigFFI {
         // Load from config file or return defaults
         match crate::config::Config::load() {
-            Ok(cfg) => crate::cowork_ffi::FileOpsConfigFFI::from(cfg.cowork.file_ops),
-            Err(_) => crate::cowork_ffi::FileOpsConfigFFI::default(),
+            Ok(cfg) => crate::ffi::dispatcher_types::FileOpsConfigFFI::from(cfg.cowork.file_ops),
+            Err(_) => crate::ffi::dispatcher_types::FileOpsConfigFFI::default(),
         }
     }
 
     /// Update file operations configuration
     pub fn cowork_update_file_ops_config(
         &self,
-        config: crate::cowork_ffi::FileOpsConfigFFI,
+        config: crate::ffi::dispatcher_types::FileOpsConfigFFI,
     ) -> Result<(), AetherFfiError> {
         // Load current config
         let mut full_config = crate::config::Config::load()
@@ -289,27 +293,27 @@ impl AetherCore {
     // ===== MODEL ROUTER =====
 
     /// Get all configured model profiles
-    pub fn cowork_get_model_profiles(&self) -> Vec<crate::cowork_ffi::ModelProfileFFI> {
+    pub fn cowork_get_model_profiles(&self) -> Vec<crate::ffi::dispatcher_types::ModelProfileFFI> {
         // Load from config file or return empty
         match crate::config::Config::load() {
             Ok(cfg) => cfg
                 .cowork
                 .get_model_profiles()
                 .into_iter()
-                .map(crate::cowork_ffi::ModelProfileFFI::from)
+                .map(crate::ffi::dispatcher_types::ModelProfileFFI::from)
                 .collect(),
             Err(_) => Vec::new(),
         }
     }
 
     /// Get model routing rules
-    pub fn cowork_get_routing_rules(&self) -> crate::cowork_ffi::ModelRoutingRulesFFI {
+    pub fn cowork_get_routing_rules(&self) -> crate::ffi::dispatcher_types::ModelRoutingRulesFFI {
         // Load from config file or return defaults
         match crate::config::Config::load() {
             Ok(cfg) => {
-                crate::cowork_ffi::ModelRoutingRulesFFI::from(cfg.cowork.get_routing_rules())
+                crate::ffi::dispatcher_types::ModelRoutingRulesFFI::from(cfg.cowork.get_routing_rules())
             }
-            Err(_) => crate::cowork_ffi::ModelRoutingRulesFFI::from(
+            Err(_) => crate::ffi::dispatcher_types::ModelRoutingRulesFFI::from(
                 crate::dispatcher::ModelRoutingRules::default(),
             ),
         }
@@ -318,7 +322,7 @@ impl AetherCore {
     /// Update a model profile (add or modify)
     pub fn cowork_update_model_profile(
         &self,
-        profile: crate::cowork_ffi::ModelProfileFFI,
+        profile: crate::ffi::dispatcher_types::ModelProfileFFI,
     ) -> Result<(), AetherFfiError> {
         let profile = crate::dispatcher::ModelProfile::from(profile);
         let profile_id = profile.id.clone();
@@ -508,7 +512,7 @@ impl AetherCore {
     /// Update cost strategy
     pub fn cowork_update_cost_strategy(
         &self,
-        strategy: crate::cowork_ffi::ModelCostStrategyFFI,
+        strategy: crate::ffi::dispatcher_types::ModelCostStrategyFFI,
     ) -> Result<(), AetherFfiError> {
         // Load current config
         let mut full_config = crate::config::Config::load()
@@ -562,7 +566,7 @@ impl AetherCore {
     /// and consecutive success/failure counts.
     pub fn cowork_get_model_health_summaries(
         &self,
-    ) -> Vec<crate::cowork_ffi::ModelHealthSummaryFFI> {
+    ) -> Vec<crate::ffi::dispatcher_types::ModelHealthSummaryFFI> {
         // TODO: Integrate with HealthManager when it's added to CoworkEngine
         // For now, generate summaries from configured model profiles
         match crate::config::Config::load() {
@@ -570,9 +574,9 @@ impl AetherCore {
                 .cowork
                 .get_model_profiles()
                 .into_iter()
-                .map(|profile| crate::cowork_ffi::ModelHealthSummaryFFI {
+                .map(|profile| crate::ffi::dispatcher_types::ModelHealthSummaryFFI {
                     model_id: profile.id,
-                    status: crate::cowork_ffi::ModelHealthStatusFFI::Unknown,
+                    status: crate::ffi::dispatcher_types::ModelHealthStatusFFI::Unknown,
                     status_text: "Unknown".to_string(),
                     status_emoji: "❓".to_string(),
                     reason: None,
@@ -591,15 +595,15 @@ impl AetherCore {
     pub fn cowork_get_model_health(
         &self,
         model_id: String,
-    ) -> Option<crate::cowork_ffi::ModelHealthSummaryFFI> {
+    ) -> Option<crate::ffi::dispatcher_types::ModelHealthSummaryFFI> {
         // TODO: Integrate with HealthManager when it's added to CoworkEngine
         // For now, return Unknown status if model exists
         match crate::config::Config::load() {
             Ok(cfg) => {
                 if cfg.cowork.model_profiles.contains_key(&model_id) {
-                    Some(crate::cowork_ffi::ModelHealthSummaryFFI {
+                    Some(crate::ffi::dispatcher_types::ModelHealthSummaryFFI {
                         model_id,
-                        status: crate::cowork_ffi::ModelHealthStatusFFI::Unknown,
+                        status: crate::ffi::dispatcher_types::ModelHealthStatusFFI::Unknown,
                         status_text: "Unknown".to_string(),
                         status_emoji: "❓".to_string(),
                         reason: None,
@@ -618,7 +622,7 @@ impl AetherCore {
     ///
     /// Returns aggregate statistics about the health status of all tracked models,
     /// including counts of healthy, degraded, unhealthy, and circuit-open models.
-    pub fn cowork_get_health_statistics(&self) -> crate::cowork_ffi::HealthStatisticsFFI {
+    pub fn cowork_get_health_statistics(&self) -> crate::ffi::dispatcher_types::HealthStatisticsFFI {
         // TODO: Integrate with HealthManager when it's added to CoworkEngine
         // For now, return statistics based on configured model count
         let total = match crate::config::Config::load() {
@@ -626,7 +630,7 @@ impl AetherCore {
             Err(_) => 0,
         };
 
-        crate::cowork_ffi::HealthStatisticsFFI {
+        crate::ffi::dispatcher_types::HealthStatisticsFFI {
             total,
             healthy: 0,
             degraded: 0,
@@ -646,18 +650,18 @@ impl AetherCore {
     ///
     /// Returns the overall budget status including all configured limits,
     /// current spending, and warning/exceeded states.
-    pub fn cowork_get_budget_status(&self) -> crate::cowork_ffi::BudgetStatusFFI {
+    pub fn cowork_get_budget_status(&self) -> crate::ffi::dispatcher_types::BudgetStatusFFI {
         // Load config and get budget limits
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
-            Err(_) => return crate::cowork_ffi::BudgetStatusFFI::disabled(),
+            Err(_) => return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled(),
         };
 
         // Get budget configuration from cowork.model_routing.budget
         let budget_config = &config.cowork.model_routing.budget;
 
         if !budget_config.enabled {
-            return crate::cowork_ffi::BudgetStatusFFI::disabled();
+            return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled();
         }
 
         // Convert config limits to internal BudgetLimit types
@@ -669,7 +673,7 @@ impl AetherCore {
             .collect();
 
         if limits.is_empty() {
-            return crate::cowork_ffi::BudgetStatusFFI::disabled();
+            return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled();
         }
 
         // Create initial states for each limit
@@ -682,7 +686,7 @@ impl AetherCore {
             );
         }
 
-        crate::cowork_ffi::BudgetStatusFFI::from_limits_and_states(&limits, &states)
+        crate::ffi::dispatcher_types::BudgetStatusFFI::from_limits_and_states(&limits, &states)
     }
 
     /// Get budget status for a specific scope
@@ -692,7 +696,7 @@ impl AetherCore {
         &self,
         scope_type: String,
         scope_id: Option<String>,
-    ) -> crate::cowork_ffi::BudgetStatusFFI {
+    ) -> crate::ffi::dispatcher_types::BudgetStatusFFI {
         // Parse scope
         let scope = match scope_type.as_str() {
             "global" => crate::dispatcher::model_router::BudgetScope::Global,
@@ -705,19 +709,19 @@ impl AetherCore {
             "model" => {
                 crate::dispatcher::model_router::BudgetScope::Model(scope_id.unwrap_or_default())
             }
-            _ => return crate::cowork_ffi::BudgetStatusFFI::disabled(),
+            _ => return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled(),
         };
 
         // Load config and get budget limits
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
-            Err(_) => return crate::cowork_ffi::BudgetStatusFFI::disabled(),
+            Err(_) => return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled(),
         };
 
         let budget_config = &config.cowork.model_routing.budget;
 
         if !budget_config.enabled {
-            return crate::cowork_ffi::BudgetStatusFFI::disabled();
+            return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled();
         }
 
         // Convert config limits to internal BudgetLimit types
@@ -738,7 +742,7 @@ impl AetherCore {
             .collect();
 
         if applicable_limits.is_empty() {
-            return crate::cowork_ffi::BudgetStatusFFI::disabled();
+            return crate::ffi::dispatcher_types::BudgetStatusFFI::disabled();
         }
 
         // Create initial states for each limit
@@ -751,7 +755,7 @@ impl AetherCore {
             );
         }
 
-        crate::cowork_ffi::BudgetStatusFFI::from_limits_and_states(&applicable_limits, &states)
+        crate::ffi::dispatcher_types::BudgetStatusFFI::from_limits_and_states(&applicable_limits, &states)
     }
 
     /// Get a single budget limit status by ID
@@ -760,7 +764,7 @@ impl AetherCore {
     pub fn cowork_get_budget_limit(
         &self,
         limit_id: String,
-    ) -> Option<crate::cowork_ffi::BudgetLimitStatusFFI> {
+    ) -> Option<crate::ffi::dispatcher_types::BudgetLimitStatusFFI> {
         // Load config
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
@@ -780,7 +784,7 @@ impl AetherCore {
         let limit = limit_config.to_budget_limit(default_enforcement);
         let state = crate::dispatcher::model_router::BudgetState::new(&limit);
 
-        Some(crate::cowork_ffi::BudgetLimitStatusFFI::from_limit_and_state(&limit, &state))
+        Some(crate::ffi::dispatcher_types::BudgetLimitStatusFFI::from_limit_and_state(&limit, &state))
     }
 
     // =========================================================================
@@ -791,17 +795,17 @@ impl AetherCore {
     ///
     /// Returns the overall A/B testing status including all active experiments,
     /// their configurations, and current statistics.
-    pub fn cowork_get_ab_testing_status(&self) -> crate::cowork_ffi::ABTestingStatusFFI {
+    pub fn cowork_get_ab_testing_status(&self) -> crate::ffi::dispatcher_types::ABTestingStatusFFI {
         // Load config to check if A/B testing is enabled
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
-            Err(_) => return crate::cowork_ffi::ABTestingStatusFFI::disabled(),
+            Err(_) => return crate::ffi::dispatcher_types::ABTestingStatusFFI::disabled(),
         };
 
         let ab_config = &config.cowork.model_routing.ab_testing;
 
         if !ab_config.enabled {
-            return crate::cowork_ffi::ABTestingStatusFFI::disabled();
+            return crate::ffi::dispatcher_types::ABTestingStatusFFI::disabled();
         }
 
         // TODO: When ABTestingEngine is integrated into CoworkEngine, use actual engine
@@ -809,7 +813,7 @@ impl AetherCore {
         let experiment_count = ab_config.experiments.len();
 
         if experiment_count == 0 {
-            return crate::cowork_ffi::ABTestingStatusFFI {
+            return crate::ffi::dispatcher_types::ABTestingStatusFFI {
                 enabled: true,
                 total_experiments: 0,
                 active_experiments: 0,
@@ -819,7 +823,7 @@ impl AetherCore {
             };
         }
 
-        crate::cowork_ffi::ABTestingStatusFFI {
+        crate::ffi::dispatcher_types::ABTestingStatusFFI {
             enabled: true,
             total_experiments: experiment_count as u32,
             active_experiments: ab_config.experiments.iter().filter(|e| e.enabled).count() as u32,
@@ -860,7 +864,7 @@ impl AetherCore {
     pub fn cowork_get_experiment_report(
         &self,
         experiment_id: String,
-    ) -> Option<crate::cowork_ffi::ExperimentReportFFI> {
+    ) -> Option<crate::ffi::dispatcher_types::ExperimentReportFFI> {
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
             Err(_) => return None,
@@ -952,36 +956,36 @@ impl AetherCore {
     /// Get ensemble status overview
     ///
     /// Returns the current ensemble configuration and statistics.
-    pub fn cowork_get_ensemble_status(&self) -> crate::cowork_ffi::EnsembleStatusFFI {
+    pub fn cowork_get_ensemble_status(&self) -> crate::ffi::dispatcher_types::EnsembleStatusFFI {
         let config = match crate::config::Config::load() {
             Ok(cfg) => cfg,
-            Err(_) => return crate::cowork_ffi::EnsembleStatusFFI::disabled(),
+            Err(_) => return crate::ffi::dispatcher_types::EnsembleStatusFFI::disabled(),
         };
 
         let ensemble_config = &config.cowork.model_routing.ensemble;
 
         if !ensemble_config.enabled {
-            return crate::cowork_ffi::EnsembleStatusFFI::disabled();
+            return crate::ffi::dispatcher_types::EnsembleStatusFFI::disabled();
         }
 
         // Convert config to FFI summary
         let mode_ffi = match ensemble_config.default_mode.as_str() {
-            "best_of_n" => crate::cowork_ffi::EnsembleModeFFI::BestOfN,
-            "voting" => crate::cowork_ffi::EnsembleModeFFI::Voting,
-            "consensus" => crate::cowork_ffi::EnsembleModeFFI::Consensus,
-            "cascade" => crate::cowork_ffi::EnsembleModeFFI::Cascade,
-            _ => crate::cowork_ffi::EnsembleModeFFI::Disabled,
+            "best_of_n" => crate::ffi::dispatcher_types::EnsembleModeFFI::BestOfN,
+            "voting" => crate::ffi::dispatcher_types::EnsembleModeFFI::Voting,
+            "consensus" => crate::ffi::dispatcher_types::EnsembleModeFFI::Consensus,
+            "cascade" => crate::ffi::dispatcher_types::EnsembleModeFFI::Cascade,
+            _ => crate::ffi::dispatcher_types::EnsembleModeFFI::Disabled,
         };
 
         let quality_metric_ffi = match ensemble_config.quality_scorer.as_str() {
-            "length" => crate::cowork_ffi::QualityMetricFFI::Length,
-            "structure" => crate::cowork_ffi::QualityMetricFFI::Structure,
-            "length_and_structure" => crate::cowork_ffi::QualityMetricFFI::LengthAndStructure,
+            "length" => crate::ffi::dispatcher_types::QualityMetricFFI::Length,
+            "structure" => crate::ffi::dispatcher_types::QualityMetricFFI::Structure,
+            "length_and_structure" => crate::ffi::dispatcher_types::QualityMetricFFI::LengthAndStructure,
             "confidence_markers" | "confidence" => {
-                crate::cowork_ffi::QualityMetricFFI::ConfidenceMarkers
+                crate::ffi::dispatcher_types::QualityMetricFFI::ConfidenceMarkers
             }
-            "relevance" => crate::cowork_ffi::QualityMetricFFI::Relevance,
-            _ => crate::cowork_ffi::QualityMetricFFI::LengthAndStructure,
+            "relevance" => crate::ffi::dispatcher_types::QualityMetricFFI::Relevance,
+            _ => crate::ffi::dispatcher_types::QualityMetricFFI::LengthAndStructure,
         };
 
         // Collect all models from strategies and high complexity config
@@ -1000,7 +1004,7 @@ impl AetherCore {
         all_models.sort();
         all_models.dedup();
 
-        let config_summary = crate::cowork_ffi::EnsembleConfigSummaryFFI {
+        let config_summary = crate::ffi::dispatcher_types::EnsembleConfigSummaryFFI {
             enabled: true,
             mode: mode_ffi,
             mode_display: ensemble_config.default_mode.clone(),
@@ -1014,7 +1018,7 @@ impl AetherCore {
         };
 
         // TODO: When EnsembleEngine is integrated, get actual stats
-        let stats = crate::cowork_ffi::EnsembleStatsFFI::empty();
+        let stats = crate::ffi::dispatcher_types::EnsembleStatsFFI::empty();
 
         let model_count = all_models.len();
         let (emoji, message) = if model_count > 0 {
@@ -1032,7 +1036,7 @@ impl AetherCore {
             )
         };
 
-        crate::cowork_ffi::EnsembleStatusFFI {
+        crate::ffi::dispatcher_types::EnsembleStatusFFI {
             config: config_summary,
             stats,
             status_emoji: emoji,
@@ -1043,7 +1047,7 @@ impl AetherCore {
     /// Get ensemble configuration summary
     ///
     /// Returns the current ensemble configuration for display.
-    pub fn cowork_get_ensemble_config(&self) -> crate::cowork_ffi::EnsembleConfigSummaryFFI {
+    pub fn cowork_get_ensemble_config(&self) -> crate::ffi::dispatcher_types::EnsembleConfigSummaryFFI {
         let status = self.cowork_get_ensemble_status();
         status.config
     }
@@ -1051,7 +1055,7 @@ impl AetherCore {
     /// Get ensemble execution statistics
     ///
     /// Returns statistics about ensemble executions.
-    pub fn cowork_get_ensemble_stats(&self) -> crate::cowork_ffi::EnsembleStatsFFI {
+    pub fn cowork_get_ensemble_stats(&self) -> crate::ffi::dispatcher_types::EnsembleStatsFFI {
         let status = self.cowork_get_ensemble_status();
         status.stats
     }

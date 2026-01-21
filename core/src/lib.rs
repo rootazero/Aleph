@@ -63,7 +63,6 @@ pub mod compressor; // NEW: Context compression for Agent Loop
 mod config;
 pub mod conversation; // NEW: Multi-turn conversation support
 mod core;
-pub mod cowork_ffi; // Cowork FFI bindings
 pub mod dispatcher; // Core dispatch center: model routing, tool registry, task orchestration
 mod error;
 pub mod event; // NEW: Event-driven architecture for agentic loop
@@ -281,8 +280,8 @@ pub use crate::utils::pii;
 pub use crate::vision::{
     CaptureMode, VisionConfig, VisionRequest, VisionResult, VisionService, VisionTask,
 };
-// Cowork FFI exports (task orchestration)
-pub use crate::cowork_ffi::{
+// Dispatcher FFI exports (task orchestration, model routing)
+pub use crate::ffi::dispatcher_types::{
     // Budget management types (Model Router P1)
     BudgetEnforcementFFI,
     BudgetLimitStatusFFI,

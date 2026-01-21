@@ -9,13 +9,15 @@
 //! - `config`: Configuration management (reload_config, update_provider, etc.)
 //! - `skills`: Skills management (list_skills, install_skill, etc.)
 //! - `mcp`: MCP server management (list_mcp_servers, add_mcp_server, etc.)
-//! - `cowork`: Cowork task orchestration (cowork_plan, cowork_execute, etc.)
+//! - `dispatcher`: Dispatcher FFI methods (task orchestration, model routing, etc.)
+//! - `dispatcher_types`: Dispatcher FFI types (enums, structs for UniFFI)
 //! - `generation`: Media generation (generate_image, generate_speech, etc.)
 //! - `session`: Session lifecycle management (resume, cancel, list)
 
 mod agent_loop_adapter;
 mod config;
-mod cowork;
+mod dispatcher;
+pub mod dispatcher_types;
 mod generation;
 #[cfg(feature = "uniffi")]
 mod init;
