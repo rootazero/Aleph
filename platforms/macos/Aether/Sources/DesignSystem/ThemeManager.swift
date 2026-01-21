@@ -90,8 +90,10 @@ final class ThemeManager: ObservableObject {
             self.currentTheme = .auto
         }
 
-        // Apply the loaded theme
-        applyTheme()
+        // DO NOT call applyTheme() here!
+        // This init() may be called during SwiftUI view graph construction,
+        // where calling window.displayIfNeeded() causes AttributeGraph crash.
+        // Theme will be applied via onAppear in the view hierarchy.
 
         // Observe system appearance changes (for auto mode)
         setupAppearanceObserver()

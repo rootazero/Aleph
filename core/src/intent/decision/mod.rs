@@ -16,8 +16,11 @@ pub use calibrator::{
     RoutingLayer,
 };
 pub use execution_decider::{
-    ContextSignals, CustomInvocation, DeciderConfig, DecisionLayer, DecisionMetadata,
+    ContextSignals, CustomInvocation, DeciderConfig, DecisionMetadata,
     DecisionResult, ExecutionIntentDecider, ExecutionMode, IntentLayer, McpInvocation,
     SkillInvocation, SlashCommand, ToolInvocation,
 };
+// Backward compatibility: DecisionLayer is deprecated, use IntentLayer instead
+#[allow(deprecated)]
+pub use execution_decider::DecisionLayer;
 pub use router::{DirectMode, DirectRouteInfo, IntentRouter, RouteResult, ThinkingContext};
