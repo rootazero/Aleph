@@ -126,13 +126,14 @@ impl TaskOutput {
         }
     }
 
-    /// Truncate string to max length with ellipsis
+    /// Truncate string to max length with ellipsis (UTF-8 safe)
     fn truncate(s: &str, max_len: usize) -> String {
-        if s.len() <= max_len {
-            s.to_string()
-        } else {
-            format!("{}...", &s[..max_len.saturating_sub(3)])
+        if s.chars().count() <= max_len {
+            return s.to_string();
         }
+
+        let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{}...", truncated)
     }
 }
 
