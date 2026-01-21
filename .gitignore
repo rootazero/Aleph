@@ -80,6 +80,7 @@ log*.md
 **/.fastembed_cache/
 
 icons/
+!platforms/tauri/src-tauri/icons/
 agentstructure/
 .worktrees/
 Aether.dmg
