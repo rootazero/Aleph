@@ -106,61 +106,57 @@ Swift: CommandCompletionManager auto-refreshes command list
 
 ---
 
-## L3 Agent (Multi-step Planning)
+## Task Orchestration (Cowork)
 
-The L3 Agent enables intelligent multi-step task planning where complex requests are decomposed into sequential tool invocations.
+Cowork is Aether's multi-task orchestration system that decomposes complex user requests into DAG-structured task graphs and executes them with parallel scheduling.
 
-### Planning Architecture
+### Architecture
 
 ```
-User Input
-     |
-+-------------------------+
-|   QuickHeuristics       |  <- Fast detection (<10ms)
-|   (is_likely_multi_step)|     Detects action verbs + connectors
-+-----------+-------------+
-            | (if multi-step likely)
-+-------------------------+
-|   L3TaskPlanner         |  <- LLM-based planning
-|   (analyze_and_plan)    |     Generates TaskPlan with steps
-+-----------+-------------+
-            |
-+-------------------------+
-|   PlanningResult        |
-|   - Plan(TaskPlan)      |  -> Multi-step execution
-|   - SingleTool          |  -> Direct tool execution
-|   - GeneralChat         |  -> AI conversation
-+-----------+-------------+
-            | (if Plan)
-+-------------------------+
-|   PlanConfirmationView  |  <- User confirms plan
-|   (Swift UI)            |     Shows steps + safety warnings
-+-----------+-------------+
-            |
-+-------------------------+
-|   PlanExecutor          |  <- Sequential execution
-|   (execute_plan)        |     Resolves $prev references
-+-----------+-------------+
-            |
-+-------------------------+
-|   PlanProgressView      |  <- Live progress display
-|   (Swift UI)            |     Shows step status + results
-+-------------------------+
+┌─────────────────────────────────────────────────────────────────┐
+│                      Dispatcher (CoworkEngine)                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
+│  │  TaskPlanner │  │ DAGScheduler │  │  ExecutorRegistry    │   │
+│  │  (LLM-based) │  │  (topo sort) │  │  (extensible)        │   │
+│  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
+│  │ TaskMonitor  │  │  TaskGraph   │  │  ModelRouter         │   │
+│  │  (progress)  │  │  (DAG model) │  │  (intelligent)       │   │
+│  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### $prev Parameter Chaining
+### Core Components
 
-Steps in a plan can reference the output of the previous step using `$prev`:
+| Component | Location | Description |
+|-----------|----------|-------------|
+| **cowork_types/** | `dispatcher/cowork_types/` | Task, TaskGraph, TaskDependency definitions |
+| **planner/** | `dispatcher/planner/` | LLM-based task decomposition (llm.rs, prompt.rs) |
+| **scheduler/** | `dispatcher/scheduler/` | DAG scheduling with topological sort |
+| **executor/** | `dispatcher/executor/` | Task execution (file_ops.rs, code_exec.rs, permission.rs, noop.rs) |
+| **monitor/** | `dispatcher/monitor/` | Real-time progress tracking and events |
+| **model_router/** | `dispatcher/model_router/` | Intelligent model selection (5 sub-modules) |
+| **engine.rs** | `dispatcher/engine.rs` | CoworkEngine unified API |
 
-```json
-{
-  "steps": [
-    {"tool": "search", "params": {"query": "AI news"}},
-    {"tool": "summarize", "params": {"text": "$prev"}},
-    {"tool": "translate", "params": {"text": "$prev", "target": "Chinese"}}
-  ]
-}
-```
+### Task Types
+
+| Type | Description |
+|------|-------------|
+| `FileOperation` | Read, write, copy, delete files |
+| `CodeExecution` | Run scripts or code |
+| `DocumentGeneration` | Create documents, reports |
+| `AppAutomation` | Control applications via AppleScript |
+| `AiInference` | Call AI models for generation |
+
+### DAG Scheduler
+
+Executes tasks respecting dependencies with configurable parallelism:
+
+1. Compute in-degree for all tasks
+2. Queue tasks with zero in-degree
+3. Execute up to `max_parallelism` tasks concurrently
+4. When task completes, decrement dependents' in-degree
+5. Queue newly ready tasks
 
 ### Tool Safety Levels
 
@@ -171,6 +167,27 @@ Steps in a plan can reference the output of the previous step using `$prev`:
 | `IrreversibleLowRisk` | Minor permanent changes | Yes | No |
 | `IrreversibleHighRisk` | Major permanent changes (delete) | Always | No |
 
+### Model Router
+
+Intelligent model selection based on task type and capabilities:
+
+| Sub-module | Location | Description |
+|------------|----------|-------------|
+| **core/** | `model_router/core/` | Core routing logic, profiles, rules, scoring |
+| **health/** | `model_router/health/` | Health monitoring, status, metrics |
+| **resilience/** | `model_router/resilience/` | Fault tolerance, retry, failover, budget |
+| **intelligent/** | `model_router/intelligent/` | Smart routing P2 (prompt analysis, semantic cache) |
+| **advanced/** | `model_router/advanced/` | Advanced features P3 (A/B testing, ensemble) |
+
+**Cost Strategies**: `Cheapest`, `Balanced`, `BestQuality`
+
+**Routing Priority**:
+1. Explicit task type mapping
+2. Required capability matching
+3. Cost strategy application
+4. Default model fallback
+5. Fallback provider (`[general].default_provider`)
+
 ---
 
 ## Configuration
@@ -180,20 +197,36 @@ See [CONFIGURATION.md](./CONFIGURATION.md#dispatcher) for full configuration opt
 ```toml
 [dispatcher]
 enabled = true
-l3_enabled = true
-l3_timeout_ms = 5000
 confirmation_enabled = true
 confirmation_threshold = 0.7
 confirmation_timeout_ms = 30000
 
-[dispatcher.agent]
+[cowork]
 enabled = true
-max_steps = 10
-step_timeout_ms = 30000
-enable_rollback = true
-plan_confirmation_required = true
-allow_irreversible_without_confirmation = false
-heuristics_threshold = 2
+require_confirmation = true
+max_parallelism = 4
+dry_run = false
+max_tasks_per_graph = 20
+task_timeout_seconds = 300
+
+[cowork.file_ops]
+enabled = true
+allowed_paths = ["~/Downloads/**", "~/Documents/**"]
+max_file_size = "100MB"
+require_confirmation_for_write = true
+require_confirmation_for_delete = true
+
+[cowork.code_exec]
+enabled = false  # Disabled by default for security
+default_runtime = "shell"
+timeout_seconds = 60
+sandbox_enabled = true
+allowed_runtimes = ["shell", "python"]
+
+[cowork.model_routing]
+cost_strategy = "balanced"
+default_model = "claude-sonnet"
+enable_pipelines = true
 ```
 
 ---

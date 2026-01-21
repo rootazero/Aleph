@@ -366,7 +366,7 @@ When enabled, Aether automatically redacts:
 - **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**: Complete config.toml reference
 - **[docs/DEVELOPMENT_PHASES.md](docs/DEVELOPMENT_PHASES.md)**: Project roadmap
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: Technical architecture
-- **[docs/COWORK.md](docs/COWORK.md)**: DAG task orchestration
+- **[docs/DISPATCHER.md](docs/DISPATCHER.md)**: Tool routing and task orchestration
 - **[docs/manual-testing-checklist.md](docs/manual-testing-checklist.md)**: Testing guide
 
 ## Contributing

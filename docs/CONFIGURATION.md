@@ -267,7 +267,7 @@ capabilities = ["memory"]          # Enable memory for all requests
 
 **Valid Categories**: `file_operation`, `code_execution`, `document_generation`, `app_automation`, `ai_inference`
 
-See [COWORK.md](./COWORK.md) for detailed documentation.
+See [DISPATCHER.md](./DISPATCHER.md#task-orchestration-cowork) for detailed documentation.
 
 ### [cowork.model_profiles.*]
 

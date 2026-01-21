@@ -299,7 +299,7 @@ dry_run = false
 - `AppAutomation` - AppleScript automation
 - `AiInference` - AI model calls
 
-See [COWORK.md](./COWORK.md) for detailed documentation.
+See [DISPATCHER.md](./DISPATCHER.md#task-orchestration-cowork) for detailed documentation.
 
 ---
 

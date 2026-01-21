@@ -194,7 +194,7 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **MCP** | Model Context Protocol (stdio transport) |
 | **event** | Type-safe event bus for event-driven architecture |
 
-See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md), [COWORK](./docs/COWORK.md)
+See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md)
 
 ---
 
@@ -214,7 +214,7 @@ See [docs/DESIGN_CONSTRAINTS.md](./docs/DESIGN_CONSTRAINTS.md) for full constrai
 
 | Category | Documents |
 |----------|-----------|
-| **Architecture** | [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md), [COWORK](./docs/COWORK.md) |
+| **Architecture** | [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md) |
 | **Configuration** | [CONFIGURATION](./docs/CONFIGURATION.md), [PERMISSIONS](./docs/PERMISSIONS.md) |
 | **Development** | [BUILD_COMMANDS](./docs/BUILD_COMMANDS.md), [DIRECTORY_STRUCTURE](./docs/DIRECTORY_STRUCTURE.md) |
 | **Platform** | [PLATFORM_NOTES](./docs/PLATFORM_NOTES.md), [MACOS26_WINDOW_DESIGN](./docs/MACOS26_WINDOW_DESIGN.md) |

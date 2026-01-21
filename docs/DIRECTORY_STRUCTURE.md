@@ -285,8 +285,7 @@ aether/
 ├── docs/                              # Documentation
 │   ├── ARCHITECTURE.md
 │   ├── CONFIGURATION.md
-│   ├── DISPATCHER.md
-│   ├── COWORK.md
+│   ├── DISPATCHER.md              # Includes Cowork task orchestration
 │   └── ...
 │
 ├── openspec/                          # OpenSpec change management
