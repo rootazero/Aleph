@@ -32,8 +32,10 @@ settings:
     SWIFT_EMIT_LOC_STRINGS: YES
     SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
     STRING_CATALOG_GENERATE_SYMBOLS: YES
-    # Swift 6 concurrency checking: targeted (gradual migration), complete (full enforcement)
-    SWIFT_STRICT_CONCURRENCY: targeted
+    # Swift 6 concurrency checking: minimal (for UniFFI compatibility), targeted, complete
+    # Note: Using minimal to avoid errors in UniFFI-generated code (aether.swift)
+    # which has global mutable state (vtable, handleMap, initializationResult)
+    SWIFT_STRICT_CONCURRENCY: minimal
     # Limit to arm64 only to match Rust library architecture
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: NO
@@ -177,6 +179,21 @@ targets:
             --library "${LIBRARY_PATH}" \
             --language swift \
             --out-dir "${PROJECT_DIR}/Aether/Sources/Generated/"
+
+          # Patch generated Swift for Swift 6 concurrency compatibility
+          # Add nonisolated(unsafe) to global mutable state variables (idempotent)
+          GENERATED_FILE="${PROJECT_DIR}/Aether/Sources/Generated/aether.swift"
+          if [ -f "${GENERATED_FILE}" ]; then
+              # Only patch if not already patched (check for marker)
+              if ! grep -q "nonisolated(unsafe) static var vtable" "${GENERATED_FILE}"; then
+                  sed -i '' 's/    static var vtable/    nonisolated(unsafe) static var vtable/g' "${GENERATED_FILE}"
+                  sed -i '' 's/    fileprivate static var handleMap/    nonisolated(unsafe) fileprivate static var handleMap/g' "${GENERATED_FILE}"
+                  sed -i '' 's/^private var initializationResult/nonisolated(unsafe) private var initializationResult/g' "${GENERATED_FILE}"
+                  echo "Swift 6 concurrency patches applied to aether.swift"
+              else
+                  echo "aether.swift already patched, skipping"
+              fi
+          fi
 
           echo "UniFFI bindings generated successfully"
         basedOnDependencyAnalysis: false

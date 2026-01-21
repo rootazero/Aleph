@@ -620,11 +620,23 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func coworkExecute(graph: CoworkTaskGraphFfi) throws  -> CoworkExecutionSummaryFfi
     
+    func coworkGetBudgetLimit(limitId: String)  -> BudgetLimitStatusFfi?
+    
+    func coworkGetBudgetStatus()  -> BudgetStatusFfi
+    
+    func coworkGetBudgetStatusForScope(scopeType: String, scopeId: String?)  -> BudgetStatusFfi
+    
     func coworkGetCodeExecConfig()  -> CodeExecConfigFfi
     
     func coworkGetConfig()  -> CoworkConfigFfi
     
     func coworkGetFileOpsConfig()  -> FileOpsConfigFfi
+    
+    func coworkGetHealthStatistics()  -> HealthStatisticsFfi
+    
+    func coworkGetModelHealth(modelId: String)  -> ModelHealthSummaryFfi?
+    
+    func coworkGetModelHealthSummaries()  -> [ModelHealthSummaryFfi]
     
     func coworkGetModelProfiles()  -> [ModelProfileFfi]
     
@@ -958,6 +970,30 @@ open func coworkExecute(graph: CoworkTaskGraphFfi)throws  -> CoworkExecutionSumm
 })
 }
     
+open func coworkGetBudgetLimit(limitId: String) -> BudgetLimitStatusFfi? {
+    return try!  FfiConverterOptionTypeBudgetLimitStatusFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_budget_limit(self.uniffiClonePointer(),
+        FfiConverterString.lower(limitId),$0
+    )
+})
+}
+    
+open func coworkGetBudgetStatus() -> BudgetStatusFfi {
+    return try!  FfiConverterTypeBudgetStatusFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_budget_status(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func coworkGetBudgetStatusForScope(scopeType: String, scopeId: String?) -> BudgetStatusFfi {
+    return try!  FfiConverterTypeBudgetStatusFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_budget_status_for_scope(self.uniffiClonePointer(),
+        FfiConverterString.lower(scopeType),
+        FfiConverterOptionString.lower(scopeId),$0
+    )
+})
+}
+    
 open func coworkGetCodeExecConfig() -> CodeExecConfigFfi {
     return try!  FfiConverterTypeCodeExecConfigFFI.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_cowork_get_code_exec_config(self.uniffiClonePointer(),$0
@@ -975,6 +1011,28 @@ open func coworkGetConfig() -> CoworkConfigFfi {
 open func coworkGetFileOpsConfig() -> FileOpsConfigFfi {
     return try!  FfiConverterTypeFileOpsConfigFFI.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_cowork_get_file_ops_config(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func coworkGetHealthStatistics() -> HealthStatisticsFfi {
+    return try!  FfiConverterTypeHealthStatisticsFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_health_statistics(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func coworkGetModelHealth(modelId: String) -> ModelHealthSummaryFfi? {
+    return try!  FfiConverterOptionTypeModelHealthSummaryFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_model_health(self.uniffiClonePointer(),
+        FfiConverterString.lower(modelId),$0
+    )
+})
+}
+    
+open func coworkGetModelHealthSummaries() -> [ModelHealthSummaryFfi] {
+    return try!  FfiConverterSequenceTypeModelHealthSummaryFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_model_health_summaries(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -2010,6 +2068,290 @@ public func FfiConverterTypeBehaviorConfig_lift(_ buf: RustBuffer) throws -> Beh
 #endif
 public func FfiConverterTypeBehaviorConfig_lower(_ value: BehaviorConfig) -> RustBuffer {
     return FfiConverterTypeBehaviorConfig.lower(value)
+}
+
+
+public struct BudgetLimitStatusFfi {
+    public var limitId: String
+    public var scope: BudgetScopeFfi
+    public var scopeDisplay: String
+    public var period: BudgetPeriodFfi
+    public var periodDisplay: String
+    public var limitUsd: Double
+    public var spentUsd: Double
+    public var remainingUsd: Double
+    public var usedPercent: Double
+    public var enforcement: BudgetEnforcementFfi
+    public var isExceeded: Bool
+    public var isWarning: Bool
+    public var nextResetTimestamp: Int64
+    public var nextResetDisplay: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(limitId: String, scope: BudgetScopeFfi, scopeDisplay: String, period: BudgetPeriodFfi, periodDisplay: String, limitUsd: Double, spentUsd: Double, remainingUsd: Double, usedPercent: Double, enforcement: BudgetEnforcementFfi, isExceeded: Bool, isWarning: Bool, nextResetTimestamp: Int64, nextResetDisplay: String) {
+        self.limitId = limitId
+        self.scope = scope
+        self.scopeDisplay = scopeDisplay
+        self.period = period
+        self.periodDisplay = periodDisplay
+        self.limitUsd = limitUsd
+        self.spentUsd = spentUsd
+        self.remainingUsd = remainingUsd
+        self.usedPercent = usedPercent
+        self.enforcement = enforcement
+        self.isExceeded = isExceeded
+        self.isWarning = isWarning
+        self.nextResetTimestamp = nextResetTimestamp
+        self.nextResetDisplay = nextResetDisplay
+    }
+}
+
+
+
+extension BudgetLimitStatusFfi: Equatable, Hashable {
+    public static func ==(lhs: BudgetLimitStatusFfi, rhs: BudgetLimitStatusFfi) -> Bool {
+        if lhs.limitId != rhs.limitId {
+            return false
+        }
+        if lhs.scope != rhs.scope {
+            return false
+        }
+        if lhs.scopeDisplay != rhs.scopeDisplay {
+            return false
+        }
+        if lhs.period != rhs.period {
+            return false
+        }
+        if lhs.periodDisplay != rhs.periodDisplay {
+            return false
+        }
+        if lhs.limitUsd != rhs.limitUsd {
+            return false
+        }
+        if lhs.spentUsd != rhs.spentUsd {
+            return false
+        }
+        if lhs.remainingUsd != rhs.remainingUsd {
+            return false
+        }
+        if lhs.usedPercent != rhs.usedPercent {
+            return false
+        }
+        if lhs.enforcement != rhs.enforcement {
+            return false
+        }
+        if lhs.isExceeded != rhs.isExceeded {
+            return false
+        }
+        if lhs.isWarning != rhs.isWarning {
+            return false
+        }
+        if lhs.nextResetTimestamp != rhs.nextResetTimestamp {
+            return false
+        }
+        if lhs.nextResetDisplay != rhs.nextResetDisplay {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(limitId)
+        hasher.combine(scope)
+        hasher.combine(scopeDisplay)
+        hasher.combine(period)
+        hasher.combine(periodDisplay)
+        hasher.combine(limitUsd)
+        hasher.combine(spentUsd)
+        hasher.combine(remainingUsd)
+        hasher.combine(usedPercent)
+        hasher.combine(enforcement)
+        hasher.combine(isExceeded)
+        hasher.combine(isWarning)
+        hasher.combine(nextResetTimestamp)
+        hasher.combine(nextResetDisplay)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBudgetLimitStatusFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BudgetLimitStatusFfi {
+        return
+            try BudgetLimitStatusFfi(
+                limitId: FfiConverterString.read(from: &buf), 
+                scope: FfiConverterTypeBudgetScopeFFI.read(from: &buf), 
+                scopeDisplay: FfiConverterString.read(from: &buf), 
+                period: FfiConverterTypeBudgetPeriodFFI.read(from: &buf), 
+                periodDisplay: FfiConverterString.read(from: &buf), 
+                limitUsd: FfiConverterDouble.read(from: &buf), 
+                spentUsd: FfiConverterDouble.read(from: &buf), 
+                remainingUsd: FfiConverterDouble.read(from: &buf), 
+                usedPercent: FfiConverterDouble.read(from: &buf), 
+                enforcement: FfiConverterTypeBudgetEnforcementFFI.read(from: &buf), 
+                isExceeded: FfiConverterBool.read(from: &buf), 
+                isWarning: FfiConverterBool.read(from: &buf), 
+                nextResetTimestamp: FfiConverterInt64.read(from: &buf), 
+                nextResetDisplay: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BudgetLimitStatusFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.limitId, into: &buf)
+        FfiConverterTypeBudgetScopeFFI.write(value.scope, into: &buf)
+        FfiConverterString.write(value.scopeDisplay, into: &buf)
+        FfiConverterTypeBudgetPeriodFFI.write(value.period, into: &buf)
+        FfiConverterString.write(value.periodDisplay, into: &buf)
+        FfiConverterDouble.write(value.limitUsd, into: &buf)
+        FfiConverterDouble.write(value.spentUsd, into: &buf)
+        FfiConverterDouble.write(value.remainingUsd, into: &buf)
+        FfiConverterDouble.write(value.usedPercent, into: &buf)
+        FfiConverterTypeBudgetEnforcementFFI.write(value.enforcement, into: &buf)
+        FfiConverterBool.write(value.isExceeded, into: &buf)
+        FfiConverterBool.write(value.isWarning, into: &buf)
+        FfiConverterInt64.write(value.nextResetTimestamp, into: &buf)
+        FfiConverterString.write(value.nextResetDisplay, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetLimitStatusFFI_lift(_ buf: RustBuffer) throws -> BudgetLimitStatusFfi {
+    return try FfiConverterTypeBudgetLimitStatusFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetLimitStatusFFI_lower(_ value: BudgetLimitStatusFfi) -> RustBuffer {
+    return FfiConverterTypeBudgetLimitStatusFFI.lower(value)
+}
+
+
+public struct BudgetStatusFfi {
+    public var enabled: Bool
+    public var totalLimits: UInt32
+    public var exceededCount: UInt32
+    public var warningCount: UInt32
+    public var totalSpentUsd: Double
+    public var minRemainingUsd: Double
+    public var limits: [BudgetLimitStatusFfi]
+    public var statusEmoji: String
+    public var statusMessage: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, totalLimits: UInt32, exceededCount: UInt32, warningCount: UInt32, totalSpentUsd: Double, minRemainingUsd: Double, limits: [BudgetLimitStatusFfi], statusEmoji: String, statusMessage: String) {
+        self.enabled = enabled
+        self.totalLimits = totalLimits
+        self.exceededCount = exceededCount
+        self.warningCount = warningCount
+        self.totalSpentUsd = totalSpentUsd
+        self.minRemainingUsd = minRemainingUsd
+        self.limits = limits
+        self.statusEmoji = statusEmoji
+        self.statusMessage = statusMessage
+    }
+}
+
+
+
+extension BudgetStatusFfi: Equatable, Hashable {
+    public static func ==(lhs: BudgetStatusFfi, rhs: BudgetStatusFfi) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.totalLimits != rhs.totalLimits {
+            return false
+        }
+        if lhs.exceededCount != rhs.exceededCount {
+            return false
+        }
+        if lhs.warningCount != rhs.warningCount {
+            return false
+        }
+        if lhs.totalSpentUsd != rhs.totalSpentUsd {
+            return false
+        }
+        if lhs.minRemainingUsd != rhs.minRemainingUsd {
+            return false
+        }
+        if lhs.limits != rhs.limits {
+            return false
+        }
+        if lhs.statusEmoji != rhs.statusEmoji {
+            return false
+        }
+        if lhs.statusMessage != rhs.statusMessage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(totalLimits)
+        hasher.combine(exceededCount)
+        hasher.combine(warningCount)
+        hasher.combine(totalSpentUsd)
+        hasher.combine(minRemainingUsd)
+        hasher.combine(limits)
+        hasher.combine(statusEmoji)
+        hasher.combine(statusMessage)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBudgetStatusFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BudgetStatusFfi {
+        return
+            try BudgetStatusFfi(
+                enabled: FfiConverterBool.read(from: &buf), 
+                totalLimits: FfiConverterUInt32.read(from: &buf), 
+                exceededCount: FfiConverterUInt32.read(from: &buf), 
+                warningCount: FfiConverterUInt32.read(from: &buf), 
+                totalSpentUsd: FfiConverterDouble.read(from: &buf), 
+                minRemainingUsd: FfiConverterDouble.read(from: &buf), 
+                limits: FfiConverterSequenceTypeBudgetLimitStatusFFI.read(from: &buf), 
+                statusEmoji: FfiConverterString.read(from: &buf), 
+                statusMessage: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BudgetStatusFfi, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterUInt32.write(value.totalLimits, into: &buf)
+        FfiConverterUInt32.write(value.exceededCount, into: &buf)
+        FfiConverterUInt32.write(value.warningCount, into: &buf)
+        FfiConverterDouble.write(value.totalSpentUsd, into: &buf)
+        FfiConverterDouble.write(value.minRemainingUsd, into: &buf)
+        FfiConverterSequenceTypeBudgetLimitStatusFFI.write(value.limits, into: &buf)
+        FfiConverterString.write(value.statusEmoji, into: &buf)
+        FfiConverterString.write(value.statusMessage, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetStatusFFI_lift(_ buf: RustBuffer) throws -> BudgetStatusFfi {
+    return try FfiConverterTypeBudgetStatusFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetStatusFFI_lower(_ value: BudgetStatusFfi) -> RustBuffer {
+    return FfiConverterTypeBudgetStatusFFI.lower(value)
 }
 
 
@@ -3747,6 +4089,80 @@ public func FfiConverterTypeExecutableTaskFFI_lower(_ value: ExecutableTaskFfi) 
 }
 
 
+public struct ExperimentalPolicy {
+    public var useUnifiedIntentDecider: Bool
+    public var useNewPromptSystem: Bool
+    public var verboseDecisionLogging: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(useUnifiedIntentDecider: Bool, useNewPromptSystem: Bool, verboseDecisionLogging: Bool) {
+        self.useUnifiedIntentDecider = useUnifiedIntentDecider
+        self.useNewPromptSystem = useNewPromptSystem
+        self.verboseDecisionLogging = verboseDecisionLogging
+    }
+}
+
+
+
+extension ExperimentalPolicy: Equatable, Hashable {
+    public static func ==(lhs: ExperimentalPolicy, rhs: ExperimentalPolicy) -> Bool {
+        if lhs.useUnifiedIntentDecider != rhs.useUnifiedIntentDecider {
+            return false
+        }
+        if lhs.useNewPromptSystem != rhs.useNewPromptSystem {
+            return false
+        }
+        if lhs.verboseDecisionLogging != rhs.verboseDecisionLogging {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(useUnifiedIntentDecider)
+        hasher.combine(useNewPromptSystem)
+        hasher.combine(verboseDecisionLogging)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeExperimentalPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ExperimentalPolicy {
+        return
+            try ExperimentalPolicy(
+                useUnifiedIntentDecider: FfiConverterBool.read(from: &buf), 
+                useNewPromptSystem: FfiConverterBool.read(from: &buf), 
+                verboseDecisionLogging: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ExperimentalPolicy, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.useUnifiedIntentDecider, into: &buf)
+        FfiConverterBool.write(value.useNewPromptSystem, into: &buf)
+        FfiConverterBool.write(value.verboseDecisionLogging, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExperimentalPolicy_lift(_ buf: RustBuffer) throws -> ExperimentalPolicy {
+    return try FfiConverterTypeExperimentalPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExperimentalPolicy_lower(_ value: ExperimentalPolicy) -> RustBuffer {
+    return FfiConverterTypeExperimentalPolicy.lower(value)
+}
+
+
 public struct FileOpsConfigFfi {
     public var enabled: Bool
     public var allowedPaths: [String]
@@ -4852,6 +5268,120 @@ public func FfiConverterTypeGenerationProviderInfoFFI_lift(_ buf: RustBuffer) th
 #endif
 public func FfiConverterTypeGenerationProviderInfoFFI_lower(_ value: GenerationProviderInfoFfi) -> RustBuffer {
     return FfiConverterTypeGenerationProviderInfoFFI.lower(value)
+}
+
+
+public struct HealthStatisticsFfi {
+    public var total: UInt32
+    public var healthy: UInt32
+    public var degraded: UInt32
+    public var unhealthy: UInt32
+    public var circuitOpen: UInt32
+    public var halfOpen: UInt32
+    public var unknown: UInt32
+    public var healthyPercent: Double
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(total: UInt32, healthy: UInt32, degraded: UInt32, unhealthy: UInt32, circuitOpen: UInt32, halfOpen: UInt32, unknown: UInt32, healthyPercent: Double) {
+        self.total = total
+        self.healthy = healthy
+        self.degraded = degraded
+        self.unhealthy = unhealthy
+        self.circuitOpen = circuitOpen
+        self.halfOpen = halfOpen
+        self.unknown = unknown
+        self.healthyPercent = healthyPercent
+    }
+}
+
+
+
+extension HealthStatisticsFfi: Equatable, Hashable {
+    public static func ==(lhs: HealthStatisticsFfi, rhs: HealthStatisticsFfi) -> Bool {
+        if lhs.total != rhs.total {
+            return false
+        }
+        if lhs.healthy != rhs.healthy {
+            return false
+        }
+        if lhs.degraded != rhs.degraded {
+            return false
+        }
+        if lhs.unhealthy != rhs.unhealthy {
+            return false
+        }
+        if lhs.circuitOpen != rhs.circuitOpen {
+            return false
+        }
+        if lhs.halfOpen != rhs.halfOpen {
+            return false
+        }
+        if lhs.unknown != rhs.unknown {
+            return false
+        }
+        if lhs.healthyPercent != rhs.healthyPercent {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(total)
+        hasher.combine(healthy)
+        hasher.combine(degraded)
+        hasher.combine(unhealthy)
+        hasher.combine(circuitOpen)
+        hasher.combine(halfOpen)
+        hasher.combine(unknown)
+        hasher.combine(healthyPercent)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeHealthStatisticsFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HealthStatisticsFfi {
+        return
+            try HealthStatisticsFfi(
+                total: FfiConverterUInt32.read(from: &buf), 
+                healthy: FfiConverterUInt32.read(from: &buf), 
+                degraded: FfiConverterUInt32.read(from: &buf), 
+                unhealthy: FfiConverterUInt32.read(from: &buf), 
+                circuitOpen: FfiConverterUInt32.read(from: &buf), 
+                halfOpen: FfiConverterUInt32.read(from: &buf), 
+                unknown: FfiConverterUInt32.read(from: &buf), 
+                healthyPercent: FfiConverterDouble.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: HealthStatisticsFfi, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.total, into: &buf)
+        FfiConverterUInt32.write(value.healthy, into: &buf)
+        FfiConverterUInt32.write(value.degraded, into: &buf)
+        FfiConverterUInt32.write(value.unhealthy, into: &buf)
+        FfiConverterUInt32.write(value.circuitOpen, into: &buf)
+        FfiConverterUInt32.write(value.halfOpen, into: &buf)
+        FfiConverterUInt32.write(value.unknown, into: &buf)
+        FfiConverterDouble.write(value.healthyPercent, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHealthStatisticsFFI_lift(_ buf: RustBuffer) throws -> HealthStatisticsFfi {
+    return try FfiConverterTypeHealthStatisticsFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHealthStatisticsFFI_lower(_ value: HealthStatisticsFfi) -> RustBuffer {
+    return FfiConverterTypeHealthStatisticsFFI.lower(value)
 }
 
 
@@ -6788,6 +7318,112 @@ public func FfiConverterTypeMetricsPolicy_lower(_ value: MetricsPolicy) -> RustB
 }
 
 
+public struct ModelHealthSummaryFfi {
+    public var modelId: String
+    public var status: ModelHealthStatusFfi
+    public var statusText: String
+    public var statusEmoji: String
+    public var reason: String?
+    public var consecutiveSuccesses: UInt32
+    public var consecutiveFailures: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(modelId: String, status: ModelHealthStatusFfi, statusText: String, statusEmoji: String, reason: String?, consecutiveSuccesses: UInt32, consecutiveFailures: UInt32) {
+        self.modelId = modelId
+        self.status = status
+        self.statusText = statusText
+        self.statusEmoji = statusEmoji
+        self.reason = reason
+        self.consecutiveSuccesses = consecutiveSuccesses
+        self.consecutiveFailures = consecutiveFailures
+    }
+}
+
+
+
+extension ModelHealthSummaryFfi: Equatable, Hashable {
+    public static func ==(lhs: ModelHealthSummaryFfi, rhs: ModelHealthSummaryFfi) -> Bool {
+        if lhs.modelId != rhs.modelId {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.statusText != rhs.statusText {
+            return false
+        }
+        if lhs.statusEmoji != rhs.statusEmoji {
+            return false
+        }
+        if lhs.reason != rhs.reason {
+            return false
+        }
+        if lhs.consecutiveSuccesses != rhs.consecutiveSuccesses {
+            return false
+        }
+        if lhs.consecutiveFailures != rhs.consecutiveFailures {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(modelId)
+        hasher.combine(status)
+        hasher.combine(statusText)
+        hasher.combine(statusEmoji)
+        hasher.combine(reason)
+        hasher.combine(consecutiveSuccesses)
+        hasher.combine(consecutiveFailures)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeModelHealthSummaryFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelHealthSummaryFfi {
+        return
+            try ModelHealthSummaryFfi(
+                modelId: FfiConverterString.read(from: &buf), 
+                status: FfiConverterTypeModelHealthStatusFFI.read(from: &buf), 
+                statusText: FfiConverterString.read(from: &buf), 
+                statusEmoji: FfiConverterString.read(from: &buf), 
+                reason: FfiConverterOptionString.read(from: &buf), 
+                consecutiveSuccesses: FfiConverterUInt32.read(from: &buf), 
+                consecutiveFailures: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ModelHealthSummaryFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.modelId, into: &buf)
+        FfiConverterTypeModelHealthStatusFFI.write(value.status, into: &buf)
+        FfiConverterString.write(value.statusText, into: &buf)
+        FfiConverterString.write(value.statusEmoji, into: &buf)
+        FfiConverterOptionString.write(value.reason, into: &buf)
+        FfiConverterUInt32.write(value.consecutiveSuccesses, into: &buf)
+        FfiConverterUInt32.write(value.consecutiveFailures, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelHealthSummaryFFI_lift(_ buf: RustBuffer) throws -> ModelHealthSummaryFfi {
+    return try FfiConverterTypeModelHealthSummaryFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelHealthSummaryFFI_lower(_ value: ModelHealthSummaryFfi) -> RustBuffer {
+    return FfiConverterTypeModelHealthSummaryFFI.lower(value)
+}
+
+
 public struct ModelProfileFfi {
     public var id: String
     public var provider: String
@@ -7213,10 +7849,11 @@ public struct PoliciesConfig {
     public var text: TextFormatPolicy
     public var metrics: MetricsPolicy
     public var keyword: KeywordPolicy
+    public var experimental: ExperimentalPolicy
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(toolSafety: ToolSafetyPolicy, intent: IntentDetectionPolicy, memory: MemoryPolicies, retry: RetryPolicy, webFetch: WebFetchPolicy, text: TextFormatPolicy, metrics: MetricsPolicy, keyword: KeywordPolicy) {
+    public init(toolSafety: ToolSafetyPolicy, intent: IntentDetectionPolicy, memory: MemoryPolicies, retry: RetryPolicy, webFetch: WebFetchPolicy, text: TextFormatPolicy, metrics: MetricsPolicy, keyword: KeywordPolicy, experimental: ExperimentalPolicy) {
         self.toolSafety = toolSafety
         self.intent = intent
         self.memory = memory
@@ -7225,6 +7862,7 @@ public struct PoliciesConfig {
         self.text = text
         self.metrics = metrics
         self.keyword = keyword
+        self.experimental = experimental
     }
 }
 
@@ -7256,6 +7894,9 @@ extension PoliciesConfig: Equatable, Hashable {
         if lhs.keyword != rhs.keyword {
             return false
         }
+        if lhs.experimental != rhs.experimental {
+            return false
+        }
         return true
     }
 
@@ -7268,6 +7909,7 @@ extension PoliciesConfig: Equatable, Hashable {
         hasher.combine(text)
         hasher.combine(metrics)
         hasher.combine(keyword)
+        hasher.combine(experimental)
     }
 }
 
@@ -7286,7 +7928,8 @@ public struct FfiConverterTypePoliciesConfig: FfiConverterRustBuffer {
                 webFetch: FfiConverterTypeWebFetchPolicy.read(from: &buf), 
                 text: FfiConverterTypeTextFormatPolicy.read(from: &buf), 
                 metrics: FfiConverterTypeMetricsPolicy.read(from: &buf), 
-                keyword: FfiConverterTypeKeywordPolicy.read(from: &buf)
+                keyword: FfiConverterTypeKeywordPolicy.read(from: &buf), 
+                experimental: FfiConverterTypeExperimentalPolicy.read(from: &buf)
         )
     }
 
@@ -7299,6 +7942,7 @@ public struct FfiConverterTypePoliciesConfig: FfiConverterRustBuffer {
         FfiConverterTypeTextFormatPolicy.write(value.text, into: &buf)
         FfiConverterTypeMetricsPolicy.write(value.metrics, into: &buf)
         FfiConverterTypeKeywordPolicy.write(value.keyword, into: &buf)
+        FfiConverterTypeExperimentalPolicy.write(value.experimental, into: &buf)
     }
 }
 
@@ -9270,6 +9914,135 @@ public func FfiConverterTypeStageResultFFI_lower(_ value: StageResultFfi) -> Rus
 }
 
 
+/**
+ * Task information for UI display
+ */
+public struct TaskInfo {
+    /**
+     * Unique task identifier
+     */
+    public var id: String
+    /**
+     * Human-readable task name
+     */
+    public var name: String
+    /**
+     * Current status
+     */
+    public var status: TaskDisplayStatus
+    /**
+     * Risk level as a string ("low" or "high")
+     *
+     * Note: We use String instead of enum for UniFFI compatibility
+     * with legacy Swift code. Valid values are "low" and "high".
+     */
+    public var riskLevel: String
+    /**
+     * IDs of tasks this task depends on
+     */
+    public var dependencies: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Unique task identifier
+         */id: String, 
+        /**
+         * Human-readable task name
+         */name: String, 
+        /**
+         * Current status
+         */status: TaskDisplayStatus, 
+        /**
+         * Risk level as a string ("low" or "high")
+         *
+         * Note: We use String instead of enum for UniFFI compatibility
+         * with legacy Swift code. Valid values are "low" and "high".
+         */riskLevel: String, 
+        /**
+         * IDs of tasks this task depends on
+         */dependencies: [String]) {
+        self.id = id
+        self.name = name
+        self.status = status
+        self.riskLevel = riskLevel
+        self.dependencies = dependencies
+    }
+}
+
+
+
+extension TaskInfo: Equatable, Hashable {
+    public static func ==(lhs: TaskInfo, rhs: TaskInfo) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.riskLevel != rhs.riskLevel {
+            return false
+        }
+        if lhs.dependencies != rhs.dependencies {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(status)
+        hasher.combine(riskLevel)
+        hasher.combine(dependencies)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTaskInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskInfo {
+        return
+            try TaskInfo(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                status: FfiConverterTypeTaskDisplayStatus.read(from: &buf), 
+                riskLevel: FfiConverterString.read(from: &buf), 
+                dependencies: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TaskInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterTypeTaskDisplayStatus.write(value.status, into: &buf)
+        FfiConverterString.write(value.riskLevel, into: &buf)
+        FfiConverterSequenceString.write(value.dependencies, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskInfo_lift(_ buf: RustBuffer) throws -> TaskInfo {
+    return try FfiConverterTypeTaskInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskInfo_lower(_ value: TaskInfo) -> RustBuffer {
+    return FfiConverterTypeTaskInfo.lower(value)
+}
+
+
 public struct TaskParametersFfi {
     public var organizeMethod: OrganizeMethodFfi
     public var conflictResolution: ConflictResolutionFfi
@@ -9341,6 +10114,115 @@ public func FfiConverterTypeTaskParametersFFI_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeTaskParametersFFI_lower(_ value: TaskParametersFfi) -> RustBuffer {
     return FfiConverterTypeTaskParametersFFI.lower(value)
+}
+
+
+/**
+ * Execution plan for UI display
+ */
+public struct TaskPlan {
+    /**
+     * Unique plan identifier
+     */
+    public var id: String
+    /**
+     * Human-readable plan title
+     */
+    public var title: String
+    /**
+     * List of tasks in the plan
+     */
+    public var tasks: [TaskInfo]
+    /**
+     * Whether user confirmation is required before execution
+     */
+    public var requiresConfirmation: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Unique plan identifier
+         */id: String, 
+        /**
+         * Human-readable plan title
+         */title: String, 
+        /**
+         * List of tasks in the plan
+         */tasks: [TaskInfo], 
+        /**
+         * Whether user confirmation is required before execution
+         */requiresConfirmation: Bool) {
+        self.id = id
+        self.title = title
+        self.tasks = tasks
+        self.requiresConfirmation = requiresConfirmation
+    }
+}
+
+
+
+extension TaskPlan: Equatable, Hashable {
+    public static func ==(lhs: TaskPlan, rhs: TaskPlan) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.title != rhs.title {
+            return false
+        }
+        if lhs.tasks != rhs.tasks {
+            return false
+        }
+        if lhs.requiresConfirmation != rhs.requiresConfirmation {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(title)
+        hasher.combine(tasks)
+        hasher.combine(requiresConfirmation)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTaskPlan: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskPlan {
+        return
+            try TaskPlan(
+                id: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                tasks: FfiConverterSequenceTypeTaskInfo.read(from: &buf), 
+                requiresConfirmation: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TaskPlan, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterSequenceTypeTaskInfo.write(value.tasks, into: &buf)
+        FfiConverterBool.write(value.requiresConfirmation, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskPlan_lift(_ buf: RustBuffer) throws -> TaskPlan {
+    return try FfiConverterTypeTaskPlan.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskPlan_lower(_ value: TaskPlan) -> RustBuffer {
+    return FfiConverterTypeTaskPlan.lower(value)
 }
 
 
@@ -10440,6 +11322,242 @@ extension AetherFfiError: Foundation.LocalizedError {
         String(reflecting: self)
     }
 }
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum BudgetEnforcementFfi {
+    
+    case warnOnly
+    case softBlock
+    case hardBlock
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBudgetEnforcementFFI: FfiConverterRustBuffer {
+    typealias SwiftType = BudgetEnforcementFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BudgetEnforcementFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .warnOnly
+        
+        case 2: return .softBlock
+        
+        case 3: return .hardBlock
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BudgetEnforcementFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .warnOnly:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .softBlock:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .hardBlock:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetEnforcementFFI_lift(_ buf: RustBuffer) throws -> BudgetEnforcementFfi {
+    return try FfiConverterTypeBudgetEnforcementFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetEnforcementFFI_lower(_ value: BudgetEnforcementFfi) -> RustBuffer {
+    return FfiConverterTypeBudgetEnforcementFFI.lower(value)
+}
+
+
+
+extension BudgetEnforcementFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum BudgetPeriodFfi {
+    
+    case lifetime
+    case daily
+    case weekly
+    case monthly
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBudgetPeriodFFI: FfiConverterRustBuffer {
+    typealias SwiftType = BudgetPeriodFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BudgetPeriodFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .lifetime
+        
+        case 2: return .daily
+        
+        case 3: return .weekly
+        
+        case 4: return .monthly
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BudgetPeriodFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .lifetime:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .daily:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .weekly:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .monthly:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetPeriodFFI_lift(_ buf: RustBuffer) throws -> BudgetPeriodFfi {
+    return try FfiConverterTypeBudgetPeriodFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetPeriodFFI_lower(_ value: BudgetPeriodFfi) -> RustBuffer {
+    return FfiConverterTypeBudgetPeriodFFI.lower(value)
+}
+
+
+
+extension BudgetPeriodFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum BudgetScopeFfi {
+    
+    case global
+    case project(id: String
+    )
+    case session(id: String
+    )
+    case model(id: String
+    )
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBudgetScopeFFI: FfiConverterRustBuffer {
+    typealias SwiftType = BudgetScopeFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BudgetScopeFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .global
+        
+        case 2: return .project(id: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .session(id: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .model(id: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BudgetScopeFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .global:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .project(id):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(id, into: &buf)
+            
+        
+        case let .session(id):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(id, into: &buf)
+            
+        
+        case let .model(id):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(id, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetScopeFFI_lift(_ buf: RustBuffer) throws -> BudgetScopeFfi {
+    return try FfiConverterTypeBudgetScopeFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBudgetScopeFFI_lower(_ value: BudgetScopeFfi) -> RustBuffer {
+    return FfiConverterTypeBudgetScopeFFI.lower(value)
+}
+
+
+
+extension BudgetScopeFfi: Equatable, Hashable {}
+
+
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
@@ -11975,6 +13093,98 @@ extension ModelCostTierFfi: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum ModelHealthStatusFfi {
+    
+    case healthy
+    case degraded
+    case unhealthy
+    case circuitOpen
+    case halfOpen
+    case unknown
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeModelHealthStatusFFI: FfiConverterRustBuffer {
+    typealias SwiftType = ModelHealthStatusFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelHealthStatusFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .healthy
+        
+        case 2: return .degraded
+        
+        case 3: return .unhealthy
+        
+        case 4: return .circuitOpen
+        
+        case 5: return .halfOpen
+        
+        case 6: return .unknown
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ModelHealthStatusFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .healthy:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .degraded:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .unhealthy:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .circuitOpen:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .halfOpen:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(6))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelHealthStatusFFI_lift(_ buf: RustBuffer) throws -> ModelHealthStatusFfi {
+    return try FfiConverterTypeModelHealthStatusFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelHealthStatusFFI_lower(_ value: ModelHealthStatusFfi) -> RustBuffer {
+    return FfiConverterTypeModelHealthStatusFFI.lower(value)
+}
+
+
+
+extension ModelHealthStatusFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum ModelLatencyTierFfi {
     
     case fast
@@ -12305,11 +13515,23 @@ public enum TaskCategoryFfi {
     
     case general
     case fileOrganize
+    case fileOperation
     case fileTransfer
     case fileCleanup
     case codeExecution
+    case appLaunch
     case appAutomation
+    case documentGeneration
     case documentGenerate
+    case imageGeneration
+    case videoGeneration
+    case audioGeneration
+    case speechGeneration
+    case webSearch
+    case webFetch
+    case systemInfo
+    case mediaDownload
+    case textProcessing
     case dataProcess
 }
 
@@ -12328,17 +13550,41 @@ public struct FfiConverterTypeTaskCategoryFFI: FfiConverterRustBuffer {
         
         case 2: return .fileOrganize
         
-        case 3: return .fileTransfer
+        case 3: return .fileOperation
         
-        case 4: return .fileCleanup
+        case 4: return .fileTransfer
         
-        case 5: return .codeExecution
+        case 5: return .fileCleanup
         
-        case 6: return .appAutomation
+        case 6: return .codeExecution
         
-        case 7: return .documentGenerate
+        case 7: return .appLaunch
         
-        case 8: return .dataProcess
+        case 8: return .appAutomation
+        
+        case 9: return .documentGeneration
+        
+        case 10: return .documentGenerate
+        
+        case 11: return .imageGeneration
+        
+        case 12: return .videoGeneration
+        
+        case 13: return .audioGeneration
+        
+        case 14: return .speechGeneration
+        
+        case 15: return .webSearch
+        
+        case 16: return .webFetch
+        
+        case 17: return .systemInfo
+        
+        case 18: return .mediaDownload
+        
+        case 19: return .textProcessing
+        
+        case 20: return .dataProcess
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -12356,28 +13602,76 @@ public struct FfiConverterTypeTaskCategoryFFI: FfiConverterRustBuffer {
             writeInt(&buf, Int32(2))
         
         
-        case .fileTransfer:
+        case .fileOperation:
             writeInt(&buf, Int32(3))
         
         
-        case .fileCleanup:
+        case .fileTransfer:
             writeInt(&buf, Int32(4))
         
         
-        case .codeExecution:
+        case .fileCleanup:
             writeInt(&buf, Int32(5))
         
         
-        case .appAutomation:
+        case .codeExecution:
             writeInt(&buf, Int32(6))
         
         
-        case .documentGenerate:
+        case .appLaunch:
             writeInt(&buf, Int32(7))
         
         
-        case .dataProcess:
+        case .appAutomation:
             writeInt(&buf, Int32(8))
+        
+        
+        case .documentGeneration:
+            writeInt(&buf, Int32(9))
+        
+        
+        case .documentGenerate:
+            writeInt(&buf, Int32(10))
+        
+        
+        case .imageGeneration:
+            writeInt(&buf, Int32(11))
+        
+        
+        case .videoGeneration:
+            writeInt(&buf, Int32(12))
+        
+        
+        case .audioGeneration:
+            writeInt(&buf, Int32(13))
+        
+        
+        case .speechGeneration:
+            writeInt(&buf, Int32(14))
+        
+        
+        case .webSearch:
+            writeInt(&buf, Int32(15))
+        
+        
+        case .webFetch:
+            writeInt(&buf, Int32(16))
+        
+        
+        case .systemInfo:
+            writeInt(&buf, Int32(17))
+        
+        
+        case .mediaDownload:
+            writeInt(&buf, Int32(18))
+        
+        
+        case .textProcessing:
+            writeInt(&buf, Int32(19))
+        
+        
+        case .dataProcess:
+            writeInt(&buf, Int32(20))
         
         }
     }
@@ -12401,6 +13695,109 @@ public func FfiConverterTypeTaskCategoryFFI_lower(_ value: TaskCategoryFfi) -> R
 
 
 extension TaskCategoryFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Task status for UI display
+ */
+
+public enum TaskDisplayStatus {
+    
+    /**
+     * Task is waiting to be executed
+     */
+    case pending
+    /**
+     * Task is currently running
+     */
+    case running
+    /**
+     * Task completed successfully
+     */
+    case completed
+    /**
+     * Task failed
+     */
+    case failed
+    /**
+     * Task was cancelled
+     */
+    case cancelled
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTaskDisplayStatus: FfiConverterRustBuffer {
+    typealias SwiftType = TaskDisplayStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskDisplayStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .pending
+        
+        case 2: return .running
+        
+        case 3: return .completed
+        
+        case 4: return .failed
+        
+        case 5: return .cancelled
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: TaskDisplayStatus, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .pending:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .running:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .completed:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskDisplayStatus_lift(_ buf: RustBuffer) throws -> TaskDisplayStatus {
+    return try FfiConverterTypeTaskDisplayStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskDisplayStatus_lower(_ value: TaskDisplayStatus) -> RustBuffer {
+    return FfiConverterTypeTaskDisplayStatus.lower(value)
+}
+
+
+
+extension TaskDisplayStatus: Equatable, Hashable {}
 
 
 
@@ -12562,6 +13959,79 @@ extension UserConfirmationDecision: Equatable, Hashable {}
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * User's decision on whether to proceed with execution
+ */
+
+public enum UserDecision {
+    
+    /**
+     * User confirmed, proceed with execution
+     */
+    case confirmed
+    /**
+     * User cancelled, abort execution
+     */
+    case cancelled
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUserDecision: FfiConverterRustBuffer {
+    typealias SwiftType = UserDecision
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UserDecision {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .confirmed
+        
+        case 2: return .cancelled
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: UserDecision, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .confirmed:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUserDecision_lift(_ buf: RustBuffer) throws -> UserDecision {
+    return try FfiConverterTypeUserDecision.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUserDecision_lower(_ value: UserDecision) -> RustBuffer {
+    return FfiConverterTypeUserDecision.lower(value)
+}
+
+
+
+extension UserDecision: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum VisionTask {
     
@@ -12691,7 +14161,6 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
     nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
         onThinking: { (
             uniffiHandle: UInt64,
@@ -13213,7 +14682,6 @@ private func uniffiCallbackInitAetherEventHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
-    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
     nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
 }
 
@@ -13270,7 +14738,6 @@ fileprivate struct UniffiCallbackInterfaceCoworkProgressHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
     nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceCoworkProgressHandler = UniffiVTableCallbackInterfaceCoworkProgressHandler(
         onProgressEvent: { (
             uniffiHandle: UInt64,
@@ -13314,7 +14781,6 @@ private func uniffiCallbackInitCoworkProgressHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceCoworkProgressHandler {
-    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
     nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<CoworkProgressHandler>()
 }
 
@@ -13423,7 +14889,6 @@ fileprivate struct UniffiCallbackInterfaceInitProgressHandlerFFI {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
     nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
         onPhaseStarted: { (
             uniffiHandle: UInt64,
@@ -13579,7 +15044,6 @@ private func uniffiCallbackInitInitProgressHandlerFFI() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceInitProgressHandlerFfi {
-    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
     nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
 }
 
@@ -13791,6 +15255,30 @@ fileprivate struct FfiConverterOptionTypeBehaviorConfig: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeBudgetLimitStatusFFI: FfiConverterRustBuffer {
+    typealias SwiftType = BudgetLimitStatusFfi?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBudgetLimitStatusFFI.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBudgetLimitStatusFFI.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeGenerationParamsFFI: FfiConverterRustBuffer {
     typealias SwiftType = GenerationParamsFfi?
 
@@ -13855,6 +15343,30 @@ fileprivate struct FfiConverterOptionTypeMcpServerConfig: FfiConverterRustBuffer
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeMcpServerConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeModelHealthSummaryFFI: FfiConverterRustBuffer {
+    typealias SwiftType = ModelHealthSummaryFfi?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeModelHealthSummaryFFI.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeModelHealthSummaryFFI.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -14195,6 +15707,31 @@ fileprivate struct FfiConverterSequenceTypeAppMemoryInfo: FfiConverterRustBuffer
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeAppMemoryInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeBudgetLimitStatusFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [BudgetLimitStatusFfi]
+
+    public static func write(_ value: [BudgetLimitStatusFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBudgetLimitStatusFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BudgetLimitStatusFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BudgetLimitStatusFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBudgetLimitStatusFFI.read(from: &buf))
         }
         return seq
     }
@@ -14578,6 +16115,31 @@ fileprivate struct FfiConverterSequenceTypeMemoryItem: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeModelHealthSummaryFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [ModelHealthSummaryFfi]
+
+    public static func write(_ value: [ModelHealthSummaryFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeModelHealthSummaryFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ModelHealthSummaryFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ModelHealthSummaryFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeModelHealthSummaryFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeModelProfileFFI: FfiConverterRustBuffer {
     typealias SwiftType = [ModelProfileFfi]
 
@@ -14820,6 +16382,31 @@ fileprivate struct FfiConverterSequenceTypeSkillInfo: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeSkillInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeTaskInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [TaskInfo]
+
+    public static func write(_ value: [TaskInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTaskInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TaskInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TaskInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeTaskInfo.read(from: &buf))
         }
         return seq
     }
@@ -15072,7 +16659,6 @@ private enum InitializationResult {
 }
 // Use a global variable to perform the versioning checks. Swift ensures that
 // the code inside is only computed once.
-// nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
 nonisolated(unsafe) private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
@@ -15141,6 +16727,15 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_cowork_execute() != 42847) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_budget_limit() != 29691) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_budget_status() != 53776) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_budget_status_for_scope() != 65308) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_get_code_exec_config() != 38916) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -15148,6 +16743,15 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_get_file_ops_config() != 14218) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_health_statistics() != 25413) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_model_health() != 48243) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_model_health_summaries() != 40865) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_get_model_profiles() != 55034) {
