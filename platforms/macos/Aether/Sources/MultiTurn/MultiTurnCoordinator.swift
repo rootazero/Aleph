@@ -392,9 +392,21 @@ final class MultiTurnCoordinator {
         let isFirstMessage = pendingIsFirstMessage
         clearPendingContext()
 
-        // Route to existing response handler
         DispatchQueue.main.async { [weak self] in
-            self?.handleAIResponse(response, topic: topic, userInput: userInput, isFirstMessage: isFirstMessage)
+            guard let self = self else { return }
+
+            // If streaming was already in progress, just finish it
+            if self.unifiedWindow.viewModel.streamingMessageId != nil {
+                // Update with final response if different from streamed content
+                if !response.isEmpty && response != self.unifiedWindow.viewModel.streamingText {
+                    self.unifiedWindow.viewModel.updateStreamingText(response)
+                }
+                self.unifiedWindow.viewModel.finishStreamingMessage()
+                self.finishResponse(topic: topic, userInput: userInput, aiResponse: response, isFirstMessage: isFirstMessage)
+            } else {
+                // No streaming in progress, use normal response handling (with typewriter)
+                self.handleAIResponse(response, topic: topic, userInput: userInput, isFirstMessage: isFirstMessage)
+            }
         }
     }
 
@@ -406,7 +418,47 @@ final class MultiTurnCoordinator {
         clearPendingContext()
 
         DispatchQueue.main.async { [weak self] in
-            self?.unifiedWindow.viewModel.setError(message)
+            guard let self = self else { return }
+
+            // If streaming was in progress, finish it with the error appended
+            if self.unifiedWindow.viewModel.streamingMessageId != nil {
+                let currentText = self.unifiedWindow.viewModel.streamingText
+                let errorSuffix = currentText.isEmpty ? "❌ \(message)" : "\n\n❌ \(message)"
+                self.unifiedWindow.viewModel.updateStreamingText(currentText + errorSuffix)
+                self.unifiedWindow.viewModel.finishStreamingMessage()
+            } else {
+                self.unifiedWindow.viewModel.setError(message)
+            }
+        }
+    }
+
+    /// Handle streaming chunk
+    /// Called by EventHandler.onStreamChunk() for real-time response streaming
+    func handleStreamChunk(text: String) {
+        // Only process if we have pending context
+        guard pendingTopic != nil else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            // Start streaming if not already started
+            if self.unifiedWindow.viewModel.streamingMessageId == nil {
+                _ = self.unifiedWindow.viewModel.startStreamingMessage()
+                print("[MultiTurnCoordinator] Started streaming message")
+            }
+
+            // Update streaming text directly (no typewriter in streaming mode)
+            self.unifiedWindow.viewModel.updateStreamingText(text)
+        }
+    }
+
+    /// Handle thinking state
+    /// Called by EventHandler.onThinking() when AI starts processing
+    func handleThinking() {
+        guard pendingTopic != nil else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.unifiedWindow.viewModel.setLoading(true)
         }
     }
 

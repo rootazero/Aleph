@@ -100,9 +100,12 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Skip halo in multi-turn mode
-            guard !self.isInMultiTurnMode else {
-                print("[EventHandler] Skipping thinking state (multi-turn mode)")
+
+            // Forward to MultiTurnCoordinator in multi-turn mode
+            if self.isInMultiTurnMode {
+                if MultiTurnCoordinator.shared.isProcessingPending {
+                    MultiTurnCoordinator.shared.handleThinking()
+                }
                 return
             }
 
@@ -164,8 +167,14 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Skip halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
+
+            // Forward to MultiTurnCoordinator in multi-turn mode
+            if self.isInMultiTurnMode {
+                if MultiTurnCoordinator.shared.isProcessingPending {
+                    MultiTurnCoordinator.shared.handleStreamChunk(text: text)
+                }
+                return
+            }
 
             self.haloWindow?.updateState(.processing(streamingText: text))
         }
