@@ -189,6 +189,9 @@ pub use crate::dispatcher::{
     PendingConfirmationStore, ToolCategory, ToolConfirmation, ToolDefinition, ToolRegistry,
     ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
     UserConfirmationDecision,
+    // DAG execution callback types
+    TaskDisplayStatus, TaskInfo, TaskPlan as DagTaskPlan, UserDecision as DagUserDecision,
+    NoOpCallback as DagNoOpCallback, ExecutionCallback,
 };
 pub use crate::intent::{
     // Core classifier types
