@@ -151,11 +151,13 @@ impl AetherCore {
 
         // Clone generation config for model aliases
         // Clone routing rules for slash command parsing
-        let (generation_config, routing_rules) = {
+        // Clone orchestrator config for three-layer control switch
+        let (generation_config, routing_rules, use_three_layer_control) = {
             let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
             (
                 full_config.generation.clone(),
                 full_config.rules.clone(),
+                full_config.orchestrator.use_three_layer_control,
             )
         };
 
@@ -177,7 +179,23 @@ impl AetherCore {
             handler.on_thinking();
 
             // ================================================================
-            // RequestOrchestrator-based processing (Unified Path)
+            // Orchestrator Selection (Config-based routing)
+            // ================================================================
+            // Check if three-layer control is enabled
+            if use_three_layer_control {
+                // New path: ThreeLayerOrchestrator (Phase 4+ implementation)
+                // Currently returns placeholder - full implementation pending
+                info!("Three-layer control enabled but not yet fully implemented");
+                handler.on_error(
+                    "ThreeLayerOrchestrator is not yet fully implemented. \
+                     Set orchestrator.use_three_layer_control = false to use legacy orchestrator."
+                        .to_string(),
+                );
+                return;
+            }
+
+            // ================================================================
+            // RequestOrchestrator-based processing (Legacy Path)
             // ================================================================
             // All processing goes through the orchestrator which handles:
             // - Builtin commands (/screenshot, /search, etc.)
@@ -185,7 +203,8 @@ impl AetherCore {
             // - MCP commands (/mcp_server)
             // - Custom commands (from routing rules)
             // - Natural language tasks (Execute or Converse mode)
-            info!("Processing via RequestOrchestrator");
+            info!("Processing via RequestOrchestrator (legacy)");
+            #[allow(deprecated)]
             process_with_orchestrator(
                 &runtime,
                 &input,
