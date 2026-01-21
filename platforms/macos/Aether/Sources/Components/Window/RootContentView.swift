@@ -142,6 +142,8 @@ struct RootContentView: View {
             return L("settings.mcp.title")
         case .skills:
             return L("settings.skills.title")
+        case .plugins:
+            return L("settings.plugins.title")
         case .agent:
             return L("settings.agent.title")
         case .policies:
@@ -172,6 +174,8 @@ struct RootContentView: View {
             return L("settings.mcp.description")
         case .skills:
             return L("settings.skills.description")
+        case .plugins:
+            return L("settings.plugins.description")
         case .agent:
             return L("settings.agent.description")
         case .policies:
@@ -298,6 +302,15 @@ struct RootContentView: View {
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Skills management requires AetherCore initialization")
+            }
+
+        case .plugins:
+            // core used for plugins management
+            if let core = core {
+                PluginsSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
+                    .id(configReloadTrigger)
+            } else {
+                placeholderView("Plugins management requires AetherCore initialization")
             }
 
         case .agent:

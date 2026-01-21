@@ -489,6 +489,34 @@
 "settings.skills.zip_description" = "Select a ZIP file containing skills (each with SKILL.md)";
 "settings.skills.zip_no_skills" = "No valid skills found in the ZIP file";
 
+// MARK: - Settings Window - Plugins Tab
+"settings.plugins.title" = "Plugins";
+"settings.plugins.description" = "Install and manage Claude Code compatible plugins. Plugins can include skills, agents, hooks, and MCP servers.";
+"settings.plugins.installed_plugins" = "Installed Plugins";
+"settings.plugins.install" = "Install Plugin";
+"settings.plugins.install_plugin" = "Install Plugin";
+"settings.plugins.install_first" = "Install Your First Plugin";
+"settings.plugins.loading" = "Loading plugins...";
+"settings.plugins.empty_title" = "No Plugins Installed";
+"settings.plugins.empty_description" = "Plugins extend Aether's capabilities with skills, agents, hooks, and MCP servers.\nInstall plugins from GitHub repositories or ZIP files.";
+"settings.plugins.git_url" = "Git Repository URL";
+"settings.plugins.git_url_placeholder" = "https://github.com/user/plugin-repo";
+"settings.plugins.git_url_example" = "Example: https://github.com/user/my-plugin.git";
+"settings.plugins.delete" = "Delete Plugin";
+"settings.plugins.delete_plugin" = "Delete Plugin";
+"settings.plugins.delete_plugin_message" = "Are you sure you want to delete the plugin \"%@\"? This action cannot be undone.";
+"settings.plugins.delete_failed" = "Failed to delete plugin: %@";
+"settings.plugins.install_failed" = "Failed to install plugin: %@";
+"settings.plugins.toggle_failed" = "Failed to toggle plugin: %@";
+"settings.plugins.install_method_git" = "Git Repository";
+"settings.plugins.install_method_zip" = "ZIP File";
+"settings.plugins.zip_file" = "ZIP File";
+"settings.plugins.no_file_selected" = "No file selected";
+"settings.plugins.browse" = "Browse...";
+"settings.plugins.select_zip" = "Select ZIP File";
+"settings.plugins.zip_description" = "Select a ZIP file containing plugins (each with .claude-plugin/plugin.json)";
+"settings.plugins.zip_no_plugins" = "No valid plugins found in the ZIP file";
+
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "Memory Management";
 "settings.memory.description" = "Aether remembers past interactions to provide context-aware responses. All data is stored locally and never leaves your device.";

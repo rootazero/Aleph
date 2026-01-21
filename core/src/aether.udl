@@ -1163,6 +1163,54 @@ interface AetherCore {
 
     void refresh_skills();
 
+    // PLUGINS MANAGEMENT (Claude Code Compatible)
+    // List all installed plugins
+    [Throws=AetherFfiError]
+    sequence<PluginInfoFFI> list_plugins();
+
+    // Enable a plugin
+    [Throws=AetherFfiError]
+    void enable_plugin(string name);
+
+    // Disable a plugin
+    [Throws=AetherFfiError]
+    void disable_plugin(string name);
+
+    // Load a plugin from a custom path (for development)
+    [Throws=AetherFfiError]
+    PluginInfoFFI load_plugin_from_path(string path);
+
+    // List all skills from enabled plugins
+    [Throws=AetherFfiError]
+    sequence<PluginSkillFFI> list_plugin_skills();
+
+    // Execute a plugin skill
+    [Throws=AetherFfiError]
+    string execute_plugin_skill(string plugin_name, string skill_name, string arguments);
+
+    // Get the plugins directory path
+    string get_plugins_dir();
+
+    // Refresh plugins (reload from disk)
+    [Throws=AetherFfiError]
+    u32 refresh_plugins();
+
+    // Get skill instructions for prompt injection
+    [Throws=AetherFfiError]
+    string get_plugin_skill_instructions();
+
+    // Install a plugin from a Git repository URL
+    [Throws=AetherFfiError]
+    PluginInfoFFI install_plugin_from_git(string url);
+
+    // Install plugins from a ZIP file
+    [Throws=AetherFfiError]
+    sequence<string> install_plugins_from_zip(string zip_path);
+
+    // Uninstall a plugin
+    [Throws=AetherFfiError]
+    void uninstall_plugin(string name);
+
     // TOOL REGISTRY (Config Management)
     sequence<UnifiedToolInfo> list_builtin_tools();
 
@@ -1445,6 +1493,32 @@ dictionary ToolInfoFFI {
     string description;
     string source;
 };
+
+// ===== PLUGIN SYSTEM TYPES (Claude Code Compatible) =====
+
+// Plugin information for FFI/UI display
+dictionary PluginInfoFFI {
+    string name;              // Plugin name
+    string version;           // Plugin version
+    string description;       // Plugin description
+    boolean enabled;          // Whether plugin is enabled
+    string path;              // Plugin root path
+    u32 skills_count;         // Number of skills
+    u32 agents_count;         // Number of agents
+    u32 hooks_count;          // Number of hook events
+    u32 mcp_servers_count;    // Number of MCP servers
+};
+
+// Plugin skill information for FFI/UI display
+dictionary PluginSkillFFI {
+    string qualified_name;    // Fully qualified skill name (plugin:skill)
+    string plugin_name;       // Plugin name
+    string skill_name;        // Skill name
+    string description;       // Skill description
+    boolean is_command;       // Whether this is a command (user-triggered) or skill (auto-invocable)
+};
+
+// ===== END PLUGIN SYSTEM TYPES =====
 
 dictionary MemoryItem {
     string id;

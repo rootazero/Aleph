@@ -82,6 +82,7 @@ pub mod intent; // NEW: Smart intent detection for conversation flow
 pub mod logging;
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod memory;
+pub mod plugins; // NEW: Claude Code compatible plugin system
 pub mod metrics;
 pub mod three_layer; // Three-layer control architecture (Orchestrator/Skill-DAG/Tools)
 pub mod payload; // Structured context protocol with capability support
@@ -278,6 +279,18 @@ pub use crate::metrics::StageTimer;
 pub use crate::providers::AiProvider;
 pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
+// Plugin system exports
+pub use crate::plugins::{
+    // Core types
+    default_plugins_dir, default_state_path, HookAction, HookEvent, LoadedPlugin, PluginAgent,
+    PluginError, PluginHooksConfig, PluginInfo, PluginLoader, PluginManager, PluginManifest,
+    PluginMcpConfig, PluginMcpServer, PluginRegistry, PluginResult, PluginScanner, PluginSkill,
+    PluginState, PluginStateFile, SkillType,
+    // Integration utilities
+    build_skill_instructions, build_skill_prompt, plugin_agent_to_agent_def,
+    register_plugin_agents, resolve_mcp_command, HookContext, HookExecutor, HookResult,
+    PluginHookHandler,
+};
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::utils::pii;
 pub use crate::vision::{
@@ -494,6 +507,9 @@ pub use crate::uniffi_core::{
     GenerationTypeFFI,
     MemoryItem,
     ProcessOptions,
+    // Plugin FFI types
+    PluginInfoFFI,
+    PluginSkillFFI,
     // Runtime FFI types
     RuntimeInfo,
     RuntimeUpdateInfo,

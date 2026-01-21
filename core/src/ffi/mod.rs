@@ -24,6 +24,7 @@ mod init;
 mod mcp;
 mod memory;
 pub mod plan_confirmation;
+mod plugins;
 mod processing;
 mod runtime;
 mod session;
@@ -55,6 +56,7 @@ pub use self::init::{
     needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI,
 };
 pub use self::processing::ProcessOptions;
+pub use self::plugins::{PluginInfoFFI, PluginSkillFFI};
 pub use self::runtime::{RuntimeInfo, RuntimeUpdateInfo};
 pub use self::session::SessionSummary;
 

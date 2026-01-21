@@ -46,6 +46,9 @@ pub use crate::ffi::{
     GenerationTypeFFI,
     // Memory types
     MemoryItem,
+    // Plugin types
+    PluginInfoFFI,
+    PluginSkillFFI,
     // Processing types
     ProcessOptions,
     // Runtime types

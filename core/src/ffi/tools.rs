@@ -154,8 +154,11 @@ impl AetherCore {
     }
 
     /// List builtin tools only
+    ///
+    /// Returns the list of builtin tools that matches BuiltinToolRegistry.
+    /// This list MUST be kept in sync with executor/builtin_registry.rs.
     pub fn list_builtin_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
-        // Return static builtin tools
+        // Return static builtin tools - synced with BuiltinToolRegistry
         vec![
             crate::dispatcher::UnifiedToolInfo {
                 id: "builtin:search".to_string(),
@@ -177,10 +180,10 @@ impl AetherCore {
                 has_subtools: false,
             },
             crate::dispatcher::UnifiedToolInfo {
-                id: "builtin:webfetch".to_string(),
-                name: "webfetch".to_string(),
+                id: "builtin:web_fetch".to_string(),
+                name: "web_fetch".to_string(),
                 display_name: "Web Fetch".to_string(),
-                description: "Fetch web page content".to_string(),
+                description: "Fetch and read content from a URL".to_string(),
                 source_type: crate::dispatcher::ToolSourceType::Builtin,
                 source_id: None,
                 parameters_schema: None,
@@ -189,8 +192,8 @@ impl AetherCore {
                 safety_level: "Read Only".to_string(),
                 service_name: None,
                 icon: Some("globe".to_string()),
-                usage: Some("/webfetch <url>".to_string()),
-                localization_key: Some("tool.webfetch".to_string()),
+                usage: Some("/web_fetch <url>".to_string()),
+                localization_key: Some("tool.web_fetch".to_string()),
                 is_builtin: true,
                 sort_order: 20,
                 has_subtools: false,
@@ -199,7 +202,7 @@ impl AetherCore {
                 id: "builtin:youtube".to_string(),
                 name: "youtube".to_string(),
                 display_name: "YouTube".to_string(),
-                description: "Extract YouTube video transcripts".to_string(),
+                description: "Get information about YouTube videos".to_string(),
                 source_type: crate::dispatcher::ToolSourceType::Builtin,
                 source_id: None,
                 parameters_schema: None,
@@ -215,23 +218,61 @@ impl AetherCore {
                 has_subtools: false,
             },
             crate::dispatcher::UnifiedToolInfo {
-                id: "builtin:agent".to_string(),
-                name: "agent".to_string(),
-                display_name: "Agent".to_string(),
-                description: "Execute task in Agent mode (auto plan + confirm + execute)"
+                id: "builtin:file_ops".to_string(),
+                name: "file_ops".to_string(),
+                display_name: "File Operations".to_string(),
+                description: "File system operations - list, read, write, move, copy, delete, etc."
                     .to_string(),
                 source_type: crate::dispatcher::ToolSourceType::Builtin,
                 source_id: None,
                 parameters_schema: None,
                 is_active: true,
-                requires_confirmation: false,
+                requires_confirmation: true,
                 safety_level: "Needs Confirmation".to_string(),
                 service_name: None,
-                icon: Some("gearshape.2".to_string()),
-                usage: Some("/agent <task description>".to_string()),
-                localization_key: Some("tool.agent".to_string()),
+                icon: Some("folder".to_string()),
+                usage: Some("/file_ops <operation> <path>".to_string()),
+                localization_key: Some("tool.file_ops".to_string()),
                 is_builtin: true,
                 sort_order: 40,
+                has_subtools: true,
+            },
+            crate::dispatcher::UnifiedToolInfo {
+                id: "builtin:code_exec".to_string(),
+                name: "code_exec".to_string(),
+                display_name: "Code Execution".to_string(),
+                description: "Execute code in various programming languages".to_string(),
+                source_type: crate::dispatcher::ToolSourceType::Builtin,
+                source_id: None,
+                parameters_schema: None,
+                is_active: true,
+                requires_confirmation: true,
+                safety_level: "Needs Confirmation".to_string(),
+                service_name: None,
+                icon: Some("terminal".to_string()),
+                usage: Some("/code_exec <language> <code>".to_string()),
+                localization_key: Some("tool.code_exec".to_string()),
+                is_builtin: true,
+                sort_order: 50,
+                has_subtools: false,
+            },
+            crate::dispatcher::UnifiedToolInfo {
+                id: "builtin:pdf_generate".to_string(),
+                name: "pdf_generate".to_string(),
+                display_name: "PDF Generate".to_string(),
+                description: "Generate PDF documents from various formats".to_string(),
+                source_type: crate::dispatcher::ToolSourceType::Builtin,
+                source_id: None,
+                parameters_schema: None,
+                is_active: true,
+                requires_confirmation: false,
+                safety_level: "Read Only".to_string(),
+                service_name: None,
+                icon: Some("doc.richtext".to_string()),
+                usage: Some("/pdf_generate <content>".to_string()),
+                localization_key: Some("tool.pdf_generate".to_string()),
+                is_builtin: true,
+                sort_order: 60,
                 has_subtools: false,
             },
         ]

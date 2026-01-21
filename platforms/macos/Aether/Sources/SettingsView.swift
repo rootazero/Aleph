@@ -22,6 +22,7 @@ enum SettingsTab: Hashable {
     case search
     case mcp
     case skills
+    case plugins     // Claude Code compatible plugins
     case agent
     case policies
 }

@@ -684,7 +684,13 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func deleteSkill(skillId: String) throws 
     
+    func disablePlugin(name: String) throws 
+    
     func editImage(providerName: String, prompt: String, params: GenerationParamsFfi) throws  -> GenerationOutputFfi
+    
+    func enablePlugin(name: String) throws 
+    
+    func executePluginSkill(pluginName: String, skillName: String, arguments: String) throws  -> String
     
     func exportMcpConfigJson()  -> String
     
@@ -734,6 +740,10 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getNpmPath()  -> String?
     
+    func getPluginSkillInstructions() throws  -> String
+    
+    func getPluginsDir()  -> String
+    
     func getProvidersForType(generationType: GenerationTypeFfi)  -> [GenerationProviderInfoFfi]
     
     func getPythonPath()  -> String?
@@ -745,6 +755,10 @@ public protocol AetherCoreProtocol : AnyObject {
     func getYtdlpPath()  -> String?
     
     func importMcpConfigJson(json: String) throws 
+    
+    func installPluginFromGit(url: String) throws  -> PluginInfoFfi
+    
+    func installPluginsFromZip(zipPath: String) throws  -> [String]
     
     func installRuntime(runtimeId: String) throws 
     
@@ -762,6 +776,10 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func listMcpServers()  -> [McpServerConfig]
     
+    func listPluginSkills() throws  -> [PluginSkillFfi]
+    
+    func listPlugins() throws  -> [PluginInfoFfi]
+    
     func listRecentSessions(limit: UInt32)  -> [SessionSummary]
     
     func listRuntimes()  -> [RuntimeInfo]
@@ -772,9 +790,13 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func loadConfig() throws  -> FullConfig
     
+    func loadPluginFromPath(path: String) throws  -> PluginInfoFfi
+    
     func process(input: String, options: ProcessOptions?) throws 
     
     func providerSupportsImageEditing(providerName: String)  -> Bool
+    
+    func refreshPlugins() throws  -> UInt32
     
     func refreshSkills() 
     
@@ -797,6 +819,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func testSearchProviderWithConfig(config: SearchProviderTestConfig) throws  -> ProviderTestResult
     
     func triggerCompression() throws  -> CompressionResult
+    
+    func uninstallPlugin(name: String) throws 
     
     func updateBehavior(behavior: BehaviorConfig) throws 
     
@@ -1203,12 +1227,36 @@ open func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverte
 }
 }
     
+open func disablePlugin(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_disable_plugin(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),$0
+    )
+}
+}
+    
 open func editImage(providerName: String, prompt: String, params: GenerationParamsFfi)throws  -> GenerationOutputFfi {
     return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_edit_image(self.uniffiClonePointer(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(prompt),
         FfiConverterTypeGenerationParamsFFI.lower(params),$0
+    )
+})
+}
+    
+open func enablePlugin(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_enable_plugin(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),$0
+    )
+}
+}
+    
+open func executePluginSkill(pluginName: String, skillName: String, arguments: String)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_execute_plugin_skill(self.uniffiClonePointer(),
+        FfiConverterString.lower(pluginName),
+        FfiConverterString.lower(skillName),
+        FfiConverterString.lower(arguments),$0
     )
 })
 }
@@ -1405,6 +1453,20 @@ open func getNpmPath() -> String? {
 })
 }
     
+open func getPluginSkillInstructions()throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_get_plugin_skill_instructions(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getPluginsDir() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_plugins_dir(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func getProvidersForType(generationType: GenerationTypeFfi) -> [GenerationProviderInfoFfi] {
     return try!  FfiConverterSequenceTypeGenerationProviderInfoFFI.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_get_providers_for_type(self.uniffiClonePointer(),
@@ -1446,6 +1508,22 @@ open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiCon
         FfiConverterString.lower(json),$0
     )
 }
+}
+    
+open func installPluginFromGit(url: String)throws  -> PluginInfoFfi {
+    return try  FfiConverterTypePluginInfoFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_install_plugin_from_git(self.uniffiClonePointer(),
+        FfiConverterString.lower(url),$0
+    )
+})
+}
+    
+open func installPluginsFromZip(zipPath: String)throws  -> [String] {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_install_plugins_from_zip(self.uniffiClonePointer(),
+        FfiConverterString.lower(zipPath),$0
+    )
+})
 }
     
 open func installRuntime(runtimeId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
@@ -1507,6 +1585,20 @@ open func listMcpServers() -> [McpServerConfig] {
 })
 }
     
+open func listPluginSkills()throws  -> [PluginSkillFfi] {
+    return try  FfiConverterSequenceTypePluginSkillFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_list_plugin_skills(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listPlugins()throws  -> [PluginInfoFfi] {
+    return try  FfiConverterSequenceTypePluginInfoFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_list_plugins(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func listRecentSessions(limit: UInt32) -> [SessionSummary] {
     return try!  FfiConverterSequenceTypeSessionSummary.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_list_recent_sessions(self.uniffiClonePointer(),
@@ -1543,6 +1635,14 @@ open func loadConfig()throws  -> FullConfig {
 })
 }
     
+open func loadPluginFromPath(path: String)throws  -> PluginInfoFfi {
+    return try  FfiConverterTypePluginInfoFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_load_plugin_from_path(self.uniffiClonePointer(),
+        FfiConverterString.lower(path),$0
+    )
+})
+}
+    
 open func process(input: String, options: ProcessOptions?)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_process(self.uniffiClonePointer(),
         FfiConverterString.lower(input),
@@ -1555,6 +1655,13 @@ open func providerSupportsImageEditing(providerName: String) -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_provider_supports_image_editing(self.uniffiClonePointer(),
         FfiConverterString.lower(providerName),$0
+    )
+})
+}
+    
+open func refreshPlugins()throws  -> UInt32 {
+    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_refresh_plugins(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1644,6 +1751,13 @@ open func triggerCompression()throws  -> CompressionResult {
     uniffi_aethecore_fn_method_aethercore_trigger_compression(self.uniffiClonePointer(),$0
     )
 })
+}
+    
+open func uninstallPlugin(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_uninstall_plugin(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),$0
+    )
+}
 }
     
 open func updateBehavior(behavior: BehaviorConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
@@ -8039,6 +8153,218 @@ public func FfiConverterTypePendingConfirmationInfo_lower(_ value: PendingConfir
 }
 
 
+public struct PluginInfoFfi {
+    public var name: String
+    public var version: String
+    public var description: String
+    public var enabled: Bool
+    public var path: String
+    public var skillsCount: UInt32
+    public var agentsCount: UInt32
+    public var hooksCount: UInt32
+    public var mcpServersCount: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, version: String, description: String, enabled: Bool, path: String, skillsCount: UInt32, agentsCount: UInt32, hooksCount: UInt32, mcpServersCount: UInt32) {
+        self.name = name
+        self.version = version
+        self.description = description
+        self.enabled = enabled
+        self.path = path
+        self.skillsCount = skillsCount
+        self.agentsCount = agentsCount
+        self.hooksCount = hooksCount
+        self.mcpServersCount = mcpServersCount
+    }
+}
+
+
+
+extension PluginInfoFfi: Equatable, Hashable {
+    public static func ==(lhs: PluginInfoFfi, rhs: PluginInfoFfi) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.version != rhs.version {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.path != rhs.path {
+            return false
+        }
+        if lhs.skillsCount != rhs.skillsCount {
+            return false
+        }
+        if lhs.agentsCount != rhs.agentsCount {
+            return false
+        }
+        if lhs.hooksCount != rhs.hooksCount {
+            return false
+        }
+        if lhs.mcpServersCount != rhs.mcpServersCount {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(version)
+        hasher.combine(description)
+        hasher.combine(enabled)
+        hasher.combine(path)
+        hasher.combine(skillsCount)
+        hasher.combine(agentsCount)
+        hasher.combine(hooksCount)
+        hasher.combine(mcpServersCount)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePluginInfoFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PluginInfoFfi {
+        return
+            try PluginInfoFfi(
+                name: FfiConverterString.read(from: &buf), 
+                version: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                enabled: FfiConverterBool.read(from: &buf), 
+                path: FfiConverterString.read(from: &buf), 
+                skillsCount: FfiConverterUInt32.read(from: &buf), 
+                agentsCount: FfiConverterUInt32.read(from: &buf), 
+                hooksCount: FfiConverterUInt32.read(from: &buf), 
+                mcpServersCount: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PluginInfoFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.version, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterUInt32.write(value.skillsCount, into: &buf)
+        FfiConverterUInt32.write(value.agentsCount, into: &buf)
+        FfiConverterUInt32.write(value.hooksCount, into: &buf)
+        FfiConverterUInt32.write(value.mcpServersCount, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePluginInfoFFI_lift(_ buf: RustBuffer) throws -> PluginInfoFfi {
+    return try FfiConverterTypePluginInfoFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePluginInfoFFI_lower(_ value: PluginInfoFfi) -> RustBuffer {
+    return FfiConverterTypePluginInfoFFI.lower(value)
+}
+
+
+public struct PluginSkillFfi {
+    public var qualifiedName: String
+    public var pluginName: String
+    public var skillName: String
+    public var description: String
+    public var isCommand: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(qualifiedName: String, pluginName: String, skillName: String, description: String, isCommand: Bool) {
+        self.qualifiedName = qualifiedName
+        self.pluginName = pluginName
+        self.skillName = skillName
+        self.description = description
+        self.isCommand = isCommand
+    }
+}
+
+
+
+extension PluginSkillFfi: Equatable, Hashable {
+    public static func ==(lhs: PluginSkillFfi, rhs: PluginSkillFfi) -> Bool {
+        if lhs.qualifiedName != rhs.qualifiedName {
+            return false
+        }
+        if lhs.pluginName != rhs.pluginName {
+            return false
+        }
+        if lhs.skillName != rhs.skillName {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.isCommand != rhs.isCommand {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(qualifiedName)
+        hasher.combine(pluginName)
+        hasher.combine(skillName)
+        hasher.combine(description)
+        hasher.combine(isCommand)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePluginSkillFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PluginSkillFfi {
+        return
+            try PluginSkillFfi(
+                qualifiedName: FfiConverterString.read(from: &buf), 
+                pluginName: FfiConverterString.read(from: &buf), 
+                skillName: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                isCommand: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PluginSkillFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.qualifiedName, into: &buf)
+        FfiConverterString.write(value.pluginName, into: &buf)
+        FfiConverterString.write(value.skillName, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterBool.write(value.isCommand, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePluginSkillFFI_lift(_ buf: RustBuffer) throws -> PluginSkillFfi {
+    return try FfiConverterTypePluginSkillFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePluginSkillFFI_lower(_ value: PluginSkillFfi) -> RustBuffer {
+    return FfiConverterTypePluginSkillFFI.lower(value)
+}
+
+
 public struct PoliciesConfig {
     public var toolSafety: ToolSafetyPolicy
     public var intent: IntentDetectionPolicy
@@ -14127,7 +14453,7 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
+    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
         onThinking: { (
             uniffiHandle: UInt64,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -14674,7 +15000,7 @@ private func uniffiCallbackInitAetherEventHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
-    fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
+    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
 }
 
 #if swift(>=5.8)
@@ -14730,7 +15056,7 @@ fileprivate struct UniffiCallbackInterfaceAgentProgressHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceAgentProgressHandler = UniffiVTableCallbackInterfaceAgentProgressHandler(
+    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAgentProgressHandler = UniffiVTableCallbackInterfaceAgentProgressHandler(
         onProgressEvent: { (
             uniffiHandle: UInt64,
             event: RustBuffer,
@@ -14773,7 +15099,7 @@ private func uniffiCallbackInitAgentProgressHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAgentProgressHandler {
-    fileprivate static var handleMap = UniffiHandleMap<AgentProgressHandler>()
+    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AgentProgressHandler>()
 }
 
 #if swift(>=5.8)
@@ -14881,7 +15207,7 @@ fileprivate struct UniffiCallbackInterfaceInitProgressHandlerFFI {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
+    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
         onPhaseStarted: { (
             uniffiHandle: UInt64,
             phase: RustBuffer,
@@ -15036,7 +15362,7 @@ private func uniffiCallbackInitInitProgressHandlerFFI() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceInitProgressHandlerFfi {
-    fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
+    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
 }
 
 #if swift(>=5.8)
@@ -16182,6 +16508,56 @@ fileprivate struct FfiConverterSequenceTypeModelProfileFFI: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypePluginInfoFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [PluginInfoFfi]
+
+    public static func write(_ value: [PluginInfoFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePluginInfoFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PluginInfoFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PluginInfoFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypePluginInfoFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypePluginSkillFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [PluginSkillFfi]
+
+    public static func write(_ value: [PluginSkillFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePluginSkillFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PluginSkillFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PluginSkillFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypePluginSkillFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypePolicyKeywordRule: FfiConverterRustBuffer {
     typealias SwiftType = [PolicyKeywordRule]
 
@@ -16651,7 +17027,7 @@ private enum InitializationResult {
 }
 // Use a global variable to perform the versioning checks. Swift ensures that
 // the code inside is only computed once.
-private var initializationResult: InitializationResult = {
+nonisolated(unsafe) private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
     // Get the scaffolding contract version by calling the into the dylib
@@ -16815,7 +17191,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_delete_skill() != 64856) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_disable_plugin() != 64230) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_edit_image() != 50812) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_enable_plugin() != 57301) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_execute_plugin_skill() != 45433) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json() != 17811) {
@@ -16890,6 +17275,12 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_npm_path() != 60063) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_plugin_skill_instructions() != 58364) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_plugins_dir() != 42652) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_providers_for_type() != 30953) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -16906,6 +17297,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json() != 22743) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_install_plugin_from_git() != 23877) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_install_plugins_from_zip() != 10475) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_install_runtime() != 21593) {
@@ -16932,6 +17329,12 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_list_mcp_servers() != 29913) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_list_plugin_skills() != 312) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_plugins() != 35316) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_list_recent_sessions() != 13544) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -16947,10 +17350,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_load_config() != 47747) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_load_plugin_from_path() != 1059) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_process() != 36139) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_provider_supports_image_editing() != 59293) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_refresh_plugins() != 61282) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_refresh_skills() != 30751) {
@@ -16984,6 +17393,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_trigger_compression() != 65371) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_uninstall_plugin() != 8638) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_behavior() != 3903) {

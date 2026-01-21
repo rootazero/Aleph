@@ -491,6 +491,34 @@
 "settings.skills.zip_description" = "选择包含 Skills 的 ZIP 文件（每个 Skill 需包含 SKILL.md）";
 "settings.skills.zip_no_skills" = "ZIP 文件中未找到有效的 Skill";
 
+// MARK: - Settings Window - Plugins Tab
+"settings.plugins.title" = "插件";
+"settings.plugins.description" = "安装和管理兼容 Claude Code 的插件。插件可以包含技能、智能体、钩子和 MCP 服务器。";
+"settings.plugins.installed_plugins" = "已安装的插件";
+"settings.plugins.install" = "安装插件";
+"settings.plugins.install_plugin" = "安装插件";
+"settings.plugins.install_first" = "安装第一个插件";
+"settings.plugins.loading" = "正在加载插件...";
+"settings.plugins.empty_title" = "暂无已安装的插件";
+"settings.plugins.empty_description" = "插件可以通过技能、智能体、钩子和 MCP 服务器扩展 Aether 的能力。\n从 Git 仓库或 ZIP 文件安装插件。";
+"settings.plugins.git_url" = "Git 仓库 URL";
+"settings.plugins.git_url_placeholder" = "https://github.com/user/plugin-repo";
+"settings.plugins.git_url_example" = "示例：https://github.com/user/my-plugin.git";
+"settings.plugins.delete" = "删除插件";
+"settings.plugins.delete_plugin" = "删除插件";
+"settings.plugins.delete_plugin_message" = "确定要删除插件 \"%@\" 吗？此操作无法撤销。";
+"settings.plugins.delete_failed" = "删除插件失败：%@";
+"settings.plugins.install_failed" = "安装插件失败：%@";
+"settings.plugins.toggle_failed" = "切换插件状态失败：%@";
+"settings.plugins.install_method_git" = "Git 仓库";
+"settings.plugins.install_method_zip" = "ZIP 文件";
+"settings.plugins.zip_file" = "ZIP 文件";
+"settings.plugins.no_file_selected" = "未选择文件";
+"settings.plugins.browse" = "浏览...";
+"settings.plugins.select_zip" = "选择 ZIP 文件";
+"settings.plugins.zip_description" = "选择包含插件的 ZIP 文件（每个插件需包含 .claude-plugin/plugin.json）";
+"settings.plugins.zip_no_plugins" = "ZIP 文件中未找到有效的插件";
+
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "记忆管理";
 "settings.memory.description" = "Aether 会记住过去的交互以提供上下文感知的响应。所有数据都存储在本地，永远不会离开您的设备。";
