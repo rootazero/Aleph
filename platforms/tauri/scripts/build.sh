@@ -62,16 +62,33 @@ check_deps() {
     log_info "All dependencies found"
 }
 
-# Install npm dependencies
+# Install dependencies
 install_deps() {
-    log_info "Installing npm dependencies..."
-    npm install
+    log_info "Installing dependencies..."
+    if command -v pnpm &> /dev/null; then
+        pnpm install
+    else
+        npm install
+    fi
 }
 
 # Build frontend
 build_frontend() {
     log_info "Building frontend..."
-    npm run build
+    if command -v pnpm &> /dev/null; then
+        pnpm build
+    else
+        npm run build
+    fi
+}
+
+# Get package manager command
+get_pm() {
+    if command -v pnpm &> /dev/null; then
+        echo "pnpm"
+    else
+        echo "npm run"
+    fi
 }
 
 # Build for macOS
@@ -83,10 +100,11 @@ build_macos() {
         return
     fi
 
+    PM=$(get_pm)
     if [ -n "$RELEASE_MODE" ]; then
-        npm run tauri build -- --target universal-apple-darwin
+        $PM tauri build -- --target universal-apple-darwin
     else
-        npm run tauri build
+        $PM tauri build
     fi
 
     log_info "macOS build complete!"
@@ -98,7 +116,8 @@ build_windows() {
     log_info "Building for Windows..."
 
     if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]]; then
-        npm run tauri build
+        PM=$(get_pm)
+        $PM tauri build
     else
         log_warn "Cross-compilation to Windows requires additional setup. Skipping."
         log_warn "For Windows builds, run this script on Windows or use CI/CD."
@@ -110,7 +129,8 @@ build_linux() {
     log_info "Building for Linux..."
 
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        npm run tauri build
+        PM=$(get_pm)
+        $PM tauri build
     else
         log_warn "Cross-compilation to Linux requires additional setup. Skipping."
         log_warn "For Linux builds, run this script on Linux or use CI/CD."
