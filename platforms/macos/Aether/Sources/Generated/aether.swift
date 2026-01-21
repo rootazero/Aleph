@@ -9192,18 +9192,11 @@ public struct RoutingRuleConfig {
     public var intentType: String?
     public var preferredModel: String?
     public var contextFormat: String?
-    public var skillId: String?
-    public var skillVersion: String?
-    public var workflow: String?
-    public var tools: String?
-    public var knowledgeBase: String?
     public var icon: String?
-    public var hint: String?
-    public var triggers: [String]?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(ruleType: String?, isBuiltin: Bool, regex: String, provider: String?, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, preferredModel: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?, icon: String?, hint: String?, triggers: [String]?) {
+    public init(ruleType: String?, isBuiltin: Bool, regex: String, provider: String?, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, preferredModel: String?, contextFormat: String?, icon: String?) {
         self.ruleType = ruleType
         self.isBuiltin = isBuiltin
         self.regex = regex
@@ -9214,14 +9207,7 @@ public struct RoutingRuleConfig {
         self.intentType = intentType
         self.preferredModel = preferredModel
         self.contextFormat = contextFormat
-        self.skillId = skillId
-        self.skillVersion = skillVersion
-        self.workflow = workflow
-        self.tools = tools
-        self.knowledgeBase = knowledgeBase
         self.icon = icon
-        self.hint = hint
-        self.triggers = triggers
     }
 }
 
@@ -9259,28 +9245,7 @@ extension RoutingRuleConfig: Equatable, Hashable {
         if lhs.contextFormat != rhs.contextFormat {
             return false
         }
-        if lhs.skillId != rhs.skillId {
-            return false
-        }
-        if lhs.skillVersion != rhs.skillVersion {
-            return false
-        }
-        if lhs.workflow != rhs.workflow {
-            return false
-        }
-        if lhs.tools != rhs.tools {
-            return false
-        }
-        if lhs.knowledgeBase != rhs.knowledgeBase {
-            return false
-        }
         if lhs.icon != rhs.icon {
-            return false
-        }
-        if lhs.hint != rhs.hint {
-            return false
-        }
-        if lhs.triggers != rhs.triggers {
             return false
         }
         return true
@@ -9297,14 +9262,7 @@ extension RoutingRuleConfig: Equatable, Hashable {
         hasher.combine(intentType)
         hasher.combine(preferredModel)
         hasher.combine(contextFormat)
-        hasher.combine(skillId)
-        hasher.combine(skillVersion)
-        hasher.combine(workflow)
-        hasher.combine(tools)
-        hasher.combine(knowledgeBase)
         hasher.combine(icon)
-        hasher.combine(hint)
-        hasher.combine(triggers)
     }
 }
 
@@ -9326,14 +9284,7 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
                 intentType: FfiConverterOptionString.read(from: &buf), 
                 preferredModel: FfiConverterOptionString.read(from: &buf), 
                 contextFormat: FfiConverterOptionString.read(from: &buf), 
-                skillId: FfiConverterOptionString.read(from: &buf), 
-                skillVersion: FfiConverterOptionString.read(from: &buf), 
-                workflow: FfiConverterOptionString.read(from: &buf), 
-                tools: FfiConverterOptionString.read(from: &buf), 
-                knowledgeBase: FfiConverterOptionString.read(from: &buf), 
-                icon: FfiConverterOptionString.read(from: &buf), 
-                hint: FfiConverterOptionString.read(from: &buf), 
-                triggers: FfiConverterOptionSequenceString.read(from: &buf)
+                icon: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -9348,14 +9299,7 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.intentType, into: &buf)
         FfiConverterOptionString.write(value.preferredModel, into: &buf)
         FfiConverterOptionString.write(value.contextFormat, into: &buf)
-        FfiConverterOptionString.write(value.skillId, into: &buf)
-        FfiConverterOptionString.write(value.skillVersion, into: &buf)
-        FfiConverterOptionString.write(value.workflow, into: &buf)
-        FfiConverterOptionString.write(value.tools, into: &buf)
-        FfiConverterOptionString.write(value.knowledgeBase, into: &buf)
         FfiConverterOptionString.write(value.icon, into: &buf)
-        FfiConverterOptionString.write(value.hint, into: &buf)
-        FfiConverterOptionSequenceString.write(value.triggers, into: &buf)
     }
 }
 

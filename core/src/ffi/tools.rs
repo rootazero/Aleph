@@ -356,7 +356,7 @@ impl AetherCore {
                     key: command_name.clone(),
                     description,
                     icon: rule.icon.clone().unwrap_or_else(|| "command".to_string()),
-                    hint: rule.hint.clone(),
+                    hint: None, // Custom commands don't have hints
                     node_type: crate::command::CommandType::Action,
                     has_children: false,
                     source_id: None,

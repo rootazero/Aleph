@@ -119,7 +119,6 @@ mod tests {
     fn test_intent_from_rule_skills() {
         let mut rule = RoutingRuleConfig::command("^/build-ios", "claude", None);
         rule.intent_type = Some("skills:build-macos-apps".to_string());
-        rule.skill_id = Some("build-macos-apps".to_string());
 
         let intent = Intent::from_rule(&rule);
         assert!(intent.is_skills());

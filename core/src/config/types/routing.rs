@@ -121,43 +121,6 @@ pub struct RoutingRuleConfig {
     /// Default: based on command type (bolt for Action, text.quote for Prompt)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
-
-    /// Short hint text for command mode display (max ~80px width)
-    /// For builtin commands, this is overridden by localized hints
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hint: Option<String>,
-
-    // ===== Natural Language Detection fields =====
-    /// Trigger keywords for natural language command detection
-    /// When user input contains any of these keywords, this command may be auto-invoked.
-    /// Example: triggers = ["翻译", "translate", "转换语言"]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub triggers: Option<Vec<String>>,
-
-    // ===== Skills fields (reserved) =====
-    /// Skills ID (e.g., "build-macos-apps", "pdf")
-    /// Only valid when intent_type = "skills:xxx"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skill_id: Option<String>,
-
-    /// Skills version number (semantic versioning, e.g., "1.0.0")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skill_version: Option<String>,
-
-    /// Skills workflow definition (JSON string)
-    /// Example: '{"steps": [{"type": "tool_call", "tool": "read_files"}, ...]}'
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workflow: Option<String>,
-
-    /// Skills available tools list (JSON string array)
-    /// Example: '["read_files", "write_files", "swift_compile"]'
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<String>,
-
-    /// Skills knowledge base path or URL
-    /// Example: "~/.aether/skills/build-macos-apps/knowledge"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub knowledge_base: Option<String>,
 }
 
 impl RoutingRuleConfig {
@@ -176,13 +139,6 @@ impl RoutingRuleConfig {
             preferred_model: None,
             context_format: None,
             icon: None,
-            hint: None,
-            triggers: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
         }
     }
 
@@ -200,13 +156,6 @@ impl RoutingRuleConfig {
             preferred_model: None,
             context_format: None,
             icon: None,
-            hint: None,
-            triggers: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
         }
     }
 
@@ -224,13 +173,6 @@ impl RoutingRuleConfig {
             preferred_model: None,
             context_format: None,
             icon: None,
-            hint: None,
-            triggers: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
         }
     }
 
@@ -356,31 +298,6 @@ impl RoutingRuleConfig {
             .and_then(|s| ContextFormat::parse(s).ok())
             .unwrap_or(ContextFormat::Markdown)
     }
-
-    // 🔮 Skills related helper methods (reserved for Solution C)
-
-    /// Check if this is a Skills routing rule
-    pub fn is_skills_rule(&self) -> bool {
-        self.intent_type
-            .as_ref()
-            .map(|s| s.starts_with("skills:"))
-            .unwrap_or(false)
-    }
-
-    /// Get Skills workflow definition (parse JSON)
-    pub fn get_workflow_definition(&self) -> Option<serde_json::Value> {
-        self.workflow
-            .as_ref()
-            .and_then(|json_str| serde_json::from_str(json_str).ok())
-    }
-
-    /// Get Skills tools list (parse JSON)
-    pub fn get_tools_list(&self) -> Vec<String> {
-        self.tools
-            .as_ref()
-            .and_then(|json_str| serde_json::from_str::<Vec<String>>(json_str).ok())
-            .unwrap_or_default()
-    }
 }
 
 // =============================================================================
@@ -501,23 +418,5 @@ mod tests {
         };
         let intent = rule.get_task_intent();
         assert!(matches!(intent, TaskIntent::Custom(ref s) if s == "my_custom_workflow"));
-    }
-
-    #[test]
-    fn test_routing_rule_with_triggers() {
-        let toml = r#"
-            regex = "^/translate"
-            hint = "翻译文本"
-            triggers = ["翻译", "translate", "转换语言"]
-        "#;
-        let rule: RoutingRuleConfig = toml::from_str(toml).unwrap();
-        assert_eq!(
-            rule.triggers,
-            Some(vec![
-                "翻译".to_string(),
-                "translate".to_string(),
-                "转换语言".to_string()
-            ])
-        );
     }
 }

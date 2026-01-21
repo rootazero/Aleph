@@ -285,15 +285,15 @@ dictionary SearchProviderTestConfig {
   string? engine_id;       // Engine ID (required for Google CSE)
 };
 
-// Routing rule configuration (Phase 6 - Task 1.5, refactor-routing-rule-logic)
+// Routing rule configuration for builtin commands
 //
 // Aether supports two types of routing rules:
 // - Command Rules: Start with ^/, first-match-stops, requires provider
 // - Keyword Rules: Non-/ patterns, all-match, prompt only (uses default_provider)
 dictionary RoutingRuleConfig {
-  // ===== Rule Type (refactor-routing-rule-logic) =====
+  // ===== Rule Type =====
   string? rule_type;   // "command" or "keyword" (auto-detected if not specified)
-  boolean is_builtin;  // Whether this is a builtin rule (read-only in Settings UI)
+  boolean is_builtin;  // Whether this is a builtin rule
 
   // ===== Core fields =====
   string regex;        // Regex pattern to match user input
@@ -307,19 +307,8 @@ dictionary RoutingRuleConfig {
   string? preferred_model;          // Preferred model ID for Model Router (overrides automatic selection)
   string? context_format;           // Context injection format (e.g., "markdown", "xml", "json")
 
-  // ===== Skills fields (reserved) =====
-  string? skill_id;          // Skills ID (e.g., "build-macos-apps")
-  string? skill_version;     // Skills version (e.g., "1.0.0")
-  string? workflow;          // Skills workflow definition (JSON string)
-  string? tools;             // Skills tools list (JSON string array)
-  string? knowledge_base;    // Skills knowledge base path
-
-  // ===== Command Mode Display fields =====
+  // ===== Display fields =====
   string? icon;              // SF Symbol name for command mode display
-  string? hint;              // Short hint text for command mode (max ~80px width)
-
-  // ===== Natural Language Detection fields =====
-  sequence<string>? triggers;  // Trigger keywords for natural language command detection
 };
 
 // Shortcuts configuration (Phase 6 - Task 4.2)

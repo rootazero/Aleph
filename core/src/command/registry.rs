@@ -146,11 +146,9 @@ impl CommandRegistry {
             .clone()
             .unwrap_or_else(|| node_type.default_icon().to_string());
 
-        // Get hint: first try rule's hint field, then try builtin hints
+        // Get hint from builtin hints
         let hint = if show_hints {
-            rule.hint
-                .clone()
-                .or_else(|| get_builtin_hint(&key, language))
+            get_builtin_hint(&key, language)
         } else {
             None
         };
@@ -422,7 +420,6 @@ mod tests {
                 capabilities: Some(vec!["search".to_string()]),
                 system_prompt: Some("Search the web".to_string()),
                 icon: Some("magnifyingglass".to_string()),
-                hint: None,
                 ..Default::default()
             },
             RoutingRuleConfig {
@@ -431,7 +428,6 @@ mod tests {
                 capabilities: None,
                 system_prompt: Some("Translate to English".to_string()),
                 icon: Some("globe".to_string()),
-                hint: Some("译英文".to_string()),
                 ..Default::default()
             },
             // Keyword rule (should be ignored)
@@ -467,7 +463,7 @@ mod tests {
         assert!(en.is_some());
         let en = en.unwrap();
         assert_eq!(en.node_type, CommandType::Prompt);
-        assert_eq!(en.hint, Some("译英文".to_string())); // User-defined hint
+        assert_eq!(en.hint, None); // User-defined hints removed, only builtin hints remain
     }
 
     #[test]
