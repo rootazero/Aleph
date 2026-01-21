@@ -45,9 +45,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **错误恢复**: 单个子任务失败时的处理策略
 
 **关键模块**:
-- `UnifiedPlanner`: LLM 驱动的任务分解，生成 ExecutionPlan
-- `UnifiedExecutor`: DAG 调度执行器，处理 TaskGraph
-- `RequestOrchestrator`: 请求入口，需要集成 Planner 支持复杂任务
+- `dispatcher/planner`: LLM 驱动的任务分解，生成 ExecutionPlan
+- `dispatcher/scheduler`: DAG 调度器，处理 TaskGraph 依赖
+- `dispatcher/executor`: 任务执行引擎
+- `components/TaskPlanner`: Agentic Loop 中的任务规划组件
+- `agent_loop`: 核心 observe-think-act-feedback 循环
 
 **没有多步骤任务支持，Aether 就不是真正的 Agent。**
 
@@ -76,13 +78,17 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for complete technical docume
 aether/
 ├── Cargo.toml                 # Workspace root
 ├── VERSION                    # Single version source
-├── core/                      # Rust Core (44 modules)
+├── core/                      # Rust Core (~37 modules)
 │   ├── src/
 │   │   ├── lib.rs             # UniFFI/C ABI exports
-│   │   ├── agent/             # Agent execution
+│   │   ├── agent_loop/        # Core observe-think-act-feedback cycle
+│   │   ├── agents/            # Unified agent system (sub-agent + rig-core)
 │   │   ├── components/        # 8 agentic loop components
-│   │   ├── dispatcher/        # Multi-layer routing
+│   │   ├── dispatcher/        # Multi-layer routing & task orchestration
+│   │   ├── intent/            # Three-layer intent detection (L1-L3)
 │   │   ├── memory/            # Dual-layer memory
+│   │   ├── thinker/           # LLM decision-making layer
+│   │   ├── three_layer/       # Control architecture (Orchestrator/Skill/Tools)
 │   │   └── ...
 │   └── Cargo.toml             # Features: uniffi, cabi
 ├── platforms/
@@ -175,12 +181,18 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 
 | Component | Description |
 |-----------|-------------|
-| **Agentic Loop** | 8 components: IntentAnalyzer, TaskPlanner, ToolExecutor, etc. |
+| **agent_loop** | Core observe-think-act-feedback cycle with guards & state management |
+| **Agentic Loop** | 8 components: IntentAnalyzer, TaskPlanner, ToolExecutor, LoopController, SessionRecorder, SessionCompactor, SubAgentHandler, CallbackBridge |
+| **intent** | Three-layer intent detection: L1 Regex → L2 Keywords → L3 AI |
+| **dispatcher** | Multi-layer routing hub: planner, scheduler, executor, model_router, monitor |
+| **thinker** | LLM decision-making layer with model routing and prompt building |
+| **three_layer** | Control architecture: Orchestrator (FSM) / Skill (DAG) / Tools (Safety) |
 | **rig-core** | AI provider abstraction (OpenAI, Anthropic, Gemini) |
 | **Dual-Layer Memory** | Raw history + AI-extracted facts |
 | **Cowork** | DAG task orchestration with model routing |
-| **Runtime Managers** | Auto-install uv, fnm, yt-dlp |
+| **Runtime Managers** | Auto-install uv, fnm, yt-dlp, ffmpeg |
 | **MCP** | Model Context Protocol (stdio transport) |
+| **event** | Type-safe event bus for event-driven architecture |
 
 See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md), [COWORK](./docs/COWORK.md)
 
