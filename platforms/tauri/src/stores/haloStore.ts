@@ -1,5 +1,14 @@
 import { create } from 'zustand';
 import { commands } from '@/lib/commands';
+import {
+  subscribeToAetherEvents,
+  type AetherEventHandlers,
+  type StreamChunkPayload,
+  type CompletePayload,
+  type ErrorPayload,
+  type ToolStartPayload,
+  type PlanConfirmationPayload,
+} from '@/lib/events';
 import type { PlanStep } from '@/windows/halo/components/HaloPlanConfirmation';
 import type { TaskGraph } from '@/windows/halo/components/HaloTaskGraph';
 import type { AgentPlan, AgentProgress, ConflictInfo } from '@/windows/halo/components/HaloAgent';
@@ -31,12 +40,19 @@ interface HaloStore {
   state: HaloStateType;
   position: { x: number; y: number };
   visible: boolean;
+  streamingContent: string;
+  currentTopicId: string | null;
+  unsubscribe: (() => void) | null;
 
   // Actions
   setState: (state: HaloStateType) => void;
   show: (position?: { x: number; y: number }) => void;
   hide: () => void;
   reset: () => void;
+
+  // Initialization
+  initialize: () => Promise<void>;
+  cleanup: () => void;
 
   // Business operations
   showSuccess: (message?: string) => void;
@@ -53,12 +69,23 @@ interface HaloStore {
   // Input handlers
   submitClarification: (response: string) => void;
   submitConversation: (input: string) => void;
+
+  // AI event handlers (internal)
+  _onThinking: () => void;
+  _onStreamChunk: (payload: StreamChunkPayload) => void;
+  _onComplete: (payload: CompletePayload) => void;
+  _onError: (payload: ErrorPayload) => void;
+  _onToolStart: (payload: ToolStartPayload) => void;
+  _onPlanConfirmation: (payload: PlanConfirmationPayload) => void;
 }
 
 export const useHaloStore = create<HaloStore>((set, get) => ({
   state: { type: 'idle' },
   position: { x: 0, y: 0 },
   visible: false,
+  streamingContent: '',
+  currentTopicId: null,
+  unsubscribe: null,
 
   setState: (state) => set({ state }),
 
@@ -77,11 +104,38 @@ export const useHaloStore = create<HaloStore>((set, get) => ({
   },
 
   hide: () => {
-    set({ visible: false, state: { type: 'idle' } });
+    set({ visible: false, state: { type: 'idle' }, streamingContent: '' });
     commands.hideHaloWindow().catch(console.error);
   },
 
-  reset: () => set({ state: { type: 'idle' }, visible: false }),
+  reset: () => set({ state: { type: 'idle' }, visible: false, streamingContent: '' }),
+
+  // Initialize event listeners for AI callbacks
+  initialize: async () => {
+    const store = get();
+    if (store.unsubscribe) return;
+
+    const handlers: AetherEventHandlers = {
+      onThinking: () => get()._onThinking(),
+      onStreamChunk: (payload) => get()._onStreamChunk(payload),
+      onComplete: (payload) => get()._onComplete(payload),
+      onError: (payload) => get()._onError(payload),
+      onToolStart: (payload) => get()._onToolStart(payload),
+      onPlanConfirmationRequired: (payload) => get()._onPlanConfirmation(payload),
+    };
+
+    const unsubscribe = await subscribeToAetherEvents(handlers);
+    set({ unsubscribe });
+    console.log('[HaloStore] Event listeners initialized');
+  },
+
+  cleanup: () => {
+    const { unsubscribe } = get();
+    if (unsubscribe) {
+      unsubscribe();
+      set({ unsubscribe: null });
+    }
+  },
 
   showSuccess: (message) => {
     set({ state: { type: 'success', message } });
@@ -177,15 +231,95 @@ export const useHaloStore = create<HaloStore>((set, get) => ({
     console.log('Selected conflict option:', optionId);
   },
 
-  submitClarification: (response) => {
+  submitClarification: async (response) => {
     set({ state: { type: 'processingWithAI', provider: 'Processing response...' } });
-    // TODO: Call Rust backend with clarification response
-    console.log('Clarification response:', response);
+    try {
+      await commands.processInput(response, get().currentTopicId ?? undefined, true);
+    } catch (error) {
+      console.error('Failed to submit clarification:', error);
+      get().showError(error instanceof Error ? error.message : 'Failed to process');
+    }
   },
 
-  submitConversation: (input) => {
+  submitConversation: async (input) => {
+    set({
+      state: { type: 'processingWithAI', provider: 'Thinking...' },
+      streamingContent: '',
+    });
+
+    try {
+      await commands.processInput(input, get().currentTopicId ?? undefined, true);
+    } catch (error) {
+      console.error('Failed to submit conversation:', error);
+      get().showError(error instanceof Error ? error.message : 'Failed to process');
+    }
+  },
+
+  // ============================================================================
+  // Internal AI Event Handlers
+  // ============================================================================
+
+  _onThinking: () => {
     set({ state: { type: 'processingWithAI', provider: 'Thinking...' } });
-    // TODO: Call Rust backend with conversation input
-    console.log('Conversation input:', input);
+  },
+
+  _onStreamChunk: (payload: StreamChunkPayload) => {
+    set((state) => {
+      const newContent = state.streamingContent + payload.text;
+      return {
+        streamingContent: newContent,
+        state: { type: 'processing', content: newContent },
+      };
+    });
+  },
+
+  _onComplete: (payload: CompletePayload) => {
+    const content = payload.response;
+
+    // Show typewriting effect for shorter responses, direct success for longer
+    if (content.length < 500) {
+      set({
+        state: { type: 'typewriting', content, progress: 0 },
+        streamingContent: '',
+      });
+
+      // Simulate typewriting completion
+      setTimeout(() => {
+        if (get().state.type === 'typewriting') {
+          get().showSuccess('Done');
+        }
+      }, Math.min(content.length * 10, 2000));
+    } else {
+      set({ streamingContent: '' });
+      get().showSuccess('Response complete');
+    }
+  },
+
+  _onError: (payload: ErrorPayload) => {
+    set({ streamingContent: '' });
+    get().showError(payload.message, true);
+  },
+
+  _onToolStart: (payload: ToolStartPayload) => {
+    set({
+      state: {
+        type: 'processingWithAI',
+        provider: `Using ${payload.tool_name}...`,
+      },
+    });
+  },
+
+  _onPlanConfirmation: (payload: PlanConfirmationPayload) => {
+    const steps: PlanStep[] = payload.tasks.map((task) => ({
+      id: task.id,
+      title: task.name,
+      status: task.status === 'Completed' ? 'completed' :
+              task.status === 'Running' ? 'running' :
+              task.status === 'Failed' ? 'failed' : 'pending',
+    }));
+
+    set({
+      state: { type: 'planConfirmation', steps },
+    });
   },
 }));

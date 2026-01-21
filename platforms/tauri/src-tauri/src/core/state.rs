@@ -1,0 +1,72 @@
+//! CoreState - manages the AetherCore instance lifecycle
+//!
+//! This module provides thread-safe access to the AetherCore instance
+//! for use across multiple Tauri commands.
+
+use std::sync::{Arc, RwLock};
+use tracing::warn;
+
+use crate::error::{AetherError, Result};
+
+/// Thread-safe state wrapper for AetherCore
+pub struct CoreState {
+    core: RwLock<Option<Arc<aethecore::AetherCore>>>,
+}
+
+impl CoreState {
+    /// Create a new empty CoreState
+    pub fn new() -> Self {
+        Self {
+            core: RwLock::new(None),
+        }
+    }
+
+    /// Initialize the core with an AetherCore instance
+    pub fn initialize(&self, core: Arc<aethecore::AetherCore>) {
+        let mut guard = self.core.write().unwrap_or_else(|e| {
+            warn!("CoreState write lock poisoned, recovering");
+            e.into_inner()
+        });
+        *guard = Some(core);
+    }
+
+    /// Get a reference to the core, or error if not initialized
+    pub fn get_core(&self) -> Result<Arc<aethecore::AetherCore>> {
+        let guard = self.core.read().unwrap_or_else(|e| {
+            warn!("CoreState read lock poisoned, recovering");
+            e.into_inner()
+        });
+
+        guard
+            .clone()
+            .ok_or_else(|| AetherError::Core("Aether core not initialized".to_string()))
+    }
+
+    /// Check if the core is initialized
+    pub fn is_initialized(&self) -> bool {
+        let guard = self.core.read().unwrap_or_else(|e| {
+            warn!("CoreState read lock poisoned, recovering");
+            e.into_inner()
+        });
+        guard.is_some()
+    }
+
+    /// Shutdown the core (clears the reference)
+    pub fn shutdown(&self) {
+        let mut guard = self.core.write().unwrap_or_else(|e| {
+            warn!("CoreState write lock poisoned, recovering");
+            e.into_inner()
+        });
+        *guard = None;
+    }
+}
+
+impl Default for CoreState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Safety: CoreState uses RwLock which provides thread-safety
+unsafe impl Send for CoreState {}
+unsafe impl Sync for CoreState {}

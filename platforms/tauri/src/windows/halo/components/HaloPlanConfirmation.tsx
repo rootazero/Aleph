@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { ListChecks, Play, X, Circle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useTranslation } from 'react-i18next';
 
 export interface PlanStep {
   id: string;
@@ -20,6 +21,8 @@ export function HaloPlanConfirmation({
   onConfirm,
   onCancel,
 }: HaloPlanConfirmationProps) {
+  const { t } = useTranslation();
+
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -32,7 +35,7 @@ export function HaloPlanConfirmation({
           <ListChecks className="w-4 h-4 text-primary" />
         </div>
         <div>
-          <p className="text-body font-medium text-foreground">Execute Plan?</p>
+          <p className="text-body font-medium text-foreground">{t('halo.plan.title')}</p>
           <p className="text-caption text-muted-foreground">
             {steps.length} step{steps.length !== 1 ? 's' : ''}
           </p>
@@ -66,11 +69,11 @@ export function HaloPlanConfirmation({
       <div className="flex items-center justify-end gap-2 pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>
           <X className="w-3.5 h-3.5 mr-1.5" />
-          Cancel
+          {t('common.cancel')}
         </Button>
         <Button size="sm" onClick={onConfirm}>
           <Play className="w-3.5 h-3.5 mr-1.5" />
-          Execute All
+          {t('halo.plan.approve')}
         </Button>
       </div>
     </motion.div>

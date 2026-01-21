@@ -11,10 +11,29 @@
     "close": "关闭",
     "retry": "重试",
     "loading": "加载中...",
-    "error": "错误"
+    "error": "错误",
+    "enabled": "已启用",
+    "disabled": "已禁用",
+    "name": "名称",
+    "type": "类型",
+    "status": "状态",
+    "actions": "操作",
+    "search": "搜索",
+    "noResults": "未找到结果",
+    "pressKeys": "按下按键...",
+    "clearShortcut": "清除快捷键",
+    "setAsDefault": "设为默认",
+    "notRequired": "非必填",
+    "systemDefault": "跟随系统"
   },
   "settings": {
     "title": "设置",
+    "groups": {
+      "basic": "基础",
+      "ai": "AI",
+      "extensions": "扩展",
+      "advanced": "高级"
+    },
     "general": {
       "title": "通用",
       "description": "基本应用设置",
@@ -29,39 +48,209 @@
     },
     "shortcuts": {
       "title": "快捷键",
-      "description": "配置键盘快捷键"
+      "description": "配置全局键盘快捷键",
+      "showHalo": "显示 Halo",
+      "showHaloDescription": "在光标位置激活 Halo 助手",
+      "commandCompletion": "命令补全",
+      "commandCompletionDescription": "触发 AI 命令补全",
+      "toggleListening": "切换监听",
+      "toggleListeningDescription": "开始或停止语音监听模式",
+      "quickCapture": "快速捕获",
+      "quickCaptureDescription": "捕获选中文本进行处理",
+      "hint": "点击快捷键字段并按下您想要的组合键"
     },
     "behavior": {
       "title": "行为",
-      "description": "配置输出和行为设置"
+      "description": "配置输出和行为设置",
+      "outputDirectory": "输出目录",
+      "outputDirectoryDescription": "生成文件的默认位置",
+      "autoSave": "自动保存",
+      "autoSaveDescription": "自动保存更改",
+      "confirmDelete": "确认删除",
+      "confirmDeleteDescription": "删除项目前请求确认"
     },
     "providers": {
       "title": "提供商",
-      "description": "配置 AI 提供商"
+      "description": "管理 AI 提供商连接",
+      "addProvider": "添加提供商",
+      "editProvider": "编辑提供商",
+      "configureDescription": "配置您的 AI 提供商设置",
+      "noProviders": "未配置提供商",
+      "noProvidersHint": "添加一个提供商以开始使用",
+      "providerName": "名称",
+      "providerType": "提供商类型",
+      "apiKey": "API 密钥",
+      "baseUrl": "基础 URL",
+      "model": "模型",
+      "types": {
+        "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "gemini": "Google Gemini",
+        "ollama": "Ollama（本地）",
+        "custom": "自定义"
+      }
+    },
+    "generation": {
+      "title": "生成",
+      "description": "配置文本和图像生成设置",
+      "textGeneration": "文本生成",
+      "imageGeneration": "图像生成",
+      "maxTokens": "最大 Token 数",
+      "temperature": "温度",
+      "topP": "Top P",
+      "presencePenalty": "存在惩罚",
+      "frequencyPenalty": "频率惩罚"
+    },
+    "memory": {
+      "title": "记忆",
+      "description": "配置对话记忆和历史",
+      "enableMemory": "启用记忆",
+      "enableMemoryDescription": "存储对话历史以提供上下文",
+      "maxHistoryItems": "最大历史条目数",
+      "clearMemory": "清除记忆",
+      "clearMemoryDescription": "删除所有存储的记忆",
+      "confirmClear": "确定要清除所有记忆吗？",
+      "memoryCleared": "记忆已成功清除"
+    },
+    "search": {
+      "title": "搜索",
+      "description": "配置搜索设置",
+      "webSearch": "网页搜索",
+      "webSearchDescription": "启用查询的网页搜索",
+      "searchEngine": "搜索引擎",
+      "searchEngineDescription": "选择首选搜索引擎"
     },
     "mcp": {
       "title": "MCP",
-      "description": "配置 MCP 服务器"
+      "description": "配置 MCP 服务器",
+      "addServer": "添加服务器",
+      "editServer": "编辑服务器",
+      "noServers": "未配置 MCP 服务器",
+      "noServersHint": "添加 MCP 服务器以扩展功能",
+      "serverName": "服务器名称",
+      "serverCommand": "命令",
+      "serverArgs": "参数",
+      "serverEnv": "环境变量",
+      "status": {
+        "running": "运行中",
+        "stopped": "已停止",
+        "error": "错误"
+      }
+    },
+    "skills": {
+      "title": "技能",
+      "description": "管理 AI 技能和能力",
+      "noSkills": "暂无可用技能",
+      "skillName": "技能名称",
+      "skillDescription": "描述",
+      "allowedTools": "允许的工具"
     },
     "plugins": {
       "title": "插件",
-      "description": "管理插件"
+      "description": "管理插件",
+      "addPlugin": "添加插件",
+      "installFromGit": "从 Git 安装",
+      "installFromZip": "从 ZIP 安装",
+      "noPlugins": "未安装插件",
+      "noPluginsHint": "安装插件以扩展功能",
+      "pluginName": "插件名称",
+      "pluginVersion": "版本",
+      "pluginAuthor": "作者",
+      "gitUrl": "Git URL",
+      "gitUrlPlaceholder": "https://github.com/user/plugin.git",
+      "selectZip": "选择 ZIP 文件"
     },
     "agent": {
       "title": "Agent",
-      "description": "配置 Agent 设置"
+      "description": "配置 Agent 设置",
+      "enableAgent": "启用 Agent 模式",
+      "enableAgentDescription": "允许 AI 执行多步骤任务",
+      "confirmActions": "确认操作",
+      "confirmActionsDescription": "每个操作都需要确认",
+      "maxSteps": "最大步骤数",
+      "maxStepsDescription": "每个任务的最大步骤数"
+    },
+    "policies": {
+      "title": "策略",
+      "description": "配置安全和访问策略",
+      "allowFileAccess": "允许文件访问",
+      "allowFileAccessDescription": "允许 AI 读写文件",
+      "allowNetworkAccess": "允许网络访问",
+      "allowNetworkAccessDescription": "允许 AI 发起网络请求",
+      "blockedDomains": "阻止的域名",
+      "blockedDomainsDescription": "要阻止的域名列表"
     }
   },
   "halo": {
     "listening": "正在监听...",
     "processing": "处理中...",
+    "thinking": "思考中...",
     "success": "完成",
-    "error": "出错了"
+    "error": "出错了",
+    "retrievingMemory": "正在检索记忆...",
+    "typewriting": "正在输入...",
+    "clarification": {
+      "title": "需要澄清",
+      "submit": "提交"
+    },
+    "input": {
+      "placeholder": "输入您的消息..."
+    },
+    "tool": {
+      "title": "工具确认",
+      "description": "允许运行此工具吗？",
+      "approve": "批准",
+      "deny": "拒绝"
+    },
+    "plan": {
+      "title": "计划确认",
+      "description": "审查并批准计划",
+      "approve": "批准计划",
+      "reject": "拒绝",
+      "stepStatus": {
+        "pending": "待执行",
+        "running": "执行中",
+        "completed": "已完成",
+        "failed": "失败"
+      }
+    },
+    "taskGraph": {
+      "title": "任务图",
+      "description": "审查任务执行计划",
+      "approve": "执行",
+      "reject": "取消"
+    },
+    "agent": {
+      "title": "Agent 计划",
+      "description": "Agent 想要执行以下步骤",
+      "approve": "启动 Agent",
+      "reject": "取消",
+      "resolving": "正在解决...",
+      "conflict": {
+        "title": "检测到冲突",
+        "description": "请选择一个选项来解决"
+      }
+    },
+    "toast": {
+      "info": "信息",
+      "warning": "警告",
+      "error": "错误"
+    }
+  },
+  "conversation": {
+    "title": "对话",
+    "startPrompt": "开始对话",
+    "startDescription": "在下方输入消息，开始与 Aether AI 聊天。",
+    "inputPlaceholder": "问 Aether 任何问题...",
+    "clearMessages": "清除消息",
+    "processing": "处理中..."
   },
   "tray": {
     "about": "关于 Aether",
     "settings": "设置...",
     "quit": "退出 Aether",
-    "defaultProvider": "默认提供商"
+    "defaultProvider": "默认提供商",
+    "showHalo": "显示 Halo",
+    "openConversation": "打开对话"
   }
 }

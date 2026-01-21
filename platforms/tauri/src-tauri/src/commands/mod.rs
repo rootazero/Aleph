@@ -1,44 +1,20 @@
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-// Re-export error types
 use crate::error::{AetherError, Result};
+use crate::settings::{self, AetherPaths, Settings, WindowPosition};
 
 /// Application version information
-#[derive(Debug, Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct AppVersion {
     pub version: String,
     pub build: String,
 }
 
 /// Cursor position
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Position {
     pub x: i32,
     pub y: i32,
-}
-
-/// Settings structure (simplified for Phase 1)
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct Settings {
-    pub general: GeneralSettings,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GeneralSettings {
-    pub sound_enabled: bool,
-    pub launch_at_login: bool,
-    pub language: String,
-}
-
-impl Default for GeneralSettings {
-    fn default() -> Self {
-        Self {
-            sound_enabled: true,
-            launch_at_login: false,
-            language: "system".to_string(),
-        }
-    }
 }
 
 /// Get application version
@@ -53,7 +29,6 @@ pub fn get_app_version() -> AppVersion {
 /// Get cursor position
 #[tauri::command]
 pub fn get_cursor_position() -> Result<Position> {
-    // Platform-specific cursor position retrieval
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::POINT;
@@ -76,7 +51,6 @@ pub fn get_cursor_position() -> Result<Position> {
         use cocoa::foundation::NSPoint;
 
         let location: NSPoint = unsafe { NSEvent::mouseLocation(nil) };
-        // Note: macOS uses bottom-left origin, may need conversion
         Ok(Position {
             x: location.x as i32,
             y: location.y as i32,
@@ -96,7 +70,6 @@ pub async fn show_halo_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     let position = get_cursor_position()?;
 
     if let Some(window) = app.get_webview_window("halo") {
-        // Position window at cursor
         window
             .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
                 x: position.x,
@@ -108,7 +81,6 @@ pub async fn show_halo_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
             .show()
             .map_err(|e| AetherError::Window(e.to_string()))?;
 
-        // Emit activation event to frontend
         window
             .emit("halo:activate", ())
             .map_err(|e: tauri::Error| AetherError::Window(e.to_string()))?;
@@ -136,6 +108,20 @@ pub async fn hide_halo_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
 #[tauri::command]
 pub async fn open_settings_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     if let Some(window) = app.get_webview_window("settings") {
+        // Try to restore window position
+        if let Ok(state) = settings::load_window_state() {
+            if let Some(pos) = state.settings {
+                let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: pos.x,
+                    y: pos.y,
+                }));
+                let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                    width: pos.width,
+                    height: pos.height,
+                }));
+            }
+        }
+
         window
             .show()
             .map_err(|e| AetherError::Window(e.to_string()))?;
@@ -151,14 +137,131 @@ pub async fn open_settings_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
 /// Get current settings
 #[tauri::command]
 pub async fn get_settings() -> Result<Settings> {
-    // TODO: Load from aether-core config
-    Ok(Settings::default())
+    settings::load_settings()
 }
 
 /// Save settings
 #[tauri::command]
-pub async fn save_settings(settings: Settings) -> Result<()> {
-    tracing::info!("Saving settings: {:?}", settings);
-    // TODO: Save to aether-core config
+pub async fn save_settings(new_settings: Settings) -> Result<()> {
+    tracing::info!("Saving settings");
+    settings::save_settings(&new_settings)?;
+
+    // Handle launch at login change
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        // The actual autostart management is handled by tauri-plugin-autostart
+        // We just log the intention here; the frontend should use the plugin directly
+        tracing::info!(
+            "Launch at login: {}",
+            new_settings.general.launch_at_login
+        );
+    }
+
     Ok(())
+}
+
+/// Save window position (called when window is moved/resized)
+#[tauri::command]
+pub async fn save_window_position<R: Runtime>(
+    app: AppHandle<R>,
+    window_name: String,
+) -> Result<()> {
+    if let Some(window) = app.get_webview_window(&window_name) {
+        let position = window
+            .outer_position()
+            .map_err(|e| AetherError::Window(e.to_string()))?;
+        let size = window
+            .outer_size()
+            .map_err(|e| AetherError::Window(e.to_string()))?;
+
+        let mut state = settings::load_window_state().unwrap_or_default();
+
+        let window_pos = WindowPosition {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+        };
+
+        match window_name.as_str() {
+            "settings" => state.settings = Some(window_pos),
+            _ => {}
+        }
+
+        settings::save_window_state(&state)?;
+        tracing::debug!("Window position saved for {}", window_name);
+    }
+
+    Ok(())
+}
+
+/// Get window position
+#[tauri::command]
+pub async fn get_window_position(window_name: String) -> Result<Option<WindowPosition>> {
+    let state = settings::load_window_state()?;
+
+    let pos = match window_name.as_str() {
+        "settings" => state.settings,
+        _ => None,
+    };
+
+    Ok(pos)
+}
+
+/// Send notification
+#[tauri::command]
+pub async fn send_notification<R: Runtime>(
+    app: AppHandle<R>,
+    title: String,
+    body: String,
+) -> Result<()> {
+    use tauri_plugin_notification::NotificationExt;
+
+    app.notification()
+        .builder()
+        .title(&title)
+        .body(&body)
+        .show()
+        .map_err(|e| AetherError::Unknown(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Get autostart status
+#[tauri::command]
+pub async fn get_autostart_enabled<R: Runtime>(app: AppHandle<R>) -> Result<bool> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    manager
+        .is_enabled()
+        .map_err(|e| AetherError::Config(e.to_string()))
+}
+
+/// Set autostart status
+#[tauri::command]
+pub async fn set_autostart_enabled<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<()> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+
+    if enabled {
+        manager
+            .enable()
+            .map_err(|e| AetherError::Config(e.to_string()))?;
+        tracing::info!("Autostart enabled");
+    } else {
+        manager
+            .disable()
+            .map_err(|e| AetherError::Config(e.to_string()))?;
+        tracing::info!("Autostart disabled");
+    }
+
+    Ok(())
+}
+
+/// Get all Aether paths (~/.config/aether/*)
+#[tauri::command]
+pub async fn get_aether_paths() -> Result<AetherPaths> {
+    settings::get_aether_paths()
 }

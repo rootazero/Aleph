@@ -3,8 +3,21 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useTheme } from '@/hooks/useTheme';
 import { SettingsSidebar, type SettingsTab } from './SettingsSidebar';
-import { GeneralSettings } from './tabs/GeneralSettings';
 import { SaveBar } from '@/components/ui/save-bar';
+
+// Import all settings tabs
+import { GeneralSettings } from './tabs/GeneralSettings';
+import { ShortcutsSettings } from './tabs/ShortcutsSettings';
+import { BehaviorSettings } from './tabs/BehaviorSettings';
+import { ProvidersSettings } from './tabs/ProvidersSettings';
+import { GenerationSettings } from './tabs/GenerationSettings';
+import { MemorySettings } from './tabs/MemorySettings';
+import { McpSettings } from './tabs/McpSettings';
+import { PluginsSettings } from './tabs/PluginsSettings';
+import { SkillsSettings } from './tabs/SkillsSettings';
+import { AgentSettings } from './tabs/AgentSettings';
+import { SearchSettings } from './tabs/SearchSettings';
+import { PoliciesSettings } from './tabs/PoliciesSettings';
 
 export function SettingsWindow() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -31,19 +44,29 @@ export function SettingsWindow() {
       case 'general':
         return <GeneralSettings />;
       case 'shortcuts':
-        return <PlaceholderTab name="Shortcuts" />;
+        return <ShortcutsSettings />;
       case 'behavior':
-        return <PlaceholderTab name="Behavior" />;
+        return <BehaviorSettings />;
       case 'providers':
-        return <PlaceholderTab name="Providers" />;
+        return <ProvidersSettings />;
+      case 'generation':
+        return <GenerationSettings />;
+      case 'memory':
+        return <MemorySettings />;
       case 'mcp':
-        return <PlaceholderTab name="MCP Servers" />;
+        return <McpSettings />;
       case 'plugins':
-        return <PlaceholderTab name="Plugins" />;
+        return <PluginsSettings />;
+      case 'skills':
+        return <SkillsSettings />;
       case 'agent':
-        return <PlaceholderTab name="Agent" />;
+        return <AgentSettings />;
+      case 'search':
+        return <SearchSettings />;
+      case 'policies':
+        return <PoliciesSettings />;
       default:
-        return <PlaceholderTab name={activeTab} />;
+        return <GeneralSettings />;
     }
   };
 
@@ -83,15 +106,6 @@ export function SettingsWindow() {
           {isDirty && <SaveBar onSave={handleSave} onDiscard={discard} />}
         </AnimatePresence>
       </main>
-    </div>
-  );
-}
-
-// Placeholder for tabs not yet implemented
-function PlaceholderTab({ name }: { name: string }) {
-  return (
-    <div className="flex items-center justify-center h-64 text-muted-foreground">
-      <p>{name} settings coming soon...</p>
     </div>
   );
 }

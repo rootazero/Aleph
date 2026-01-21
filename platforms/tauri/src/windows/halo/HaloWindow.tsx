@@ -27,6 +27,8 @@ export function HaloWindow() {
     visible,
     show,
     hide,
+    initialize,
+    cleanup,
     confirmTool,
     confirmPlan,
     confirmTaskGraph,
@@ -35,6 +37,17 @@ export function HaloWindow() {
     submitClarification,
     submitConversation,
   } = useHaloStore();
+
+  // Initialize AI event listeners
+  useEffect(() => {
+    initialize().catch((error) => {
+      console.error('Failed to initialize Halo AI listeners:', error);
+    });
+
+    return () => {
+      cleanup();
+    };
+  }, [initialize, cleanup]);
 
   // Listen for activation events from Rust
   useEffect(() => {

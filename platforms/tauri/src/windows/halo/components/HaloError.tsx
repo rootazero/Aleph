@@ -1,4 +1,5 @@
 import { AlertCircle, RefreshCw, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface HaloErrorProps {
   message: string;
@@ -8,6 +9,8 @@ interface HaloErrorProps {
 }
 
 export function HaloError({ message, canRetry, onRetry, onClose }: HaloErrorProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col gap-3 p-4 max-w-[280px]">
       <div className="flex items-start gap-3">
@@ -21,7 +24,7 @@ export function HaloError({ message, canRetry, onRetry, onClose }: HaloErrorProp
             className="flex items-center gap-1.5 px-3 py-1.5 text-caption rounded-medium bg-secondary hover:bg-secondary/80 transition-colors"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            Retry
+            {t('common.retry')}
           </button>
         )}
         <button
@@ -29,7 +32,7 @@ export function HaloError({ message, canRetry, onRetry, onClose }: HaloErrorProp
           className="flex items-center gap-1.5 px-3 py-1.5 text-caption rounded-medium bg-secondary hover:bg-secondary/80 transition-colors"
         >
           <X className="w-3.5 h-3.5" />
-          Close
+          {t('common.close')}
         </button>
       </div>
     </div>

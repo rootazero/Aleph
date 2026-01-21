@@ -13,6 +13,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 
 export type SettingsTab =
   | 'general'
@@ -28,46 +29,48 @@ export type SettingsTab =
   | 'agent'
   | 'policies';
 
-interface TabGroup {
-  label: string;
-  tabs: {
-    id: SettingsTab;
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-  }[];
+interface TabConfig {
+  id: SettingsTab;
+  labelKey: string;
+  icon: React.ComponentType<{ className?: string }>;
 }
 
-const tabGroups: TabGroup[] = [
+interface TabGroupConfig {
+  labelKey: string;
+  tabs: TabConfig[];
+}
+
+const tabGroupsConfig: TabGroupConfig[] = [
   {
-    label: 'Basic',
+    labelKey: 'settings.groups.basic',
     tabs: [
-      { id: 'general', label: 'General', icon: Settings },
-      { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
-      { id: 'behavior', label: 'Behavior', icon: Sliders },
+      { id: 'general', labelKey: 'settings.general.title', icon: Settings },
+      { id: 'shortcuts', labelKey: 'settings.shortcuts.title', icon: Keyboard },
+      { id: 'behavior', labelKey: 'settings.behavior.title', icon: Sliders },
     ],
   },
   {
-    label: 'AI',
+    labelKey: 'settings.groups.ai',
     tabs: [
-      { id: 'providers', label: 'Providers', icon: Cpu },
-      { id: 'generation', label: 'Generation', icon: Palette },
-      { id: 'memory', label: 'Memory', icon: Brain },
+      { id: 'providers', labelKey: 'settings.providers.title', icon: Cpu },
+      { id: 'generation', labelKey: 'settings.generation.title', icon: Palette },
+      { id: 'memory', labelKey: 'settings.memory.title', icon: Brain },
     ],
   },
   {
-    label: 'Extensions',
+    labelKey: 'settings.groups.extensions',
     tabs: [
-      { id: 'mcp', label: 'MCP', icon: Wrench },
-      { id: 'plugins', label: 'Plugins', icon: Plug },
-      { id: 'skills', label: 'Skills', icon: Sparkles },
+      { id: 'mcp', labelKey: 'settings.mcp.title', icon: Wrench },
+      { id: 'plugins', labelKey: 'settings.plugins.title', icon: Plug },
+      { id: 'skills', labelKey: 'settings.skills.title', icon: Sparkles },
     ],
   },
   {
-    label: 'Advanced',
+    labelKey: 'settings.groups.advanced',
     tabs: [
-      { id: 'agent', label: 'Agent', icon: Bot },
-      { id: 'search', label: 'Search', icon: Search },
-      { id: 'policies', label: 'Policies', icon: Shield },
+      { id: 'agent', labelKey: 'settings.agent.title', icon: Bot },
+      { id: 'search', labelKey: 'settings.search.title', icon: Search },
+      { id: 'policies', labelKey: 'settings.policies.title', icon: Shield },
     ],
   },
 ];
@@ -78,12 +81,14 @@ interface SettingsSidebarProps {
 }
 
 export function SettingsSidebar({ activeTab, onTabChange }: SettingsSidebarProps) {
+  const { t } = useTranslation();
+
   return (
     <nav className="space-y-4">
-      {tabGroups.map((group) => (
-        <div key={group.label}>
+      {tabGroupsConfig.map((group) => (
+        <div key={group.labelKey}>
           <h3 className="px-3 py-1 text-caption font-medium text-muted-foreground">
-            {group.label}
+            {t(group.labelKey)}
           </h3>
           <div className="space-y-0.5">
             {group.tabs.map((tab) => {
@@ -102,7 +107,7 @@ export function SettingsSidebar({ activeTab, onTabChange }: SettingsSidebarProps
                   )}
                 >
                   <Icon className="w-4 h-4" />
-                  <span>{tab.label}</span>
+                  <span>{t(tab.labelKey)}</span>
                 </button>
               );
             })}

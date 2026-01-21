@@ -24,6 +24,12 @@ pub enum AetherError {
     #[error("Window error: {0}")]
     Window(String),
 
+    #[error("Config error: {0}")]
+    Config(String),
+
+    #[error("Core error: {0}")]
+    Core(String),
+
     #[error("IO error: {0}")]
     Io(String),
 

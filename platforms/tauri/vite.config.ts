@@ -23,6 +23,7 @@ export default defineConfig({
     target: ['es2021', 'chrome100', 'safari15'],
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_DEBUG,
+    chunkSizeWarningLimit: 500,
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, 'index.html'),
@@ -30,6 +31,40 @@ export default defineConfig({
         settings: path.resolve(__dirname, 'settings.html'),
         conversation: path.resolve(__dirname, 'conversation.html'),
       },
+      output: {
+        manualChunks: {
+          // Vendor chunks for better caching
+          'react-vendor': ['react', 'react-dom'],
+          'ui-vendor': ['framer-motion', 'lucide-react'],
+          'radix-vendor': [
+            '@radix-ui/react-switch',
+            '@radix-ui/react-select',
+            '@radix-ui/react-slider',
+            '@radix-ui/react-dialog',
+            '@radix-ui/react-slot',
+          ],
+          'tauri-vendor': [
+            '@tauri-apps/api',
+            '@tauri-apps/plugin-dialog',
+            '@tauri-apps/plugin-fs',
+            '@tauri-apps/plugin-global-shortcut',
+            '@tauri-apps/plugin-notification',
+            '@tauri-apps/plugin-shell',
+          ],
+          'state': ['zustand'],
+          'i18n': ['i18next', 'react-i18next'],
+        },
+      },
     },
+  },
+  // Optimize deps
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom',
+      'framer-motion',
+      'zustand',
+      'lucide-react',
+    ],
   },
 });

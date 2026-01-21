@@ -11,10 +11,29 @@
     "close": "Close",
     "retry": "Retry",
     "loading": "Loading...",
-    "error": "Error"
+    "error": "Error",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "name": "Name",
+    "type": "Type",
+    "status": "Status",
+    "actions": "Actions",
+    "search": "Search",
+    "noResults": "No results found",
+    "pressKeys": "Press keys...",
+    "clearShortcut": "Clear shortcut",
+    "setAsDefault": "Set as default",
+    "notRequired": "Not required",
+    "systemDefault": "System Default"
   },
   "settings": {
     "title": "Settings",
+    "groups": {
+      "basic": "Basic",
+      "ai": "AI",
+      "extensions": "Extensions",
+      "advanced": "Advanced"
+    },
     "general": {
       "title": "General",
       "description": "Basic application settings",
@@ -29,39 +48,209 @@
     },
     "shortcuts": {
       "title": "Shortcuts",
-      "description": "Configure keyboard shortcuts"
+      "description": "Configure global keyboard shortcuts",
+      "showHalo": "Show Halo",
+      "showHaloDescription": "Activate the Halo assistant at cursor position",
+      "commandCompletion": "Command Completion",
+      "commandCompletionDescription": "Trigger AI command completion",
+      "toggleListening": "Toggle Listening",
+      "toggleListeningDescription": "Start or stop voice listening mode",
+      "quickCapture": "Quick Capture",
+      "quickCaptureDescription": "Capture selected text for processing",
+      "hint": "Click on a shortcut field and press your desired key combination"
     },
     "behavior": {
       "title": "Behavior",
-      "description": "Configure output and behavior settings"
+      "description": "Configure output and behavior settings",
+      "outputDirectory": "Output Directory",
+      "outputDirectoryDescription": "Default location for generated files",
+      "autoSave": "Auto Save",
+      "autoSaveDescription": "Automatically save changes",
+      "confirmDelete": "Confirm Delete",
+      "confirmDeleteDescription": "Ask for confirmation before deleting items"
     },
     "providers": {
       "title": "Providers",
-      "description": "Configure AI providers"
+      "description": "Manage AI provider connections",
+      "addProvider": "Add Provider",
+      "editProvider": "Edit Provider",
+      "configureDescription": "Configure your AI provider settings",
+      "noProviders": "No providers configured",
+      "noProvidersHint": "Add a provider to get started",
+      "providerName": "Name",
+      "providerType": "Provider Type",
+      "apiKey": "API Key",
+      "baseUrl": "Base URL",
+      "model": "Model",
+      "types": {
+        "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "gemini": "Google Gemini",
+        "ollama": "Ollama (Local)",
+        "custom": "Custom"
+      }
+    },
+    "generation": {
+      "title": "Generation",
+      "description": "Configure text and image generation settings",
+      "textGeneration": "Text Generation",
+      "imageGeneration": "Image Generation",
+      "maxTokens": "Max Tokens",
+      "temperature": "Temperature",
+      "topP": "Top P",
+      "presencePenalty": "Presence Penalty",
+      "frequencyPenalty": "Frequency Penalty"
+    },
+    "memory": {
+      "title": "Memory",
+      "description": "Configure conversation memory and history",
+      "enableMemory": "Enable Memory",
+      "enableMemoryDescription": "Store conversation history for context",
+      "maxHistoryItems": "Max History Items",
+      "clearMemory": "Clear Memory",
+      "clearMemoryDescription": "Delete all stored memory",
+      "confirmClear": "Are you sure you want to clear all memory?",
+      "memoryCleared": "Memory cleared successfully"
+    },
+    "search": {
+      "title": "Search",
+      "description": "Configure search settings",
+      "webSearch": "Web Search",
+      "webSearchDescription": "Enable web search for queries",
+      "searchEngine": "Search Engine",
+      "searchEngineDescription": "Select preferred search engine"
     },
     "mcp": {
       "title": "MCP",
-      "description": "Configure MCP servers"
+      "description": "Configure MCP servers",
+      "addServer": "Add Server",
+      "editServer": "Edit Server",
+      "noServers": "No MCP servers configured",
+      "noServersHint": "Add an MCP server to extend functionality",
+      "serverName": "Server Name",
+      "serverCommand": "Command",
+      "serverArgs": "Arguments",
+      "serverEnv": "Environment Variables",
+      "status": {
+        "running": "Running",
+        "stopped": "Stopped",
+        "error": "Error"
+      }
+    },
+    "skills": {
+      "title": "Skills",
+      "description": "Manage AI skills and capabilities",
+      "noSkills": "No skills available",
+      "skillName": "Skill Name",
+      "skillDescription": "Description",
+      "allowedTools": "Allowed Tools"
     },
     "plugins": {
       "title": "Plugins",
-      "description": "Manage plugins"
+      "description": "Manage plugins",
+      "addPlugin": "Add Plugin",
+      "installFromGit": "Install from Git",
+      "installFromZip": "Install from ZIP",
+      "noPlugins": "No plugins installed",
+      "noPluginsHint": "Install a plugin to extend functionality",
+      "pluginName": "Plugin Name",
+      "pluginVersion": "Version",
+      "pluginAuthor": "Author",
+      "gitUrl": "Git URL",
+      "gitUrlPlaceholder": "https://github.com/user/plugin.git",
+      "selectZip": "Select ZIP file"
     },
     "agent": {
       "title": "Agent",
-      "description": "Configure agent settings"
+      "description": "Configure agent settings",
+      "enableAgent": "Enable Agent Mode",
+      "enableAgentDescription": "Allow AI to execute multi-step tasks",
+      "confirmActions": "Confirm Actions",
+      "confirmActionsDescription": "Require confirmation for each action",
+      "maxSteps": "Max Steps",
+      "maxStepsDescription": "Maximum number of steps per task"
+    },
+    "policies": {
+      "title": "Policies",
+      "description": "Configure security and access policies",
+      "allowFileAccess": "Allow File Access",
+      "allowFileAccessDescription": "Allow AI to read and write files",
+      "allowNetworkAccess": "Allow Network Access",
+      "allowNetworkAccessDescription": "Allow AI to make network requests",
+      "blockedDomains": "Blocked Domains",
+      "blockedDomainsDescription": "List of domains to block"
     }
   },
   "halo": {
     "listening": "Listening...",
     "processing": "Processing...",
+    "thinking": "Thinking...",
     "success": "Done",
-    "error": "Something went wrong"
+    "error": "Something went wrong",
+    "retrievingMemory": "Retrieving memory...",
+    "typewriting": "Writing...",
+    "clarification": {
+      "title": "Clarification needed",
+      "submit": "Submit"
+    },
+    "input": {
+      "placeholder": "Type your message..."
+    },
+    "tool": {
+      "title": "Tool Confirmation",
+      "description": "Allow this tool to run?",
+      "approve": "Approve",
+      "deny": "Deny"
+    },
+    "plan": {
+      "title": "Plan Confirmation",
+      "description": "Review and approve the plan",
+      "approve": "Approve Plan",
+      "reject": "Reject",
+      "stepStatus": {
+        "pending": "Pending",
+        "running": "Running",
+        "completed": "Completed",
+        "failed": "Failed"
+      }
+    },
+    "taskGraph": {
+      "title": "Task Graph",
+      "description": "Review the task execution plan",
+      "approve": "Execute",
+      "reject": "Cancel"
+    },
+    "agent": {
+      "title": "Agent Plan",
+      "description": "The agent wants to execute these steps",
+      "approve": "Start Agent",
+      "reject": "Cancel",
+      "resolving": "Resolving...",
+      "conflict": {
+        "title": "Conflict Detected",
+        "description": "Please select an option to resolve"
+      }
+    },
+    "toast": {
+      "info": "Info",
+      "warning": "Warning",
+      "error": "Error"
+    }
+  },
+  "conversation": {
+    "title": "Conversation",
+    "startPrompt": "Start a Conversation",
+    "startDescription": "Type a message below to begin chatting with Aether AI.",
+    "inputPlaceholder": "Ask Aether anything...",
+    "clearMessages": "Clear messages",
+    "processing": "Processing..."
   },
   "tray": {
     "about": "About Aether",
     "settings": "Settings...",
     "quit": "Quit Aether",
-    "defaultProvider": "Default Provider"
+    "defaultProvider": "Default Provider",
+    "showHalo": "Show Halo",
+    "openConversation": "Open Conversation"
   }
 }
