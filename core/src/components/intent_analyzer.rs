@@ -484,6 +484,50 @@ impl IntentAnalyzer {
                 };
                 Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
             }
+            ExecutionMode::Skill(skill) => {
+                // Skill command - run agent with skill instructions injected
+                let tool_call = ToolCallRequest {
+                    tool: "agent_with_skill".to_string(),
+                    parameters: serde_json::json!({
+                        "skill_id": skill.skill_id,
+                        "skill_name": skill.display_name,
+                        "instructions": skill.instructions,
+                        "args": skill.args,
+                        "input_text": input.text,
+                    }),
+                    plan_step_id: None,
+                };
+                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+            }
+            ExecutionMode::Mcp(mcp) => {
+                // MCP command - route to MCP server
+                let tool_call = ToolCallRequest {
+                    tool: format!("mcp:{}", mcp.server_name),
+                    parameters: serde_json::json!({
+                        "server_name": mcp.server_name,
+                        "tool_name": mcp.tool_name,
+                        "args": mcp.args,
+                        "input_text": input.text,
+                    }),
+                    plan_step_id: None,
+                };
+                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+            }
+            ExecutionMode::Custom(custom) => {
+                // Custom command - run agent with custom system prompt
+                let tool_call = ToolCallRequest {
+                    tool: "agent_with_prompt".to_string(),
+                    parameters: serde_json::json!({
+                        "command_name": custom.command_name,
+                        "system_prompt": custom.system_prompt,
+                        "provider": custom.provider,
+                        "args": custom.args,
+                        "input_text": input.text,
+                    }),
+                    plan_step_id: None,
+                };
+                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+            }
             ExecutionMode::Execute(category) => {
                 // Determine if planning is needed based on complexity
                 let complexity = self.analyze_complexity_for_category(&input.text, category);

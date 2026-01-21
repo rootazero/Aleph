@@ -1,5 +1,13 @@
 //! Request Orchestrator - Unified entry point for request processing
 //!
+//! # DEPRECATED
+//!
+//! This module is being replaced by the new Agent Loop architecture.
+//! See `crate::agent_loop` for the new implementation.
+//!
+//! - Old: RequestOrchestrator (2-phase: Intent → Dispatcher)
+//! - New: IntentRouter + AgentLoop (L0-L2 routing + observe-think-act loop)
+//!
 //! This module coordinates the ExecutionIntentDecider (Phase 1) and Dispatcher (Phase 2)
 //! to provide a clean separation of concerns:
 //!
@@ -36,6 +44,9 @@
 //! 2. **Clear separation**: "what to do" vs "how to do"
 //! 3. **Simplified prompts**: No decision logic in prompts
 
+// Allow deprecated usage within this module during transition
+#![allow(deprecated)]
+
 mod request;
 mod result;
 
@@ -66,6 +77,11 @@ pub struct RoutingOptions {
 /// Coordinates the two-phase processing:
 /// 1. ExecutionIntentDecider: Decides execution mode
 /// 2. Dispatcher: Routes to tools and models (only for Execute mode)
+///
+/// # Deprecated
+///
+/// Use `crate::agent_loop::AgentLoop` with `crate::intent::IntentRouter` instead.
+#[deprecated(since = "0.2.0", note = "Use AgentLoop with IntentRouter instead")]
 pub struct RequestOrchestrator {
     /// Phase 1: Intent decision
     intent_decider: ExecutionIntentDecider,
@@ -96,6 +112,22 @@ impl RequestOrchestrator {
             dispatcher: DispatcherIntegration::new(dispatcher_config),
             prompt_config,
         }
+    }
+
+    /// Create with a pre-configured ExecutionIntentDecider
+    ///
+    /// This allows for custom command parser setup (skills, MCP, custom commands).
+    pub fn with_intent_decider(intent_decider: ExecutionIntentDecider) -> Self {
+        Self {
+            intent_decider,
+            dispatcher: DispatcherIntegration::with_defaults(),
+            prompt_config: PromptConfig::default(),
+        }
+    }
+
+    /// Set the intent decider
+    pub fn set_intent_decider(&mut self, decider: ExecutionIntentDecider) {
+        self.intent_decider = decider;
     }
 
     /// Process a user request through the two-phase pipeline
@@ -144,6 +176,95 @@ impl RequestOrchestrator {
                 ))
             }
 
+            ExecutionMode::Skill(skill) => {
+                // Skill execution - inject skill instructions
+                debug!(
+                    skill_id = %skill.skill_id,
+                    skill_name = %skill.display_name,
+                    "Skill execution mode"
+                );
+
+                // Build prompt with skill instructions
+                let base_prompt = PromptBuilder::executor_prompt(
+                    TaskCategory::General,
+                    &[],
+                    Some(&self.prompt_config),
+                );
+                let prompt = format!(
+                    "# Skill: {}\n\n{}\n\n---\n\n{}",
+                    skill.display_name, skill.instructions, base_prompt
+                );
+
+                Ok(OrchestratorResult::skill(
+                    skill.skill_id.clone(),
+                    skill.display_name.clone(),
+                    skill.instructions.clone(),
+                    skill.args.clone(),
+                    prompt,
+                    request.tools.clone(),
+                    decision,
+                ))
+            }
+
+            ExecutionMode::Mcp(mcp) => {
+                // MCP execution - route to MCP server
+                debug!(
+                    server_name = %mcp.server_name,
+                    tool_name = ?mcp.tool_name,
+                    "MCP execution mode"
+                );
+
+                // Build prompt with MCP tool hint
+                let base_prompt = PromptBuilder::executor_prompt(
+                    TaskCategory::General,
+                    &[],
+                    Some(&self.prompt_config),
+                );
+                let tool_hint = if let Some(ref tool_name) = mcp.tool_name {
+                    format!("请使用 {} 工具（来自 {} 服务器）处理", tool_name, mcp.server_name)
+                } else {
+                    format!("请使用 {} MCP 服务器的工具处理", mcp.server_name)
+                };
+                let prompt = format!("{}\n\n---\n\n{}", base_prompt, tool_hint);
+
+                Ok(OrchestratorResult::mcp(
+                    mcp.server_name.clone(),
+                    mcp.tool_name.clone(),
+                    mcp.args.clone(),
+                    prompt,
+                    request.tools.clone(),
+                    decision,
+                ))
+            }
+
+            ExecutionMode::Custom(custom) => {
+                // Custom command execution - use custom system prompt
+                debug!(
+                    command_name = %custom.command_name,
+                    has_system_prompt = custom.system_prompt.is_some(),
+                    "Custom command execution mode"
+                );
+
+                // Use custom system prompt if provided, otherwise use default executor prompt
+                let prompt = custom.system_prompt.clone().unwrap_or_else(|| {
+                    PromptBuilder::executor_prompt(
+                        TaskCategory::General,
+                        &[],
+                        Some(&self.prompt_config),
+                    )
+                });
+
+                Ok(OrchestratorResult::custom(
+                    custom.command_name.clone(),
+                    custom.system_prompt.clone(),
+                    custom.provider.clone(),
+                    custom.args.clone(),
+                    prompt,
+                    request.tools.clone(),
+                    decision,
+                ))
+            }
+
             ExecutionMode::Converse => {
                 // Conversation mode - generate conversational prompt
                 let prompt =
@@ -165,7 +286,7 @@ impl RequestOrchestrator {
     fn process_execute_mode(
         &self,
         category: TaskCategory,
-        input: &str,
+        _input: &str, // TODO: May be used for prompt enhancement
         decision: DecisionResult,
         available_tools: &[UnifiedTool],
     ) -> Result<OrchestratorResult> {

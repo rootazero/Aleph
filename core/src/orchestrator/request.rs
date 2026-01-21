@@ -1,4 +1,11 @@
 //! Request types for the orchestrator
+//!
+//! # Deprecated
+//!
+//! This module is being replaced by the Agent Loop architecture.
+//! See `crate::agent_loop::state::RequestContext` for the new implementation.
+
+#![allow(deprecated)]
 
 use crate::dispatcher::UnifiedTool;
 

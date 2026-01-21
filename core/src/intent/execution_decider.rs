@@ -38,10 +38,12 @@
 //! 4. **No prompt contamination**: Prompts never contain decision logic
 
 use super::TaskCategory;
+use crate::command::{CommandContext, CommandParser, ParsedCommand};
+use crate::dispatcher::ToolSourceType;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 // =============================================================================
 // Core Types
@@ -50,9 +52,21 @@ use std::sync::LazyLock;
 /// Execution mode determined by the decider
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionMode {
-    /// Direct tool invocation from slash command
-    /// Bypasses all AI processing, directly calls the specified tool
+    /// Direct tool invocation from slash command (builtin tools)
+    /// Example: /screenshot, /ocr, /search
     DirectTool(ToolInvocation),
+
+    /// Skill-based execution with injected instructions
+    /// Example: /knowledge-graph, /translate
+    Skill(SkillInvocation),
+
+    /// MCP server tool execution
+    /// Example: /git, /docker
+    Mcp(McpInvocation),
+
+    /// Custom command with system prompt
+    /// Example: /translate (from routing rules)
+    Custom(CustomInvocation),
 
     /// Execute a task using AI with tools
     /// The AI receives an executor prompt and relevant tools
@@ -63,11 +77,48 @@ pub enum ExecutionMode {
     Converse,
 }
 
-/// Direct tool invocation details
+/// Direct tool invocation details (for builtin commands)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolInvocation {
     /// Tool identifier (e.g., "screenshot", "ocr")
     pub tool_id: String,
+    /// Raw arguments from the command
+    pub args: String,
+}
+
+/// Skill invocation details
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillInvocation {
+    /// Skill identifier
+    pub skill_id: String,
+    /// Display name for the skill
+    pub display_name: String,
+    /// Skill instructions to inject as context
+    pub instructions: String,
+    /// Raw arguments from the command
+    pub args: String,
+}
+
+/// MCP server invocation details
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpInvocation {
+    /// MCP server name
+    pub server_name: String,
+    /// Specific tool name within the server (if any)
+    pub tool_name: Option<String>,
+    /// Raw arguments from the command
+    pub args: String,
+}
+
+/// Custom command invocation details
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomInvocation {
+    /// Command name
+    pub command_name: String,
+    /// System prompt to inject
+    pub system_prompt: Option<String>,
+    /// Provider override
+    pub provider: Option<String>,
     /// Raw arguments from the command
     pub args: String,
 }
@@ -357,6 +408,9 @@ pub struct ContextSignals {
 /// Single decision point for "execute vs converse" determination.
 pub struct ExecutionIntentDecider {
     config: DeciderConfig,
+    /// Optional command parser for dynamic command resolution
+    /// (supports skills, MCP, custom commands)
+    command_parser: Option<Arc<CommandParser>>,
 }
 
 impl ExecutionIntentDecider {
@@ -364,12 +418,32 @@ impl ExecutionIntentDecider {
     pub fn new() -> Self {
         Self {
             config: DeciderConfig::default(),
+            command_parser: None,
         }
     }
 
     /// Create a new decider with custom config
     pub fn with_config(config: DeciderConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            command_parser: None,
+        }
+    }
+
+    /// Set the command parser for dynamic command resolution
+    ///
+    /// This enables support for:
+    /// - Skills (from SkillsRegistry)
+    /// - MCP tools (from MCP servers)
+    /// - Custom commands (from routing rules)
+    pub fn with_command_parser(mut self, parser: Arc<CommandParser>) -> Self {
+        self.command_parser = Some(parser);
+        self
+    }
+
+    /// Update the command parser
+    pub fn set_command_parser(&mut self, parser: Arc<CommandParser>) {
+        self.command_parser = Some(parser);
     }
 
     /// Decide execution mode for user input
@@ -412,20 +486,30 @@ impl ExecutionIntentDecider {
     }
 
     /// Check for slash command (L0)
+    ///
+    /// Uses CommandParser if available for dynamic command resolution,
+    /// otherwise falls back to built-in command lookup.
     fn check_slash_command(&self, input: &str) -> Option<ExecutionMode> {
         let trimmed = input.trim();
         if !trimmed.starts_with('/') {
             return None;
         }
 
-        // Parse command and args
+        // If we have a command parser, use it for full resolution
+        if let Some(ref parser) = self.command_parser {
+            if let Some(parsed) = parser.parse(trimmed) {
+                return Some(self.parsed_command_to_mode(parsed));
+            }
+        }
+
+        // Fallback: Parse command and args manually
         let without_slash = &trimmed[1..];
         let (cmd_name, args) = match without_slash.split_once(char::is_whitespace) {
             Some((name, rest)) => (name.to_lowercase(), rest.trim().to_string()),
             None => (without_slash.to_lowercase(), String::new()),
         };
 
-        // Check custom commands first
+        // Check custom commands from config
         if let Some(tool_id) = self.config.custom_slash_commands.get(&cmd_name) {
             return Some(ExecutionMode::DirectTool(ToolInvocation {
                 tool_id: tool_id.clone(),
@@ -442,6 +526,96 @@ impl ExecutionIntentDecider {
         }
 
         None
+    }
+
+    /// Convert a ParsedCommand to ExecutionMode
+    fn parsed_command_to_mode(&self, cmd: ParsedCommand) -> ExecutionMode {
+        let args = cmd.arguments.clone().unwrap_or_default();
+
+        match cmd.source_type {
+            ToolSourceType::Builtin => {
+                // Built-in commands map to DirectTool
+                if let CommandContext::Builtin { tool_name } = cmd.context {
+                    ExecutionMode::DirectTool(ToolInvocation {
+                        tool_id: tool_name,
+                        args,
+                    })
+                } else {
+                    ExecutionMode::DirectTool(ToolInvocation {
+                        tool_id: cmd.command_name,
+                        args,
+                    })
+                }
+            }
+
+            ToolSourceType::Skill => {
+                // Skills need their instructions injected
+                if let CommandContext::Skill {
+                    skill_id,
+                    instructions,
+                    display_name,
+                } = cmd.context
+                {
+                    ExecutionMode::Skill(SkillInvocation {
+                        skill_id,
+                        display_name,
+                        instructions,
+                        args,
+                    })
+                } else {
+                    // Fallback to general execution
+                    ExecutionMode::Execute(TaskCategory::General)
+                }
+            }
+
+            ToolSourceType::Mcp => {
+                // MCP commands route to MCP server
+                if let CommandContext::Mcp {
+                    server_name,
+                    tool_name,
+                } = cmd.context
+                {
+                    ExecutionMode::Mcp(McpInvocation {
+                        server_name,
+                        tool_name,
+                        args,
+                    })
+                } else {
+                    ExecutionMode::Mcp(McpInvocation {
+                        server_name: cmd.command_name,
+                        tool_name: None,
+                        args,
+                    })
+                }
+            }
+
+            ToolSourceType::Custom => {
+                // Custom commands have system prompts
+                if let CommandContext::Custom {
+                    system_prompt,
+                    provider,
+                    ..
+                } = cmd.context
+                {
+                    ExecutionMode::Custom(CustomInvocation {
+                        command_name: cmd.command_name,
+                        system_prompt,
+                        provider,
+                        args,
+                    })
+                } else {
+                    ExecutionMode::Execute(TaskCategory::General)
+                }
+            }
+
+            ToolSourceType::Native => {
+                // Legacy native tools
+                ExecutionMode::DirectTool(ToolInvocation {
+                    tool_id: cmd.command_name,
+                    args,
+                })
+            }
+        }
     }
 
     /// Check regex patterns (L1)
@@ -494,7 +668,7 @@ impl ExecutionIntentDecider {
     fn finalize_result(
         &self,
         mode: ExecutionMode,
-        layer: DecisionLayer,
+        layer: IntentLayer,
         start: std::time::Instant,
         matched: Option<&str>,
     ) -> DecisionResult {

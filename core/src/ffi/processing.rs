@@ -2,32 +2,48 @@
 //!
 //! This module contains AI processing methods: process, cancel, generate_topic_title, extract_text
 //!
-//! # Architecture (Simplified 2-Layer)
+//! # Architecture
 //!
-//! - L1: Slash command check (immediate routing for /agent, /search, etc.)
-//! - L3: AI unified planner for everything else (conversational, single action, task graph)
+//! Two processing paths are available:
+//!
+//! ## Legacy Path (RequestOrchestrator) - DEPRECATED
+//!
+//! Uses `RequestOrchestrator` with two-phase pipeline:
+//! - Phase 1 (ExecutionIntentDecider): Decides execution mode
+//! - Phase 2 (Dispatcher): Tool and model routing
+//!
+//! ## New Path (Agent Loop) - RECOMMENDED
+//!
+//! Uses `IntentRouter` + `AgentLoop` with observe-think-act cycle:
+//! - L0-L2: Fast routing via IntentRouter
+//! - Agent Loop: LLM-based thinking for complex tasks
+
+// Allow deprecated orchestrator usage during transition
+#![allow(deprecated)]
 
 use super::{AetherCore, AetherFfiError};
 use crate::agents::RigAgentManager;
-use crate::command::{CommandContext, CommandParser, ParsedCommand};
+use crate::command::CommandParser;
 use crate::config::RoutingRuleConfig;
-use crate::dispatcher::executor::{
-    CodeExecutor, ExecutorRegistry, FileOpsExecutor, PathPermissionChecker,
-};
-use crate::dispatcher::ToolSourceType;
-use crate::executor::{ExecutionContext as ExecContext, ExecutorError, UnifiedExecutor};
 use crate::intent::{AgentModePrompt, ToolDescription};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
-use crate::orchestrator::{OrchestratorMode, OrchestratorRequest, RequestContext, RequestOrchestrator};
-use crate::planner::{ExecutionPlan, PlannerConfig, ToolInfo, UnifiedPlanner};
+use crate::orchestrator::{OrchestratorMode, OrchestratorRequest, RequestContext as OrchestratorRequestContext, RequestOrchestrator};
 use crate::prompt::PromptBuilder;
-use crate::providers::{create_provider, AiProvider};
 use crate::skills::SkillsRegistry;
 use crate::utils::paths::get_skills_dir;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+
+// New Agent Loop imports
+use crate::agent_loop::{
+    AgentLoop, LoopConfig, LoopResult, RequestContext as AgentRequestContext,
+};
+use crate::compressor::NoOpCompressor;
+use crate::ffi::FfiLoopCallback;
+use crate::intent::{DirectMode, IntentRouter, RouteResult, ThinkingContext};
+use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
 
 /// Processing options
 #[derive(Debug, Clone)]
@@ -111,7 +127,7 @@ impl AetherCore {
         let app_context = options.app_context.clone();
         let window_title = options.window_title.clone();
         let topic_id = options.topic_id.clone();
-        let stream = options.stream;
+        let _stream = options.stream; // TODO: Use streaming mode in orchestrator
 
         let handler = Arc::clone(&self.handler);
         // Acquire read lock to get current config (supports config reload)
@@ -135,13 +151,11 @@ impl AetherCore {
 
         // Clone generation config for model aliases
         // Clone routing rules for slash command parsing
-        // Clone full config for creating AI provider
-        let (generation_config, routing_rules, full_config_clone) = {
+        let (generation_config, routing_rules) = {
             let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
             (
                 full_config.generation.clone(),
                 full_config.rules.clone(),
-                full_config.clone(),
             )
         };
 
@@ -163,312 +177,36 @@ impl AetherCore {
             handler.on_thinking();
 
             // ================================================================
-            // EXPERIMENTAL: RequestOrchestrator-based processing
+            // RequestOrchestrator-based processing (Unified Path)
             // ================================================================
-            // Check if the new orchestrator-based processing is enabled
-            if full_config_clone.policies.experimental.use_request_orchestrator {
-                info!("Using experimental RequestOrchestrator processing");
-                process_with_orchestrator(
-                    &runtime,
-                    &input,
-                    &app_context,
-                    &window_title,
-                    &config,
-                    tool_server_handle,
-                    registered_tools,
-                    &conversation_histories,
-                    &topic_id,
-                    attachments.as_deref(),
-                    &op_token,
-                    &handler,
-                    &memory_config,
-                    &memory_path,
-                    &input_for_memory,
-                    &generation_config,
-                );
-                return;
-            }
-
-            // ================================================================
-            // L1: SLASH COMMAND CHECK (Legacy Path)
-            // ================================================================
-            // Only parse slash commands (starting with '/').
-            // For non-slash input, use the unified planner (L3).
-            let parsed_command = if input.starts_with('/') {
-                parse_slash_command(&input, &routing_rules)
-            } else {
-                None
-            };
-
-            // Get tool descriptions for agent prompt (used by multiple branches)
-            // Includes generate_image if image providers are configured
-            info!(
-                generation_providers_count = generation_config.providers.len(),
-                generation_providers = ?generation_config.providers.keys().collect::<Vec<_>>(),
-                "Checking generation config for tool descriptions"
+            // All processing goes through the orchestrator which handles:
+            // - Builtin commands (/screenshot, /search, etc.)
+            // - Skills (/skill_name with instructions)
+            // - MCP commands (/mcp_server)
+            // - Custom commands (from routing rules)
+            // - Natural language tasks (Execute or Converse mode)
+            info!("Processing via RequestOrchestrator");
+            process_with_orchestrator(
+                &runtime,
+                &input,
+                &app_context,
+                &window_title,
+                &config,
+                tool_server_handle,
+                registered_tools,
+                &conversation_histories,
+                &topic_id,
+                attachments.as_deref(),
+                &op_token,
+                &handler,
+                &memory_config,
+                &memory_path,
+                &input_for_memory,
+                &generation_config,
+                &routing_rules,
             );
-            let tool_descriptions = get_builtin_tool_descriptions(&generation_config);
 
-            // If slash command is detected, handle it with existing logic
-            if let Some(ref cmd) = parsed_command {
-                // ================================================================
-                // SLASH COMMAND HANDLING (Existing Logic)
-                // ================================================================
-                let processed_input = match cmd.source_type {
-                    ToolSourceType::Builtin => {
-                        // Handle builtin commands
-                        match cmd.command_name.as_str() {
-                            "agent" => {
-                                // /agent command - inject agent mode prompt
-                                let task_input = cmd.arguments.clone().unwrap_or_default();
-                                info!(task = %task_input, "Explicit /agent command detected");
-
-                                let agent_prompt = AgentModePrompt::with_tools(tool_descriptions)
-                                    .with_generation_config(&generation_config)
-                                    .generate();
-
-                                // Notify UI of agent mode
-                                let task = crate::intent::ExecutableTask {
-                                    category: crate::intent::TaskCategory::General,
-                                    action: task_input.clone(),
-                                    target: None,
-                                    confidence: 1.0,
-                                };
-                                handler.on_agent_mode_detected((&task).into());
-
-                                format!("{}\n\n---\n\n用户请求: {}", agent_prompt, task_input)
-                            }
-                            "search" | "youtube" | "webfetch" => {
-                                // Other builtin tools - inject tool trigger prompt
-                                let tool_name = &cmd.command_name;
-                                let args = cmd.arguments.clone().unwrap_or_default();
-                                info!(tool = %tool_name, args = %args, "Builtin tool command");
-
-                                // Inject agent prompt with tool hint
-                                let agent_prompt =
-                                    AgentModePrompt::with_tools(tool_descriptions.clone())
-                                        .with_generation_config(&generation_config)
-                                        .generate();
-                                let tool_hint = match tool_name.as_str() {
-                                    "search" => format!("请使用 search 工具搜索以下内容: {}", args),
-                                    "youtube" => {
-                                        format!("请使用 youtube 工具获取以下视频信息: {}", args)
-                                    }
-                                    "webfetch" => {
-                                        format!("请使用 web_fetch 工具获取以下网页内容: {}", args)
-                                    }
-                                    _ => args,
-                                };
-
-                                format!("{}\n\n---\n\n用户请求: {}", agent_prompt, tool_hint)
-                            }
-                            _ => {
-                                // Unknown builtin - treat as regular input
-                                input.clone()
-                            }
-                        }
-                    }
-                    ToolSourceType::Skill => {
-                        // Handle skill commands - inject skill instructions
-                        if let CommandContext::Skill {
-                            skill_id,
-                            instructions,
-                            display_name,
-                        } = &cmd.context
-                        {
-                            let user_input = cmd.arguments.clone().unwrap_or_default();
-                            info!(
-                                skill_id = %skill_id,
-                                skill_name = %display_name,
-                                "Skill command detected"
-                            );
-
-                            // Inject skill instructions as system context
-                            format!(
-                                "# Skill: {}\n\n{}\n\n---\n\n用户请求: {}",
-                                display_name, instructions, user_input
-                            )
-                        } else {
-                            input.clone()
-                        }
-                    }
-                    ToolSourceType::Custom => {
-                        // Handle custom commands - inject system prompt
-                        if let CommandContext::Custom {
-                            system_prompt,
-                            provider: _,
-                            pattern: _,
-                        } = &cmd.context
-                        {
-                            let user_input = cmd.arguments.clone().unwrap_or_default();
-                            info!(
-                                command = %cmd.command_name,
-                                "Custom command detected"
-                            );
-
-                            if let Some(prompt) = system_prompt {
-                                format!("{}\n\n---\n\n用户输入: {}", prompt, user_input)
-                            } else {
-                                user_input
-                            }
-                        } else {
-                            input.clone()
-                        }
-                    }
-                    ToolSourceType::Mcp => {
-                        // Handle MCP commands - inject tool trigger
-                        if let CommandContext::Mcp {
-                            server_name,
-                            tool_name: _,
-                        } = &cmd.context
-                        {
-                            let args = cmd.arguments.clone().unwrap_or_default();
-                            info!(
-                                server = %server_name,
-                                args = %args,
-                                "MCP command detected"
-                            );
-
-                            // Inject agent prompt with MCP tool hint
-                            let agent_prompt =
-                                AgentModePrompt::with_tools(tool_descriptions.clone())
-                                    .with_generation_config(&generation_config)
-                                    .generate();
-                            format!(
-                                "{}\n\n---\n\n请使用 {} 工具处理: {}",
-                                agent_prompt, server_name, args
-                            )
-                        } else {
-                            input.clone()
-                        }
-                    }
-                    ToolSourceType::Native => {
-                        // Legacy native tools - treat as regular input
-                        input.clone()
-                    }
-                };
-
-                // Execute with RigAgentManager (existing path for slash commands)
-                execute_with_agent_manager(
-                    &runtime,
-                    &processed_input,
-                    &config,
-                    tool_server_handle,
-                    registered_tools,
-                    &conversation_histories,
-                    &topic_id,
-                    attachments.as_deref(),
-                    &op_token,
-                    &handler,
-                    &memory_config,
-                    &memory_path,
-                    &input_for_memory,
-                    &app_context,
-                    &window_title,
-                );
-            } else {
-                // ================================================================
-                // L3: UNIFIED PLANNER + EXECUTOR (New Path)
-                // ================================================================
-                // No slash command detected - use AI unified planner to decide
-                // the execution strategy (conversational, single action, or task graph).
-                info!(
-                    input_len = input.len(),
-                    "Using unified planner for non-slash input"
-                );
-
-                // Create AI provider for planner
-                let planner_provider = create_planner_provider(&full_config_clone);
-
-                // Try to plan, or fallback to direct agent execution
-                let plan_opt = if let Some(provider) = planner_provider {
-                    // Create unified planner with available tools
-                    let tools = convert_tool_descriptions_to_tool_info(&tool_descriptions);
-
-                    // Log available tools for debugging
-                    info!(
-                        tools_count = tools.len(),
-                        tools = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-                        "Tools available for planner"
-                    );
-
-                    let planner_config = PlannerConfig::default();
-                    let planner =
-                        UnifiedPlanner::with_config(Arc::clone(&provider), planner_config)
-                            .with_tools(tools);
-
-                    // Plan the execution
-                    let plan_result = runtime.block_on(async {
-                        tokio::select! {
-                            biased;
-                            _ = op_token.cancelled() => {
-                                Err(crate::planner::PlannerError::Timeout)
-                            }
-                            result = planner.plan(&input) => {
-                                result
-                            }
-                        }
-                    });
-
-                    match plan_result {
-                        Ok(plan) => {
-                            info!(plan_type = %plan.plan_type(), "Execution plan generated");
-                            Some(plan)
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Planner failed, falling back to conversational mode");
-                            None
-                        }
-                    }
-                } else {
-                    warn!("No provider available for planner, using direct agent execution");
-                    None
-                };
-
-                // Execute plan or fallback to direct agent
-                if let Some(plan) = plan_opt {
-                    execute_plan(
-                        &runtime,
-                        plan,
-                        &input,
-                        &config,
-                        tool_server_handle,
-                        registered_tools,
-                        &conversation_histories,
-                        &topic_id,
-                        attachments.as_deref(),
-                        &op_token,
-                        &handler,
-                        &memory_config,
-                        &memory_path,
-                        &input_for_memory,
-                        &app_context,
-                        &window_title,
-                        stream,
-                        &generation_config,
-                        &tool_descriptions,
-                    );
-                } else {
-                    // Fallback to direct agent execution
-                    execute_with_agent_manager(
-                        &runtime,
-                        &input,
-                        &config,
-                        tool_server_handle,
-                        registered_tools,
-                        &conversation_histories,
-                        &topic_id,
-                        attachments.as_deref(),
-                        &op_token,
-                        &handler,
-                        &memory_config,
-                        &memory_path,
-                        &input_for_memory,
-                        &app_context,
-                        &window_title,
-                    );
-                }
-            }
+            // Processing complete - orchestrator handles all paths
         });
 
         Ok(())
@@ -604,368 +342,6 @@ impl AetherCore {
         })
     }
 }
-
-/// Parse user input as a slash command
-///
-/// This function creates a CommandParser and attempts to parse slash commands.
-/// It only handles explicit slash commands (starting with '/').
-/// Natural language command detection has been removed in favor of the unified planner.
-///
-/// # Arguments
-/// * `input` - User input to parse (should start with '/')
-/// * `routing_rules` - Routing rules from config (for custom commands)
-///
-/// # Returns
-/// `Some(ParsedCommand)` if input is a recognized slash command, `None` otherwise
-fn parse_slash_command(input: &str, routing_rules: &[RoutingRuleConfig]) -> Option<ParsedCommand> {
-    // Only process slash commands
-    if !input.starts_with('/') {
-        return None;
-    }
-
-    // Build command parser with all sources
-    let mut parser = CommandParser::new();
-
-    // Load skills registry
-    let skills_registry = if let Ok(skills_dir) = get_skills_dir() {
-        let registry = SkillsRegistry::new(skills_dir);
-        if registry.load_all().is_ok() {
-            Some(Arc::new(registry))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Add skills registry to parser
-    if let Some(ref registry) = skills_registry {
-        parser = parser.with_skills_registry(Arc::clone(registry));
-    }
-
-    // Pass routing rules from config
-    parser = parser.with_routing_rules(routing_rules.to_vec());
-
-    // Parse the input (slash commands only, no NL detection)
-    parser.parse(input)
-}
-
-/// Create an AI provider for the planner
-///
-/// Uses the default provider configuration to create an AI provider instance.
-fn create_planner_provider(config: &crate::config::Config) -> Option<Arc<dyn AiProvider>> {
-    let default_provider_name = config.general.default_provider.as_ref()?;
-    let provider_config = config.providers.get(default_provider_name)?;
-
-    match create_provider(default_provider_name, provider_config.clone()) {
-        Ok(provider) => Some(provider),
-        Err(e) => {
-            warn!(error = %e, "Failed to create provider for planner");
-            None
-        }
-    }
-}
-
-/// Convert ToolDescription to ToolInfo for the planner
-fn convert_tool_descriptions_to_tool_info(descriptions: &[ToolDescription]) -> Vec<ToolInfo> {
-    descriptions
-        .iter()
-        .map(|d| ToolInfo::new(&d.name, &d.description))
-        .collect()
-}
-
-/// Execute a plan using the unified executor or fallback to agent manager
-#[allow(clippy::too_many_arguments)]
-fn execute_plan(
-    runtime: &tokio::runtime::Handle,
-    plan: ExecutionPlan,
-    original_input: &str,
-    config: &crate::agents::RigAgentConfig,
-    tool_server_handle: rig::tool::server::ToolServerHandle,
-    registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
-    conversation_histories: &Arc<
-        std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
-    >,
-    topic_id: &Option<String>,
-    attachments: Option<&[crate::core::MediaAttachment]>,
-    op_token: &CancellationToken,
-    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
-    memory_config: &crate::config::MemoryConfig,
-    memory_path: &Option<String>,
-    input_for_memory: &str,
-    app_context: &Option<String>,
-    window_title: &Option<String>,
-    _stream: bool,
-    generation_config: &crate::config::GenerationConfig,
-    tool_descriptions: &[ToolDescription],
-) {
-    match plan {
-        ExecutionPlan::Conversational { enhanced_prompt } => {
-            // Check for special ASK_*_MODEL markers for media generation
-            let model_selection_prompt = match enhanced_prompt.as_deref() {
-                Some("ASK_IMAGE_MODEL") => {
-                    debug!("Asking user to select image model");
-                    Some(build_media_model_selection_prompt(
-                        generation_config,
-                        original_input,
-                        MediaGenerationType::Image,
-                    ))
-                }
-                Some("ASK_VIDEO_MODEL") => {
-                    debug!("Asking user to select video model");
-                    Some(build_media_model_selection_prompt(
-                        generation_config,
-                        original_input,
-                        MediaGenerationType::Video,
-                    ))
-                }
-                Some("ASK_AUDIO_MODEL") => {
-                    debug!("Asking user to select audio model");
-                    Some(build_media_model_selection_prompt(
-                        generation_config,
-                        original_input,
-                        MediaGenerationType::Audio,
-                    ))
-                }
-                Some("ASK_SPEECH_MODEL") => {
-                    debug!("Asking user to select speech model");
-                    Some(build_media_model_selection_prompt(
-                        generation_config,
-                        original_input,
-                        MediaGenerationType::Speech,
-                    ))
-                }
-                _ => None,
-            };
-
-            if let Some(model_list) = model_selection_prompt {
-                execute_with_agent_manager(
-                    runtime,
-                    &model_list,
-                    config,
-                    tool_server_handle,
-                    registered_tools,
-                    conversation_histories,
-                    topic_id,
-                    attachments,
-                    op_token,
-                    handler,
-                    memory_config,
-                    memory_path,
-                    input_for_memory,
-                    app_context,
-                    window_title,
-                );
-            } else {
-                // Conversational plan - use agent manager for direct response
-                let processed_input = enhanced_prompt.unwrap_or_else(|| original_input.to_string());
-                debug!("Executing conversational plan");
-
-                execute_with_agent_manager(
-                    runtime,
-                    &processed_input,
-                    config,
-                    tool_server_handle,
-                    registered_tools,
-                    conversation_histories,
-                    topic_id,
-                    attachments,
-                    op_token,
-                    handler,
-                    memory_config,
-                    memory_path,
-                    input_for_memory,
-                    app_context,
-                    window_title,
-                );
-            }
-        }
-        ExecutionPlan::SingleAction {
-            tool_name,
-            parameters,
-            requires_confirmation,
-        } => {
-            // Single action plan - inject tool call instruction and use agent manager
-            info!(tool_name = %tool_name, requires_confirmation = requires_confirmation, "Executing single action plan");
-
-            if requires_confirmation {
-                // TODO: Add confirmation UI callback
-                handler.on_confirmation_required(format!("Execute tool '{}'?", tool_name));
-            }
-
-            // Build prompt that instructs the agent to use the specific tool
-            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.to_vec())
-                .with_generation_config(generation_config)
-                .generate();
-
-            let params_str = serde_json::to_string_pretty(&parameters).unwrap_or_default();
-            let processed_input = format!(
-                "{}\n\n---\n\n用户请求: {}\n\n请使用 {} 工具，参数如下:\n{}",
-                agent_prompt, original_input, tool_name, params_str
-            );
-
-            debug!(
-                tool_name = %tool_name,
-                parameters = %params_str,
-                processed_input_len = processed_input.len(),
-                "SingleAction: sending request to agent manager"
-            );
-
-            execute_with_agent_manager(
-                runtime,
-                &processed_input,
-                config,
-                tool_server_handle,
-                registered_tools,
-                conversation_histories,
-                topic_id,
-                attachments,
-                op_token,
-                handler,
-                memory_config,
-                memory_path,
-                input_for_memory,
-                app_context,
-                window_title,
-            );
-        }
-        ExecutionPlan::TaskGraph {
-            tasks,
-            dependencies,
-            requires_confirmation,
-        } => {
-            // Task graph plan - use unified executor for multi-step execution
-            info!(
-                task_count = tasks.len(),
-                dependency_count = dependencies.len(),
-                requires_confirmation = requires_confirmation,
-                "Executing task graph plan"
-            );
-
-            if requires_confirmation {
-                // TODO: Add confirmation UI callback
-                let task_names: Vec<_> = tasks.iter().map(|t| t.description.as_str()).collect();
-                handler.on_confirmation_required(format!(
-                    "Execute {} tasks?\n{}",
-                    tasks.len(),
-                    task_names.join("\n")
-                ));
-            }
-
-            // Create agent manager for executor
-            let manager = RigAgentManager::with_shared_handle(
-                config.clone(),
-                tool_server_handle,
-                registered_tools,
-            );
-            let agent_manager = Arc::new(manager);
-
-            // Create executor registry with file ops and code executors
-            let mut executor_registry = ExecutorRegistry::new();
-
-            // Register FileOpsExecutor
-            let file_ops_executor = FileOpsExecutor::with_defaults();
-            executor_registry.register("file_ops", Arc::new(file_ops_executor));
-
-            // Register CodeExecutor with default settings
-            let permission_checker = PathPermissionChecker::default();
-            let code_executor = CodeExecutor::new(
-                true,               // enabled
-                "bash".to_string(), // default_runtime
-                300,                // timeout_seconds
-                false,              // sandbox_enabled (for now)
-                vec![],             // allowed_runtimes (all)
-                true,               // allow_network
-                vec![],             // blocked_commands
-                permission_checker,
-                None,                                         // working_directory
-                vec!["PATH".to_string(), "HOME".to_string()], // pass_env
-            );
-            executor_registry.register("code_exec", Arc::new(code_executor));
-
-            let executor_registry = Arc::new(executor_registry);
-
-            // Create unified executor
-            let executor =
-                UnifiedExecutor::new(agent_manager, executor_registry, Arc::clone(handler));
-
-            // Build execution context
-            let exec_context = ExecContext::new().with_stream(true);
-            let exec_context = if let Some(ref app) = app_context {
-                exec_context.with_app_context(app.clone())
-            } else {
-                exec_context
-            };
-            let exec_context = if let Some(ref title) = window_title {
-                exec_context.with_window_title(title.clone())
-            } else {
-                exec_context
-            };
-            let exec_context = if let Some(ref id) = topic_id {
-                exec_context.with_topic_id(id.clone())
-            } else {
-                exec_context
-            };
-
-            // Execute the task graph
-            let result = runtime.block_on(async {
-                tokio::select! {
-                    biased;
-                    _ = op_token.cancelled() => {
-                        Err(ExecutorError::Cancelled)
-                    }
-                    result = executor.execute_task_graph(tasks, dependencies, exec_context) => {
-                        result
-                    }
-                }
-            });
-
-            // Handle result
-            match result {
-                Ok(exec_result) => {
-                    // Store memory if enabled
-                    if memory_config.enabled {
-                        if let Some(ref db_path) = memory_path {
-                            let store_result = runtime.block_on(async {
-                                store_memory_after_response(
-                                    db_path,
-                                    memory_config,
-                                    input_for_memory,
-                                    &exec_result.content,
-                                    app_context.as_deref(),
-                                    window_title.as_deref(),
-                                    topic_id.as_deref(),
-                                )
-                                .await
-                            });
-
-                            match store_result {
-                                Ok(memory_id) => {
-                                    info!(memory_id = %memory_id, "Memory stored successfully");
-                                    handler.on_memory_stored();
-                                }
-                                Err(e) => {
-                                    warn!(error = %e, "Failed to store memory (non-blocking)");
-                                }
-                            }
-                        }
-                    }
-
-                    handler.on_complete(exec_result.content);
-                }
-                Err(e) => {
-                    if op_token.is_cancelled() || e.is_cancelled() {
-                        handler.on_error("Operation cancelled".to_string());
-                    } else {
-                        error!(error = %e, "Task graph execution failed");
-                        handler.on_error(e.to_string());
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Execute input using RigAgentManager (existing code path)
 #[allow(clippy::too_many_arguments)]
 fn execute_with_agent_manager(
@@ -1260,177 +636,22 @@ fn get_builtin_tool_descriptions(
     tools
 }
 
-/// Media generation type for model selection
-#[derive(Debug, Clone, Copy)]
-enum MediaGenerationType {
-    Image,
-    Video,
-    Audio,
-    Speech,
-}
-
-impl MediaGenerationType {
-    /// Get the display name for this media type
-    fn display_name(&self) -> &'static str {
-        match self {
-            MediaGenerationType::Image => "image",
-            MediaGenerationType::Video => "video",
-            MediaGenerationType::Audio => "audio/music",
-            MediaGenerationType::Speech => "speech/TTS",
-        }
-    }
-
-    /// Get the tool name for this media type
-    #[allow(dead_code)]
-    fn tool_name(&self) -> &'static str {
-        match self {
-            MediaGenerationType::Image => "generate_image",
-            MediaGenerationType::Video => "generate_video",
-            MediaGenerationType::Audio => "generate_audio",
-            MediaGenerationType::Speech => "generate_speech",
-        }
-    }
-
-    /// Convert to crate::generation::GenerationType
-    fn to_generation_type(self) -> crate::generation::GenerationType {
-        match self {
-            MediaGenerationType::Image => crate::generation::GenerationType::Image,
-            MediaGenerationType::Video => crate::generation::GenerationType::Video,
-            MediaGenerationType::Audio => crate::generation::GenerationType::Audio,
-            MediaGenerationType::Speech => crate::generation::GenerationType::Speech,
-        }
-    }
-
-    /// Get common aliases for this media type's providers
-    fn get_aliases(&self) -> &'static [(&'static str, &'static [&'static str])] {
-        match self {
-            MediaGenerationType::Image => &[
-                (
-                    "t8star-image",
-                    &["nanobanana", "nano-banana", "nano banana"],
-                ),
-                ("midjourney", &["mj", "MJ"]),
-                ("dalle", &["dall-e", "DALL-E", "dall·e"]),
-                ("stability", &["stable diffusion", "sd", "SD"]),
-                ("flux", &["FLUX"]),
-                ("ideogram", &["ideo"]),
-            ],
-            MediaGenerationType::Video => &[
-                ("runway", &["runwayml", "gen-3"]),
-                ("pika", &["pika labs"]),
-                ("sora", &[]),
-                ("kling", &[]),
-            ],
-            MediaGenerationType::Audio => &[("suno", &[]), ("udio", &[]), ("mubert", &[])],
-            MediaGenerationType::Speech => {
-                &[("elevenlabs", &["11labs"]), ("openai-tts", &["openai tts"])]
-            }
-        }
-    }
-
-    /// Get example usage phrase for this media type
-    fn example_phrase(&self) -> &'static str {
-        match self {
-            MediaGenerationType::Image => "Use nanobanana to draw a cat",
-            MediaGenerationType::Video => "Use runway to create a video of flying birds",
-            MediaGenerationType::Audio => "Use suno to generate a jazz tune",
-            MediaGenerationType::Speech => "Use elevenlabs to read this aloud",
-        }
-    }
-}
-
-/// Build a prompt asking user to select a media generation model
-///
-/// When user requests media generation without specifying a model,
-/// this function generates a response listing available models.
-fn build_media_model_selection_prompt(
-    generation_config: &crate::config::GenerationConfig,
-    original_input: &str,
-    media_type: MediaGenerationType,
-) -> String {
-    // Get available providers for this media type
-    let providers: Vec<(&str, &crate::config::GenerationProviderConfig)> =
-        generation_config.get_providers_for_type(media_type.to_generation_type());
-
-    let type_name = media_type.display_name();
-
-    if providers.is_empty() {
-        return format!(
-            "You want to generate {}, but no {} generation models are configured. \
-             Please configure a provider with {} capability in your config.toml first.\n\n\
-             Original request: {}",
-            type_name, type_name, type_name, original_input
-        );
-    }
-
-    // Build model list with common aliases
-    let mut model_list = format!(
-        "## {} Generation Model Selection\n\n",
-        type_name.to_uppercase()
-    );
-    model_list.push_str(&format!(
-        "I detected you want to generate {}. Please select which model to use:\n\n",
-        type_name
-    ));
-    model_list.push_str("**Available Models:**\n");
-
-    // Get aliases for this media type
-    let aliases = media_type.get_aliases();
-
-    for (idx, (name, config)) in providers.iter().enumerate() {
-        let model_name = config.model.as_deref().unwrap_or("default");
-
-        // Find aliases for this provider
-        let provider_aliases: Vec<&str> = aliases
-            .iter()
-            .find(|(prov, _)| prov == name)
-            .map(|(_, a)| a.to_vec())
-            .unwrap_or_default();
-
-        let alias_str = if provider_aliases.is_empty() {
-            String::new()
-        } else {
-            format!(" (aliases: {})", provider_aliases.join(", "))
-        };
-
-        model_list.push_str(&format!(
-            "{}. **{}**{} - model: {}\n",
-            idx + 1,
-            name,
-            alias_str,
-            model_name
-        ));
-    }
-
-    model_list.push_str("\n**How to use:**\n");
-    model_list.push_str(&format!(
-        "- Reply with the model name or number (e.g., \"1\" or \"{}\")\n",
-        providers.first().map(|(n, _)| *n).unwrap_or("provider")
-    ));
-    model_list.push_str(&format!(
-        "- Or rephrase your request with the model name (e.g., \"{}\")\n",
-        media_type.example_phrase()
-    ));
-    model_list.push_str(&format!("\n**Your original request:** {}", original_input));
-
-    // Wrap as a system instruction for the agent to respond with this
-    format!(
-        "Please respond to the user with this message, asking them to select a {} generation model:\n\n{}",
-        type_name, model_list
-    )
-}
-
 // ============================================================================
-// EXPERIMENTAL: RequestOrchestrator-based processing
+// RequestOrchestrator-based processing (Unified Path)
 // ============================================================================
 
-/// Process input using the new RequestOrchestrator (experimental)
+/// Process input using the RequestOrchestrator
 ///
 /// This function uses the two-phase architecture:
 /// - Phase 1: ExecutionIntentDecider decides "execute vs converse"
 /// - Phase 2: Dispatcher decides "which tool and model" (only for Execute mode)
 ///
-/// Feature flag: `experimental.use_request_orchestrator`
+/// Supports all command types:
+/// - Builtin commands (/screenshot, /search, etc.)
+/// - Skills (/skill_name with instructions)
+/// - MCP commands (/mcp_server)
+/// - Custom commands (from routing rules)
+/// - Natural language tasks
 #[allow(clippy::too_many_arguments)]
 fn process_with_orchestrator(
     runtime: &tokio::runtime::Handle,
@@ -1451,12 +672,34 @@ fn process_with_orchestrator(
     memory_path: &Option<String>,
     input_for_memory: &str,
     generation_config: &crate::config::GenerationConfig,
+    routing_rules: &[RoutingRuleConfig],
 ) {
-    // Create the orchestrator
-    let orchestrator = RequestOrchestrator::new();
+    // Build CommandParser with all dynamic command sources
+    let mut command_parser = CommandParser::new();
+
+    // Load skills registry
+    if let Ok(skills_dir) = get_skills_dir() {
+        let registry = SkillsRegistry::new(skills_dir);
+        if registry.load_all().is_ok() {
+            command_parser = command_parser.with_skills_registry(Arc::new(registry));
+        }
+    }
+
+    // Add routing rules for custom commands
+    command_parser = command_parser.with_routing_rules(routing_rules.to_vec());
+
+    // TODO: Add MCP server names when available
+    // command_parser = command_parser.with_mcp_servers(mcp_server_names);
+
+    // Create ExecutionIntentDecider with the command parser
+    let intent_decider = crate::intent::ExecutionIntentDecider::new()
+        .with_command_parser(Arc::new(command_parser));
+
+    // Create the orchestrator with the configured decider
+    let orchestrator = RequestOrchestrator::with_intent_decider(intent_decider);
 
     // Build context from FFI options
-    let context = RequestContext::from_ffi_options(app_context.clone(), None);
+    let context = OrchestratorRequestContext::from_ffi_options(app_context.clone(), None);
 
     // Get available tools for the orchestrator
     let tool_descriptions = get_builtin_tool_descriptions(generation_config);
@@ -1562,6 +805,119 @@ fn process_with_orchestrator(
             );
         }
 
+        OrchestratorMode::Skill { skill_id, display_name, instructions, args } => {
+            // Skill mode - inject skill instructions as context
+            info!(
+                skill_id = %skill_id,
+                skill_name = %display_name,
+                "Skill execution via orchestrator"
+            );
+
+            // Build prompt with skill instructions
+            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
+                .with_generation_config(generation_config)
+                .generate();
+
+            let processed_input = format!(
+                "# Skill: {}\n\n{}\n\n---\n\n{}\n\n---\n\n用户请求: {}",
+                display_name, instructions, agent_prompt, args
+            );
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                conversation_histories,
+                topic_id,
+                attachments,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+
+        OrchestratorMode::Mcp { server_name, tool_name, args } => {
+            // MCP mode - route to MCP server
+            info!(
+                server_name = %server_name,
+                tool_name = ?tool_name,
+                "MCP execution via orchestrator"
+            );
+
+            // Build prompt with MCP tool hint
+            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
+                .with_generation_config(generation_config)
+                .generate();
+
+            let tool_hint = if let Some(ref tool) = tool_name {
+                format!("请使用 {} 工具（来自 {} 服务器）处理: {}", tool, server_name, args)
+            } else {
+                format!("请使用 {} MCP 服务器的工具处理: {}", server_name, args)
+            };
+
+            let processed_input = format!("{}\n\n---\n\n{}", agent_prompt, tool_hint);
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                conversation_histories,
+                topic_id,
+                attachments,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+
+        OrchestratorMode::Custom { command_name, system_prompt, provider: _, args } => {
+            // Custom command mode - use custom system prompt
+            info!(
+                command_name = %command_name,
+                has_system_prompt = system_prompt.is_some(),
+                "Custom command execution via orchestrator"
+            );
+
+            // Use custom system prompt if provided, otherwise use agent prompt
+            let prompt = system_prompt.unwrap_or_else(|| {
+                AgentModePrompt::with_tools(tool_descriptions.clone())
+                    .with_generation_config(generation_config)
+                    .generate()
+            });
+
+            let processed_input = format!("{}\n\n---\n\n用户输入: {}", prompt, args);
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                conversation_histories,
+                topic_id,
+                attachments,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+
         OrchestratorMode::Execute { category, ref task_intent } => {
             // Execute mode - use agent prompt with filtered tools
             info!(
@@ -1607,6 +963,497 @@ fn process_with_orchestrator(
                 app_context,
                 &None,
             );
+        }
+    }
+}
+
+// ============================================================================
+// Agent Loop-based processing (New Architecture)
+// ============================================================================
+
+/// Process input using the new Agent Loop architecture
+///
+/// This function implements the new observe-think-act-feedback loop:
+/// - L0-L2: Fast routing via IntentRouter (slash commands, patterns, context)
+/// - Agent Loop: LLM-based thinking for complex tasks
+///
+/// # Architecture Flow
+///
+/// ```text
+/// User Input
+///     ↓
+/// IntentRouter (L0-L2)
+///     ├── DirectRoute → Execute immediately (slash commands, etc.)
+///     └── NeedsThinking → Agent Loop
+///                             ↓
+///                         ┌─────────────────────────┐
+///                         │ Guards → Compress →     │
+///                         │ Think → Decide →        │
+///                         │ Execute → Feedback      │
+///                         │ (repeat until done)     │
+///                         └─────────────────────────┘
+/// ```
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+fn process_with_agent_loop(
+    runtime: &tokio::runtime::Handle,
+    input: &str,
+    app_context: &Option<String>,
+    window_title: &Option<String>,
+    config: &crate::agents::RigAgentConfig,
+    tool_server_handle: rig::tool::server::ToolServerHandle,
+    registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
+    _conversation_histories: &Arc<
+        std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
+    >,
+    _topic_id: &Option<String>,
+    _attachments: Option<&[crate::core::MediaAttachment]>,
+    op_token: &CancellationToken,
+    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
+    memory_config: &crate::config::MemoryConfig,
+    memory_path: &Option<String>,
+    input_for_memory: &str,
+    generation_config: &crate::config::GenerationConfig,
+    routing_rules: &[RoutingRuleConfig],
+) {
+    // ================================================================
+    // Step 1: Build IntentRouter with dynamic command sources
+    // ================================================================
+    let mut command_parser = CommandParser::new();
+
+    // Load skills registry
+    if let Ok(skills_dir) = get_skills_dir() {
+        let registry = SkillsRegistry::new(skills_dir);
+        if registry.load_all().is_ok() {
+            command_parser = command_parser.with_skills_registry(Arc::new(registry));
+        }
+    }
+
+    // Add routing rules for custom commands
+    command_parser = command_parser.with_routing_rules(routing_rules.to_vec());
+
+    let router = IntentRouter::new().with_command_parser(Arc::new(command_parser));
+
+    // ================================================================
+    // Step 2: Route the input (L0-L2)
+    // ================================================================
+    let route_result = router.route(input, None);
+
+    match route_result {
+        RouteResult::DirectRoute(info) => {
+            // Direct execution - skip Agent Loop
+            info!(
+                layer = ?info.layer,
+                latency_us = info.latency_us,
+                "Direct route - skipping Agent Loop"
+            );
+
+            handle_direct_route(
+                runtime,
+                input,
+                info.mode,
+                config,
+                tool_server_handle,
+                registered_tools,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                generation_config,
+            );
+        }
+
+        RouteResult::NeedsThinking(ctx) => {
+            // Needs Agent Loop for LLM-based thinking
+            info!(
+                category_hint = ?ctx.category_hint,
+                bias_execute = ctx.bias_execute,
+                latency_us = ctx.latency_us,
+                "Needs thinking - entering Agent Loop"
+            );
+
+            run_agent_loop(
+                runtime,
+                input,
+                ctx,
+                config,
+                tool_server_handle,
+                registered_tools,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                window_title,
+                generation_config,
+            );
+        }
+    }
+}
+
+/// Handle direct route cases (slash commands, skills, MCP, custom)
+#[allow(clippy::too_many_arguments)]
+fn handle_direct_route(
+    runtime: &tokio::runtime::Handle,
+    input: &str,
+    mode: DirectMode,
+    config: &crate::agents::RigAgentConfig,
+    tool_server_handle: rig::tool::server::ToolServerHandle,
+    registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
+    op_token: &CancellationToken,
+    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
+    memory_config: &crate::config::MemoryConfig,
+    memory_path: &Option<String>,
+    input_for_memory: &str,
+    app_context: &Option<String>,
+    generation_config: &crate::config::GenerationConfig,
+) {
+    let tool_descriptions = get_builtin_tool_descriptions(generation_config);
+    let conversation_histories = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+    let topic_id = None;
+
+    match mode {
+        DirectMode::Tool(tool) => {
+            info!(tool_id = %tool.tool_id, "Direct tool execution");
+
+            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
+                .with_generation_config(generation_config)
+                .generate();
+
+            let processed_input = format!(
+                "{}\n\n---\n\n请使用 {} 工具处理: {}",
+                agent_prompt, tool.tool_id, tool.args
+            );
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                &conversation_histories,
+                &topic_id,
+                None,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+
+        DirectMode::Skill(skill) => {
+            info!(skill_id = %skill.skill_id, "Direct skill execution");
+
+            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
+                .with_generation_config(generation_config)
+                .generate();
+
+            let processed_input = format!(
+                "# Skill: {}\n\n{}\n\n---\n\n{}\n\n---\n\n用户请求: {}",
+                skill.display_name, skill.instructions, agent_prompt, skill.args
+            );
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                &conversation_histories,
+                &topic_id,
+                None,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+
+        DirectMode::Mcp(mcp) => {
+            info!(server_name = %mcp.server_name, "Direct MCP execution");
+
+            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
+                .with_generation_config(generation_config)
+                .generate();
+
+            let tool_hint = if let Some(ref tool) = mcp.tool_name {
+                format!(
+                    "请使用 {} 工具（来自 {} 服务器）处理: {}",
+                    tool, mcp.server_name, mcp.args
+                )
+            } else {
+                format!(
+                    "请使用 {} MCP 服务器的工具处理: {}",
+                    mcp.server_name, mcp.args
+                )
+            };
+
+            let processed_input = format!("{}\n\n---\n\n{}", agent_prompt, tool_hint);
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                &conversation_histories,
+                &topic_id,
+                None,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+
+        DirectMode::Custom(custom) => {
+            info!(command_name = %custom.command_name, "Direct custom command execution");
+
+            let prompt = custom.system_prompt.unwrap_or_else(|| {
+                AgentModePrompt::with_tools(tool_descriptions.clone())
+                    .with_generation_config(generation_config)
+                    .generate()
+            });
+
+            let processed_input = format!("{}\n\n---\n\n用户输入: {}", prompt, input);
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                &conversation_histories,
+                &topic_id,
+                None,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+    }
+}
+
+/// Run the Agent Loop for tasks requiring LLM thinking
+#[allow(clippy::too_many_arguments)]
+fn run_agent_loop(
+    runtime: &tokio::runtime::Handle,
+    input: &str,
+    ctx: ThinkingContext,
+    config: &crate::agents::RigAgentConfig,
+    _tool_server_handle: rig::tool::server::ToolServerHandle,
+    _registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
+    op_token: &CancellationToken,
+    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
+    memory_config: &crate::config::MemoryConfig,
+    memory_path: &Option<String>,
+    input_for_memory: &str,
+    app_context: &Option<String>,
+    window_title: &Option<String>,
+    generation_config: &crate::config::GenerationConfig,
+) {
+    // Check if already cancelled
+    if op_token.is_cancelled() {
+        handler.on_error("Operation cancelled".to_string());
+        return;
+    }
+
+    // Get available tools for the loop
+    let tool_descriptions = get_builtin_tool_descriptions(generation_config);
+    let tools: Vec<crate::dispatcher::UnifiedTool> = tool_descriptions
+        .iter()
+        .map(|td| {
+            crate::dispatcher::UnifiedTool::new(
+                &format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                crate::dispatcher::ToolSource::Native,
+            )
+        })
+        .collect();
+
+    // Create the AI provider
+    let provider = match create_provider_from_config(config) {
+        Ok(p) => p,
+        Err(e) => {
+            error!(error = %e, "Failed to create provider");
+            handler.on_error(format!("Provider error: {}", e));
+            return;
+        }
+    };
+
+    // Build request context
+    let mut request_context = AgentRequestContext::empty();
+    request_context.current_app = app_context.clone();
+    request_context.window_title = window_title.clone();
+
+    // Store category hint in metadata if present
+    if let Some(ref hint) = ctx.category_hint {
+        request_context.metadata.insert("category_hint".to_string(), format!("{:?}", hint));
+    }
+
+    // Create loop config
+    let loop_config = LoopConfig::default()
+        .with_max_steps(20)
+        .with_max_tokens(100_000);
+
+    // Create components
+    let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));
+    let thinker = Arc::new(Thinker::new(provider_registry, ThinkerConfig::default()));
+
+    // Create a simple executor that delegates to the existing RigAgentManager
+    // For now, use a placeholder that will be replaced with proper SingleStepExecutor
+    let executor = Arc::new(PlaceholderExecutor);
+
+    // Create compressor (rule-based for now)
+    let compressor = Arc::new(NoOpCompressor);
+
+    // Create callback adapter
+    let callback = FfiLoopCallback::new(handler.clone());
+
+    // Create abort signal from cancellation token
+    let (abort_tx, abort_rx) = tokio::sync::watch::channel(false);
+    let op_token_clone = op_token.clone();
+    runtime.spawn(async move {
+        op_token_clone.cancelled().await;
+        let _ = abort_tx.send(true);
+    });
+
+    // Run the Agent Loop
+    let result = runtime.block_on(async {
+        let agent_loop = AgentLoop::new(thinker, executor, compressor, loop_config);
+
+        agent_loop
+            .run(
+                input.to_string(),
+                request_context,
+                tools,
+                &callback,
+                Some(abort_rx),
+            )
+            .await
+    });
+
+    // Handle result
+    match result {
+        LoopResult::Completed { summary, steps, .. } => {
+            info!(steps = steps, "Agent Loop completed");
+
+            // Store memory if enabled
+            if memory_config.enabled {
+                if let Some(ref db_path) = memory_path {
+                    let store_result = runtime.block_on(async {
+                        store_memory_after_response(
+                            db_path,
+                            memory_config,
+                            input_for_memory,
+                            &summary,
+                            app_context.as_deref(),
+                            window_title.as_deref(),
+                            None,
+                        )
+                        .await
+                    });
+
+                    if let Err(e) = store_result {
+                        warn!(error = %e, "Failed to store memory (non-blocking)");
+                    }
+                }
+            }
+
+            handler.on_complete(summary);
+        }
+
+        LoopResult::Failed { reason, steps } => {
+            warn!(steps = steps, reason = %reason, "Agent Loop failed");
+            handler.on_error(reason);
+        }
+
+        LoopResult::GuardTriggered(violation) => {
+            warn!(violation = ?violation, "Agent Loop guard triggered");
+            handler.on_error(format!("Limit reached: {}", violation.description()));
+        }
+
+        LoopResult::UserAborted => {
+            info!("Agent Loop aborted by user");
+            handler.on_error("Operation cancelled".to_string());
+        }
+    }
+}
+
+/// Create an AI provider from config
+fn create_provider_from_config(
+    config: &crate::agents::RigAgentConfig,
+) -> Result<Arc<dyn crate::providers::AiProvider>, String> {
+    use crate::config::ProviderConfig;
+
+    let provider_config = ProviderConfig {
+        provider_type: Some(config.provider.clone()),
+        api_key: config.api_key.clone(),
+        model: config.model.clone(),
+        base_url: config.base_url.clone(),
+        color: "#808080".to_string(), // Default gray
+        timeout_seconds: 30,
+        enabled: true,
+        max_tokens: Some(config.max_tokens),
+        temperature: Some(config.temperature),
+        top_p: None,
+        top_k: None,
+        frequency_penalty: None,
+        presence_penalty: None,
+        stop_sequences: None,
+        thinking_level: None,
+        media_resolution: None,
+        repeat_penalty: None,
+        system_prompt_mode: None,
+    };
+
+    crate::providers::create_provider(&config.provider, provider_config)
+        .map_err(|e| e.to_string())
+}
+
+/// Placeholder executor for Agent Loop
+/// TODO: Replace with proper SingleStepExecutor once ToolRegistry is implemented
+struct PlaceholderExecutor;
+
+#[async_trait::async_trait]
+impl crate::agent_loop::ExecutorTrait for PlaceholderExecutor {
+    async fn execute(&self, action: &crate::agent_loop::Action) -> crate::agent_loop::ActionResult {
+        match action {
+            crate::agent_loop::Action::ToolCall { tool_name, .. } => {
+                // For now, return a placeholder result
+                // TODO: Integrate with actual tool execution via ToolServerHandle
+                warn!(tool_name = %tool_name, "PlaceholderExecutor: tool execution not implemented");
+                crate::agent_loop::ActionResult::ToolError {
+                    error: "Tool execution not yet implemented in Agent Loop".to_string(),
+                    retryable: false,
+                }
+            }
+            crate::agent_loop::Action::UserInteraction { question, .. } => {
+                crate::agent_loop::ActionResult::UserResponse {
+                    response: format!("Awaiting response for: {}", question),
+                }
+            }
+            crate::agent_loop::Action::Completion { .. } => {
+                crate::agent_loop::ActionResult::Completed
+            }
+            crate::agent_loop::Action::Failure { .. } => crate::agent_loop::ActionResult::Failed,
         }
     }
 }

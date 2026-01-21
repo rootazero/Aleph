@@ -1,0 +1,340 @@
+//! Prompt builder for Agent Loop
+//!
+//! This module builds prompts for the LLM thinking step,
+//! including system prompts and message history.
+
+use crate::agent_loop::{LoopState, Observation, StepSummary, ToolInfo};
+use crate::core::MediaAttachment;
+
+/// Configuration for prompt building
+#[derive(Debug, Clone)]
+pub struct PromptConfig {
+    /// Assistant persona/name
+    pub persona: Option<String>,
+    /// Response language
+    pub language: Option<String>,
+    /// Custom instructions to append
+    pub custom_instructions: Option<String>,
+    /// Maximum tokens for tool descriptions
+    pub max_tool_description_tokens: usize,
+}
+
+impl Default for PromptConfig {
+    fn default() -> Self {
+        Self {
+            persona: None,
+            language: None,
+            custom_instructions: None,
+            max_tool_description_tokens: 2000,
+        }
+    }
+}
+
+/// Prompt builder for Agent Loop thinking
+pub struct PromptBuilder {
+    config: PromptConfig,
+}
+
+impl PromptBuilder {
+    /// Create a new prompt builder
+    pub fn new(config: PromptConfig) -> Self {
+        Self { config }
+    }
+
+    /// Build the system prompt
+    pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
+        let mut prompt = String::new();
+
+        // Role definition
+        prompt.push_str("You are an AI assistant executing tasks step by step.\n\n");
+
+        // Core instructions
+        prompt.push_str("## Your Role\n");
+        prompt.push_str("- Observe the current state and history\n");
+        prompt.push_str("- Decide the SINGLE next action to take\n");
+        prompt.push_str("- Execute until the task is complete or you need user input\n\n");
+
+        // Available tools
+        prompt.push_str("## Available Tools\n");
+        if tools.is_empty() {
+            prompt.push_str("No tools available. You can only use special actions.\n\n");
+        } else {
+            for tool in tools {
+                prompt.push_str(&format!("### {}\n", tool.name));
+                prompt.push_str(&format!("{}\n", tool.description));
+                if !tool.parameters_schema.is_empty() {
+                    prompt.push_str(&format!("Parameters: {}\n", tool.parameters_schema));
+                }
+                prompt.push('\n');
+            }
+        }
+
+        // Special actions
+        prompt.push_str("## Special Actions\n");
+        prompt.push_str("- `complete`: Call when the task is fully done\n");
+        prompt.push_str("- `ask_user`: Call when you need clarification or user decision\n");
+        prompt.push_str("- `fail`: Call when the task cannot be completed\n\n");
+
+        // Response format
+        prompt.push_str("## Response Format\n");
+        prompt.push_str("You must respond with a JSON object:\n");
+        prompt.push_str("```json\n");
+        prompt.push_str("{\n");
+        prompt.push_str("  \"reasoning\": \"Brief explanation of your thinking\",\n");
+        prompt.push_str("  \"action\": {\n");
+        prompt.push_str("    \"type\": \"tool|ask_user|complete|fail\",\n");
+        prompt.push_str("    \"tool_name\": \"...\",      // if type=tool\n");
+        prompt.push_str("    \"arguments\": {...},       // if type=tool\n");
+        prompt.push_str("    \"question\": \"...\",        // if type=ask_user\n");
+        prompt.push_str("    \"options\": [...],         // if type=ask_user (optional)\n");
+        prompt.push_str("    \"summary\": \"...\",         // if type=complete\n");
+        prompt.push_str("    \"reason\": \"...\"           // if type=fail\n");
+        prompt.push_str("  }\n");
+        prompt.push_str("}\n");
+        prompt.push_str("```\n\n");
+
+        // Guidelines
+        prompt.push_str("## Guidelines\n");
+        prompt.push_str("1. Take ONE action at a time, observe the result, then decide next\n");
+        prompt.push_str("2. Use tool results to inform subsequent decisions\n");
+        prompt.push_str(
+            "3. Ask user when: multiple valid approaches, unclear requirements, need confirmation\n",
+        );
+        prompt.push_str(
+            "4. Complete when: task is done, or you've provided the requested information\n",
+        );
+        prompt.push_str("5. Fail when: impossible to proceed, missing critical resources\n\n");
+
+        // Custom instructions
+        if let Some(instructions) = &self.config.custom_instructions {
+            prompt.push_str("## Additional Instructions\n");
+            prompt.push_str(instructions);
+            prompt.push_str("\n\n");
+        }
+
+        // Language setting
+        if let Some(lang) = &self.config.language {
+            prompt.push_str(&format!("Respond in {}.\n", lang));
+        }
+
+        prompt
+    }
+
+    /// Build messages for the thinking step
+    pub fn build_messages(
+        &self,
+        original_request: &str,
+        observation: &Observation,
+    ) -> Vec<Message> {
+        let mut messages = Vec::new();
+
+        // 1. User's original request with context
+        let mut user_msg = format!("Task: {}\n", original_request);
+
+        // Add attachments info
+        if !observation.attachments.is_empty() {
+            user_msg.push_str("\nAttachments:\n");
+            for (i, attachment) in observation.attachments.iter().enumerate() {
+                user_msg.push_str(&format!("{}. {}\n", i + 1, format_attachment(attachment)));
+            }
+        }
+
+        messages.push(Message::user(user_msg));
+
+        // 2. Compressed history summary (if any)
+        if !observation.history_summary.is_empty() {
+            messages.push(Message::assistant(format!(
+                "[Previous steps summary]\n{}",
+                observation.history_summary
+            )));
+        }
+
+        // 3. Recent steps with full details
+        for step in &observation.recent_steps {
+            // Assistant's thinking and action
+            messages.push(Message::assistant(format!(
+                "Reasoning: {}\nAction: {} {}",
+                step.reasoning, step.action_type, step.action_args
+            )));
+
+            // Tool result
+            messages.push(Message::tool_result(&step.action_type, &step.result_summary));
+        }
+
+        // 4. Current context and request for next action
+        let context_msg = format!(
+            "Current step: {}\nTokens used: {}\n\nBased on the above, what is your next action?",
+            observation.current_step, observation.total_tokens
+        );
+        messages.push(Message::user(context_msg));
+
+        messages
+    }
+
+    /// Build observation from state
+    pub fn build_observation(
+        &self,
+        state: &LoopState,
+        tools: &[ToolInfo],
+        window_size: usize,
+    ) -> Observation {
+        let recent_steps: Vec<StepSummary> = state
+            .recent_steps(window_size)
+            .iter()
+            .map(StepSummary::from)
+            .collect();
+
+        Observation {
+            history_summary: state.history_summary.clone(),
+            recent_steps,
+            available_tools: tools.to_vec(),
+            attachments: state.context.attachments.clone(),
+            current_step: state.step_count,
+            total_tokens: state.total_tokens,
+        }
+    }
+}
+
+/// Message type for LLM conversation
+#[derive(Debug, Clone)]
+pub struct Message {
+    pub role: MessageRole,
+    pub content: String,
+}
+
+/// Message role
+#[derive(Debug, Clone, PartialEq)]
+pub enum MessageRole {
+    User,
+    Assistant,
+    Tool,
+}
+
+impl Message {
+    /// Create a user message
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::User,
+            content: content.into(),
+        }
+    }
+
+    /// Create an assistant message
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::Assistant,
+            content: content.into(),
+        }
+    }
+
+    /// Create a tool result message
+    pub fn tool_result(tool_name: &str, result: &str) -> Self {
+        Self {
+            role: MessageRole::Tool,
+            content: format!("[{}]\n{}", tool_name, result),
+        }
+    }
+}
+
+/// Format attachment for display
+fn format_attachment(attachment: &MediaAttachment) -> String {
+    let preview = if attachment.data.len() > 50 {
+        format!("{}...", &attachment.data[..50.min(attachment.data.len())])
+    } else {
+        attachment.data.clone()
+    };
+
+    match attachment.media_type.as_str() {
+        "image" => {
+            format!(
+                "Image ({}, {} bytes)",
+                attachment.mime_type,
+                attachment.size_bytes
+            )
+        }
+        "document" => {
+            format!(
+                "Document: {} ({}, {} bytes)",
+                attachment.filename.as_deref().unwrap_or("unnamed"),
+                attachment.mime_type,
+                attachment.size_bytes
+            )
+        }
+        "file" => {
+            format!(
+                "File: {} ({}, {} bytes)",
+                attachment.filename.as_deref().unwrap_or("unnamed"),
+                attachment.mime_type,
+                attachment.size_bytes
+            )
+        }
+        _ => {
+            format!(
+                "{}: {} ({} bytes)",
+                attachment.media_type,
+                attachment.filename.as_deref().unwrap_or(&preview),
+                attachment.size_bytes
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_system_prompt_generation() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        let tools = vec![
+            ToolInfo {
+                name: "search".to_string(),
+                description: "Search the web".to_string(),
+                parameters_schema: r#"{"query": "string"}"#.to_string(),
+                category: None,
+            },
+            ToolInfo {
+                name: "read_file".to_string(),
+                description: "Read a file".to_string(),
+                parameters_schema: r#"{"path": "string"}"#.to_string(),
+                category: None,
+            },
+        ];
+
+        let prompt = builder.build_system_prompt(&tools);
+
+        assert!(prompt.contains("AI assistant"));
+        assert!(prompt.contains("search"));
+        assert!(prompt.contains("read_file"));
+        assert!(prompt.contains("Response Format"));
+        assert!(prompt.contains("JSON"));
+    }
+
+    #[test]
+    fn test_message_building() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        let observation = Observation {
+            history_summary: "Previously searched for Rust tutorials".to_string(),
+            recent_steps: vec![StepSummary {
+                step_id: 0,
+                reasoning: "Need to search".to_string(),
+                action_type: "tool:search".to_string(),
+                action_args: r#"{"query": "rust"}"#.to_string(),
+                result_summary: "Found 10 results".to_string(),
+                success: true,
+            }],
+            available_tools: vec![],
+            attachments: vec![],
+            current_step: 1,
+            total_tokens: 500,
+        };
+
+        let messages = builder.build_messages("Find Rust tutorials", &observation);
+
+        assert!(messages.len() >= 3);
+        assert_eq!(messages[0].role, MessageRole::User);
+        assert!(messages[0].content.contains("Find Rust tutorials"));
+    }
+}

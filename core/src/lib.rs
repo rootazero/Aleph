@@ -52,12 +52,14 @@
 // Module declarations
 // NOTE: clipboard module retained for ImageData/ImageFormat types (used by AI providers)
 // Clipboard operations are handled by Swift ClipboardManager
+pub mod agent_loop; // NEW: Agent Loop - observe-think-act-feedback cycle
 pub mod agents; // Unified agent system: rig-core agent + sub-agent delegation
 pub mod capability;
 pub mod clarification; // NEW: Phantom Flow interaction types
 mod clipboard;
 pub mod command; // NEW: Command completion system
 pub mod components; // NEW: Core event handler components for agentic loop
+pub mod compressor; // NEW: Context compression for Agent Loop
 mod config;
 pub mod conversation; // NEW: Multi-turn conversation support
 mod core;
@@ -66,7 +68,7 @@ pub mod dispatcher; // Core dispatch center: model routing, tool registry, task 
 mod error;
 pub mod event; // NEW: Event-driven architecture for agentic loop
 mod event_handler;
-pub mod executor; // NEW: Unified executor for 2-layer architecture
+pub mod executor; // Unified executor for multi-step task execution
 pub mod ffi; // FFI module - split AetherCore implementation
 pub mod generation;
 pub mod initialization {
@@ -84,7 +86,7 @@ pub mod memory;
 pub mod metrics;
 pub mod orchestrator; // NEW: Unified request orchestrator (Phase 1 + Phase 2 coordination)
 pub mod payload; // Structured context protocol with capability support
-pub mod planner; // NEW: Unified planner for 2-layer architecture
+pub mod planner; // Unified planner for multi-step task decomposition
 pub mod prompt; // NEW: Unified prompt management (executor/conversational)
 pub mod providers;
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
@@ -93,6 +95,7 @@ pub mod search; // NEW: Search capability with multiple provider support
 pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInfo)
 pub mod skills; // NEW: Claude Agent Skills support
 pub mod suggestion; // NEW: AI response suggestion parsing
+pub mod thinker; // NEW: LLM decision-making layer for Agent Loop
 mod title_generator; // Title generation for conversation topics
 pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module
 pub mod utils; // NEW: Capability executor for enriching payloads
@@ -248,13 +251,22 @@ pub use crate::intent::{
     // New unified execution decider
     ContextSignals,
     DeciderConfig,
-    DecisionLayer,
     DecisionMetadata,
     DecisionResult,
     ExecutionIntentDecider,
     ExecutionMode,
+    IntentLayer,
     ToolInvocation,
+    // New simplified router for Agent Loop
+    DirectMode,
+    DirectRouteInfo,
+    IntentRouter,
+    RouteResult,
+    ThinkingContext,
 };
+// Backward compatibility: DecisionLayer is deprecated, use IntentLayer instead
+#[allow(deprecated)]
+pub use crate::intent::DecisionLayer;
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::mcp::{
     McpEnvVar, McpServerConfig, McpServerPermissions, McpServerStatus, McpServerStatusInfo,
@@ -327,21 +339,22 @@ pub use crate::generation::{
     GenerationType, MockGenerationProvider,
 };
 
-// Planner exports (unified 2-layer architecture)
+// Planner exports (unified multi-step task planning)
 pub use crate::planner::{
     ExecutionPlan, PlannedTask, PlannerConfig, PlannerError, ToolInfo, UnifiedPlanner,
+};
+
+// Executor exports (unified multi-step task execution)
+pub use crate::executor::{
+    ExecutionContext, ExecutionResult, ExecutorConfig, ExecutorError, SingleStepConfig,
+    SingleStepExecutor, TaskExecutionResult, ToolCallRecord as ExecutorToolCallRecord,
+    ToolRegistry as ExecutorToolRegistry, UnifiedExecutor,
 };
 
 // Prompt exports (unified prompt management)
 pub use crate::prompt::{
     ConversationalPrompt, ExecutorPrompt, PromptBuilder, PromptConfig, PromptTemplate, TemplateVar,
     ToolInfo as PromptToolInfo,
-};
-
-// Executor exports (unified 2-layer architecture)
-pub use crate::executor::{
-    ExecutionContext, ExecutionResult, ExecutorConfig, ExecutorError, TaskExecutionResult,
-    ToolCallRecord as ExecutorToolCallRecord, UnifiedExecutor,
 };
 
 // Event system exports (event-driven agentic loop)
@@ -416,6 +429,32 @@ pub use crate::components::{
 };
 // Note: RetryPolicy from components is available as components::RetryPolicy
 // to avoid conflict with config::RetryPolicy (network retry policy)
+
+// Agent Loop exports (new unified agent architecture)
+pub use crate::agent_loop::{
+    AgentLoop, CollectingCallback, CompressedHistory, CompressorTrait, ExecutorTrait,
+    GuardViolation, LoggingCallback, LoopCallback, LoopConfig as AgentLoopConfig, LoopGuard,
+    LoopResult, LoopState as AgentLoopState, LoopStep, NoOpCallback, Observation, RequestContext,
+    StepSummary, ThinkerTrait, Thinking,
+    // Decision types
+    Action, ActionResult, Decision as AgentDecision, LlmAction, LlmResponse,
+    // Config types
+    CompressionConfig, ModelRoutingConfig,
+};
+
+// Thinker exports (LLM decision-making layer)
+pub use crate::thinker::{
+    DecisionParser, Message, MessageRole as ThinkerMessageRole, ModelId, ModelRouter,
+    PromptBuilder as ThinkerPromptBuilder, PromptConfig as ThinkerPromptConfig, ProviderRegistry,
+    RoutingCondition, RoutingRule, SingleProviderRegistry, Thinker, ThinkerConfig, ToolFilter,
+    ToolFilterConfig,
+};
+
+// Compressor exports (context compression)
+pub use crate::compressor::{
+    CompressionPrompt, ContextCompressor, KeyInfo, KeyInfoExtractor, NoOpCompressor,
+    RuleBasedStrategy,
+};
 
 // Agent system exports (unified: rig-core agent + sub-agent delegation)
 pub use crate::agents::{

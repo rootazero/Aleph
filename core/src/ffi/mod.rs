@@ -13,6 +13,7 @@
 //! - `generation`: Media generation (generate_image, generate_speech, etc.)
 //! - `session`: Session lifecycle management (resume, cancel, list)
 
+mod agent_loop_adapter;
 mod config;
 mod cowork;
 mod generation;
@@ -25,6 +26,9 @@ mod runtime;
 mod session;
 mod skills;
 mod tools;
+
+// Agent Loop FFI adapter for new architecture
+pub use agent_loop_adapter::FfiLoopCallback;
 
 use crate::agents::{BuiltinToolConfig, RigAgentConfig, RigAgentManager};
 use crate::config::Config;

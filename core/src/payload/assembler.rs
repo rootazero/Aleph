@@ -170,6 +170,36 @@ impl PromptAssembler {
                 // For direct tool calls, use minimal prompt
                 PromptBuilder::direct_tool_prompt(&invocation.tool_id, "Execute the requested tool")
             }
+            ExecutionMode::Skill(skill) => {
+                // For skills, inject skill instructions as system context
+                format!(
+                    "# Skill: {}\n\n{}\n\n---\n\n{}",
+                    skill.display_name,
+                    skill.instructions,
+                    PromptBuilder::executor_prompt(TaskCategory::General, tools, config)
+                )
+            }
+            ExecutionMode::Mcp(mcp) => {
+                // For MCP commands, use agent prompt with MCP tool hint
+                let tool_hint = if let Some(ref tool_name) = mcp.tool_name {
+                    format!("Use the {} tool from {} server", tool_name, mcp.server_name)
+                } else {
+                    format!("Use tools from the {} MCP server", mcp.server_name)
+                };
+                format!(
+                    "{}\n\n---\n\nTool hint: {}",
+                    PromptBuilder::executor_prompt(TaskCategory::General, tools, config),
+                    tool_hint
+                )
+            }
+            ExecutionMode::Custom(custom) => {
+                // For custom commands, use the custom system prompt if provided
+                if let Some(ref system_prompt) = custom.system_prompt {
+                    system_prompt.clone()
+                } else {
+                    PromptBuilder::executor_prompt(TaskCategory::General, tools, config)
+                }
+            }
             ExecutionMode::Execute(category) => {
                 // For execution mode, use executor prompt with category-specific tools
                 let category_tools = self.filter_tools_for_category(tools, *category);
@@ -195,7 +225,7 @@ impl PromptAssembler {
     /// Filter tools relevant to a task category.
     ///
     /// This reduces tool list noise by only showing tools relevant to the task.
-    fn filter_tools_for_category(&self, tools: &[ToolInfo], category: TaskCategory) -> Vec<ToolInfo> {
+    fn filter_tools_for_category(&self, tools: &[ToolInfo], _category: TaskCategory) -> Vec<ToolInfo> {
         // For now, return all tools. In the future, this can be enhanced
         // to filter based on category-tool mappings.
         //

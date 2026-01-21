@@ -84,6 +84,7 @@ pub mod keyword;
 pub mod parameters;
 pub mod presets;
 pub mod rollback;
+pub mod router;
 pub mod task_category;
 
 pub use agent_prompt::{AgentModePrompt, GenerationModelInfo, ToolDescription};
@@ -116,9 +117,13 @@ pub use task_category::TaskCategory;
 
 // New unified decision layer
 pub use execution_decider::{
-    ContextSignals, DeciderConfig, DecisionMetadata, DecisionResult,
-    ExecutionIntentDecider, ExecutionMode, IntentLayer, SlashCommand, ToolInvocation,
+    ContextSignals, CustomInvocation, DeciderConfig, DecisionMetadata, DecisionResult,
+    ExecutionIntentDecider, ExecutionMode, IntentLayer, McpInvocation, SkillInvocation,
+    SlashCommand, ToolInvocation,
 };
 // Backward compatibility
 #[allow(deprecated)]
 pub use execution_decider::DecisionLayer;
+
+// New simplified router for Agent Loop
+pub use router::{DirectMode, DirectRouteInfo, IntentRouter, RouteResult, ThinkingContext};

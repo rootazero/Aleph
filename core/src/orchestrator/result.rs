@@ -1,4 +1,11 @@
 //! Result types for the orchestrator
+//!
+//! # Deprecated
+//!
+//! This module is being replaced by the Agent Loop architecture.
+//! See `crate::agent_loop` for the new implementation.
+
+#![allow(deprecated)]
 
 use crate::dispatcher::model_router::TaskIntent;
 use crate::dispatcher::UnifiedTool;
@@ -23,11 +30,42 @@ impl ProcessingPhase {
 /// Execution mode determined by the orchestrator
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrchestratorMode {
-    /// Direct tool invocation from slash command
+    /// Direct tool invocation from slash command (builtin tools)
     DirectTool {
         /// Tool ID to invoke
         tool_id: String,
         /// Arguments for the tool
+        args: String,
+    },
+    /// Skill-based execution with injected instructions
+    Skill {
+        /// Skill identifier
+        skill_id: String,
+        /// Display name
+        display_name: String,
+        /// Skill instructions to inject
+        instructions: String,
+        /// Arguments
+        args: String,
+    },
+    /// MCP server tool execution
+    Mcp {
+        /// MCP server name
+        server_name: String,
+        /// Specific tool name (if any)
+        tool_name: Option<String>,
+        /// Arguments
+        args: String,
+    },
+    /// Custom command with system prompt
+    Custom {
+        /// Command name
+        command_name: String,
+        /// System prompt to inject
+        system_prompt: Option<String>,
+        /// Provider override
+        provider: Option<String>,
+        /// Arguments
         args: String,
     },
     /// Execute mode with task category
@@ -113,6 +151,82 @@ impl OrchestratorResult {
             prompt: Some(prompt),
             category: Some(category),
             task_intent: Some(task_intent),
+            tools,
+            decision,
+        }
+    }
+
+    /// Create a result for skill execution
+    pub fn skill(
+        skill_id: String,
+        display_name: String,
+        instructions: String,
+        args: String,
+        prompt: String,
+        tools: Vec<UnifiedTool>,
+        decision: DecisionResult,
+    ) -> Self {
+        Self {
+            mode: OrchestratorMode::Skill {
+                skill_id,
+                display_name,
+                instructions,
+                args,
+            },
+            phase: ProcessingPhase::Phase1Only,
+            prompt: Some(prompt),
+            category: None,
+            task_intent: None,
+            tools,
+            decision,
+        }
+    }
+
+    /// Create a result for MCP execution
+    pub fn mcp(
+        server_name: String,
+        tool_name: Option<String>,
+        args: String,
+        prompt: String,
+        tools: Vec<UnifiedTool>,
+        decision: DecisionResult,
+    ) -> Self {
+        Self {
+            mode: OrchestratorMode::Mcp {
+                server_name,
+                tool_name,
+                args,
+            },
+            phase: ProcessingPhase::Phase1Only,
+            prompt: Some(prompt),
+            category: None,
+            task_intent: None,
+            tools,
+            decision,
+        }
+    }
+
+    /// Create a result for custom command execution
+    pub fn custom(
+        command_name: String,
+        system_prompt: Option<String>,
+        provider: Option<String>,
+        args: String,
+        prompt: String,
+        tools: Vec<UnifiedTool>,
+        decision: DecisionResult,
+    ) -> Self {
+        Self {
+            mode: OrchestratorMode::Custom {
+                command_name,
+                system_prompt,
+                provider,
+                args,
+            },
+            phase: ProcessingPhase::Phase1Only,
+            prompt: Some(prompt),
+            category: None,
+            task_intent: None,
             tools,
             decision,
         }

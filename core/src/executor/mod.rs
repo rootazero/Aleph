@@ -52,9 +52,11 @@
 //! let result = ExecutionResult::failure("Connection timeout");
 //! ```
 
+mod single_step;
 mod types;
 mod unified;
 
+pub use single_step::{SingleStepConfig, SingleStepExecutor, ToolRegistry};
 pub use types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
 };

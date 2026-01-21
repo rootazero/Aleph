@@ -94,6 +94,7 @@ impl PromptTemplate {
 }
 
 /// Standard prompt templates
+#[allow(dead_code)]
 pub mod standard {
     use super::*;
 
