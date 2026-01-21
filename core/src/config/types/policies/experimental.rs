@@ -51,18 +51,6 @@ pub struct ExperimentalPolicy {
     /// Default: false
     #[serde(default)]
     pub verbose_decision_logging: bool,
-
-    /// Use the new RequestOrchestrator for unified request processing.
-    ///
-    /// The RequestOrchestrator provides:
-    /// - Two-phase pipeline: Phase 1 (intent decision) + Phase 2 (tool/model routing)
-    /// - DirectTool mode bypasses Phase 2 for slash commands
-    /// - Clean separation of "what to do" vs "how to do"
-    /// - Unified entry point for all request processing
-    ///
-    /// Default: false (use legacy processing path)
-    #[serde(default)]
-    pub use_request_orchestrator: bool,
 }
 
 impl Default for ExperimentalPolicy {
@@ -71,7 +59,6 @@ impl Default for ExperimentalPolicy {
             use_unified_intent_decider: false,
             use_new_prompt_system: false,
             verbose_decision_logging: false,
-            use_request_orchestrator: false,
         }
     }
 }
@@ -86,7 +73,6 @@ mod tests {
         assert!(!policy.use_unified_intent_decider);
         assert!(!policy.use_new_prompt_system);
         assert!(!policy.verbose_decision_logging);
-        assert!(!policy.use_request_orchestrator);
     }
 
     #[test]
@@ -94,13 +80,11 @@ mod tests {
         let toml = r#"
             use_unified_intent_decider = true
             use_new_prompt_system = true
-            use_request_orchestrator = true
         "#;
         let policy: ExperimentalPolicy = toml::from_str(toml).unwrap();
         assert!(policy.use_unified_intent_decider);
         assert!(policy.use_new_prompt_system);
         assert!(!policy.verbose_decision_logging); // default
-        assert!(policy.use_request_orchestrator);
     }
 
     #[test]
@@ -108,6 +92,5 @@ mod tests {
         let policy: ExperimentalPolicy = toml::from_str("").unwrap();
         assert!(!policy.use_unified_intent_decider);
         assert!(!policy.use_new_prompt_system);
-        assert!(!policy.use_request_orchestrator);
     }
 }

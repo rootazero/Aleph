@@ -4,22 +4,9 @@
 //!
 //! # Architecture
 //!
-//! Two processing paths are available:
-//!
-//! ## Legacy Path (RequestOrchestrator) - DEPRECATED
-//!
-//! Uses `RequestOrchestrator` with two-phase pipeline:
-//! - Phase 1 (ExecutionIntentDecider): Decides execution mode
-//! - Phase 2 (Dispatcher): Tool and model routing
-//!
-//! ## New Path (Agent Loop) - RECOMMENDED
-//!
 //! Uses `IntentRouter` + `AgentLoop` with observe-think-act cycle:
-//! - L0-L2: Fast routing via IntentRouter
+//! - L0-L2: Fast routing via IntentRouter (slash commands, patterns, context)
 //! - Agent Loop: LLM-based thinking for complex tasks
-
-// Allow deprecated orchestrator usage during transition
-#![allow(deprecated)]
 
 use super::{AetherCore, AetherFfiError};
 use crate::agents::RigAgentManager;
@@ -27,8 +14,6 @@ use crate::command::CommandParser;
 use crate::config::RoutingRuleConfig;
 use crate::intent::{AgentModePrompt, ToolDescription};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
-use crate::orchestrator::{OrchestratorMode, OrchestratorRequest, RequestContext as OrchestratorRequestContext, RequestOrchestrator};
-use crate::prompt::PromptBuilder;
 use crate::skills::SkillsRegistry;
 use crate::utils::paths::get_skills_dir;
 use std::path::PathBuf;
@@ -152,14 +137,9 @@ impl AetherCore {
 
         // Clone generation config for model aliases
         // Clone routing rules for slash command parsing
-        // Clone orchestrator config for three-layer control switch
-        let (generation_config, routing_rules, use_three_layer_control) = {
+        let (generation_config, routing_rules) = {
             let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
-            (
-                full_config.generation.clone(),
-                full_config.rules.clone(),
-                full_config.orchestrator.use_three_layer_control,
-            )
+            (full_config.generation.clone(), full_config.rules.clone())
         };
 
         // Clone conversation histories for multi-turn support
@@ -179,49 +159,9 @@ impl AetherCore {
 
             handler.on_thinking();
 
-            // ================================================================
-            // Orchestrator Selection (Config-based routing)
-            // ================================================================
-            // Check if three-layer control is enabled
-            if use_three_layer_control {
-                // New path: Agent Loop with Three-Layer Control
-                info!("Processing via Agent Loop (three-layer control)");
-                process_with_agent_loop(
-                    &runtime,
-                    &input,
-                    &app_context,
-                    &window_title,
-                    &config,
-                    tool_server_handle,
-                    registered_tools,
-                    &conversation_histories,
-                    &topic_id,
-                    attachments.as_deref(),
-                    &op_token,
-                    &handler,
-                    &memory_config,
-                    &memory_path,
-                    &input_for_memory,
-                    &generation_config,
-                    &routing_rules,
-                );
-                return;
-            }
-
-            // ================================================================
-            // RequestOrchestrator-based processing (Legacy Path) - DEPRECATED
-            // ================================================================
-            // This path is deprecated and will be removed in a future version.
-            // Set orchestrator.use_three_layer_control = true to use the new
-            // Agent Loop architecture (now the default).
-            warn!(
-                "Using deprecated RequestOrchestrator path. \
-                 This will be removed in a future version. \
-                 Set orchestrator.use_three_layer_control = true to use the new Agent Loop."
-            );
-            info!("Processing via RequestOrchestrator (legacy)");
-            #[allow(deprecated)]
-            process_with_orchestrator(
+            // Process via Agent Loop (observe-think-act cycle)
+            info!("Processing via Agent Loop");
+            process_with_agent_loop(
                 &runtime,
                 &input,
                 &app_context,
@@ -240,8 +180,6 @@ impl AetherCore {
                 &generation_config,
                 &routing_rules,
             );
-
-            // Processing complete - orchestrator handles all paths
         });
 
         Ok(())
@@ -672,338 +610,7 @@ fn get_builtin_tool_descriptions(
 }
 
 // ============================================================================
-// RequestOrchestrator-based processing (Unified Path)
-// ============================================================================
-
-/// Process input using the RequestOrchestrator
-///
-/// This function uses the two-phase architecture:
-/// - Phase 1: ExecutionIntentDecider decides "execute vs converse"
-/// - Phase 2: Dispatcher decides "which tool and model" (only for Execute mode)
-///
-/// Supports all command types:
-/// - Builtin commands (/screenshot, /search, etc.)
-/// - Skills (/skill_name with instructions)
-/// - MCP commands (/mcp_server)
-/// - Custom commands (from routing rules)
-/// - Natural language tasks
-#[allow(clippy::too_many_arguments)]
-fn process_with_orchestrator(
-    runtime: &tokio::runtime::Handle,
-    input: &str,
-    app_context: &Option<String>,
-    _window_title: &Option<String>,
-    config: &crate::agents::RigAgentConfig,
-    tool_server_handle: rig::tool::server::ToolServerHandle,
-    registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
-    conversation_histories: &Arc<
-        std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
-    >,
-    topic_id: &Option<String>,
-    attachments: Option<&[crate::core::MediaAttachment]>,
-    op_token: &CancellationToken,
-    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
-    memory_config: &crate::config::MemoryConfig,
-    memory_path: &Option<String>,
-    input_for_memory: &str,
-    generation_config: &crate::config::GenerationConfig,
-    routing_rules: &[RoutingRuleConfig],
-) {
-    // Build CommandParser with all dynamic command sources
-    let mut command_parser = CommandParser::new();
-
-    // Load skills registry
-    if let Ok(skills_dir) = get_skills_dir() {
-        let registry = SkillsRegistry::new(skills_dir);
-        if registry.load_all().is_ok() {
-            command_parser = command_parser.with_skills_registry(Arc::new(registry));
-        }
-    }
-
-    // Add routing rules for custom commands
-    command_parser = command_parser.with_routing_rules(routing_rules.to_vec());
-
-    // TODO: Add MCP server names when available
-    // command_parser = command_parser.with_mcp_servers(mcp_server_names);
-
-    // Create ExecutionIntentDecider with the command parser
-    let intent_decider = crate::intent::ExecutionIntentDecider::new()
-        .with_command_parser(Arc::new(command_parser));
-
-    // Create the orchestrator with the configured decider
-    let orchestrator = RequestOrchestrator::with_intent_decider(intent_decider);
-
-    // Build context from FFI options
-    let context = OrchestratorRequestContext::from_ffi_options(app_context.clone(), None);
-
-    // Get available tools for the orchestrator
-    let tool_descriptions = get_builtin_tool_descriptions(generation_config);
-    let unified_tools: Vec<crate::dispatcher::UnifiedTool> = tool_descriptions
-        .iter()
-        .map(|td| {
-            crate::dispatcher::UnifiedTool::new(
-                &format!("builtin:{}", td.name),
-                &td.name,
-                &td.description,
-                crate::dispatcher::ToolSource::Native,
-            )
-        })
-        .collect();
-
-    // Create the request
-    let request = OrchestratorRequest::new(input).with_tools(unified_tools);
-    let request = if let Some(ctx) = context {
-        request.with_context(ctx)
-    } else {
-        request
-    };
-
-    // Process through the orchestrator
-    let result = match orchestrator.process(&request) {
-        Ok(r) => r,
-        Err(e) => {
-            error!(error = %e, "Orchestrator processing failed");
-            // Fallback to conversational mode on error
-            handler.on_error(format!("Orchestrator error: {}", e));
-            return;
-        }
-    };
-
-    info!(
-        mode = ?result.mode,
-        phase = ?result.phase,
-        confidence = result.confidence(),
-        latency_us = result.latency_us(),
-        "Orchestrator decision"
-    );
-
-    // Route based on orchestrator result
-    match result.mode {
-        OrchestratorMode::DirectTool { tool_id, args } => {
-            // Direct tool invocation - execute immediately
-            info!(tool_id = %tool_id, args = %args, "Direct tool execution via orchestrator");
-
-            // For now, inject a tool trigger prompt similar to existing slash command handling
-            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
-                .with_generation_config(generation_config)
-                .generate();
-
-            let processed_input = format!(
-                "{}\n\n---\n\n请使用 {} 工具处理: {}",
-                agent_prompt, tool_id, args
-            );
-
-            execute_with_agent_manager(
-                runtime,
-                &processed_input,
-                config,
-                tool_server_handle,
-                registered_tools,
-                conversation_histories,
-                topic_id,
-                attachments,
-                op_token,
-                handler,
-                memory_config,
-                memory_path,
-                input_for_memory,
-                app_context,
-                &None,
-            );
-        }
-
-        OrchestratorMode::Converse => {
-            // Conversation mode - use the prompt from orchestrator
-            info!("Conversational mode via orchestrator");
-
-            let prompt = result.prompt.unwrap_or_else(|| {
-                PromptBuilder::conversational_prompt(None)
-            });
-
-            // Execute without agent tools
-            execute_with_agent_manager(
-                runtime,
-                &format!("{}\n\n---\n\n{}", prompt, input),
-                config,
-                tool_server_handle,
-                registered_tools,
-                conversation_histories,
-                topic_id,
-                attachments,
-                op_token,
-                handler,
-                memory_config,
-                memory_path,
-                input_for_memory,
-                app_context,
-                &None,
-            );
-        }
-
-        OrchestratorMode::Skill { skill_id, display_name, instructions, args } => {
-            // Skill mode - inject skill instructions as context
-            info!(
-                skill_id = %skill_id,
-                skill_name = %display_name,
-                "Skill execution via orchestrator"
-            );
-
-            // Build prompt with skill instructions
-            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
-                .with_generation_config(generation_config)
-                .generate();
-
-            let processed_input = format!(
-                "# Skill: {}\n\n{}\n\n---\n\n{}\n\n---\n\n用户请求: {}",
-                display_name, instructions, agent_prompt, args
-            );
-
-            execute_with_agent_manager(
-                runtime,
-                &processed_input,
-                config,
-                tool_server_handle,
-                registered_tools,
-                conversation_histories,
-                topic_id,
-                attachments,
-                op_token,
-                handler,
-                memory_config,
-                memory_path,
-                input_for_memory,
-                app_context,
-                &None,
-            );
-        }
-
-        OrchestratorMode::Mcp { server_name, tool_name, args } => {
-            // MCP mode - route to MCP server
-            info!(
-                server_name = %server_name,
-                tool_name = ?tool_name,
-                "MCP execution via orchestrator"
-            );
-
-            // Build prompt with MCP tool hint
-            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
-                .with_generation_config(generation_config)
-                .generate();
-
-            let tool_hint = if let Some(ref tool) = tool_name {
-                format!("请使用 {} 工具（来自 {} 服务器）处理: {}", tool, server_name, args)
-            } else {
-                format!("请使用 {} MCP 服务器的工具处理: {}", server_name, args)
-            };
-
-            let processed_input = format!("{}\n\n---\n\n{}", agent_prompt, tool_hint);
-
-            execute_with_agent_manager(
-                runtime,
-                &processed_input,
-                config,
-                tool_server_handle,
-                registered_tools,
-                conversation_histories,
-                topic_id,
-                attachments,
-                op_token,
-                handler,
-                memory_config,
-                memory_path,
-                input_for_memory,
-                app_context,
-                &None,
-            );
-        }
-
-        OrchestratorMode::Custom { command_name, system_prompt, provider: _, args } => {
-            // Custom command mode - use custom system prompt
-            info!(
-                command_name = %command_name,
-                has_system_prompt = system_prompt.is_some(),
-                "Custom command execution via orchestrator"
-            );
-
-            // Use custom system prompt if provided, otherwise use agent prompt
-            let prompt = system_prompt.unwrap_or_else(|| {
-                AgentModePrompt::with_tools(tool_descriptions.clone())
-                    .with_generation_config(generation_config)
-                    .generate()
-            });
-
-            let processed_input = format!("{}\n\n---\n\n用户输入: {}", prompt, args);
-
-            execute_with_agent_manager(
-                runtime,
-                &processed_input,
-                config,
-                tool_server_handle,
-                registered_tools,
-                conversation_histories,
-                topic_id,
-                attachments,
-                op_token,
-                handler,
-                memory_config,
-                memory_path,
-                input_for_memory,
-                app_context,
-                &None,
-            );
-        }
-
-        OrchestratorMode::Execute { category, ref task_intent } => {
-            // Execute mode - use agent prompt with filtered tools
-            info!(
-                category = ?category,
-                task_intent = %task_intent,
-                tools_count = result.tools.len(),
-                "Execute mode via orchestrator"
-            );
-
-            // Notify UI of agent mode
-            let task = crate::intent::ExecutableTask {
-                category,
-                action: input.to_string(),
-                target: None,
-                confidence: result.confidence(),
-            };
-            handler.on_agent_mode_detected((&task).into());
-
-            // Use the prompt generated by orchestrator
-            let prompt = result.prompt.unwrap_or_else(|| {
-                // Fallback: generate agent prompt with all tools
-                AgentModePrompt::with_tools(tool_descriptions.clone())
-                    .with_generation_config(generation_config)
-                    .generate()
-            });
-
-            let processed_input = format!("{}\n\n---\n\n用户请求: {}", prompt, input);
-
-            execute_with_agent_manager(
-                runtime,
-                &processed_input,
-                config,
-                tool_server_handle,
-                registered_tools,
-                conversation_histories,
-                topic_id,
-                attachments,
-                op_token,
-                handler,
-                memory_config,
-                memory_path,
-                input_for_memory,
-                app_context,
-                &None,
-            );
-        }
-    }
-}
-
-// ============================================================================
-// Agent Loop-based processing (New Architecture)
+// Agent Loop Processing
 // ============================================================================
 
 /// Process input using the new Agent Loop architecture

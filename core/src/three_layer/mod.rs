@@ -5,9 +5,7 @@
 //! - Middle Layer: Skill DAG (stable, testable workflows)
 //! - Bottom Layer: Tools (capability-based with sandbox)
 //!
-//! # Usage
-//!
-//! Enable via config: `orchestrator.use_three_layer_control = true`
+//! This is the default and only orchestration architecture.
 //!
 //! # Example
 //!
