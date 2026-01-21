@@ -20,6 +20,11 @@ final class ConversationStore: @unchecked Sendable {
 
     static let shared = ConversationStore()
 
+    // MARK: - Schema Version
+
+    /// Current database schema version (increment when adding migrations)
+    private static let schemaVersion = 2  // v2: Added attachments table
+
     // MARK: - Properties
 
     private var dbQueue: DatabaseQueue?
@@ -76,10 +81,41 @@ final class ConversationStore: @unchecked Sendable {
                 t.column("createdAt", .datetime).notNull()
             }
 
+            // Attachments table (v2)
+            try db.create(table: "attachments", ifNotExists: true) { t in
+                t.column("id", .text).primaryKey()
+                t.column("messageId", .text).notNull().references("messages", onDelete: .cascade)
+                t.column("attachmentType", .text).notNull()
+                t.column("mediaType", .text).notNull()
+                t.column("mimeType", .text).notNull()
+                t.column("filename", .text)
+                t.column("localPath", .text)
+                t.column("remoteUrl", .text)
+                t.column("sizeBytes", .integer).notNull().defaults(to: 0)
+                t.column("createdAt", .datetime).notNull()
+            }
+
             // Indexes
             try db.create(index: "idx_messages_topic", on: "messages", columns: ["topicId"], ifNotExists: true)
             try db.create(index: "idx_topics_updated", on: "topics", columns: ["updatedAt"], ifNotExists: true)
+            try db.create(index: "idx_attachments_message", on: "attachments", columns: ["messageId"], ifNotExists: true)
         }
+    }
+
+    // MARK: - Database Access (for AttachmentStore)
+
+    /// Execute a read-only database operation
+    /// - Parameter block: The operation to execute
+    /// - Returns: The result of the operation
+    func dbRead<T>(_ block: (Database) throws -> T) throws -> T? {
+        return try dbQueue?.read(block)
+    }
+
+    /// Execute a write database operation
+    /// - Parameter block: The operation to execute
+    /// - Returns: The result of the operation
+    func dbWrite<T>(_ block: (Database) throws -> T) throws -> T? {
+        return try dbQueue?.write(block)
     }
 
     // MARK: - Topic Operations
@@ -142,7 +178,19 @@ final class ConversationStore: @unchecked Sendable {
     }
 
     /// Soft delete a topic
+    /// Also cleans up associated attachment files
     func deleteTopic(id: String) {
+        // First, get attachment paths for file cleanup
+        let attachmentPaths = AttachmentStore.shared.getAttachmentPaths(forTopic: id)
+        let localPaths = attachmentPaths.compactMap { $0.localPath }
+
+        // Delete attachment files
+        if !localPaths.isEmpty {
+            let deletedFiles = AttachmentFileManager.shared.deleteFiles(paths: localPaths)
+            print("[ConversationStore] Deleted \(deletedFiles) attachment files for topic: \(id)")
+        }
+
+        // Soft delete topic (CASCADE will delete messages and attachments from DB)
         do {
             try dbQueue?.write { db in
                 try db.execute(
@@ -154,6 +202,9 @@ final class ConversationStore: @unchecked Sendable {
         } catch {
             print("[ConversationStore] Failed to delete topic: \(error)")
         }
+
+        // Clean up empty directories
+        AttachmentFileManager.shared.cleanupEmptyDirectories()
     }
 
     /// Update topic's updatedAt timestamp
@@ -236,7 +287,19 @@ final class ConversationStore: @unchecked Sendable {
     }
 
     /// Delete all messages for a topic
+    /// Also cleans up associated attachment files
     func deleteMessages(topicId: String) {
+        // First, get attachment paths for file cleanup
+        let attachmentPaths = AttachmentStore.shared.getAttachmentPaths(forTopic: topicId)
+        let localPaths = attachmentPaths.compactMap { $0.localPath }
+
+        // Delete attachment files
+        if !localPaths.isEmpty {
+            let deletedFiles = AttachmentFileManager.shared.deleteFiles(paths: localPaths)
+            print("[ConversationStore] Deleted \(deletedFiles) attachment files for topic: \(topicId)")
+        }
+
+        // Delete messages (CASCADE will delete attachments from DB)
         do {
             try dbQueue?.write { db in
                 try db.execute(
@@ -253,12 +316,27 @@ final class ConversationStore: @unchecked Sendable {
     // MARK: - Bulk Operations
 
     /// Clear all topics and messages (hard delete)
+    /// Also cleans up all attachment files
     /// Returns the number of topics deleted
     @discardableResult
     func clearAllTopics() -> Int {
+        // Delete all attachment files first
+        let attachmentsDir = AttachmentFileManager.attachmentsDirectory
+        if FileManager.default.fileExists(atPath: attachmentsDir.path) {
+            do {
+                try FileManager.default.removeItem(at: attachmentsDir)
+                print("[ConversationStore] Cleared all attachment files")
+            } catch {
+                print("[ConversationStore] Failed to clear attachment files: \(error)")
+            }
+        }
+
+        // Recreate empty directories
+        _ = AttachmentFileManager.shared
+
         do {
             return try dbQueue?.write { db in
-                // Messages will be deleted automatically due to ON DELETE CASCADE
+                // Messages and attachments will be deleted automatically due to ON DELETE CASCADE
                 let deletedCount = try Topic.deleteAll(db)
                 print("[ConversationStore] Cleared all topics and messages: \(deletedCount) topics deleted")
                 return deletedCount

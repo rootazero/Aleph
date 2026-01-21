@@ -18,6 +18,7 @@ struct MessageBubbleView: View {
     let onCopy: () -> Void
 
     @State private var isHovering = false
+    @State private var storedAttachments: [StoredAttachment] = []
 
     private var isUser: Bool {
         message.role == .user
@@ -28,7 +29,12 @@ struct MessageBubbleView: View {
             if isUser { Spacer(minLength: 40) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
-                // Rich message content (text + images)
+                // Stored attachments (user uploads)
+                if isUser && !storedAttachments.isEmpty {
+                    AttachmentGridView(attachments: storedAttachments)
+                }
+
+                // Rich message content (text + images from content)
                 RichMessageContentView(
                     content: message.content,
                     isUser: isUser
@@ -54,6 +60,18 @@ struct MessageBubbleView: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
             }
+        }
+        .onAppear {
+            loadStoredAttachments()
+        }
+    }
+
+    /// Load stored attachments for this message
+    private func loadStoredAttachments() {
+        // Load from database
+        storedAttachments = AttachmentStore.shared.getAttachments(forMessage: message.id)
+        if !storedAttachments.isEmpty {
+            print("[MessageBubble] Loaded \(storedAttachments.count) attachments for message: \(message.id)")
         }
     }
 }

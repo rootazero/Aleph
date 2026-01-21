@@ -371,7 +371,37 @@ final class UnifiedConversationViewModel {
         ) {
             messages.append(message)
             displayState = .conversation
+
+            // Save pending attachments to this message
+            saveAttachments(for: message.id)
         }
+    }
+
+    /// Save pending attachments to storage
+    /// - Parameter messageId: The message ID to link attachments to
+    private func saveAttachments(for messageId: String) {
+        guard !pendingAttachments.isEmpty else { return }
+
+        for pending in pendingAttachments {
+            // Save file to disk
+            guard let localPath = AttachmentFileManager.shared.saveUserUpload(
+                from: pending,
+                messageId: messageId
+            ) else {
+                print("[UnifiedViewModel] Failed to save attachment file: \(pending.fileName)")
+                continue
+            }
+
+            // Create and save database record
+            let stored = StoredAttachment(
+                from: pending,
+                messageId: messageId,
+                localPath: localPath
+            )
+            AttachmentStore.shared.save(stored)
+        }
+
+        print("[UnifiedViewModel] Saved \(pendingAttachments.count) attachments for message: \(messageId)")
     }
 
     func addAssistantMessage(_ content: String) {
@@ -383,6 +413,9 @@ final class UnifiedConversationViewModel {
             content: content
         ) {
             messages.append(message)
+
+            // Extract and save image URLs from assistant response
+            extractAndSaveImageURLs(from: content, messageId: message.id)
         }
         isLoading = false
     }
@@ -422,10 +455,79 @@ final class UnifiedConversationViewModel {
                 messageId: messageId,
                 content: streamingText
             )
+
+            // Extract and save image URLs from assistant response
+            extractAndSaveImageURLs(from: streamingText, messageId: messageId)
         }
         streamingMessageId = nil
         streamingText = ""
         isLoading = false
+    }
+
+    /// Extract image URLs from content and save as attachments
+    /// - Parameters:
+    ///   - content: The message content to parse
+    ///   - messageId: The message ID to link attachments to
+    private func extractAndSaveImageURLs(from content: String, messageId: String) {
+        let segments = ContentParser.parse(content)
+        var imageURLs: [String] = []
+
+        for segment in segments {
+            if case .image(let url) = segment {
+                imageURLs.append(url)
+            }
+        }
+
+        guard !imageURLs.isEmpty else { return }
+
+        // Save each image URL as a remote attachment
+        for urlString in imageURLs {
+            guard let url = URL(string: urlString) else { continue }
+
+            // Determine if it's a local file (from output directory) or remote URL
+            let isLocalFile = url.isFileURL || urlString.hasPrefix("file://")
+
+            if isLocalFile {
+                // For local files (tool-generated), copy to attachments directory
+                if let localPath = AttachmentFileManager.shared.saveGeneratedFile(
+                    from: url,
+                    toolName: "tool",
+                    messageId: messageId
+                ) {
+                    let stored = StoredAttachment.forToolOutput(
+                        messageId: messageId,
+                        toolName: "tool",
+                        sourceURL: url,
+                        localPath: localPath
+                    )
+                    AttachmentStore.shared.save(stored)
+                    print("[UnifiedViewModel] Saved local tool output: \(localPath)")
+                }
+            } else {
+                // For remote URLs, create attachment record (download in background)
+                let stored = StoredAttachment.forToolOutput(
+                    messageId: messageId,
+                    toolName: "remote",
+                    sourceURL: url,
+                    localPath: nil
+                )
+                AttachmentStore.shared.save(stored)
+                print("[UnifiedViewModel] Saved remote URL attachment: \(urlString)")
+
+                // Optionally cache remote images in background
+                Task {
+                    if let relativePath = await AttachmentFileManager.shared.downloadAndCache(
+                        url: url,
+                        messageId: messageId
+                    ) {
+                        AttachmentStore.shared.updateLocalPath(id: stored.id, localPath: relativePath)
+                        print("[UnifiedViewModel] Cached remote image: \(relativePath)")
+                    }
+                }
+            }
+        }
+
+        print("[UnifiedViewModel] Extracted \(imageURLs.count) image URLs from assistant response")
     }
 
     func setLoading(_ loading: Bool) {
