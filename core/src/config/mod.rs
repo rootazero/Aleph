@@ -99,6 +99,9 @@ pub struct Config {
     /// Generation providers configuration (image, speech, audio, video)
     #[serde(default)]
     pub generation: GenerationConfig,
+    /// Orchestrator configuration (Three-Layer Control architecture)
+    #[serde(default)]
+    pub orchestrator: OrchestratorConfig,
 }
 
 // =============================================================================
@@ -185,6 +188,7 @@ impl Default for Config {
             cowork: CoworkConfigToml::default(),
             policies: PoliciesConfig::default(),
             generation: GenerationConfig::default(),
+            orchestrator: OrchestratorConfig::default(),
         }
     }
 }
