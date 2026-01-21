@@ -63,6 +63,9 @@ pub mod scheduler;
 
 mod engine;
 
+// === Task Analysis ===
+pub mod analyzer;
+
 // === Re-exports: Tool Management ===
 pub use async_confirmation::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
@@ -97,6 +100,9 @@ pub use model_router::{
 pub use monitor::{ProgressEvent, ProgressMonitor, ProgressSubscriber, TaskMonitor};
 pub use planner::{LlmTaskPlanner, TaskPlanner};
 pub use scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
+
+// === Re-exports: Task Analysis ===
+pub use analyzer::{AnalysisResult, TaskAnalyzer};
 
 #[cfg(test)]
 mod tests {
