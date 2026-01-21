@@ -28,13 +28,14 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use rig::tool::Tool;
 use serde_json::Value;
 use tracing::{debug, error, info};
 
 use crate::dispatcher::{ToolSource, UnifiedTool};
 use crate::error::{AetherError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::rig_tools::{FileOpsTool, SearchTool, WebFetchTool, YouTubeTool};
+use crate::rig_tools::{CodeExecTool, FileOpsTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
 use crate::three_layer::{Capability, CapabilityGate};
 
 use super::ToolRegistry;
@@ -61,6 +62,10 @@ pub struct BuiltinToolRegistry {
     youtube_tool: YouTubeTool,
     /// File operations tool instance
     file_ops_tool: FileOpsTool,
+    /// Code execution tool instance
+    code_exec_tool: CodeExecTool,
+    /// PDF generation tool instance
+    pdf_generate_tool: PdfGenerateTool,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
     /// Capability gate for security enforcement
@@ -77,14 +82,34 @@ impl BuiltinToolRegistry {
 
     /// Create a new registry with custom configuration
     ///
-    /// Uses a permissive CapabilityGate that allows safe operations by default.
+    /// Uses a permissive CapabilityGate that allows full AI Agent operations.
+    /// Aether is designed as a powerful AI Agent that needs to perform complex
+    /// multi-step tasks including file operations and code execution.
+    ///
+    /// # Enabled Capabilities
+    /// - File operations: read, list, write, delete
+    /// - Network: web search, web fetch
+    /// - Code execution: shell commands, process spawning
+    /// - LLM calls
+    ///
+    /// # Safety Notes
+    /// - Dangerous commands are still blocked by CommandChecker (rm -rf /, sudo, etc.)
+    /// - File operations are sandboxed by PathPermissionChecker
     pub fn with_config(config: BuiltinToolConfig) -> Self {
-        // Default: allow safe operations (read, search, fetch)
+        // Full AI Agent capabilities - Aether is a super-powered agent
         let gate = CapabilityGate::new(vec![
+            // File system operations
             Capability::FileRead,
             Capability::FileList,
+            Capability::FileWrite,
+            Capability::FileDelete, // Enabled for cleanup operations
+            // Network operations
             Capability::WebSearch,
             Capability::WebFetch,
+            // Code execution
+            Capability::ShellExec,    // Enabled for code execution
+            Capability::ProcessSpawn, // Enabled for spawning processes
+            // LLM
             Capability::LlmCall,
         ]);
         Self::with_config_and_gate(config, gate)
@@ -103,6 +128,8 @@ impl BuiltinToolRegistry {
         let web_fetch_tool = WebFetchTool::new();
         let youtube_tool = YouTubeTool::new();
         let file_ops_tool = FileOpsTool::new();
+        let code_exec_tool = CodeExecTool::new();
+        let pdf_generate_tool = PdfGenerateTool::new();
 
         // Build tool metadata
         let mut tools = HashMap::new();
@@ -147,6 +174,26 @@ impl BuiltinToolRegistry {
             ),
         );
 
+        tools.insert(
+            "code_exec".to_string(),
+            UnifiedTool::new(
+                "builtin:code_exec",
+                "code_exec",
+                CodeExecTool::DESCRIPTION,
+                ToolSource::Builtin,
+            ),
+        );
+
+        tools.insert(
+            "pdf_generate".to_string(),
+            UnifiedTool::new(
+                "builtin:pdf_generate",
+                "pdf_generate",
+                PdfGenerateTool::DESCRIPTION,
+                ToolSource::Builtin,
+            ),
+        );
+
         // TODO: Add image generation tool when generation_registry is provided
 
         Self {
@@ -154,6 +201,8 @@ impl BuiltinToolRegistry {
             web_fetch_tool,
             youtube_tool,
             file_ops_tool,
+            code_exec_tool,
+            pdf_generate_tool,
             tools,
             capability_gate,
         }
@@ -181,6 +230,8 @@ impl BuiltinToolRegistry {
                     Some(Capability::FileRead)
                 }
             }
+            "code_exec" => Some(Capability::ShellExec), // Code execution requires shell capability
+            "pdf_generate" => Some(Capability::FileWrite), // PDF generation writes files
             _ => None,
         }
     }
@@ -263,6 +314,36 @@ impl BuiltinToolRegistry {
         serde_json::to_value(result)
             .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))
     }
+
+    /// Execute the code execution tool
+    async fn execute_code_exec(&self, arguments: Value) -> Result<Value> {
+        let args: crate::rig_tools::CodeExecArgs =
+            serde_json::from_value(arguments).map_err(|e| {
+                AetherError::tool(format!("Invalid code_exec arguments: {}", e))
+            })?;
+
+        let result = self.code_exec_tool.call(args).await.map_err(|e| {
+            AetherError::tool(format!("Code execution failed: {}", e))
+        })?;
+
+        serde_json::to_value(result)
+            .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))
+    }
+
+    /// Execute the PDF generation tool
+    async fn execute_pdf_generate(&self, arguments: Value) -> Result<Value> {
+        let args: crate::rig_tools::PdfGenerateArgs =
+            serde_json::from_value(arguments).map_err(|e| {
+                AetherError::tool(format!("Invalid pdf_generate arguments: {}", e))
+            })?;
+
+        let result = self.pdf_generate_tool.call(args).await.map_err(|e| {
+            AetherError::tool(format!("PDF generation failed: {}", e))
+        })?;
+
+        serde_json::to_value(result)
+            .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))
+    }
 }
 
 impl Default for BuiltinToolRegistry {
@@ -294,6 +375,8 @@ impl ToolRegistry for BuiltinToolRegistry {
             "web_fetch" => Box::pin(async move { self.execute_web_fetch(arguments).await }),
             "youtube" => Box::pin(async move { self.execute_youtube(arguments).await }),
             "file_ops" => Box::pin(async move { self.execute_file_ops(arguments).await }),
+            "code_exec" => Box::pin(async move { self.execute_code_exec(arguments).await }),
+            "pdf_generate" => Box::pin(async move { self.execute_pdf_generate(arguments).await }),
             _ => {
                 let tool = tool_name.to_string();
                 error!(tool = %tool, "Unknown tool requested");
@@ -318,6 +401,8 @@ mod tests {
         assert!(registry.get_tool("web_fetch").is_some());
         assert!(registry.get_tool("youtube").is_some());
         assert!(registry.get_tool("file_ops").is_some());
+        assert!(registry.get_tool("code_exec").is_some());
+        assert!(registry.get_tool("pdf_generate").is_some());
 
         // Verify unknown tool returns None
         assert!(registry.get_tool("unknown").is_none());
@@ -410,24 +495,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_delete_blocked_by_default() {
-        // Default registry doesn't grant FileDelete
+    async fn test_file_delete_allowed_by_default() {
+        // Default registry now grants FileDelete for super-powered AI Agent
         let registry = BuiltinToolRegistry::new();
 
-        // Delete should be blocked
-        let result = registry
-            .execute_tool(
-                "file_ops",
-                serde_json::json!({"operation": "delete", "path": "/tmp/test"}),
-            )
-            .await;
+        // Delete capability check should pass
+        let check = registry.check_capability("file_ops", &serde_json::json!({"operation": "delete"}));
+        assert!(check.is_ok(), "FileDelete should be allowed by default");
+    }
 
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("Permission denied") || err_msg.contains("capability"),
-            "Expected permission error, got: {}",
-            err_msg
+    #[tokio::test]
+    async fn test_code_exec_allowed_by_default() {
+        // Default registry grants ShellExec for code execution
+        let registry = BuiltinToolRegistry::new();
+
+        // Code execution capability check should pass
+        let check = registry.check_capability("code_exec", &serde_json::json!({}));
+        assert!(check.is_ok(), "ShellExec should be allowed by default");
+    }
+
+    #[test]
+    fn test_code_exec_capability_mapping() {
+        let registry = BuiltinToolRegistry::new();
+
+        // Code exec requires ShellExec
+        assert_eq!(
+            registry.required_capability("code_exec", &serde_json::json!({})),
+            Some(Capability::ShellExec)
         );
     }
 
@@ -439,5 +533,43 @@ mod tests {
         // Read capability check should pass
         let check = registry.check_capability("file_ops", &serde_json::json!({"operation": "read"}));
         assert!(check.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_file_write_allowed_by_default() {
+        // Default registry grants FileWrite for AI Agent tasks
+        let registry = BuiltinToolRegistry::new();
+
+        // Write capability check should pass
+        let check = registry.check_capability("file_ops", &serde_json::json!({"operation": "write"}));
+        assert!(check.is_ok());
+
+        // Other write-like operations should also pass
+        let check_mkdir = registry.check_capability("file_ops", &serde_json::json!({"operation": "mkdir"}));
+        assert!(check_mkdir.is_ok());
+
+        let check_copy = registry.check_capability("file_ops", &serde_json::json!({"operation": "copy"}));
+        assert!(check_copy.is_ok());
+    }
+
+    #[test]
+    fn test_pdf_generate_capability_mapping() {
+        let registry = BuiltinToolRegistry::new();
+
+        // PDF generate requires FileWrite
+        assert_eq!(
+            registry.required_capability("pdf_generate", &serde_json::json!({})),
+            Some(Capability::FileWrite)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pdf_generate_allowed_by_default() {
+        // Default registry grants FileWrite for PDF generation
+        let registry = BuiltinToolRegistry::new();
+
+        // PDF generate capability check should pass
+        let check = registry.check_capability("pdf_generate", &serde_json::json!({}));
+        assert!(check.is_ok(), "FileWrite should be allowed for pdf_generate");
     }
 }

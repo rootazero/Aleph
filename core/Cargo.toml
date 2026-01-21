@@ -93,6 +93,10 @@ tar = "0.4"
 sha2 = "0.10"
 # For consistent hashing (A/B testing traffic splitting)
 siphasher = "1.0"
+# For PDF generation
+printpdf = "0.7"
+# For Markdown parsing (PDF generation)
+pulldown-cmark = "0.12"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
