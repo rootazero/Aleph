@@ -318,8 +318,8 @@ pub struct AetherCore {
     pub(crate) tool_server_handle: ToolServerHandle,
     /// Names of registered tools (for tracking and display)
     pub(crate) registered_tools: Arc<RwLock<Vec<String>>>,
-    /// Cowork engine for task orchestration (lazily initialized)
-    pub(crate) cowork_engine: Arc<RwLock<Option<Arc<crate::dispatcher::CoworkEngine>>>>,
+    /// Agent engine for task orchestration (lazily initialized)
+    pub(crate) agent_engine: Arc<RwLock<Option<Arc<crate::dispatcher::AgentEngine>>>>,
     /// Conversation histories keyed by topic_id for multi-turn support
     pub(crate) conversation_histories: Arc<RwLock<HashMap<String, Vec<Message>>>>,
     /// Generation provider registry for media generation (image, speech, etc.)
@@ -571,7 +571,7 @@ pub fn init_core(
         current_op_token,
         tool_server_handle,
         registered_tools,
-        cowork_engine: Arc::new(RwLock::new(None)), // Lazily initialized
+        agent_engine: Arc::new(RwLock::new(None)), // Lazily initialized
         conversation_histories: Arc::new(RwLock::new(HashMap::new())), // Multi-turn support
         generation_registry,
     });

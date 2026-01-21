@@ -49,10 +49,6 @@ pub struct AgentConfig {
     pub routing_rules: Option<ModelRoutingRules>,
 }
 
-/// Type alias for backward compatibility
-#[deprecated(since = "0.1.0", note = "Use AgentConfig instead")]
-pub type CoworkConfig = AgentConfig;
-
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -119,10 +115,6 @@ pub struct AgentEngine {
     /// AI provider for model execution
     provider: Option<Arc<dyn AiProvider>>,
 }
-
-/// Type alias for backward compatibility
-#[deprecated(since = "0.1.0", note = "Use AgentEngine instead")]
-pub type CoworkEngine = AgentEngine;
 
 impl AgentEngine {
     /// Create a new AgentEngine

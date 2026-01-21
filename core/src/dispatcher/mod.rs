@@ -101,7 +101,7 @@ pub use cowork_types::{
     GraphValidationError, ImageGenTask, Language, Task, TaskCountByStatus, TaskDependency,
     TaskGraph, TaskGraphMeta, TaskResult as CoworkTaskResult, TaskStatus, TaskType, VideoGenTask,
 };
-pub use engine::{AgentConfig, AgentEngine, CoworkConfig, CoworkEngine, ExecutionState};
+pub use engine::{AgentConfig, AgentEngine, ExecutionState};
 pub use executor::{ExecutionContext, ExecutorRegistry, NoopExecutor, TaskExecutor};
 pub use model_router::{
     Capability, CostStrategy, CostTier, FallbackProvider, LatencyTier, ModelMatcher, ModelProfile,

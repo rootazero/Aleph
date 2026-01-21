@@ -12,36 +12,36 @@ use std::sync::Arc;
 use tracing::info;
 
 impl AetherCore {
-    /// Get or create the Cowork engine
+    /// Get or create the Agent engine
     ///
-    /// Lazily initializes the CoworkEngine on first use.
-    pub(crate) fn get_or_create_cowork_engine(
+    /// Lazily initializes the AgentEngine on first use.
+    pub(crate) fn get_or_create_agent_engine(
         &self,
-    ) -> Result<Arc<crate::dispatcher::CoworkEngine>, AetherFfiError> {
+    ) -> Result<Arc<crate::dispatcher::AgentEngine>, AetherFfiError> {
         // Check if engine already exists
         {
-            let engine_guard = self.cowork_engine.read().unwrap();
+            let engine_guard = self.agent_engine.read().unwrap();
             if let Some(engine) = engine_guard.as_ref() {
                 return Ok(Arc::clone(engine));
             }
         }
 
         // Need to create the engine
-        let mut engine_guard = self.cowork_engine.write().unwrap();
+        let mut engine_guard = self.agent_engine.write().unwrap();
 
         // Double-check after acquiring write lock
         if let Some(engine) = engine_guard.as_ref() {
             return Ok(Arc::clone(engine));
         }
 
-        // Get the config for cowork from the loaded configuration
-        let cowork_config = {
+        // Get the config for agent from the loaded configuration
+        let agent_config = {
             // Note: We lock full_config briefly to ensure consistent state, but load from file
-            // because FullConfig doesn't expose cowork settings directly
+            // because FullConfig doesn't expose agent settings directly
             let _config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
             match Config::load() {
                 Ok(cfg) => cfg.agent.to_engine_config(),
-                Err(_) => crate::dispatcher::CoworkConfig::default(),
+                Err(_) => crate::dispatcher::AgentConfig::default(),
             }
         };
 
@@ -69,11 +69,11 @@ impl AetherCore {
         // Create a provider from config
         let provider = crate::providers::create_provider(&default_provider_name, provider_config)
             .map_err(|e| {
-            AetherFfiError::Provider(format!("Failed to create provider for Cowork: {}", e))
+            AetherFfiError::Provider(format!("Failed to create provider for Agent: {}", e))
         })?;
 
         // Create the engine
-        let mut engine = crate::dispatcher::CoworkEngine::new(cowork_config, provider);
+        let mut engine = crate::dispatcher::AgentEngine::new(agent_config, provider);
 
         // Set fallback provider from default_provider config
         // This ensures model routing works even without explicit model_profiles
@@ -85,15 +85,15 @@ impl AetherCore {
 
         let engine = Arc::new(engine);
         *engine_guard = Some(Arc::clone(&engine));
-        info!("Cowork engine initialized");
+        info!("Agent engine initialized");
 
         Ok(engine)
     }
 
-    /// Get Cowork configuration
+    /// Get Cowork configuration (FFI method name kept for Swift compatibility)
     pub fn cowork_get_config(&self) -> crate::ffi::dispatcher_types::CoworkConfigFFI {
         // Return current config or default
-        crate::ffi::dispatcher_types::CoworkConfigFFI::from(crate::dispatcher::CoworkConfig::default())
+        crate::ffi::dispatcher_types::CoworkConfigFFI::from(crate::dispatcher::AgentConfig::default())
     }
 
     /// Update Cowork configuration
@@ -103,7 +103,7 @@ impl AetherCore {
     ) -> Result<(), AetherFfiError> {
         // For now, this would reinitialize the engine with new config
         // Reset the engine so it gets recreated with new config
-        let mut engine_guard = self.cowork_engine.write().unwrap();
+        let mut engine_guard = self.agent_engine.write().unwrap();
         *engine_guard = None;
 
         info!(
@@ -120,7 +120,7 @@ impl AetherCore {
         &self,
         request: String,
     ) -> Result<crate::ffi::dispatcher_types::CoworkTaskGraphFFI, AetherFfiError> {
-        let engine = self.get_or_create_cowork_engine()?;
+        let engine = self.get_or_create_agent_engine()?;
 
         info!(request = %request, "Planning Cowork task");
 
@@ -233,7 +233,7 @@ impl AetherCore {
         &self,
         graph_ffi: crate::ffi::dispatcher_types::CoworkTaskGraphFFI,
     ) -> Result<crate::ffi::dispatcher_types::CoworkExecutionSummaryFFI, AetherFfiError> {
-        let engine = self.get_or_create_cowork_engine()?;
+        let engine = self.get_or_create_agent_engine()?;
 
         info!(graph_id = %graph_ffi.id, "Executing Cowork task graph");
 
@@ -270,7 +270,7 @@ impl AetherCore {
 
     /// Get current execution state
     pub fn cowork_get_state(&self) -> crate::ffi::dispatcher_types::CoworkExecutionState {
-        if let Ok(engine) = self.get_or_create_cowork_engine() {
+        if let Ok(engine) = self.get_or_create_agent_engine() {
             self.runtime.block_on(async {
                 crate::ffi::dispatcher_types::CoworkExecutionState::from(engine.state().await)
             })
@@ -281,7 +281,7 @@ impl AetherCore {
 
     /// Pause execution
     pub fn cowork_pause(&self) {
-        if let Ok(engine) = self.get_or_create_cowork_engine() {
+        if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.pause();
             info!("Cowork execution paused");
         }
@@ -289,7 +289,7 @@ impl AetherCore {
 
     /// Resume execution
     pub fn cowork_resume(&self) {
-        if let Ok(engine) = self.get_or_create_cowork_engine() {
+        if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.resume();
             info!("Cowork execution resumed");
         }
@@ -297,7 +297,7 @@ impl AetherCore {
 
     /// Cancel execution
     pub fn cowork_cancel(&self) {
-        if let Ok(engine) = self.get_or_create_cowork_engine() {
+        if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.cancel();
             info!("Cowork execution cancelled");
         }
@@ -305,7 +305,7 @@ impl AetherCore {
 
     /// Check if execution is paused
     pub fn cowork_is_paused(&self) -> bool {
-        if let Ok(engine) = self.get_or_create_cowork_engine() {
+        if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.is_paused()
         } else {
             false
@@ -314,7 +314,7 @@ impl AetherCore {
 
     /// Check if execution is cancelled
     pub fn cowork_is_cancelled(&self) -> bool {
-        if let Ok(engine) = self.get_or_create_cowork_engine() {
+        if let Ok(engine) = self.get_or_create_agent_engine() {
             engine.is_cancelled()
         } else {
             false
@@ -323,7 +323,7 @@ impl AetherCore {
 
     /// Subscribe to progress events
     pub fn cowork_subscribe(&self, handler: Box<dyn crate::ffi::dispatcher_types::CoworkProgressHandler>) {
-        if let Ok(engine) = self.get_or_create_cowork_engine() {
+        if let Ok(engine) = self.get_or_create_agent_engine() {
             // Convert Box to Arc for internal use
             let handler_arc: Arc<dyn crate::ffi::dispatcher_types::CoworkProgressHandler> = Arc::from(handler);
             let subscriber = Arc::new(crate::ffi::dispatcher_types::FfiProgressSubscriber::new(handler_arc));
@@ -673,7 +673,7 @@ impl AetherCore {
     pub fn cowork_get_model_health_summaries(
         &self,
     ) -> Vec<crate::ffi::dispatcher_types::ModelHealthSummaryFFI> {
-        // TODO: Integrate with HealthManager when it's added to CoworkEngine
+        // TODO: Integrate with HealthManager when it's added to AgentEngine
         // For now, generate summaries from configured model profiles
         match crate::config::Config::load() {
             Ok(cfg) => cfg
@@ -702,7 +702,7 @@ impl AetherCore {
         &self,
         model_id: String,
     ) -> Option<crate::ffi::dispatcher_types::ModelHealthSummaryFFI> {
-        // TODO: Integrate with HealthManager when it's added to CoworkEngine
+        // TODO: Integrate with HealthManager when it's added to AgentEngine
         // For now, return Unknown status if model exists
         match crate::config::Config::load() {
             Ok(cfg) => {
@@ -729,7 +729,7 @@ impl AetherCore {
     /// Returns aggregate statistics about the health status of all tracked models,
     /// including counts of healthy, degraded, unhealthy, and circuit-open models.
     pub fn cowork_get_health_statistics(&self) -> crate::ffi::dispatcher_types::HealthStatisticsFFI {
-        // TODO: Integrate with HealthManager when it's added to CoworkEngine
+        // TODO: Integrate with HealthManager when it's added to AgentEngine
         // For now, return statistics based on configured model count
         let total = match crate::config::Config::load() {
             Ok(cfg) => cfg.agent.model_profiles.len() as u32,
@@ -783,7 +783,7 @@ impl AetherCore {
         }
 
         // Create initial states for each limit
-        // TODO: When BudgetManager is integrated into CoworkEngine, use actual states
+        // TODO: When BudgetManager is integrated into AgentEngine, use actual states
         let mut states = std::collections::HashMap::new();
         for limit in &limits {
             states.insert(
@@ -914,7 +914,7 @@ impl AetherCore {
             return crate::ffi::dispatcher_types::ABTestingStatusFFI::disabled();
         }
 
-        // TODO: When ABTestingEngine is integrated into CoworkEngine, use actual engine
+        // TODO: When ABTestingEngine is integrated into AgentEngine, use actual engine
         // For now, return configured experiments count
         let experiment_count = ab_config.experiments.len();
 
