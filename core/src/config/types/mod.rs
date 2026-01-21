@@ -14,12 +14,14 @@
 //! - `skills`: Claude Agent Skills settings (SkillsConfig)
 //! - `dispatcher`: Dispatcher Layer settings (DispatcherConfigToml)
 //! - `cowork`: Cowork task orchestration settings (CoworkConfigToml)
+//! - `orchestrator`: Three-Layer Control orchestrator settings (OrchestratorConfig, OrchestratorGuards)
 
 pub mod cowork;
 pub mod dispatcher;
 pub mod general;
 pub mod generation;
 pub mod memory;
+pub mod orchestrator;
 pub mod policies;
 pub mod provider;
 pub mod routing;
@@ -36,6 +38,7 @@ pub use dispatcher::*;
 pub use general::*;
 pub use generation::*;
 pub use memory::*;
+pub use orchestrator::*;
 pub use policies::*;
 pub use provider::*;
 pub use routing::*;
