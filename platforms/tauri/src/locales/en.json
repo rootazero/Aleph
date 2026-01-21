@@ -1,0 +1,67 @@
+{
+  "common": {
+    "save": "Save",
+    "discard": "Discard",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "edit": "Edit",
+    "add": "Add",
+    "remove": "Remove",
+    "close": "Close",
+    "retry": "Retry",
+    "loading": "Loading...",
+    "error": "Error"
+  },
+  "settings": {
+    "title": "Settings",
+    "general": {
+      "title": "General",
+      "description": "Basic application settings",
+      "sound": "Sound Effects",
+      "soundDescription": "Play sound effects for actions",
+      "launchAtLogin": "Launch at Login",
+      "launchAtLoginDescription": "Automatically start Aether when you log in",
+      "language": "Language",
+      "languageDescription": "Select your preferred language",
+      "version": "Version",
+      "versionDescription": "Current application version"
+    },
+    "shortcuts": {
+      "title": "Shortcuts",
+      "description": "Configure keyboard shortcuts"
+    },
+    "behavior": {
+      "title": "Behavior",
+      "description": "Configure output and behavior settings"
+    },
+    "providers": {
+      "title": "Providers",
+      "description": "Configure AI providers"
+    },
+    "mcp": {
+      "title": "MCP",
+      "description": "Configure MCP servers"
+    },
+    "plugins": {
+      "title": "Plugins",
+      "description": "Manage plugins"
+    },
+    "agent": {
+      "title": "Agent",
+      "description": "Configure agent settings"
+    }
+  },
+  "halo": {
+    "listening": "Listening...",
+    "processing": "Processing...",
+    "success": "Done",
+    "error": "Something went wrong"
+  },
+  "tray": {
+    "about": "About Aether",
+    "settings": "Settings...",
+    "quit": "Quit Aether",
+    "defaultProvider": "Default Provider"
+  }
+}

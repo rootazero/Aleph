@@ -1,0 +1,67 @@
+{
+  "common": {
+    "save": "保存",
+    "discard": "放弃",
+    "cancel": "取消",
+    "confirm": "确认",
+    "delete": "删除",
+    "edit": "编辑",
+    "add": "添加",
+    "remove": "移除",
+    "close": "关闭",
+    "retry": "重试",
+    "loading": "加载中...",
+    "error": "错误"
+  },
+  "settings": {
+    "title": "设置",
+    "general": {
+      "title": "通用",
+      "description": "基本应用设置",
+      "sound": "声音效果",
+      "soundDescription": "为操作播放声音效果",
+      "launchAtLogin": "登录时启动",
+      "launchAtLoginDescription": "登录时自动启动 Aether",
+      "language": "语言",
+      "languageDescription": "选择您的首选语言",
+      "version": "版本",
+      "versionDescription": "当前应用版本"
+    },
+    "shortcuts": {
+      "title": "快捷键",
+      "description": "配置键盘快捷键"
+    },
+    "behavior": {
+      "title": "行为",
+      "description": "配置输出和行为设置"
+    },
+    "providers": {
+      "title": "提供商",
+      "description": "配置 AI 提供商"
+    },
+    "mcp": {
+      "title": "MCP",
+      "description": "配置 MCP 服务器"
+    },
+    "plugins": {
+      "title": "插件",
+      "description": "管理插件"
+    },
+    "agent": {
+      "title": "Agent",
+      "description": "配置 Agent 设置"
+    }
+  },
+  "halo": {
+    "listening": "正在监听...",
+    "processing": "处理中...",
+    "success": "完成",
+    "error": "出错了"
+  },
+  "tray": {
+    "about": "关于 Aether",
+    "settings": "设置...",
+    "quit": "退出 Aether",
+    "defaultProvider": "默认提供商"
+  }
+}
