@@ -145,36 +145,36 @@ let response = provider.chat(
 
 ### Router
 
-**Location**: `core/src/router/mod.rs`
+**Location**: `core/src/intent/decision/router.rs` (IntentRouter)
 
 **Responsibilities**:
-- Match user input against routing rules (regex patterns)
-- Infer intent from rule configuration
-- Select appropriate AI provider
-- Build initial `AgentPayload`
+- Match user input against routing rules
+- Route based on intent classification results
+- Select appropriate execution path
+- Build routing decisions with context signals
 
 **Key Methods**:
 ```rust
 pub fn route(
     &self,
-    user_input: &str,
-    context: &CapturedContext
-) -> Result<(Arc<dyn AiProvider>, AgentPayload)>
+    input: &str,
+    context: Option<&ContextSignals>
+) -> RouteResult
 ```
 
-**Data Stored**:
-- `rules: Vec<RoutingRule>` - Compiled regex patterns
-- `rule_configs: Vec<RoutingRuleConfig>` - Full config with capabilities
-- `providers: HashMap<String, Arc<dyn AiProvider>>` - Provider instances
+**Related Components**:
+- `intent/detection/` - L1/L2/L3 intent classification
+- `intent/decision/` - Routing decision logic
+- `dispatcher/model_router/` - Model selection routing
 
 ---
 
 ### CapabilityExecutor
 
-**Location**: `core/src/capability/mod.rs`
+**Location**: `core/src/capability/` (CapabilitySystem in `system.rs`)
 
 **Responsibilities**:
-- Execute capabilities in sorted priority order
+- Execute capabilities via Strategy pattern
 - Populate `payload.context` fields with retrieved data
 - Handle failures gracefully (warn but don't block)
 
@@ -264,16 +264,17 @@ similarity_threshold = 0.7     # Min cosine similarity (0.0-1.0)
 
 ### Cowork Task Orchestration
 
-**Location**: `core/src/cowork/`
+**Location**: `core/src/dispatcher/`
 
 **Purpose**: Decomposes complex user requests into DAG-structured task graphs and executes them with parallel scheduling.
 
 **Components**:
-- `TaskPlanner` - LLM-based task decomposition
-- `DAGScheduler` - Topological sort execution with parallelism
-- `ExecutorRegistry` - Extensible task execution backends
-- `TaskMonitor` - Real-time progress tracking
-- `CoworkEngine` - Unified API
+- `dispatcher/planner/` - LLM-based task decomposition
+- `dispatcher/scheduler/` - DAG scheduling with topological sort
+- `dispatcher/executor/` - Task execution backends
+- `dispatcher/monitor/` - Real-time progress tracking
+- `dispatcher/cowork_types/` - DAG task definitions (Task, TaskGraph, TaskDependency)
+- `dispatcher/engine.rs` - CoworkEngine unified API
 
 **Execution Flow**:
 ```
@@ -493,7 +494,7 @@ match self.format {
 
 ## Intent Routing Pipeline
 
-**Location**: `core/src/routing/`
+**Location**: `core/src/intent/`
 
 The Intent Routing Pipeline is an enhanced multi-layer routing system that optimizes intent detection through caching, confidence calibration, and intelligent layer execution.
 
@@ -546,7 +547,7 @@ User Input
 
 #### IntentCache
 
-**Location**: `core/src/routing/cache.rs`
+**Location**: `core/src/intent/support/cache.rs`
 
 LRU-based cache with time decay for fast-path routing:
 
@@ -575,7 +576,7 @@ pub struct CachedIntent {
 
 #### LayerExecutionEngine
 
-**Location**: `core/src/routing/engine.rs`
+**Location**: `core/src/intent/detection/classifier.rs`
 
 Orchestrates L1/L2/L3 layer execution with early exit optimization:
 
@@ -597,7 +598,7 @@ pub enum ExecutionMode {
 
 #### ConfidenceCalibrator
 
-**Location**: `core/src/routing/calibrator.rs`
+**Location**: `core/src/intent/decision/calibrator.rs`
 
 Adjusts raw confidence scores using multiple factors:
 
@@ -621,7 +622,7 @@ pub struct CalibrationFactor {
 
 #### IntentAggregator
 
-**Location**: `core/src/routing/aggregator.rs`
+**Location**: `core/src/intent/decision/aggregator.rs`
 
 Combines signals from multiple layers:
 
@@ -649,7 +650,7 @@ pub enum IntentAction {
 
 #### ClarificationIntegrator
 
-**Location**: `core/src/routing/clarification.rs`
+**Location**: `core/src/clarification/`
 
 Manages multi-turn clarification flows:
 
@@ -725,15 +726,15 @@ repeat_boost = 0.1
 
 ### Testing
 
-Integration tests: `core/src/tests/pipeline_integration.rs` (23 tests)
-Performance benchmarks: `core/benches/pipeline_bench.rs`
+Integration tests: `core/src/tests/intent_integration.rs`
+Performance benchmarks: `core/benches/` (if available)
 
 ```bash
-# Run pipeline tests
-cargo test tests::pipeline_integration --lib
+# Run intent integration tests
+cargo test tests::intent_integration --lib
 
-# Run benchmarks
-cargo bench --bench pipeline_bench
+# Run all tests
+cargo test --lib
 ```
 
 ---
@@ -877,6 +878,6 @@ pub struct Skill {
 
 ---
 
-**Last Updated**: 2026-01-11
+**Last Updated**: 2026-01-21
 **Implemented In**: Aether v0.1.0
 **OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`, `enhance-intent-routing-pipeline`
