@@ -150,6 +150,9 @@ impl AetherCore {
             (full_config.generation.clone(), full_config.rules.clone())
         };
 
+        // Clone generation registry for DAG execution of generation tasks
+        let generation_registry = Arc::clone(&self.generation_registry);
+
         // Clone conversation histories for multi-turn support
         let conversation_histories = Arc::clone(&self.conversation_histories);
 
@@ -187,6 +190,7 @@ impl AetherCore {
                 &input_for_memory,
                 &generation_config,
                 &routing_rules,
+                &generation_registry,
             );
         });
 
@@ -664,6 +668,7 @@ fn process_with_agent_loop(
     input_for_memory: &str,
     generation_config: &crate::config::GenerationConfig,
     routing_rules: &[RoutingRuleConfig],
+    generation_registry: &Arc<std::sync::RwLock<crate::generation::GenerationProviderRegistry>>,
 ) {
     // ================================================================
     // Step 1: Build IntentRouter with dynamic command sources
@@ -733,7 +738,10 @@ fn process_with_agent_loop(
                 }
             };
 
-            let analyzer = TaskAnalyzer::new(provider.clone());
+            let analyzer = TaskAnalyzer::with_generation_config(
+                provider.clone(),
+                generation_config.clone(),
+            );
 
             // Analyze input
             let analysis_result = runtime.block_on(async { analyzer.analyze(input).await });
@@ -775,6 +783,7 @@ fn process_with_agent_loop(
                         op_token,
                         handler,
                         input,
+                        generation_registry,
                     );
                 }
                 Err(e) => {
@@ -1139,24 +1148,208 @@ fn create_provider_from_config(
 // DAG Scheduler Integration
 // ============================================================================
 
-/// LLM-based task executor for DAG nodes
+use crate::dispatcher::cowork_types::TaskType;
+use crate::generation::{
+    GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
+};
+
+/// Comprehensive task executor for DAG nodes
 ///
-/// This executor uses the AI provider to execute individual tasks within
-/// the DAG scheduler. Each task receives context from its dependencies
-/// and produces output for downstream tasks.
-struct LlmTaskExecutor {
+/// This executor handles different task types:
+/// - Generation tasks (image/video/audio): calls the actual generation provider
+/// - AI inference tasks: uses LLM completion
+/// - Other tasks: uses LLM with task-specific prompts
+struct DagTaskExecutor {
     provider: Arc<dyn crate::providers::AiProvider>,
+    generation_registry: Arc<std::sync::RwLock<GenerationProviderRegistry>>,
 }
 
-impl LlmTaskExecutor {
-    fn new(provider: Arc<dyn crate::providers::AiProvider>) -> Self {
-        Self { provider }
+impl DagTaskExecutor {
+    fn new(
+        provider: Arc<dyn crate::providers::AiProvider>,
+        generation_registry: Arc<std::sync::RwLock<GenerationProviderRegistry>>,
+    ) -> Self {
+        Self {
+            provider,
+            generation_registry,
+        }
     }
-}
 
-#[async_trait::async_trait]
-impl GraphTaskExecutor for LlmTaskExecutor {
-    async fn execute(&self, task: &Task, context: &str) -> crate::error::Result<TaskOutput> {
+    /// Execute an image generation task
+    async fn execute_image_generation(
+        &self,
+        task: &Task,
+        image_gen: &crate::dispatcher::cowork_types::ImageGenTask,
+    ) -> crate::error::Result<TaskOutput> {
+        info!(
+            task_id = %task.id,
+            provider = %image_gen.provider,
+            model = %image_gen.model,
+            "Executing image generation task"
+        );
+
+        // Get provider from registry (clone Arc to release lock before await)
+        let gen_provider = {
+            let registry = self.generation_registry.read().map_err(|e| {
+                crate::error::AetherError::config(format!(
+                    "Failed to read generation registry: {}",
+                    e
+                ))
+            })?;
+
+            registry.get(&image_gen.provider).ok_or_else(|| {
+                crate::error::AetherError::config(format!(
+                    "Generation provider '{}' not found in registry",
+                    image_gen.provider
+                ))
+            })?
+        };
+
+        // Build generation request with model
+        let params = GenerationParams::builder().model(&image_gen.model).build();
+        let request = GenerationRequest::image(&image_gen.prompt).with_params(params);
+
+        // Execute generation (lock is released before this point)
+        let output = gen_provider.generate(request).await.map_err(|e| {
+            crate::error::AetherError::provider(format!("Image generation failed: {}", e))
+        })?;
+
+        // Format result
+        let result = if let Some(url) = output.data.as_url() {
+            format!("✓ 图像生成成功: {}", url)
+        } else if let Some(path) = output.data.as_local_path() {
+            format!("✓ 图像已保存到: {}", path)
+        } else {
+            "✓ 图像生成成功".to_string()
+        };
+
+        info!(task_id = %task.id, "Image generation completed");
+        Ok(TaskOutput::text(result))
+    }
+
+    /// Execute a video generation task
+    async fn execute_video_generation(
+        &self,
+        task: &Task,
+        video_gen: &crate::dispatcher::cowork_types::VideoGenTask,
+    ) -> crate::error::Result<TaskOutput> {
+        info!(
+            task_id = %task.id,
+            provider = %video_gen.provider,
+            model = %video_gen.model,
+            "Executing video generation task"
+        );
+
+        // Get provider from registry (clone Arc to release lock before await)
+        let gen_provider = {
+            let registry = self.generation_registry.read().map_err(|e| {
+                crate::error::AetherError::config(format!(
+                    "Failed to read generation registry: {}",
+                    e
+                ))
+            })?;
+
+            registry.get(&video_gen.provider).ok_or_else(|| {
+                crate::error::AetherError::config(format!(
+                    "Generation provider '{}' not found in registry",
+                    video_gen.provider
+                ))
+            })?
+        };
+
+        // Build generation request with model
+        let params = GenerationParams::builder().model(&video_gen.model).build();
+        let request = GenerationRequest::video(&video_gen.prompt).with_params(params);
+
+        // Execute generation (lock is released before this point)
+        let output = gen_provider.generate(request).await.map_err(|e| {
+            crate::error::AetherError::video(format!("Video generation failed: {}", e))
+        })?;
+
+        // Format result
+        let result = if let Some(url) = output.data.as_url() {
+            format!("✓ 视频生成成功: {}", url)
+        } else if let Some(path) = output.data.as_local_path() {
+            format!("✓ 视频已保存到: {}", path)
+        } else {
+            "✓ 视频生成成功".to_string()
+        };
+
+        info!(task_id = %task.id, "Video generation completed");
+        Ok(TaskOutput::text(result))
+    }
+
+    /// Execute an audio generation task
+    async fn execute_audio_generation(
+        &self,
+        task: &Task,
+        audio_gen: &crate::dispatcher::cowork_types::AudioGenTask,
+    ) -> crate::error::Result<TaskOutput> {
+        info!(
+            task_id = %task.id,
+            provider = %audio_gen.provider,
+            model = %audio_gen.model,
+            "Executing audio generation task"
+        );
+
+        // Get provider from registry and determine type (release lock before await)
+        let (gen_provider, gen_type) = {
+            let registry = self.generation_registry.read().map_err(|e| {
+                crate::error::AetherError::config(format!(
+                    "Failed to read generation registry: {}",
+                    e
+                ))
+            })?;
+
+            let provider = registry.get(&audio_gen.provider).ok_or_else(|| {
+                crate::error::AetherError::config(format!(
+                    "Generation provider '{}' not found in registry",
+                    audio_gen.provider
+                ))
+            })?;
+
+            // Determine if this is speech or audio based on provider capabilities
+            let gen_type = if provider.supports(GenerationType::Speech) {
+                GenerationType::Speech
+            } else {
+                GenerationType::Audio
+            };
+
+            (provider, gen_type)
+        };
+
+        // Build generation request with model
+        let params = GenerationParams::builder().model(&audio_gen.model).build();
+        let request = if gen_type == GenerationType::Speech {
+            GenerationRequest::speech(&audio_gen.prompt).with_params(params)
+        } else {
+            GenerationRequest::audio(&audio_gen.prompt).with_params(params)
+        };
+
+        // Execute generation (lock is released before this point)
+        let output = gen_provider.generate(request).await.map_err(|e| {
+            crate::error::AetherError::provider(format!("Audio generation failed: {}", e))
+        })?;
+
+        // Format result
+        let result = if let Some(url) = output.data.as_url() {
+            format!("✓ 音频生成成功: {}", url)
+        } else if let Some(path) = output.data.as_local_path() {
+            format!("✓ 音频已保存到: {}", path)
+        } else {
+            "✓ 音频生成成功".to_string()
+        };
+
+        info!(task_id = %task.id, "Audio generation completed");
+        Ok(TaskOutput::text(result))
+    }
+
+    /// Execute a generic LLM task
+    async fn execute_llm_task(
+        &self,
+        task: &Task,
+        context: &str,
+    ) -> crate::error::Result<TaskOutput> {
         // Truncate context if too large
         const MAX_CONTEXT_CHARS: usize = 50_000;
         let context_to_use = if context.len() > MAX_CONTEXT_CHARS {
@@ -1167,8 +1360,7 @@ impl GraphTaskExecutor for LlmTaskExecutor {
                 MAX_CONTEXT_CHARS
             );
             // Safe UTF-8 truncation
-            let truncated: String = context.chars().take(MAX_CONTEXT_CHARS).collect();
-            truncated
+            context.chars().take(MAX_CONTEXT_CHARS).collect()
         } else {
             context.to_string()
         };
@@ -1182,6 +1374,25 @@ impl GraphTaskExecutor for LlmTaskExecutor {
 
         let response = self.provider.process(&prompt, None).await?;
         Ok(TaskOutput::text(response))
+    }
+}
+
+#[async_trait::async_trait]
+impl GraphTaskExecutor for DagTaskExecutor {
+    async fn execute(&self, task: &Task, context: &str) -> crate::error::Result<TaskOutput> {
+        match &task.task_type {
+            TaskType::ImageGeneration(image_gen) => {
+                self.execute_image_generation(task, image_gen).await
+            }
+            TaskType::VideoGeneration(video_gen) => {
+                self.execute_video_generation(task, video_gen).await
+            }
+            TaskType::AudioGeneration(audio_gen) => {
+                self.execute_audio_generation(task, audio_gen).await
+            }
+            // For all other task types, use LLM completion
+            _ => self.execute_llm_task(task, context).await,
+        }
     }
 }
 
@@ -1318,6 +1529,12 @@ impl ExecutionCallback for FfiExecutionCallback {
 /// This function handles multi-step task execution using the DAG scheduler.
 /// It creates the necessary components (executor, callback, context) and
 /// orchestrates the execution of the task graph.
+///
+/// # Generation Task Support
+///
+/// When the task graph contains generation tasks (image/video/audio), this
+/// function uses the `generation_registry` to call the actual generation
+/// providers instead of just asking the LLM to describe the generation.
 #[allow(clippy::too_many_arguments)]
 fn run_dag_execution(
     runtime: &tokio::runtime::Handle,
@@ -1327,6 +1544,7 @@ fn run_dag_execution(
     op_token: &CancellationToken,
     handler: &Arc<dyn crate::ffi::AetherEventHandler>,
     user_input: &str,
+    generation_registry: &Arc<std::sync::RwLock<GenerationProviderRegistry>>,
 ) {
     // Check if already cancelled
     if op_token.is_cancelled() {
@@ -1336,14 +1554,15 @@ fn run_dag_execution(
 
     let handler = handler.clone();
     let user_input = user_input.to_string();
+    let generation_registry = Arc::clone(generation_registry);
 
     // Run DAG execution
     let result = runtime.block_on(async {
         // Create callback adapter
         let callback = Arc::new(FfiExecutionCallback::new(handler.clone()));
 
-        // Create executor
-        let executor = Arc::new(LlmTaskExecutor::new(provider));
+        // Create executor with generation capabilities
+        let executor = Arc::new(DagTaskExecutor::new(provider, generation_registry));
 
         // Create context
         let context = TaskContext::new(&user_input);

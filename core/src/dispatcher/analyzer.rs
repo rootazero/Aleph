@@ -8,6 +8,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, info};
 
+use crate::config::GenerationConfig;
+use crate::dispatcher::planner::GenerationProviders;
+use crate::generation::GenerationType;
+
 /// Multi-step indicator patterns
 const MULTI_STEP_PATTERNS: &[&str] = &[
     // Chinese patterns
@@ -63,6 +67,7 @@ pub enum AnalysisResult {
 pub struct TaskAnalyzer {
     provider: Arc<dyn AiProvider>,
     planner: LlmTaskPlanner,
+    generation_config: Option<GenerationConfig>,
 }
 
 impl TaskAnalyzer {
@@ -71,6 +76,19 @@ impl TaskAnalyzer {
         Self {
             planner: LlmTaskPlanner::new(provider.clone()),
             provider,
+            generation_config: None,
+        }
+    }
+
+    /// Create a new task analyzer with generation config for provider-aware planning
+    pub fn with_generation_config(
+        provider: Arc<dyn AiProvider>,
+        generation_config: GenerationConfig,
+    ) -> Self {
+        Self {
+            planner: LlmTaskPlanner::new(provider.clone()),
+            provider,
+            generation_config: Some(generation_config),
         }
     }
 
@@ -118,6 +136,55 @@ impl TaskAnalyzer {
         true
     }
 
+    /// Build GenerationProviders from config for the planner
+    fn build_generation_providers(&self) -> GenerationProviders {
+        let Some(config) = &self.generation_config else {
+            return GenerationProviders::default();
+        };
+
+        let mut providers = GenerationProviders::default();
+
+        // Image providers
+        for (name, provider_config) in config.get_providers_for_type(GenerationType::Image) {
+            let mut models = Vec::new();
+            // Add default model if set
+            if let Some(ref model) = provider_config.model {
+                models.push(model.clone());
+            }
+            // Add all model aliases
+            models.extend(provider_config.models.keys().cloned());
+            if !models.is_empty() {
+                providers.image.push((name.to_string(), models));
+            }
+        }
+
+        // Video providers
+        for (name, provider_config) in config.get_providers_for_type(GenerationType::Video) {
+            let mut models = Vec::new();
+            if let Some(ref model) = provider_config.model {
+                models.push(model.clone());
+            }
+            models.extend(provider_config.models.keys().cloned());
+            if !models.is_empty() {
+                providers.video.push((name.to_string(), models));
+            }
+        }
+
+        // Audio providers
+        for (name, provider_config) in config.get_providers_for_type(GenerationType::Audio) {
+            let mut models = Vec::new();
+            if let Some(ref model) = provider_config.model {
+                models.push(model.clone());
+            }
+            models.extend(provider_config.models.keys().cloned());
+            if !models.is_empty() {
+                providers.audio.push((name.to_string(), models));
+            }
+        }
+
+        providers
+    }
+
     fn build_analysis_prompt(&self, input: &str) -> String {
         format!(
             r#"分析以下用户请求，判断是否需要多步骤执行：
@@ -151,8 +218,19 @@ risk 值: "low"（分析、生成文本） 或 "high"（调用API、执行代码
         match parsed {
             AnalysisResponse::Single { intent } => Ok(AnalysisResult::SingleStep { intent }),
             AnalysisResponse::Multi { tasks } => {
-                // Use planner to build proper TaskGraph
-                let task_graph = self.planner.plan(original_input).await?;
+                // Use planner with providers if available to ensure correct provider names
+                let providers = self.build_generation_providers();
+                let task_graph = if providers.image.is_empty()
+                    && providers.video.is_empty()
+                    && providers.audio.is_empty()
+                {
+                    self.planner.plan(original_input).await?
+                } else {
+                    self.planner
+                        .plan_with_providers(original_input, &providers)
+                        .await?
+                };
+
                 let requires_confirmation = tasks.iter().any(|t| t.risk == "high");
 
                 Ok(AnalysisResult::MultiStep {
