@@ -55,7 +55,10 @@ pub struct TaskInfo {
     pub name: String,
     /// Current status
     pub status: TaskDisplayStatus,
-    /// Risk level ("low" or "high")
+    /// Risk level as a string ("low" or "high")
+    ///
+    /// Note: We use String instead of enum for UniFFI compatibility
+    /// with legacy Swift code. Valid values are "low" and "high".
     pub risk_level: String,
     /// IDs of tasks this task depends on
     pub dependencies: Vec<String>,
@@ -176,6 +179,7 @@ impl TaskPlan {
 
 /// User's decision on whether to proceed with execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UserDecision {
     /// User confirmed, proceed with execution
     Confirmed,
