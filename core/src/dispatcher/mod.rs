@@ -54,6 +54,7 @@ mod registry;
 mod types;
 
 // === Task Orchestration (formerly cowork) ===
+pub mod callback;
 pub mod cowork_types;
 pub mod executor;
 pub mod model_router;
@@ -92,6 +93,9 @@ pub use types::{
 };
 
 // === Re-exports: Task Orchestration ===
+pub use callback::{
+    ExecutionCallback, NoOpCallback, TaskDisplayStatus, TaskInfo, TaskPlan, UserDecision,
+};
 pub use cowork_types::{
     AiTask, AppAuto, CodeExec, DocGen, ExecutionSummary, FileOp, GraphValidationError, Language,
     Task, TaskCountByStatus, TaskDependency, TaskGraph, TaskGraphMeta,
