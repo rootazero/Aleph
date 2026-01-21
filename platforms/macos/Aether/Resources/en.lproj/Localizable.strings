@@ -1098,3 +1098,4 @@
 "dag.confirm_cancel" = "Cancel";
 "dag.tasks_header" = "Tasks to execute";
 "dag.high_risk_warning" = "⚠️ This plan contains high-risk operations that may modify files or execute code.";
+"dag.confirm_message" = "Do you want to proceed with this task plan?";

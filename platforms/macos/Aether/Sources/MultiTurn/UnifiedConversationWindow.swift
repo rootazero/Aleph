@@ -197,6 +197,64 @@ final class UnifiedConversationWindow: NSWindow {
             }
         }
         notificationObservers.append(failedObserver)
+
+        // DAG plan confirmation required
+        let dagConfirmObserver = NotificationCenter.default.addObserver(
+            forName: .dagPlanConfirmationRequired,
+            object: nil,
+            queue: .main
+        ) { notification in
+            // Extract data from notification BEFORE MainActor block to avoid Sendable issues
+            guard let planId = notification.userInfo?["planId"] as? String,
+                  let core = notification.userInfo?["core"] as? AetherCore else {
+                print("[UnifiedConversationWindow] Invalid DAG confirmation notification data")
+                return
+            }
+
+            // Build informative text from planInfo (outside MainActor to avoid Sendable issues)
+            var infoText = ""
+            if let info = notification.userInfo?["planInfo"] as? EventHandler.PlanConfirmationInfo {
+                infoText = "\(info.title)\n\n"
+                infoText += NSLocalizedString("dag.tasks_header", comment: "") + ":\n"
+                for (index, task) in info.tasks.enumerated() {
+                    let riskIcon = task.riskLevel == "high" ? "⚠️" : "✓"
+                    infoText += "\(index + 1). \(riskIcon) \(task.name)\n"
+                }
+                let hasHighRiskTasks = info.tasks.contains { $0.riskLevel == "high" }
+                if hasHighRiskTasks {
+                    infoText += "\n" + NSLocalizedString("dag.high_risk_warning", comment: "")
+                }
+            } else {
+                infoText = NSLocalizedString("dag.confirm_message", comment: "")
+            }
+
+            // Store Sendable values for use in MainActor block
+            let confirmTitle = NSLocalizedString("dag.confirm_title", comment: "")
+            let executeTitle = NSLocalizedString("dag.confirm_execute", comment: "")
+            let cancelTitle = NSLocalizedString("dag.confirm_cancel", comment: "")
+
+            MainActor.assumeIsolated {
+                // Show confirmation dialog
+                let alert = NSAlert()
+                alert.messageText = confirmTitle
+                alert.informativeText = infoText
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: executeTitle)
+                alert.addButton(withTitle: cancelTitle)
+
+                let response = alert.runModal()
+                let confirmed = response == .alertFirstButtonReturn
+
+                print("[UnifiedConversationWindow] DAG plan confirmation: planId=\(planId), confirmed=\(confirmed)")
+
+                // Send decision back to Rust
+                let success = core.confirmTaskPlan(planId: planId, confirmed: confirmed)
+                if !success {
+                    print("[UnifiedConversationWindow] Warning: Plan confirmation may have expired: \(planId)")
+                }
+            }
+        }
+        notificationObservers.append(dagConfirmObserver)
     }
 
     private func removeNotificationObservers() {

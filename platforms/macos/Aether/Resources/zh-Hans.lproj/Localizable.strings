@@ -1130,3 +1130,4 @@
 "dag.confirm_cancel" = "取消";
 "dag.tasks_header" = "待执行任务";
 "dag.high_risk_warning" = "⚠️ 此计划包含高风险操作，可能会修改文件或执行代码。";
+"dag.confirm_message" = "是否继续执行此任务计划？";
