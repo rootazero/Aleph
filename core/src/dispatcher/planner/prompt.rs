@@ -88,6 +88,47 @@ For AI-powered analysis or generation:
 }
 ```
 
+### image_generation
+For generating images using AI models:
+```json
+{
+  "type": "image_generation",
+  "prompt": "A detailed description of the image to generate",
+  "provider": "provider_name",
+  "model": "model_name",
+  "output_path": "/optional/path/to/save/image.png"
+}
+```
+Note: Use ONLY providers and models from the "Available Image Generation Providers" section below.
+
+### video_generation
+For generating videos using AI models:
+```json
+{
+  "type": "video_generation",
+  "prompt": "A detailed description of the video to generate",
+  "provider": "provider_name",
+  "model": "model_name",
+  "output_path": "/optional/path/to/save/video.mp4",
+  "duration": 10
+}
+```
+Note: Use ONLY providers and models from the "Available Video Generation Providers" section below.
+
+### audio_generation
+For generating audio using AI models (TTS, music, sound effects):
+```json
+{
+  "type": "audio_generation",
+  "prompt": "Text to speak or description of audio to generate",
+  "provider": "provider_name",
+  "model": "model_name",
+  "output_path": "/optional/path/to/save/audio.mp3",
+  "voice": "optional_voice_name"
+}
+```
+Note: Use ONLY providers and models from the "Available Audio Generation Providers" section below.
+
 ## Rules
 
 1. **Atomic Tasks**: Each task should be independently executable
@@ -166,6 +207,70 @@ Now, break down the following user request into tasks:
 /// Build the user prompt for planning
 pub fn build_user_prompt(request: &str) -> String {
     format!("User request: {}", request)
+}
+
+/// Available generation providers for planning
+#[derive(Debug, Default)]
+pub struct GenerationProviders {
+    /// Image generation providers: Vec of (provider_name, models)
+    pub image: Vec<(String, Vec<String>)>,
+    /// Video generation providers: Vec of (provider_name, models)
+    pub video: Vec<(String, Vec<String>)>,
+    /// Audio generation providers: Vec of (provider_name, models)
+    pub audio: Vec<(String, Vec<String>)>,
+}
+
+/// Build the user prompt for planning with available providers
+pub fn build_user_prompt_with_providers(request: &str, providers: &GenerationProviders) -> String {
+    let mut prompt = String::new();
+
+    // Add available image generation providers section if any
+    if !providers.image.is_empty() {
+        prompt.push_str("## Available Image Generation Providers\n\n");
+        for (provider, models) in &providers.image {
+            prompt.push_str(&format!(
+                "- **{}**: models [{}]\n",
+                provider,
+                models.join(", ")
+            ));
+        }
+        prompt.push_str(
+            "\nWhen planning image generation tasks, you MUST use one of these providers and models.\n\n",
+        );
+    }
+
+    // Add available video generation providers section if any
+    if !providers.video.is_empty() {
+        prompt.push_str("## Available Video Generation Providers\n\n");
+        for (provider, models) in &providers.video {
+            prompt.push_str(&format!(
+                "- **{}**: models [{}]\n",
+                provider,
+                models.join(", ")
+            ));
+        }
+        prompt.push_str(
+            "\nWhen planning video generation tasks, you MUST use one of these providers and models.\n\n",
+        );
+    }
+
+    // Add available audio generation providers section if any
+    if !providers.audio.is_empty() {
+        prompt.push_str("## Available Audio Generation Providers\n\n");
+        for (provider, models) in &providers.audio {
+            prompt.push_str(&format!(
+                "- **{}**: models [{}]\n",
+                provider,
+                models.join(", ")
+            ));
+        }
+        prompt.push_str(
+            "\nWhen planning audio generation tasks, you MUST use one of these providers and models.\n\n",
+        );
+    }
+
+    prompt.push_str(&format!("User request: {}", request));
+    prompt
 }
 
 #[cfg(test)]

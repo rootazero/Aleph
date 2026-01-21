@@ -105,6 +105,11 @@ impl RiskEvaluator {
 
             // Document generation is low risk
             TaskType::DocumentGeneration(_) => RiskLevel::Low,
+
+            // Generation tasks are low risk (they don't modify files or execute code)
+            TaskType::ImageGeneration(_) => RiskLevel::Low,
+            TaskType::VideoGeneration(_) => RiskLevel::Low,
+            TaskType::AudioGeneration(_) => RiskLevel::Low,
         }
     }
 

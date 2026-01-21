@@ -304,6 +304,8 @@ mod tests {
         fn on_subagent_started(&self, _parent_session_id: String, _child_session_id: String, _agent_id: String) {}
 
         fn on_subagent_completed(&self, _child_session_id: String, _success: bool, _summary: String) {}
+
+        fn on_plan_confirmation_required(&self, _plan_id: String, _plan: crate::dispatcher::DagTaskPlan) {}
     }
 
     #[tokio::test]

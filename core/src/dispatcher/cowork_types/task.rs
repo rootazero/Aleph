@@ -134,6 +134,15 @@ pub enum TaskType {
 
     /// AI inference task
     AiInference(AiTask),
+
+    /// Image generation task (uses specific provider/model)
+    ImageGeneration(ImageGenTask),
+
+    /// Video generation task (uses specific provider/model)
+    VideoGeneration(VideoGenTask),
+
+    /// Audio generation task (uses specific provider/model)
+    AudioGeneration(AudioGenTask),
 }
 
 impl TaskType {
@@ -145,6 +154,9 @@ impl TaskType {
             TaskType::DocumentGeneration(_) => "document_generation",
             TaskType::AppAutomation(_) => "app_automation",
             TaskType::AiInference(_) => "ai_inference",
+            TaskType::ImageGeneration(_) => "image_generation",
+            TaskType::VideoGeneration(_) => "video_generation",
+            TaskType::AudioGeneration(_) => "audio_generation",
         }
     }
 }
@@ -259,6 +271,60 @@ pub struct AiTask {
 
     /// Expected output format
     pub output_format: Option<String>,
+}
+
+/// Image generation task
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageGenTask {
+    /// The prompt describing the image to generate
+    pub prompt: String,
+
+    /// The provider to use for image generation
+    pub provider: String,
+
+    /// The model to use for image generation
+    pub model: String,
+
+    /// Optional output path for the generated image
+    pub output_path: Option<String>,
+}
+
+/// Video generation task
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoGenTask {
+    /// The prompt describing the video to generate
+    pub prompt: String,
+
+    /// The provider to use for video generation
+    pub provider: String,
+
+    /// The model to use for video generation
+    pub model: String,
+
+    /// Optional output path for the generated video
+    pub output_path: Option<String>,
+
+    /// Optional duration in seconds
+    pub duration: Option<u32>,
+}
+
+/// Audio generation task
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AudioGenTask {
+    /// The prompt describing the audio to generate (or text for TTS)
+    pub prompt: String,
+
+    /// The provider to use for audio generation
+    pub provider: String,
+
+    /// The model to use for audio generation
+    pub model: String,
+
+    /// Optional output path for the generated audio
+    pub output_path: Option<String>,
+
+    /// Voice name for TTS (if applicable)
+    pub voice: Option<String>,
 }
 
 /// Current execution status of a task

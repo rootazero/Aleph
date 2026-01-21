@@ -150,16 +150,16 @@ pub fn pending_confirmation_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::{TaskDisplayStatus, TaskInfo, DagTaskPlan};
+    use crate::dispatcher::{DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan};
 
     fn create_test_plan() -> DagTaskPlan {
         DagTaskPlan {
             id: "test_plan_1".to_string(),
             title: "Test Plan".to_string(),
-            tasks: vec![TaskInfo {
+            tasks: vec![DagTaskInfo {
                 id: "task_1".to_string(),
                 name: "Test Task".to_string(),
-                status: TaskDisplayStatus::Pending,
+                status: DagTaskDisplayStatus::Pending,
                 risk_level: "high".to_string(),
                 dependencies: vec![],
             }],

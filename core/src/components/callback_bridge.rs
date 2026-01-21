@@ -209,6 +209,7 @@ mod tests {
             self.subagent_completed_count.fetch_add(1, Ordering::SeqCst);
         }
         fn on_runtime_updates_available(&self, _: Vec<crate::ffi::RuntimeUpdateInfo>) {}
+        fn on_plan_confirmation_required(&self, _: String, _: crate::dispatcher::DagTaskPlan) {}
     }
 
     fn create_test_context() -> EventContext {

@@ -284,6 +284,12 @@ struct CoworkConfirmationView: View {
             return "apps.iphone"
         case .aiInference:
             return "brain"
+        case .imageGeneration:
+            return "photo"
+        case .videoGeneration:
+            return "video"
+        case .audioGeneration:
+            return "waveform"
         }
     }
 
@@ -299,6 +305,12 @@ struct CoworkConfirmationView: View {
             return .purple
         case .aiInference:
             return .pink
+        case .imageGeneration:
+            return .teal
+        case .videoGeneration:
+            return .red
+        case .audioGeneration:
+            return .indigo
         }
     }
 

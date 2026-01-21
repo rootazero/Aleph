@@ -124,12 +124,94 @@ impl AetherCore {
 
         info!(request = %request, "Planning Cowork task");
 
-        let graph = self
-            .runtime
-            .block_on(async { engine.plan(&request).await })
-            .map_err(|e| AetherFfiError::Provider(format!("Planning failed: {}", e)))?;
+        // Extract generation providers from config
+        let providers = self.extract_generation_providers();
+
+        let graph = if providers.image.is_empty()
+            && providers.video.is_empty()
+            && providers.audio.is_empty()
+        {
+            // No generation providers configured, use simple plan()
+            self.runtime
+                .block_on(async { engine.plan(&request).await })
+        } else {
+            // Generation providers available, pass them to planner
+            info!(
+                image_providers = providers.image.len(),
+                video_providers = providers.video.len(),
+                audio_providers = providers.audio.len(),
+                "Using generation providers for planning"
+            );
+            self.runtime
+                .block_on(async { engine.plan_with_providers(&request, &providers).await })
+        }
+        .map_err(|e| AetherFfiError::Provider(format!("Planning failed: {}", e)))?;
 
         Ok(crate::ffi::dispatcher_types::CoworkTaskGraphFFI::from(&graph))
+    }
+
+    /// Extract generation providers from config for planning
+    fn extract_generation_providers(&self) -> crate::dispatcher::GenerationProviders {
+        use crate::generation::GenerationType;
+
+        let mut providers = crate::dispatcher::GenerationProviders::default();
+
+        // Load config
+        let config = match Config::load() {
+            Ok(cfg) => cfg,
+            Err(_) => return providers,
+        };
+
+        // Extract image providers
+        for (name, prov_config) in config.generation.get_providers_for_type(GenerationType::Image) {
+            let models: Vec<String> = if prov_config.models.is_empty() {
+                // Use default model if available
+                prov_config
+                    .model
+                    .as_ref()
+                    .map(|m| vec![m.clone()])
+                    .unwrap_or_default()
+            } else {
+                prov_config.models.keys().cloned().collect()
+            };
+            if !models.is_empty() {
+                providers.image.push((name.to_string(), models));
+            }
+        }
+
+        // Extract video providers
+        for (name, prov_config) in config.generation.get_providers_for_type(GenerationType::Video) {
+            let models: Vec<String> = if prov_config.models.is_empty() {
+                prov_config
+                    .model
+                    .as_ref()
+                    .map(|m| vec![m.clone()])
+                    .unwrap_or_default()
+            } else {
+                prov_config.models.keys().cloned().collect()
+            };
+            if !models.is_empty() {
+                providers.video.push((name.to_string(), models));
+            }
+        }
+
+        // Extract audio providers
+        for (name, prov_config) in config.generation.get_providers_for_type(GenerationType::Audio) {
+            let models: Vec<String> = if prov_config.models.is_empty() {
+                prov_config
+                    .model
+                    .as_ref()
+                    .map(|m| vec![m.clone()])
+                    .unwrap_or_default()
+            } else {
+                prov_config.models.keys().cloned().collect()
+            };
+            if !models.is_empty() {
+                providers.audio.push((name.to_string(), models));
+            }
+        }
+
+        providers
     }
 
     /// Execute a task graph
@@ -149,10 +231,20 @@ impl AetherCore {
             .clone()
             .unwrap_or_else(|| "Execute planned tasks".to_string());
 
-        let graph = self
-            .runtime
-            .block_on(async { engine.plan(&original_request).await })
-            .map_err(|e| AetherFfiError::Provider(format!("Re-planning failed: {}", e)))?;
+        // Extract generation providers from config
+        let providers = self.extract_generation_providers();
+
+        let graph = if providers.image.is_empty()
+            && providers.video.is_empty()
+            && providers.audio.is_empty()
+        {
+            self.runtime
+                .block_on(async { engine.plan(&original_request).await })
+        } else {
+            self.runtime
+                .block_on(async { engine.plan_with_providers(&original_request, &providers).await })
+        }
+        .map_err(|e| AetherFfiError::Provider(format!("Re-planning failed: {}", e)))?;
 
         let summary = self
             .runtime

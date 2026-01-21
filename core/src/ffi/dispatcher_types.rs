@@ -94,6 +94,9 @@ pub enum CoworkTaskTypeCategory {
     DocumentGeneration,
     AppAutomation,
     AiInference,
+    ImageGeneration,
+    VideoGeneration,
+    AudioGeneration,
 }
 
 impl From<&TaskType> for CoworkTaskTypeCategory {
@@ -104,6 +107,9 @@ impl From<&TaskType> for CoworkTaskTypeCategory {
             TaskType::DocumentGeneration(_) => CoworkTaskTypeCategory::DocumentGeneration,
             TaskType::AppAutomation(_) => CoworkTaskTypeCategory::AppAutomation,
             TaskType::AiInference(_) => CoworkTaskTypeCategory::AiInference,
+            TaskType::ImageGeneration(_) => CoworkTaskTypeCategory::ImageGeneration,
+            TaskType::VideoGeneration(_) => CoworkTaskTypeCategory::VideoGeneration,
+            TaskType::AudioGeneration(_) => CoworkTaskTypeCategory::AudioGeneration,
         }
     }
 }

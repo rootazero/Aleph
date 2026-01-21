@@ -12152,6 +12152,9 @@ public enum CoworkTaskTypeCategory {
     case documentGeneration
     case appAutomation
     case aiInference
+    case imageGeneration
+    case videoGeneration
+    case audioGeneration
 }
 
 
@@ -12174,6 +12177,12 @@ public struct FfiConverterTypeCoworkTaskTypeCategory: FfiConverterRustBuffer {
         case 4: return .appAutomation
         
         case 5: return .aiInference
+        
+        case 6: return .imageGeneration
+        
+        case 7: return .videoGeneration
+        
+        case 8: return .audioGeneration
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -12201,6 +12210,18 @@ public struct FfiConverterTypeCoworkTaskTypeCategory: FfiConverterRustBuffer {
         
         case .aiInference:
             writeInt(&buf, Int32(5))
+        
+        
+        case .imageGeneration:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .videoGeneration:
+            writeInt(&buf, Int32(7))
+        
+        
+        case .audioGeneration:
+            writeInt(&buf, Int32(8))
         
         }
     }

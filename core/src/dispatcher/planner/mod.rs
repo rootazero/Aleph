@@ -7,6 +7,7 @@ mod llm;
 mod prompt;
 
 pub use llm::LlmTaskPlanner;
+pub use prompt::GenerationProviders;
 
 use async_trait::async_trait;
 
@@ -30,6 +31,27 @@ pub trait TaskPlanner: Send + Sync {
     /// * `Ok(TaskGraph)` - A structured task graph
     /// * `Err` - If planning fails
     async fn plan(&self, request: &str) -> Result<TaskGraph>;
+
+    /// Plan a task with available generation providers
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The user's natural language request
+    /// * `providers` - Available generation providers (image, video, audio)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(TaskGraph)` - A structured task graph
+    /// * `Err` - If planning fails
+    async fn plan_with_providers(
+        &self,
+        request: &str,
+        providers: &GenerationProviders,
+    ) -> Result<TaskGraph> {
+        // Default implementation ignores providers
+        let _ = providers;
+        self.plan(request).await
+    }
 
     /// Get the name of this planner
     fn name(&self) -> &str;

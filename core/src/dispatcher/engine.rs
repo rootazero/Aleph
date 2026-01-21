@@ -12,7 +12,7 @@ use super::model_router::{
     ModelMatcher, ModelProfile, ModelRouter, ModelRoutingRules, TaskContextManager,
 };
 use super::monitor::{ProgressMonitor, ProgressSubscriber, TaskMonitor};
-use super::planner::{LlmTaskPlanner, TaskPlanner};
+use super::planner::{GenerationProviders, LlmTaskPlanner, TaskPlanner};
 use super::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
@@ -289,6 +289,44 @@ impl CoworkEngine {
         *self.state.write().await = ExecutionState::Planning;
 
         let result = self.planner.plan(request).await;
+
+        if result.is_err() {
+            *self.state.write().await = ExecutionState::Idle;
+        } else if self.config.require_confirmation {
+            *self.state.write().await = ExecutionState::AwaitingConfirmation;
+        }
+
+        result
+    }
+
+    /// Plan a task with available generation providers
+    ///
+    /// This method should be used when the user has configured image, video, or audio
+    /// generation providers. The providers will be passed to the LLM planner so it can
+    /// correctly route generation tasks to the appropriate providers.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The user's natural language request
+    /// * `providers` - Available generation providers (image, video, audio)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(TaskGraph)` - The planned task graph
+    /// * `Err` - If planning fails
+    pub async fn plan_with_providers(
+        &self,
+        request: &str,
+        providers: &GenerationProviders,
+    ) -> Result<TaskGraph> {
+        if !self.config.enabled {
+            return Err(AetherError::config("Cowork is disabled"));
+        }
+
+        info!("Planning task with providers: {}", request);
+        *self.state.write().await = ExecutionState::Planning;
+
+        let result = self.planner.plan_with_providers(request, providers).await;
 
         if result.is_err() {
             *self.state.write().await = ExecutionState::Idle;

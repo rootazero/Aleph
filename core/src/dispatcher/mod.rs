@@ -97,9 +97,9 @@ pub use callback::{
     DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpCallback, UserDecision,
 };
 pub use cowork_types::{
-    AiTask, AppAuto, CodeExec, DocGen, ExecutionSummary, FileOp, GraphValidationError, Language,
-    Task, TaskCountByStatus, TaskDependency, TaskGraph, TaskGraphMeta,
-    TaskResult as CoworkTaskResult, TaskStatus, TaskType,
+    AiTask, AppAuto, AudioGenTask, CodeExec, DocGen, ExecutionSummary, FileOp,
+    GraphValidationError, ImageGenTask, Language, Task, TaskCountByStatus, TaskDependency,
+    TaskGraph, TaskGraphMeta, TaskResult as CoworkTaskResult, TaskStatus, TaskType, VideoGenTask,
 };
 pub use engine::{CoworkConfig, CoworkEngine, ExecutionState};
 pub use executor::{ExecutionContext, ExecutorRegistry, NoopExecutor, TaskExecutor};
@@ -108,7 +108,7 @@ pub use model_router::{
     ModelRouter, ModelRoutingRules, RoutingError, StageResult, TaskContextManager, TaskIntent,
 };
 pub use monitor::{ProgressEvent, ProgressMonitor, ProgressSubscriber, TaskMonitor};
-pub use planner::{LlmTaskPlanner, TaskPlanner};
+pub use planner::{GenerationProviders, LlmTaskPlanner, TaskPlanner};
 pub use scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
 
 // === Re-exports: Task Context ===

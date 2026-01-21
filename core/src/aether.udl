@@ -1758,6 +1758,9 @@ enum CoworkTaskTypeCategory {
   "DocumentGeneration",   // Document generation (Excel, PDF, etc.)
   "AppAutomation",        // macOS app automation
   "AiInference",          // AI inference task
+  "ImageGeneration",      // Image generation (DALL-E, Stable Diffusion, etc.)
+  "VideoGeneration",      // Video generation (Runway, Pika, etc.)
+  "AudioGeneration",      // Audio generation (TTS, music, sound effects)
 };
 
 // Cowork configuration

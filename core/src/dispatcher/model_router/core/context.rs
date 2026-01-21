@@ -447,6 +447,9 @@ fn task_type_to_string(task_type: &TaskType) -> String {
         TaskType::CodeExecution(_) => "code_execution".to_string(),
         TaskType::AppAutomation(_) => "app_automation".to_string(),
         TaskType::DocumentGeneration(_) => "document_generation".to_string(),
+        TaskType::ImageGeneration(_) => "image_generation".to_string(),
+        TaskType::VideoGeneration(_) => "video_generation".to_string(),
+        TaskType::AudioGeneration(_) => "audio_generation".to_string(),
     }
 }
 

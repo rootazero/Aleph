@@ -6,10 +6,11 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use super::prompt::{build_user_prompt, PLANNING_SYSTEM_PROMPT};
+use super::prompt::{build_user_prompt, build_user_prompt_with_providers, GenerationProviders, PLANNING_SYSTEM_PROMPT};
 use super::TaskPlanner;
 use crate::dispatcher::cowork_types::{
-    AiTask, AppAuto, CodeExec, DocGen, FileOp, Language, Task, TaskDependency, TaskGraph, TaskType,
+    AiTask, AppAuto, AudioGenTask, CodeExec, DocGen, FileOp, ImageGenTask, Language, Task,
+    TaskDependency, TaskGraph, TaskType, VideoGenTask,
 };
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
@@ -101,6 +102,9 @@ impl LlmTaskPlanner {
             "document_generation" => self.parse_doc_gen(type_def),
             "app_automation" => self.parse_app_auto(type_def),
             "ai_inference" => self.parse_ai_inference(type_def),
+            "image_generation" => self.parse_image_gen(type_def),
+            "video_generation" => self.parse_video_gen(type_def),
+            "audio_generation" => self.parse_audio_gen(type_def),
             other => {
                 warn!("Unknown task type: {}", other);
                 // Default to AI inference for unknown types
@@ -219,6 +223,53 @@ impl LlmTaskPlanner {
             output_format: def.output_format.clone(),
         }))
     }
+
+    fn parse_image_gen(&self, def: &TaskTypeDef) -> Result<TaskType> {
+        Ok(TaskType::ImageGeneration(ImageGenTask {
+            prompt: def
+                .prompt
+                .clone()
+                .unwrap_or_else(|| "Generate an image".to_string()),
+            provider: def
+                .provider
+                .clone()
+                .unwrap_or_else(|| "default".to_string()),
+            model: def.model.clone().unwrap_or_else(|| "default".to_string()),
+            output_path: def.output_path.clone(),
+        }))
+    }
+
+    fn parse_video_gen(&self, def: &TaskTypeDef) -> Result<TaskType> {
+        Ok(TaskType::VideoGeneration(VideoGenTask {
+            prompt: def
+                .prompt
+                .clone()
+                .unwrap_or_else(|| "Generate a video".to_string()),
+            provider: def
+                .provider
+                .clone()
+                .unwrap_or_else(|| "default".to_string()),
+            model: def.model.clone().unwrap_or_else(|| "default".to_string()),
+            output_path: def.output_path.clone(),
+            duration: def.duration,
+        }))
+    }
+
+    fn parse_audio_gen(&self, def: &TaskTypeDef) -> Result<TaskType> {
+        Ok(TaskType::AudioGeneration(AudioGenTask {
+            prompt: def
+                .prompt
+                .clone()
+                .unwrap_or_else(|| "Generate audio".to_string()),
+            provider: def
+                .provider
+                .clone()
+                .unwrap_or_else(|| "default".to_string()),
+            model: def.model.clone().unwrap_or_else(|| "default".to_string()),
+            output_path: def.output_path.clone(),
+            voice: def.voice.clone(),
+        }))
+    }
 }
 
 #[async_trait]
@@ -230,6 +281,39 @@ impl TaskPlanner for LlmTaskPlanner {
         let user_prompt = build_user_prompt(request);
 
         debug!("Sending planning request to LLM");
+
+        // Call the LLM
+        let response = self
+            .provider
+            .process(&user_prompt, Some(PLANNING_SYSTEM_PROMPT))
+            .await
+            .map_err(|e| {
+                error!("LLM planning request failed: {}", e);
+                AetherError::provider(format!("Planning failed: {}", e))
+            })?;
+
+        debug!("Received LLM response, parsing...");
+
+        // Parse the response
+        self.parse_response(&response, request)
+    }
+
+    async fn plan_with_providers(
+        &self,
+        request: &str,
+        providers: &GenerationProviders,
+    ) -> Result<TaskGraph> {
+        info!("Planning task with providers from request: {}", request);
+
+        // Build the prompt with available providers
+        let user_prompt = build_user_prompt_with_providers(request, providers);
+
+        debug!(
+            "Sending planning request to LLM with providers (image: {}, video: {}, audio: {})",
+            providers.image.len(),
+            providers.video.len(),
+            providers.audio.len()
+        );
 
         // Call the LLM
         let response = self
@@ -360,6 +444,13 @@ struct TaskTypeDef {
     requires_privacy: Option<bool>,
     has_images: Option<bool>,
     output_format: Option<String>,
+
+    // Generation task fields (image/video/audio)
+    provider: Option<String>,
+    model: Option<String>,
+    output_path: Option<String>,
+    duration: Option<u32>,
+    voice: Option<String>,
 }
 
 #[cfg(test)]
