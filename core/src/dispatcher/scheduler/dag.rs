@@ -74,10 +74,11 @@ impl ExecutionResult {
                     };
                     // Use summary as title if available, otherwise use task_id
                     let title = output.summary.as_deref().unwrap_or(task_id);
-                    // Truncate title to first line or 50 chars for readability
+                    // Truncate title to first line or 50 chars for readability (UTF-8 safe)
                     let title_short = title.lines().next().unwrap_or(title);
-                    let title_short = if title_short.len() > 50 {
-                        format!("{}...", &title_short[..47])
+                    let title_short = if title_short.chars().count() > 50 {
+                        let truncated: String = title_short.chars().take(47).collect();
+                        format!("{}...", truncated)
                     } else {
                         title_short.to_string()
                     };
