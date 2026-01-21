@@ -272,85 +272,34 @@ final class ConfigPersistenceTests: XCTestCase {
 
 // MARK: - Test Event Handler
 
-/// Stub event handler for testing
+/// Stub event handler for testing - implements current AetherEventHandler protocol
 class TestEventHandler: AetherEventHandler {
-    var stateChangedCalled = false
     var errorCalled = false
-    var configChangedCalled = false
+    var completeCalled = false
 
-    var onConfigChangedCallback: (() -> Void)?
-
-    func onStateChanged(state: ProcessingState) {
-        stateChangedCalled = true
+    func onThinking() {}
+    func onToolStart(toolName: String) {}
+    func onToolResult(toolName: String, result: String) {}
+    func onStreamChunk(text: String) {}
+    func onComplete(response: String) {
+        completeCalled = true
     }
-
-    func onError(message: String, suggestion: String?) {
+    func onError(message: String) {
         errorCalled = true
     }
-
-    func onResponseChunk(text: String) {
-        // No-op for tests
-    }
-
-    func onErrorTyped(errorType: ErrorType, message: String) {
-        errorCalled = true
-    }
-
-    func onProgress(percent: Float) {
-        // No-op for tests
-    }
-
-    func onAiProcessingStarted(providerName: String, providerColor: String) {
-        // No-op for tests
-    }
-
-    func onAiResponseReceived(responsePreview: String) {
-        // No-op for tests
-    }
-
-    func onProviderFallback(fromProvider: String, toProvider: String) {
-        // No-op for tests
-    }
-
-    func onConfigChanged() {
-        configChangedCalled = true
-        onConfigChangedCallback?()
-    }
-
-    func onTypewriterProgress(percent: Float) {
-        // No-op for tests
-    }
-
-    func onTypewriterCancelled() {
-        // No-op for tests
-    }
-
-    func onClarificationNeeded(request: ClarificationRequest) -> ClarificationResult {
-        // Return cancelled response for tests
-        return ClarificationResult(resultType: .cancelled, selectedIndex: nil, value: nil)
-    }
-
-    func onConfirmationNeeded(confirmation: PendingConfirmationInfo) {
-        // No-op for tests
-    }
-
-    func onConfirmationExpired(confirmationId: String) {
-        // No-op for tests
-    }
-
-    func onConversationStarted(sessionId: String) {
-        // No-op for tests
-    }
-
-    func onConversationTurnCompleted(turn: ConversationTurn) {
-        // No-op for tests
-    }
-
-    func onConversationContinuationReady() {
-        // No-op for tests
-    }
-
-    func onConversationEnded(sessionId: String, totalTurns: UInt32) {
-        // No-op for tests
-    }
+    func onMemoryStored() {}
+    func onAgentModeDetected(task: ExecutableTaskFfi) {}
+    func onToolsChanged(toolCount: UInt32) {}
+    func onMcpStartupComplete(report: McpStartupReportFfi) {}
+    func onRuntimeUpdatesAvailable(updates: [RuntimeUpdateInfo]) {}
+    func onSessionStarted(sessionId: String) {}
+    func onToolCallStarted(callId: String, toolName: String) {}
+    func onToolCallCompleted(callId: String, output: String) {}
+    func onToolCallFailed(callId: String, error: String, isRetryable: Bool) {}
+    func onLoopProgress(sessionId: String, iteration: UInt32, status: String) {}
+    func onPlanCreated(sessionId: String, steps: [String]) {}
+    func onSessionCompleted(sessionId: String, summary: String) {}
+    func onSubagentStarted(parentSessionId: String, childSessionId: String, agentId: String) {}
+    func onSubagentCompleted(childSessionId: String, success: Bool, summary: String) {}
+    func onPlanConfirmationRequired(planId: String, plan: DagTaskPlan) {}
 }

@@ -497,4 +497,6 @@ class PreviewEventHandler: AetherEventHandler {
     func onSubagentCompleted(childSessionId: String, success: Bool, summary: String) {}
     // Phase 7 callbacks
     func onRuntimeUpdatesAvailable(updates: [RuntimeUpdateInfo]) {}
+    // DAG Plan Confirmation callback
+    func onPlanConfirmationRequired(planId: String, plan: DagTaskPlan) {}
 }

@@ -34,7 +34,7 @@ use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
 // DAG scheduler imports
 use crate::dispatcher::{
     AnalysisResult, DagScheduler, ExecutionCallback, TaskAnalyzer, TaskContext,
-    TaskDisplayStatus, TaskOutput, TaskPlan, UserDecision,
+    DagTaskDisplayStatus, DagTaskPlan, TaskOutput, UserDecision,
 };
 use crate::dispatcher::cowork_types::{Task, TaskGraph};
 use crate::dispatcher::scheduler::GraphTaskExecutor;
@@ -1201,16 +1201,16 @@ impl FfiExecutionCallback {
 
 #[async_trait::async_trait]
 impl ExecutionCallback for FfiExecutionCallback {
-    async fn on_plan_ready(&self, plan: &TaskPlan) {
+    async fn on_plan_ready(&self, plan: &DagTaskPlan) {
         // Format plan as markdown for display
         let mut output = format!("**任务计划: {}**\n\n", plan.title);
         for (i, task) in plan.tasks.iter().enumerate() {
             let status = match task.status {
-                TaskDisplayStatus::Pending => "○",
-                TaskDisplayStatus::Running => "◉",
-                TaskDisplayStatus::Completed => "✓",
-                TaskDisplayStatus::Failed => "✗",
-                TaskDisplayStatus::Cancelled => "⊘",
+                DagTaskDisplayStatus::Pending => "○",
+                DagTaskDisplayStatus::Running => "◉",
+                DagTaskDisplayStatus::Completed => "✓",
+                DagTaskDisplayStatus::Failed => "✗",
+                DagTaskDisplayStatus::Cancelled => "⊘",
             };
             output.push_str(&format!("{} {}. {}\n", status, i + 1, task.name));
         }
@@ -1218,11 +1218,56 @@ impl ExecutionCallback for FfiExecutionCallback {
         self.handler.on_stream_chunk(output);
     }
 
-    async fn on_confirmation_required(&self, _plan: &TaskPlan) -> UserDecision {
-        self.handler
-            .on_stream_chunk("⚠️ 此任务包含高风险操作，需要用户确认（当前未实现，已自动取消）\n".to_string());
-        // SAFETY: Default to Cancelled until real confirmation is implemented
-        UserDecision::Cancelled
+    async fn on_confirmation_required(&self, plan: &DagTaskPlan) -> UserDecision {
+        use crate::ffi::plan_confirmation::store_pending_confirmation;
+        use std::time::Duration;
+
+        // Generate unique plan_id (use the plan's existing ID)
+        let plan_id = plan.id.clone();
+
+        info!(
+            plan_id = %plan_id,
+            task_count = plan.tasks.len(),
+            "Requesting user confirmation for DAG plan"
+        );
+
+        // Store pending confirmation and get the receiver
+        let receiver = store_pending_confirmation(plan_id.clone(), plan.clone());
+
+        // Notify Swift via callback
+        // Swift will show a confirmation dialog and call confirm_task_plan(plan_id, decision)
+        self.handler.on_plan_confirmation_required(plan_id.clone(), plan.clone());
+
+        // Stream a message to show we're waiting for confirmation
+        self.handler.on_stream_chunk(
+            "⏳ 等待用户确认任务计划...\n".to_string()
+        );
+
+        // Wait for the decision with timeout
+        const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+        match tokio::time::timeout(CONFIRMATION_TIMEOUT, receiver).await {
+            Ok(Ok(decision)) => {
+                info!(plan_id = %plan_id, decision = ?decision, "Received user confirmation");
+                decision
+            }
+            Ok(Err(_)) => {
+                // Channel closed without sending - treat as cancelled
+                warn!(plan_id = %plan_id, "Confirmation channel closed");
+                self.handler.on_stream_chunk(
+                    "⚠️ 确认已取消（内部错误）\n".to_string()
+                );
+                UserDecision::Cancelled
+            }
+            Err(_) => {
+                // Timeout - treat as cancelled
+                warn!(plan_id = %plan_id, "Confirmation timed out after {:?}", CONFIRMATION_TIMEOUT);
+                self.handler.on_stream_chunk(
+                    format!("⚠️ 确认超时（{}秒），任务已取消\n", CONFIRMATION_TIMEOUT.as_secs())
+                );
+                UserDecision::Cancelled
+            }
+        }
     }
 
     async fn on_task_start(&self, _task_id: &str, task_name: &str) {

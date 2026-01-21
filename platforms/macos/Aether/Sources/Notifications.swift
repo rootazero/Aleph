@@ -144,6 +144,12 @@ extension Notification.Name {
     /// Posted when runtime updates are available
     /// - UserInfo: ["updates": [RuntimeUpdateInfo]]
     static let runtimeUpdatesAvailable = Notification.Name("AetherRuntimeUpdatesAvailable")
+
+    // MARK: - DAG Plan Confirmation
+
+    /// Posted when a DAG task plan requires user confirmation before execution
+    /// - UserInfo: ["planId": String, "plan": DagTaskPlan, "core": AetherCore]
+    static let dagPlanConfirmationRequired = Notification.Name("AetherDagPlanConfirmationRequired")
 }
 
 // MARK: - UserInfo Keys

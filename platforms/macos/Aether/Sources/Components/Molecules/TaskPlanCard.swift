@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Visual indicator for task execution status
 struct TaskStatusIcon: View {
-    let status: TaskDisplayStatus
+    let status: DagTaskDisplayStatus
 
     var body: some View {
         Group {
@@ -57,7 +57,7 @@ struct TaskStatusIcon: View {
 /// and risk levels. Used during multi-step task execution to provide
 /// visual feedback to users.
 struct TaskPlanCard: View {
-    let plan: TaskPlan
+    let plan: DagTaskPlan
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
@@ -120,7 +120,7 @@ struct TaskPlanCard: View {
 
     // MARK: - Task Row
 
-    private func taskRow(index: Int, task: TaskInfo) -> some View {
+    private func taskRow(index: Int, task: DagTaskInfo) -> some View {
         HStack(spacing: DesignTokens.Spacing.sm) {
             // Status icon
             TaskStatusIcon(status: task.status)
@@ -178,25 +178,25 @@ private func L(_ key: String) -> String {
 // MARK: - Preview
 
 #Preview("Basic Plan") {
-    TaskPlanCard(plan: TaskPlan(
+    TaskPlanCard(plan: DagTaskPlan(
         id: "plan_1",
         title: "Analyze and Generate",
         tasks: [
-            TaskInfo(
+            DagTaskInfo(
                 id: "t1",
                 name: "Analyze document content",
                 status: .completed,
                 riskLevel: "low",
                 dependencies: []
             ),
-            TaskInfo(
+            DagTaskInfo(
                 id: "t2",
                 name: "Generate knowledge graph prompt",
                 status: .running,
                 riskLevel: "low",
                 dependencies: ["t1"]
             ),
-            TaskInfo(
+            DagTaskInfo(
                 id: "t3",
                 name: "Call image generation API",
                 status: .pending,
@@ -211,25 +211,25 @@ private func L(_ key: String) -> String {
 }
 
 #Preview("All Completed") {
-    TaskPlanCard(plan: TaskPlan(
+    TaskPlanCard(plan: DagTaskPlan(
         id: "plan_2",
         title: "File Processing",
         tasks: [
-            TaskInfo(
+            DagTaskInfo(
                 id: "t1",
                 name: "Read source files",
                 status: .completed,
                 riskLevel: "low",
                 dependencies: []
             ),
-            TaskInfo(
+            DagTaskInfo(
                 id: "t2",
                 name: "Transform data",
                 status: .completed,
                 riskLevel: "low",
                 dependencies: ["t1"]
             ),
-            TaskInfo(
+            DagTaskInfo(
                 id: "t3",
                 name: "Write output",
                 status: .completed,
@@ -244,25 +244,25 @@ private func L(_ key: String) -> String {
 }
 
 #Preview("With Failure") {
-    TaskPlanCard(plan: TaskPlan(
+    TaskPlanCard(plan: DagTaskPlan(
         id: "plan_3",
         title: "Data Migration",
         tasks: [
-            TaskInfo(
+            DagTaskInfo(
                 id: "t1",
                 name: "Connect to database",
                 status: .completed,
                 riskLevel: "high",
                 dependencies: []
             ),
-            TaskInfo(
+            DagTaskInfo(
                 id: "t2",
                 name: "Export records",
                 status: .failed,
                 riskLevel: "low",
                 dependencies: ["t1"]
             ),
-            TaskInfo(
+            DagTaskInfo(
                 id: "t3",
                 name: "Import to new system",
                 status: .cancelled,

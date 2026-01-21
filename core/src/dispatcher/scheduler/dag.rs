@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use super::{SchedulerConfig, TaskScheduler};
-use crate::dispatcher::callback::{ExecutionCallback, TaskPlan, UserDecision};
+use crate::dispatcher::callback::{DagTaskPlan, ExecutionCallback, UserDecision};
 use crate::dispatcher::context::{TaskContext, TaskOutput};
 use crate::dispatcher::cowork_types::{Task, TaskGraph, TaskResult, TaskStatus};
 use crate::dispatcher::risk::RiskEvaluator;
@@ -279,8 +279,8 @@ impl DagScheduler {
         let risk_evaluator = RiskEvaluator::new();
         let requires_confirmation = risk_evaluator.evaluate_graph(&graph);
 
-        // 2. Create TaskPlan and notify UI
-        let plan = TaskPlan::from_graph(&graph, requires_confirmation);
+        // 2. Create DagTaskPlan and notify UI
+        let plan = DagTaskPlan::from_graph(&graph, requires_confirmation);
         callback.on_plan_ready(&plan).await;
 
         // 3. If high-risk tasks exist, request user confirmation

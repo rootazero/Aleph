@@ -730,6 +730,100 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         }
     }
 
+    // MARK: - DAG Plan Confirmation Callback
+
+    /// Called when a DAG task plan requires user confirmation before execution
+    /// - Parameters:
+    ///   - planId: Unique identifier for this confirmation request
+    ///   - plan: The task plan that needs confirmation
+    func onPlanConfirmationRequired(planId: String, plan: DagTaskPlan) {
+        print("[EventHandler] Plan confirmation required: planId=\(planId), tasks=\(plan.tasks.count), title=\(plan.title)")
+
+        // Extract plan data to Sendable-compatible types before crossing actor boundary
+        let planInfo = PlanConfirmationInfo(from: plan)
+
+        Task { @MainActor [weak self] in
+            guard let self = self, let core = self.core else {
+                print("[EventHandler] Error: EventHandler or core is nil, auto-cancelling")
+                self?.core?.confirmTaskPlan(planId: planId, confirmed: false)
+                return
+            }
+
+            // Check if we're in multi-turn mode
+            if self.isInMultiTurnMode {
+                // In multi-turn mode, post notification for conversation UI to handle
+                NotificationCenter.default.post(
+                    name: .dagPlanConfirmationRequired,
+                    object: nil,
+                    userInfo: [
+                        "planId": planId,
+                        "planInfo": planInfo,
+                        "core": core
+                    ]
+                )
+            } else {
+                // In halo mode, show confirmation dialog
+                self.showPlanConfirmationDialogWithInfo(planId: planId, planInfo: planInfo, core: core)
+            }
+        }
+    }
+
+    /// Sendable-compatible plan information for crossing actor boundaries
+    struct PlanConfirmationInfo: Sendable {
+        let id: String
+        let title: String
+        let tasks: [(id: String, name: String, riskLevel: String)]
+        let requiresConfirmation: Bool
+
+        init(from plan: DagTaskPlan) {
+            self.id = plan.id
+            self.title = plan.title
+            self.tasks = plan.tasks.map { (id: $0.id, name: $0.name, riskLevel: $0.riskLevel) }
+            self.requiresConfirmation = plan.requiresConfirmation
+        }
+    }
+
+    /// Show a confirmation dialog for the DAG task plan (Halo mode)
+    private func showPlanConfirmationDialogWithInfo(planId: String, planInfo: PlanConfirmationInfo, core: AetherCore) {
+        // Create a simple alert for confirmation
+        let alert = NSAlert()
+        alert.messageText = L("dag.confirm_title")
+        alert.informativeText = formatPlanInfoDescription(planInfo)
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L("dag.confirm_execute"))
+        alert.addButton(withTitle: L("dag.confirm_cancel"))
+
+        // Show the alert
+        let response = alert.runModal()
+
+        // Handle user decision
+        let confirmed = response == .alertFirstButtonReturn
+        print("[EventHandler] Plan confirmation decision: planId=\(planId), confirmed=\(confirmed)")
+
+        // Send decision back to Rust
+        let success = core.confirmTaskPlan(planId: planId, confirmed: confirmed)
+        if !success {
+            print("[EventHandler] Warning: Plan confirmation may have expired or not found: \(planId)")
+        }
+    }
+
+    /// Format plan info description for display in confirmation dialog
+    private func formatPlanInfoDescription(_ planInfo: PlanConfirmationInfo) -> String {
+        var description = "\(planInfo.title)\n\n"
+        description += L("dag.tasks_header") + ":\n"
+
+        for (index, task) in planInfo.tasks.enumerated() {
+            let riskIcon = task.riskLevel == "high" ? "⚠️" : "✓"
+            description += "\(index + 1). \(riskIcon) \(task.name)\n"
+        }
+
+        if planInfo.requiresConfirmation {
+            description += "\n" + L("dag.high_risk_warning")
+        }
+
+        return description
+    }
+
     // MARK: - Error Notification
 
     private func showErrorNotification(message: String) {

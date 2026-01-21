@@ -10,13 +10,15 @@ use crate::dispatcher::cowork_types::TaskGraph;
 use crate::dispatcher::risk::{RiskEvaluator, RiskLevel};
 
 // ============================================================================
-// TaskDisplayStatus - UI-friendly task status
+// DagTaskDisplayStatus - UI-friendly task status
 // ============================================================================
 
 /// Task status for UI display
+///
+/// Note: UniFFI export is done via UDL (aether.udl), not proc-macros,
+/// to avoid conflicts with UDL-defined callback parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum TaskDisplayStatus {
+pub enum DagTaskDisplayStatus {
     /// Task is waiting to be executed
     Pending,
     /// Task is currently running
@@ -29,32 +31,33 @@ pub enum TaskDisplayStatus {
     Cancelled,
 }
 
-impl std::fmt::Display for TaskDisplayStatus {
+impl std::fmt::Display for DagTaskDisplayStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TaskDisplayStatus::Pending => write!(f, "pending"),
-            TaskDisplayStatus::Running => write!(f, "running"),
-            TaskDisplayStatus::Completed => write!(f, "completed"),
-            TaskDisplayStatus::Failed => write!(f, "failed"),
-            TaskDisplayStatus::Cancelled => write!(f, "cancelled"),
+            DagTaskDisplayStatus::Pending => write!(f, "pending"),
+            DagTaskDisplayStatus::Running => write!(f, "running"),
+            DagTaskDisplayStatus::Completed => write!(f, "completed"),
+            DagTaskDisplayStatus::Failed => write!(f, "failed"),
+            DagTaskDisplayStatus::Cancelled => write!(f, "cancelled"),
         }
     }
 }
 
 // ============================================================================
-// TaskInfo - UI-friendly task information
+// DagTaskInfo - UI-friendly task information
 // ============================================================================
 
 /// Task information for UI display
+///
+/// Note: UniFFI export is done via UDL (aether.udl), not proc-macros.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TaskInfo {
+pub struct DagTaskInfo {
     /// Unique task identifier
     pub id: String,
     /// Human-readable task name
     pub name: String,
     /// Current status
-    pub status: TaskDisplayStatus,
+    pub status: DagTaskDisplayStatus,
     /// Risk level as a string ("low" or "high")
     ///
     /// Note: We use String instead of enum for UniFFI compatibility
@@ -64,12 +67,12 @@ pub struct TaskInfo {
     pub dependencies: Vec<String>,
 }
 
-impl TaskInfo {
-    /// Create a new TaskInfo
+impl DagTaskInfo {
+    /// Create a new DagTaskInfo
     pub fn new(
         id: impl Into<String>,
         name: impl Into<String>,
-        status: TaskDisplayStatus,
+        status: DagTaskDisplayStatus,
         risk_level: RiskLevel,
         dependencies: Vec<String>,
     ) -> Self {
@@ -87,37 +90,38 @@ impl TaskInfo {
 }
 
 // ============================================================================
-// TaskPlan - UI-friendly execution plan
+// DagTaskPlan - UI-friendly execution plan
 // ============================================================================
 
 /// Execution plan for UI display
+///
+/// Note: UniFFI export is done via UDL (aether.udl), not proc-macros.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TaskPlan {
+pub struct DagTaskPlan {
     /// Unique plan identifier
     pub id: String,
     /// Human-readable plan title
     pub title: String,
     /// List of tasks in the plan
-    pub tasks: Vec<TaskInfo>,
+    pub tasks: Vec<DagTaskInfo>,
     /// Whether user confirmation is required before execution
     pub requires_confirmation: bool,
 }
 
-impl TaskPlan {
-    /// Create a TaskPlan from a TaskGraph
+impl DagTaskPlan {
+    /// Create a DagTaskPlan from a TaskGraph
     ///
     /// # Arguments
     /// * `graph` - The task graph to convert
     /// * `requires_confirmation` - Whether user confirmation is required
     ///
     /// # Returns
-    /// A TaskPlan suitable for UI display
+    /// A DagTaskPlan suitable for UI display
     pub fn from_graph(graph: &TaskGraph, requires_confirmation: bool) -> Self {
         let evaluator = RiskEvaluator::new();
 
         // Build a map of task dependencies
-        let tasks: Vec<TaskInfo> = graph
+        let tasks: Vec<DagTaskInfo> = graph
             .tasks
             .iter()
             .map(|task| {
@@ -131,26 +135,26 @@ impl TaskPlan {
                 // Convert status
                 let status = match &task.status {
                     crate::dispatcher::cowork_types::TaskStatus::Pending => {
-                        TaskDisplayStatus::Pending
+                        DagTaskDisplayStatus::Pending
                     }
                     crate::dispatcher::cowork_types::TaskStatus::Running { .. } => {
-                        TaskDisplayStatus::Running
+                        DagTaskDisplayStatus::Running
                     }
                     crate::dispatcher::cowork_types::TaskStatus::Completed { .. } => {
-                        TaskDisplayStatus::Completed
+                        DagTaskDisplayStatus::Completed
                     }
                     crate::dispatcher::cowork_types::TaskStatus::Failed { .. } => {
-                        TaskDisplayStatus::Failed
+                        DagTaskDisplayStatus::Failed
                     }
                     crate::dispatcher::cowork_types::TaskStatus::Cancelled => {
-                        TaskDisplayStatus::Cancelled
+                        DagTaskDisplayStatus::Cancelled
                     }
                 };
 
                 // Evaluate risk
                 let risk_level = evaluator.evaluate(task);
 
-                TaskInfo::new(&task.id, &task.name, status, risk_level, dependencies)
+                DagTaskInfo::new(&task.id, &task.name, status, risk_level, dependencies)
             })
             .collect();
 
@@ -204,7 +208,7 @@ pub enum UserDecision {
 ///
 /// #[async_trait]
 /// impl ExecutionCallback for MyCallback {
-///     async fn on_plan_ready(&self, plan: &TaskPlan) {
+///     async fn on_plan_ready(&self, plan: &DagTaskPlan) {
 ///         println!("Plan ready: {}", plan.title);
 ///     }
 ///     // ... implement other methods
@@ -216,7 +220,7 @@ pub trait ExecutionCallback: Send + Sync {
     ///
     /// This is called after task planning is complete, before execution begins.
     /// The UI can use this to display the task list to the user.
-    async fn on_plan_ready(&self, plan: &TaskPlan);
+    async fn on_plan_ready(&self, plan: &DagTaskPlan);
 
     /// Called when user confirmation is required
     ///
@@ -226,7 +230,7 @@ pub trait ExecutionCallback: Send + Sync {
     ///
     /// # Returns
     /// `UserDecision::Confirmed` to proceed, `UserDecision::Cancelled` to abort
-    async fn on_confirmation_required(&self, plan: &TaskPlan) -> UserDecision;
+    async fn on_confirmation_required(&self, plan: &DagTaskPlan) -> UserDecision;
 
     /// Called when a task starts execution
     ///
@@ -310,9 +314,9 @@ pub struct NoOpCallback;
 
 #[async_trait]
 impl ExecutionCallback for NoOpCallback {
-    async fn on_plan_ready(&self, _plan: &TaskPlan) {}
+    async fn on_plan_ready(&self, _plan: &DagTaskPlan) {}
 
-    async fn on_confirmation_required(&self, _plan: &TaskPlan) -> UserDecision {
+    async fn on_confirmation_required(&self, _plan: &DagTaskPlan) -> UserDecision {
         // Default to confirmed for testing
         UserDecision::Confirmed
     }
@@ -350,33 +354,33 @@ mod tests {
 
     #[test]
     fn test_task_display_status() {
-        assert_eq!(TaskDisplayStatus::Pending.to_string(), "pending");
-        assert_eq!(TaskDisplayStatus::Running.to_string(), "running");
-        assert_eq!(TaskDisplayStatus::Completed.to_string(), "completed");
-        assert_eq!(TaskDisplayStatus::Failed.to_string(), "failed");
-        assert_eq!(TaskDisplayStatus::Cancelled.to_string(), "cancelled");
+        assert_eq!(DagTaskDisplayStatus::Pending.to_string(), "pending");
+        assert_eq!(DagTaskDisplayStatus::Running.to_string(), "running");
+        assert_eq!(DagTaskDisplayStatus::Completed.to_string(), "completed");
+        assert_eq!(DagTaskDisplayStatus::Failed.to_string(), "failed");
+        assert_eq!(DagTaskDisplayStatus::Cancelled.to_string(), "cancelled");
     }
 
     #[test]
     fn test_task_info_creation() {
-        let info = TaskInfo::new(
+        let info = DagTaskInfo::new(
             "task_1",
             "Read file",
-            TaskDisplayStatus::Pending,
+            DagTaskDisplayStatus::Pending,
             RiskLevel::Low,
             vec!["task_0".to_string()],
         );
 
         assert_eq!(info.id, "task_1");
         assert_eq!(info.name, "Read file");
-        assert_eq!(info.status, TaskDisplayStatus::Pending);
+        assert_eq!(info.status, DagTaskDisplayStatus::Pending);
         assert_eq!(info.risk_level, "low");
         assert_eq!(info.dependencies, vec!["task_0"]);
 
-        let high_risk_info = TaskInfo::new(
+        let high_risk_info = DagTaskInfo::new(
             "task_2",
             "Delete file",
-            TaskDisplayStatus::Running,
+            DagTaskDisplayStatus::Running,
             RiskLevel::High,
             vec![],
         );
@@ -415,8 +419,8 @@ mod tests {
         graph.add_dependency("task_1", "task_2");
         graph.add_dependency("task_2", "task_3");
 
-        // Convert to TaskPlan
-        let plan = TaskPlan::from_graph(&graph, true);
+        // Convert to DagTaskPlan
+        let plan = DagTaskPlan::from_graph(&graph, true);
 
         assert_eq!(plan.id, "plan_1");
         assert_eq!(plan.title, "Test Plan");
@@ -426,7 +430,7 @@ mod tests {
         // Verify task info
         let task_1 = plan.tasks.iter().find(|t| t.id == "task_1").unwrap();
         assert_eq!(task_1.name, "Read config");
-        assert_eq!(task_1.status, TaskDisplayStatus::Pending);
+        assert_eq!(task_1.status, DagTaskDisplayStatus::Pending);
         assert_eq!(task_1.risk_level, "low"); // Read is low risk
         assert!(task_1.dependencies.is_empty()); // No predecessors
 
@@ -461,7 +465,7 @@ mod tests {
             },
         ));
 
-        let plan = TaskPlan::from_graph(&graph, false);
+        let plan = DagTaskPlan::from_graph(&graph, false);
 
         assert!(!plan.requires_confirmation);
         assert!(!plan.has_high_risk_tasks());
@@ -476,7 +480,7 @@ mod tests {
     #[tokio::test]
     async fn test_noop_callback() {
         let callback = NoOpCallback;
-        let plan = TaskPlan {
+        let plan = DagTaskPlan {
             id: "test".to_string(),
             title: "Test Plan".to_string(),
             tasks: vec![],

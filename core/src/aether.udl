@@ -799,6 +799,34 @@ dictionary McpServerStatusInfo {
   string? last_error;      // Last error message
 };
 
+// ===== DAG Task Plan Types (plan-confirmation-flow) =====
+
+// Task display status for UI (DAG scheduler)
+enum DagTaskDisplayStatus {
+  "Pending",     // Task is waiting to be executed
+  "Running",     // Task is currently running
+  "Completed",   // Task completed successfully
+  "Failed",      // Task failed
+  "Cancelled",   // Task was cancelled
+};
+
+// Task information for UI display (DAG scheduler)
+dictionary DagTaskInfo {
+  string id;                    // Unique task identifier
+  string name;                  // Human-readable task name
+  DagTaskDisplayStatus status;  // Current status
+  string risk_level;            // Risk level as a string ("low" or "high")
+  sequence<string> dependencies; // IDs of tasks this task depends on
+};
+
+// Task execution plan for UI display (DAG scheduler)
+dictionary DagTaskPlan {
+  string id;                    // Unique plan identifier
+  string title;                 // Human-readable plan title
+  sequence<DagTaskInfo> tasks;  // List of tasks in the plan
+  boolean requires_confirmation; // Whether user confirmation is required
+};
+
 // ===== Async Confirmation Flow Types (async-confirmation-flow) =====
 
 // User's decision on a pending confirmation
@@ -976,6 +1004,11 @@ callback interface AetherEventHandler {
     void on_subagent_started(string parent_session_id, string child_session_id, string agent_id);
     // Called when sub-agent completes
     void on_subagent_completed(string child_session_id, boolean success, string summary);
+
+    // DAG Plan Confirmation callback
+    // Called when a DAG task plan requires user confirmation before execution.
+    // Swift should display the plan and call AetherCore.confirm_task_plan() with user's decision.
+    void on_plan_confirmation_required(string plan_id, DagTaskPlan plan);
 };
 
 interface AetherCore {
@@ -1341,6 +1374,13 @@ interface AetherCore {
     // Cancel the current session
     [Throws=AetherFfiError]
     boolean cancel_session();
+
+    // ===== DAG PLAN CONFIRMATION (plan-confirmation-flow) =====
+
+    // Confirm or cancel a pending DAG task plan
+    // Called by Swift after displaying confirmation dialog
+    // Returns true if confirmation was found and completed, false if expired or not found
+    boolean confirm_task_plan(string plan_id, boolean confirmed);
 
     // ===== RUNTIME MANAGEMENT (add-runtime-manager) =====
 

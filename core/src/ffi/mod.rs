@@ -23,6 +23,7 @@ mod generation;
 mod init;
 mod mcp;
 mod memory;
+pub mod plan_confirmation;
 mod processing;
 mod runtime;
 mod session;
@@ -191,6 +192,27 @@ pub trait AetherEventHandler: Send + Sync {
         // Default: auto-confirm (no-op)
         // UI implementations should override to show confirmation dialog
     }
+
+    // ========================================================================
+    // DAG PLAN CONFIRMATION CALLBACKS
+    // ========================================================================
+
+    /// Called when a DAG task plan requires user confirmation
+    ///
+    /// This callback is triggered when the DAG scheduler detects high-risk
+    /// tasks in the execution plan. The UI should display the plan and
+    /// prompt the user for confirmation.
+    ///
+    /// After receiving this callback, Swift should:
+    /// 1. Display the DagTaskPlan to the user
+    /// 2. Wait for user to click "Confirm" or "Cancel"
+    /// 3. Call `AetherCore.confirm_task_plan(plan_id, decision)` with the decision
+    ///
+    /// # Arguments
+    ///
+    /// * `plan_id` - Unique identifier for this confirmation request
+    /// * `plan` - The task plan that needs confirmation
+    fn on_plan_confirmation_required(&self, plan_id: String, plan: crate::dispatcher::DagTaskPlan);
 }
 
 /// Tool information for UI display

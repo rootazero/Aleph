@@ -44,10 +44,13 @@ struct AdaptiveGlassModifier: ViewModifier {
             // macOS 26+: Use pure glassEffect without custom background layers
             // System automatically applies vibrant text colors for legibility
             // clipShape ensures content doesn't leak outside rounded corners
+            // Note: glassEffect may add a subtle border line; the outer clipShape helps mask it
             content
                 .environment(\.isInGlass, true)
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                // Additional clip to remove any glassEffect edge artifacts
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         } else {
             // Fallback for macOS 15-25: NSVisualEffectView
             content

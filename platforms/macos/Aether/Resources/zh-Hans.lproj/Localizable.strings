@@ -1123,3 +1123,10 @@
 "notification.runtime_updates_title" = "运行时更新可用";
 "notification.runtime_update_single" = "%@ 可以更新到 %@";
 "notification.runtime_updates_multiple" = "%@ 个运行时有更新可用";
+
+// DAG Plan Confirmation
+"dag.confirm_title" = "确认执行任务";
+"dag.confirm_execute" = "执行";
+"dag.confirm_cancel" = "取消";
+"dag.tasks_header" = "待执行任务";
+"dag.high_risk_warning" = "⚠️ 此计划包含高风险操作，可能会修改文件或执行代码。";

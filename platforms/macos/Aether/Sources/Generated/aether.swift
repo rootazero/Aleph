@@ -612,6 +612,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func clearMemory() throws 
     
+    func confirmTaskPlan(planId: String, confirmed: Bool)  -> Bool
+    
     func coworkCancel() 
     
     func coworkDeleteModelProfile(profileId: String) throws 
@@ -940,6 +942,15 @@ open func clearMemory()throws  {try rustCallWithError(FfiConverterTypeAetherFfiE
     uniffi_aethecore_fn_method_aethercore_clear_memory(self.uniffiClonePointer(),$0
     )
 }
+}
+    
+open func confirmTaskPlan(planId: String, confirmed: Bool) -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_confirm_task_plan(self.uniffiClonePointer(),
+        FfiConverterString.lower(planId),
+        FfiConverterBool.lower(confirmed),$0
+    )
+})
 }
     
 open func coworkCancel() {try! rustCall() {
@@ -4004,6 +4015,178 @@ public func FfiConverterTypeCoworkTaskGraphFFI_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeCoworkTaskGraphFFI_lower(_ value: CoworkTaskGraphFfi) -> RustBuffer {
     return FfiConverterTypeCoworkTaskGraphFFI.lower(value)
+}
+
+
+public struct DagTaskInfo {
+    public var id: String
+    public var name: String
+    public var status: DagTaskDisplayStatus
+    public var riskLevel: String
+    public var dependencies: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, status: DagTaskDisplayStatus, riskLevel: String, dependencies: [String]) {
+        self.id = id
+        self.name = name
+        self.status = status
+        self.riskLevel = riskLevel
+        self.dependencies = dependencies
+    }
+}
+
+
+
+extension DagTaskInfo: Equatable, Hashable {
+    public static func ==(lhs: DagTaskInfo, rhs: DagTaskInfo) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.riskLevel != rhs.riskLevel {
+            return false
+        }
+        if lhs.dependencies != rhs.dependencies {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(status)
+        hasher.combine(riskLevel)
+        hasher.combine(dependencies)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDagTaskInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DagTaskInfo {
+        return
+            try DagTaskInfo(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                status: FfiConverterTypeDagTaskDisplayStatus.read(from: &buf), 
+                riskLevel: FfiConverterString.read(from: &buf), 
+                dependencies: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DagTaskInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterTypeDagTaskDisplayStatus.write(value.status, into: &buf)
+        FfiConverterString.write(value.riskLevel, into: &buf)
+        FfiConverterSequenceString.write(value.dependencies, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDagTaskInfo_lift(_ buf: RustBuffer) throws -> DagTaskInfo {
+    return try FfiConverterTypeDagTaskInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDagTaskInfo_lower(_ value: DagTaskInfo) -> RustBuffer {
+    return FfiConverterTypeDagTaskInfo.lower(value)
+}
+
+
+public struct DagTaskPlan {
+    public var id: String
+    public var title: String
+    public var tasks: [DagTaskInfo]
+    public var requiresConfirmation: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, title: String, tasks: [DagTaskInfo], requiresConfirmation: Bool) {
+        self.id = id
+        self.title = title
+        self.tasks = tasks
+        self.requiresConfirmation = requiresConfirmation
+    }
+}
+
+
+
+extension DagTaskPlan: Equatable, Hashable {
+    public static func ==(lhs: DagTaskPlan, rhs: DagTaskPlan) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.title != rhs.title {
+            return false
+        }
+        if lhs.tasks != rhs.tasks {
+            return false
+        }
+        if lhs.requiresConfirmation != rhs.requiresConfirmation {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(title)
+        hasher.combine(tasks)
+        hasher.combine(requiresConfirmation)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDagTaskPlan: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DagTaskPlan {
+        return
+            try DagTaskPlan(
+                id: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                tasks: FfiConverterSequenceTypeDagTaskInfo.read(from: &buf), 
+                requiresConfirmation: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DagTaskPlan, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterSequenceTypeDagTaskInfo.write(value.tasks, into: &buf)
+        FfiConverterBool.write(value.requiresConfirmation, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDagTaskPlan_lift(_ buf: RustBuffer) throws -> DagTaskPlan {
+    return try FfiConverterTypeDagTaskPlan.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDagTaskPlan_lower(_ value: DagTaskPlan) -> RustBuffer {
+    return FfiConverterTypeDagTaskPlan.lower(value)
 }
 
 
@@ -9914,135 +10097,6 @@ public func FfiConverterTypeStageResultFFI_lower(_ value: StageResultFfi) -> Rus
 }
 
 
-/**
- * Task information for UI display
- */
-public struct TaskInfo {
-    /**
-     * Unique task identifier
-     */
-    public var id: String
-    /**
-     * Human-readable task name
-     */
-    public var name: String
-    /**
-     * Current status
-     */
-    public var status: TaskDisplayStatus
-    /**
-     * Risk level as a string ("low" or "high")
-     *
-     * Note: We use String instead of enum for UniFFI compatibility
-     * with legacy Swift code. Valid values are "low" and "high".
-     */
-    public var riskLevel: String
-    /**
-     * IDs of tasks this task depends on
-     */
-    public var dependencies: [String]
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(
-        /**
-         * Unique task identifier
-         */id: String, 
-        /**
-         * Human-readable task name
-         */name: String, 
-        /**
-         * Current status
-         */status: TaskDisplayStatus, 
-        /**
-         * Risk level as a string ("low" or "high")
-         *
-         * Note: We use String instead of enum for UniFFI compatibility
-         * with legacy Swift code. Valid values are "low" and "high".
-         */riskLevel: String, 
-        /**
-         * IDs of tasks this task depends on
-         */dependencies: [String]) {
-        self.id = id
-        self.name = name
-        self.status = status
-        self.riskLevel = riskLevel
-        self.dependencies = dependencies
-    }
-}
-
-
-
-extension TaskInfo: Equatable, Hashable {
-    public static func ==(lhs: TaskInfo, rhs: TaskInfo) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.status != rhs.status {
-            return false
-        }
-        if lhs.riskLevel != rhs.riskLevel {
-            return false
-        }
-        if lhs.dependencies != rhs.dependencies {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(name)
-        hasher.combine(status)
-        hasher.combine(riskLevel)
-        hasher.combine(dependencies)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeTaskInfo: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskInfo {
-        return
-            try TaskInfo(
-                id: FfiConverterString.read(from: &buf), 
-                name: FfiConverterString.read(from: &buf), 
-                status: FfiConverterTypeTaskDisplayStatus.read(from: &buf), 
-                riskLevel: FfiConverterString.read(from: &buf), 
-                dependencies: FfiConverterSequenceString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: TaskInfo, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.id, into: &buf)
-        FfiConverterString.write(value.name, into: &buf)
-        FfiConverterTypeTaskDisplayStatus.write(value.status, into: &buf)
-        FfiConverterString.write(value.riskLevel, into: &buf)
-        FfiConverterSequenceString.write(value.dependencies, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTaskInfo_lift(_ buf: RustBuffer) throws -> TaskInfo {
-    return try FfiConverterTypeTaskInfo.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTaskInfo_lower(_ value: TaskInfo) -> RustBuffer {
-    return FfiConverterTypeTaskInfo.lower(value)
-}
-
-
 public struct TaskParametersFfi {
     public var organizeMethod: OrganizeMethodFfi
     public var conflictResolution: ConflictResolutionFfi
@@ -10114,115 +10168,6 @@ public func FfiConverterTypeTaskParametersFFI_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeTaskParametersFFI_lower(_ value: TaskParametersFfi) -> RustBuffer {
     return FfiConverterTypeTaskParametersFFI.lower(value)
-}
-
-
-/**
- * Execution plan for UI display
- */
-public struct TaskPlan {
-    /**
-     * Unique plan identifier
-     */
-    public var id: String
-    /**
-     * Human-readable plan title
-     */
-    public var title: String
-    /**
-     * List of tasks in the plan
-     */
-    public var tasks: [TaskInfo]
-    /**
-     * Whether user confirmation is required before execution
-     */
-    public var requiresConfirmation: Bool
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(
-        /**
-         * Unique plan identifier
-         */id: String, 
-        /**
-         * Human-readable plan title
-         */title: String, 
-        /**
-         * List of tasks in the plan
-         */tasks: [TaskInfo], 
-        /**
-         * Whether user confirmation is required before execution
-         */requiresConfirmation: Bool) {
-        self.id = id
-        self.title = title
-        self.tasks = tasks
-        self.requiresConfirmation = requiresConfirmation
-    }
-}
-
-
-
-extension TaskPlan: Equatable, Hashable {
-    public static func ==(lhs: TaskPlan, rhs: TaskPlan) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.title != rhs.title {
-            return false
-        }
-        if lhs.tasks != rhs.tasks {
-            return false
-        }
-        if lhs.requiresConfirmation != rhs.requiresConfirmation {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(title)
-        hasher.combine(tasks)
-        hasher.combine(requiresConfirmation)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeTaskPlan: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskPlan {
-        return
-            try TaskPlan(
-                id: FfiConverterString.read(from: &buf), 
-                title: FfiConverterString.read(from: &buf), 
-                tasks: FfiConverterSequenceTypeTaskInfo.read(from: &buf), 
-                requiresConfirmation: FfiConverterBool.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: TaskPlan, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.id, into: &buf)
-        FfiConverterString.write(value.title, into: &buf)
-        FfiConverterSequenceTypeTaskInfo.write(value.tasks, into: &buf)
-        FfiConverterBool.write(value.requiresConfirmation, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTaskPlan_lift(_ buf: RustBuffer) throws -> TaskPlan {
-    return try FfiConverterTypeTaskPlan.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTaskPlan_lower(_ value: TaskPlan) -> RustBuffer {
-    return FfiConverterTypeTaskPlan.lower(value)
 }
 
 
@@ -12285,6 +12230,91 @@ extension CoworkTaskTypeCategory: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum DagTaskDisplayStatus {
+    
+    case pending
+    case running
+    case completed
+    case failed
+    case cancelled
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDagTaskDisplayStatus: FfiConverterRustBuffer {
+    typealias SwiftType = DagTaskDisplayStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DagTaskDisplayStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .pending
+        
+        case 2: return .running
+        
+        case 3: return .completed
+        
+        case 4: return .failed
+        
+        case 5: return .cancelled
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DagTaskDisplayStatus, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .pending:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .running:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .completed:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDagTaskDisplayStatus_lift(_ buf: RustBuffer) throws -> DagTaskDisplayStatus {
+    return try FfiConverterTypeDagTaskDisplayStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDagTaskDisplayStatus_lower(_ value: DagTaskDisplayStatus) -> RustBuffer {
+    return FfiConverterTypeDagTaskDisplayStatus.lower(value)
+}
+
+
+
+extension DagTaskDisplayStatus: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum ErrorType {
     
     case network
@@ -13700,109 +13730,6 @@ extension TaskCategoryFfi: Equatable, Hashable {}
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-/**
- * Task status for UI display
- */
-
-public enum TaskDisplayStatus {
-    
-    /**
-     * Task is waiting to be executed
-     */
-    case pending
-    /**
-     * Task is currently running
-     */
-    case running
-    /**
-     * Task completed successfully
-     */
-    case completed
-    /**
-     * Task failed
-     */
-    case failed
-    /**
-     * Task was cancelled
-     */
-    case cancelled
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeTaskDisplayStatus: FfiConverterRustBuffer {
-    typealias SwiftType = TaskDisplayStatus
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskDisplayStatus {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        
-        case 1: return .pending
-        
-        case 2: return .running
-        
-        case 3: return .completed
-        
-        case 4: return .failed
-        
-        case 5: return .cancelled
-        
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: TaskDisplayStatus, into buf: inout [UInt8]) {
-        switch value {
-        
-        
-        case .pending:
-            writeInt(&buf, Int32(1))
-        
-        
-        case .running:
-            writeInt(&buf, Int32(2))
-        
-        
-        case .completed:
-            writeInt(&buf, Int32(3))
-        
-        
-        case .failed:
-            writeInt(&buf, Int32(4))
-        
-        
-        case .cancelled:
-            writeInt(&buf, Int32(5))
-        
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTaskDisplayStatus_lift(_ buf: RustBuffer) throws -> TaskDisplayStatus {
-    return try FfiConverterTypeTaskDisplayStatus.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTaskDisplayStatus_lower(_ value: TaskDisplayStatus) -> RustBuffer {
-    return FfiConverterTypeTaskDisplayStatus.lower(value)
-}
-
-
-
-extension TaskDisplayStatus: Equatable, Hashable {}
-
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum ToolSourceType {
     
@@ -14145,6 +14072,8 @@ public protocol AetherEventHandler : AnyObject {
     func onSubagentStarted(parentSessionId: String, childSessionId: String, agentId: String) 
     
     func onSubagentCompleted(childSessionId: String, success: Bool, summary: String) 
+    
+    func onPlanConfirmationRequired(planId: String, plan: DagTaskPlan) 
     
 }
 
@@ -14653,6 +14582,32 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                      childSessionId: try FfiConverterString.lift(childSessionId),
                      success: try FfiConverterBool.lift(success),
                      summary: try FfiConverterString.lift(summary)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onPlanConfirmationRequired: { (
+            uniffiHandle: UInt64,
+            planId: RustBuffer,
+            plan: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onPlanConfirmationRequired(
+                     planId: try FfiConverterString.lift(planId),
+                     plan: try FfiConverterTypeDagTaskPlan.lift(plan)
                 )
             }
 
@@ -15890,6 +15845,31 @@ fileprivate struct FfiConverterSequenceTypeCoworkTaskFFI: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeDagTaskInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [DagTaskInfo]
+
+    public static func write(_ value: [DagTaskInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeDagTaskInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [DagTaskInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [DagTaskInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeDagTaskInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeGenerationDataFFI: FfiConverterRustBuffer {
     typealias SwiftType = [GenerationDataFfi]
 
@@ -16390,31 +16370,6 @@ fileprivate struct FfiConverterSequenceTypeSkillInfo: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeTaskInfo: FfiConverterRustBuffer {
-    typealias SwiftType = [TaskInfo]
-
-    public static func write(_ value: [TaskInfo], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeTaskInfo.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TaskInfo] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [TaskInfo]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeTaskInfo.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterSequenceTypeTaskTypeMappingFFI: FfiConverterRustBuffer {
     typealias SwiftType = [TaskTypeMappingFfi]
 
@@ -16713,6 +16668,9 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_clear_memory() != 33517) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_confirm_task_plan() != 29235) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_cancel() != 36328) {
@@ -17091,6 +17049,9 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_completed() != 6747) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_plan_confirmation_required() != 14579) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_coworkprogresshandler_on_progress_event() != 54161) {

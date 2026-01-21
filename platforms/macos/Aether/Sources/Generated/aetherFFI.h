@@ -391,6 +391,13 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod19)(uint64_t, Rust
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD20
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD20
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod20)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_COWORK_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_COWORK_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceCoworkProgressHandlerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
@@ -456,6 +463,7 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod17 _Nonnull onSessionCompleted;
     UniffiCallbackInterfaceAetherEventHandlerMethod18 _Nonnull onSubagentStarted;
     UniffiCallbackInterfaceAetherEventHandlerMethod19 _Nonnull onSubagentCompleted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod20 _Nonnull onPlanConfirmationRequired;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -533,6 +541,11 @@ uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(void*_Nonnull ptr,
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORY
 void uniffi_aethecore_fn_method_aethercore_clear_memory(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
+int8_t uniffi_aethecore_fn_method_aethercore_confirm_task_plan(void*_Nonnull ptr, RustBuffer plan_id, int8_t confirmed, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_COWORK_CANCEL
@@ -1495,6 +1508,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_clear_memory(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
+uint16_t uniffi_aethecore_checksum_method_aethercore_confirm_task_plan(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_COWORK_CANCEL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_COWORK_CANCEL
 uint16_t uniffi_aethecore_checksum_method_aethercore_cowork_cancel(void
@@ -2248,6 +2267,12 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_started
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SUBAGENT_COMPLETED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SUBAGENT_COMPLETED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_completed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PLAN_CONFIRMATION_REQUIRED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PLAN_CONFIRMATION_REQUIRED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_plan_confirmation_required(void
     
 );
 #endif
