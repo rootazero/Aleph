@@ -86,7 +86,6 @@ pub mod memory;
 pub mod metrics;
 pub mod three_layer; // Three-layer control architecture (Orchestrator/Skill-DAG/Tools)
 pub mod payload; // Structured context protocol with capability support
-pub mod planner; // Unified planner for multi-step task decomposition
 pub mod prompt; // NEW: Unified prompt management (executor/conversational)
 pub mod providers;
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
@@ -339,16 +338,12 @@ pub use crate::generation::{
     GenerationType, MockGenerationProvider,
 };
 
-// Planner exports (unified multi-step task planning)
-pub use crate::planner::{
-    ExecutionPlan, PlannedTask, PlannerConfig, PlannerError, ToolInfo, UnifiedPlanner,
-};
 
-// Executor exports (unified multi-step task execution)
+// Executor exports
 pub use crate::executor::{
-    ExecutionContext, ExecutionResult, ExecutorConfig, ExecutorError, SingleStepConfig,
-    SingleStepExecutor, TaskExecutionResult, ToolCallRecord as ExecutorToolCallRecord,
-    ToolRegistry as ExecutorToolRegistry, UnifiedExecutor,
+    ExecutionContext, ExecutionResult, ExecutorError, SingleStepConfig, SingleStepExecutor,
+    TaskExecutionResult, ToolCallRecord as ExecutorToolCallRecord,
+    ToolRegistry as ExecutorToolRegistry,
 };
 
 // Prompt exports (unified prompt management)

@@ -1,50 +1,26 @@
-//! Unified Executor Module
+//! Executor Module
 //!
-//! This module implements the unified executor architecture that executes
-//! plans produced by the unified planner.
-//!
-//! # Architecture
-//!
-//! The unified executor takes an `ExecutionPlan` and executes it, producing
-//! an `ExecutionResult`. It handles three types of plans:
-//!
-//! - **Conversational**: Direct AI response, no tools needed
-//! - **SingleAction**: Execute a single tool call
-//! - **TaskGraph**: Execute a multi-step task graph with dependencies
+//! This module provides task execution capabilities for the Agent Loop architecture.
 //!
 //! # Types
 //!
-//! - [`ExecutionResult`]: The outcome of executing a plan
+//! - [`ExecutionResult`]: The outcome of executing a task
 //! - [`ToolCallRecord`]: Record of a tool call during execution
 //! - [`TaskExecutionResult`]: Result of executing a single task
 //! - [`ExecutionContext`]: Context information for execution
 //! - [`ExecutorError`]: Error types for executor operations
-//! - [`UnifiedExecutor`]: The main executor implementation
-//! - [`ExecutorConfig`]: Configuration for the executor
+//! - [`SingleStepExecutor`]: Single-step task executor
 //!
 //! # Usage
 //!
 //! ```ignore
 //! use aethecore::executor::{ExecutionResult, ExecutionContext, ExecutorError};
-//! use aethecore::executor::{UnifiedExecutor, ExecutorConfig};
+//! use aethecore::executor::{SingleStepExecutor, SingleStepConfig};
 //!
-//! // Create executor with default config
-//! let executor = UnifiedExecutor::new(agent_manager, executor_registry, event_handler);
+//! // Create executor
+//! let executor = SingleStepExecutor::new(config);
 //!
-//! // Execute a plan and get the result
-//! let result = executor.execute(plan, context).await?;
-//!
-//! // Check the result
-//! if result.success {
-//!     println!("Execution completed: {}", result.content);
-//!     println!("Tool calls made: {}", result.tool_calls.len());
-//! } else {
-//!     eprintln!("Execution failed: {:?}", result.error);
-//! }
-//!
-//! // Or create results manually for testing:
-//!
-//! // Create a successful result
+//! // Create results for testing:
 //! let result = ExecutionResult::success("Task completed successfully")
 //!     .with_execution_time_ms(150);
 //!
@@ -55,11 +31,9 @@
 mod builtin_registry;
 mod single_step;
 mod types;
-mod unified;
 
 pub use builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
 pub use single_step::{SingleStepConfig, SingleStepExecutor, ToolRegistry};
 pub use types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
 };
-pub use unified::{ExecutorConfig, UnifiedExecutor};
