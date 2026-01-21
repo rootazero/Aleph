@@ -31,6 +31,14 @@ use crate::ffi::FfiLoopCallback;
 use crate::intent::{DirectMode, IntentRouter, RouteResult, ThinkingContext};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
 
+// DAG scheduler imports
+use crate::dispatcher::{
+    AnalysisResult, DagScheduler, ExecutionCallback, TaskAnalyzer, TaskContext,
+    TaskDisplayStatus, TaskOutput, TaskPlan, UserDecision,
+};
+use crate::dispatcher::cowork_types::{Task, TaskGraph};
+use crate::dispatcher::scheduler::GraphTaskExecutor;
+
 /// Processing options
 #[derive(Debug, Clone)]
 pub struct ProcessOptions {
@@ -707,30 +715,88 @@ fn process_with_agent_loop(
         }
 
         RouteResult::NeedsThinking(ctx) => {
-            // Needs Agent Loop for LLM-based thinking
+            // Needs thinking - analyze task complexity first
             info!(
                 category_hint = ?ctx.category_hint,
                 bias_execute = ctx.bias_execute,
                 latency_us = ctx.latency_us,
-                "Needs thinking - entering Agent Loop"
+                "Needs thinking - analyzing task complexity"
             );
 
-            run_agent_loop(
-                runtime,
-                input,
-                ctx,
-                config,
-                tool_server_handle,
-                registered_tools,
-                op_token,
-                handler,
-                memory_config,
-                memory_path,
-                input_for_memory,
-                app_context,
-                window_title,
-                generation_config,
-            );
+            // Create provider for TaskAnalyzer
+            let provider = match create_provider_from_config(config) {
+                Ok(p) => p,
+                Err(e) => {
+                    error!(error = %e, "Failed to create provider for analysis");
+                    handler.on_error(format!("Provider error: {}", e));
+                    return;
+                }
+            };
+
+            let analyzer = TaskAnalyzer::new(provider.clone());
+
+            // Analyze input
+            let analysis_result = runtime.block_on(async { analyzer.analyze(input).await });
+
+            match analysis_result {
+                Ok(AnalysisResult::SingleStep { intent }) => {
+                    info!(intent = %intent, "Single-step task - using Agent Loop");
+                    run_agent_loop(
+                        runtime,
+                        input,
+                        ctx,
+                        config,
+                        tool_server_handle,
+                        registered_tools,
+                        op_token,
+                        handler,
+                        memory_config,
+                        memory_path,
+                        input_for_memory,
+                        app_context,
+                        window_title,
+                        generation_config,
+                    );
+                }
+                Ok(AnalysisResult::MultiStep {
+                    task_graph,
+                    requires_confirmation,
+                }) => {
+                    info!(
+                        tasks = task_graph.tasks.len(),
+                        requires_confirmation,
+                        "Multi-step task - using DAG scheduler"
+                    );
+                    run_dag_execution(
+                        runtime,
+                        task_graph,
+                        requires_confirmation,
+                        provider,
+                        op_token,
+                        handler,
+                        input,
+                    );
+                }
+                Err(e) => {
+                    warn!(error = %e, "Task analysis failed, falling back to Agent Loop");
+                    run_agent_loop(
+                        runtime,
+                        input,
+                        ctx,
+                        config,
+                        tool_server_handle,
+                        registered_tools,
+                        op_token,
+                        handler,
+                        memory_config,
+                        memory_path,
+                        input_for_memory,
+                        app_context,
+                        window_title,
+                        generation_config,
+                    );
+                }
+            }
         }
     }
 }
@@ -1067,5 +1133,176 @@ fn create_provider_from_config(
 
     crate::providers::create_provider(&config.provider, provider_config)
         .map_err(|e| e.to_string())
+}
+
+// ============================================================================
+// DAG Scheduler Integration
+// ============================================================================
+
+/// LLM-based task executor for DAG nodes
+///
+/// This executor uses the AI provider to execute individual tasks within
+/// the DAG scheduler. Each task receives context from its dependencies
+/// and produces output for downstream tasks.
+struct LlmTaskExecutor {
+    provider: Arc<dyn crate::providers::AiProvider>,
+}
+
+impl LlmTaskExecutor {
+    fn new(provider: Arc<dyn crate::providers::AiProvider>) -> Self {
+        Self { provider }
+    }
+}
+
+#[async_trait::async_trait]
+impl GraphTaskExecutor for LlmTaskExecutor {
+    async fn execute(&self, task: &Task, context: &str) -> crate::error::Result<TaskOutput> {
+        let prompt = format!(
+            "{}\n\n请执行以下任务:\n任务: {}\n描述: {}\n\n请直接给出结果。",
+            context,
+            task.name,
+            task.description.as_deref().unwrap_or("无"),
+        );
+
+        let response = self.provider.process(&prompt, None).await?;
+        Ok(TaskOutput::text(response))
+    }
+}
+
+/// Adapter to convert ExecutionCallback to AetherEventHandler
+///
+/// This struct bridges the DAG scheduler's callback interface with
+/// the FFI event handler, allowing progress updates to flow to the UI.
+struct FfiExecutionCallback {
+    handler: Arc<dyn crate::ffi::AetherEventHandler>,
+}
+
+impl FfiExecutionCallback {
+    fn new(handler: Arc<dyn crate::ffi::AetherEventHandler>) -> Self {
+        Self { handler }
+    }
+}
+
+#[async_trait::async_trait]
+impl ExecutionCallback for FfiExecutionCallback {
+    async fn on_plan_ready(&self, plan: &TaskPlan) {
+        // Format plan as markdown for display
+        let mut output = format!("**任务计划: {}**\n\n", plan.title);
+        for (i, task) in plan.tasks.iter().enumerate() {
+            let status = match task.status {
+                TaskDisplayStatus::Pending => "○",
+                TaskDisplayStatus::Running => "◉",
+                TaskDisplayStatus::Completed => "✓",
+                TaskDisplayStatus::Failed => "✗",
+                TaskDisplayStatus::Cancelled => "⊘",
+            };
+            output.push_str(&format!("{} {}. {}\n", status, i + 1, task.name));
+        }
+        output.push_str("\n---\n\n");
+        self.handler.on_stream_chunk(output);
+    }
+
+    async fn on_confirmation_required(&self, _plan: &TaskPlan) -> UserDecision {
+        self.handler
+            .on_stream_chunk("此任务包含高风险操作，是否继续执行？\n".to_string());
+        // For now, auto-confirm. Real implementation would wait for user input.
+        UserDecision::Confirmed
+    }
+
+    async fn on_task_start(&self, _task_id: &str, task_name: &str) {
+        self.handler
+            .on_stream_chunk(format!("\n**[开始]** {}\n", task_name));
+    }
+
+    async fn on_task_stream(&self, _task_id: &str, chunk: &str) {
+        self.handler.on_stream_chunk(chunk.to_string());
+    }
+
+    async fn on_task_complete(&self, _task_id: &str, summary: &str) {
+        self.handler.on_stream_chunk(format!("\n✓ {}\n", summary));
+    }
+
+    async fn on_task_retry(&self, task_id: &str, attempt: u32, error: &str) {
+        self.handler.on_stream_chunk(format!(
+            "\n重试 {} (第{}次): {}\n",
+            task_id, attempt, error
+        ));
+    }
+
+    async fn on_task_deciding(&self, task_id: &str, error: &str) {
+        self.handler.on_stream_chunk(format!(
+            "\n任务 {} 失败，正在决策...\n错误: {}\n",
+            task_id, error
+        ));
+    }
+
+    async fn on_task_failed(&self, task_id: &str, error: &str) {
+        self.handler
+            .on_stream_chunk(format!("\n✗ {} 失败: {}\n", task_id, error));
+    }
+
+    async fn on_all_complete(&self, summary: &str) {
+        self.handler
+            .on_stream_chunk(format!("\n---\n\n**执行完成**: {}\n", summary));
+    }
+
+    async fn on_cancelled(&self) {
+        self.handler
+            .on_stream_chunk("\n---\n\n**已取消**\n".to_string());
+    }
+}
+
+/// Run DAG-based multi-step execution
+///
+/// This function handles multi-step task execution using the DAG scheduler.
+/// It creates the necessary components (executor, callback, context) and
+/// orchestrates the execution of the task graph.
+#[allow(clippy::too_many_arguments)]
+fn run_dag_execution(
+    runtime: &tokio::runtime::Handle,
+    task_graph: TaskGraph,
+    _requires_confirmation: bool,
+    provider: Arc<dyn crate::providers::AiProvider>,
+    op_token: &CancellationToken,
+    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
+    user_input: &str,
+) {
+    // Check if already cancelled
+    if op_token.is_cancelled() {
+        handler.on_error("Operation cancelled".to_string());
+        return;
+    }
+
+    let handler = handler.clone();
+    let user_input = user_input.to_string();
+
+    // Run DAG execution
+    let result = runtime.block_on(async {
+        // Create callback adapter
+        let callback = Arc::new(FfiExecutionCallback::new(handler.clone()));
+
+        // Create executor
+        let executor = Arc::new(LlmTaskExecutor::new(provider));
+
+        // Create context
+        let context = TaskContext::new(&user_input);
+
+        // Execute graph
+        DagScheduler::execute_graph(task_graph, executor, callback, context).await
+    });
+
+    match result {
+        Ok(exec_result) => {
+            if exec_result.cancelled {
+                handler.on_error("用户取消了任务执行".to_string());
+            } else if !exec_result.failed_tasks.is_empty() {
+                handler.on_error(format!("部分任务失败: {:?}", exec_result.failed_tasks));
+            }
+            handler.on_complete("".to_string());
+        }
+        Err(e) => {
+            handler.on_error(format!("DAG 执行失败: {}", e));
+        }
+    }
 }
 
