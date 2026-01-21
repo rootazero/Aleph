@@ -4,7 +4,7 @@
 
 mod dag;
 
-pub use dag::DagScheduler;
+pub use dag::{DagScheduler, ExecutionResult, GraphTaskExecutor};
 
 use crate::dispatcher::cowork_types::{Task, TaskGraph};
 
