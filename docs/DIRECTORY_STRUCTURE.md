@@ -6,19 +6,19 @@ This document provides a detailed view of the project's directory structure.
 
 Aether is a Monorepo with platform-specific directories. macOS uses [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
-## Rust Core Module Count: 44 Modules
+## Rust Core Module Count: ~37 Modules
 
 | Category | Modules |
 |----------|---------|
-| **FFI** | 9 sub-modules |
-| **Agent** | agent/, agents/, components/ (8 modules) |
-| **Config** | 10 type modules + policies |
+| **FFI** | 14 sub-modules (ffi/) |
+| **Agent** | agent_loop/, agents/, components/ (8 components) |
+| **Config** | config/ (types + policies + watcher) |
 | **AI** | generation/ (10+ providers), providers/, rig_tools/ |
-| **Memory** | Dual-layer (Raw + Facts), compression |
-| **Routing** | dispatcher/, intent/ (3 layers), router/ |
+| **Memory** | Dual-layer (Raw + Facts), compression, SIMD |
+| **Routing** | dispatcher/ (planner, scheduler, executor, model_router), intent/ (3 layers) |
 | **Tools** | mcp/, skills/, search/ (6 providers), video/, vision/ |
-| **Runtime** | runtimes/ (uv, fnm, yt-dlp) |
-| **Infra** | services/, event/, conversation/, cowork/, payload/ |
+| **Runtime** | runtimes/ (uv, fnm, yt-dlp, ffmpeg) |
+| **Infra** | services/, event/, conversation/, payload/, three_layer/, thinker/ |
 
 ## Complete Directory Tree
 
@@ -43,21 +43,22 @@ aether/
 │       ├── aether.udl                 # UniFFI interface definition
 │       ├── ffi_cabi.rs                # Windows C ABI exports
 │       ├── error.rs                   # Error types
-│       ├── initialization.rs          # First-time setup
 │       ├── event_handler.rs           # Event callback traits
-│       ├── cowork_ffi.rs              # Cowork FFI bindings
 │       ├── title_generator.rs         # Conversation title generation
 │       ├── uniffi_core.rs             # UniFFI core re-exports
 │       │
-│       ├── agent/                     # Agent execution engine
-│       │   ├── mod.rs, config.rs, manager.rs, types.rs, conversation.rs
+│       ├── agent_loop/                # Core observe-think-act-feedback cycle
+│       │   ├── mod.rs, config.rs, decision.rs, state.rs
+│       │   ├── callback.rs, guards.rs
 │       │
-│       ├── agents/                    # Sub-agent system (Phase 4)
+│       ├── agents/                    # Unified agent system (sub-agent + rig-core)
 │       │   ├── mod.rs, registry.rs, task_tool.rs, types.rs
-│       │   └── prompts/               # Agent system prompts
+│       │   └── integration_test.rs
 │       │
-│       ├── capability/                # Capability definitions
-│       │   ├── mod.rs, declaration.rs, executor.rs, vision.rs
+│       ├── capability/                # Capability system (Strategy pattern)
+│       │   ├── mod.rs, declaration.rs, request.rs, response_parser.rs
+│       │   ├── strategy.rs, system.rs
+│       │   └── strategies/            # Capability strategy implementations
 │       │
 │       ├── clarification/             # Phantom Flow interaction
 │       │   ├── mod.rs, types.rs
@@ -79,41 +80,64 @@ aether/
 │       │   ├── task_planner.rs        # Multi-step planning
 │       │   └── tool_executor.rs       # Unified tool dispatch
 │       │
-│       ├── config/                    # Configuration types
-│       │   ├── mod.rs, types.rs, policies.rs, provider_entry.rs
+│       ├── config/                    # Configuration management
+│       │   ├── mod.rs, watcher.rs, tests.rs
+│       │   └── types/                 # Config type definitions
+│       │       ├── policies/          # Policy types
 │       │
 │       ├── conversation/              # Multi-turn conversation
 │       │   ├── mod.rs, manager.rs, session.rs, turn.rs
 │       │
+│       ├── compressor/                # Context compression
+│       │   ├── mod.rs, context.rs
+│       │
 │       ├── core/                      # Internal core types
 │       │   ├── mod.rs, types.rs, memory_types.rs
 │       │
-│       ├── cowork/                    # DAG task orchestration
-│       │   ├── mod.rs, executor.rs, graph.rs, model_router.rs
-│       │   ├── file_operations.rs, code_executor.rs
-│       │
-│       ├── dispatcher/                # Multi-layer routing
-│       │   ├── mod.rs, config.rs, integration.rs
-│       │   ├── tool_registry.rs, tool_types.rs
+│       ├── dispatcher/                # Multi-layer routing & task orchestration
+│       │   ├── mod.rs, engine.rs, integration.rs, types.rs
+│       │   ├── registry.rs, confirmation.rs, async_confirmation.rs
+│       │   ├── cowork_types/          # DAG task definitions
+│       │   ├── planner/               # LLM task decomposition
+│       │   ├── scheduler/             # DAG scheduling
+│       │   ├── executor/              # Task execution backends
+│       │   ├── monitor/               # Progress monitoring
+│       │   └── model_router/          # Intelligent model selection
+│       │       ├── core/              # Core routing logic
+│       │       ├── health/            # Health monitoring
+│       │       ├── resilience/        # Fault tolerance
+│       │       ├── intelligent/       # Smart routing P2
+│       │       └── advanced/          # Advanced features P3
 │       │
 │       ├── event/                     # Event-driven architecture
 │       │   ├── mod.rs, bus.rs, types.rs, handlers.rs
 │       │
-│       ├── ffi/                       # 9 FFI sub-modules
-│       │   ├── mod.rs, core.rs, config_ffi.rs
-│       │   ├── memory_ffi.rs, conversation_ffi.rs
-│       │   ├── dispatcher_ffi.rs, mcp_ffi.rs
-│       │   ├── search_ffi.rs, skills_ffi.rs
+│       ├── ffi/                       # 14 FFI sub-modules
+│       │   ├── mod.rs, processing.rs, tools.rs, memory.rs
+│       │   ├── config.rs, skills.rs, mcp.rs, dispatcher.rs
+│       │   ├── dispatcher_types.rs, generation.rs, init.rs
+│       │   ├── session.rs, runtime.rs, agent_loop_adapter.rs
 │       │
 │       ├── generation/                # Media generation providers
 │       │   ├── mod.rs, types.rs, registry.rs, mock.rs
 │       │   └── providers/             # 10+ generation backends
 │       │
+│       ├── init_unified/              # Unified initialization
+│       │   ├── mod.rs, coordinator.rs
+│       │
 │       ├── intent/                    # 3-layer intent detection
-│       │   ├── mod.rs, classifier.rs, aggregator.rs
-│       │   ├── calibrator.rs, cache.rs, types.rs
-│       │   ├── context.rs, defaults.rs, presets.rs
-│       │   └── rollback.rs
+│       │   ├── mod.rs
+│       │   ├── detection/             # L1-L3 classification
+│       │   │   ├── classifier.rs, ai_detector.rs
+│       │   ├── decision/              # Execution decision making
+│       │   │   ├── router.rs, aggregator.rs, calibrator.rs
+│       │   │   └── execution_decider.rs
+│       │   ├── parameters/            # Parameter types
+│       │   │   ├── types.rs, presets.rs, defaults.rs, context.rs
+│       │   ├── support/               # Caching, rollback
+│       │   │   ├── cache.rs, rollback.rs, agent_prompt.rs
+│       │   └── types/                 # Core types
+│       │       ├── task_category.rs, ffi.rs
 │       │
 │       ├── logging/                   # Structured logging
 │       │   ├── mod.rs, file_logging.rs, pii_layer.rs
@@ -122,26 +146,31 @@ aether/
 │       │   ├── mod.rs, types.rs, service.rs, manager.rs
 │       │
 │       ├── memory/                    # Dual-layer memory system
-│       │   ├── mod.rs, database.rs, context.rs
-│       │   ├── embedding.rs, facts.rs, retrieval.rs
+│       │   ├── mod.rs, database.rs, context.rs, embedding.rs
+│       │   ├── retrieval.rs, ai_retrieval.rs, fact_retrieval.rs
+│       │   ├── ingestion.rs, augmentation.rs, cleanup.rs, simd.rs
 │       │
 │       ├── metrics/                   # Performance metrics
 │       │   └── mod.rs
 │       │
 │       ├── payload/                   # Structured context protocol
-│       │   ├── mod.rs, builder.rs, types.rs
+│       │   ├── mod.rs, builder.rs, assembler.rs
+│       │   ├── capability.rs, context_format.rs, intent.rs
+│       │
+│       ├── prompt/                    # Unified prompt management
+│       │   ├── mod.rs, executor.rs, conversational.rs
 │       │
 │       ├── providers/                 # AI provider implementations
 │       │   ├── mod.rs, rig_providers.rs
 │       │
-│       ├── rig_tools/                 # rig-core tool definitions
-│       │   ├── mod.rs, registry.rs
-│       │   ├── builtin_tools.rs, mcp_tools.rs, skill_tools.rs
+│       ├── rig_tools/                 # rig-core tool implementations
+│       │   ├── mod.rs, error.rs, mcp_wrapper.rs
+│       │   ├── search.rs, web_fetch.rs, youtube.rs, file_ops.rs
 │       │   └── generation/            # Generation tool wrappers
 │       │
 │       ├── runtimes/                  # Runtime managers
-│       │   ├── mod.rs, registry.rs, traits.rs
-│       │   ├── uv.rs, fnm.rs, ytdlp.rs
+│       │   ├── mod.rs, registry.rs, manager.rs, manifest.rs
+│       │   ├── download.rs, uv.rs, fnm.rs, ytdlp.rs, ffmpeg.rs
 │       │
 │       ├── search/                    # 6 search providers
 │       │   ├── mod.rs, registry.rs, types.rs
@@ -157,6 +186,20 @@ aether/
 │       │
 │       ├── utils/                     # Utilities
 │       │   ├── mod.rs, pii.rs, text.rs
+│       │
+│       ├── thinker/                   # LLM decision-making layer
+│       │   ├── mod.rs, model_router.rs, prompt_builder.rs
+│       │   ├── decision_parser.rs, tool_filter.rs
+│       │
+│       ├── three_layer/               # Control architecture
+│       │   ├── mod.rs, tests.rs
+│       │   ├── orchestrator/          # FSM state machine
+│       │   ├── safety/                # Capability gating
+│       │   └── skill/                 # Skill definition
+│       │
+│       ├── executor/                  # Task execution engine
+│       │   ├── mod.rs, single_step.rs, types.rs
+│       │   └── builtin_registry.rs
 │       │
 │       ├── video/                     # Video processing
 │       │   ├── mod.rs, transcript.rs, youtube.rs
