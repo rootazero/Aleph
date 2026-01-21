@@ -80,8 +80,12 @@ pub struct RoutingOptions {
 ///
 /// # Deprecated
 ///
-/// Use `crate::agent_loop::AgentLoop` with `crate::intent::IntentRouter` instead.
-#[deprecated(since = "0.2.0", note = "Use AgentLoop with IntentRouter instead")]
+/// Use `crate::three_layer` orchestrator instead.
+/// Enable via config: `orchestrator.use_three_layer_control = true`
+#[deprecated(
+    since = "0.10.0",
+    note = "Use ThreeLayerOrchestrator instead. Enable via config: orchestrator.use_three_layer_control = true"
+)]
 pub struct RequestOrchestrator {
     /// Phase 1: Intent decision
     intent_decider: ExecutionIntentDecider,
