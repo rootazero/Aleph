@@ -85,6 +85,7 @@ pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod memory;
 pub mod metrics;
 pub mod orchestrator; // NEW: Unified request orchestrator (Phase 1 + Phase 2 coordination)
+pub mod three_layer; // NEW: Three-layer control architecture (Orchestrator/Skill-DAG/Tools)
 pub mod payload; // Structured context protocol with capability support
 pub mod planner; // Unified planner for multi-step task decomposition
 pub mod prompt; // NEW: Unified prompt management (executor/conversational)
