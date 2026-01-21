@@ -36,12 +36,13 @@
 //! ExecutionIntent::Conversational
 //! ```
 //!
-//! # Components
+//! # Module Structure
 //!
-//! - **IntentClassifier**: Main entry point with `classify()` method
-//! - **KeywordIndex**: Weighted keyword matching with CJK support
-//! - **AiIntentDetector**: AI-powered fallback detection
-//! - **TaskCategory**: Enumeration of executable task types
+//! - **detection/**: Intent detection (L1-L3 classification)
+//! - **decision/**: Execution decision making and routing
+//! - **parameters/**: Parameter types, defaults, and context
+//! - **types/**: Core type definitions (TaskCategory, FFI)
+//! - **support/**: Caching, rollback, and legacy prompts
 //!
 //! # Usage
 //!
@@ -70,60 +71,48 @@
 //! This ensures requests like "分析这个文件" (analyze this file) are
 //! handled conversationally rather than triggering file operations.
 
-pub mod agent_prompt;
-pub mod aggregator;
-pub mod ai_detector;
-pub mod cache;
-pub mod calibrator;
-pub mod classifier;
-pub mod context;
-pub mod defaults;
-pub mod execution_decider;
-pub mod ffi;
-pub mod keyword;
+// Submodules
+pub mod decision;
+pub mod detection;
 pub mod parameters;
-pub mod presets;
-pub mod rollback;
-pub mod router;
-pub mod task_category;
+pub mod support;
+pub mod types;
 
-pub use agent_prompt::{AgentModePrompt, GenerationModelInfo, ToolDescription};
-pub use aggregator::{
-    AggregatedIntent, AggregatorConfig, IntentAction, IntentAggregator, MissingParameter,
+// Re-export from detection
+pub use detection::{
+    AiIntentDetector, AiIntentResult, ExecutableTask, ExecutionIntent, IntentClassifier,
+    KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule,
 };
-pub use ai_detector::{AiIntentDetector, AiIntentResult};
-pub use cache::{CacheConfig, CacheMetrics, CachedIntent, IntentCache};
-pub use calibrator::{
-    CalibratedSignal, CalibrationHistory, CalibratorConfig, ConfidenceCalibrator, IntentSignal,
-    RoutingLayer,
-};
-pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
-pub use context::{
-    AppContext, ConversationContext, InputFeatures, MatchingContext, MatchingContextBuilder,
-    PendingParam, TimeContext,
-};
-pub use defaults::DefaultsResolver;
-pub use ffi::{
-    AmbiguousTaskFFI, ConflictResolutionFFI, ExecutableTaskFFI, ExecutionIntentTypeFFI,
-    OrganizeMethodFFI, ParameterSourceFFI, TaskCategoryFFI, TaskParametersFFI,
-};
-pub use keyword::{KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule};
-pub use parameters::{ConflictResolution, OrganizeMethod, ParameterSource, TaskParameters};
-pub use presets::{PresetRegistry, ScenarioPreset};
-pub use rollback::{
-    RollbackCapable, RollbackConfig, RollbackEntry, RollbackManager, RollbackResult,
-};
-pub use task_category::TaskCategory;
 
-// New unified decision layer
-pub use execution_decider::{
-    ContextSignals, CustomInvocation, DeciderConfig, DecisionMetadata, DecisionResult,
-    ExecutionIntentDecider, ExecutionMode, IntentLayer, McpInvocation, SkillInvocation,
-    SlashCommand, ToolInvocation,
+// Re-export from decision
+pub use decision::{
+    AggregatedIntent, AggregatorConfig, CalibratedSignal, CalibrationHistory, CalibratorConfig,
+    ConfidenceCalibrator, ContextSignals, CustomInvocation, DeciderConfig, DecisionMetadata,
+    DecisionResult, DirectMode, DirectRouteInfo, ExecutionIntentDecider, ExecutionMode,
+    IntentAction, IntentAggregator, IntentLayer, IntentRouter, IntentSignal, McpInvocation,
+    MissingParameter, RouteResult, RoutingLayer, SkillInvocation, SlashCommand, ThinkingContext,
+    ToolInvocation,
 };
 // Backward compatibility
 #[allow(deprecated)]
-pub use execution_decider::DecisionLayer;
+pub use decision::DecisionLayer;
 
-// New simplified router for Agent Loop
-pub use router::{DirectMode, DirectRouteInfo, IntentRouter, RouteResult, ThinkingContext};
+// Re-export from parameters
+pub use parameters::{
+    AppContext, ConflictResolution, ConversationContext, DefaultsResolver, InputFeatures,
+    MatchingContext, MatchingContextBuilder, OrganizeMethod, ParameterSource, PendingParam,
+    PresetRegistry, ScenarioPreset, TaskParameters, TimeContext,
+};
+
+// Re-export from types
+pub use types::{
+    AmbiguousTaskFFI, ConflictResolutionFFI, ExecutableTaskFFI, ExecutionIntentTypeFFI,
+    OrganizeMethodFFI, ParameterSourceFFI, TaskCategory, TaskCategoryFFI, TaskParametersFFI,
+};
+
+// Re-export from support
+pub use support::{
+    AgentModePrompt, CacheConfig, CacheMetrics, CachedIntent, GenerationModelInfo, IntentCache,
+    RollbackCapable, RollbackConfig, RollbackEntry, RollbackManager, RollbackResult,
+    ToolDescription,
+};

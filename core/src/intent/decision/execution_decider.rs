@@ -37,7 +37,7 @@
 //! 3. **Bias toward execution**: When uncertain, assume user wants action
 //! 4. **No prompt contamination**: Prompts never contain decision logic
 
-use super::TaskCategory;
+use crate::intent::types::TaskCategory;
 use crate::command::{CommandContext, CommandParser, ParsedCommand};
 use crate::dispatcher::ToolSourceType;
 use regex::Regex;

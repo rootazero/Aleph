@@ -19,7 +19,7 @@ use crate::event::{
     AetherEvent, EventContext, EventHandler, EventType, HandlerError, InputEvent, PlanRequest,
     ToolCallRequest,
 };
-use crate::intent::classifier::{ExecutionIntent, IntentClassifier};
+use crate::intent::{ExecutionIntent, IntentClassifier};
 use crate::intent::{ContextSignals, ExecutionIntentDecider, ExecutionMode};
 
 use super::Complexity;
@@ -600,7 +600,7 @@ impl IntentAnalyzer {
 mod tests {
     use super::*;
     use crate::event::InputContext;
-    use crate::intent::classifier::ExecutableTask;
+    use crate::intent::ExecutableTask;
 
     fn create_test_input(text: &str) -> InputEvent {
         InputEvent {
@@ -798,7 +798,7 @@ mod tests {
 
     #[test]
     fn test_build_direct_call_executable() {
-        use crate::intent::task_category::TaskCategory;
+        use crate::intent::TaskCategory;
 
         let analyzer = IntentAnalyzer::new();
         let input = create_test_input("整理下载文件夹");
@@ -930,7 +930,7 @@ mod tests {
 
     #[test]
     fn test_with_input_context() {
-        use crate::intent::task_category::TaskCategory;
+        use crate::intent::TaskCategory;
 
         let analyzer = IntentAnalyzer::new();
 

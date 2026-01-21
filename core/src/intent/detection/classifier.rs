@@ -6,13 +6,15 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::sync::Arc;
 
-use super::aggregator::{AggregatedIntent, AggregatorConfig, IntentAggregator};
 use super::ai_detector::{AiIntentDetector, AiIntentResult};
-use super::cache::{CachedIntent, IntentCache};
-use super::calibrator::{CalibratedSignal, ConfidenceCalibrator, IntentSignal, RoutingLayer};
-use super::context::MatchingContext;
 use super::keyword::{KeywordIndex, KeywordMatchMode, KeywordRule};
-use super::task_category::TaskCategory;
+use crate::intent::decision::{
+    AggregatedIntent, AggregatorConfig, CalibratedSignal, ConfidenceCalibrator, IntentAggregator,
+    IntentSignal, RoutingLayer,
+};
+use crate::intent::parameters::MatchingContext;
+use crate::intent::support::{CachedIntent, IntentCache};
+use crate::intent::types::TaskCategory;
 use crate::config::{KeywordPolicy, PolicyKeywordRule};
 use crate::error::Result;
 use crate::providers::AiProvider;
@@ -1043,7 +1045,7 @@ mod tests {
 
     #[test]
     fn test_convert_ai_result() {
-        use crate::intent::ai_detector::AiIntentResult;
+        use crate::intent::AiIntentResult;
         use std::collections::HashMap;
 
         let classifier = IntentClassifier::new();
@@ -1062,7 +1064,7 @@ mod tests {
 
     #[test]
     fn test_convert_ai_result_with_path() {
-        use crate::intent::ai_detector::AiIntentResult;
+        use crate::intent::AiIntentResult;
         use std::collections::HashMap;
 
         let classifier = IntentClassifier::new();
@@ -1087,7 +1089,7 @@ mod tests {
 
     #[test]
     fn test_convert_ai_result_unknown_intent() {
-        use crate::intent::ai_detector::AiIntentResult;
+        use crate::intent::AiIntentResult;
         use std::collections::HashMap;
 
         let classifier = IntentClassifier::new();
@@ -1105,7 +1107,7 @@ mod tests {
 
     #[test]
     fn test_convert_ai_result_all_categories() {
-        use crate::intent::ai_detector::AiIntentResult;
+        use crate::intent::AiIntentResult;
         use std::collections::HashMap;
 
         let classifier = IntentClassifier::new();

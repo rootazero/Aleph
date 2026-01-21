@@ -3,10 +3,9 @@
 //! These types are exposed through UniFFI to Swift/Kotlin clients.
 //! Type definitions are in aether.udl, this file provides the Rust implementations.
 
-use super::{
-    ConflictResolution, ExecutableTask, ExecutionIntent, OrganizeMethod, ParameterSource,
-    TaskCategory, TaskParameters,
-};
+use super::task_category::TaskCategory;
+use crate::intent::detection::{ExecutableTask, ExecutionIntent};
+use crate::intent::parameters::{ConflictResolution, OrganizeMethod, ParameterSource, TaskParameters};
 
 // ===== TaskCategory FFI =====
 // Type defined in aether.udl

@@ -5,9 +5,9 @@
 //! 2. Preset scenarios (hardcoded defaults)
 //! 3. Context inference (based on file analysis)
 
-use super::classifier::ExecutableTask;
-use super::parameters::{ParameterSource, TaskParameters};
 use super::presets::PresetRegistry;
+use super::types::{ParameterSource, TaskParameters};
+use crate::intent::detection::ExecutableTask;
 
 /// Resolves default parameters for executable tasks
 ///
@@ -60,6 +60,7 @@ impl Default for DefaultsResolver {
 
 #[cfg(test)]
 mod tests {
+    use crate::intent::OrganizeMethod;
     use super::*;
     use crate::intent::TaskCategory;
 
@@ -101,7 +102,7 @@ mod tests {
         let params = resolver.resolve(&task).await;
         assert_eq!(
             params.organize_method,
-            super::super::parameters::OrganizeMethod::ByDate
+            OrganizeMethod::ByDate
         );
     }
 
@@ -117,7 +118,7 @@ mod tests {
         let params = resolver.resolve(&task).await;
         assert_eq!(
             params.organize_method,
-            super::super::parameters::OrganizeMethod::ByCategory
+            OrganizeMethod::ByCategory
         );
     }
 }

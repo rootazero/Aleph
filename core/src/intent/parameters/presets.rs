@@ -1,8 +1,8 @@
 //! Preset scenarios for default task parameters.
 
-use super::classifier::ExecutableTask;
-use super::parameters::{ParameterSource, TaskParameters};
-use super::task_category::TaskCategory;
+use super::types::{ParameterSource, TaskParameters};
+use crate::intent::detection::ExecutableTask;
+use crate::intent::types::TaskCategory;
 
 /// A preset scenario with default parameters
 #[derive(Debug, Clone)]
@@ -92,6 +92,7 @@ impl PresetRegistry {
 
 #[cfg(test)]
 mod tests {
+    use crate::intent::OrganizeMethod;
     use super::*;
 
     #[test]
@@ -107,7 +108,7 @@ mod tests {
         assert!(preset.is_some());
         assert_eq!(
             preset.unwrap().parameters.organize_method,
-            super::super::parameters::OrganizeMethod::ByExtension
+            OrganizeMethod::ByExtension
         );
     }
 
@@ -124,7 +125,7 @@ mod tests {
         assert!(preset.is_some());
         assert_eq!(
             preset.unwrap().parameters.organize_method,
-            super::super::parameters::OrganizeMethod::ByCategory
+            OrganizeMethod::ByCategory
         );
     }
 
@@ -141,7 +142,7 @@ mod tests {
         assert!(preset.is_some());
         assert_eq!(
             preset.unwrap().parameters.organize_method,
-            super::super::parameters::OrganizeMethod::ByDate
+            OrganizeMethod::ByDate
         );
     }
 

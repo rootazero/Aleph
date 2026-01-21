@@ -35,7 +35,7 @@ use super::execution_decider::{
     ContextSignals, CustomInvocation, DeciderConfig, ExecutionIntentDecider, ExecutionMode,
     IntentLayer, McpInvocation, SkillInvocation, ToolInvocation,
 };
-use super::TaskCategory;
+use crate::intent::types::TaskCategory;
 use crate::command::CommandParser;
 use std::sync::Arc;
 
