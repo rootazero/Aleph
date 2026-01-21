@@ -37,3 +37,6 @@ pub use safety::{
     QuotaTracker, QuotaUsage, ResourceQuota, SandboxViolation,
 };
 pub use skill::{SkillDefinition, SkillNode, SkillNodeType, SkillRegistry};
+
+#[cfg(test)]
+mod tests;
