@@ -14,7 +14,7 @@ use super::config::RigAgentConfig;
 use crate::core::MediaAttachment;
 use crate::error::{AetherError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::rig_tools::{FileOpsTool, ImageGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
+use crate::rig_tools::{FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
 use rig::client::CompletionClient;
 use rig::completion::message::{
     Document, DocumentMediaType, DocumentSourceKind, Image, ImageMediaType, Text, UserContent,
@@ -75,6 +75,7 @@ const BUILTIN_TOOLS: &[&str] = &[
     "youtube",
     "file_ops",
     "generate_image",
+    "pdf_generate",
 ];
 
 /// Configuration for built-in tools
@@ -117,7 +118,8 @@ fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> ToolServer 
         .tool(search_tool)
         .tool(WebFetchTool::new())
         .tool(YouTubeTool::new())
-        .tool(FileOpsTool::new());
+        .tool(FileOpsTool::new())
+        .tool(PdfGenerateTool::new());
 
     // Add image generation tool if generation registry is available
     if let Some(cfg) = config {
