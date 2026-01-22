@@ -10,9 +10,10 @@ import { ConversationArea } from './components/ConversationArea';
 
 // Layout constants
 const LAYOUT = {
-  WIDTH: 600,
+  WIDTH: 800,
   INPUT_HEIGHT: 80,
-  MAX_CONTENT_HEIGHT: 300,
+  MAX_CONTENT_HEIGHT: 500,
+  MAX_WINDOW_HEIGHT: 600,
   PADDING: 16,
 };
 
@@ -70,7 +71,10 @@ export function UnifiedHaloView() {
           resizeTimeout = setTimeout(async () => {
             try {
               const appWindow = getCurrentWindow();
-              const newHeight = Math.ceil(height) + LAYOUT.PADDING;
+              const newHeight = Math.min(
+                Math.ceil(height) + LAYOUT.PADDING,
+                LAYOUT.MAX_WINDOW_HEIGHT
+              );
               console.log('[Halo] Setting window size:', LAYOUT.WIDTH, 'x', newHeight);
               await appWindow.setSize(new LogicalSize(LAYOUT.WIDTH, newHeight));
             } catch (error) {
@@ -109,7 +113,7 @@ export function UnifiedHaloView() {
         ref={containerRef}
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-[600px] bg-background/95 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl"
+        className="w-full max-w-[800px] bg-background/95 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl"
       >
         {/* Content panel (conversation/commands/topics) */}
         <AnimatePresence mode="wait">
