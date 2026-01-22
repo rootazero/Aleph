@@ -38,6 +38,7 @@ use crate::agents::{BuiltinToolConfig, RigAgentConfig, RigAgentManager};
 use crate::config::Config;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::memory::MemoryEntry;
+use crate::utils::paths::get_memory_db_path;
 use rig::completion::Message;
 use rig::tool::server::ToolServerHandle;
 use std::collections::HashMap;
@@ -514,12 +515,18 @@ pub fn init_core(
 
     // Set up memory store path if memory is enabled
     // Wrapped in Arc<RwLock> to support dynamic enable/disable of memory feature
+    // Uses unified path: ~/.config/aether/memory.db (cross-platform)
     let memory_path = Arc::new(RwLock::new(if full_config.memory.enabled {
-        let db_path = dirs::home_dir()
-            .map(|h| h.join(".config/aether/memory.db"))
-            .unwrap_or_else(|| std::path::PathBuf::from("memory.db"));
-        info!(path = %db_path.display(), "Memory store enabled");
-        Some(db_path.to_string_lossy().to_string())
+        match get_memory_db_path() {
+            Ok(db_path) => {
+                info!(path = %db_path.display(), "Memory store enabled");
+                Some(db_path.to_string_lossy().to_string())
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to get memory db path, memory disabled");
+                None
+            }
+        }
     } else {
         info!("Memory store disabled in config");
         None

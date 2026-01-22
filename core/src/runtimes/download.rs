@@ -136,6 +136,77 @@ pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: us
     Ok(())
 }
 
+/// Extract a tar.xz archive to the specified directory
+///
+/// This uses Rust native libraries (xz2 + tar) for cross-platform support.
+/// Does not require external tools like `tar` or `xz`.
+///
+/// # Arguments
+/// * `archive_path` - Path to the .tar.xz file
+/// * `dest_dir` - Directory to extract files into
+/// * `strip_components` - Number of leading path components to strip (like tar --strip-components)
+#[allow(dead_code)] // Used by ffmpeg on Linux, may appear unused on other platforms
+pub fn extract_tar_xz(archive_path: &Path, dest_dir: &Path, strip_components: usize) -> Result<()> {
+    info!(archive = ?archive_path, dest = ?dest_dir, "Extracting tar.xz archive");
+
+    let file = File::open(archive_path)
+        .map_err(|e| AetherError::runtime("extract", format!("Failed to open archive: {}", e)))?;
+
+    let buf_reader = BufReader::new(file);
+    let xz_decoder = xz2::read::XzDecoder::new(buf_reader);
+    let mut archive = tar::Archive::new(xz_decoder);
+
+    // Create destination directory if it doesn't exist
+    std::fs::create_dir_all(dest_dir).map_err(|e| {
+        AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+    })?;
+
+    // Extract each entry, stripping path components as needed
+    for entry in archive.entries().map_err(|e| {
+        AetherError::runtime("extract", format!("Failed to read archive entries: {}", e))
+    })? {
+        let mut entry = entry
+            .map_err(|e| AetherError::runtime("extract", format!("Failed to read entry: {}", e)))?;
+
+        let entry_path = entry.path().map_err(|e| {
+            AetherError::runtime("extract", format!("Failed to get entry path: {}", e))
+        })?;
+
+        // Strip leading components from path
+        let stripped_path: std::path::PathBuf =
+            entry_path.components().skip(strip_components).collect();
+
+        // Skip if path is empty after stripping
+        if stripped_path.as_os_str().is_empty() {
+            continue;
+        }
+
+        let dest_path = dest_dir.join(&stripped_path);
+
+        // Create parent directories
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AetherError::runtime("extract", format!("Failed to create parent dir: {}", e))
+            })?;
+        }
+
+        // Extract based on entry type
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_dir() {
+            std::fs::create_dir_all(&dest_path).map_err(|e| {
+                AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+            })?;
+        } else if entry_type.is_file() || entry_type.is_symlink() {
+            entry.unpack(&dest_path).map_err(|e| {
+                AetherError::runtime("extract", format!("Failed to extract file: {}", e))
+            })?;
+        }
+    }
+
+    debug!(dest = ?dest_dir, "tar.xz extraction completed");
+    Ok(())
+}
+
 /// Extract a ZIP archive to the specified directory
 ///
 /// This uses Rust native library (zip) for cross-platform support.

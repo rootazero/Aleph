@@ -91,6 +91,8 @@ lru = "0.12"
 # For tar.gz extraction (runtime manager - cross-platform)
 flate2 = "1.0"
 tar = "0.4"
+# For tar.xz extraction (Linux ffmpeg - cross-platform)
+xz2 = "0.1"
 # For SHA-256 hashing (semantic cache)
 sha2 = "0.10"
 # For consistent hashing (A/B testing traffic splitting)
