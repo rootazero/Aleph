@@ -449,6 +449,7 @@ pub fn save_settings(settings: &Settings) -> Result<()> {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WindowState {
     pub settings: Option<WindowPosition>,
+    pub conversation: Option<WindowPosition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
