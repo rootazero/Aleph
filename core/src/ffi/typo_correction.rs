@@ -1,7 +1,7 @@
 //! FFI interface for typo correction
 //!
 //! Provides the FFI entry point for the quick typo correction feature.
-//! This module exposes a simple async function that can be called from Swift.
+//! This module exposes a synchronous function that runs async code via the runtime.
 
 use super::AetherCore;
 use crate::providers::create_provider;
@@ -51,7 +51,7 @@ impl AetherCore {
     ///
     /// * `TypoCorrectionResult::Success` - Correction succeeded
     /// * `TypoCorrectionResult::Error` - Correction failed
-    pub async fn correct_typo(&self, text: String) -> TypoCorrectionResult {
+    pub fn correct_typo(&self, text: String) -> TypoCorrectionResult {
         debug!("FFI correct_typo called with {} chars", text.len());
 
         // Get typo correction config
@@ -115,17 +115,20 @@ impl AetherCore {
             "Performing typo correction"
         );
 
-        // Create corrector and perform correction
+        // Create corrector and perform correction using the runtime
         let corrector = TypoCorrector::new(provider, typo_config);
 
-        match corrector.correct(&text).await {
-            Ok(result) => {
-                if result.has_changes {
+        // Run the async correction within the tokio runtime
+        let result = self.runtime.block_on(async { corrector.correct(&text).await });
+
+        match result {
+            Ok(correction_result) => {
+                if correction_result.has_changes {
                     info!("Text corrected successfully");
                 } else {
                     debug!("No corrections needed");
                 }
-                result.into()
+                correction_result.into()
             }
             Err(e) => {
                 error!("Typo correction failed: {}", e);

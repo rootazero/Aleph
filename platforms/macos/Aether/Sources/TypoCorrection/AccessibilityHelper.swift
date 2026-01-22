@@ -52,7 +52,29 @@ final class AccessibilityHelper {
             return false
         }
 
+        // Move cursor to end of text
+        moveCursorToEnd(element: focusedElement, textLength: text.count)
+
         return true
+    }
+
+    /// Move cursor to the end of text in the given element
+    private func moveCursorToEnd(element: AXUIElement, textLength: Int) {
+        // Create a CFRange for the cursor position (location = end, length = 0)
+        var range = CFRange(location: textLength, length: 0)
+
+        // Create an AXValue from the CFRange
+        guard let axValue = AXValueCreate(.cfRange, &range) else {
+            print("[AccessibilityHelper] Failed to create AXValue for cursor position")
+            return
+        }
+
+        // Set the selected text range to move cursor
+        let result = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axValue)
+
+        if result != .success {
+            print("[AccessibilityHelper] Failed to set cursor position: \(result.rawValue)")
+        }
     }
 
     /// Check if accessibility permissions are granted

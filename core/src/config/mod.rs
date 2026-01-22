@@ -135,6 +135,8 @@ pub struct FullConfig {
     pub skills: Option<SkillsConfig>,
     #[serde(default)]
     pub policies: PoliciesConfig,
+    #[serde(default)]
+    pub typo_correction: TypoCorrectionConfig,
 }
 
 impl From<Config> for FullConfig {
@@ -160,6 +162,7 @@ impl From<Config> for FullConfig {
             smart_matching: config.smart_matching,
             skills: Some(config.skills),
             policies: config.policies,
+            typo_correction: config.typo_correction,
         }
     }
 }

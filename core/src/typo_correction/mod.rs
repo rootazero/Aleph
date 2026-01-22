@@ -84,13 +84,14 @@ impl TypoCorrector {
         }
 
         // Truncate if too long
-        let text_to_correct = if text.chars().count() > self.config.max_length {
+        let max_len = self.config.max_length as usize;
+        let text_to_correct = if text.chars().count() > max_len {
             warn!(
                 "Text exceeds max_length ({}), truncating to {} characters",
                 text.chars().count(),
-                self.config.max_length
+                max_len
             );
-            text.chars().take(self.config.max_length).collect::<String>()
+            text.chars().take(max_len).collect::<String>()
         } else {
             text.to_string()
         };
@@ -159,7 +160,7 @@ mod tests {
             enabled: true,
             provider: Some("test".to_string()),
             model: None,
-            timeout_seconds: 5,
+            timeout_seconds: 30,
             max_length: 2000,
         }
     }

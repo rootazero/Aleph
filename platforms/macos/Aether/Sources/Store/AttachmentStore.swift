@@ -91,10 +91,10 @@ final class AttachmentStore: @unchecked Sendable {
     func getAttachment(id: String) -> StoredAttachment? {
         do {
             // dbRead returns T?, and fetchOne returns StoredAttachment?
-            // so we need to flatten the double optional
+            // so we need to flatten the double optional with flatMap
             return try ConversationStore.shared.dbRead { db in
                 try StoredAttachment.fetchOne(db, key: id)
-            } ?? nil
+            }.flatMap { $0 }
         } catch {
             print("[AttachmentStore] Failed to fetch attachment: \(error)")
             return nil

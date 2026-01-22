@@ -77,54 +77,35 @@ final class TypoCorrectionCoordinator {
             return
         }
 
-        // 2. Remove trailing spaces (the two spaces from the trigger)
-        var cleanText = text
-        // Remove up to 2 trailing spaces (the trigger spaces)
-        var spacesRemoved = 0
-        while cleanText.hasSuffix(" ") && spacesRemoved < 2 {
-            cleanText.removeLast()
-            spacesRemoved += 1
-        }
-
-        // 3. Check if there's any meaningful content
-        if cleanText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // 2. Check if there's any meaningful content
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             print("[TypoCorrectionCoordinator] No meaningful content to correct")
-            // Just remove the trigger spaces
-            accessibilityHelper.setFocusedText(cleanText)
             return
         }
 
-        // 4. Get the AetherCore instance
-        guard let core = DependencyContainer.shared.core else {
+        // 3. Get the AetherCore instance from AppDelegate
+        guard let core = (NSApplication.shared.delegate as? AppDelegate)?.core else {
             print("[TypoCorrectionCoordinator] AetherCore not initialized")
             showNotification(title: "Typo Correction", message: "Service not ready")
-            // Restore text without trigger spaces
-            accessibilityHelper.setFocusedText(cleanText)
             return
         }
 
-        // 5. Call the Rust core for correction
-        print("[TypoCorrectionCoordinator] Sending text to AI for correction (\(cleanText.count) chars)")
+        // 4. Call the Rust core for correction
+        // Note: This is a synchronous call that blocks briefly during the network request.
+        // The Rust side uses its own tokio runtime to handle the async network call.
+        print("[TypoCorrectionCoordinator] Sending text to AI for correction (\(text.count) chars)")
 
-        let result = await core.correctTypo(text: cleanText)
+        let result = core.correctTypo(text: text)
 
-        // 6. Handle the result
+        // 5. Handle the result - full text replacement (AI handles trailing spaces)
         switch result {
-        case .success(let correctedText, let hasChanges):
-            if hasChanges {
-                print("[TypoCorrectionCoordinator] Text corrected, applying changes")
-                accessibilityHelper.setFocusedText(correctedText)
-            } else {
-                print("[TypoCorrectionCoordinator] No corrections needed")
-                // Remove trigger spaces
-                accessibilityHelper.setFocusedText(cleanText)
-            }
+        case .success(let correctedText, _):
+            print("[TypoCorrectionCoordinator] Text corrected, applying changes")
+            accessibilityHelper.setFocusedText(correctedText)
 
         case .error(let message):
             print("[TypoCorrectionCoordinator] Correction failed: \(message)")
             showNotification(title: "Typo Correction Failed", message: message)
-            // Restore text without trigger spaces
-            accessibilityHelper.setFocusedText(cleanText)
         }
     }
 

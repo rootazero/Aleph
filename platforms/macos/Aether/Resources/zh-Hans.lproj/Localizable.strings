@@ -299,6 +299,15 @@
 "settings.behavior.window_visibility" = "窗口显示";
 "settings.behavior.keep_window_visible" = "处理时保持窗口可见";
 "settings.behavior.keep_window_visible_description" = "开启后，AI处理时对话窗口保持可见；关闭后窗口会暂时隐藏，显示处理指示器。";
+"settings.behavior.typo_correction" = "输入法纠错";
+"settings.behavior.typo_correction_enable" = "启用输入法纠错";
+"settings.behavior.typo_correction_description" = "使用AI自动修正中英文输入错误，包括同音字、拼写错误、前后鼻音等常见输入法问题。";
+"settings.behavior.typo_correction_trigger" = "双击空格键（200毫秒内）触发纠错";
+"settings.behavior.typo_correction_provider" = "AI 提供商";
+"settings.behavior.typo_correction_provider_none" = "请选择提供商...";
+"settings.behavior.typo_correction_model" = "模型（可选）";
+"settings.behavior.typo_correction_model_placeholder" = "例如：gpt-4o-mini";
+"settings.behavior.typo_correction_model_hint" = "留空则使用提供商默认模型";
 
 // MARK: - Settings Window - Trigger System (Hotkey Configuration)
 "settings.trigger.title" = "触发热键";

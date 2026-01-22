@@ -325,6 +325,15 @@ dictionary BehaviorConfig {
   u32 typing_speed;      // Characters per second for typewriter mode (10-200)
 };
 
+// Typo correction configuration (double-space trigger)
+dictionary TypoCorrectionConfig {
+  boolean enabled;           // Whether typo correction is enabled
+  string? provider;          // Provider name (e.g., "openai", "gemini")
+  string? model;             // Optional model override (e.g., "gpt-4o-mini")
+  u64 timeout_seconds;       // Timeout for correction requests (default: 5)
+  u64 max_length;            // Maximum text length to process (default: 2000)
+};
+
 // Trigger configuration (hotkey-system-refactor)
 // Controls hotkeys for Replace and Append operations
 dictionary TriggerConfig {
@@ -439,6 +448,7 @@ dictionary FullConfig {
   SmartMatchingConfig smart_matching;
   SkillsConfig? skills;  // Skills configuration (add-skills-capability)
   PoliciesConfig policies;  // Mechanism-policy separation configuration
+  TypoCorrectionConfig typo_correction;  // Typo correction configuration (double-space trigger)
 };
 
 // =============================================================================
@@ -1067,6 +1077,9 @@ interface AetherCore {
     void update_search_config(SearchConfig search);
 
     [Throws=AetherFfiError]
+    void update_typo_correction_config(TypoCorrectionConfig typo_correction);
+
+    [Throws=AetherFfiError]
     void update_policies(PoliciesConfig policies);
 
     // Test search provider with ad-hoc config (Config Management)
@@ -1466,8 +1479,7 @@ interface AetherCore {
     // ===== TYPO CORRECTION =====
 
     // Correct typos in text using AI
-    // Bypasses complex routing for minimal latency
-    [Async]
+    // Bypasses complex routing for minimal latency (sync method, uses internal runtime)
     TypoCorrectionResult correct_typo(string text);
 };
 

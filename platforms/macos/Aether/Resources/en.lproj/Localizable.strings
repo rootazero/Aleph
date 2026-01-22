@@ -299,6 +299,15 @@
 "settings.behavior.window_visibility" = "Window Visibility";
 "settings.behavior.keep_window_visible" = "Keep Window Visible During Processing";
 "settings.behavior.keep_window_visible_description" = "When enabled, the conversation window stays visible during AI processing. When disabled, the window hides and a processing indicator appears instead.";
+"settings.behavior.typo_correction" = "Typo Correction";
+"settings.behavior.typo_correction_enable" = "Enable Typo Correction";
+"settings.behavior.typo_correction_description" = "Automatically fix typos and common input errors in Chinese and English text using AI. Great for input method errors and spelling mistakes.";
+"settings.behavior.typo_correction_trigger" = "Double-tap Space (within 200ms) to trigger correction";
+"settings.behavior.typo_correction_provider" = "AI Provider";
+"settings.behavior.typo_correction_provider_none" = "Select a provider...";
+"settings.behavior.typo_correction_model" = "Model (optional)";
+"settings.behavior.typo_correction_model_placeholder" = "e.g., gpt-4o-mini";
+"settings.behavior.typo_correction_model_hint" = "Leave empty to use the provider's default model";
 
 // MARK: - Settings Window - Trigger Hotkeys
 "settings.trigger.title" = "Trigger Hotkeys";

@@ -24,6 +24,12 @@ struct BehaviorSettingsView: View {
     @State private var piiScrubSSN: Bool = true
     @State private var piiScrubCreditCard: Bool = true
 
+    // Typo correction settings
+    @State private var typoCorrectionEnabled: Bool = false
+    @State private var typoCorrectionProvider: String = ""
+    @State private var typoCorrectionModel: String = ""
+    @State private var availableProviders: [String] = []
+
     // Saved output settings (for comparison)
     @State private var savedOutputMode: OutputMode = .typewriter
     @State private var savedTypingSpeed: Double = 50.0
@@ -34,6 +40,11 @@ struct BehaviorSettingsView: View {
     @State private var savedPiiScrubPhone: Bool = true
     @State private var savedPiiScrubSSN: Bool = true
     @State private var savedPiiScrubCreditCard: Bool = true
+
+    // Saved typo correction settings (for comparison)
+    @State private var savedTypoCorrectionEnabled: Bool = false
+    @State private var savedTypoCorrectionProvider: String = ""
+    @State private var savedTypoCorrectionModel: String = ""
 
     // UI state
     @State private var showingPreview = false
@@ -50,6 +61,8 @@ struct BehaviorSettingsView: View {
                     if outputMode == .typewriter {
                         typingSpeedCard
                     }
+
+                    typoCorrectionCard
 
                     piiScrubbingCard
                 }
@@ -81,6 +94,9 @@ struct BehaviorSettingsView: View {
         .onChange(of: piiScrubPhone) { _, _ in syncUnsavedChanges() }
         .onChange(of: piiScrubSSN) { _, _ in syncUnsavedChanges() }
         .onChange(of: piiScrubCreditCard) { _, _ in syncUnsavedChanges() }
+        .onChange(of: typoCorrectionEnabled) { _, _ in syncUnsavedChanges() }
+        .onChange(of: typoCorrectionProvider) { _, _ in syncUnsavedChanges() }
+        .onChange(of: typoCorrectionModel) { _, _ in syncUnsavedChanges() }
         .onChange(of: isSaving) { _, _ in syncUnsavedChanges() }
     }
 
@@ -241,6 +257,75 @@ struct BehaviorSettingsView: View {
         }
     }
 
+    private var typoCorrectionCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label(L("settings.behavior.typo_correction"), systemImage: "character.cursor.ibeam")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                Toggle(L("settings.behavior.typo_correction_enable"), isOn: $typoCorrectionEnabled)
+                    .toggleStyle(.switch)
+                    .font(DesignTokens.Typography.body)
+
+                Text(L("settings.behavior.typo_correction_description"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                if typoCorrectionEnabled {
+                    Divider()
+
+                    // Trigger info
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        Image(systemName: "keyboard")
+                            .foregroundColor(DesignTokens.Colors.info)
+                        Text(L("settings.behavior.typo_correction_trigger"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .padding(DesignTokens.Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(DesignTokens.Colors.info.opacity(0.05))
+                    .cornerRadius(DesignTokens.CornerRadius.small)
+
+                    // Provider picker
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                        Text(L("settings.behavior.typo_correction_provider"))
+                            .font(DesignTokens.Typography.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        Picker("", selection: $typoCorrectionProvider) {
+                            Text(L("settings.behavior.typo_correction_provider_none")).tag("")
+                            ForEach(availableProviders, id: \.self) { provider in
+                                Text(provider).tag(provider)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+
+                    // Model input (optional)
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                        Text(L("settings.behavior.typo_correction_model"))
+                            .font(DesignTokens.Typography.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        TextField(L("settings.behavior.typo_correction_model_placeholder"), text: $typoCorrectionModel)
+                            .textFieldStyle(.roundedBorder)
+
+                        Text(L("settings.behavior.typo_correction_model_hint"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                }
+            }
+            .padding(DesignTokens.Spacing.md)
+            .background(DesignTokens.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+        }
+    }
+
     @ViewBuilder
     private func piiToggle(
         title: String,
@@ -276,7 +361,10 @@ struct BehaviorSettingsView: View {
                piiScrubEmail != savedPiiScrubEmail ||
                piiScrubPhone != savedPiiScrubPhone ||
                piiScrubSSN != savedPiiScrubSSN ||
-               piiScrubCreditCard != savedPiiScrubCreditCard
+               piiScrubCreditCard != savedPiiScrubCreditCard ||
+               typoCorrectionEnabled != savedTypoCorrectionEnabled ||
+               typoCorrectionProvider != savedTypoCorrectionProvider ||
+               typoCorrectionModel != savedTypoCorrectionModel
     }
 
     // MARK: - Helpers
@@ -326,6 +414,18 @@ struct BehaviorSettingsView: View {
                         piiScrubCreditCard = pii.scrubCreditCard
                         savedPiiScrubCreditCard = piiScrubCreditCard
                     }
+
+                    // Load typo correction settings
+                    let typoConfig = config.typoCorrection
+                    typoCorrectionEnabled = typoConfig.enabled
+                    savedTypoCorrectionEnabled = typoConfig.enabled
+                    typoCorrectionProvider = typoConfig.provider ?? ""
+                    savedTypoCorrectionProvider = typoConfig.provider ?? ""
+                    typoCorrectionModel = typoConfig.model ?? ""
+                    savedTypoCorrectionModel = typoConfig.model ?? ""
+
+                    // Populate available providers from config
+                    availableProviders = config.providers.map { $0.name }
                 }
             } catch {
                 print("Failed to load behavior settings: \(error)")
@@ -380,10 +480,21 @@ struct BehaviorSettingsView: View {
 
             try core.updateSearchConfig(search: searchConfig)
 
+            // Save typo correction config
+            let typoConfig = TypoCorrectionConfig(
+                enabled: typoCorrectionEnabled,
+                provider: typoCorrectionProvider.isEmpty ? nil : typoCorrectionProvider,
+                model: typoCorrectionModel.isEmpty ? nil : typoCorrectionModel,
+                timeoutSeconds: 5,
+                maxLength: 2000
+            )
+            try core.updateTypoCorrectionConfig(typoCorrection: typoConfig)
+
             print("Behavior settings saved successfully:")
             print("  Output Mode: \(outputMode.rawValue)")
             print("  Typing Speed: \(Int(typingSpeed))")
             print("  PII Scrubbing Enabled: \(piiEnabled)")
+            print("  Typo Correction Enabled: \(typoCorrectionEnabled)")
 
             await MainActor.run {
                 // Update saved state to match current state
@@ -394,6 +505,9 @@ struct BehaviorSettingsView: View {
                 savedPiiScrubPhone = piiScrubPhone
                 savedPiiScrubSSN = piiScrubSSN
                 savedPiiScrubCreditCard = piiScrubCreditCard
+                savedTypoCorrectionEnabled = typoCorrectionEnabled
+                savedTypoCorrectionProvider = typoCorrectionProvider
+                savedTypoCorrectionModel = typoCorrectionModel
 
                 isSaving = false
                 errorMessage = nil
@@ -422,6 +536,9 @@ struct BehaviorSettingsView: View {
         piiScrubPhone = savedPiiScrubPhone
         piiScrubSSN = savedPiiScrubSSN
         piiScrubCreditCard = savedPiiScrubCreditCard
+        typoCorrectionEnabled = savedTypoCorrectionEnabled
+        typoCorrectionProvider = savedTypoCorrectionProvider
+        typoCorrectionModel = savedTypoCorrectionModel
         errorMessage = nil
     }
 

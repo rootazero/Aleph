@@ -28,14 +28,14 @@ pub struct TypoCorrectionConfig {
 
     /// Maximum text length to process (characters)
     #[serde(default = "default_max_length")]
-    pub max_length: usize,
+    pub max_length: u64,
 }
 
 fn default_timeout() -> u64 {
-    5
+    30
 }
 
-fn default_max_length() -> usize {
+fn default_max_length() -> u64 {
     2000
 }
 
@@ -61,7 +61,7 @@ mod tests {
         assert!(!config.enabled);
         assert!(config.provider.is_none());
         assert!(config.model.is_none());
-        assert_eq!(config.timeout_seconds, 5);
+        assert_eq!(config.timeout_seconds, 30);
         assert_eq!(config.max_length, 2000);
     }
 
@@ -94,7 +94,7 @@ mod tests {
         assert!(config.enabled);
         assert_eq!(config.provider, Some("gemini".to_string()));
         assert!(config.model.is_none());
-        assert_eq!(config.timeout_seconds, 5); // default
+        assert_eq!(config.timeout_seconds, 30); // default
         assert_eq!(config.max_length, 2000); // default
     }
 }

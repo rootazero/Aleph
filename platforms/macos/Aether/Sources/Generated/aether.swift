@@ -668,7 +668,7 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func confirmTaskPlan(planId: String, confirmed: Bool)  -> Bool
     
-    func correctTypo(text: String) async  -> TypoCorrectionResult
+    func correctTypo(text: String)  -> TypoCorrectionResult
     
     func deleteGenerationProvider(name: String) throws 
     
@@ -845,6 +845,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func updateShortcuts(shortcuts: ShortcutsConfig) throws 
     
     func updateTriggerConfig(trigger: TriggerConfig) throws 
+    
+    func updateTypoCorrectionConfig(typoCorrection: TypoCorrectionConfig) throws 
     
     func validateRegex(pattern: String) throws  -> Bool
     
@@ -1168,22 +1170,12 @@ open func confirmTaskPlan(planId: String, confirmed: Bool) -> Bool {
 })
 }
     
-open func correctTypo(text: String)async  -> TypoCorrectionResult {
-    return
-        try!  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_aethecore_fn_method_aethercore_correct_typo(
-                    self.uniffiClonePointer(),
-                    FfiConverterString.lower(text)
-                )
-            },
-            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
-            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
-            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterTypeTypoCorrectionResult.lift,
-            errorHandler: nil
-            
-        )
+open func correctTypo(text: String) -> TypoCorrectionResult {
+    return try!  FfiConverterTypeTypoCorrectionResult.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_correct_typo(self.uniffiClonePointer(),
+        FfiConverterString.lower(text),$0
+    )
+})
 }
     
 open func deleteGenerationProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
@@ -1851,6 +1843,13 @@ open func updateShortcuts(shortcuts: ShortcutsConfig)throws  {try rustCallWithEr
 open func updateTriggerConfig(trigger: TriggerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_update_trigger_config(self.uniffiClonePointer(),
         FfiConverterTypeTriggerConfig.lower(trigger),$0
+    )
+}
+}
+    
+open func updateTypoCorrectionConfig(typoCorrection: TypoCorrectionConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_typo_correction_config(self.uniffiClonePointer(),
+        FfiConverterTypeTypoCorrectionConfig.lower(typoCorrection),$0
     )
 }
 }
@@ -4491,10 +4490,11 @@ public struct FullConfig {
     public var smartMatching: SmartMatchingConfig
     public var skills: SkillsConfig?
     public var policies: PoliciesConfig
+    public var typoCorrection: TypoCorrectionConfig
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?, smartMatching: SmartMatchingConfig, skills: SkillsConfig?, policies: PoliciesConfig) {
+    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?, smartMatching: SmartMatchingConfig, skills: SkillsConfig?, policies: PoliciesConfig, typoCorrection: TypoCorrectionConfig) {
         self.defaultHotkey = defaultHotkey
         self.general = general
         self.memory = memory
@@ -4507,6 +4507,7 @@ public struct FullConfig {
         self.smartMatching = smartMatching
         self.skills = skills
         self.policies = policies
+        self.typoCorrection = typoCorrection
     }
 }
 
@@ -4550,6 +4551,9 @@ extension FullConfig: Equatable, Hashable {
         if lhs.policies != rhs.policies {
             return false
         }
+        if lhs.typoCorrection != rhs.typoCorrection {
+            return false
+        }
         return true
     }
 
@@ -4566,6 +4570,7 @@ extension FullConfig: Equatable, Hashable {
         hasher.combine(smartMatching)
         hasher.combine(skills)
         hasher.combine(policies)
+        hasher.combine(typoCorrection)
     }
 }
 
@@ -4588,7 +4593,8 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
                 trigger: FfiConverterOptionTypeTriggerConfig.read(from: &buf), 
                 smartMatching: FfiConverterTypeSmartMatchingConfig.read(from: &buf), 
                 skills: FfiConverterOptionTypeSkillsConfig.read(from: &buf), 
-                policies: FfiConverterTypePoliciesConfig.read(from: &buf)
+                policies: FfiConverterTypePoliciesConfig.read(from: &buf), 
+                typoCorrection: FfiConverterTypeTypoCorrectionConfig.read(from: &buf)
         )
     }
 
@@ -4605,6 +4611,7 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
         FfiConverterTypeSmartMatchingConfig.write(value.smartMatching, into: &buf)
         FfiConverterOptionTypeSkillsConfig.write(value.skills, into: &buf)
         FfiConverterTypePoliciesConfig.write(value.policies, into: &buf)
+        FfiConverterTypeTypoCorrectionConfig.write(value.typoCorrection, into: &buf)
     }
 }
 
@@ -10861,6 +10868,96 @@ public func FfiConverterTypeTriggerConfig_lower(_ value: TriggerConfig) -> RustB
 }
 
 
+public struct TypoCorrectionConfig {
+    public var enabled: Bool
+    public var provider: String?
+    public var model: String?
+    public var timeoutSeconds: UInt64
+    public var maxLength: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, provider: String?, model: String?, timeoutSeconds: UInt64, maxLength: UInt64) {
+        self.enabled = enabled
+        self.provider = provider
+        self.model = model
+        self.timeoutSeconds = timeoutSeconds
+        self.maxLength = maxLength
+    }
+}
+
+
+
+extension TypoCorrectionConfig: Equatable, Hashable {
+    public static func ==(lhs: TypoCorrectionConfig, rhs: TypoCorrectionConfig) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.provider != rhs.provider {
+            return false
+        }
+        if lhs.model != rhs.model {
+            return false
+        }
+        if lhs.timeoutSeconds != rhs.timeoutSeconds {
+            return false
+        }
+        if lhs.maxLength != rhs.maxLength {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(provider)
+        hasher.combine(model)
+        hasher.combine(timeoutSeconds)
+        hasher.combine(maxLength)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTypoCorrectionConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TypoCorrectionConfig {
+        return
+            try TypoCorrectionConfig(
+                enabled: FfiConverterBool.read(from: &buf), 
+                provider: FfiConverterOptionString.read(from: &buf), 
+                model: FfiConverterOptionString.read(from: &buf), 
+                timeoutSeconds: FfiConverterUInt64.read(from: &buf), 
+                maxLength: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TypoCorrectionConfig, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterOptionString.write(value.provider, into: &buf)
+        FfiConverterOptionString.write(value.model, into: &buf)
+        FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
+        FfiConverterUInt64.write(value.maxLength, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTypoCorrectionConfig_lift(_ buf: RustBuffer) throws -> TypoCorrectionConfig {
+    return try FfiConverterTypeTypoCorrectionConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTypoCorrectionConfig_lower(_ value: TypoCorrectionConfig) -> RustBuffer {
+    return FfiConverterTypeTypoCorrectionConfig.lower(value)
+}
+
+
 public struct UnifiedToolInfo {
     public var id: String
     public var name: String
@@ -16857,52 +16954,6 @@ fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
         return dict
     }
 }
-private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
-private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
-
-fileprivate nonisolated(unsafe) let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
-
-fileprivate func uniffiRustCallAsync<F, T>(
-    rustFutureFunc: () -> UInt64,
-    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
-    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
-    freeFunc: (UInt64) -> (),
-    liftFunc: (F) throws -> T,
-    errorHandler: ((RustBuffer) throws -> Swift.Error)?
-) async throws -> T {
-    // Make sure to call uniffiEnsureInitialized() since future creation doesn't have a
-    // RustCallStatus param, so doesn't use makeRustCall()
-    uniffiEnsureInitialized()
-    let rustFuture = rustFutureFunc()
-    defer {
-        freeFunc(rustFuture)
-    }
-    var pollResult: Int8;
-    repeat {
-        pollResult = await withUnsafeContinuation {
-            pollFunc(
-                rustFuture,
-                uniffiFutureContinuationCallback,
-                uniffiContinuationHandleMap.insert(obj: $0)
-            )
-        }
-    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
-
-    return try liftFunc(makeRustCall(
-        { completeFunc(rustFuture, $0) },
-        errorHandler: errorHandler
-    ))
-}
-
-// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
-// lift the return value or error and resume the suspended function.
-fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
-    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
-        continuation.resume(returning: pollResult)
-    } else {
-        print("uniffiFutureContinuationCallback invalid handle")
-    }
-}
 public func getSkillsDirString()throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_get_skills_dir_string($0
@@ -17140,7 +17191,7 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_confirm_task_plan() != 29235) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_correct_typo() != 2303) {
+    if (uniffi_aethecore_checksum_method_aethercore_correct_typo() != 37546) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_delete_generation_provider() != 6436) {
@@ -17405,6 +17456,9 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_trigger_config() != 15069) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_typo_correction_config() != 37766) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 37438) {
