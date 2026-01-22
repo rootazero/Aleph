@@ -92,7 +92,7 @@ final class AttachmentStore: @unchecked Sendable {
         do {
             return try ConversationStore.shared.dbRead { db in
                 try StoredAttachment.fetchOne(db, key: id)
-            } ?? nil
+            }
         } catch {
             print("[AttachmentStore] Failed to fetch attachment: \(error)")
             return nil

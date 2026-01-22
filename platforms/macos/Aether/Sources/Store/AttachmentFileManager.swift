@@ -414,8 +414,8 @@ extension AttachmentFileManager {
     ///   - url: Remote URL
     ///   - messageId: Associated message ID
     ///   - completion: Callback with relative path on success
-    func downloadAndCache(url: URL, messageId: String, completion: @escaping (String?) -> Void) {
-        let task = URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+    func downloadAndCache(url: URL, messageId: String, completion: @escaping @Sendable (String?) -> Void) {
+        let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
             guard let self = self else {
                 completion(nil)
                 return
