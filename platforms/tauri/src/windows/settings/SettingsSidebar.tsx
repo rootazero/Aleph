@@ -11,6 +11,7 @@ import {
   Brain,
   Palette,
   Sparkles,
+  Image,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
@@ -21,6 +22,7 @@ export type SettingsTab =
   | 'behavior'
   | 'providers'
   | 'generation'
+  | 'generationProviders'
   | 'memory'
   | 'search'
   | 'mcp'
@@ -53,6 +55,7 @@ const tabGroupsConfig: TabGroupConfig[] = [
     labelKey: 'settings.groups.ai',
     tabs: [
       { id: 'providers', labelKey: 'settings.providers.title', icon: Cpu },
+      { id: 'generationProviders', labelKey: 'settings.generationProviders.title', icon: Image },
       { id: 'generation', labelKey: 'settings.generation.title', icon: Palette },
       { id: 'memory', labelKey: 'settings.memory.title', icon: Brain },
     ],

@@ -11,43 +11,34 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Plus, Star, Trash2, Settings, Eye, EyeOff, Check } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Plus, Star, Trash2, Settings, Eye, EyeOff, Check, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
-import type { ProviderConfig } from '@/lib/commands';
-import { presetProviders, type PresetProvider } from '@/lib/presetProviders';
-
-const providerIcons: Record<string, string> = {
-  openai: '🤖',
-  anthropic: '🧠',
-  gemini: '✨',
-  ollama: '🦙',
-  custom: '⚙️',
-};
+import {
+  generationProviders,
+  categoryMeta,
+  type GenerationCategory,
+  type GenerationPresetProvider,
+} from '@/lib/generationPresets';
+import type { GenerationProviderConfig } from '@/lib/commands';
 
 // Check if a preset provider is already configured
 function isPresetConfigured(
   presetId: string,
-  providers: ProviderConfig[]
-): ProviderConfig | undefined {
+  providers: GenerationProviderConfig[]
+): GenerationProviderConfig | undefined {
   return providers.find(
     (p) => p.id === presetId || p.name.toLowerCase() === presetId.toLowerCase()
   );
 }
 
-function PresetProviderCard({
+function GenerationProviderCard({
   preset,
   isConfigured,
   onClick,
 }: {
-  preset: PresetProvider;
+  preset: GenerationPresetProvider;
   isConfigured: boolean;
   onClick: () => void;
 }) {
@@ -57,17 +48,25 @@ function PresetProviderCard({
   return (
     <button
       onClick={onClick}
+      disabled={preset.isUnsupported}
       className={cn(
-        'relative flex flex-col items-center gap-2 p-4 rounded-card border transition-all',
-        'hover:border-primary/50 hover:bg-accent/30',
-        isConfigured
+        'relative flex flex-col items-center gap-2 p-4 rounded-card border transition-all text-left',
+        preset.isUnsupported
+          ? 'opacity-50 cursor-not-allowed border-border/50 bg-muted/30'
+          : 'hover:border-primary/50 hover:bg-accent/30',
+        isConfigured && !preset.isUnsupported
           ? 'border-primary/30 bg-primary/5'
           : 'border-border bg-card'
       )}
     >
-      {isConfigured && (
+      {isConfigured && !preset.isUnsupported && (
         <div className="absolute top-2 right-2">
           <Check className="h-4 w-4 text-primary" />
+        </div>
+      )}
+      {preset.isUnsupported && (
+        <div className="absolute top-2 right-2">
+          <AlertCircle className="h-4 w-4 text-muted-foreground" />
         </div>
       )}
       <div
@@ -76,22 +75,26 @@ function PresetProviderCard({
       >
         <Icon className="h-5 w-5" style={{ color: preset.color }} />
       </div>
-      <div className="text-center">
+      <div className="text-center w-full">
         <p className="text-body font-medium text-foreground">{preset.name}</p>
-        <p className="text-caption text-muted-foreground line-clamp-1">
+        <p className="text-caption text-muted-foreground line-clamp-2">
           {preset.description}
         </p>
       </div>
-      {isConfigured && (
-        <span className="text-xs text-primary font-medium">
-          {t('settings.providers.configured')}
+      {preset.isUnsupported ? (
+        <span className="text-xs text-muted-foreground">
+          {t('settings.generationProviders.comingSoon')}
         </span>
-      )}
+      ) : isConfigured ? (
+        <span className="text-xs text-primary font-medium">
+          {t('settings.generationProviders.configured')}
+        </span>
+      ) : null}
     </button>
   );
 }
 
-function ProviderCard({
+function ConfiguredProviderCard({
   provider,
   isDefault,
   onToggle,
@@ -99,7 +102,7 @@ function ProviderCard({
   onEdit,
   onDelete,
 }: {
-  provider: ProviderConfig;
+  provider: GenerationProviderConfig;
   isDefault: boolean;
   onToggle: () => void;
   onSetDefault: () => void;
@@ -109,7 +112,12 @@ function ProviderCard({
   const { t } = useTranslation();
 
   // Find matching preset for icon
-  const matchingPreset = presetProviders.find(
+  const allPresets = [
+    ...generationProviders.image,
+    ...generationProviders.video,
+    ...generationProviders.audio,
+  ];
+  const matchingPreset = allPresets.find(
     (p) => p.id === provider.id || p.name.toLowerCase() === provider.name.toLowerCase()
   );
 
@@ -133,7 +141,9 @@ function ProviderCard({
               />
             </div>
           ) : (
-            <span className="text-2xl">{providerIcons[provider.type]}</span>
+            <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center">
+              <Settings className="h-4 w-4 text-muted-foreground" />
+            </div>
           )}
           <div>
             <div className="flex items-center gap-2">
@@ -145,7 +155,7 @@ function ProviderCard({
               )}
             </div>
             <span className="text-caption text-muted-foreground">
-              {t(`settings.providers.types.${provider.type}`)}
+              {t(`settings.generationProviders.categories.${provider.category}`)}
               {provider.model && ` · ${provider.model}`}
             </span>
           </div>
@@ -180,7 +190,7 @@ function ProviderCard({
   );
 }
 
-function ProviderDialog({
+function GenerationProviderDialog({
   open,
   onOpenChange,
   provider,
@@ -189,15 +199,16 @@ function ProviderDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  provider: ProviderConfig | null;
-  preset: PresetProvider | null;
-  onSave: (provider: ProviderConfig) => void;
+  provider: GenerationProviderConfig | null;
+  preset: GenerationPresetProvider | null;
+  onSave: (provider: GenerationProviderConfig) => void;
 }) {
   const { t } = useTranslation();
-  const [form, setForm] = useState<ProviderConfig>({
+  const [form, setForm] = useState<GenerationProviderConfig>({
     id: crypto.randomUUID(),
     name: '',
     type: 'openai',
+    category: 'image',
     api_key: '',
     base_url: '',
     model: '',
@@ -215,6 +226,7 @@ function ProviderDialog({
         id: preset.id,
         name: preset.name,
         type: preset.type,
+        category: preset.category,
         api_key: '',
         base_url: preset.baseUrl || '',
         model: preset.defaultModel,
@@ -226,6 +238,7 @@ function ProviderDialog({
         id: crypto.randomUUID(),
         name: '',
         type: 'openai',
+        category: 'image',
         api_key: '',
         base_url: '',
         model: '',
@@ -243,12 +256,10 @@ function ProviderDialog({
   };
 
   const dialogTitle = provider
-    ? t('settings.providers.editProvider')
+    ? t('settings.generationProviders.editProvider')
     : preset
-      ? t('settings.providers.configurePreset', { name: preset.name })
-      : t('settings.providers.addProvider');
-
-  const showBaseUrl = form.type === 'custom' || form.type === 'ollama' || form.base_url;
+      ? t('settings.generationProviders.configurePreset', { name: preset.name })
+      : t('settings.generationProviders.addProvider');
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -256,52 +267,32 @@ function ProviderDialog({
         <DialogHeader>
           <DialogTitle>{dialogTitle}</DialogTitle>
           <DialogDescription>
-            {t('settings.providers.configureDescription')}
+            {t('settings.generationProviders.configureDescription')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <label className="text-body font-medium">{t('settings.providers.providerName')}</label>
+            <label className="text-body font-medium">
+              {t('settings.generationProviders.providerName')}
+            </label>
             <Input
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="My OpenAI"
+              placeholder="My DALL-E"
             />
           </div>
 
           <div className="space-y-2">
-            <label className="text-body font-medium">{t('settings.providers.providerType')}</label>
-            <Select
-              value={form.type}
-              onValueChange={(value) =>
-                setForm({
-                  ...form,
-                  type: value as ProviderConfig['type'],
-                })
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai">{t('settings.providers.types.openai')}</SelectItem>
-                <SelectItem value="anthropic">{t('settings.providers.types.anthropic')}</SelectItem>
-                <SelectItem value="gemini">{t('settings.providers.types.gemini')}</SelectItem>
-                <SelectItem value="ollama">{t('settings.providers.types.ollama')}</SelectItem>
-                <SelectItem value="custom">{t('settings.providers.types.custom')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-body font-medium">{t('settings.providers.apiKey')}</label>
+            <label className="text-body font-medium">
+              {t('settings.generationProviders.apiKey')}
+            </label>
             <div className="relative">
               <Input
                 type={showApiKey ? 'text' : 'password'}
                 value={form.api_key || ''}
                 onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-                placeholder={form.type === 'ollama' ? t('common.notRequired') : 'sk-...'}
+                placeholder="sk-..."
                 className="pr-10"
               />
               <button
@@ -318,37 +309,27 @@ function ProviderDialog({
             </div>
           </div>
 
-          {showBaseUrl && (
+          {form.base_url && (
             <div className="space-y-2">
-              <label className="text-body font-medium">{t('settings.providers.baseUrl')}</label>
+              <label className="text-body font-medium">
+                {t('settings.generationProviders.baseUrl')}
+              </label>
               <Input
                 value={form.base_url || ''}
                 onChange={(e) => setForm({ ...form, base_url: e.target.value })}
-                placeholder={
-                  form.type === 'ollama'
-                    ? 'http://localhost:11434'
-                    : 'https://api.example.com/v1'
-                }
+                placeholder="https://api.example.com"
               />
             </div>
           )}
 
           <div className="space-y-2">
-            <label className="text-body font-medium">{t('settings.providers.model')}</label>
+            <label className="text-body font-medium">
+              {t('settings.generationProviders.model')}
+            </label>
             <Input
               value={form.model || ''}
               onChange={(e) => setForm({ ...form, model: e.target.value })}
-              placeholder={
-                form.type === 'openai'
-                  ? 'gpt-4o'
-                  : form.type === 'anthropic'
-                    ? 'claude-3-5-sonnet'
-                    : form.type === 'gemini'
-                      ? 'gemini-2.0-flash'
-                      : form.type === 'ollama'
-                        ? 'llama3.2'
-                        : 'model-name'
-              }
+              placeholder={preset?.defaultModel || 'model-name'}
             />
           </div>
         </div>
@@ -366,60 +347,74 @@ function ProviderDialog({
   );
 }
 
-export function ProvidersSettings() {
+export function GenerationProvidersSettings() {
   const { t } = useTranslation();
-  const providers = useSettingsStore((s) => s.providers);
-  const updateProviders = useSettingsStore((s) => s.updateProviders);
+  const generationProvidersState = useSettingsStore((s) => s.generationProviders);
+  const updateGenerationProviders = useSettingsStore((s) => s.updateGenerationProviders);
 
+  const [activeCategory, setActiveCategory] = useState<GenerationCategory>('image');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingProvider, setEditingProvider] = useState<ProviderConfig | null>(null);
-  const [selectedPreset, setSelectedPreset] = useState<PresetProvider | null>(null);
+  const [editingProvider, setEditingProvider] = useState<GenerationProviderConfig | null>(null);
+  const [selectedPreset, setSelectedPreset] = useState<GenerationPresetProvider | null>(null);
+
+  // Get providers for the active category
+  const categoryProviders = generationProvidersState.providers.filter(
+    (p) => p.category === activeCategory
+  );
 
   const handleToggle = (id: string) => {
-    updateProviders({
-      providers: providers.providers.map((p) =>
+    updateGenerationProviders({
+      providers: generationProvidersState.providers.map((p) =>
         p.id === id ? { ...p, enabled: !p.enabled } : p
       ),
     });
   };
 
-  const handleSetDefault = (id: string) => {
-    updateProviders({
-      default_provider_id: id,
-      providers: providers.providers.map((p) => ({
+  const handleSetDefault = (id: string, category: GenerationCategory) => {
+    const defaultKey = `default_${category}_provider_id` as keyof typeof generationProvidersState;
+    updateGenerationProviders({
+      [defaultKey]: id,
+      providers: generationProvidersState.providers.map((p) => ({
         ...p,
-        is_default: p.id === id,
+        is_default: p.category === category ? p.id === id : p.is_default,
       })),
     });
   };
 
-  const handleEdit = (provider: ProviderConfig) => {
+  const handleEdit = (provider: GenerationProviderConfig) => {
     setEditingProvider(provider);
     setSelectedPreset(null);
     setDialogOpen(true);
   };
 
   const handleDelete = (id: string) => {
-    updateProviders({
-      providers: providers.providers.filter((p) => p.id !== id),
-      default_provider_id:
-        providers.default_provider_id === id ? '' : providers.default_provider_id,
+    const provider = generationProvidersState.providers.find((p) => p.id === id);
+    if (!provider) return;
+
+    const defaultKey = `default_${provider.category}_provider_id` as keyof typeof generationProvidersState;
+    const currentDefault = generationProvidersState[defaultKey];
+
+    updateGenerationProviders({
+      providers: generationProvidersState.providers.filter((p) => p.id !== id),
+      [defaultKey]: currentDefault === id ? '' : currentDefault,
     });
   };
 
-  const handleSave = (provider: ProviderConfig) => {
-    const existingIndex = providers.providers.findIndex((p) => p.id === provider.id);
+  const handleSave = (provider: GenerationProviderConfig) => {
+    const existingIndex = generationProvidersState.providers.findIndex(
+      (p) => p.id === provider.id
+    );
     if (existingIndex >= 0) {
       // Update existing
-      updateProviders({
-        providers: providers.providers.map((p) =>
+      updateGenerationProviders({
+        providers: generationProvidersState.providers.map((p) =>
           p.id === provider.id ? provider : p
         ),
       });
     } else {
       // Add new
-      updateProviders({
-        providers: [...providers.providers, provider],
+      updateGenerationProviders({
+        providers: [...generationProvidersState.providers, provider],
       });
     }
     setEditingProvider(null);
@@ -432,8 +427,13 @@ export function ProvidersSettings() {
     setDialogOpen(true);
   };
 
-  const handlePresetClick = (preset: PresetProvider) => {
-    const existingProvider = isPresetConfigured(preset.id, providers.providers);
+  const handlePresetClick = (preset: GenerationPresetProvider) => {
+    if (preset.isUnsupported) return;
+
+    const existingProvider = isPresetConfigured(
+      preset.id,
+      generationProvidersState.providers
+    );
     if (existingProvider) {
       // Edit existing provider
       setEditingProvider(existingProvider);
@@ -446,35 +446,58 @@ export function ProvidersSettings() {
     setDialogOpen(true);
   };
 
+  const getDefaultForCategory = (category: GenerationCategory): string => {
+    const key = `default_${category}_provider_id` as keyof typeof generationProvidersState;
+    return generationProvidersState[key] as string;
+  };
+
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-title mb-1">{t('settings.providers.title')}</h1>
+          <h1 className="text-title mb-1">{t('settings.generationProviders.title')}</h1>
           <p className="text-caption text-muted-foreground">
-            {t('settings.providers.description')}
+            {t('settings.generationProviders.description')}
           </p>
         </div>
         <Button onClick={handleAddNew}>
           <Plus className="h-4 w-4 mr-2" />
-          {t('settings.providers.addProvider')}
+          {t('settings.generationProviders.addProvider')}
         </Button>
       </div>
+
+      {/* Category Tabs */}
+      <Tabs
+        value={activeCategory}
+        onValueChange={(v) => setActiveCategory(v as GenerationCategory)}
+      >
+        <TabsList className="grid w-full grid-cols-3">
+          {(Object.keys(categoryMeta) as GenerationCategory[]).map((category) => {
+            const meta = categoryMeta[category];
+            const Icon = meta.icon;
+            return (
+              <TabsTrigger key={category} value={category} className="gap-2">
+                <Icon className="h-4 w-4" />
+                {t(meta.labelKey)}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
+      </Tabs>
 
       {/* Preset Providers Grid */}
       <div className="space-y-3">
         <h2 className="text-body font-medium text-foreground">
-          {t('settings.providers.presets')}
+          {t('settings.generationProviders.presets')}
         </h2>
-        <p className="text-caption text-muted-foreground">
-          {t('settings.providers.presetsDescription')}
-        </p>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-          {presetProviders.map((preset) => (
-            <PresetProviderCard
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {generationProviders[activeCategory].map((preset) => (
+            <GenerationProviderCard
               key={preset.id}
               preset={preset}
-              isConfigured={!!isPresetConfigured(preset.id, providers.providers)}
+              isConfigured={
+                !!isPresetConfigured(preset.id, generationProvidersState.providers)
+              }
               onClick={() => handlePresetClick(preset)}
             />
           ))}
@@ -482,19 +505,19 @@ export function ProvidersSettings() {
       </div>
 
       {/* Configured Providers List */}
-      {providers.providers.length > 0 && (
+      {categoryProviders.length > 0 && (
         <div className="space-y-3">
           <h2 className="text-body font-medium text-foreground">
-            {t('settings.providers.configuredProviders')}
+            {t('settings.generationProviders.configuredProviders')}
           </h2>
           <div className="space-y-3">
-            {providers.providers.map((provider) => (
-              <ProviderCard
+            {categoryProviders.map((provider) => (
+              <ConfiguredProviderCard
                 key={provider.id}
                 provider={provider}
-                isDefault={provider.id === providers.default_provider_id}
+                isDefault={provider.id === getDefaultForCategory(provider.category)}
                 onToggle={() => handleToggle(provider.id)}
-                onSetDefault={() => handleSetDefault(provider.id)}
+                onSetDefault={() => handleSetDefault(provider.id, provider.category)}
                 onEdit={() => handleEdit(provider)}
                 onDelete={() => handleDelete(provider.id)}
               />
@@ -503,15 +526,17 @@ export function ProvidersSettings() {
         </div>
       )}
 
-      {/* Empty state for configured providers */}
-      {providers.providers.length === 0 && (
+      {/* Empty state */}
+      {categoryProviders.length === 0 && (
         <div className="text-center py-8 text-muted-foreground border border-dashed rounded-card">
-          <p>{t('settings.providers.noProviders')}</p>
-          <p className="text-caption mt-1">{t('settings.providers.noProvidersHint')}</p>
+          <p>{t('settings.generationProviders.noProviders')}</p>
+          <p className="text-caption mt-1">
+            {t('settings.generationProviders.noProvidersHint')}
+          </p>
         </div>
       )}
 
-      <ProviderDialog
+      <GenerationProviderDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         provider={editingProvider}

@@ -11,6 +11,7 @@ import { ShortcutsSettings } from './tabs/ShortcutsSettings';
 import { BehaviorSettings } from './tabs/BehaviorSettings';
 import { ProvidersSettings } from './tabs/ProvidersSettings';
 import { GenerationSettings } from './tabs/GenerationSettings';
+import { GenerationProvidersSettings } from './tabs/GenerationProvidersSettings';
 import { MemorySettings } from './tabs/MemorySettings';
 import { McpSettings } from './tabs/McpSettings';
 import { PluginsSettings } from './tabs/PluginsSettings';
@@ -49,6 +50,8 @@ export function SettingsWindow() {
         return <BehaviorSettings />;
       case 'providers':
         return <ProvidersSettings />;
+      case 'generationProviders':
+        return <GenerationProvidersSettings />;
       case 'generation':
         return <GenerationSettings />;
       case 'memory':

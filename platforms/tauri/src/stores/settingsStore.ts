@@ -7,6 +7,7 @@ import {
   type BehaviorSettings,
   type ProvidersSettings,
   type GenerationSettings,
+  type GenerationProvidersSettings,
   type MemorySettings,
   type McpSettings,
   type PluginsSettings,
@@ -25,6 +26,7 @@ interface SettingsStore {
   behavior: BehaviorSettings;
   providers: ProvidersSettings;
   generation: GenerationSettings;
+  generationProviders: GenerationProvidersSettings;
   memory: MemorySettings;
   mcp: McpSettings;
   plugins: PluginsSettings;
@@ -45,6 +47,7 @@ interface SettingsStore {
   updateBehavior: (partial: Partial<BehaviorSettings>) => void;
   updateProviders: (partial: Partial<ProvidersSettings>) => void;
   updateGeneration: (partial: Partial<GenerationSettings>) => void;
+  updateGenerationProviders: (partial: Partial<GenerationProvidersSettings>) => void;
   updateMemory: (partial: Partial<MemorySettings>) => void;
   updateMcp: (partial: Partial<McpSettings>) => void;
   updatePlugins: (partial: Partial<PluginsSettings>) => void;
@@ -90,6 +93,12 @@ const defaultSettings: Settings = {
     frequency_penalty: 0,
     presence_penalty: 0,
     streaming: true,
+  },
+  generationProviders: {
+    providers: [],
+    default_image_provider_id: '',
+    default_video_provider_id: '',
+    default_audio_provider_id: '',
   },
   memory: {
     enabled: true,
@@ -212,6 +221,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }));
   },
 
+  updateGenerationProviders: (partial) => {
+    set((state) => ({
+      generationProviders: { ...state.generationProviders, ...partial },
+      isDirty: true,
+    }));
+  },
+
   updateMemory: (partial) => {
     set((state) => ({
       memory: { ...state.memory, ...partial },
@@ -289,6 +305,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       behavior: state.behavior,
       providers: state.providers,
       generation: state.generation,
+      generationProviders: state.generationProviders,
       memory: state.memory,
       mcp: state.mcp,
       plugins: state.plugins,

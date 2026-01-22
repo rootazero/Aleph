@@ -12,6 +12,8 @@ pub struct Settings {
     pub behavior: BehaviorSettings,
     pub providers: ProvidersSettings,
     pub generation: GenerationSettings,
+    #[serde(default, rename = "generationProviders")]
+    pub generation_providers: GenerationProvidersSettings,
     pub memory: MemorySettings,
     pub mcp: McpSettings,
     pub plugins: PluginsSettings,
@@ -73,6 +75,28 @@ pub struct GenerationSettings {
     pub frequency_penalty: f32,
     pub presence_penalty: f32,
     pub streaming: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationProviderConfig {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub provider_type: String,
+    pub category: String,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub enabled: bool,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationProvidersSettings {
+    pub providers: Vec<GenerationProviderConfig>,
+    pub default_image_provider_id: String,
+    pub default_video_provider_id: String,
+    pub default_audio_provider_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +265,7 @@ impl Default for Settings {
             behavior: BehaviorSettings::default(),
             providers: ProvidersSettings::default(),
             generation: GenerationSettings::default(),
+            generation_providers: GenerationProvidersSettings::default(),
             memory: MemorySettings::default(),
             mcp: McpSettings::default(),
             plugins: PluginsSettings::default(),
@@ -304,6 +329,17 @@ impl Default for GenerationSettings {
             frequency_penalty: 0.0,
             presence_penalty: 0.0,
             streaming: true,
+        }
+    }
+}
+
+impl Default for GenerationProvidersSettings {
+    fn default() -> Self {
+        Self {
+            providers: vec![],
+            default_image_provider_id: String::new(),
+            default_video_provider_id: String::new(),
+            default_audio_provider_id: String::new(),
         }
     }
 }

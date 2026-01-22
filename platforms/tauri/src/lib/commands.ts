@@ -58,6 +58,25 @@ export interface GenerationSettings {
   streaming: boolean;
 }
 
+export interface GenerationProviderConfig {
+  id: string;
+  name: string;
+  type: string;
+  category: 'image' | 'video' | 'audio';
+  api_key?: string;
+  base_url?: string;
+  model?: string;
+  enabled: boolean;
+  is_default: boolean;
+}
+
+export interface GenerationProvidersSettings {
+  providers: GenerationProviderConfig[];
+  default_image_provider_id: string;
+  default_video_provider_id: string;
+  default_audio_provider_id: string;
+}
+
 export interface MemorySettings {
   enabled: boolean;
   auto_save: boolean;
@@ -156,6 +175,7 @@ export interface Settings {
   behavior: BehaviorSettings;
   providers: ProvidersSettings;
   generation: GenerationSettings;
+  generationProviders: GenerationProvidersSettings;
   memory: MemorySettings;
   mcp: McpSettings;
   plugins: PluginsSettings;

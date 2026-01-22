@@ -75,6 +75,7 @@
       "addProvider": "添加提供商",
       "editProvider": "编辑提供商",
       "configureDescription": "配置您的 AI 提供商设置",
+      "configurePreset": "配置 {{name}}",
       "noProviders": "未配置提供商",
       "noProvidersHint": "添加一个提供商以开始使用",
       "providerName": "名称",
@@ -82,12 +83,39 @@
       "apiKey": "API 密钥",
       "baseUrl": "基础 URL",
       "model": "模型",
+      "presets": "快速配置",
+      "presetsDescription": "点击预设供应商快速配置推荐设置",
+      "configured": "已配置",
+      "configuredProviders": "已配置的提供商",
       "types": {
         "openai": "OpenAI",
         "anthropic": "Anthropic",
         "gemini": "Google Gemini",
         "ollama": "Ollama（本地）",
         "custom": "自定义"
+      }
+    },
+    "generationProviders": {
+      "title": "媒体生成",
+      "description": "配置图像、视频和音频生成提供商",
+      "addProvider": "添加提供商",
+      "editProvider": "编辑提供商",
+      "configureDescription": "配置您的媒体生成提供商",
+      "configurePreset": "配置 {{name}}",
+      "noProviders": "此类别未配置提供商",
+      "noProvidersHint": "点击上方的提供商开始配置",
+      "providerName": "名称",
+      "apiKey": "API 密钥",
+      "baseUrl": "基础 URL",
+      "model": "模型",
+      "presets": "可用提供商",
+      "configured": "已配置",
+      "configuredProviders": "已配置的提供商",
+      "comingSoon": "即将支持",
+      "categories": {
+        "image": "图像",
+        "video": "视频",
+        "audio": "音频"
       }
     },
     "generation": {

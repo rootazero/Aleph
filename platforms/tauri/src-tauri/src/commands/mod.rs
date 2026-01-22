@@ -64,16 +64,26 @@ pub fn get_cursor_position() -> Result<Position> {
     }
 }
 
-/// Show halo window at cursor position
+/// Show halo window at fixed screen position (center horizontally, 30% from bottom)
 #[tauri::command]
 pub async fn show_halo_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
-    let position = get_cursor_position()?;
-
     if let Some(window) = app.get_webview_window("halo") {
+        // Get window size
+        let window_size = window
+            .outer_size()
+            .map_err(|e| AetherError::Window(e.to_string()))?;
+
+        // Calculate fixed position: center horizontally, 30% from bottom
+        let (final_x, final_y) = calculate_fixed_position(
+            &app,
+            window_size.width as i32,
+            window_size.height as i32,
+        );
+
         window
             .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: position.x,
-                y: position.y,
+                x: final_x,
+                y: final_y,
             }))
             .map_err(|e| AetherError::Window(e.to_string()))?;
 
@@ -85,10 +95,43 @@ pub async fn show_halo_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
             .emit("halo:activate", ())
             .map_err(|e: tauri::Error| AetherError::Window(e.to_string()))?;
 
-        tracing::debug!("Halo window shown at ({}, {})", position.x, position.y);
+        tracing::debug!("Halo window shown at ({}, {})", final_x, final_y);
     }
 
     Ok(())
+}
+
+/// Calculate fixed window position: center horizontally, 30% from bottom vertically
+fn calculate_fixed_position<R: Runtime>(
+    app: &AppHandle<R>,
+    window_width: i32,
+    window_height: i32,
+) -> (i32, i32) {
+    if let Some(monitor) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| app.available_monitors().ok().and_then(|m| m.into_iter().next()))
+    {
+        let monitor_pos = monitor.position();
+        let monitor_size = monitor.size();
+
+        let screen_width = monitor_size.width as i32;
+        let screen_height = monitor_size.height as i32;
+
+        // Center horizontally
+        let x = monitor_pos.x + (screen_width - window_width) / 2;
+
+        // 30% from bottom = 70% from top
+        let y = monitor_pos.y + (screen_height as f32 * 0.7) as i32 - window_height / 2;
+
+        (x, y)
+    } else {
+        // Fallback: center of a default 1920x1080 screen
+        let x = (1920 - window_width) / 2;
+        let y = (1080.0 * 0.7) as i32 - window_height / 2;
+        (x, y)
+    }
 }
 
 /// Hide halo window

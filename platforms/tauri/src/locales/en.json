@@ -75,6 +75,7 @@
       "addProvider": "Add Provider",
       "editProvider": "Edit Provider",
       "configureDescription": "Configure your AI provider settings",
+      "configurePreset": "Configure {{name}}",
       "noProviders": "No providers configured",
       "noProvidersHint": "Add a provider to get started",
       "providerName": "Name",
@@ -82,12 +83,39 @@
       "apiKey": "API Key",
       "baseUrl": "Base URL",
       "model": "Model",
+      "presets": "Quick Setup",
+      "presetsDescription": "Click a provider to configure it with recommended settings",
+      "configured": "Configured",
+      "configuredProviders": "Configured Providers",
       "types": {
         "openai": "OpenAI",
         "anthropic": "Anthropic",
         "gemini": "Google Gemini",
         "ollama": "Ollama (Local)",
         "custom": "Custom"
+      }
+    },
+    "generationProviders": {
+      "title": "Media Providers",
+      "description": "Configure image, video, and audio generation providers",
+      "addProvider": "Add Provider",
+      "editProvider": "Edit Provider",
+      "configureDescription": "Configure your media generation provider",
+      "configurePreset": "Configure {{name}}",
+      "noProviders": "No providers configured for this category",
+      "noProvidersHint": "Click a provider above to get started",
+      "providerName": "Name",
+      "apiKey": "API Key",
+      "baseUrl": "Base URL",
+      "model": "Model",
+      "presets": "Available Providers",
+      "configured": "Configured",
+      "configuredProviders": "Configured Providers",
+      "comingSoon": "Coming Soon",
+      "categories": {
+        "image": "Image",
+        "video": "Video",
+        "audio": "Audio"
       }
     },
     "generation": {
