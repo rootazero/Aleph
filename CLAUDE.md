@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Aether** is a system-level AI middleware for macOS (primary), Windows, and Linux. It acts as an invisible "ether" connecting user intent with AI models through a frictionless, native interface with zero webview dependencies.
+**Aether** is a system-level AI middleware for macOS (native) and cross-platform (Tauri). It acts as an invisible "ether" connecting user intent with AI models through a frictionless interface.
 
 **Current Status**: Phase 8 Completed (Runtime Manager) | Phase 9 Planned (Production Hardening)
 
@@ -57,16 +57,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Technical Stack
 
-**Architecture**: Rust Core + rig-core + UniFFI + Native UI
-
-**NO WEBVIEWS. NO TAURI. NO ELECTRON.**
+**Architecture**: Rust Core + rig-core + Platform UI
 
 | Layer | Technology |
 |-------|------------|
 | **Rust Core** | rig-core 0.28, rig-sqlite, UniFFI, tokio, reqwest |
-| **macOS UI** | Swift + SwiftUI, NSApplicationMain() entry |
-| **Windows UI** | C# + WinUI 3 (Future) |
-| **Linux UI** | Rust + GTK4 (Future) |
+| **macOS UI** | Swift + SwiftUI (Native), NSApplicationMain() entry |
+| **Cross-Platform** | Tauri 2.0 + React + TypeScript (Windows, Linux) |
+
+> **Note**: Windows native (C#/WinUI 3) has been archived. Use Tauri for cross-platform.
 
 See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for complete technical documentation.
 
@@ -92,10 +91,13 @@ aether/
 │   │   └── ...
 │   └── Cargo.toml             # Features: uniffi, cabi
 ├── platforms/
-│   ├── macos/                 # Swift + SwiftUI
+│   ├── macos/                 # Swift + SwiftUI (Native)
 │   │   ├── project.yml        # XcodeGen config
 │   │   └── Aether/Sources/
-│   └── windows/               # C# + WinUI 3
+│   ├── tauri/                 # Tauri 2.0 + React (Cross-platform)
+│   │   ├── src-tauri/         # Rust backend
+│   │   └── src/               # React frontend
+│   └── windows/               # [ARCHIVED] C# + WinUI 3
 ├── scripts/                   # Build scripts
 └── docs/                      # Documentation
 ```
@@ -115,12 +117,11 @@ See [docs/DIRECTORY_STRUCTURE.md](./docs/DIRECTORY_STRUCTURE.md) for detailed tr
 │     └─ cd core && cargo test                                    │
 │                                                                  │
 │  2. 构建平台特定库                                               │
-│     ├─ macOS:   ./scripts/build-core.sh macos                   │
-│     └─ Windows: .\scripts\build-windows.ps1                     │
+│     └─ macOS:   ./scripts/build-core.sh macos                   │
 │                                                                  │
 │  3. 开发 UI                                                      │
 │     ├─ macOS:   cd platforms/macos && xcodegen && open *.xcodeproj │
-│     └─ Windows: cd platforms/windows && dotnet watch            │
+│     └─ Tauri:   cd platforms/tauri && pnpm tauri dev            │
 │                                                                  │
 │  4. 提交                                                         │
 │     └─ git commit (触发对应平台的 CI)                            │
@@ -149,7 +150,8 @@ main                    # 唯一的长期分支，所有开发直接在此进行
 |--------|----------|
 | 代码组织 | Monorepo |
 | Rust 核心 | Workspace 成员，feature flags 区分平台 |
-| FFI 绑定 | macOS: UniFFI, Windows: csbindgen |
+| FFI 绑定 | macOS: UniFFI |
+| 跨平台 | Tauri 2.0 (Windows, Linux) |
 | CI/CD | 按路径触发，平台独立构建 |
 | 版本管理 | 单一 VERSION 文件 |
 | 本地化 | JSON 主文件 → 转换脚本 → 平台格式 |
@@ -164,9 +166,13 @@ cd core && cargo build           # Build
 cd core && cargo test            # Test
 cd core && cargo build --release # Release build
 
-# macOS
+# macOS (Native)
 cd platforms/macos && xcodegen generate
 open Aether.xcodeproj
+
+# Tauri (Cross-platform)
+cd platforms/tauri && pnpm install
+cd platforms/tauri && pnpm tauri dev
 
 # Build scripts
 ./scripts/build-core.sh macos    # Build core for macOS

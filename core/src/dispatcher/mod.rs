@@ -94,7 +94,8 @@ pub use types::{
 
 // === Re-exports: Task Orchestration ===
 pub use callback::{
-    DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpCallback, UserDecision,
+    DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpExecutionCallback,
+    UserDecision,
 };
 pub use agent_types::{
     AiTask, AppAuto, AudioGenTask, CodeExec, DocGen, ExecutionSummary, FileOp,

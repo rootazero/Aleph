@@ -123,57 +123,67 @@ cp libaethecore.universal.dylib ../Frameworks/libaethecore.dylib
 
 ---
 
-## Windows (Future Support)
+## Tauri Cross-Platform (Windows & Linux)
 
-### Planned Architecture
+Aether uses Tauri 2.0 for cross-platform support on Windows and Linux.
 
-**UI Layer:** C# + WinUI 3
-**Core:** Rust (same codebase, cross-compiled)
+### Architecture
 
-### System Tray Integration
+| Layer | Technology |
+|-------|------------|
+| **Backend** | Rust (Tauri commands) |
+| **Frontend** | React + TypeScript |
+| **Bundling** | Tauri 2.0 |
 
-```csharp
-// System tray icon setup (Windows)
-notifyIcon = new NotifyIcon
-{
-    Icon = new Icon("aether.ico"),
-    ContextMenuStrip = CreateContextMenu(),
-    Visible = true
-};
-```
-
-### Required Permissions
-
-- **Accessibility API**: For global hotkeys and keyboard simulation
-- **Clipboard Access**: Standard Windows clipboard API
-
----
-
-## Linux (Future Support)
-
-### Planned Architecture
-
-**UI Layer:** Rust + GTK4
-**Core:** Rust (same codebase, native)
-
-### Desktop Integration
+### Development
 
 ```bash
-# Install .desktop file for system integration
-cp aether.desktop ~/.local/share/applications/
+cd platforms/tauri
 
-# System tray icon (via libappindicator)
+# Install dependencies
+pnpm install
+
+# Run development mode
+pnpm tauri dev
+
+# Build release
+pnpm tauri build
 ```
 
-### Required Dependencies
+### Platform-Specific Notes
+
+**Windows:**
+- Uses native Windows APIs via Tauri
+- System tray integration built-in
+- Hotkey registration via Tauri global shortcuts
+
+**Linux:**
+- Requires WebKit2GTK for rendering
+- System tray via libappindicator
+
+### Required Dependencies (Linux)
 
 ```bash
 # Ubuntu/Debian
-sudo apt install libgtk-4-dev libappindicator3-dev
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev
 
 # Fedora
-sudo dnf install gtk4-devel libappindicator-gtk3-devel
+sudo dnf install webkit2gtk4.1-devel libappindicator-gtk3-devel
 ```
+
+---
+
+## Windows Native (ARCHIVED)
+
+> **Note**: The Windows native platform (C#/WinUI 3) has been archived.
+> Use Tauri for Windows support instead.
+
+See `platforms/windows/ARCHIVED.md` for details.
+
+The archived code may be useful as reference for:
+- WinUI 3 transparent window implementation
+- Windows global hotkey patterns
+- csbindgen FFI patterns
 
 ---
 
@@ -181,7 +191,7 @@ sudo dnf install gtk4-devel libappindicator-gtk3-devel
 
 ### Trait-Based Design
 
-All platform-specific components use trait abstractions:
+Platform-specific components use trait abstractions:
 
 ```rust
 // Clipboard abstraction
@@ -198,9 +208,8 @@ pub trait InputSimulator {
 ```
 
 **Platform Implementations:**
-- `clipboard/macos.rs` - macOS-specific clipboard (via `arboard`)
-- `clipboard/windows.rs` - Windows-specific clipboard (future)
-- `clipboard/linux.rs` - Linux-specific clipboard (future)
+- **macOS Native**: Direct implementation via `arboard` and `enigo`
+- **Tauri (Windows/Linux)**: Handled by Tauri runtime APIs
 
 ---
 

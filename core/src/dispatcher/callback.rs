@@ -303,17 +303,20 @@ pub trait ExecutionCallback: Send + Sync {
 }
 
 // ============================================================================
-// NoOpCallback - No-op implementation for testing
+// NoOpExecutionCallback - No-op implementation for testing
 // ============================================================================
 
-/// A no-op callback implementation for testing
+/// A no-op callback implementation for testing task execution
 ///
 /// This implementation does nothing for all callback methods, making it
 /// suitable for tests that don't need to verify callback behavior.
-pub struct NoOpCallback;
+///
+/// This is distinct from `agent_loop::NoOpLoopCallback` which implements
+/// `LoopCallback` for Agent Loop callbacks.
+pub struct NoOpExecutionCallback;
 
 #[async_trait]
-impl ExecutionCallback for NoOpCallback {
+impl ExecutionCallback for NoOpExecutionCallback {
     async fn on_plan_ready(&self, _plan: &DagTaskPlan) {}
 
     async fn on_confirmation_required(&self, _plan: &DagTaskPlan) -> UserDecision {
@@ -478,8 +481,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_noop_callback() {
-        let callback = NoOpCallback;
+    async fn test_noop_execution_callback() {
+        let callback = NoOpExecutionCallback;
         let plan = DagTaskPlan {
             id: "test".to_string(),
             title: "Test Plan".to_string(),

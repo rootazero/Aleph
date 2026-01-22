@@ -299,7 +299,7 @@ impl DagScheduler {
     /// ```rust,ignore
     /// let graph = TaskGraph::new("plan_1", "My Plan");
     /// let executor = Arc::new(MyExecutor);
-    /// let callback = Arc::new(NoOpCallback);
+    /// let callback = Arc::new(NoOpExecutionCallback);
     /// let context = TaskContext::new("User request");
     ///
     /// let result = DagScheduler::execute_graph(
@@ -752,7 +752,7 @@ mod tests {
     // execute_graph tests
     // ========================================================================
 
-    use crate::dispatcher::callback::NoOpCallback;
+    use crate::dispatcher::callback::NoOpExecutionCallback;
     use crate::dispatcher::context::TaskContext;
 
     /// Mock task executor that always succeeds
@@ -789,7 +789,7 @@ mod tests {
         graph.add_dependency("b", "c");
 
         let executor = Arc::new(MockTaskExecutor);
-        let callback = Arc::new(NoOpCallback);
+        let callback = Arc::new(NoOpExecutionCallback);
         let context = TaskContext::new("Test user request");
 
         let result = DagScheduler::execute_graph(graph, executor, callback, context, None)
@@ -813,7 +813,7 @@ mod tests {
         // No dependencies - all can run in parallel
 
         let executor = Arc::new(MockTaskExecutor);
-        let callback = Arc::new(NoOpCallback);
+        let callback = Arc::new(NoOpExecutionCallback);
         let context = TaskContext::new("Test parallel execution");
 
         let result = DagScheduler::execute_graph(graph, executor, callback, context, None)
@@ -833,7 +833,7 @@ mod tests {
         graph.add_dependency("a", "b");
 
         let executor = Arc::new(FailingExecutor);
-        let callback = Arc::new(NoOpCallback);
+        let callback = Arc::new(NoOpExecutionCallback);
         let context = TaskContext::new("Test failure handling");
 
         let result = DagScheduler::execute_graph(graph, executor, callback, context, None)
@@ -862,7 +862,7 @@ mod tests {
         graph.add_dependency("c", "d");
 
         let executor = Arc::new(MockTaskExecutor);
-        let callback = Arc::new(NoOpCallback);
+        let callback = Arc::new(NoOpExecutionCallback);
         let context = TaskContext::new("Test diamond execution");
 
         let result = DagScheduler::execute_graph(graph, executor, callback, context, None)

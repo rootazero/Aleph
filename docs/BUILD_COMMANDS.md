@@ -11,6 +11,8 @@ This document provides all build commands for the Aether project.
 | Run tests | `cd core && cargo test` |
 | Generate Xcode project | `cd platforms/macos && xcodegen generate` |
 | Build macOS app | `xcodebuild -project Aether.xcodeproj -scheme Aether build` |
+| Run Tauri dev | `cd platforms/tauri && pnpm tauri dev` |
+| Build Tauri release | `cd platforms/tauri && pnpm tauri build` |
 
 ## Building Rust Core
 
@@ -24,9 +26,6 @@ cargo build
 # Release build
 cargo build --release
 
-# Build for Windows (C ABI)
-cargo build --release --no-default-features --features cabi
-
 # Generate UniFFI bindings (macOS)
 cargo run --bin uniffi-bindgen generate \
   --library target/release/libaethecore.dylib \
@@ -34,7 +33,7 @@ cargo run --bin uniffi-bindgen generate \
   --out-dir ../platforms/macos/Aether/Sources/Generated/
 ```
 
-## Building macOS Client
+## Building macOS Client (Native)
 
 ```bash
 cd platforms/macos/
@@ -44,24 +43,33 @@ open Aether.xcodeproj              # Open in Xcode
 xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build
 ```
 
-## Building Windows Client (on Windows)
+## Building Tauri Client (Cross-platform)
 
-```powershell
-cd platforms/windows/
-dotnet build -c Release
+```bash
+cd platforms/tauri/
+
+# Install dependencies
+pnpm install
+
+# Development mode
+pnpm tauri dev
+
+# Build release
+pnpm tauri build
+
+# Build for specific platform (from any OS with cross-compilation)
+pnpm tauri build --target x86_64-pc-windows-msvc
+pnpm tauri build --target x86_64-unknown-linux-gnu
 ```
 
 ## Using Build Scripts
 
 ```bash
-# Build core for all platforms
-./scripts/build-core.sh all
+# Build core for macOS
+./scripts/build-core.sh macos
 
 # Build macOS app
 ./scripts/build-macos.sh release
-
-# Build Windows app (on Windows)
-.\scripts\build-windows.ps1 -Config Release
 ```
 
 ## Testing
@@ -80,12 +88,17 @@ The Rust core uses feature flags to control platform-specific builds:
 | Feature | Platform | Description |
 |---------|----------|-------------|
 | `uniffi` | macOS | Generates Swift bindings via UniFFI (default) |
-| `cabi` | Windows | Generates C ABI for csbindgen P/Invoke |
 
 ```bash
 # macOS build (default)
 cargo build --features uniffi
-
-# Windows build
-cargo build --no-default-features --features cabi
 ```
+
+---
+
+## Archived: Windows Native
+
+> **Note**: The Windows native platform (C#/WinUI 3) has been archived.
+> For Windows support, use the Tauri cross-platform build instead.
+
+See `platforms/windows/ARCHIVED.md` for details.

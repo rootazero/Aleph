@@ -30,7 +30,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::agent_loop::{AgentLoop, LoopConfig, NoOpCallback};
+//! use aethecore::agent_loop::{AgentLoop, LoopConfig, NoOpLoopCallback};
 //!
 //! let config = LoopConfig::default();
 //! let agent_loop = AgentLoop::new(thinker, executor, compressor, config);
@@ -39,7 +39,7 @@
 //!     "Search for Rust tutorials".to_string(),
 //!     RequestContext::empty(),
 //!     tools,
-//!     NoOpCallback,
+//!     NoOpLoopCallback,
 //! ).await;
 //! ```
 
@@ -52,7 +52,7 @@ pub mod state;
 use std::sync::Arc;
 use tokio::sync::watch;
 
-pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent, NoOpCallback};
+pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent, NoOpLoopCallback};
 pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig};
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
 pub use guards::{GuardViolation, LoopGuard};
@@ -473,7 +473,7 @@ mod tests {
                 "Test request".to_string(),
                 RequestContext::empty(),
                 vec![],
-                NoOpCallback,
+                NoOpLoopCallback,
                 None,
             )
             .await;
@@ -548,7 +548,7 @@ mod tests {
                 "Run many steps".to_string(),
                 RequestContext::empty(),
                 vec![],
-                NoOpCallback,
+                NoOpLoopCallback,
                 None,
             )
             .await;

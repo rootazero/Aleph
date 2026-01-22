@@ -4,7 +4,10 @@ This document provides a detailed view of the project's directory structure.
 
 ## Overview
 
-Aether is a Monorepo with platform-specific directories. macOS uses [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+Aether is a Monorepo with platform-specific directories:
+- **macOS**: Native Swift + SwiftUI with XcodeGen
+- **Tauri**: Cross-platform (Windows, Linux) with React + TypeScript
+- **Windows (Native)**: ARCHIVED - use Tauri instead
 
 ## Rust Core Module Count: ~37 Modules
 
@@ -28,7 +31,7 @@ aether/
 │   └── workflows/
 │       ├── rust-core.yml              # Rust CI (test, lint, build)
 │       ├── macos-app.yml              # macOS app build
-│       └── windows-app.yml            # Windows app build
+│       └── tauri-app.yml              # Tauri cross-platform build
 │
 ├── core/                              # Rust Core Library
 │   ├── Cargo.toml                     # [features] uniffi, cabi
@@ -252,19 +255,21 @@ aether/
 │   │   ├── AetherTests/               # Unit tests
 │   │   └── AetherUITests/             # UI tests
 │   │
-│   └── windows/                       # Windows Application
+│   ├── tauri/                         # Tauri Cross-Platform (Windows, Linux)
+│   │   ├── package.json               # pnpm workspace config
+│   │   ├── src-tauri/                 # Rust backend
+│   │   │   ├── Cargo.toml
+│   │   │   ├── tauri.conf.json        # Tauri configuration
+│   │   │   └── src/                   # Rust source
+│   │   └── src/                       # React frontend
+│   │       ├── App.tsx
+│   │       ├── components/            # React components
+│   │       └── i18n/                  # Internationalization
+│   │
+│   └── windows/                       # [ARCHIVED] Windows Native
+│       ├── ARCHIVED.md                # Archive notice
 │       ├── Aether.sln                 # Visual Studio solution
-│       ├── Aether/
-│       │   ├── Aether.csproj          # .NET 8.0 WinUI 3
-│       │   ├── App.xaml               # Application entry
-│       │   ├── App.xaml.cs
-│       │   ├── MainWindow.xaml        # Main window (placeholder)
-│       │   ├── MainWindow.xaml.cs
-│       │   ├── app.manifest           # Windows manifest
-│       │   ├── Interop/
-│       │   │   └── NativeMethods.g.cs # csbindgen P/Invoke
-│       │   └── libs/                  # aethecore.dll
-│       └── Aether.Tests/              # Unit tests
+│       └── ...                        # See ARCHIVED.md
 │
 ├── shared/                            # Cross-Platform Resources
 │   ├── config/
@@ -273,9 +278,8 @@ aether/
 │   └── docs/                          # Shared documentation (future)
 │
 ├── scripts/                           # Build Scripts
-│   ├── build-core.sh                  # Build Rust (macos/windows/all)
+│   ├── build-core.sh                  # Build Rust core for macOS
 │   ├── build-macos.sh                 # macOS full build
-│   ├── build-windows.ps1              # Windows full build
 │   └── generate-bindings.sh           # FFI binding generation
 │
 ├── Scripts/                           # Legacy scripts (macOS)

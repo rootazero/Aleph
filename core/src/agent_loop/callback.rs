@@ -114,11 +114,14 @@ impl<T: LoopCallback + ?Sized> LoopCallback for &T {
     }
 }
 
-/// No-op callback implementation for testing
-pub struct NoOpCallback;
+/// No-op callback implementation for testing Agent Loop
+///
+/// This is distinct from `dispatcher::NoOpExecutionCallback` which implements
+/// `ExecutionCallback` for task execution callbacks.
+pub struct NoOpLoopCallback;
 
 #[async_trait]
-impl LoopCallback for NoOpCallback {
+impl LoopCallback for NoOpLoopCallback {
     async fn on_loop_start(&self, _state: &LoopState) {}
     async fn on_step_start(&self, _step: usize) {}
     async fn on_thinking_start(&self, _step: usize) {}

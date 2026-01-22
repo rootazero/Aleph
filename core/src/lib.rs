@@ -192,7 +192,7 @@ pub use crate::dispatcher::{
     UserConfirmationDecision,
     // DAG execution callback types
     DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, UserDecision as DagUserDecision,
-    NoOpCallback as DagNoOpCallback, ExecutionCallback,
+    NoOpExecutionCallback, ExecutionCallback,
 };
 pub use crate::intent::{
     // Core classifier types
@@ -443,7 +443,7 @@ pub use crate::components::{
 pub use crate::agent_loop::{
     ActionExecutor, AgentLoop, CollectingCallback, CompressedHistory, CompressorTrait,
     GuardViolation, LoggingCallback, LoopCallback, LoopConfig as AgentLoopConfig, LoopGuard,
-    LoopResult, LoopState as AgentLoopState, LoopStep, NoOpCallback, Observation, RequestContext,
+    LoopResult, LoopState as AgentLoopState, LoopStep, NoOpLoopCallback, Observation, RequestContext,
     StepSummary, ThinkerTrait, Thinking,
     // Decision types
     Action, ActionResult, Decision as AgentDecision, LlmAction, LlmResponse,

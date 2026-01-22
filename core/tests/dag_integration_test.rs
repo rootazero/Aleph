@@ -4,7 +4,7 @@
 //! working together for multi-step task execution.
 
 use aethecore::dispatcher::{
-    DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpCallback as DagNoOpCallback,
+    DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpExecutionCallback,
     RiskEvaluator, RiskLevel, TaskContext, TaskOutput, UserDecision,
 };
 use aethecore::dispatcher::agent_types::{AiTask, CodeExec, Language, Task, TaskGraph, TaskType};
@@ -268,7 +268,7 @@ fn test_task_display_status_display() {
 
 #[tokio::test]
 async fn test_noop_callback_all_methods() {
-    let callback = DagNoOpCallback;
+    let callback = NoOpExecutionCallback;
     let plan = DagTaskPlan {
         id: "test".to_string(),
         title: "Test Plan".to_string(),
