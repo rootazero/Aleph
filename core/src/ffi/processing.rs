@@ -38,6 +38,7 @@ use crate::dispatcher::{
 };
 use crate::dispatcher::agent_types::{Task, TaskGraph};
 use crate::dispatcher::scheduler::GraphTaskExecutor;
+use crate::dispatcher::MAX_PARALLELISM;
 
 /// Processing options
 #[derive(Debug, Clone)]
@@ -1601,7 +1602,7 @@ fn run_dag_execution(
         // Build scheduler config with custom retries if provided
         let scheduler_config = max_task_retries.map(|retries| {
             crate::dispatcher::SchedulerConfig {
-                max_parallelism: 4,
+                max_parallelism: MAX_PARALLELISM,
                 max_task_retries: retries,
             }
         });

@@ -49,6 +49,7 @@
 /// # }
 /// ```
 use crate::config::ProviderConfig;
+use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AetherError, Result};
 use crate::providers::shared::{
     build_document_context, combine_with_document_context, separate_attachments,
@@ -63,9 +64,6 @@ use tracing::{debug, error, info};
 
 /// Anthropic Claude API version
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-
-/// Default max_tokens if not specified (Claude requires this field)
-const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 /// Claude API provider
 pub struct ClaudeProvider {

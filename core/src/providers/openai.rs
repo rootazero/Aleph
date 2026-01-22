@@ -40,6 +40,7 @@
 /// # }
 /// ```
 use crate::config::ProviderConfig;
+use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AetherError, Result};
 use crate::providers::shared::{
     build_document_context, combine_with_document_context, separate_attachments,
@@ -448,7 +449,7 @@ impl OpenAiProvider {
         ChatCompletionRequest {
             model: self.config.model.clone(),
             messages,
-            max_tokens: Some(self.config.max_tokens.unwrap_or(4096)),
+            max_tokens: Some(self.config.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
             temperature: self.config.temperature,
         }
     }

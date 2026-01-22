@@ -32,7 +32,12 @@ use crate::dispatcher::model_router::{
     StageResult,
 };
 use crate::dispatcher::monitor::{ProgressEvent, ProgressSubscriber};
-use crate::dispatcher::{AgentConfig, ExecutionState};
+use crate::dispatcher::{
+    ExecutionState, DEFAULT_ALLOW_NETWORK, DEFAULT_CODE_EXEC_ENABLED, DEFAULT_CODE_EXEC_RUNTIME,
+    DEFAULT_CODE_EXEC_TIMEOUT, DEFAULT_FILE_OPS_ENABLED, DEFAULT_MAX_FILE_SIZE, DEFAULT_PASS_ENV,
+    DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE, DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE,
+    DEFAULT_SANDBOX_ENABLED,
+};
 
 // ============================================================================
 // FFI Enums
@@ -273,39 +278,10 @@ impl From<ModelCostStrategyFFI> for CostStrategy {
 // FFI Dictionaries (Structs)
 // ============================================================================
 
-/// Cowork configuration for FFI
-#[derive(Debug, Clone)]
-pub struct AgentConfigFFI {
-    pub require_confirmation: bool,
-    pub max_parallelism: u32,
-    pub max_task_retries: u32,
-    pub dry_run: bool,
-}
-
-impl From<AgentConfig> for AgentConfigFFI {
-    fn from(config: AgentConfig) -> Self {
-        Self {
-            require_confirmation: config.require_confirmation,
-            max_parallelism: config.max_parallelism as u32,
-            max_task_retries: config.max_task_retries,
-            dry_run: config.dry_run,
-        }
-    }
-}
-
-impl From<AgentConfigFFI> for AgentConfig {
-    fn from(config: AgentConfigFFI) -> Self {
-        Self {
-            require_confirmation: config.require_confirmation,
-            max_parallelism: config.max_parallelism as usize,
-            max_task_retries: config.max_task_retries,
-            dry_run: config.dry_run,
-            enable_pipelines: false,
-            model_profiles: Vec::new(),
-            routing_rules: None,
-        }
-    }
-}
+// Note: AgentConfigFFI has been removed. Core execution parameters
+// (require_confirmation, max_parallelism, max_task_retries) are now
+// hardcoded for security and stability. Use engine::REQUIRE_CONFIRMATION,
+// engine::MAX_PARALLELISM, and engine::MAX_TASK_RETRIES constants.
 
 /// Code execution configuration for FFI
 #[derive(Debug, Clone)]
@@ -333,14 +309,14 @@ pub struct CodeExecConfigFFI {
 impl Default for CodeExecConfigFFI {
     fn default() -> Self {
         Self {
-            enabled: false,
-            default_runtime: "shell".to_string(),
-            timeout_seconds: 60,
-            sandbox_enabled: true,
-            allow_network: false,
+            enabled: DEFAULT_CODE_EXEC_ENABLED,
+            default_runtime: DEFAULT_CODE_EXEC_RUNTIME.to_string(),
+            timeout_seconds: DEFAULT_CODE_EXEC_TIMEOUT,
+            sandbox_enabled: DEFAULT_SANDBOX_ENABLED,
+            allow_network: DEFAULT_ALLOW_NETWORK,
             allowed_runtimes: Vec::new(),
             working_directory: None,
-            pass_env: vec!["PATH".to_string(), "HOME".to_string(), "USER".to_string()],
+            pass_env: DEFAULT_PASS_ENV.iter().map(|s| s.to_string()).collect(),
             blocked_commands: Vec::new(),
         }
     }
@@ -398,12 +374,12 @@ pub struct FileOpsConfigFFI {
 impl Default for FileOpsConfigFFI {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: DEFAULT_FILE_OPS_ENABLED,
             allowed_paths: Vec::new(),
             denied_paths: Vec::new(),
-            max_file_size: 100 * 1024 * 1024, // 100MB
-            require_confirmation_for_write: true,
-            require_confirmation_for_delete: true,
+            max_file_size: DEFAULT_MAX_FILE_SIZE,
+            require_confirmation_for_write: DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE,
+            require_confirmation_for_delete: DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE,
         }
     }
 }
@@ -1972,26 +1948,6 @@ mod tests {
             AgentTaskStatusState::from(&TaskStatus::failed("error")),
             AgentTaskStatusState::Failed
         );
-    }
-
-    #[test]
-    fn test_config_conversion() {
-        let config = AgentConfig {
-            enabled: true,
-            require_confirmation: false,
-            max_parallelism: 8,
-            dry_run: true,
-            ..Default::default()
-        };
-
-        let ffi_config = AgentConfigFFI::from(config.clone());
-        assert_eq!(ffi_config.enabled, true);
-        assert_eq!(ffi_config.max_parallelism, 8);
-        assert_eq!(ffi_config.dry_run, true);
-
-        let converted_back = AgentConfig::from(ffi_config);
-        assert_eq!(converted_back.enabled, config.enabled);
-        assert_eq!(converted_back.max_parallelism, config.max_parallelism);
     }
 
     #[test]

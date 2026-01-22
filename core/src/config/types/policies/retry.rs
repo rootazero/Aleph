@@ -3,6 +3,7 @@
 //! Configurable retry parameters for network operations including
 //! backoff strategy and retryable error conditions.
 
+use crate::dispatcher::DEFAULT_MAX_RETRIES;
 use serde::{Deserialize, Serialize};
 
 /// Policy for retry behavior in network operations
@@ -62,7 +63,7 @@ impl Default for RetryPolicy {
 }
 
 fn default_max_retries() -> u32 {
-    3
+    DEFAULT_MAX_RETRIES
 }
 
 fn default_initial_backoff_ms() -> u64 {

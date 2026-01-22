@@ -25,15 +25,7 @@ use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use super::error::ToolError;
-
-/// Maximum stdout size (10MB)
-const MAX_STDOUT_SIZE: usize = 10 * 1024 * 1024;
-
-/// Maximum stderr size (1MB)
-const MAX_STDERR_SIZE: usize = 1024 * 1024;
-
-/// Default execution timeout in seconds
-const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
+use crate::dispatcher::{DEFAULT_CODE_EXEC_TIMEOUT, MAX_STDERR_SIZE, MAX_STDOUT_SIZE};
 
 /// Supported programming languages
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -176,7 +168,7 @@ Examples:
 
         let runtime = args.language.runtime();
         let code_flag = args.language.code_flag();
-        let timeout_secs = args.timeout.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
+        let timeout_secs = args.timeout.unwrap_or(DEFAULT_CODE_EXEC_TIMEOUT);
 
         // Check if runtime is available
         let which_cmd = if cfg!(target_os = "windows") {

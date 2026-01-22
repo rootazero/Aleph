@@ -793,63 +793,8 @@
 "mcp.startup_partial" = "MCP 启动警告";
 "mcp.servers_failed" = "部分 MCP 服务器启动失败: %@";
 
-// MARK: - Settings Window - Agent Tab
-"settings.agent.title" = "Agent 模式";
-"settings.agent.description" = "配置 Agent 任务编排。Agent 将复杂请求分解为任务图，并行调度执行。";
-"settings.agent.enabled" = "任务编排";
-"settings.agent.enabled_description" = "启用 Agent 将复杂任务分解为可并行执行的子任务。";
-"settings.agent.enabled_toggle" = "启用 Agent";
-"settings.agent.confirmation" = "确认设置";
-"settings.agent.confirmation_description" = "执行任务图前需要用户确认。启用后，您将看到所有计划任务的预览。";
-"settings.agent.confirmation_toggle" = "需要确认";
-"settings.agent.parallelism" = "并行执行";
-"settings.agent.parallelism_description" = "可同时运行的最大任务数。较高的值可提升速度，但会占用更多资源。";
-"settings.agent.parallelism_hint" = "建议：普通使用 2-4，高性能机器 8+";
-"settings.agent.dry_run" = "演练模式";
-"settings.agent.dry_run_description" = "规划任务但不执行。用于测试和调试任务图。";
-"settings.agent.dry_run_toggle" = "启用演练模式";
-"settings.agent.dry_run_warning" = "任务将被规划但不会执行";
-
-// 文件操作设置 (Phase 2)
-"settings.agent.file_ops.title" = "文件操作";
-"settings.agent.file_ops.description" = "配置 Agent 任务的文件操作设置。文件操作包括读取、写入、复制、移动和删除文件。";
-"settings.agent.file_ops.enabled" = "启用文件操作";
-"settings.agent.file_ops.enabled_description" = "允许 Agent 在任务工作流中执行文件操作。";
-"settings.agent.file_ops.enabled_toggle" = "启用文件操作";
-"settings.agent.file_ops.allowed_paths" = "允许路径";
-"settings.agent.file_ops.allowed_paths_description" = "允许进行文件操作的目录。留空表示允许所有路径（拒绝路径除外）。";
-"settings.agent.file_ops.add_allowed_path" = "添加允许路径...";
-"settings.agent.file_ops.denied_paths" = "拒绝路径";
-"settings.agent.file_ops.denied_paths_description" = "禁止进行文件操作的目录。这些路径优先于允许路径。";
-"settings.agent.file_ops.add_denied_path" = "添加拒绝路径...";
-"settings.agent.file_ops.default_denied_note" = "敏感路径（~/.ssh、~/.gnupg 等）始终默认被拒绝。";
-"settings.agent.file_ops.max_file_size" = "最大文件大小";
-"settings.agent.file_ops.max_file_size_description" = "读取操作允许的最大文件大小。超过此大小的文件将被拒绝。";
-"settings.agent.file_ops.max_file_size_picker" = "选择大小";
-"settings.agent.file_ops.confirmations" = "确认";
-"settings.agent.file_ops.confirmations_description" = "在执行可能具有破坏性的文件操作前要求确认。";
-"settings.agent.file_ops.confirm_write" = "确认写入操作";
-"settings.agent.file_ops.confirm_delete" = "确认删除操作";
-"settings.agent.file_ops.confirmations_warning" = "禁用确认将允许操作在无用户批准的情况下执行。";
-"settings.agent.file_ops.browse" = "浏览文件夹";
-
-// 代码执行设置 (Phase 3)
-"settings.agent.code_exec.title" = "代码执行";
-"settings.agent.code_exec.description" = "配置 Agent 任务的代码执行设置。代码执行允许运行 shell 脚本、Python 和 Node.js 代码。";
-"settings.agent.code_exec.enabled" = "启用代码执行";
-"settings.agent.code_exec.enabled_description" = "允许 Agent 在任务工作流中执行代码。出于安全考虑，默认禁用。";
-"settings.agent.code_exec.enabled_toggle" = "启用代码执行";
-"settings.agent.code_exec.security_warning" = "代码执行可能存在安全风险。仅在信任任务来源时启用。";
-"settings.agent.code_exec.sandbox" = "沙箱";
-"settings.agent.code_exec.sandbox_description" = "在受限的沙箱环境中运行代码，限制对系统资源的访问。";
-"settings.agent.code_exec.sandbox_toggle" = "启用沙箱";
-"settings.agent.code_exec.network" = "网络访问";
-"settings.agent.code_exec.network_description" = "允许沙箱中的代码访问网络。除非必要，请保持禁用。";
-"settings.agent.code_exec.timeout" = "执行超时";
-"settings.agent.code_exec.timeout_description" = "代码执行的最大允许时间。长时间运行的任务将被终止。";
-"settings.agent.code_exec.runtime" = "默认运行时";
-"settings.agent.code_exec.runtime_description" = "代码执行任务的默认编程环境。";
-"settings.agent.code_exec.runtime_picker" = "选择运行时";
+// 注意：Agent 设置已移除。核心执行参数现已硬编码。
+// 文件操作和代码执行设置已移至安全设置。
 
 // 模型路由设置
 "settings.model_routing.title" = "模型路由";

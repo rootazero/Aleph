@@ -7,6 +7,7 @@ use crate::agents::RigAgentConfig;
 use crate::config::{
     Config, FullConfig, GeneralConfig, ProviderConfig, RoutingRuleConfig, TestConnectionResult,
 };
+use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use std::path::Path;
 use tracing::info;
 
@@ -87,7 +88,7 @@ impl AetherCore {
             provider,
             model,
             temperature: temperature.unwrap_or(0.7),
-            max_tokens: max_tokens.unwrap_or(4096),
+            max_tokens: max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             max_turns: 50, // Default to 50 turns for complex multi-step tasks
             timeout_seconds, // Use timeout from provider config
             system_prompt: system_prompt

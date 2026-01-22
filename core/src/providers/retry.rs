@@ -3,13 +3,11 @@
 /// This module provides utilities for retrying failed requests with
 /// exponential backoff strategy.
 use crate::config::RetryPolicy;
+use crate::dispatcher::DEFAULT_MAX_RETRIES;
 use crate::error::{AetherError, Result};
 use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, info, warn};
-
-/// Maximum number of retry attempts (default, used when no policy provided)
-const MAX_RETRIES: u32 = 3;
 
 /// Initial backoff duration (1 second) (default, used when no policy provided)
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -83,7 +81,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    let max_retries = max_retries.unwrap_or(MAX_RETRIES);
+    let max_retries = max_retries.unwrap_or(DEFAULT_MAX_RETRIES);
     let mut attempt = 0;
     let mut last_error = None;
 

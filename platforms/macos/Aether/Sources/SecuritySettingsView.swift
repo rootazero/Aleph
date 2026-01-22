@@ -634,6 +634,131 @@ private extension View {
     }
 }
 
+// MARK: - PathListEditor Component
+
+/// A component for editing a list of file paths with add/remove functionality
+struct PathListEditor: View {
+    @Binding var paths: [String]
+    let placeholder: String
+
+    @State private var newPath: String = ""
+    @State private var isShowingFilePicker = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            // Existing paths list
+            ForEach(paths, id: \.self) { path in
+                pathRow(for: path)
+            }
+
+            // Add new path row
+            addPathRow
+        }
+        .fileImporter(
+            isPresented: $isShowingFilePicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            handleFileImport(result)
+        }
+    }
+
+    private func pathRow(for path: String) -> some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            Image(systemName: "folder")
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+                .font(.system(size: 12))
+
+            Text(path)
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer()
+
+            Button {
+                removePath(path)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, DesignTokens.Spacing.xs)
+    }
+
+    private var addPathRow: some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            TextField(placeholder, text: $newPath)
+                .textFieldStyle(.roundedBorder)
+                .font(DesignTokens.Typography.caption)
+                .onSubmit {
+                    addPath()
+                }
+
+            Button {
+                isShowingFilePicker = true
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
+            }
+            .buttonStyle(.plain)
+            .help(L("settings.security.file_ops.browse"))
+
+            Button {
+                addPath()
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
+            }
+            .buttonStyle(.plain)
+            .disabled(newPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    private func removePath(_ path: String) {
+        withAnimation {
+            if let index = paths.firstIndex(of: path) {
+                paths.remove(at: index)
+            }
+        }
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            if let url = urls.first {
+                let path = url.path
+                if !paths.contains(path) {
+                    withAnimation {
+                        paths.append(path)
+                    }
+                }
+            }
+        case .failure(let error):
+            print("File picker error: \(error)")
+        }
+    }
+
+    private func addPath() {
+        let trimmed = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // Expand ~ to home directory
+        let expandedPath = trimmed.hasPrefix("~")
+            ? (trimmed as NSString).expandingTildeInPath
+            : trimmed
+
+        if !paths.contains(expandedPath) {
+            withAnimation {
+                paths.append(expandedPath)
+            }
+        }
+        newPath = ""
+    }
+}
+
 // MARK: - Preview
 
 #Preview {

@@ -101,7 +101,15 @@ pub use agent_types::{
     GraphValidationError, ImageGenTask, Language, Task, TaskCountByStatus, TaskDependency,
     TaskGraph, TaskGraphMeta, TaskResult as CoworkTaskResult, TaskStatus, TaskType, VideoGenTask,
 };
-pub use engine::{AgentConfig, AgentEngine, ExecutionState};
+pub use engine::{
+    AgentConfig, AgentEngine, ExecutionState, DEFAULT_ALLOW_NETWORK, DEFAULT_CODE_EXEC_ENABLED,
+    DEFAULT_CODE_EXEC_RUNTIME, DEFAULT_CODE_EXEC_TIMEOUT, DEFAULT_CONFIRMATION_TIMEOUT_SECS,
+    DEFAULT_CONNECTION_TIMEOUT_SECS, DEFAULT_FILE_OPS_ENABLED, DEFAULT_MAX_FILE_SIZE,
+    DEFAULT_MAX_RETRIES, DEFAULT_MAX_TOKENS, DEFAULT_PASS_ENV,
+    DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE, DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE,
+    DEFAULT_SANDBOX_ENABLED, MAX_PARALLELISM, MAX_STDERR_SIZE, MAX_STDOUT_SIZE, MAX_TASK_RETRIES,
+    REQUIRE_CONFIRMATION,
+};
 pub use executor::{ExecutionContext, ExecutorRegistry, NoopExecutor, TaskExecutor};
 pub use model_router::{
     Capability, CostStrategy, CostTier, FallbackProvider, LatencyTier, ModelMatcher, ModelProfile,

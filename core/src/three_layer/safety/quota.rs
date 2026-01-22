@@ -3,6 +3,8 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
+use crate::dispatcher::DEFAULT_MAX_FILE_SIZE;
+
 /// Resource quota limits
 #[derive(Debug, Clone)]
 pub struct ResourceQuota {
@@ -21,7 +23,7 @@ pub struct ResourceQuota {
 impl Default for ResourceQuota {
     fn default() -> Self {
         Self {
-            max_file_size: 10 * 1024 * 1024,   // 10 MB
+            max_file_size: DEFAULT_MAX_FILE_SIZE,
             max_total_read: 100 * 1024 * 1024, // 100 MB
             max_total_write: 50 * 1024 * 1024, // 50 MB
             max_file_count: 1000,

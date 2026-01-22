@@ -36,6 +36,7 @@ pub use agent_loop_adapter::FfiLoopCallback;
 
 use crate::agents::{BuiltinToolConfig, RigAgentConfig, RigAgentManager};
 use crate::config::Config;
+use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::memory::MemoryEntry;
 use rig::completion::Message;
 use rig::tool::server::ToolServerHandle;
@@ -489,7 +490,7 @@ pub fn init_core(
         provider,
         model,
         temperature: temperature.unwrap_or(0.7),
-        max_tokens: max_tokens.unwrap_or(4096),
+        max_tokens: max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         max_turns: 50, // Default to 50 turns for complex multi-step tasks
         timeout_seconds, // Use timeout from provider config
         system_prompt: system_prompt

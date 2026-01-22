@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
 
-use crate::agent_loop::{Action, ActionResult, ExecutorTrait};
+use crate::agent_loop::{Action, ActionExecutor, ActionResult};
 use crate::dispatcher::UnifiedTool;
 use crate::error::{AetherError, Result};
 
@@ -146,7 +146,7 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
 }
 
 #[async_trait]
-impl<R: ToolRegistry + 'static> ExecutorTrait for SingleStepExecutor<R> {
+impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
     async fn execute(&self, action: &Action) -> ActionResult {
         match action {
             Action::ToolCall {

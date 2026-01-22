@@ -934,7 +934,7 @@ private struct ServerLogsSheet: View {
     }
 }
 
-// Note: FlowLayout is defined in ModelProfilesSettingsView.swift and reused here
+// Note: FlowLayout is defined in Components/FlowLayout.swift
 
 // MARK: - Helper Extensions
 

@@ -1287,12 +1287,8 @@ interface AetherCore {
 
     // ===== COWORK TASK ORCHESTRATION =====
 
-    // Get Agent configuration
-    AgentConfigFFI agent_get_config();
-
-    // Update Agent configuration
-    [Throws=AetherFfiError]
-    void agent_update_config(AgentConfigFFI config);
+    // Note: agent_get_config and agent_update_config have been removed.
+    // Core execution parameters are now hardcoded for security and stability.
 
     // Plan a task from natural language request
     // Returns a task graph that can be reviewed before execution
@@ -1827,13 +1823,9 @@ enum AgentTaskTypeCategory {
   "AudioGeneration",      // Audio generation (TTS, music, sound effects)
 };
 
-// Agent configuration
-dictionary AgentConfigFFI {
-  boolean require_confirmation;  // Require user confirmation before execution
-  u32 max_parallelism;           // Max parallel tasks
-  u32 max_task_retries;          // Max retry attempts for failed tasks
-  boolean dry_run;               // Dry-run mode (no actual execution)
-};
+// Note: AgentConfigFFI has been removed.
+// Core execution parameters (require_confirmation, max_parallelism, max_task_retries)
+// are now hardcoded for security and stability.
 
 // Code execution configuration (Phase 3)
 dictionary CodeExecConfigFFI {

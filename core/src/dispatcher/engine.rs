@@ -19,41 +19,73 @@ use super::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
 
+// Hardcoded agent configuration constants (security-enforced, not user-configurable)
+/// Whether to require user confirmation before execution (always true for safety)
+pub const REQUIRE_CONFIRMATION: bool = true;
+/// Maximum number of tasks to run in parallel
+pub const MAX_PARALLELISM: usize = 4;
+/// Maximum number of retry attempts for failed tasks
+pub const MAX_TASK_RETRIES: u32 = 3;
+
+// Security boundary constants for file operations and code execution
+/// Maximum file size for file operations (100MB)
+pub const DEFAULT_MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+/// Whether sandbox is enabled by default for code execution
+pub const DEFAULT_SANDBOX_ENABLED: bool = true;
+/// Whether network access is allowed by default in sandbox
+pub const DEFAULT_ALLOW_NETWORK: bool = false;
+/// Default timeout for code execution in seconds
+pub const DEFAULT_CODE_EXEC_TIMEOUT: u64 = 60;
+/// Whether to require confirmation for write operations
+pub const DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE: bool = true;
+/// Whether to require confirmation for delete operations
+pub const DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE: bool = true;
+/// Whether file operations are enabled by default
+pub const DEFAULT_FILE_OPS_ENABLED: bool = true;
+/// Whether code execution is enabled by default (false for security)
+pub const DEFAULT_CODE_EXEC_ENABLED: bool = false;
+/// Default runtime for code execution
+pub const DEFAULT_CODE_EXEC_RUNTIME: &str = "shell";
+/// Default environment variables to pass to executed code
+pub const DEFAULT_PASS_ENV: &[&str] = &["PATH", "HOME", "USER"];
+
+// Code execution output limits
+/// Maximum stdout capture size (10MB)
+pub const MAX_STDOUT_SIZE: usize = 10 * 1024 * 1024;
+/// Maximum stderr capture size (1MB)
+pub const MAX_STDERR_SIZE: usize = 1024 * 1024;
+
+// AI model defaults
+/// Default max tokens for AI model responses
+pub const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+// Retry defaults
+/// Default maximum retry attempts for operations
+pub const DEFAULT_MAX_RETRIES: u32 = 3;
+
+// Timeout defaults (in seconds)
+/// Default confirmation timeout
+pub const DEFAULT_CONFIRMATION_TIMEOUT_SECS: u64 = 30;
+/// Default connection timeout
+pub const DEFAULT_CONNECTION_TIMEOUT_SECS: u64 = 30;
+
 /// Configuration for the Agent engine
 ///
 /// Renamed from CoworkConfig to reflect the agent-centric architecture.
+/// Note: Core execution parameters (confirmation, parallelism, retries) are hardcoded
+/// for security and stability. Only model routing settings are configurable.
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
-    /// Whether to require user confirmation before execution
-    pub require_confirmation: bool,
-
-    /// Maximum number of tasks to run in parallel
-    pub max_parallelism: usize,
-
-    /// Maximum number of retry attempts for failed tasks
-    pub max_task_retries: u32,
-
-    /// Whether to run in dry-run mode (no actual execution)
-    pub dry_run: bool,
-
-    /// Whether multi-model pipelines are enabled
-    pub enable_pipelines: bool,
-
     /// Model profiles for multi-model routing
     pub model_profiles: Vec<ModelProfile>,
 
-    /// Model routing rules
+    /// Model routing rules (contains enable_pipelines flag)
     pub routing_rules: Option<ModelRoutingRules>,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            require_confirmation: true,
-            max_parallelism: 4,
-            max_task_retries: 3,
-            dry_run: false,
-            enable_pipelines: false,
             model_profiles: Vec::new(),
             routing_rules: None,
         }
@@ -69,8 +101,14 @@ impl AgentConfig {
     ) -> Self {
         self.model_profiles = profiles;
         self.routing_rules = Some(rules);
-        self.enable_pipelines = true;
         self
+    }
+
+    /// Check if pipelines are enabled
+    pub fn pipelines_enabled(&self) -> bool {
+        self.routing_rules
+            .as_ref()
+            .is_some_and(|r| r.enable_pipelines)
     }
 }
 
@@ -98,6 +136,8 @@ pub enum ExecutionState {
 /// Provides a unified API for planning and executing task graphs.
 /// Renamed from CoworkEngine to reflect the agent-centric architecture.
 pub struct AgentEngine {
+    /// Configuration (stored for model routing access, core parameters are hardcoded)
+    #[allow(dead_code)]
     config: AgentConfig,
     planner: Arc<dyn TaskPlanner>,
     scheduler: RwLock<DagScheduler>,
@@ -116,8 +156,8 @@ impl AgentEngine {
     /// Create a new AgentEngine
     pub fn new(config: AgentConfig, provider: Arc<dyn AiProvider>) -> Self {
         let scheduler_config = SchedulerConfig {
-            max_parallelism: config.max_parallelism,
-            max_task_retries: config.max_task_retries,
+            max_parallelism: MAX_PARALLELISM,
+            max_task_retries: MAX_TASK_RETRIES,
         };
 
         let mut executors = ExecutorRegistry::new();
@@ -125,7 +165,7 @@ impl AgentEngine {
         executors.register("noop", Arc::new(NoopExecutor::new()));
 
         // Initialize model matcher if pipelines are enabled
-        let model_matcher = if config.enable_pipelines && !config.model_profiles.is_empty() {
+        let model_matcher = if config.pipelines_enabled() && !config.model_profiles.is_empty() {
             let rules = config.routing_rules.clone().unwrap_or_default();
             Some(Arc::new(ModelMatcher::new(
                 config.model_profiles.clone(),
@@ -152,15 +192,15 @@ impl AgentEngine {
     /// Create an AgentEngine with a custom planner
     pub fn with_planner(config: AgentConfig, planner: Arc<dyn TaskPlanner>) -> Self {
         let scheduler_config = SchedulerConfig {
-            max_parallelism: config.max_parallelism,
-            max_task_retries: config.max_task_retries,
+            max_parallelism: MAX_PARALLELISM,
+            max_task_retries: MAX_TASK_RETRIES,
         };
 
         let mut executors = ExecutorRegistry::new();
         executors.register("noop", Arc::new(NoopExecutor::new()));
 
         // Initialize model matcher if pipelines are enabled
-        let model_matcher = if config.enable_pipelines && !config.model_profiles.is_empty() {
+        let model_matcher = if config.pipelines_enabled() && !config.model_profiles.is_empty() {
             let rules = config.routing_rules.clone().unwrap_or_default();
             Some(Arc::new(ModelMatcher::new(
                 config.model_profiles.clone(),
@@ -191,15 +231,15 @@ impl AgentEngine {
         provider: Arc<dyn AiProvider>,
     ) -> Self {
         let scheduler_config = SchedulerConfig {
-            max_parallelism: config.max_parallelism,
-            max_task_retries: config.max_task_retries,
+            max_parallelism: MAX_PARALLELISM,
+            max_task_retries: MAX_TASK_RETRIES,
         };
 
         let mut executors = ExecutorRegistry::new();
         executors.register("noop", Arc::new(NoopExecutor::new()));
 
         // Initialize model matcher if pipelines are enabled
-        let model_matcher = if config.enable_pipelines && !config.model_profiles.is_empty() {
+        let model_matcher = if config.pipelines_enabled() && !config.model_profiles.is_empty() {
             let rules = config.routing_rules.clone().unwrap_or_default();
             Some(Arc::new(ModelMatcher::new(
                 config.model_profiles.clone(),
@@ -296,7 +336,7 @@ impl AgentEngine {
 
         if result.is_err() {
             *self.state.write().await = ExecutionState::Idle;
-        } else if self.config.require_confirmation {
+        } else if REQUIRE_CONFIRMATION {
             *self.state.write().await = ExecutionState::AwaitingConfirmation;
         }
 
@@ -330,7 +370,7 @@ impl AgentEngine {
 
         if result.is_err() {
             *self.state.write().await = ExecutionState::Idle;
-        } else if self.config.require_confirmation {
+        } else if REQUIRE_CONFIRMATION {
             *self.state.write().await = ExecutionState::AwaitingConfirmation;
         }
 
@@ -360,7 +400,7 @@ impl AgentEngine {
         self.scheduler.write().await.reset();
 
         let start_time = Instant::now();
-        let ctx = ExecutionContext::new(&graph.id).with_dry_run(self.config.dry_run);
+        let ctx = ExecutionContext::new(&graph.id);
 
         // Main execution loop
         loop {
@@ -720,7 +760,7 @@ impl AgentEngine {
         self.scheduler.write().await.reset();
 
         let start_time = Instant::now();
-        let ctx = ExecutionContext::new(&graph.id).with_dry_run(self.config.dry_run);
+        let ctx = ExecutionContext::new(&graph.id);
 
         // Create context manager for tracking results
         let context_manager = TaskContextManager::new(&graph.id);
@@ -1004,12 +1044,7 @@ mod tests {
     #[tokio::test]
     async fn test_engine_execute() {
         // Create a mock provider (we won't use it for execution)
-        let config = AgentConfig {
-            require_confirmation: false,
-            max_parallelism: 2,
-            dry_run: false,
-            ..Default::default()
-        };
+        let config = AgentConfig::default();
 
         // Create engine with mock planner
         let engine = AgentEngine::with_planner(config, Arc::new(MockPlanner));

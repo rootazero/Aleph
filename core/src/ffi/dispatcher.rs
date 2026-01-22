@@ -90,29 +90,9 @@ impl AetherCore {
         Ok(engine)
     }
 
-    /// Get Cowork configuration (FFI method name kept for Swift compatibility)
-    pub fn agent_get_config(&self) -> crate::ffi::dispatcher_types::AgentConfigFFI {
-        // Return current config or default
-        crate::ffi::dispatcher_types::AgentConfigFFI::from(crate::dispatcher::AgentConfig::default())
-    }
-
-    /// Update Cowork configuration
-    pub fn agent_update_config(
-        &self,
-        config: crate::ffi::dispatcher_types::AgentConfigFFI,
-    ) -> Result<(), AetherFfiError> {
-        // For now, this would reinitialize the engine with new config
-        // Reset the engine so it gets recreated with new config
-        let mut engine_guard = self.agent_engine.write().unwrap();
-        *engine_guard = None;
-
-        info!(
-            max_parallelism = config.max_parallelism,
-            "Cowork configuration updated"
-        );
-
-        Ok(())
-    }
+    // Note: agent_get_config and agent_update_config have been removed.
+    // Core execution parameters (require_confirmation, max_parallelism, max_task_retries)
+    // are now hardcoded for security and stability.
 
     /// Plan a task from natural language request
     pub fn agent_plan(

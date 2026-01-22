@@ -7,6 +7,7 @@ mod dag;
 pub use dag::{DagScheduler, ExecutionResult, GraphTaskExecutor};
 
 use crate::dispatcher::agent_types::{Task, TaskGraph};
+use super::engine::{MAX_PARALLELISM, MAX_TASK_RETRIES};
 
 /// Configuration for the scheduler
 #[derive(Debug, Clone)]
@@ -20,8 +21,8 @@ pub struct SchedulerConfig {
 impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
-            max_parallelism: 4,
-            max_task_retries: 3,
+            max_parallelism: MAX_PARALLELISM,
+            max_task_retries: MAX_TASK_RETRIES,
         }
     }
 }
