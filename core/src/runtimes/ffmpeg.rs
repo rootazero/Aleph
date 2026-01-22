@@ -88,8 +88,16 @@ impl FfmpegRuntime {
 
                 let name = entry.name().to_string();
 
-                // Match ffmpeg binary at any path level
-                if name == "ffmpeg" || name.ends_with("/ffmpeg") {
+                // Match ffmpeg binary at any path level (Unix and Windows)
+                // Unix: "ffmpeg" or "path/to/ffmpeg"
+                // Windows: "ffmpeg.exe" or "path\\to\\ffmpeg.exe" or "path/to/ffmpeg.exe"
+                let is_ffmpeg = name == "ffmpeg"
+                    || name == "ffmpeg.exe"
+                    || name.ends_with("/ffmpeg")
+                    || name.ends_with("/ffmpeg.exe")
+                    || name.ends_with("\\ffmpeg.exe");
+
+                if is_ffmpeg {
                     // Found the binary
                     let mut contents = Vec::new();
                     entry.read_to_end(&mut contents).map_err(|e| {

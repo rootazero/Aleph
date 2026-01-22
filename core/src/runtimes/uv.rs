@@ -89,12 +89,13 @@ impl UvRuntime {
 
         info!(package = %package, "Installing Python package");
 
+        let python_path = self.python_path();
         let output = Command::new(self.uv_binary())
             .args([
                 "pip",
                 "install",
                 "--python",
-                self.python_path().to_str().unwrap_or("python"),
+                &python_path.to_string_lossy(),
                 package,
             ])
             .output()
@@ -136,7 +137,7 @@ impl UvRuntime {
         info!(venv = ?venv_path, "Creating default Python virtual environment");
 
         let output = Command::new(self.uv_binary())
-            .args(["venv", venv_path.to_str().unwrap_or("default")])
+            .args(["venv", &venv_path.to_string_lossy()])
             .output()
             .map_err(|e| AetherError::runtime("uv", format!("Failed to create venv: {}", e)))?;
 
