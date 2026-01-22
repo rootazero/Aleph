@@ -79,7 +79,7 @@ impl Default for ConfirmationConfig {
         Self {
             threshold: 0.7,
             enabled: true,
-            timeout_ms: 30000, // 30 seconds default
+            timeout_ms: 0, // 0 = no timeout, wait indefinitely (like Claude Code)
             show_parameters: true,
             skip_native_tools: false,
         }
@@ -472,7 +472,7 @@ mod tests {
 
         assert_eq!(config.threshold, 0.7);
         assert!(config.enabled);
-        assert_eq!(config.timeout_ms, 30000);
+        assert_eq!(config.timeout_ms, 0); // 0 = no timeout
         assert!(config.show_parameters);
     }
 

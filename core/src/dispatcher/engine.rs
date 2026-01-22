@@ -64,8 +64,9 @@ pub const DEFAULT_MAX_TOKENS: u32 = 4096;
 pub const DEFAULT_MAX_RETRIES: u32 = 3;
 
 // Timeout defaults (in seconds)
-/// Default confirmation timeout
-pub const DEFAULT_CONFIRMATION_TIMEOUT_SECS: u64 = 30;
+/// Default confirmation timeout (0 = no timeout, wait indefinitely)
+/// User confirmation should wait forever until user responds, like Claude Code
+pub const DEFAULT_CONFIRMATION_TIMEOUT_SECS: u64 = 0;
 /// Default connection timeout
 pub const DEFAULT_CONNECTION_TIMEOUT_SECS: u64 = 30;
 

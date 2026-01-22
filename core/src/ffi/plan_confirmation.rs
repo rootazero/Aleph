@@ -40,8 +40,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
-/// Default timeout for plan confirmations (30 seconds)
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default timeout for plan confirmations
+/// Duration::ZERO means no timeout - wait indefinitely (like Claude Code)
+const DEFAULT_TIMEOUT: Duration = Duration::ZERO;
 
 /// A pending plan confirmation awaiting user decision
 pub struct PendingPlanConfirmation {
@@ -66,7 +67,12 @@ impl PendingPlanConfirmation {
     }
 
     /// Check if this confirmation has expired
+    /// Returns false if DEFAULT_TIMEOUT is zero (no timeout, wait indefinitely)
     pub fn is_expired(&self) -> bool {
+        // Duration::ZERO means no timeout, wait indefinitely
+        if DEFAULT_TIMEOUT == Duration::ZERO {
+            return false;
+        }
         self.created_at.elapsed() > DEFAULT_TIMEOUT
     }
 }

@@ -112,7 +112,12 @@ impl PendingConfirmation {
     }
 
     /// Check if this confirmation has timed out
+    /// Returns false if timeout is zero (no timeout, wait indefinitely)
     pub fn is_expired(&self) -> bool {
+        // timeout == 0 means no timeout, wait indefinitely
+        if self.timeout == Duration::ZERO {
+            return false;
+        }
         self.created_at.elapsed() > self.timeout
     }
 
@@ -294,11 +299,12 @@ pub struct PendingConfirmationStore {
 
 impl PendingConfirmationStore {
     /// Create a new store with default settings
+    /// Default timeout is zero (no timeout, wait indefinitely like Claude Code)
     pub fn new() -> Self {
         Self {
             confirmations: RwLock::new(HashMap::new()),
             max_pending: 100,
-            default_timeout: Duration::from_secs(30),
+            default_timeout: Duration::ZERO, // No timeout, wait indefinitely
         }
     }
 
@@ -438,7 +444,7 @@ impl Default for AsyncConfirmationConfig {
         Self {
             threshold: 0.7,
             enabled: true,
-            timeout_ms: 30000,
+            timeout_ms: 0, // 0 = no timeout, wait indefinitely (like Claude Code)
             skip_native_tools: false,
         }
     }
@@ -644,7 +650,7 @@ mod tests {
         assert_eq!(ffi.tool_id, "native:search");
         assert_eq!(ffi.tool_name, "search");
         assert_eq!(ffi.confidence, 0.65);
-        assert_eq!(ffi.timeout_ms, 30000);
+        assert_eq!(ffi.timeout_ms, 30000); // This test uses explicit 30s timeout
     }
 
     #[test]
