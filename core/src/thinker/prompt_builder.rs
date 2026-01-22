@@ -17,6 +17,9 @@ pub struct PromptConfig {
     pub custom_instructions: Option<String>,
     /// Maximum tokens for tool descriptions
     pub max_tool_description_tokens: usize,
+    /// Runtime capabilities (pre-formatted prompt text)
+    /// Describes available runtimes (Python, Node.js, FFmpeg, etc.)
+    pub runtime_capabilities: Option<String>,
 }
 
 impl Default for PromptConfig {
@@ -26,6 +29,7 @@ impl Default for PromptConfig {
             language: None,
             custom_instructions: None,
             max_tool_description_tokens: 2000,
+            runtime_capabilities: None,
         }
     }
 }
@@ -53,6 +57,13 @@ impl PromptBuilder {
         prompt.push_str("- Observe the current state and history\n");
         prompt.push_str("- Decide the SINGLE next action to take\n");
         prompt.push_str("- Execute until the task is complete or you need user input\n\n");
+
+        // Runtime capabilities (injected if available)
+        if let Some(ref runtimes) = self.config.runtime_capabilities {
+            prompt.push_str("## Available Runtimes\n\n");
+            prompt.push_str(runtimes);
+            prompt.push('\n');
+        }
 
         // Available tools
         prompt.push_str("## Available Tools\n");
@@ -336,5 +347,42 @@ mod tests {
         assert!(messages.len() >= 3);
         assert_eq!(messages[0].role, MessageRole::User);
         assert!(messages[0].content.contains("Find Rust tutorials"));
+    }
+
+    #[test]
+    fn test_system_prompt_with_runtime_capabilities() {
+        let mut config = PromptConfig::default();
+        config.runtime_capabilities = Some(
+            "**Python (via uv)**\n\
+             - Execute Python scripts\n\
+             - Executable: `/path/to/python`\n"
+                .to_string(),
+        );
+
+        let builder = PromptBuilder::new(config);
+        let prompt = builder.build_system_prompt(&[]);
+
+        // Verify runtime capabilities section is present
+        assert!(prompt.contains("## Available Runtimes"));
+        assert!(prompt.contains("Python (via uv)"));
+        assert!(prompt.contains("/path/to/python"));
+
+        // Verify section order: Runtimes should come before Tools
+        let runtimes_pos = prompt.find("## Available Runtimes").unwrap();
+        let tools_pos = prompt.find("## Available Tools").unwrap();
+        assert!(
+            runtimes_pos < tools_pos,
+            "Available Runtimes should appear before Available Tools"
+        );
+    }
+
+    #[test]
+    fn test_system_prompt_without_runtime_capabilities() {
+        let config = PromptConfig::default();
+        let builder = PromptBuilder::new(config);
+        let prompt = builder.build_system_prompt(&[]);
+
+        // Verify runtime capabilities section is NOT present
+        assert!(!prompt.contains("## Available Runtimes"));
     }
 }

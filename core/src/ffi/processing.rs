@@ -29,6 +29,7 @@ use crate::compressor::NoOpCompressor;
 use crate::executor::{BuiltinToolRegistry, SingleStepExecutor};
 use crate::ffi::FfiLoopCallback;
 use crate::intent::{DirectMode, IntentRouter, RouteResult, ThinkingContext};
+use crate::runtimes::{RuntimeCapability, RuntimeRegistry};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
 
 // DAG scheduler imports
@@ -1045,9 +1046,29 @@ fn run_agent_loop(
         .with_max_steps(20)
         .with_max_tokens(100_000);
 
+    // Get runtime capabilities for system prompt injection
+    let runtime_capabilities = match RuntimeRegistry::new() {
+        Ok(registry) => {
+            let capabilities = RuntimeCapability::get_installed_from_registry(&registry);
+            if capabilities.is_empty() {
+                None
+            } else {
+                Some(RuntimeCapability::format_for_prompt(&capabilities))
+            }
+        }
+        Err(e) => {
+            debug!(error = %e, "Failed to get runtime capabilities (non-blocking)");
+            None
+        }
+    };
+
+    // Create thinker config with runtime capabilities
+    let mut thinker_config = ThinkerConfig::default();
+    thinker_config.prompt.runtime_capabilities = runtime_capabilities;
+
     // Create components
     let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));
-    let thinker = Arc::new(Thinker::new(provider_registry, ThinkerConfig::default()));
+    let thinker = Arc::new(Thinker::new(provider_registry, thinker_config));
 
     // Create executor with builtin tool registry
     let tool_registry = Arc::new(BuiltinToolRegistry::new());

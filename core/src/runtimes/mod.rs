@@ -24,6 +24,7 @@
 //! let runtimes = registry.list();
 //! ```
 
+mod capability;
 mod download;
 mod manager;
 mod manifest;
@@ -36,6 +37,7 @@ mod uv;
 mod ytdlp;
 
 // Re-exports
+pub use capability::RuntimeCapability;
 pub use manager::{RuntimeInfo, RuntimeManager, UpdateInfo};
 pub use manifest::Manifest;
 pub use registry::RuntimeRegistry;
