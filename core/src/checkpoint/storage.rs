@@ -182,6 +182,7 @@ impl CheckpointStorage for MemoryStorage {
 /// File-based storage for checkpoints (persistent)
 pub struct FileStorage {
     base_dir: PathBuf,
+    #[allow(dead_code)] // Reserved for future use
     max_checkpoints_per_session: usize,
 }
 
@@ -203,6 +204,7 @@ impl FileStorage {
     }
 
     /// Get path for the index file
+    #[allow(dead_code)] // Reserved for future use
     fn index_path(&self) -> PathBuf {
         self.base_dir.join("checkpoints_index.json")
     }
