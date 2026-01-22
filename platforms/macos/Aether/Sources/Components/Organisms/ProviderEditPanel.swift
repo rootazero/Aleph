@@ -1361,6 +1361,8 @@ struct ProviderEditPanel: View {
             return "https://api.deepseek.com"
         case "moonshot":
             return "https://api.moonshot.cn/v1"
+        case "doubao", "volcengine", "ark":
+            return "https://ark.cn-beijing.volces.com/api/v3"
         case "openrouter":
             return "https://openrouter.ai/api/v1"
         // Azure OpenAI and GitHub Copilot require user configuration

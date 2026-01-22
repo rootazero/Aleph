@@ -72,6 +72,9 @@ struct ProviderIcon: View {
         // DeepSeek
         case "deepseek":
             return "ProviderIcon-DeepSeek"
+        // Volcengine / Doubao
+        case "doubao", "volcengine", "ark":
+            return "ProviderIcon-Doubao"
         // Moonshot / Kimi
         case "moonshot", "kimi":
             return "ProviderIcon-Moonshot"
@@ -109,13 +112,19 @@ struct ProviderIcon: View {
         HStack(spacing: 20) {
             iconPreview("Ollama", "ollama")
             iconPreview("DeepSeek", "deepseek")
-            iconPreview("Moonshot", "moonshot")
+            iconPreview("Doubao", "doubao")
         }
 
-        // Row 3: Platform providers
+
+        // Row 3: More providers
         HStack(spacing: 20) {
+            iconPreview("Moonshot", "moonshot")
             iconPreview("OpenRouter", "openrouter")
             iconPreview("Azure", "azure")
+        }
+
+        // Row 4: Platform providers
+        HStack(spacing: 20) {
             iconPreview("GitHub", "github")
         }
     }

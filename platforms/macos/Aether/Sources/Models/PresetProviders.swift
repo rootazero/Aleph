@@ -108,6 +108,16 @@ struct PresetProviders {
             baseUrl: nil  // Default: https://api.moonshot.cn/v1
         ),
         PresetProvider(
+            id: "doubao",
+            name: "Doubao (Volcengine)",
+            iconName: "sparkles.rectangle.stack",
+            color: "#3370FF",
+            providerType: "openai",
+            defaultModel: "doubao-1-5-pro-32k",
+            description: "ByteDance's Doubao AI models with long context support",
+            baseUrl: nil  // Default: https://ark.cn-beijing.volces.com/api/v3
+        ),
+        PresetProvider(
             id: "openrouter",
             name: "OpenRouter",
             iconName: "arrow.triangle.branch",
