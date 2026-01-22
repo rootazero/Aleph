@@ -1,10 +1,66 @@
 //! Configuration for Agent Loop
 //!
 //! This module defines configuration options for the Agent Loop,
-//! including guard limits, compression settings, and tool policies.
+//! including guard limits, compression settings, tool policies,
+//! and permission modes (Normal, AutoAcceptEdits, PlanMode).
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+/// Permission mode for Agent Loop
+///
+/// Controls how the agent handles write operations and confirmations.
+/// Inspired by Claude Code's permission model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PermissionMode {
+    /// Default mode: file edits and shell commands require user confirmation
+    #[default]
+    Normal,
+
+    /// Auto-accept edits: file changes are applied automatically,
+    /// but shell commands still require confirmation
+    AutoAcceptEdits,
+
+    /// Plan mode: read-only exploration, all write operations are blocked.
+    /// The agent can only read files, search, and explore the codebase.
+    /// Useful for designing implementation approaches before writing code.
+    PlanMode,
+}
+
+impl PermissionMode {
+    /// Check if this mode allows write operations
+    pub fn allows_writes(&self) -> bool {
+        !matches!(self, PermissionMode::PlanMode)
+    }
+
+    /// Check if file edits require confirmation
+    pub fn requires_edit_confirmation(&self) -> bool {
+        matches!(self, PermissionMode::Normal)
+    }
+
+    /// Check if shell commands require confirmation
+    pub fn requires_shell_confirmation(&self) -> bool {
+        !matches!(self, PermissionMode::AutoAcceptEdits)
+    }
+
+    /// Get a human-readable description
+    pub fn description(&self) -> &'static str {
+        match self {
+            PermissionMode::Normal => "Normal mode: edits and commands require confirmation",
+            PermissionMode::AutoAcceptEdits => "Auto-accept: edits are automatic, commands need confirmation",
+            PermissionMode::PlanMode => "Plan mode: read-only exploration, no write operations",
+        }
+    }
+
+    /// Get the display name
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            PermissionMode::Normal => "Normal",
+            PermissionMode::AutoAcceptEdits => "Auto-Accept Edits",
+            PermissionMode::PlanMode => "Plan Mode",
+        }
+    }
+}
 
 /// Configuration for Agent Loop
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +84,10 @@ pub struct LoopConfig {
     /// Tools that require user confirmation before execution
     #[serde(default)]
     pub require_confirmation: Vec<String>,
+
+    /// Permission mode controlling write operations and confirmations
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
 
     /// Compression configuration
     #[serde(default)]
@@ -55,6 +115,7 @@ impl Default for LoopConfig {
             timeout_secs,
             timeout: Duration::from_secs(timeout_secs),
             require_confirmation: default_dangerous_tools(),
+            permission_mode: PermissionMode::default(),
             compression: CompressionConfig::default(),
             model_routing: ModelRoutingConfig::default(),
             enable_thinking_stream: true,
@@ -227,6 +288,64 @@ impl LoopConfig {
         self
     }
 
+    /// Builder pattern: set permission mode
+    pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
+        self.permission_mode = mode;
+        self
+    }
+
+    /// Check if the current mode allows a specific tool
+    ///
+    /// In PlanMode, only read operations are allowed.
+    /// Returns Ok(()) if allowed, Err with reason if blocked.
+    pub fn check_tool_permission(&self, tool_name: &str) -> Result<(), String> {
+        if self.permission_mode == PermissionMode::PlanMode {
+            // In plan mode, only allow read operations
+            let read_only_tools = [
+                "read", "read_file", "search", "grep", "glob", "find",
+                "list", "ls", "dir", "tree", "cat", "head", "tail",
+                "git_status", "git_log", "git_diff", "git_show",
+                "web_search", "web_fetch", "fetch_url",
+                "ask_user", "ask_question",
+            ];
+
+            let tool_lower = tool_name.to_lowercase();
+            let is_read_only = read_only_tools.iter().any(|t| {
+                tool_lower == *t || tool_lower.starts_with(&format!("{}_", t))
+            });
+
+            if !is_read_only {
+                return Err(format!(
+                    "Plan mode is active. Tool '{}' is blocked because it may modify files or execute commands. \
+                     Switch to Normal mode to enable write operations.",
+                    tool_name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if confirmation is needed for a tool
+    pub fn needs_confirmation(&self, tool_name: &str) -> bool {
+        match self.permission_mode {
+            PermissionMode::PlanMode => {
+                // Plan mode - all modifications are blocked, no confirmation needed
+                false
+            }
+            PermissionMode::AutoAcceptEdits => {
+                // Auto-accept edits - only confirm shell commands
+                let shell_tools = ["shell", "execute", "run", "bash", "cmd", "exec"];
+                shell_tools.iter().any(|t| tool_name.to_lowercase().contains(t))
+            }
+            PermissionMode::Normal => {
+                // Normal mode - use the configured list
+                self.require_confirmation.iter().any(|t| {
+                    tool_name == t || tool_name.starts_with(t)
+                })
+            }
+        }
+    }
+
     /// Create a config for testing with lower limits
     pub fn for_testing() -> Self {
         Self {
@@ -235,6 +354,7 @@ impl LoopConfig {
             timeout_secs: 30,
             timeout: Duration::from_secs(30),
             require_confirmation: vec![],
+            permission_mode: PermissionMode::Normal,
             compression: CompressionConfig {
                 compress_after_steps: 3,
                 recent_window_size: 2,
@@ -244,6 +364,14 @@ impl LoopConfig {
             model_routing: ModelRoutingConfig::default(),
             enable_thinking_stream: false,
             persist_session: false,
+        }
+    }
+
+    /// Create a config for plan mode (read-only exploration)
+    pub fn for_plan_mode() -> Self {
+        Self {
+            permission_mode: PermissionMode::PlanMode,
+            ..Self::default()
         }
     }
 }
@@ -259,6 +387,7 @@ mod tests {
         assert_eq!(config.max_tokens, 100_000);
         assert_eq!(config.timeout, Duration::from_secs(600));
         assert!(!config.require_confirmation.is_empty());
+        assert_eq!(config.permission_mode, PermissionMode::Normal);
     }
 
     #[test]
@@ -267,12 +396,14 @@ mod tests {
             .with_max_steps(100)
             .with_max_tokens(50_000)
             .with_timeout(Duration::from_secs(300))
-            .add_confirmation_tool("custom_danger");
+            .add_confirmation_tool("custom_danger")
+            .with_permission_mode(PermissionMode::PlanMode);
 
         assert_eq!(config.max_steps, 100);
         assert_eq!(config.max_tokens, 50_000);
         assert_eq!(config.timeout, Duration::from_secs(300));
         assert!(config.require_confirmation.contains(&"custom_danger".to_string()));
+        assert_eq!(config.permission_mode, PermissionMode::PlanMode);
     }
 
     #[test]
@@ -289,5 +420,76 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let parsed: LoopConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.max_steps, config.max_steps);
+    }
+
+    #[test]
+    fn test_permission_mode_properties() {
+        assert!(PermissionMode::Normal.allows_writes());
+        assert!(PermissionMode::AutoAcceptEdits.allows_writes());
+        assert!(!PermissionMode::PlanMode.allows_writes());
+
+        assert!(PermissionMode::Normal.requires_edit_confirmation());
+        assert!(!PermissionMode::AutoAcceptEdits.requires_edit_confirmation());
+        assert!(!PermissionMode::PlanMode.requires_edit_confirmation());
+    }
+
+    #[test]
+    fn test_plan_mode_tool_permissions() {
+        let config = LoopConfig::for_plan_mode();
+
+        // Read operations should be allowed
+        assert!(config.check_tool_permission("read_file").is_ok());
+        assert!(config.check_tool_permission("search").is_ok());
+        assert!(config.check_tool_permission("grep").is_ok());
+        assert!(config.check_tool_permission("glob").is_ok());
+        assert!(config.check_tool_permission("git_status").is_ok());
+        assert!(config.check_tool_permission("web_search").is_ok());
+
+        // Write operations should be blocked
+        assert!(config.check_tool_permission("write_file").is_err());
+        assert!(config.check_tool_permission("delete").is_err());
+        assert!(config.check_tool_permission("execute_code").is_err());
+        assert!(config.check_tool_permission("run_command").is_err());
+    }
+
+    #[test]
+    fn test_normal_mode_all_tools_allowed() {
+        let config = LoopConfig::default();
+
+        // All tools should be allowed (permission-wise)
+        assert!(config.check_tool_permission("read_file").is_ok());
+        assert!(config.check_tool_permission("write_file").is_ok());
+        assert!(config.check_tool_permission("delete").is_ok());
+        assert!(config.check_tool_permission("execute_code").is_ok());
+    }
+
+    #[test]
+    fn test_needs_confirmation() {
+        let normal_config = LoopConfig::default();
+        let auto_config = LoopConfig::default().with_permission_mode(PermissionMode::AutoAcceptEdits);
+        let plan_config = LoopConfig::for_plan_mode();
+
+        // Normal mode - dangerous tools need confirmation
+        assert!(normal_config.needs_confirmation("write_file"));
+        assert!(normal_config.needs_confirmation("delete"));
+
+        // Auto-accept mode - only shell commands need confirmation
+        assert!(!auto_config.needs_confirmation("write_file"));
+        assert!(auto_config.needs_confirmation("shell_execute"));
+        assert!(auto_config.needs_confirmation("bash"));
+
+        // Plan mode - nothing needs confirmation (writes are blocked entirely)
+        assert!(!plan_config.needs_confirmation("write_file"));
+        assert!(!plan_config.needs_confirmation("delete"));
+    }
+
+    #[test]
+    fn test_permission_mode_serialization() {
+        let config = LoopConfig::default().with_permission_mode(PermissionMode::PlanMode);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("PlanMode"));
+
+        let parsed: LoopConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.permission_mode, PermissionMode::PlanMode);
     }
 }

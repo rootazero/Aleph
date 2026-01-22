@@ -31,6 +31,12 @@ pub enum GuardViolation {
         action: String,
         repeat_count: usize,
     },
+    /// Repeated failures on same action pattern
+    RepeatedFailures {
+        pattern: String,
+        failure_count: usize,
+        total_attempts: usize,
+    },
 }
 
 impl GuardViolation {
@@ -65,6 +71,16 @@ impl GuardViolation {
                     action, repeat_count
                 )
             }
+            GuardViolation::RepeatedFailures {
+                pattern,
+                failure_count,
+                total_attempts,
+            } => {
+                format!(
+                    "Repeated failures on '{}': {} failures out of {} attempts",
+                    pattern, failure_count, total_attempts
+                )
+            }
         }
     }
 
@@ -83,17 +99,33 @@ impl GuardViolation {
             GuardViolation::StuckLoop { .. } => {
                 "The agent appears to be stuck. Please provide additional guidance or clarification.".to_string()
             }
+            GuardViolation::RepeatedFailures { .. } => {
+                "The same action keeps failing. This might indicate an environmental issue, missing permissions, or incorrect approach. Try a different strategy.".to_string()
+            }
         }
     }
+}
+
+/// Tracked action with success/failure status
+#[derive(Debug, Clone)]
+struct TrackedAction {
+    /// Normalized action identifier (e.g., "tool:read_file" or "tool:search")
+    pattern: String,
+    /// Whether this action succeeded
+    succeeded: bool,
 }
 
 /// Guard checker for Agent Loop
 pub struct LoopGuard {
     config: LoopConfig,
-    /// Track recent actions for stuck detection
-    recent_actions: Vec<String>,
-    /// Maximum repeated actions before stuck detection
+    /// Track recent actions with their success/failure status
+    recent_actions: Vec<TrackedAction>,
+    /// Maximum repeated identical actions before stuck detection
     stuck_threshold: usize,
+    /// Maximum consecutive failures on similar actions before intervention
+    failure_threshold: usize,
+    /// Window size for failure pattern detection
+    failure_window: usize,
 }
 
 impl LoopGuard {
@@ -102,7 +134,20 @@ impl LoopGuard {
         Self {
             config,
             recent_actions: Vec::new(),
-            stuck_threshold: 3, // Same action 3 times = stuck
+            stuck_threshold: 3,      // Same action 3 times = stuck
+            failure_threshold: 3,    // 3 failures on similar action = repeated failures
+            failure_window: 5,       // Look at last 5 actions for failure patterns
+        }
+    }
+
+    /// Create a guard with custom thresholds
+    pub fn with_thresholds(config: LoopConfig, stuck_threshold: usize, failure_threshold: usize) -> Self {
+        Self {
+            config,
+            recent_actions: Vec::new(),
+            stuck_threshold,
+            failure_threshold,
+            failure_window: failure_threshold + 2, // Allow some headroom
         }
     }
 
@@ -133,39 +178,120 @@ impl LoopGuard {
             });
         }
 
-        // Check for stuck loop
+        // Check for stuck loop (same action repeated)
         if let Some(violation) = self.check_stuck() {
+            return Some(violation);
+        }
+
+        // Check for repeated failures on similar actions
+        if let Some(violation) = self.check_repeated_failures() {
             return Some(violation);
         }
 
         None
     }
 
-    /// Record an action for stuck detection
+    /// Record an action with its success/failure status
     pub fn record_action(&mut self, action: &str) {
-        self.recent_actions.push(action.to_string());
+        self.record_action_with_result(action, true);
+    }
 
-        // Keep only recent actions
-        if self.recent_actions.len() > self.stuck_threshold * 2 {
+    /// Record an action with explicit success/failure status
+    pub fn record_action_with_result(&mut self, action: &str, succeeded: bool) {
+        // Normalize action pattern for grouping similar actions
+        let pattern = Self::normalize_action_pattern(action);
+
+        self.recent_actions.push(TrackedAction { pattern, succeeded });
+
+        // Keep history bounded
+        let max_history = self.stuck_threshold.max(self.failure_window) * 2;
+        if self.recent_actions.len() > max_history {
             self.recent_actions.remove(0);
         }
     }
 
-    /// Check if stuck in a loop
+    /// Normalize action pattern for grouping
+    ///
+    /// Examples:
+    /// - "search:query about rust" -> "search"
+    /// - "read_file:/path/to/file.rs" -> "read_file"
+    /// - "tool:write_file" -> "tool:write_file"
+    /// - "tool:write_file:/some/path" -> "tool:write_file"
+    fn normalize_action_pattern(action: &str) -> String {
+        // Split on first colon to get tool/action type
+        if let Some(colon_pos) = action.find(':') {
+            let prefix = &action[..colon_pos];
+            // If prefix is "tool", include the tool name (format: "tool:name" or "tool:name:args")
+            if prefix == "tool" {
+                let rest = &action[colon_pos + 1..];
+                // Find second colon (if args are present)
+                if let Some(second_colon) = rest.find(':') {
+                    // Return "tool:name" (exclude args after second colon)
+                    return format!("tool:{}", &rest[..second_colon]);
+                }
+                // No second colon, just "tool:name" - return entire string
+                return action.to_string();
+            }
+            prefix.to_string()
+        } else {
+            action.to_string()
+        }
+    }
+
+    /// Check if stuck in a loop (identical actions)
     fn check_stuck(&self) -> Option<GuardViolation> {
         if self.recent_actions.len() < self.stuck_threshold {
             return None;
         }
 
-        // Check if last N actions are identical
+        // Get last N actions' patterns
         let last_n = &self.recent_actions[self.recent_actions.len() - self.stuck_threshold..];
-        let first = &last_n[0];
+        let first_pattern = &last_n[0].pattern;
 
-        if last_n.iter().all(|a| a == first) {
+        // Check if all last N actions have identical patterns
+        if last_n.iter().all(|a| &a.pattern == first_pattern) {
             return Some(GuardViolation::StuckLoop {
-                action: first.clone(),
+                action: first_pattern.clone(),
                 repeat_count: self.stuck_threshold,
             });
+        }
+
+        None
+    }
+
+    /// Check for repeated failures on similar action patterns
+    ///
+    /// This catches scenarios where the agent keeps trying similar approaches
+    /// that consistently fail, even if the exact parameters differ.
+    fn check_repeated_failures(&self) -> Option<GuardViolation> {
+        if self.recent_actions.len() < self.failure_threshold {
+            return None;
+        }
+
+        // Look at the failure window
+        let window_start = self.recent_actions.len().saturating_sub(self.failure_window);
+        let window = &self.recent_actions[window_start..];
+
+        // Group by pattern and count failures
+        let mut pattern_stats: std::collections::HashMap<&str, (usize, usize)> = std::collections::HashMap::new();
+
+        for action in window {
+            let entry = pattern_stats.entry(&action.pattern).or_insert((0, 0));
+            entry.1 += 1; // total attempts
+            if !action.succeeded {
+                entry.0 += 1; // failures
+            }
+        }
+
+        // Check if any pattern has too many failures
+        for (pattern, (failures, total)) in pattern_stats {
+            if failures >= self.failure_threshold {
+                return Some(GuardViolation::RepeatedFailures {
+                    pattern: pattern.to_string(),
+                    failure_count: failures,
+                    total_attempts: total,
+                });
+            }
         }
 
         None
@@ -252,11 +378,12 @@ mod tests {
         let config = create_test_config();
         let mut guard = LoopGuard::new(config);
 
-        // Record same action 3 times
-        guard.record_action("search:query");
-        guard.record_action("search:query");
-        guard.record_action("search:query");
+        // Record same action pattern 3 times (all succeed)
+        guard.record_action_with_result("search:query1", true);
+        guard.record_action_with_result("search:query2", true);
+        guard.record_action_with_result("search:query3", true);
 
+        // Pattern normalizes to "search", so all 3 are identical
         let violation = guard.check_stuck();
         assert!(matches!(violation, Some(GuardViolation::StuckLoop { .. })));
     }
@@ -266,12 +393,88 @@ mod tests {
         let config = create_test_config();
         let mut guard = LoopGuard::new(config);
 
-        guard.record_action("search:query1");
-        guard.record_action("read_file:path");
-        guard.record_action("search:query2");
+        guard.record_action_with_result("search:query1", true);
+        guard.record_action_with_result("read_file:path", true);
+        guard.record_action_with_result("write_file:path", true);
 
         let violation = guard.check_stuck();
         assert!(violation.is_none());
+    }
+
+    #[test]
+    fn test_repeated_failures_detection() {
+        let config = create_test_config();
+        let mut guard = LoopGuard::new(config);
+
+        // Record 3 failures on similar action
+        guard.record_action_with_result("search:query1", false);
+        guard.record_action_with_result("search:query2", false);
+        guard.record_action_with_result("search:query3", false);
+
+        let violation = guard.check_repeated_failures();
+        assert!(matches!(
+            violation,
+            Some(GuardViolation::RepeatedFailures { failure_count: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn test_mixed_success_failure_no_violation() {
+        let config = create_test_config();
+        let mut guard = LoopGuard::new(config);
+
+        // Mix of successes and failures - should not trigger
+        guard.record_action_with_result("search:query1", false);
+        guard.record_action_with_result("search:query2", true);
+        guard.record_action_with_result("search:query3", false);
+        guard.record_action_with_result("search:query4", true);
+        guard.record_action_with_result("search:query5", false);
+
+        let violation = guard.check_repeated_failures();
+        // Only 3 failures, but interleaved with successes - still triggers threshold
+        assert!(violation.is_some());
+    }
+
+    #[test]
+    fn test_different_patterns_no_repeated_failure() {
+        let config = create_test_config();
+        let mut guard = LoopGuard::new(config);
+
+        // Failures on different patterns - should not trigger
+        guard.record_action_with_result("search:query1", false);
+        guard.record_action_with_result("read_file:path1", false);
+        guard.record_action_with_result("write_file:path1", false);
+
+        let violation = guard.check_repeated_failures();
+        assert!(violation.is_none());
+    }
+
+    #[test]
+    fn test_action_pattern_normalization() {
+        assert_eq!(LoopGuard::normalize_action_pattern("search:query about rust"), "search");
+        assert_eq!(LoopGuard::normalize_action_pattern("read_file:/path/to/file.rs"), "read_file");
+        assert_eq!(LoopGuard::normalize_action_pattern("tool:write_file:/some/path"), "tool:write_file");
+        assert_eq!(LoopGuard::normalize_action_pattern("tool:write_file"), "tool:write_file");
+        assert_eq!(LoopGuard::normalize_action_pattern("tool:tool_0"), "tool:tool_0");
+        assert_eq!(LoopGuard::normalize_action_pattern("tool:read_file"), "tool:read_file");
+        assert_eq!(LoopGuard::normalize_action_pattern("simple_action"), "simple_action");
+    }
+
+    #[test]
+    fn test_custom_thresholds() {
+        let config = create_test_config();
+        let mut guard = LoopGuard::with_thresholds(config, 5, 4);
+
+        // 3 failures should not trigger with threshold of 4
+        guard.record_action_with_result("search:q1", false);
+        guard.record_action_with_result("search:q2", false);
+        guard.record_action_with_result("search:q3", false);
+
+        assert!(guard.check_repeated_failures().is_none());
+
+        // 4th failure should trigger
+        guard.record_action_with_result("search:q4", false);
+        assert!(guard.check_repeated_failures().is_some());
     }
 
     #[test]
@@ -284,5 +487,21 @@ mod tests {
         assert!(guard.requires_confirmation("write_file"));
         assert!(!guard.requires_confirmation("read_file"));
         assert!(!guard.requires_confirmation("search"));
+    }
+
+    #[test]
+    fn test_guard_violation_descriptions() {
+        let violations = vec![
+            GuardViolation::MaxSteps { current: 10, limit: 10 },
+            GuardViolation::MaxTokens { current: 1000, limit: 1000 },
+            GuardViolation::Timeout { elapsed: Duration::from_secs(60), limit: Duration::from_secs(60) },
+            GuardViolation::StuckLoop { action: "search".to_string(), repeat_count: 3 },
+            GuardViolation::RepeatedFailures { pattern: "search".to_string(), failure_count: 3, total_attempts: 5 },
+        ];
+
+        for violation in violations {
+            assert!(!violation.description().is_empty());
+            assert!(!violation.suggestion().is_empty());
+        }
     }
 }

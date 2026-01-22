@@ -21,11 +21,25 @@
 //! - Important tool outputs (errors, search results)
 //! - User decisions
 //! - Current state description
+//!
+//! # Context Statistics
+//!
+//! The module also provides context usage tracking via `ContextStats`:
+//!
+//! ```rust,ignore
+//! let stats = ContextStats::from_state(&loop_state, max_tokens);
+//! println!("{}", stats.summary());
+//! if stats.is_critical() {
+//!     println!("Warning: context is almost full!");
+//! }
+//! ```
 
+pub mod context_stats;
 pub mod strategy;
 
 use std::sync::Arc;
 
+pub use context_stats::{CompressionFocus, ContextStats, UsageBreakdown, WarningLevel};
 pub use strategy::{CompressionPrompt, KeyInfo, KeyInfoExtractor, RuleBasedStrategy};
 
 use crate::agent_loop::{CompressionConfig, CompressedHistory, CompressorTrait, LoopState, LoopStep};

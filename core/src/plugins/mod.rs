@@ -45,6 +45,7 @@
 //! let result = manager.execute_skill("my-plugin", "hello", "World").await?;
 //! ```
 
+pub mod claude_md;
 pub mod components;
 pub mod error;
 pub mod integrator;
@@ -84,6 +85,9 @@ pub use types::{
 // Component re-exports
 pub use components::skill::substitute_arguments;
 pub use components::hook::{matches_pattern, substitute_variables};
+
+// CLAUDE.md re-exports
+pub use claude_md::{ClaudeMdLoader, ClaudeMdSummary};
 
 // Integrator re-exports
 pub use integrator::{

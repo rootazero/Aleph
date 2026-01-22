@@ -55,6 +55,7 @@
 pub mod agent_loop; // NEW: Agent Loop - observe-think-act-feedback cycle
 pub mod agents; // Unified agent system: rig-core agent + sub-agent delegation
 pub mod capability;
+pub mod checkpoint; // NEW: File snapshots and rollback (Claude Code style)
 pub mod clarification; // NEW: Phantom Flow interaction types
 mod clipboard;
 pub mod command; // NEW: Command completion system

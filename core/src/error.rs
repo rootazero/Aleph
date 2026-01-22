@@ -162,6 +162,10 @@ pub enum AetherError {
         runtime_id: String,
         suggestion: Option<String>,
     },
+
+    /// Data corruption or integrity error
+    #[error("Data corruption: {0}")]
+    CorruptData(String),
 }
 
 impl AetherError {
@@ -329,7 +333,8 @@ impl AetherError {
             | AetherError::McpToolNotFound(_)
             | AetherError::McpTimeout
             | AetherError::Cancelled
-            | AetherError::MissingInput { .. } => None,
+            | AetherError::MissingInput { .. }
+            | AetherError::CorruptData(_) => None,
         }
     }
 
@@ -477,6 +482,9 @@ impl AetherError {
                     }
                 )
             }
+            AetherError::CorruptData(msg) => {
+                format!("Data corruption detected: {}. Please try again or restore from backup.", msg)
+            }
         }
     }
 
@@ -543,6 +551,12 @@ pub type Result<T> = std::result::Result<T, AetherError>;
 impl From<serde_json::Error> for AetherError {
     fn from(err: serde_json::Error) -> Self {
         AetherError::IoError(format!("JSON serialization error: {}", err))
+    }
+}
+
+impl From<std::io::Error> for AetherError {
+    fn from(err: std::io::Error) -> Self {
+        AetherError::IoError(err.to_string())
     }
 }
 

@@ -515,11 +515,37 @@ impl DagScheduler {
     }
 }
 
-/// Execute a task with retry logic
+/// Exponential backoff configuration for retries
+const INITIAL_RETRY_DELAY_MS: u64 = 100;
+const MAX_RETRY_DELAY_MS: u64 = 5000;
+const BACKOFF_MULTIPLIER: f64 = 2.0;
+
+/// Calculate exponential backoff delay for a given attempt
+///
+/// Uses the formula: min(initial * multiplier^(attempt-1), max_delay)
+/// With optional jitter (±10%) to prevent thundering herd
+fn calculate_backoff_delay(attempt: u32) -> tokio::time::Duration {
+    let base_delay = INITIAL_RETRY_DELAY_MS as f64 * BACKOFF_MULTIPLIER.powi(attempt as i32 - 1);
+    let capped_delay = base_delay.min(MAX_RETRY_DELAY_MS as f64);
+
+    // Add ±10% jitter to prevent thundering herd
+    let jitter_factor = 0.9 + (rand::random::<f64>() * 0.2); // 0.9 to 1.1
+    let final_delay = (capped_delay * jitter_factor) as u64;
+
+    tokio::time::Duration::from_millis(final_delay)
+}
+
+/// Execute a task with exponential backoff retry logic
 ///
 /// Attempts to execute the task up to `max_retries` times.
-/// On each failure, notifies the callback with retry attempt info.
-/// After all retries exhausted, notifies with "deciding" state.
+/// Uses exponential backoff with jitter between retries to handle
+/// transient failures gracefully without overwhelming services.
+///
+/// Backoff formula: min(100ms * 2^(attempt-1), 5000ms) ± 10% jitter
+/// - Attempt 1 failure: ~100ms delay
+/// - Attempt 2 failure: ~200ms delay
+/// - Attempt 3 failure: ~400ms delay
+/// - etc., capped at 5000ms
 ///
 /// # Arguments
 /// * `task` - The task to execute
@@ -551,15 +577,18 @@ async fn execute_with_retry(
                 last_error = Some(e);
 
                 if attempt < max_retries {
-                    // Notify retry
+                    // Calculate exponential backoff delay
+                    let delay = calculate_backoff_delay(attempt);
+
+                    // Notify retry with delay info
                     callback.on_task_retry(&task.id, attempt, &error_msg).await;
                     warn!(
-                        "Task '{}' failed on attempt {}/{}: {}, retrying...",
-                        task.id, attempt, max_retries, error_msg
+                        "Task '{}' failed on attempt {}/{}: {}, retrying in {:?}...",
+                        task.id, attempt, max_retries, error_msg, delay
                     );
 
-                    // Brief delay before retry
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    // Apply exponential backoff delay
+                    tokio::time::sleep(delay).await;
                 } else {
                     // All retries exhausted - notify deciding state
                     callback.on_task_deciding(&task.id, &error_msg).await;
