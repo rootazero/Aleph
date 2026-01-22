@@ -85,18 +85,25 @@ final class AccessibilityHelper {
             return nil
         }
 
+        // Cast to AXUIElement (AnyObject from AX APIs is always AXUIElement)
+        // swiftlint:disable:next force_cast
+        let appUIElement = appElement as! AXUIElement
+
         // Get the focused element within the application
         var focusedElement: AnyObject?
-        result = AXUIElementCopyAttributeValue(appElement as! AXUIElement, kAXFocusedUIElementAttribute as CFString, &focusedElement)
+        result = AXUIElementCopyAttributeValue(appUIElement, kAXFocusedUIElementAttribute as CFString, &focusedElement)
 
         guard result == .success, let element = focusedElement else {
             print("[AccessibilityHelper] Failed to get focused UI element: \(result.rawValue)")
             return nil
         }
 
+        // swiftlint:disable:next force_cast
+        let elementUIElement = element as! AXUIElement
+
         // Verify the element is a text field or text area
         var role: AnyObject?
-        AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &role)
+        AXUIElementCopyAttributeValue(elementUIElement, kAXRoleAttribute as CFString, &role)
 
         if let roleString = role as? String {
             // AXTextField, AXTextArea, AXComboBox are the main text input roles
@@ -112,6 +119,6 @@ final class AccessibilityHelper {
             }
         }
 
-        return (element as! AXUIElement)
+        return elementUIElement
     }
 }
