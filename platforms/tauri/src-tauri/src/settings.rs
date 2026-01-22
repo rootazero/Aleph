@@ -131,16 +131,89 @@ pub struct SkillsSettings {
     pub skills: Vec<Skill>,
 }
 
+/// File operations configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileOpsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allowed_paths: Vec<String>,
+    #[serde(default)]
+    pub denied_paths: Vec<String>,
+    #[serde(default = "default_max_file_size")]
+    pub max_file_size: u64,
+    #[serde(default = "default_true")]
+    pub require_confirmation_for_write: bool,
+    #[serde(default = "default_true")]
+    pub require_confirmation_for_delete: bool,
+}
+
+/// Code execution configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeExecConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_runtime")]
+    pub default_runtime: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_true")]
+    pub sandbox_enabled: bool,
+    #[serde(default)]
+    pub allow_network: bool,
+    #[serde(default)]
+    pub allowed_runtimes: Vec<String>,
+    #[serde(default)]
+    pub working_directory: Option<String>,
+    #[serde(default = "default_pass_env")]
+    pub pass_env: Vec<String>,
+    #[serde(default = "default_blocked_commands")]
+    pub blocked_commands: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSettings {
-    pub file_operations: bool,
-    pub code_execution: bool,
+    #[serde(default)]
+    pub file_ops: FileOpsConfig,
+    #[serde(default)]
+    pub code_exec: CodeExecConfig,
+    #[serde(default = "default_true")]
     pub web_browsing: bool,
+    #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
-    pub require_confirmation: bool,
-    pub sandbox_mode: bool,
-    pub allowed_paths: Vec<String>,
-    pub blocked_commands: Vec<String>,
+}
+
+// Default value functions
+fn default_true() -> bool {
+    true
+}
+
+fn default_max_file_size() -> u64 {
+    100 * 1024 * 1024 // 100MB
+}
+
+fn default_runtime() -> String {
+    "shell".to_string()
+}
+
+fn default_timeout() -> u64 {
+    60
+}
+
+fn default_pass_env() -> Vec<String> {
+    vec!["PATH".to_string(), "HOME".to_string(), "USER".to_string()]
+}
+
+fn default_blocked_commands() -> Vec<String> {
+    vec![
+        "rm -rf".to_string(),
+        "format".to_string(),
+        "del /f".to_string(),
+    ]
+}
+
+fn default_max_iterations() -> u32 {
+    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,21 +341,42 @@ impl Default for SkillsSettings {
     }
 }
 
+impl Default for FileOpsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            allowed_paths: vec![],
+            denied_paths: vec![],
+            max_file_size: default_max_file_size(),
+            require_confirmation_for_write: default_true(),
+            require_confirmation_for_delete: default_true(),
+        }
+    }
+}
+
+impl Default for CodeExecConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_runtime: default_runtime(),
+            timeout_seconds: default_timeout(),
+            sandbox_enabled: default_true(),
+            allow_network: false,
+            allowed_runtimes: vec![],
+            working_directory: None,
+            pass_env: default_pass_env(),
+            blocked_commands: default_blocked_commands(),
+        }
+    }
+}
+
 impl Default for AgentSettings {
     fn default() -> Self {
         Self {
-            file_operations: true,
-            code_execution: false,
-            web_browsing: true,
-            max_iterations: 10,
-            require_confirmation: true,
-            sandbox_mode: true,
-            allowed_paths: vec![],
-            blocked_commands: vec![
-                "rm -rf".to_string(),
-                "format".to_string(),
-                "del /f".to_string(),
-            ],
+            file_ops: FileOpsConfig::default(),
+            code_exec: CodeExecConfig::default(),
+            web_browsing: default_true(),
+            max_iterations: default_max_iterations(),
         }
     }
 }
@@ -412,7 +506,7 @@ pub fn get_settings_path() -> Result<PathBuf> {
     Ok(config_dir.join("settings.json"))
 }
 
-/// Load settings from disk
+/// Load settings from disk with backward compatibility migration
 pub fn load_settings() -> Result<Settings> {
     let path = get_settings_path()?;
 
@@ -424,11 +518,96 @@ pub fn load_settings() -> Result<Settings> {
     let contents = fs::read_to_string(&path)
         .map_err(|e| AetherError::Config(format!("Cannot read settings file: {}", e)))?;
 
-    let settings: Settings = serde_json::from_str(&contents)
+    // First try to parse as-is (new format)
+    if let Ok(settings) = serde_json::from_str::<Settings>(&contents) {
+        tracing::info!("Settings loaded from {:?}", path);
+        return Ok(settings);
+    }
+
+    // Try to parse with migration from old format
+    tracing::info!("Attempting to migrate old settings format");
+    let mut json_value: serde_json::Value = serde_json::from_str(&contents)
         .map_err(|e| AetherError::Config(format!("Cannot parse settings file: {}", e)))?;
 
-    tracing::info!("Settings loaded from {:?}", path);
+    // Migrate agent settings if in old format
+    if let Some(agent) = json_value.get_mut("agent") {
+        if let Some(agent_obj) = agent.as_object_mut() {
+            // Check for old format markers (flat structure)
+            if agent_obj.contains_key("file_operations") || agent_obj.contains_key("code_execution") {
+                let migrated = migrate_agent_settings(agent_obj);
+                *agent = serde_json::to_value(migrated)
+                    .map_err(|e| AetherError::Config(format!("Migration error: {}", e)))?;
+                tracing::info!("Agent settings migrated to new format");
+            }
+        }
+    }
+
+    let settings: Settings = serde_json::from_value(json_value)
+        .map_err(|e| AetherError::Config(format!("Cannot parse migrated settings: {}", e)))?;
+
+    // Save migrated settings
+    if let Err(e) = save_settings(&settings) {
+        tracing::warn!("Failed to save migrated settings: {}", e);
+    }
+
+    tracing::info!("Settings loaded and migrated from {:?}", path);
     Ok(settings)
+}
+
+/// Migrate old agent settings format to new nested structure
+fn migrate_agent_settings(old: &serde_json::Map<String, serde_json::Value>) -> AgentSettings {
+    // Extract old values with defaults
+    let file_operations = old.get("file_operations")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let code_execution = old.get("code_execution")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let web_browsing = old.get("web_browsing")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let max_iterations = old.get("max_iterations")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(10);
+    let require_confirmation = old.get("require_confirmation")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let sandbox_mode = old.get("sandbox_mode")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let allowed_paths: Vec<String> = old.get("allowed_paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let blocked_commands: Vec<String> = old.get("blocked_commands")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_else(default_blocked_commands);
+
+    AgentSettings {
+        file_ops: FileOpsConfig {
+            enabled: file_operations,
+            allowed_paths,
+            denied_paths: vec![],
+            max_file_size: default_max_file_size(),
+            require_confirmation_for_write: require_confirmation,
+            require_confirmation_for_delete: require_confirmation,
+        },
+        code_exec: CodeExecConfig {
+            enabled: code_execution,
+            default_runtime: default_runtime(),
+            timeout_seconds: default_timeout(),
+            sandbox_enabled: sandbox_mode,
+            allow_network: false,
+            allowed_runtimes: vec![],
+            working_directory: None,
+            pass_env: default_pass_env(),
+            blocked_commands,
+        },
+        web_browsing,
+        max_iterations,
+    }
 }
 
 /// Save settings to disk

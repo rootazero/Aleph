@@ -12,6 +12,8 @@ import {
   type PluginsSettings,
   type SkillsSettings,
   type AgentSettings,
+  type FileOpsConfig,
+  type CodeExecConfig,
   type SearchSettings,
   type PoliciesSettings,
 } from '@/lib/commands';
@@ -48,6 +50,8 @@ interface SettingsStore {
   updatePlugins: (partial: Partial<PluginsSettings>) => void;
   updateSkills: (partial: Partial<SkillsSettings>) => void;
   updateAgent: (partial: Partial<AgentSettings>) => void;
+  updateFileOps: (partial: Partial<FileOpsConfig>) => void;
+  updateCodeExec: (partial: Partial<CodeExecConfig>) => void;
   updateSearch: (partial: Partial<SearchSettings>) => void;
   updatePolicies: (partial: Partial<PoliciesSettings>) => void;
   save: () => Promise<void>;
@@ -105,14 +109,27 @@ const defaultSettings: Settings = {
     skills: [],
   },
   agent: {
-    file_operations: true,
-    code_execution: false,
+    file_ops: {
+      enabled: true,
+      allowed_paths: [],
+      denied_paths: [],
+      max_file_size: 100 * 1024 * 1024, // 100MB
+      require_confirmation_for_write: true,
+      require_confirmation_for_delete: true,
+    },
+    code_exec: {
+      enabled: false,
+      default_runtime: 'shell',
+      timeout_seconds: 60,
+      sandbox_enabled: true,
+      allow_network: false,
+      allowed_runtimes: [],
+      working_directory: null,
+      pass_env: ['PATH', 'HOME', 'USER'],
+      blocked_commands: ['rm -rf', 'format', 'del /f'],
+    },
     web_browsing: true,
     max_iterations: 10,
-    require_confirmation: true,
-    sandbox_mode: true,
-    allowed_paths: [],
-    blocked_commands: ['rm -rf', 'format', 'del /f'],
   },
   search: {
     web_search_enabled: true,
@@ -226,6 +243,26 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   updateAgent: (partial) => {
     set((state) => ({
       agent: { ...state.agent, ...partial },
+      isDirty: true,
+    }));
+  },
+
+  updateFileOps: (partial) => {
+    set((state) => ({
+      agent: {
+        ...state.agent,
+        file_ops: { ...state.agent.file_ops, ...partial },
+      },
+      isDirty: true,
+    }));
+  },
+
+  updateCodeExec: (partial) => {
+    set((state) => ({
+      agent: {
+        ...state.agent,
+        code_exec: { ...state.agent.code_exec, ...partial },
+      },
       isDirty: true,
     }));
   },

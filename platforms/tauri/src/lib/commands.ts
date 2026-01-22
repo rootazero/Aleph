@@ -107,15 +107,32 @@ export interface SkillsSettings {
   skills: Skill[];
 }
 
+export interface FileOpsConfig {
+  enabled: boolean;
+  allowed_paths: string[];
+  denied_paths: string[];
+  max_file_size: number;
+  require_confirmation_for_write: boolean;
+  require_confirmation_for_delete: boolean;
+}
+
+export interface CodeExecConfig {
+  enabled: boolean;
+  default_runtime: 'shell' | 'python' | 'node';
+  timeout_seconds: number;
+  sandbox_enabled: boolean;
+  allow_network: boolean;
+  allowed_runtimes: string[];
+  working_directory: string | null;
+  pass_env: string[];
+  blocked_commands: string[];
+}
+
 export interface AgentSettings {
-  file_operations: boolean;
-  code_execution: boolean;
+  file_ops: FileOpsConfig;
+  code_exec: CodeExecConfig;
   web_browsing: boolean;
   max_iterations: number;
-  require_confirmation: boolean;
-  sandbox_mode: boolean;
-  allowed_paths: string[];
-  blocked_commands: string[];
 }
 
 export interface SearchSettings {
