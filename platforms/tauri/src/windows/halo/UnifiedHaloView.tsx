@@ -57,35 +57,46 @@ export function UnifiedHaloView() {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const resizeObserver = new ResizeObserver(async (entries) => {
+    let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { height } = entry.contentRect;
+        console.log('[Halo] ResizeObserver triggered, height:', height);
+
         if (height > 0) {
-          try {
-            const appWindow = getCurrentWindow();
-            await appWindow.setSize(
-              new LogicalSize(LAYOUT.WIDTH, Math.ceil(height) + LAYOUT.PADDING)
-            );
-          } catch (error) {
-            console.error('Failed to resize window:', error);
-          }
+          // Debounce resize to avoid rapid updates during animation
+          if (resizeTimeout) clearTimeout(resizeTimeout);
+          resizeTimeout = setTimeout(async () => {
+            try {
+              const appWindow = getCurrentWindow();
+              const newHeight = Math.ceil(height) + LAYOUT.PADDING;
+              console.log('[Halo] Setting window size:', LAYOUT.WIDTH, 'x', newHeight);
+              await appWindow.setSize(new LogicalSize(LAYOUT.WIDTH, newHeight));
+            } catch (error) {
+              console.error('[Halo] Failed to resize window:', error);
+            }
+          }, 50);
         }
       }
     });
 
     resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
+    return () => {
+      if (resizeTimeout) clearTimeout(resizeTimeout);
+      resizeObserver.disconnect();
+    };
   }, []);
 
   // Render the appropriate content panel
   const renderContentPanel = () => {
     switch (displayState.type) {
       case 'commandList':
-        return <CommandList maxHeight={LAYOUT.MAX_CONTENT_HEIGHT} />;
+        return <CommandList key="commandList" maxHeight={LAYOUT.MAX_CONTENT_HEIGHT} />;
       case 'topicList':
-        return <TopicList maxHeight={LAYOUT.MAX_CONTENT_HEIGHT} />;
+        return <TopicList key="topicList" maxHeight={LAYOUT.MAX_CONTENT_HEIGHT} />;
       case 'conversation':
-        return <ConversationArea maxHeight={LAYOUT.MAX_CONTENT_HEIGHT} />;
+        return <ConversationArea key="conversation" maxHeight={LAYOUT.MAX_CONTENT_HEIGHT} />;
       case 'empty':
       default:
         return null;
@@ -93,26 +104,16 @@ export function UnifiedHaloView() {
   };
 
   return (
-    <div className="h-screen w-screen flex items-start justify-center p-2">
+    <div className="w-full flex items-start justify-center p-2">
       <motion.div
         ref={containerRef}
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-[600px] bg-background/95 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl overflow-hidden"
+        className="w-full max-w-[600px] bg-background/95 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl"
       >
         {/* Content panel (conversation/commands/topics) */}
         <AnimatePresence mode="wait">
-          {displayState.type !== 'empty' && (
-            <motion.div
-              key={displayState.type}
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.15 }}
-            >
-              {renderContentPanel()}
-            </motion.div>
-          )}
+          {displayState.type !== 'empty' && renderContentPanel()}
         </AnimatePresence>
 
         {/* Divider */}

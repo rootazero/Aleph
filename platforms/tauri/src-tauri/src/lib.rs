@@ -60,13 +60,11 @@ pub fn run() {
             // Get windows
             let halo_window = app.get_webview_window("halo");
             let settings_window = app.get_webview_window("settings");
-            let conversation_window = app.get_webview_window("conversation");
 
             tracing::info!(
-                "Windows initialized - halo: {}, settings: {}, conversation: {}",
+                "Windows initialized - halo: {}, settings: {}",
                 halo_window.is_some(),
-                settings_window.is_some(),
-                conversation_window.is_some()
+                settings_window.is_some()
             );
 
             // Setup window close handlers for position saving
@@ -83,20 +81,6 @@ pub fn run() {
                 });
             }
 
-            // Setup conversation window close handler for position saving
-            if let Some(conversation) = conversation_window {
-                let app_handle = app.handle().clone();
-                conversation.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { .. } = event {
-                        // Save window position before closing
-                        let handle = app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let _ = commands::save_window_position(handle, "conversation".to_string()).await;
-                        });
-                    }
-                });
-            }
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -106,7 +90,6 @@ pub fn run() {
             commands::show_halo_window,
             commands::hide_halo_window,
             commands::open_settings_window,
-            commands::open_conversation_window,
             commands::get_settings,
             commands::save_settings,
             commands::save_window_position,

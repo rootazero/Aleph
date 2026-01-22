@@ -1,17 +1,17 @@
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-use crate::commands::{open_conversation_window, show_halo_window};
+use crate::commands::show_halo_window;
 use crate::error::Result;
 
 /// Register global shortcuts for the application
 pub fn register_shortcuts<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     let manager = app.global_shortcut();
 
-    // Register Ctrl+Alt+Space (or Cmd+Option+Space on macOS) to show Halo
+    // Register Ctrl+Alt+/ (or Cmd+Option+/ on macOS) to show Halo
     let show_halo_shortcut = Shortcut::new(
         Some(Modifiers::CONTROL | Modifiers::ALT),
-        Code::Space,
+        Code::Slash,
     );
 
     let app_handle = app.clone();
@@ -29,30 +29,8 @@ pub fn register_shortcuts<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
         })
         .map_err(|e| crate::error::AetherError::Unknown(e.to_string()))?;
 
-    // Register Ctrl+Alt+/ (or Cmd+Option+/ on macOS) for multi-turn conversation window
-    let conversation_shortcut = Shortcut::new(
-        Some(Modifiers::CONTROL | Modifiers::ALT),
-        Code::Slash,
-    );
-
-    let app_handle2 = app.clone();
-    manager
-        .on_shortcut(conversation_shortcut, move |_app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-                tracing::info!("Global shortcut triggered: Open conversation window");
-                let handle = app_handle2.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = open_conversation_window(handle).await {
-                        tracing::error!("Failed to open conversation window: {:?}", e);
-                    }
-                });
-            }
-        })
-        .map_err(|e| crate::error::AetherError::Unknown(e.to_string()))?;
-
     tracing::info!("Global shortcuts registered successfully");
-    tracing::info!("  - Ctrl+Alt+Space: Show Halo");
-    tracing::info!("  - Ctrl+Alt+/: Open conversation window");
+    tracing::info!("  - Ctrl+Alt+/: Show Halo");
 
     Ok(())
 }

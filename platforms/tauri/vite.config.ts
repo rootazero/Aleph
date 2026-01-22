@@ -29,7 +29,6 @@ export default defineConfig({
         main: path.resolve(__dirname, 'index.html'),
         halo: path.resolve(__dirname, 'halo.html'),
         settings: path.resolve(__dirname, 'settings.html'),
-        conversation: path.resolve(__dirname, 'conversation.html'),
       },
       output: {
         manualChunks: {

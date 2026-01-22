@@ -39,18 +39,6 @@
         "center": true,
         "decorations": true,
         "resizable": true
-      },
-      {
-        "label": "conversation",
-        "title": "Conversation",
-        "url": "/conversation.html",
-        "width": 500,
-        "height": 600,
-        "minWidth": 400,
-        "minHeight": 400,
-        "visible": false,
-        "decorations": true,
-        "resizable": true
       }
     ],
     "security": {

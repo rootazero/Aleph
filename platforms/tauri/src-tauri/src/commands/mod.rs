@@ -177,42 +177,6 @@ pub async fn open_settings_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     Ok(())
 }
 
-/// Open conversation window (multi-turn chat)
-#[tauri::command]
-pub async fn open_conversation_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
-    if let Some(window) = app.get_webview_window("conversation") {
-        // Try to restore window position
-        if let Ok(state) = settings::load_window_state() {
-            if let Some(pos) = state.conversation {
-                let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                    x: pos.x,
-                    y: pos.y,
-                }));
-                let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                    width: pos.width,
-                    height: pos.height,
-                }));
-            }
-        }
-
-        window
-            .show()
-            .map_err(|e| AetherError::Window(e.to_string()))?;
-        window
-            .set_focus()
-            .map_err(|e| AetherError::Window(e.to_string()))?;
-
-        // Emit activate event to frontend
-        window
-            .emit("conversation:activate", ())
-            .map_err(|e: tauri::Error| AetherError::Window(e.to_string()))?;
-
-        tracing::debug!("Conversation window opened");
-    }
-
-    Ok(())
-}
-
 /// Get current settings
 #[tauri::command]
 pub async fn get_settings() -> Result<Settings> {
@@ -264,7 +228,6 @@ pub async fn save_window_position<R: Runtime>(
 
         match window_name.as_str() {
             "settings" => state.settings = Some(window_pos),
-            "conversation" => state.conversation = Some(window_pos),
             _ => {}
         }
 

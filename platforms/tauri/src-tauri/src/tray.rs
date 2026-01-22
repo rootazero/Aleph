@@ -67,7 +67,7 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>> {
             &MenuItem::with_id(app, "about", "About Aether", true, None::<&str>)?,
             &MenuItem::with_id(app, "version", format!("Version {}", env!("CARGO_PKG_VERSION")).as_str(), false, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "show_halo", "Show Halo", true, Some("Ctrl+Alt+Space"))?,
+            &MenuItem::with_id(app, "show_halo", "Show Halo", true, Some("Ctrl+Alt+/"))?,
             &PredefinedMenuItem::separator(app)?,
             &provider_submenu,
             &PredefinedMenuItem::separator(app)?,
