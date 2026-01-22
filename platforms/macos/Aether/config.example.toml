@@ -228,6 +228,25 @@ max_tokens = 8192
 temperature = 0.7
 
 # ----------------------------------------------------------------------------
+# Custom Provider: Volcengine / Doubao (OpenAI-compatible)
+# ByteDance's AI platform with Doubao models
+# API Docs: https://www.volcengine.com/docs/82379/1330626
+# ----------------------------------------------------------------------------
+[providers.doubao]
+provider_type = "openai"           # Use OpenAI-compatible interface (v3 API)
+api_key = "..."                    # Get from https://console.volcengine.com/ark
+model = "doubao-1-5-pro-32k"       # Options: doubao-1-5-pro-32k, doubao-1-5-lite-32k, doubao-seed-1.6, ep-xxxx (endpoint ID)
+# base_url is optional - defaults to https://ark.cn-beijing.volces.com/api/v3
+color = "#3370FF"                  # ByteDance/Volcengine blue
+timeout_seconds = 30
+max_tokens = 4096
+temperature = 0.7
+
+# Note: You can use either model names (e.g., "doubao-1-5-pro-32k") or
+# endpoint IDs (e.g., "ep-20241201xxxxx") for the model field.
+# Endpoint IDs require creating an inference endpoint in the Volcengine console.
+
+# ----------------------------------------------------------------------------
 # Custom Provider: Azure OpenAI
 # ----------------------------------------------------------------------------
 [providers.azure]
@@ -272,6 +291,11 @@ system_prompt = "You are a helpful AI assistant."
 [[rules]]
 regex = "^/moon"                         # Explicitly use Moonshot
 provider = "moonshot"
+system_prompt = "You are a helpful AI assistant."
+
+[[rules]]
+regex = "^/doubao|^/ark"                 # Explicitly use Volcengine/Doubao
+provider = "doubao"
 system_prompt = "You are a helpful AI assistant."
 
 [[rules]]

@@ -198,21 +198,35 @@ impl OpenAiProvider {
                 AetherError::invalid_config(format!("Failed to build HTTP client: {}", e))
             })?;
 
+
         // Build API endpoint
         // Use provider-specific default URL if base_url is not configured
-        // Normalize URL: remove trailing slash and /v1 suffix, then append /v1/chat/completions
-        // This ensures consistent behavior whether user provides URL with or without /v1
+        // Normalize URL: handle both /v1 (OpenAI) and /v3 (Volcengine) API versions
         let raw_base_url = config
             .base_url
             .as_ref()
             .map(|s| s.to_string())
             .unwrap_or_else(|| Self::default_base_url(&name).to_string());
+        
+        // Detect API version from the URL (v1 or v3)
+        let is_v3_api = raw_base_url.contains("/v3") || raw_base_url.contains("/api/v3");
+        
+        // Normalize URL: remove trailing slashes and version suffixes
         let base_url = raw_base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/v3")
             .trim_end_matches('/')
             .trim_end_matches("/v1")
             .trim_end_matches('/')
             .to_string();
-        let endpoint = format!("{}/v1/chat/completions", base_url);
+        
+        // Build endpoint with appropriate API version
+        let endpoint = if is_v3_api {
+            format!("{}/v3/chat/completions", base_url)
+        } else {
+            format!("{}/v1/chat/completions", base_url)
+        };
+
 
         Ok(Self {
             name,
@@ -236,6 +250,9 @@ impl OpenAiProvider {
             "moonshot" => "https://api.moonshot.cn/v1",
             // OpenRouter - unified API for multiple models
             "openrouter" => "https://openrouter.ai/api/v1",
+            // Volcengine (ByteDance) - Doubao models
+            // API docs: https://www.volcengine.com/docs/82379/1330626
+            "volcengine" | "doubao" | "ark" => "https://ark.cn-beijing.volces.com/api/v3",
             // Azure OpenAI - requires user configuration (no default)
             // "azure-openai" => user must configure
             // GitHub Copilot - requires user configuration (no default)
@@ -1182,6 +1199,39 @@ mod tests {
             .unwrap()
             .starts_with("data:image/png;base64,"));
         assert_eq!(content[1]["image_url"]["detail"], "auto");
+    }
+
+    #[test]
+    fn test_volcengine_default_base_url() {
+        // Test "volcengine" alias
+        let config = create_test_config();
+        let provider = OpenAiProvider::new("volcengine".to_string(), config).unwrap();
+        assert_eq!(
+            provider.endpoint,
+            "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+        );
+    }
+
+    #[test]
+    fn test_doubao_default_base_url() {
+        // Test "doubao" alias
+        let config = create_test_config();
+        let provider = OpenAiProvider::new("doubao".to_string(), config).unwrap();
+        assert_eq!(
+            provider.endpoint,
+            "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+        );
+    }
+
+    #[test]
+    fn test_ark_default_base_url() {
+        // Test "ark" alias
+        let config = create_test_config();
+        let provider = OpenAiProvider::new("ark".to_string(), config).unwrap();
+        assert_eq!(
+            provider.endpoint,
+            "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+        );
     }
 
     // Note: Integration tests with real API calls should be in tests/ directory
