@@ -9,11 +9,11 @@ Aether is a Monorepo with platform-specific directories:
 - **Tauri**: Cross-platform (Windows, Linux) with React + TypeScript
 - **Windows (Native)**: ARCHIVED - use Tauri instead
 
-## Rust Core Module Count: ~37 Modules
+## Rust Core Module Count: ~35 Public Modules
 
 | Category | Modules |
 |----------|---------|
-| **FFI** | 14 sub-modules (ffi/) |
+| **FFI** | 15 sub-modules (ffi/) |
 | **Agent** | agent_loop/, agents/, components/ (8 components) |
 | **Config** | config/ (types + policies + watcher) |
 | **AI** | generation/ (10+ providers), providers/, rig_tools/ |
@@ -115,11 +115,12 @@ aether/
 │       ├── event/                     # Event-driven architecture
 │       │   ├── mod.rs, bus.rs, types.rs, handlers.rs
 │       │
-│       ├── ffi/                       # 14 FFI sub-modules
+│       ├── ffi/                       # 15 FFI sub-modules
 │       │   ├── mod.rs, processing.rs, tools.rs, memory.rs
 │       │   ├── config.rs, skills.rs, mcp.rs, dispatcher.rs
 │       │   ├── dispatcher_types.rs, generation.rs, init.rs
 │       │   ├── session.rs, runtime.rs, agent_loop_adapter.rs
+│       │   ├── plugins.rs, plan_confirmation.rs
 │       │
 │       ├── generation/                # Media generation providers
 │       │   ├── mod.rs, types.rs, registry.rs, mock.rs
@@ -159,6 +160,10 @@ aether/
 │       ├── payload/                   # Structured context protocol
 │       │   ├── mod.rs, builder.rs, assembler.rs
 │       │   ├── capability.rs, context_format.rs, intent.rs
+│       │
+│       ├── plugins/                   # Claude Code compatible plugin system
+│       │   ├── mod.rs, types.rs, loader.rs, scanner.rs
+│       │   ├── manager.rs, registry.rs, hooks.rs
 │       │
 │       ├── prompt/                    # Unified prompt management
 │       │   ├── mod.rs, executor.rs, conversational.rs

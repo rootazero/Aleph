@@ -77,7 +77,7 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for complete technical docume
 aether/
 ├── Cargo.toml                 # Workspace root
 ├── VERSION                    # Single version source
-├── core/                      # Rust Core (~37 modules)
+├── core/                      # Rust Core (~35 public modules)
 │   ├── src/
 │   │   ├── lib.rs             # UniFFI/C ABI exports
 │   │   ├── agent_loop/        # Core observe-think-act-feedback cycle
@@ -190,15 +190,17 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **agent_loop** | Core observe-think-act-feedback cycle with guards & state management |
 | **Agentic Loop** | 8 components: IntentAnalyzer, TaskPlanner, ToolExecutor, LoopController, SessionRecorder, SessionCompactor, SubAgentHandler, CallbackBridge |
 | **intent** | Three-layer intent detection: L1 Regex → L2 Keywords → L3 AI |
-| **dispatcher** | Multi-layer routing hub: planner, scheduler, executor, model_router, monitor |
+| **dispatcher** | Multi-layer routing hub with 16 sub-modules: planner/, scheduler/, executor/, model_router/, monitor/, context/, analyzer/, risk/, callback/, agent_types/, registry, confirmation, async_confirmation, integration, types, engine |
 | **thinker** | LLM decision-making layer with model routing and prompt building |
 | **three_layer** | Control architecture: Orchestrator (FSM) / Skill (DAG) / Tools (Safety) |
 | **rig-core** | AI provider abstraction (OpenAI, Anthropic, Gemini) |
 | **Dual-Layer Memory** | Raw history + AI-extracted facts |
 | **Cowork** | DAG task orchestration with model routing |
 | **Runtime Managers** | Auto-install uv, fnm, yt-dlp, ffmpeg |
-| **MCP** | Model Context Protocol (stdio transport) |
+| **MCP** | Model Context Protocol (stdio transport) - ✅ Implemented |
 | **event** | Type-safe event bus for event-driven architecture |
+| **plugins** | Claude Code compatible plugin system |
+| **init_unified** | Unified initialization coordinator |
 
 See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md)
 

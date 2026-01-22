@@ -772,7 +772,7 @@ All core components have comprehensive test coverage:
 
 Run tests:
 ```bash
-cd Aether/core
+cd core
 cargo test --lib payload router capability
 ```
 
@@ -815,12 +815,23 @@ pub struct SearchResult {
 
 ### MCP Integration
 
-**Status**: Interface reserved, not implemented
+**Status**: ✅ Implemented
 
-**Planned Architecture**:
-- MCP server connections via stdio/HTTP
-- Tool discovery and schema validation
-- Resource caching and lifecycle management
+**Location**: `core/src/mcp/`
+
+**Implementation Details**:
+- **Transport**: stdio-based communication with MCP servers
+- **Client**: `McpClient` for JSON-RPC 2.0 protocol
+- **Server management**: Start/stop/restart MCP servers
+- **Tool discovery**: Automatic tool registration from MCP servers
+- **Hot reload**: MCP tools available immediately after server start
+
+**Architecture**:
+- `mcp/client.rs` - McpClient for JSON-RPC communication
+- `mcp/transport/stdio.rs` - StdioTransport for process I/O
+- `mcp/types.rs` - MCP protocol types
+- `mcp/service.rs` - MCP service management
+- `mcp/manager.rs` - MCP server lifecycle
 
 **Data Structure**:
 ```rust
@@ -830,6 +841,25 @@ pub struct McpResource {
     pub result: String,
 }
 ```
+
+### Plugin System
+
+**Status**: ✅ Implemented
+
+**Location**: `core/src/plugins/`
+
+**Implementation Details**:
+- **Claude Code compatible**: Follows Claude Code plugin manifest format
+- **Plugin types**: Skills, agents, MCP servers, hooks
+- **Discovery**: Automatic scanning of plugin directories
+- **Hot reload**: Plugins loaded and activated at runtime
+
+**Architecture**:
+- `plugins/loader.rs` - Plugin file loading
+- `plugins/scanner.rs` - Plugin directory scanning
+- `plugins/manager.rs` - Plugin lifecycle management
+- `plugins/registry.rs` - Plugin registration and lookup
+- `plugins/hooks.rs` - Hook execution system
 
 ### Skills System
 

@@ -124,10 +124,10 @@ This document outlines the development phases for Aether, tracking progress and 
 
 ### Key Files
 
-- `Aether/core/src/providers/` - AI provider implementations
-- `Aether/core/src/router/` - Smart routing system
-- `Aether/core/src/config/` - Configuration management (10 type modules)
-- `Aether/config.example.toml` - Comprehensive configuration example
+- `core/src/providers/` - AI provider implementations
+- `core/src/dispatcher/` - Smart routing system
+- `core/src/config/` - Configuration management (10 type modules)
+- `platforms/macos/Aether/config.example.toml` - Comprehensive configuration example
 
 **Success Criteria**: ✅ All providers implemented with rig-core, router correctly routes requests based on rules
 
@@ -159,9 +159,9 @@ This document outlines the development phases for Aether, tracking progress and 
 
 ### Key Files
 
-- `Aether/Sources/Settings/` - Settings UI components
-- `Aether/Sources/Window/SettingsWindow.swift` - NSPanel-based settings window
-- `Aether/Sources/KeychainManagerImpl.swift` - Keychain integration
+- `platforms/macos/Aether/Sources/Settings/` - Settings UI components
+- `platforms/macos/Aether/Sources/Window/SettingsWindow.swift` - NSPanel-based settings window
+- `platforms/macos/Aether/Sources/Services/KeychainManagerImpl.swift` - Keychain integration
 
 **Success Criteria**: ✅ Full configuration management via native UI
 
@@ -209,10 +209,10 @@ This document outlines the development phases for Aether, tracking progress and 
 
 ### Key Files
 
-- `Aether/core/src/components/` - 8 core components
-- `Aether/core/src/agent/` - Agent execution engine
-- `Aether/core/src/cowork/` - DAG orchestration
-- `Aether/core/src/generation/` - Media generation providers
+- `core/src/components/` - 8 core components
+- `core/src/agents/` - Agent execution engine
+- `core/src/dispatcher/` - DAG orchestration
+- `core/src/generation/` - Media generation providers
 
 **Success Criteria**: ✅ Event-driven agentic loop with multi-step planning and execution
 
@@ -241,8 +241,8 @@ This document outlines the development phases for Aether, tracking progress and 
 
 ### Key Files
 
-- `Aether/core/src/runtimes/` - Runtime implementations
-- `Aether/Sources/Settings/RuntimeSettingsView.swift` - Settings UI
+- `core/src/runtimes/` - Runtime implementations
+- `platforms/macos/Aether/Sources/Settings/RuntimeSettingsView.swift` - Settings UI
 
 **Success Criteria**: ✅ Runtimes auto-install and update without user intervention
 
@@ -274,19 +274,19 @@ This document outlines the development phases for Aether, tracking progress and 
 
 ## Architecture Evolution Summary
 
-### Rust Core (44 Modules)
+### Rust Core (~35 Public Modules)
 
 | Category | Modules |
 |----------|---------|
-| **FFI** | 9 sub-modules (bindings, callbacks, types, etc.) |
+| **FFI** | 15 sub-modules (processing, tools, memory, config, skills, mcp, dispatcher, etc.) |
 | **Agent** | agent/, agents/, components/ (8 modules) |
 | **Config** | 10 type modules + policies |
 | **AI** | generation/ (10+ providers), providers/, rig_tools/ |
 | **Memory** | Dual-layer (Raw + Facts), compression |
-| **Routing** | dispatcher/, intent/ (3 layers), router/ |
+| **Routing** | dispatcher/ (16 sub-modules), intent/ (3 layers) |
 | **Tools** | mcp/, skills/, search/ (6 providers), video/, vision/ |
 | **Runtime** | runtimes/ (uv, fnm, yt-dlp) |
-| **Infra** | services/, event/, conversation/, cowork/, payload/ |
+| **Infra** | services/, event/, conversation/, payload/, plugins/, init_unified/ |
 
 ### Swift Architecture
 
