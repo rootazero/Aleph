@@ -37,7 +37,11 @@ pub mod tool_filter;
 use std::sync::Arc;
 
 pub use decision_parser::DecisionParser;
-pub use model_router::{ModelId, ModelRouter, RoutingCondition, RoutingRule};
+pub use model_router::{ModelId, RoutingCondition, RoutingRule, ThinkerModelSelector};
+
+/// Deprecated alias for backward compatibility
+#[deprecated(since = "0.2.0", note = "Use ThinkerModelSelector instead")]
+pub type ModelRouter = ThinkerModelSelector;
 pub use prompt_builder::{Message, MessageRole, PromptBuilder, PromptConfig};
 pub use tool_filter::{ToolFilter, ToolFilterConfig};
 
@@ -115,7 +119,7 @@ pub struct Thinker<P: ProviderRegistry> {
     providers: Arc<P>,
     tool_filter: ToolFilter,
     prompt_builder: PromptBuilder,
-    model_router: ModelRouter,
+    model_selector: ThinkerModelSelector,
     decision_parser: DecisionParser,
     config: ThinkerConfig,
 }
@@ -127,7 +131,7 @@ impl<P: ProviderRegistry> Thinker<P> {
             providers,
             tool_filter: ToolFilter::new(config.tool_filter.clone()),
             prompt_builder: PromptBuilder::new(config.prompt.clone()),
-            model_router: ModelRouter::new(config.model_routing.clone()),
+            model_selector: ThinkerModelSelector::new(config.model_routing.clone()),
             decision_parser: DecisionParser::new(),
             config,
         }
@@ -149,7 +153,7 @@ impl<P: ProviderRegistry> Thinker<P> {
 
     /// Select model based on observation
     fn select_model(&self, observation: &Observation) -> ModelId {
-        self.model_router.select(observation)
+        self.model_selector.select(observation)
     }
 
     /// Build the complete prompt

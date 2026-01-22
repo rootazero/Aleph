@@ -30,5 +30,5 @@ pub use session_compactor::{ModelLimit, SessionCompactor, TokenTracker};
 pub use session_recorder::{RecorderError, SessionRecord, SessionRecorder};
 pub use subagent_handler::SubAgentHandler;
 pub use task_planner::TaskPlanner;
-pub use tool_executor::{RetryPolicy, ToolExecutor};
+pub use tool_executor::{ToolExecutor, ToolRetryPolicy};
 pub use types::*;

@@ -313,7 +313,6 @@ pub use crate::ffi::dispatcher_types::{
     CodeExecConfigFFI,
     // P2: Prompt Analysis types
     ContextSizeFFI,
-    AgentConfigFFI,
     AgentExecutionState,
     AgentExecutionSummaryFFI,
     AgentProgressEventFFI,
@@ -437,12 +436,12 @@ pub use crate::components::{
     ToolExecutor,
     UserInputPart,
 };
-// Note: RetryPolicy from components is available as components::RetryPolicy
-// to avoid conflict with config::RetryPolicy (network retry policy)
+// Note: ToolRetryPolicy from components is available as components::ToolRetryPolicy
+// This is distinct from config::RetryPolicy (network retry policy)
 
 // Agent Loop exports (new unified agent architecture)
 pub use crate::agent_loop::{
-    AgentLoop, CollectingCallback, CompressedHistory, CompressorTrait, ExecutorTrait,
+    ActionExecutor, AgentLoop, CollectingCallback, CompressedHistory, CompressorTrait,
     GuardViolation, LoggingCallback, LoopCallback, LoopConfig as AgentLoopConfig, LoopGuard,
     LoopResult, LoopState as AgentLoopState, LoopStep, NoOpCallback, Observation, RequestContext,
     StepSummary, ThinkerTrait, Thinking,
@@ -454,11 +453,14 @@ pub use crate::agent_loop::{
 
 // Thinker exports (LLM decision-making layer)
 pub use crate::thinker::{
-    DecisionParser, Message, MessageRole as ThinkerMessageRole, ModelId, ModelRouter,
+    DecisionParser, Message, MessageRole as ThinkerMessageRole, ModelId,
     PromptBuilder as ThinkerPromptBuilder, PromptConfig as ThinkerPromptConfig, ProviderRegistry,
-    RoutingCondition, RoutingRule, SingleProviderRegistry, Thinker, ThinkerConfig, ToolFilter,
-    ToolFilterConfig,
+    RoutingCondition, RoutingRule, SingleProviderRegistry, Thinker, ThinkerConfig,
+    ThinkerModelSelector, ToolFilter, ToolFilterConfig,
 };
+// Deprecated alias for backward compatibility
+#[allow(deprecated)]
+pub use crate::thinker::ModelRouter;
 
 // Compressor exports (context compression)
 pub use crate::compressor::{

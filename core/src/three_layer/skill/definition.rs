@@ -3,7 +3,9 @@
 use crate::three_layer::safety::Capability;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::Duration;
+
+// Re-export RetryPolicy from config for skill definitions
+pub use crate::config::RetryPolicy;
 
 /// Definition of a Skill in the middle layer
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,38 +93,9 @@ impl Default for CostEstimate {
     }
 }
 
-/// Retry policy for skill execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetryPolicy {
-    /// Maximum retries
-    pub max_retries: u32,
-    /// Initial backoff in seconds
-    pub initial_backoff_secs: u64,
-    /// Maximum backoff in seconds
-    pub max_backoff_secs: u64,
-}
-
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self {
-            max_retries: 3,
-            initial_backoff_secs: 1,
-            max_backoff_secs: 30,
-        }
-    }
-}
-
-impl RetryPolicy {
-    /// Get initial backoff as Duration
-    pub fn initial_backoff(&self) -> Duration {
-        Duration::from_secs(self.initial_backoff_secs)
-    }
-
-    /// Get max backoff as Duration
-    pub fn max_backoff(&self) -> Duration {
-        Duration::from_secs(self.max_backoff_secs)
-    }
-}
+// RetryPolicy is now imported from crate::config::RetryPolicy
+// The config version uses milliseconds (initial_backoff_ms, max_backoff_ms)
+// and includes additional fields for more fine-grained control.
 
 /// A node in the Skill DAG
 #[derive(Debug, Clone, Serialize, Deserialize)]

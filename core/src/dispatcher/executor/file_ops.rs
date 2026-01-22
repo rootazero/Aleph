@@ -17,6 +17,10 @@ use tracing::{debug, info};
 use super::permission::PathPermissionChecker;
 use super::{ExecutionContext, TaskExecutor};
 use crate::dispatcher::agent_types::{FileOp, Task, TaskResult, TaskType};
+use crate::dispatcher::{
+    DEFAULT_MAX_FILE_SIZE, DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE,
+    DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE,
+};
 use crate::error::{AetherError, Result};
 
 /// File metadata returned by operations
@@ -144,11 +148,17 @@ impl FileOpsExecutor {
 
     /// Create with default settings (empty allowed paths = all allowed except denied)
     pub fn with_defaults() -> Self {
-        Self::new(vec![], vec![], 100 * 1024 * 1024, true, true)
+        Self::new(
+            vec![],
+            vec![],
+            DEFAULT_MAX_FILE_SIZE,
+            DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE,
+            DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE,
+        )
     }
 
     /// Execute a read operation
-    async fn execute_read(&self, path: &Path, ctx: &ExecutionContext) -> Result<TaskResult> {
+    async fn execute_read(&self, path: &Path, _ctx: &ExecutionContext) -> Result<TaskResult> {
         let start = Instant::now();
 
         // Check permission
@@ -156,14 +166,6 @@ impl FileOpsExecutor {
             .permission_checker
             .check_path(path)
             .map_err(|e| AetherError::IoError(e.to_string()))?;
-
-        if ctx.dry_run {
-            return Ok(TaskResult::with_output(json!({
-                "dry_run": true,
-                "operation": "read",
-                "path": canonical_path,
-            })));
-        }
 
         // Check file size
         let metadata =
@@ -205,7 +207,7 @@ impl FileOpsExecutor {
         &self,
         path: &Path,
         content: &str,
-        ctx: &ExecutionContext,
+        _ctx: &ExecutionContext,
     ) -> Result<TaskResult> {
         let start = Instant::now();
 
@@ -214,15 +216,6 @@ impl FileOpsExecutor {
             .permission_checker
             .check_path(path)
             .map_err(|e| AetherError::IoError(e.to_string()))?;
-
-        if ctx.dry_run {
-            return Ok(TaskResult::with_output(json!({
-                "dry_run": true,
-                "operation": "write",
-                "path": canonical_path,
-                "content_length": content.len(),
-            })));
-        }
 
         // Create parent directories if needed
         if let Some(parent) = canonical_path.parent() {
@@ -273,7 +266,7 @@ impl FileOpsExecutor {
         &self,
         from: &Path,
         to: &Path,
-        ctx: &ExecutionContext,
+        _ctx: &ExecutionContext,
     ) -> Result<TaskResult> {
         let start = Instant::now();
 
@@ -287,15 +280,6 @@ impl FileOpsExecutor {
             .permission_checker
             .check_path(to)
             .map_err(|e| AetherError::IoError(e.to_string()))?;
-
-        if ctx.dry_run {
-            return Ok(TaskResult::with_output(json!({
-                "dry_run": true,
-                "operation": "move",
-                "from": from_canonical,
-                "to": to_canonical,
-            })));
-        }
 
         // Get file size before move
         let metadata =
@@ -332,7 +316,7 @@ impl FileOpsExecutor {
         &self,
         from: &Path,
         to: &Path,
-        ctx: &ExecutionContext,
+        _ctx: &ExecutionContext,
     ) -> Result<TaskResult> {
         let start = Instant::now();
 
@@ -346,15 +330,6 @@ impl FileOpsExecutor {
             .permission_checker
             .check_path(to)
             .map_err(|e| AetherError::IoError(e.to_string()))?;
-
-        if ctx.dry_run {
-            return Ok(TaskResult::with_output(json!({
-                "dry_run": true,
-                "operation": "copy",
-                "from": from_canonical,
-                "to": to_canonical,
-            })));
-        }
 
         // Create parent directories if needed
         if let Some(parent) = to_canonical.parent() {
@@ -388,7 +363,7 @@ impl FileOpsExecutor {
     }
 
     /// Execute a delete operation
-    async fn execute_delete(&self, path: &Path, ctx: &ExecutionContext) -> Result<TaskResult> {
+    async fn execute_delete(&self, path: &Path, _ctx: &ExecutionContext) -> Result<TaskResult> {
         let start = Instant::now();
 
         // Check permission
@@ -396,14 +371,6 @@ impl FileOpsExecutor {
             .permission_checker
             .check_path(path)
             .map_err(|e| AetherError::IoError(e.to_string()))?;
-
-        if ctx.dry_run {
-            return Ok(TaskResult::with_output(json!({
-                "dry_run": true,
-                "operation": "delete",
-                "path": canonical_path,
-            })));
-        }
 
         let metadata =
             fs::metadata(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
@@ -445,7 +412,7 @@ impl FileOpsExecutor {
         &self,
         pattern: &str,
         dir: &Path,
-        ctx: &ExecutionContext,
+        _ctx: &ExecutionContext,
     ) -> Result<TaskResult> {
         let start = Instant::now();
 
@@ -454,15 +421,6 @@ impl FileOpsExecutor {
             .permission_checker
             .check_path(dir)
             .map_err(|e| AetherError::IoError(e.to_string()))?;
-
-        if ctx.dry_run {
-            return Ok(TaskResult::with_output(json!({
-                "dry_run": true,
-                "operation": "search",
-                "pattern": pattern,
-                "dir": canonical_dir,
-            })));
-        }
 
         // Build full glob pattern
         let full_pattern = canonical_dir.join(pattern);
@@ -508,7 +466,7 @@ impl FileOpsExecutor {
     }
 
     /// Execute a list operation
-    async fn execute_list(&self, path: &Path, ctx: &ExecutionContext) -> Result<TaskResult> {
+    async fn execute_list(&self, path: &Path, _ctx: &ExecutionContext) -> Result<TaskResult> {
         let start = Instant::now();
 
         // Check permission
@@ -516,14 +474,6 @@ impl FileOpsExecutor {
             .permission_checker
             .check_path(path)
             .map_err(|e| AetherError::IoError(e.to_string()))?;
-
-        if ctx.dry_run {
-            return Ok(TaskResult::with_output(json!({
-                "dry_run": true,
-                "operation": "list",
-                "path": canonical_path,
-            })));
-        }
 
         let mut entries = Vec::new();
 
@@ -570,17 +520,9 @@ impl FileOpsExecutor {
     async fn execute_batch_move(
         &self,
         operations: &[(PathBuf, PathBuf)],
-        ctx: &ExecutionContext,
+        _ctx: &ExecutionContext,
     ) -> Result<TaskResult> {
         let start = Instant::now();
-
-        if ctx.dry_run {
-            return Ok(TaskResult::with_output(json!({
-                "dry_run": true,
-                "operation": "batch_move",
-                "count": operations.len(),
-            })));
-        }
 
         let mut completed = Vec::new();
         let mut errors = Vec::new();
@@ -781,24 +723,4 @@ mod tests {
         assert_eq!(list_result.total_entries, 3);
     }
 
-    #[tokio::test]
-    async fn test_dry_run() {
-        let (executor, temp_dir) = create_test_executor();
-        let file_path = temp_dir.path().join("dry_run.txt");
-
-        let task = Task::new(
-            "test_dry_run",
-            "Dry run write",
-            TaskType::FileOperation(FileOp::Write {
-                path: file_path.clone(),
-            }),
-        )
-        .with_parameters(json!({"content": "Should not be written"}));
-
-        let ctx = ExecutionContext::new("test_graph").with_dry_run(true);
-        let result = executor.execute(&task, &ctx).await.unwrap();
-
-        assert!(result.output.get("dry_run").unwrap().as_bool().unwrap());
-        assert!(!file_path.exists());
-    }
 }

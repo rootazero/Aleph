@@ -54,12 +54,10 @@ impl TaskExecutor for NoopExecutor {
         true
     }
 
-    async fn execute(&self, task: &Task, ctx: &ExecutionContext) -> Result<TaskResult> {
+    async fn execute(&self, task: &Task, _ctx: &ExecutionContext) -> Result<TaskResult> {
         debug!("NoopExecutor executing task: {} ({})", task.name, task.id);
 
-        if ctx.dry_run {
-            debug!("Dry run mode - skipping execution");
-        } else if !self.delay.is_zero() {
+        if !self.delay.is_zero() {
             debug!("Simulating execution delay: {:?}", self.delay);
             tokio::time::sleep(self.delay).await;
         }

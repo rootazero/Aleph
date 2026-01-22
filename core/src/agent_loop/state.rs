@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use super::decision::{Action, ActionResult, Decision};
 use crate::core::MediaAttachment;
+use crate::dispatcher::executor::ExecutionContext;
 
 /// Complete state of an Agent Loop session
 #[derive(Debug, Clone)]
@@ -115,7 +116,16 @@ pub struct Thinking {
     pub decision: Decision,
 }
 
-/// Request context containing attachments and environment info
+/// Request context containing attachments and environment info from UI layer
+///
+/// This is the highest-level context in the hierarchy:
+/// - **RequestContext** (agent_loop): User environment context ← this type
+/// - **TaskContext** (dispatcher): Inter-task communication in DAG
+/// - **ExecutionContext** (executor): Single task execution context
+///
+/// RequestContext captures the user's environment when a request is made,
+/// including attachments, clipboard content, and the current application.
+/// Use `to_execution_context()` to convert to lower-level ExecutionContext.
 #[derive(Debug, Clone, Default)]
 pub struct RequestContext {
     /// Media attachments (images, files, etc.)
@@ -128,7 +138,7 @@ pub struct RequestContext {
     pub current_app: Option<String>,
     /// Current window title
     pub window_title: Option<String>,
-    /// Working directory
+    /// Working directory (passed down to ExecutionContext)
     pub working_directory: Option<String>,
     /// Additional metadata
     pub metadata: std::collections::HashMap<String, String>,
@@ -150,6 +160,33 @@ impl RequestContext {
         self.attachments.iter().any(|a| {
             a.media_type == "image" || a.mime_type.starts_with("image/")
         })
+    }
+
+    /// Convert to ExecutionContext for task execution
+    ///
+    /// This creates an ExecutionContext that can be used by task executors,
+    /// passing down the working_directory and storing other context as extra data.
+    pub fn to_execution_context(&self, graph_id: impl Into<String>) -> ExecutionContext {
+        // Build extra data from RequestContext fields
+        let mut extra = serde_json::Map::new();
+        if let Some(ref app) = self.current_app {
+            extra.insert("current_app".to_string(), serde_json::Value::String(app.clone()));
+        }
+        if let Some(ref title) = self.window_title {
+            extra.insert("window_title".to_string(), serde_json::Value::String(title.clone()));
+        }
+        if !self.metadata.is_empty() {
+            extra.insert(
+                "metadata".to_string(),
+                serde_json::to_value(&self.metadata).unwrap_or_default(),
+            );
+        }
+
+        ExecutionContext {
+            graph_id: graph_id.into(),
+            working_directory: self.working_directory.clone(),
+            extra: serde_json::Value::Object(extra),
+        }
     }
 }
 

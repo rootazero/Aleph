@@ -5,18 +5,22 @@
 
 use async_trait::async_trait;
 
+use crate::dispatcher::DEFAULT_MAX_RETRIES;
 use crate::event::{
     AetherEvent, ErrorKind, EventContext, EventHandler, EventType, HandlerError, TokenUsage,
     ToolCallError, ToolCallRequest, ToolCallResult, ToolCallRetry, ToolCallStarted,
 };
 
 // ============================================================================
-// Retry Policy
+// Tool Retry Policy
 // ============================================================================
 
 /// Retry policy for tool execution
+///
+/// This is distinct from `crate::config::RetryPolicy` which is for HTTP/network operations.
+/// ToolRetryPolicy uses `ErrorKind` to determine retryable errors in tool execution context.
 #[derive(Debug, Clone)]
-pub struct RetryPolicy {
+pub struct ToolRetryPolicy {
     /// Maximum number of retry attempts (not including the initial attempt)
     pub max_retries: u32,
     /// Base delay in milliseconds for exponential backoff
@@ -27,10 +31,10 @@ pub struct RetryPolicy {
     pub retryable_errors: Vec<ErrorKind>,
 }
 
-impl Default for RetryPolicy {
+impl Default for ToolRetryPolicy {
     fn default() -> Self {
         Self {
-            max_retries: 3,
+            max_retries: DEFAULT_MAX_RETRIES,
             base_delay_ms: 1000,
             max_delay_ms: 30000,
             retryable_errors: vec![
@@ -42,7 +46,7 @@ impl Default for RetryPolicy {
     }
 }
 
-impl RetryPolicy {
+impl ToolRetryPolicy {
     /// Create a new retry policy with custom settings
     pub fn new(max_retries: u32, base_delay_ms: u64, max_delay_ms: u64) -> Self {
         Self {
@@ -93,7 +97,7 @@ enum ToolExecutionResult {
 /// - Publishes ToolCallStarted, ToolCallCompleted, ToolCallFailed, ToolCallRetrying events
 pub struct ToolExecutor {
     /// Retry policy configuration
-    retry_policy: RetryPolicy,
+    retry_policy: ToolRetryPolicy,
 }
 
 impl Default for ToolExecutor {
@@ -106,12 +110,12 @@ impl ToolExecutor {
     /// Create a new ToolExecutor with default retry policy
     pub fn new() -> Self {
         Self {
-            retry_policy: RetryPolicy::default(),
+            retry_policy: ToolRetryPolicy::default(),
         }
     }
 
     /// Create a ToolExecutor with a custom retry policy
-    pub fn with_retry_policy(retry_policy: RetryPolicy) -> Self {
+    pub fn with_retry_policy(retry_policy: ToolRetryPolicy) -> Self {
         Self { retry_policy }
     }
 
@@ -320,12 +324,12 @@ mod tests {
     use crate::event::EventBus;
 
     // ========================================================================
-    // RetryPolicy Tests
+    // ToolRetryPolicy Tests
     // ========================================================================
 
     #[test]
     fn test_retry_policy_default() {
-        let policy = RetryPolicy::default();
+        let policy = ToolRetryPolicy::default();
 
         assert_eq!(policy.max_retries, 3);
         assert_eq!(policy.base_delay_ms, 1000);
@@ -341,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_retry_policy_custom() {
-        let policy = RetryPolicy::new(5, 500, 60000);
+        let policy = ToolRetryPolicy::new(5, 500, 60000);
 
         assert_eq!(policy.max_retries, 5);
         assert_eq!(policy.base_delay_ms, 500);
@@ -350,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_retry_policy_with_retryable_error() {
-        let policy = RetryPolicy::default().with_retryable_error(ErrorKind::ExecutionFailed);
+        let policy = ToolRetryPolicy::default().with_retryable_error(ErrorKind::ExecutionFailed);
 
         assert!(policy
             .retryable_errors
@@ -403,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_calculate_delay_custom_policy() {
-        let policy = RetryPolicy::new(5, 500, 10000);
+        let policy = ToolRetryPolicy::new(5, 500, 10000);
         let executor = ToolExecutor::with_retry_policy(policy);
 
         // attempt 1: 500 * 1 = 500
@@ -445,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_is_retryable_custom_policy() {
-        let policy = RetryPolicy::default().with_retryable_error(ErrorKind::ExecutionFailed);
+        let policy = ToolRetryPolicy::default().with_retryable_error(ErrorKind::ExecutionFailed);
         let executor = ToolExecutor::with_retry_policy(policy);
 
         // Custom retryable error
@@ -471,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_tool_executor_with_retry_policy() {
-        let policy = RetryPolicy::new(10, 100, 5000);
+        let policy = ToolRetryPolicy::new(10, 100, 5000);
         let executor = ToolExecutor::with_retry_policy(policy);
 
         assert_eq!(executor.retry_policy.max_retries, 10);

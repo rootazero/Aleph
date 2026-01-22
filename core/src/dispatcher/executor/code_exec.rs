@@ -16,13 +16,10 @@ use tracing::{debug, info, warn};
 
 use super::{ExecutionContext, PathPermissionChecker, TaskExecutor};
 use crate::dispatcher::agent_types::{CodeExec, Language, Task, TaskResult, TaskType};
+use crate::dispatcher::{
+    DEFAULT_ALLOW_NETWORK, DEFAULT_SANDBOX_ENABLED, MAX_STDERR_SIZE, MAX_STDOUT_SIZE,
+};
 use crate::error::{AetherError, Result};
-
-/// Maximum stdout size (10MB)
-const MAX_STDOUT_SIZE: usize = 10 * 1024 * 1024;
-
-/// Maximum stderr size (1MB)
-const MAX_STDERR_SIZE: usize = 1024 * 1024;
 
 /// Error types for code execution
 #[derive(Debug, Clone, thiserror::Error)]
@@ -246,10 +243,10 @@ pub struct SandboxConfig {
 impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: DEFAULT_SANDBOX_ENABLED,
             read_paths: vec![],
             write_paths: vec![],
-            allow_network: false,
+            allow_network: DEFAULT_ALLOW_NETWORK,
             allow_exec: true,
         }
     }
@@ -455,18 +452,6 @@ impl CodeExecutor {
             ));
         }
 
-        if ctx.dry_run {
-            return Ok(CodeExecResult {
-                exit_code: 0,
-                stdout: format!("[DRY RUN] Would execute: {}", full_command),
-                stderr: String::new(),
-                duration_ms: 0,
-                stdout_truncated: false,
-                stderr_truncated: false,
-                runtime: cmd.to_string(),
-            });
-        }
-
         self.run_process(cmd, args, None, ctx).await
     }
 
@@ -499,18 +484,6 @@ impl CodeExecutor {
             return Err(AetherError::other(
                 CodeExecError::RuntimeNotFound(runtime.to_string()).to_string(),
             ));
-        }
-
-        if ctx.dry_run {
-            return Ok(CodeExecResult {
-                exit_code: 0,
-                stdout: format!("[DRY RUN] Would execute {} script:\n{}", runtime, code),
-                stderr: String::new(),
-                duration_ms: 0,
-                stdout_truncated: false,
-                stderr_truncated: false,
-                runtime: runtime.to_string(),
-            });
         }
 
         // Execute based on language
@@ -568,18 +541,6 @@ impl CodeExecutor {
             ));
         }
 
-        if ctx.dry_run {
-            return Ok(CodeExecResult {
-                exit_code: 0,
-                stdout: format!("[DRY RUN] Would execute file: {:?}", canonical_path),
-                stderr: String::new(),
-                duration_ms: 0,
-                stdout_truncated: false,
-                stderr_truncated: false,
-                runtime: runtime.to_string(),
-            });
-        }
-
         self.run_process(runtime, &args, Some(&canonical_path), ctx)
             .await
     }
@@ -601,7 +562,7 @@ impl CodeExecutor {
         // Set working directory
         if let Some(ref working_dir) = self.working_directory {
             cmd.current_dir(working_dir);
-        } else if let Some(ref ctx_working_dir) = ctx.working_dir {
+        } else if let Some(ref ctx_working_dir) = ctx.working_directory {
             cmd.current_dir(ctx_working_dir);
         }
 
@@ -880,40 +841,6 @@ mod tests {
         assert!(executor2.is_runtime_allowed("bash"));
         assert!(executor2.is_runtime_allowed("python3"));
         assert!(!executor2.is_runtime_allowed("node"));
-    }
-
-    #[tokio::test]
-    async fn test_dry_run_execution() {
-        let permission_checker = PathPermissionChecker::default();
-        let executor = CodeExecutor::new(
-            true,
-            "bash".to_string(),
-            60,
-            false,
-            vec![],
-            false,
-            vec![],
-            permission_checker,
-            None,
-            vec!["PATH".to_string()],
-        );
-
-        let task = Task::new(
-            "test_task",
-            "Test Task",
-            TaskType::CodeExecution(CodeExec::Command {
-                cmd: "echo".to_string(),
-                args: vec!["hello".to_string()],
-            }),
-        );
-
-        let ctx = ExecutionContext::new("test_graph").with_dry_run(true);
-
-        let result = executor.execute(&task, &ctx).await.unwrap();
-        assert!(result.output["stdout"]
-            .as_str()
-            .unwrap()
-            .contains("DRY RUN"));
     }
 
     #[tokio::test]

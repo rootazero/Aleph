@@ -54,14 +54,19 @@ pub struct RoutingRule {
     pub priority: i32,
 }
 
-/// Model router for selecting appropriate AI model
-pub struct ModelRouter {
+/// Model selector for Agent Loop - selects appropriate AI model based on task
+///
+/// This is distinct from `dispatcher::model_router::ModelRouter` trait which
+/// provides a more comprehensive routing system with health checks and failover.
+///
+/// Use `ThinkerModelSelector` for simple model selection based on Observation.
+pub struct ThinkerModelSelector {
     config: ModelRoutingConfig,
     rules: Vec<RoutingRule>,
 }
 
-impl ModelRouter {
-    /// Create a new model router
+impl ThinkerModelSelector {
+    /// Create a new model selector
     pub fn new(config: ModelRoutingConfig) -> Self {
         let rules = Self::build_rules(&config);
         Self { config, rules }
@@ -242,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_default_routing() {
-        let router = ModelRouter::new(default_config());
+        let selector = ThinkerModelSelector::new(default_config());
 
         let observation = Observation {
             history_summary: String::new(),
@@ -254,13 +259,13 @@ mod tests {
         };
 
         // Simple task should use fast model
-        let model = router.select(&observation);
+        let model = selector.select(&observation);
         assert_eq!(model.as_str(), "claude-haiku");
     }
 
     #[test]
     fn test_vision_routing() {
-        let router = ModelRouter::new(default_config());
+        let selector = ThinkerModelSelector::new(default_config());
 
         let observation = Observation {
             history_summary: String::new(),
@@ -278,13 +283,13 @@ mod tests {
             total_tokens: 0,
         };
 
-        let model = router.select(&observation);
+        let model = selector.select(&observation);
         assert_eq!(model.as_str(), "claude-vision");
     }
 
     #[test]
     fn test_complex_task_routing() {
-        let router = ModelRouter::new(default_config());
+        let selector = ThinkerModelSelector::new(default_config());
 
         let observation = Observation {
             history_summary: "x".repeat(1500), // Long history
@@ -295,7 +300,7 @@ mod tests {
             total_tokens: 5000,
         };
 
-        let model = router.select(&observation);
+        let model = selector.select(&observation);
         assert_eq!(model.as_str(), "claude-opus");
     }
 
@@ -304,7 +309,7 @@ mod tests {
         let mut config = default_config();
         config.auto_route = false;
 
-        let router = ModelRouter::new(config);
+        let selector = ThinkerModelSelector::new(config);
 
         let observation = Observation {
             history_summary: String::new(),
@@ -323,13 +328,13 @@ mod tests {
         };
 
         // Should always return default when auto_route is disabled
-        let model = router.select(&observation);
+        let model = selector.select(&observation);
         assert_eq!(model.as_str(), "claude-sonnet");
     }
 
     #[test]
     fn test_code_related_routing() {
-        let router = ModelRouter::new(default_config());
+        let selector = ThinkerModelSelector::new(default_config());
 
         let observation = Observation {
             history_summary: String::new(),
@@ -347,7 +352,7 @@ mod tests {
             total_tokens: 100,
         };
 
-        let model = router.select(&observation);
+        let model = selector.select(&observation);
         // Code-related uses default model
         assert_eq!(model.as_str(), "claude-sonnet");
     }

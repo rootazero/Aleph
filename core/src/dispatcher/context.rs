@@ -148,9 +148,14 @@ pub struct HistoryEntry {
     pub output: TaskOutput,
 }
 
-/// Task context manager for inter-task context passing
+/// Task context manager for inter-task context passing in DAG scheduler
 ///
-/// Supports two modes of context passing:
+/// This is the middle-level context in the hierarchy:
+/// - **RequestContext** (agent_loop): User environment context (UI layer)
+/// - **TaskContext** (dispatcher): Inter-task communication in DAG ← this type
+/// - **ExecutionContext** (executor): Single task execution context
+///
+/// TaskContext manages context passing between tasks in a DAG:
 /// 1. **Implicit History**: All task outputs are accumulated in history
 /// 2. **Explicit Reference**: Tasks can reference specific outputs by task ID
 #[derive(Debug, Clone, Serialize, Deserialize)]

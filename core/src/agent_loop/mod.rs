@@ -116,15 +116,23 @@ pub trait ThinkerTrait: Send + Sync {
     ) -> Result<Thinking>;
 }
 
-/// Executor trait - abstraction for the execution layer
+/// Action Executor trait - abstraction for the execution layer
 ///
 /// This trait is implemented by the Executor module to execute
-/// individual actions.
+/// individual actions in the agent loop (observe-think-act cycle).
+///
+/// Note: This is distinct from:
+/// - `dispatcher::executor::TaskExecutor` - for task-type specific execution
+/// - `dispatcher::scheduler::GraphTaskExecutor` - for DAG node execution
 #[async_trait::async_trait]
-pub trait ExecutorTrait: Send + Sync {
+pub trait ActionExecutor: Send + Sync {
     /// Execute a single action
     async fn execute(&self, action: &Action) -> ActionResult;
 }
+
+/// Deprecated alias for backward compatibility
+#[deprecated(since = "0.2.0", note = "Use ActionExecutor instead")]
+pub type ExecutorTrait = dyn ActionExecutor;
 
 /// Compressor trait - abstraction for context compression
 ///
@@ -160,7 +168,7 @@ pub struct CompressedHistory {
 pub struct AgentLoop<T, E, C>
 where
     T: ThinkerTrait,
-    E: ExecutorTrait,
+    E: ActionExecutor,
     C: CompressorTrait,
 {
     thinker: Arc<T>,
@@ -172,7 +180,7 @@ where
 impl<T, E, C> AgentLoop<T, E, C>
 where
     T: ThinkerTrait,
-    E: ExecutorTrait,
+    E: ActionExecutor,
     C: CompressorTrait,
 {
     /// Create a new AgentLoop
@@ -412,7 +420,7 @@ mod tests {
     struct MockExecutor;
 
     #[async_trait::async_trait]
-    impl ExecutorTrait for MockExecutor {
+    impl ActionExecutor for MockExecutor {
         async fn execute(&self, action: &Action) -> ActionResult {
             match action {
                 Action::ToolCall { tool_name, .. } => ActionResult::ToolSuccess {

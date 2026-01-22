@@ -9,6 +9,13 @@
 //! Agent is the core AI task orchestration system that decomposes complex requests
 //! into DAG-structured task graphs and executes them with parallel scheduling.
 
+use crate::agent_loop::ModelRoutingConfig as AgentLoopModelRoutingConfig;
+use crate::dispatcher::{
+    DEFAULT_ALLOW_NETWORK, DEFAULT_CODE_EXEC_ENABLED, DEFAULT_CODE_EXEC_RUNTIME,
+    DEFAULT_CODE_EXEC_TIMEOUT, DEFAULT_FILE_OPS_ENABLED, DEFAULT_MAX_FILE_SIZE, DEFAULT_PASS_ENV,
+    DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE, DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE,
+    DEFAULT_SANDBOX_ENABLED, MAX_PARALLELISM, MAX_TASK_RETRIES, REQUIRE_CONFIRMATION,
+};
 use crate::dispatcher::model_router::{
     Capability, CircuitBreakerConfig, CostStrategy, CostTier, HealthConfig, LatencyTier,
     ModelProfile, ModelRoutingRules, ProbeConfig, ScoringConfig,
@@ -25,31 +32,26 @@ use std::collections::HashMap;
 /// Configures the Agent engine for multi-task orchestration.
 /// This includes task decomposition, parallel execution, and confirmation settings.
 ///
+/// Note: Core execution parameters (require_confirmation, max_parallelism, max_task_retries)
+/// are hardcoded for security and stability. This config contains planning and routing settings.
+///
 /// # Example TOML
 /// ```toml
 /// [agent]
-/// require_confirmation = true
-/// max_parallelism = 4
-/// dry_run = false
 /// planner_model = "claude"
 /// auto_execute_threshold = 0.9
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoworkConfigToml {
     /// Require user confirmation before executing task graphs
-    /// When true, shows confirmation UI with task list before execution
-    #[serde(default = "default_require_confirmation")]
+    /// (Legacy field, ignored - confirmation is always required)
+    #[serde(default = "default_require_confirmation", skip_serializing)]
     pub require_confirmation: bool,
 
     /// Maximum number of tasks to run in parallel
-    /// Higher values improve throughput but increase resource usage
-    #[serde(default = "default_max_parallelism")]
+    /// (Legacy field, ignored - uses hardcoded value for stability)
+    #[serde(default = "default_max_parallelism", skip_serializing)]
     pub max_parallelism: usize,
-
-    /// Enable dry-run mode (plan tasks but don't execute)
-    /// Useful for testing and debugging task graphs
-    #[serde(default = "default_dry_run")]
-    pub dry_run: bool,
 
     /// AI provider to use for task planning (LLM decomposition)
     /// If not specified, uses the default provider from [general]
@@ -782,31 +784,66 @@ impl ModelRoutingConfigToml {
 
         ids
     }
+
+    /// Convert to agent_loop::ModelRoutingConfig for simple routing scenarios
+    ///
+    /// This bridges the gap between the full TOML configuration and the
+    /// simplified agent loop model routing. Maps:
+    /// - `default_model` or first available model → `default_model`
+    /// - `image_analysis` → `vision_model`
+    /// - `reasoning` → `reasoning_model`
+    /// - `quick_tasks` → `fast_model`
+    pub fn to_agent_loop_config(&self) -> AgentLoopModelRoutingConfig {
+        // Default model names from agent_loop::config
+        let default_model_name = "claude-sonnet-4-20250514".to_string();
+        let default_fast_model = "claude-3-5-haiku-20241022".to_string();
+
+        AgentLoopModelRoutingConfig {
+            default_model: self
+                .default_model
+                .clone()
+                .or_else(|| self.code_generation.clone())
+                .unwrap_or_else(|| default_model_name.clone()),
+            vision_model: self
+                .image_analysis
+                .clone()
+                .unwrap_or_else(|| default_model_name.clone()),
+            reasoning_model: self
+                .reasoning
+                .clone()
+                .unwrap_or_else(|| default_model_name.clone()),
+            fast_model: self
+                .quick_tasks
+                .clone()
+                .unwrap_or(default_fast_model),
+            auto_route: self.enable_pipelines,
+        }
+    }
 }
 
 // Code execution default functions
 fn default_code_exec_enabled() -> bool {
-    false // Disabled by default for security
+    DEFAULT_CODE_EXEC_ENABLED
 }
 
 fn default_code_exec_runtime() -> String {
-    "shell".to_string()
+    DEFAULT_CODE_EXEC_RUNTIME.to_string()
 }
 
 fn default_code_exec_timeout() -> u64 {
-    60 // 1 minute default
+    DEFAULT_CODE_EXEC_TIMEOUT
 }
 
 fn default_code_exec_sandbox() -> bool {
-    true // Sandbox enabled by default
+    DEFAULT_SANDBOX_ENABLED
 }
 
 fn default_code_exec_network() -> bool {
-    false // Network disabled by default
+    DEFAULT_ALLOW_NETWORK
 }
 
 fn default_code_exec_pass_env() -> Vec<String> {
-    vec!["PATH".to_string(), "HOME".to_string(), "USER".to_string()]
+    DEFAULT_PASS_ENV.iter().map(|s| s.to_string()).collect()
 }
 
 // =============================================================================
@@ -814,15 +851,11 @@ fn default_code_exec_pass_env() -> Vec<String> {
 // =============================================================================
 
 pub fn default_require_confirmation() -> bool {
-    true
+    REQUIRE_CONFIRMATION
 }
 
 pub fn default_max_parallelism() -> usize {
-    4
-}
-
-pub fn default_dry_run() -> bool {
-    false
+    MAX_PARALLELISM
 }
 
 pub fn default_auto_execute_threshold() -> f32 {
@@ -838,28 +871,28 @@ pub fn default_task_timeout_seconds() -> u64 {
 }
 
 pub fn default_max_task_retries() -> u32 {
-    3 // 3 retries by default
+    MAX_TASK_RETRIES
 }
 
 pub fn default_sandbox_enabled() -> bool {
-    true
+    DEFAULT_SANDBOX_ENABLED
 }
 
 // FileOps default functions
 pub fn default_file_ops_enabled() -> bool {
-    true
+    DEFAULT_FILE_OPS_ENABLED
 }
 
 pub fn default_max_file_size() -> u64 {
-    100 * 1024 * 1024 // 100MB
+    DEFAULT_MAX_FILE_SIZE
 }
 
 pub fn default_require_confirmation_for_write() -> bool {
-    true
+    DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE
 }
 
 pub fn default_require_confirmation_for_delete() -> bool {
-    true
+    DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE
 }
 
 /// Deserialize file size from human-readable string or number
@@ -926,7 +959,6 @@ impl Default for CoworkConfigToml {
         Self {
             require_confirmation: default_require_confirmation(),
             max_parallelism: default_max_parallelism(),
-            dry_run: default_dry_run(),
             planner_provider: None,
             auto_execute_threshold: default_auto_execute_threshold(),
             max_tasks_per_graph: default_max_tasks_per_graph(),
@@ -1009,13 +1041,10 @@ impl CoworkConfigToml {
     /// Convert to engine configuration
     ///
     /// This creates an AgentConfig suitable for the AgentEngine.
+    /// Note: Core execution parameters (confirmation, parallelism, retries) are hardcoded.
+    /// The enable_pipelines flag is now part of routing_rules.
     pub fn to_engine_config(&self) -> crate::dispatcher::AgentConfig {
         crate::dispatcher::AgentConfig {
-            require_confirmation: self.require_confirmation,
-            max_parallelism: self.max_parallelism,
-            max_task_retries: self.max_task_retries,
-            dry_run: self.dry_run,
-            enable_pipelines: self.model_routing.enable_pipelines,
             model_profiles: self.get_model_profiles(),
             routing_rules: Some(self.get_routing_rules()),
         }
@@ -2722,10 +2751,9 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = CoworkConfigToml::default();
-        assert!(config.enabled);
+        // Legacy fields still have defaults for TOML compatibility
         assert!(config.require_confirmation);
         assert_eq!(config.max_parallelism, 4);
-        assert!(!config.dry_run);
         assert!(config.planner_provider.is_none());
     }
 
@@ -2777,19 +2805,14 @@ mod tests {
 
     #[test]
     fn test_to_engine_config() {
-        let config = CoworkConfigToml {
-            enabled: true,
-            require_confirmation: false,
-            max_parallelism: 8,
-            dry_run: true,
-            ..Default::default()
-        };
+        let config = CoworkConfigToml::default();
 
         let engine_config = config.to_engine_config();
-        assert!(engine_config.enabled);
-        assert!(!engine_config.require_confirmation);
-        assert_eq!(engine_config.max_parallelism, 8);
-        assert!(engine_config.dry_run);
+        // Core execution parameters are now hardcoded, not in AgentConfig
+        // AgentConfig only contains model routing settings
+        // enable_pipelines is now accessed via pipelines_enabled() from routing_rules
+        // Default is true (pipelines enabled by default)
+        assert!(engine_config.pipelines_enabled());
     }
 
     // =========================================================================
