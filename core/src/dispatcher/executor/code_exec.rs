@@ -304,6 +304,7 @@ impl SandboxConfig {
     }
 
     #[cfg(not(target_os = "macos"))]
+    #[allow(dead_code)]
     pub fn generate_profile(&self) -> String {
         // Non-macOS platforms: return empty (sandbox not supported)
         String::new()

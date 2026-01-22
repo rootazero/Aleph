@@ -43,6 +43,7 @@ impl CoreState {
     }
 
     /// Check if the core is initialized
+    #[allow(dead_code)]
     pub fn is_initialized(&self) -> bool {
         let guard = self.core.read().unwrap_or_else(|e| {
             warn!("CoreState read lock poisoned, recovering");
@@ -52,6 +53,7 @@ impl CoreState {
     }
 
     /// Shutdown the core (clears the reference)
+    #[allow(dead_code)]
     pub fn shutdown(&self) {
         let mut guard = self.core.write().unwrap_or_else(|e| {
             warn!("CoreState write lock poisoned, recovering");
