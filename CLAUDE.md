@@ -238,15 +238,20 @@ Use skills from: `~/.claude/skills/build-macos-apps`
 ## Environment
 
 ```bash
-# Python
+# Python (macOS)
 ~/.uv/python3/bin/python
 source ~/.uv/python3/bin/activate
 cd ~/.uv/python3 && uv pip install <package>
 
-# Xcode
+# Python (Windows)
+C:\Users\zou\.uv\python3\Scripts\python.exe
+# or in Git Bash: /c/Users/zou/.uv/python3/Scripts/python.exe
+cd C:\Users\zou\.uv\python3 && uv pip install <package>
+
+# Xcode (macOS)
 cd platforms/macos && xcodegen generate
 
-# Syntax validation
+# Syntax validation (macOS)
 ~/.uv/python3/bin/python Scripts/verify_swift_syntax.py <file.swift>
 ```
 
