@@ -20,7 +20,6 @@ export function UnifiedHaloView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const {
     displayState,
-    visible,
     show,
     handleEscape,
     initialize,
