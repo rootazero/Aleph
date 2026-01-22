@@ -109,11 +109,17 @@ fn setup_logging(
         .event_format(crate::logging::pii_filter::PiiScrubbingFormat);
 
     // Initialize subscriber with both console and file output
-    tracing_subscriber::registry()
+    // Use try_init to avoid panic if already initialized (e.g., by Tauri)
+    if tracing_subscriber::registry()
         .with(env_filter)
         .with(console_layer)
         .with(file_layer)
-        .init();
+        .try_init()
+        .is_err()
+    {
+        // Already initialized, that's fine
+        return Err("Tracing already initialized".into());
+    }
 
     // Write initial log entry
     tracing::info!("Logging system initialized");

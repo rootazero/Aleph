@@ -562,16 +562,14 @@ pub fn init_logging() {
         // Fallback to console-only logging
         use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-        static INIT: std::sync::Once = std::sync::Once::new();
-        INIT.call_once(|| {
-            let filter =
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        let filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-            tracing_subscriber::registry()
-                .with(filter)
-                .with(fmt::layer().with_target(true))
-                .init();
-        });
+        // Use try_init to avoid panic if already initialized
+        let _ = tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt::layer().with_target(true))
+            .try_init();
     }
 }
 

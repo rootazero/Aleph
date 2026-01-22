@@ -10,14 +10,14 @@ use tauri_plugin_autostart::MacosLauncher;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub fn run() {
-    // Initialize logging
-    tracing_subscriber::registry()
+    // Initialize logging (use try_init to avoid panic if already initialized by aethecore)
+    let _ = tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "aether_tauri=debug,tauri=info,aethecore=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
-        .init();
+        .try_init();
 
     tracing::info!("Starting Aether Tauri application");
 

@@ -100,22 +100,5 @@
       }
     }
   },
-  "plugins": {
-    "global-shortcut": {},
-    "notification": {
-      "all": true
-    },
-    "autostart": {},
-    "store": {},
-    "fs": {
-      "scope": {
-        "allow": ["$HOME/.config/aether/**", "$HOME/**"],
-        "deny": ["$HOME/.ssh/**", "$HOME/.gnupg/**", "$HOME/.config/aether/**/.*"]
-      }
-    },
-    "shell": {
-      "open": true,
-      "scope": []
-    }
-  }
+  "plugins": {}
 }
