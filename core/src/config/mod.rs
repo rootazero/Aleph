@@ -103,6 +103,9 @@ pub struct Config {
     /// Orchestrator configuration (Three-Layer Control architecture)
     #[serde(default)]
     pub orchestrator: OrchestratorConfig,
+    /// Typo correction configuration (quick double-space correction)
+    #[serde(default)]
+    pub typo_correction: TypoCorrectionConfig,
 }
 
 // =============================================================================
@@ -190,6 +193,7 @@ impl Default for Config {
             policies: PoliciesConfig::default(),
             generation: GenerationConfig::default(),
             orchestrator: OrchestratorConfig::default(),
+            typo_correction: TypoCorrectionConfig::default(),
         }
     }
 }

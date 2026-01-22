@@ -90,9 +90,11 @@ final class AttachmentStore: @unchecked Sendable {
     /// - Returns: The attachment, or nil if not found
     func getAttachment(id: String) -> StoredAttachment? {
         do {
+            // dbRead returns T?, and fetchOne returns StoredAttachment?
+            // so we need to flatten the double optional
             return try ConversationStore.shared.dbRead { db in
                 try StoredAttachment.fetchOne(db, key: id)
-            }
+            } ?? nil
         } catch {
             print("[AttachmentStore] Failed to fetch attachment: \(error)")
             return nil

@@ -941,6 +941,15 @@ dictionary GenerationProviderInfoFFI {
   string? default_model;
 };
 
+// ===== TYPO CORRECTION =====
+
+// Result of typo correction operation
+[Enum]
+interface TypoCorrectionResult {
+  Success(string corrected_text, boolean has_changes);
+  Error(string message);
+};
+
 // ===== CORE INTERFACE (rig-core based) =====
 // New simplified interface using rig-core for AI provider integration.
 // This provides a cleaner API compared to v1 and will eventually replace it.
@@ -1453,6 +1462,13 @@ interface AetherCore {
     // Get yt-dlp runtime path
     // Returns None if yt-dlp is not installed
     string? get_ytdlp_path();
+
+    // ===== TYPO CORRECTION =====
+
+    // Correct typos in text using AI
+    // Bypasses complex routing for minimal latency
+    [Async]
+    TypoCorrectionResult correct_typo(string text);
 };
 
 // Session summary for FFI (Phase 5)

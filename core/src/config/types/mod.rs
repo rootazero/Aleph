@@ -15,6 +15,7 @@
 //! - `dispatcher`: Dispatcher Layer settings (DispatcherConfigToml)
 //! - `agent`: Agent task orchestration settings (AgentConfigToml)
 //! - `orchestrator`: Three-Layer Control orchestrator settings (OrchestratorConfig, OrchestratorGuards)
+//! - `typo_correction`: Quick typo correction settings (TypoCorrectionConfig)
 
 pub mod agent;
 pub mod dispatcher;
@@ -29,6 +30,7 @@ pub mod search;
 pub mod skills;
 pub mod smart_flow;
 pub mod tools;
+pub mod typo_correction;
 pub mod video;
 
 // Re-export all types for backward compatibility
@@ -46,4 +48,5 @@ pub use search::*;
 pub use skills::*;
 pub use smart_flow::*;
 pub use tools::*;
+pub use typo_correction::*;
 pub use video::*;

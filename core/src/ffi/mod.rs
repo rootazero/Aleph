@@ -13,6 +13,7 @@
 //! - `dispatcher_types`: Dispatcher FFI types (enums, structs for UniFFI)
 //! - `generation`: Media generation (generate_image, generate_speech, etc.)
 //! - `session`: Session lifecycle management (resume, cancel, list)
+//! - `typo_correction`: Quick typo correction (correct_typo)
 
 mod agent_loop_adapter;
 mod config;
@@ -30,6 +31,7 @@ mod runtime;
 mod session;
 mod skills;
 mod tools;
+mod typo_correction;
 
 // Agent Loop FFI adapter for new architecture
 pub use agent_loop_adapter::FfiLoopCallback;
@@ -61,6 +63,7 @@ pub use self::processing::ProcessOptions;
 pub use self::plugins::{PluginInfoFFI, PluginSkillFFI};
 pub use self::runtime::{RuntimeInfo, RuntimeUpdateInfo};
 pub use self::session::SessionSummary;
+pub use self::typo_correction::TypoCorrectionResult;
 
 /// Error type for FFI boundary
 ///

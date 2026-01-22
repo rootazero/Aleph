@@ -553,6 +553,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Update menu bar icon to show active state
         updateMenuBarIcon(state: .listening)
+
+        // Start typo correction feature (double-space trigger)
+        TypoCorrectionCoordinator.shared.start()
+        print("[Aether] TypoCorrectionCoordinator started")
     }
 
     // MARK: - Core Initialization (rig-core based)

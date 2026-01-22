@@ -612,8 +612,6 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func agentGetCodeExecConfig()  -> CodeExecConfigFfi
     
-    func agentGetConfig()  -> AgentConfigFfi
-    
     func agentGetFileOpsConfig()  -> FileOpsConfigFfi
     
     func agentGetHealthStatistics()  -> HealthStatisticsFfi
@@ -642,8 +640,6 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func agentUpdateCodeExecConfig(config: CodeExecConfigFfi) throws 
     
-    func agentUpdateConfig(config: AgentConfigFfi) throws 
-    
     func agentUpdateCostStrategy(strategy: ModelCostStrategyFfi) throws 
     
     func agentUpdateDefaultModel(modelId: String) throws 
@@ -671,6 +667,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func clearMemory() throws 
     
     func confirmTaskPlan(planId: String, confirmed: Bool)  -> Bool
+    
+    func correctTypo(text: String) async  -> TypoCorrectionResult
     
     func deleteGenerationProvider(name: String) throws 
     
@@ -968,13 +966,6 @@ open func agentGetCodeExecConfig() -> CodeExecConfigFfi {
 })
 }
     
-open func agentGetConfig() -> AgentConfigFfi {
-    return try!  FfiConverterTypeAgentConfigFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_config(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
 open func agentGetFileOpsConfig() -> FileOpsConfigFfi {
     return try!  FfiConverterTypeFileOpsConfigFFI.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_agent_get_file_ops_config(self.uniffiClonePointer(),$0
@@ -1069,13 +1060,6 @@ open func agentSubscribe(handler: AgentProgressHandler) {try! rustCall() {
 open func agentUpdateCodeExecConfig(config: CodeExecConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_agent_update_code_exec_config(self.uniffiClonePointer(),
         FfiConverterTypeCodeExecConfigFFI.lower(config),$0
-    )
-}
-}
-    
-open func agentUpdateConfig(config: AgentConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_update_config(self.uniffiClonePointer(),
-        FfiConverterTypeAgentConfigFFI.lower(config),$0
     )
 }
 }
@@ -1182,6 +1166,24 @@ open func confirmTaskPlan(planId: String, confirmed: Bool) -> Bool {
         FfiConverterBool.lower(confirmed),$0
     )
 })
+}
+    
+open func correctTypo(text: String)async  -> TypoCorrectionResult {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_method_aethercore_correct_typo(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(text)
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeTypoCorrectionResult.lift,
+            errorHandler: nil
+            
+        )
 }
     
 open func deleteGenerationProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
@@ -1913,96 +1915,6 @@ public func FfiConverterTypeAetherCore_lift(_ pointer: UnsafeMutableRawPointer) 
 #endif
 public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
     return FfiConverterTypeAetherCore.lower(value)
-}
-
-
-public struct AgentConfigFfi {
-    public var enabled: Bool
-    public var requireConfirmation: Bool
-    public var maxParallelism: UInt32
-    public var maxTaskRetries: UInt32
-    public var dryRun: Bool
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(enabled: Bool, requireConfirmation: Bool, maxParallelism: UInt32, maxTaskRetries: UInt32, dryRun: Bool) {
-        self.enabled = enabled
-        self.requireConfirmation = requireConfirmation
-        self.maxParallelism = maxParallelism
-        self.maxTaskRetries = maxTaskRetries
-        self.dryRun = dryRun
-    }
-}
-
-
-
-extension AgentConfigFfi: Equatable, Hashable {
-    public static func ==(lhs: AgentConfigFfi, rhs: AgentConfigFfi) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.requireConfirmation != rhs.requireConfirmation {
-            return false
-        }
-        if lhs.maxParallelism != rhs.maxParallelism {
-            return false
-        }
-        if lhs.maxTaskRetries != rhs.maxTaskRetries {
-            return false
-        }
-        if lhs.dryRun != rhs.dryRun {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(requireConfirmation)
-        hasher.combine(maxParallelism)
-        hasher.combine(maxTaskRetries)
-        hasher.combine(dryRun)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeAgentConfigFFI: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AgentConfigFfi {
-        return
-            try AgentConfigFfi(
-                enabled: FfiConverterBool.read(from: &buf), 
-                requireConfirmation: FfiConverterBool.read(from: &buf), 
-                maxParallelism: FfiConverterUInt32.read(from: &buf), 
-                maxTaskRetries: FfiConverterUInt32.read(from: &buf), 
-                dryRun: FfiConverterBool.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: AgentConfigFfi, into buf: inout [UInt8]) {
-        FfiConverterBool.write(value.enabled, into: &buf)
-        FfiConverterBool.write(value.requireConfirmation, into: &buf)
-        FfiConverterUInt32.write(value.maxParallelism, into: &buf)
-        FfiConverterUInt32.write(value.maxTaskRetries, into: &buf)
-        FfiConverterBool.write(value.dryRun, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeAgentConfigFFI_lift(_ buf: RustBuffer) throws -> AgentConfigFfi {
-    return try FfiConverterTypeAgentConfigFFI.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeAgentConfigFFI_lower(_ value: AgentConfigFfi) -> RustBuffer {
-    return FfiConverterTypeAgentConfigFFI.lower(value)
 }
 
 
@@ -14123,6 +14035,77 @@ extension ToolSourceType: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum TypoCorrectionResult {
+    
+    case success(correctedText: String, hasChanges: Bool
+    )
+    case error(message: String
+    )
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTypoCorrectionResult: FfiConverterRustBuffer {
+    typealias SwiftType = TypoCorrectionResult
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TypoCorrectionResult {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .success(correctedText: try FfiConverterString.read(from: &buf), hasChanges: try FfiConverterBool.read(from: &buf)
+        )
+        
+        case 2: return .error(message: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: TypoCorrectionResult, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .success(correctedText,hasChanges):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(correctedText, into: &buf)
+            FfiConverterBool.write(hasChanges, into: &buf)
+            
+        
+        case let .error(message):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(message, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTypoCorrectionResult_lift(_ buf: RustBuffer) throws -> TypoCorrectionResult {
+    return try FfiConverterTypeTypoCorrectionResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTypoCorrectionResult_lower(_ value: TypoCorrectionResult) -> RustBuffer {
+    return FfiConverterTypeTypoCorrectionResult.lower(value)
+}
+
+
+
+extension TypoCorrectionResult: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum UserConfirmationDecision {
     
     case execute
@@ -16874,6 +16857,52 @@ fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
         return dict
     }
 }
+private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
+private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
+
+fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
+
+fileprivate func uniffiRustCallAsync<F, T>(
+    rustFutureFunc: () -> UInt64,
+    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
+    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
+    freeFunc: (UInt64) -> (),
+    liftFunc: (F) throws -> T,
+    errorHandler: ((RustBuffer) throws -> Swift.Error)?
+) async throws -> T {
+    // Make sure to call uniffiEnsureInitialized() since future creation doesn't have a
+    // RustCallStatus param, so doesn't use makeRustCall()
+    uniffiEnsureInitialized()
+    let rustFuture = rustFutureFunc()
+    defer {
+        freeFunc(rustFuture)
+    }
+    var pollResult: Int8;
+    repeat {
+        pollResult = await withUnsafeContinuation {
+            pollFunc(
+                rustFuture,
+                uniffiFutureContinuationCallback,
+                uniffiContinuationHandleMap.insert(obj: $0)
+            )
+        }
+    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
+
+    return try liftFunc(makeRustCall(
+        { completeFunc(rustFuture, $0) },
+        errorHandler: errorHandler
+    ))
+}
+
+// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
+// lift the return value or error and resume the suspended function.
+fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
+    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
+        continuation.resume(returning: pollResult)
+    } else {
+        print("uniffiFutureContinuationCallback invalid handle")
+    }
+}
 public func getSkillsDirString()throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_get_skills_dir_string($0
@@ -17027,9 +17056,6 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_agent_get_code_exec_config() != 64635) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_config() != 48182) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_method_aethercore_agent_get_file_ops_config() != 13150) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -17072,9 +17098,6 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_agent_update_code_exec_config() != 35309) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_update_config() != 53950) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_method_aethercore_agent_update_cost_strategy() != 23557) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -17115,6 +17138,9 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_confirm_task_plan() != 29235) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_correct_typo() != 2303) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_delete_generation_provider() != 6436) {
