@@ -28,7 +28,6 @@ use std::collections::HashMap;
 /// # Example TOML
 /// ```toml
 /// [agent]
-/// enabled = true
 /// require_confirmation = true
 /// max_parallelism = 4
 /// dry_run = false
@@ -37,10 +36,6 @@ use std::collections::HashMap;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoworkConfigToml {
-    /// Enable Agent task orchestration
-    #[serde(default = "default_agent_enabled")]
-    pub enabled: bool,
-
     /// Require user confirmation before executing task graphs
     /// When true, shows confirmation UI with task list before execution
     #[serde(default = "default_require_confirmation")]
@@ -818,10 +813,6 @@ fn default_code_exec_pass_env() -> Vec<String> {
 // Default Functions
 // =============================================================================
 
-pub fn default_agent_enabled() -> bool {
-    true
-}
-
 pub fn default_require_confirmation() -> bool {
     true
 }
@@ -933,7 +924,6 @@ fn parse_file_size(s: &str) -> Result<u64, String> {
 impl Default for CoworkConfigToml {
     fn default() -> Self {
         Self {
-            enabled: default_agent_enabled(),
             require_confirmation: default_require_confirmation(),
             max_parallelism: default_max_parallelism(),
             dry_run: default_dry_run(),
@@ -1021,7 +1011,6 @@ impl CoworkConfigToml {
     /// This creates an AgentConfig suitable for the AgentEngine.
     pub fn to_engine_config(&self) -> crate::dispatcher::AgentConfig {
         crate::dispatcher::AgentConfig {
-            enabled: self.enabled,
             require_confirmation: self.require_confirmation,
             max_parallelism: self.max_parallelism,
             max_task_retries: self.max_task_retries,

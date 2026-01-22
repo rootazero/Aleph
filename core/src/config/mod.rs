@@ -874,7 +874,6 @@ impl Config {
         }
 
         debug!(
-            enabled = self.agent.enabled,
             require_confirmation = self.agent.require_confirmation,
             max_parallelism = self.agent.max_parallelism,
             "Agent config validated"

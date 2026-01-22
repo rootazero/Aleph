@@ -924,6 +924,51 @@
 "settings.model_routing.task.privacy_sensitive" = "隐私敏感";
 "settings.model_routing.task.reasoning" = "推理";
 
+// MARK: - Settings Window - Security Tab
+"settings.security.title" = "安全";
+"settings.security.description" = "控制 AI 对文件系统和代码执行的访问权限。配置权限和安全边界。";
+
+// 文件操作
+"settings.security.file_ops.title" = "文件操作";
+"settings.security.file_ops.description" = "控制 AI 如何读取、写入和管理系统文件。";
+"settings.security.file_ops.enabled" = "启用文件操作";
+"settings.security.file_ops.enabled_description" = "允许 AI 执行读取、写入和管理文件等操作。";
+"settings.security.file_ops.enabled_toggle" = "文件操作";
+"settings.security.file_ops.allowed_paths" = "允许路径";
+"settings.security.file_ops.allowed_paths_description" = "AI 可以访问文件的目录。留空则允许所有路径（被拒绝的除外）。";
+"settings.security.file_ops.add_allowed_path" = "添加允许路径...";
+"settings.security.file_ops.denied_paths" = "拒绝路径";
+"settings.security.file_ops.denied_paths_description" = "AI 不能访问文件的目录。优先于允许路径。";
+"settings.security.file_ops.add_denied_path" = "添加拒绝路径...";
+"settings.security.file_ops.default_denied_note" = "~/.ssh、~/.gnupg 等敏感路径默认始终被拒绝。";
+"settings.security.file_ops.max_file_size" = "最大文件大小";
+"settings.security.file_ops.max_file_size_description" = "AI 可以读取或写入的最大文件大小。";
+"settings.security.file_ops.max_file_size_picker" = "最大文件大小";
+"settings.security.file_ops.confirmations" = "确认";
+"settings.security.file_ops.confirmations_description" = "在潜在破坏性操作前要求确认。";
+"settings.security.file_ops.confirm_write" = "确认写入";
+"settings.security.file_ops.confirm_delete" = "确认删除";
+"settings.security.file_ops.confirmations_warning" = "禁用确认将允许 AI 在不询问的情况下修改文件。";
+"settings.security.file_ops.browse" = "浏览文件夹";
+
+// 代码执行
+"settings.security.code_exec.title" = "代码执行";
+"settings.security.code_exec.description" = "控制 AI 如何在系统上执行代码和脚本。";
+"settings.security.code_exec.enabled" = "启用代码执行";
+"settings.security.code_exec.enabled_description" = "允许 AI 执行代码和脚本。出于安全考虑默认禁用。";
+"settings.security.code_exec.enabled_toggle" = "代码执行";
+"settings.security.code_exec.security_warning" = "启用代码执行将允许 AI 在您的系统上运行命令。请谨慎使用。";
+"settings.security.code_exec.sandbox" = "沙箱模式";
+"settings.security.code_exec.sandbox_description" = "在受限环境中运行代码，限制系统访问。";
+"settings.security.code_exec.sandbox_toggle" = "沙箱执行";
+"settings.security.code_exec.network" = "网络访问";
+"settings.security.code_exec.network_description" = "允许沙箱内的网络访问。Web 请求和 API 调用需要此权限。";
+"settings.security.code_exec.timeout" = "执行超时";
+"settings.security.code_exec.timeout_description" = "代码执行的最长时间，超时后自动终止。";
+"settings.security.code_exec.runtime" = "默认运行时";
+"settings.security.code_exec.runtime_description" = "代码执行的默认编程环境。";
+"settings.security.code_exec.runtime_picker" = "选择运行时";
+
 // MARK: - Settings Window - Policies Tab
 "settings.policies.title" = "策略配置";
 "settings.policies.description" = "配置系统行为策略。这些设置控制工具安全、意图检测、记忆管理等方面的参数。";

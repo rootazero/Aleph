@@ -144,6 +144,8 @@ struct RootContentView: View {
             return L("settings.plugins.title")
         case .agent:
             return L("settings.agent.title")
+        case .security:
+            return L("settings.security.title")
         case .policies:
             return L("settings.policies.title")
         }
@@ -174,6 +176,8 @@ struct RootContentView: View {
             return L("settings.plugins.description")
         case .agent:
             return L("settings.agent.description")
+        case .security:
+            return L("settings.security.description")
         case .policies:
             return L("settings.policies.description")
         }
@@ -307,6 +311,15 @@ struct RootContentView: View {
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Agent settings requires AetherCore initialization")
+            }
+
+        case .security:
+            // core used for security settings
+            if let core = core {
+                SecuritySettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
+                    .id(configReloadTrigger)
+            } else {
+                placeholderView("Security settings requires AetherCore initialization")
             }
 
         case .policies:

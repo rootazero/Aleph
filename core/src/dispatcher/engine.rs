@@ -24,9 +24,6 @@ use crate::providers::AiProvider;
 /// Renamed from CoworkConfig to reflect the agent-centric architecture.
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
-    /// Whether Agent task orchestration is enabled
-    pub enabled: bool,
-
     /// Whether to require user confirmation before execution
     pub require_confirmation: bool,
 
@@ -52,7 +49,6 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             require_confirmation: true,
             max_parallelism: 4,
             max_task_retries: 3,
@@ -293,10 +289,6 @@ impl AgentEngine {
     /// * `Ok(TaskGraph)` - The planned task graph
     /// * `Err` - If planning fails
     pub async fn plan(&self, request: &str) -> Result<TaskGraph> {
-        if !self.config.enabled {
-            return Err(AetherError::config("Agent task orchestration is disabled"));
-        }
-
         info!("Planning task: {}", request);
         *self.state.write().await = ExecutionState::Planning;
 
@@ -331,10 +323,6 @@ impl AgentEngine {
         request: &str,
         providers: &GenerationProviders,
     ) -> Result<TaskGraph> {
-        if !self.config.enabled {
-            return Err(AetherError::config("Agent task orchestration is disabled"));
-        }
-
         info!("Planning task with providers: {}", request);
         *self.state.write().await = ExecutionState::Planning;
 
@@ -360,10 +348,6 @@ impl AgentEngine {
     /// * `Ok(ExecutionSummary)` - Summary of the execution
     /// * `Err` - If execution fails
     pub async fn execute(&self, mut graph: TaskGraph) -> Result<ExecutionSummary> {
-        if !self.config.enabled {
-            return Err(AetherError::config("Agent task orchestration is disabled"));
-        }
-
         info!(
             "Executing task graph: {} ({})",
             graph.metadata.title, graph.id
@@ -718,10 +702,6 @@ impl AgentEngine {
     /// * `Ok(ExecutionSummary)` - Summary with model routing information
     /// * `Err` - If execution fails
     pub async fn execute_with_routing(&self, mut graph: TaskGraph) -> Result<ExecutionSummary> {
-        if !self.config.enabled {
-            return Err(AetherError::config("Agent task orchestration is disabled"));
-        }
-
         // If model routing is not enabled, fall back to regular execution
         if !self.has_model_routing() {
             info!("Model routing not enabled, using standard execution");
@@ -1025,7 +1005,6 @@ mod tests {
     async fn test_engine_execute() {
         // Create a mock provider (we won't use it for execution)
         let config = AgentConfig {
-            enabled: true,
             require_confirmation: false,
             max_parallelism: 2,
             dry_run: false,

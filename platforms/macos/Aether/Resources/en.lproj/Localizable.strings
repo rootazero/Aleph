@@ -922,6 +922,51 @@
 "settings.model_routing.task.privacy_sensitive" = "Privacy Sensitive";
 "settings.model_routing.task.reasoning" = "Reasoning";
 
+// MARK: - Settings Window - Security Tab
+"settings.security.title" = "Security";
+"settings.security.description" = "Control AI access to file system and code execution. Configure permissions and safety boundaries.";
+
+// File Operations
+"settings.security.file_ops.title" = "File Operations";
+"settings.security.file_ops.description" = "Control how AI can read, write, and manage files on your system.";
+"settings.security.file_ops.enabled" = "Enable File Operations";
+"settings.security.file_ops.enabled_description" = "Allow AI to perform file operations like reading, writing, and managing files.";
+"settings.security.file_ops.enabled_toggle" = "File Operations";
+"settings.security.file_ops.allowed_paths" = "Allowed Paths";
+"settings.security.file_ops.allowed_paths_description" = "Directories where AI can access files. Leave empty to allow all paths (except denied).";
+"settings.security.file_ops.add_allowed_path" = "Add allowed path...";
+"settings.security.file_ops.denied_paths" = "Denied Paths";
+"settings.security.file_ops.denied_paths_description" = "Directories where AI cannot access files. Takes precedence over allowed paths.";
+"settings.security.file_ops.add_denied_path" = "Add denied path...";
+"settings.security.file_ops.default_denied_note" = "~/.ssh, ~/.gnupg, and other sensitive paths are always denied by default.";
+"settings.security.file_ops.max_file_size" = "Maximum File Size";
+"settings.security.file_ops.max_file_size_description" = "Maximum size of files AI can read or write.";
+"settings.security.file_ops.max_file_size_picker" = "Max File Size";
+"settings.security.file_ops.confirmations" = "Confirmations";
+"settings.security.file_ops.confirmations_description" = "Require confirmation before potentially destructive operations.";
+"settings.security.file_ops.confirm_write" = "Confirm Write";
+"settings.security.file_ops.confirm_delete" = "Confirm Delete";
+"settings.security.file_ops.confirmations_warning" = "Disabling confirmations allows AI to modify files without asking.";
+"settings.security.file_ops.browse" = "Browse for folder";
+
+// Code Execution
+"settings.security.code_exec.title" = "Code Execution";
+"settings.security.code_exec.description" = "Control how AI can execute code and scripts on your system.";
+"settings.security.code_exec.enabled" = "Enable Code Execution";
+"settings.security.code_exec.enabled_description" = "Allow AI to execute code and scripts. Disabled by default for security.";
+"settings.security.code_exec.enabled_toggle" = "Code Execution";
+"settings.security.code_exec.security_warning" = "Enabling code execution allows AI to run commands on your system. Use with caution.";
+"settings.security.code_exec.sandbox" = "Sandbox Mode";
+"settings.security.code_exec.sandbox_description" = "Run code in a restricted environment with limited system access.";
+"settings.security.code_exec.sandbox_toggle" = "Sandboxed Execution";
+"settings.security.code_exec.network" = "Network Access";
+"settings.security.code_exec.network_description" = "Allow network access within sandbox. Required for web requests and API calls.";
+"settings.security.code_exec.timeout" = "Execution Timeout";
+"settings.security.code_exec.timeout_description" = "Maximum time for code execution before automatic termination.";
+"settings.security.code_exec.runtime" = "Default Runtime";
+"settings.security.code_exec.runtime_description" = "Default programming environment for code execution.";
+"settings.security.code_exec.runtime_picker" = "Select Runtime";
+
 // MARK: - Settings Window - Policies Tab
 "settings.policies.title" = "Policies";
 "settings.policies.description" = "Configure behavioral parameters that control how Aether operates. These settings allow you to tune system behavior without code changes.";

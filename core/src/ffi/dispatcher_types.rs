@@ -276,7 +276,6 @@ impl From<ModelCostStrategyFFI> for CostStrategy {
 /// Cowork configuration for FFI
 #[derive(Debug, Clone)]
 pub struct AgentConfigFFI {
-    pub enabled: bool,
     pub require_confirmation: bool,
     pub max_parallelism: u32,
     pub max_task_retries: u32,
@@ -286,7 +285,6 @@ pub struct AgentConfigFFI {
 impl From<AgentConfig> for AgentConfigFFI {
     fn from(config: AgentConfig) -> Self {
         Self {
-            enabled: config.enabled,
             require_confirmation: config.require_confirmation,
             max_parallelism: config.max_parallelism as u32,
             max_task_retries: config.max_task_retries,
@@ -298,7 +296,6 @@ impl From<AgentConfig> for AgentConfigFFI {
 impl From<AgentConfigFFI> for AgentConfig {
     fn from(config: AgentConfigFFI) -> Self {
         Self {
-            enabled: config.enabled,
             require_confirmation: config.require_confirmation,
             max_parallelism: config.max_parallelism as usize,
             max_task_retries: config.max_task_retries,

@@ -1829,7 +1829,6 @@ enum AgentTaskTypeCategory {
 
 // Agent configuration
 dictionary AgentConfigFFI {
-  boolean enabled;               // Whether Agent is enabled
   boolean require_confirmation;  // Require user confirmation before execution
   u32 max_parallelism;           // Max parallel tasks
   u32 max_task_retries;          // Max retry attempts for failed tasks

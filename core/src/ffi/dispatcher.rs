@@ -107,7 +107,6 @@ impl AetherCore {
         *engine_guard = None;
 
         info!(
-            enabled = config.enabled,
             max_parallelism = config.max_parallelism,
             "Cowork configuration updated"
         );
