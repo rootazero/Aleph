@@ -21,7 +21,7 @@
 //! ```
 
 pub mod transcript;
-pub mod youtube;
+mod youtube;
 
 // Re-exports
 pub use transcript::{TranscriptSegment, VideoTranscript};

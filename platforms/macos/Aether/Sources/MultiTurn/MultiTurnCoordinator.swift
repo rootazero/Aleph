@@ -458,19 +458,25 @@ final class MultiTurnCoordinator {
     /// Called by EventHandler.onStreamChunk() for real-time response streaming
     func handleStreamChunk(text: String) {
         // Only process if we have pending context
-        guard pendingTopic != nil else { return }
+        guard pendingTopic != nil else {
+            print("[MultiTurnCoordinator] handleStreamChunk: ignored - no pending topic")
+            return
+        }
+
+        print("[MultiTurnCoordinator] handleStreamChunk: text=\(text.prefix(50))... (\(text.count) chars)")
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
             // Start streaming if not already started
             if self.unifiedWindow.viewModel.streamingMessageId == nil {
-                _ = self.unifiedWindow.viewModel.startStreamingMessage()
-                print("[MultiTurnCoordinator] Started streaming message")
+                let messageId = self.unifiedWindow.viewModel.startStreamingMessage()
+                print("[MultiTurnCoordinator] Started streaming message, id: \(messageId ?? "nil")")
             }
 
             // Update streaming text directly (no typewriter in streaming mode)
             self.unifiedWindow.viewModel.updateStreamingText(text)
+            print("[MultiTurnCoordinator] Updated streaming text, length: \(text.count)")
         }
     }
 

@@ -20,7 +20,8 @@ pub use prompt_analyzer::{
 };
 pub use routing::{IntelligentRouter, IntelligentRoutingConfig, IntelligentRoutingResult};
 pub use semantic_cache::{
-    CacheEntry, CacheHit, CacheHitType, CacheMetadata, CacheStats, CachedResponse, EmbeddingError,
-    EvictionPolicy, FastEmbedEmbedder, InMemoryVectorStore, SemanticCacheConfig,
-    SemanticCacheError, SemanticCacheManager, TextEmbedder,
+    cosine_similarity, hash_prompt, normalize_prompt, prompt_preview, CacheEntry, CacheHit,
+    CacheHitType, CacheMetadata, CacheStats, CachedResponse, EmbeddingError, EvictionPolicy,
+    FastEmbedEmbedder, InMemoryVectorStore, SemanticCacheConfig, SemanticCacheError,
+    SemanticCacheManager, TextEmbedder,
 };

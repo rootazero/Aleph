@@ -800,6 +800,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func reloadConfig() throws 
     
+    func respondToUserInput(requestId: String, response: String)  -> Bool
+    
     func resumeSession(sessionId: String) throws 
     
     func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt32) throws  -> [MemoryEntry]
@@ -1670,6 +1672,15 @@ open func reloadConfig()throws  {try rustCallWithError(FfiConverterTypeAetherFfi
     uniffi_aethecore_fn_method_aethercore_reload_config(self.uniffiClonePointer(),$0
     )
 }
+}
+    
+open func respondToUserInput(requestId: String, response: String) -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_respond_to_user_input(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),
+        FfiConverterString.lower(response),$0
+    )
+})
 }
     
 open func resumeSession(sessionId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
@@ -14462,6 +14473,8 @@ public protocol AetherEventHandler : AnyObject {
     
     func onPlanConfirmationRequired(planId: String, plan: DagTaskPlan) 
     
+    func onUserInputRequest(requestId: String, question: String, options: [String]) 
+    
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -14477,7 +14490,7 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
+    static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
         onThinking: { (
             uniffiHandle: UInt64,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -15006,6 +15019,34 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 writeReturn: writeReturn
             )
         },
+        onUserInputRequest: { (
+            uniffiHandle: UInt64,
+            requestId: RustBuffer,
+            question: RustBuffer,
+            options: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onUserInputRequest(
+                     requestId: try FfiConverterString.lift(requestId),
+                     question: try FfiConverterString.lift(question),
+                     options: try FfiConverterSequenceString.lift(options)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             let result = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.remove(handle: uniffiHandle)
             if result == nil {
@@ -15024,7 +15065,7 @@ private func uniffiCallbackInitAetherEventHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
-    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
+    fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
 }
 
 #if swift(>=5.8)
@@ -15080,7 +15121,7 @@ fileprivate struct UniffiCallbackInterfaceAgentProgressHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAgentProgressHandler = UniffiVTableCallbackInterfaceAgentProgressHandler(
+    static var vtable: UniffiVTableCallbackInterfaceAgentProgressHandler = UniffiVTableCallbackInterfaceAgentProgressHandler(
         onProgressEvent: { (
             uniffiHandle: UInt64,
             event: RustBuffer,
@@ -15123,7 +15164,7 @@ private func uniffiCallbackInitAgentProgressHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAgentProgressHandler {
-    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AgentProgressHandler>()
+    fileprivate static var handleMap = UniffiHandleMap<AgentProgressHandler>()
 }
 
 #if swift(>=5.8)
@@ -15231,7 +15272,7 @@ fileprivate struct UniffiCallbackInterfaceInitProgressHandlerFFI {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
+    static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
         onPhaseStarted: { (
             uniffiHandle: UInt64,
             phase: RustBuffer,
@@ -15386,7 +15427,7 @@ private func uniffiCallbackInitInitProgressHandlerFFI() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceInitProgressHandlerFfi {
-    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
+    fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
 }
 
 #if swift(>=5.8)
@@ -17051,7 +17092,7 @@ private enum InitializationResult {
 }
 // Use a global variable to perform the versioning checks. Swift ensures that
 // the code inside is only computed once.
-nonisolated(unsafe) private var initializationResult: InitializationResult = {
+private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
     // Get the scaffolding contract version by calling the into the dylib
@@ -17389,6 +17430,9 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_reload_config() != 43589) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_respond_to_user_input() != 5504) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_resume_session() != 14295) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -17525,6 +17569,9 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_plan_confirmation_required() != 14579) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_user_input_request() != 9067) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_agentprogresshandler_on_progress_event() != 52150) {

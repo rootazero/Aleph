@@ -61,6 +61,8 @@ pub enum CommandContext {
         instructions: String,
         /// Skill name for display
         display_name: String,
+        /// Allowed tools for this skill (empty means all tools allowed)
+        allowed_tools: Vec<String>,
     },
 
     /// Custom command context
@@ -253,6 +255,7 @@ impl CommandParser {
                 skill_id: skill.id.clone(),
                 instructions: skill.instructions.clone(),
                 display_name: skill.frontmatter.name.clone(),
+                allowed_tools: skill.frontmatter.allowed_tools.clone(),
             },
         }
     }
@@ -357,11 +360,14 @@ When creating a knowledge graph, follow these steps:
             skill_id,
             instructions,
             display_name,
+            allowed_tools,
         } = cmd.context
         {
             assert_eq!(skill_id, "knowledge-graph");
             assert_eq!(display_name, "Knowledge Graph");
             assert!(instructions.contains("knowledge graph"));
+            // allowed_tools may be empty for test skill
+            let _ = allowed_tools;
         } else {
             panic!("Expected Skill context");
         }

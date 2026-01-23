@@ -157,7 +157,32 @@ pub struct AgentContext {
 
     /// Skills instructions - dynamically injected from matched SKILL.md
     /// Contains the instructions from the skill's markdown body
+    ///
+    /// **DEPRECATED**: This field is deprecated in favor of Progressive Disclosure pattern.
+    /// Skills are now loaded on-demand via the `read_skill` tool.
+    /// Use `available_skills` for skill metadata injection instead.
     pub skill_instructions: Option<String>,
+
+    /// Available skills metadata (Progressive Disclosure Level 1)
+    ///
+    /// Contains only skill IDs and descriptions, not full instructions.
+    /// The agent uses `read_skill` tool to load complete instructions when needed.
+    pub available_skills: Option<Vec<SkillMetadata>>,
+}
+
+/// Skill metadata for Progressive Disclosure (Level 1)
+///
+/// Contains only the minimal information needed in the system prompt:
+/// - Skill ID (for invoking read_skill)
+/// - Description (for the agent to understand when to use it)
+///
+/// Full instructions are loaded on-demand via read_skill tool (Level 2).
+#[derive(Debug, Clone)]
+pub struct SkillMetadata {
+    /// Skill ID (directory name, used with read_skill)
+    pub id: String,
+    /// Human-readable description of what the skill does
+    pub description: String,
 }
 
 /// Result of web page content fetching

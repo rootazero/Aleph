@@ -5,7 +5,12 @@ use serde::{Deserialize, Serialize};
 /// Rig Agent configuration for provider and model settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RigAgentConfig {
-    /// Provider name (openai, anthropic, ollama, groq)
+    /// Provider name from config (e.g., "t8star", "deepseek")
+    /// Used for provider selection and logging
+    #[serde(default)]
+    pub provider_name: Option<String>,
+    /// Provider type/protocol (e.g., "openai", "claude", "gemini")
+    /// Determines which API client implementation to use
     pub provider: String,
     /// Model name
     pub model: String,
@@ -51,6 +56,7 @@ fn default_timeout_seconds() -> u64 {
 impl Default for RigAgentConfig {
     fn default() -> Self {
         Self {
+            provider_name: None,
             provider: "openai".to_string(),
             model: "gpt-4o".to_string(),
             temperature: default_temperature(),

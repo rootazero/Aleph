@@ -6,9 +6,9 @@
 //! - L3: AI classification (1-3s)
 
 pub mod ai_detector;
-pub mod classifier;
+mod classifier;
 pub mod keyword;
 
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
-pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
+pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier, intent_type_to_category};
 pub use keyword::{KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule};

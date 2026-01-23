@@ -1018,6 +1018,12 @@ callback interface AetherEventHandler {
     // Called when a DAG task plan requires user confirmation before execution.
     // Swift should display the plan and call AetherCore.confirm_task_plan() with user's decision.
     void on_plan_confirmation_required(string plan_id, DagTaskPlan plan);
+
+    // User Input Request callback
+    // Called when the agent loop needs user input during execution.
+    // Swift should display the question (and optional choices) and call
+    // AetherCore.respond_to_user_input() with the user's response.
+    void on_user_input_request(string request_id, string question, sequence<string> options);
 };
 
 interface AetherCore {
@@ -1437,6 +1443,13 @@ interface AetherCore {
     // Called by Swift after displaying confirmation dialog
     // Returns true if confirmation was found and completed, false if expired or not found
     boolean confirm_task_plan(string plan_id, boolean confirmed);
+
+    // ===== USER INPUT REQUEST (agent-loop-interactive-input) =====
+
+    // Respond to a user input request from the agent loop
+    // Called by Swift after collecting user input
+    // Returns true if request was found and completed, false if not found
+    boolean respond_to_user_input(string request_id, string response);
 
     // ===== RUNTIME MANAGEMENT (add-runtime-manager) =====
 

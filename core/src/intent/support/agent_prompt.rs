@@ -23,6 +23,8 @@ pub struct ToolDescription {
     pub name: String,
     /// Tool description
     pub description: String,
+    /// JSON Schema for tool parameters (optional)
+    pub parameters_schema: Option<serde_json::Value>,
 }
 
 impl ToolDescription {
@@ -31,6 +33,20 @@ impl ToolDescription {
         Self {
             name: name.into(),
             description: description.into(),
+            parameters_schema: None,
+        }
+    }
+
+    /// Create a new tool description with parameter schema
+    pub fn with_schema(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        schema: serde_json::Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters_schema: Some(schema),
         }
     }
 }
@@ -121,6 +137,11 @@ impl AgentModePrompt {
 
         let mut lines = vec!["\n\n### Media Generation Models\n".to_string()];
         lines.push("**Use generate_image tool for image generation**".to_string());
+        lines.push("".to_string());
+        lines.push("**IMPORTANT: Image URL Auto-Caching**".to_string());
+        lines.push("- When generate_image returns a URL, the system will automatically cache it to local storage".to_string());
+        lines.push("- DO NOT ask the user whether to save the image - it is handled automatically".to_string());
+        lines.push("- Simply report the generation result and continue with the task".to_string());
         lines.push("".to_string());
         lines.push("**Model Alias Mapping (Important):**".to_string());
         lines.push(

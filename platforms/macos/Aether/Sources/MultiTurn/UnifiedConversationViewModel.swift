@@ -62,6 +62,14 @@ final class UnifiedConversationViewModel {
     /// Core reference for plan confirmation callback (set by notification handler)
     var planConfirmationCore: AetherCore?
 
+    // MARK: - User Input Request (inline in conversation)
+
+    /// Pending user input request (shown inline in conversation area)
+    var pendingUserInputRequest: PendingUserInputRequest?
+
+    /// Core reference for user input callback (set by notification handler)
+    var userInputCore: AetherCore?
+
     // MARK: - Attachment Data
 
     /// Pending attachments to send with next message
@@ -109,6 +117,9 @@ final class UnifiedConversationViewModel {
 
     /// Called when window height should change
     var onHeightChanged: ((CGFloat) -> Void)?
+
+    /// Last reported content height (without status bar)
+    private var lastContentHeight: CGFloat = 0
 
     // MARK: - Core Reference
 
@@ -449,10 +460,15 @@ final class UnifiedConversationViewModel {
     }
 
     func updateStreamingText(_ text: String) {
+        let wasEmpty = streamingText.isEmpty
         // Only update streamingText - do NOT update messages array during streaming
         // This avoids triggering SwiftUI's expensive array diff and re-render
         // The streaming message is displayed separately using StreamingMessageBubble
         streamingText = text
+        // Trigger height update when streaming text goes from empty to non-empty
+        if wasEmpty && !text.isEmpty {
+            refreshWindowHeight()
+        }
     }
 
     func finishStreamingMessage() {
@@ -477,6 +493,7 @@ final class UnifiedConversationViewModel {
         streamingMessageId = nil
         streamingText = ""
         isLoading = false
+        refreshWindowHeight()
     }
 
     /// Strip [GENERATED_FILES] block from content for display
@@ -612,7 +629,41 @@ final class UnifiedConversationViewModel {
     }
 
     func reportHeightChange(_ height: CGFloat) {
-        onHeightChanged?(height)
+        // Save content height for later use when status bar changes
+        lastContentHeight = height
+        // Add status bar height when streaming/progress is active
+        let statusBarHeight = calculateStatusBarHeight()
+        onHeightChanged?(height + statusBarHeight)
+    }
+
+    /// Refresh window height when status bar state changes
+    private func refreshWindowHeight() {
+        guard lastContentHeight > 0 else { return }
+        let statusBarHeight = calculateStatusBarHeight()
+        onHeightChanged?(lastContentHeight + statusBarHeight)
+    }
+
+    /// Calculate the height of the streaming status area
+    private func calculateStatusBarHeight() -> CGFloat {
+        // Status bar only shows when there's streaming content, tool calls, or plan steps
+        guard streamingMessageId != nil || currentToolCall != nil || !planSteps.isEmpty else {
+            return 0
+        }
+
+        // Dynamic height based on content
+        var height: CGFloat = 12  // VStack padding (vertical 6 * 2)
+
+        // Streaming text: header (~20) + scrollview (max 80)
+        if streamingMessageId != nil && !streamingText.isEmpty {
+            height += 100
+        }
+
+        // Tool call indicator (~12)
+        if currentToolCall != nil {
+            height += 12
+        }
+
+        return height
     }
 
     // MARK: - Copy Actions
@@ -661,6 +712,7 @@ final class UnifiedConversationViewModel {
         currentToolCall = nil
         planSteps = []
         currentStepIndex = 0
+        refreshWindowHeight()
     }
 
     /// Update tool call status
@@ -672,6 +724,7 @@ final class UnifiedConversationViewModel {
             planSteps[currentStepIndex].status = .running
         }
         print("[UnifiedViewModel] currentToolCall is now: \(currentToolCall ?? "nil")")
+        refreshWindowHeight()
     }
 
     /// Mark tool call as completed
@@ -682,6 +735,7 @@ final class UnifiedConversationViewModel {
         }
         currentToolCall = nil
         currentStepIndex += 1
+        refreshWindowHeight()
     }
 
     /// Mark tool call as failed
@@ -691,6 +745,7 @@ final class UnifiedConversationViewModel {
             planSteps[currentStepIndex].status = .failed
         }
         currentToolCall = nil
+        refreshWindowHeight()
     }
 
     /// Set plan steps from notification
@@ -699,6 +754,7 @@ final class UnifiedConversationViewModel {
             PlanStep(id: "step_\(index)", description: description)
         }
         currentStepIndex = 0
+        refreshWindowHeight()
     }
 
     // MARK: - Plan Confirmation Methods
@@ -747,5 +803,70 @@ final class UnifiedConversationViewModel {
     func clearPendingPlanConfirmation() {
         pendingPlanConfirmation = nil
         planConfirmationCore = nil
+    }
+
+    // MARK: - User Input Request Methods
+
+    /// Set pending user input request (shown inline in conversation)
+    func setPendingUserInputRequest(requestId: String, question: String, options: [String], core: AetherCore) {
+        self.pendingUserInputRequest = PendingUserInputRequest(
+            requestId: requestId,
+            question: question,
+            options: options
+        )
+        self.userInputCore = core
+        // Ensure we're showing the conversation to display the input request
+        if displayState == .empty {
+            displayState = .conversation
+        }
+    }
+
+    /// Respond to the pending user input request
+    func respondToUserInput(response: String) {
+        guard let request = pendingUserInputRequest,
+              let core = userInputCore else { return }
+
+        let success = core.respondToUserInput(requestId: request.requestId, response: response)
+        if !success {
+            print("[UnifiedViewModel] Warning: User input request may have expired: \(request.requestId)")
+        }
+
+        // Clear the pending request
+        pendingUserInputRequest = nil
+        userInputCore = nil
+    }
+
+    /// Cancel the pending user input request (respond with empty string)
+    func cancelUserInputRequest() {
+        guard let request = pendingUserInputRequest,
+              let core = userInputCore else { return }
+
+        let success = core.respondToUserInput(requestId: request.requestId, response: "")
+        if !success {
+            print("[UnifiedViewModel] Warning: User input request may have expired: \(request.requestId)")
+        }
+
+        // Clear the pending request
+        pendingUserInputRequest = nil
+        userInputCore = nil
+    }
+
+    /// Clear pending user input request without sending response (for reset)
+    func clearPendingUserInputRequest() {
+        pendingUserInputRequest = nil
+        userInputCore = nil
+    }
+}
+
+// MARK: - User Input Request Model
+
+/// Pending user input request from agent loop
+struct PendingUserInputRequest: Sendable {
+    let requestId: String
+    let question: String
+    let options: [String]
+
+    var hasOptions: Bool {
+        !options.isEmpty
     }
 }

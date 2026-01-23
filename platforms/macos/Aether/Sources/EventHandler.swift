@@ -164,9 +164,10 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     /// Called for each streaming response chunk
     /// - Parameter text: The accumulated response text so far
     func onStreamChunk(text: String) {
-        // Only log first call and on significant changes to avoid log spam
-        if accumulatedText.isEmpty || text.count - accumulatedText.count > 50 {
-            print("[EventHandler] Stream chunk: \(text.prefix(50))... (total: \(text.count) chars)")
+        // Always log in multi-turn mode for debugging
+        let isFirstOrLargeChange = accumulatedText.isEmpty || text.count - accumulatedText.count > 50
+        if isFirstOrLargeChange || isInMultiTurnMode {
+            print("[EventHandler] Stream chunk: \(text.prefix(80))... (total: \(text.count) chars, multiTurn: \(isInMultiTurnMode))")
         }
 
         accumulatedText = text
@@ -176,7 +177,9 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
             // Forward to MultiTurnCoordinator in multi-turn mode
             if self.isInMultiTurnMode {
-                if MultiTurnCoordinator.shared.isProcessingPending {
+                let isPending = MultiTurnCoordinator.shared.isProcessingPending
+                print("[EventHandler] Forwarding stream chunk, isProcessingPending: \(isPending)")
+                if isPending {
                     MultiTurnCoordinator.shared.handleStreamChunk(text: text)
                 }
                 return
@@ -838,6 +841,91 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         }
 
         return description
+    }
+
+    // MARK: - User Input Request Callback
+
+    /// Called when the agent loop needs user input
+    /// - Parameters:
+    ///   - requestId: Unique identifier for this input request
+    ///   - question: The question to ask the user
+    ///   - options: Optional list of choices (empty if free-form input)
+    func onUserInputRequest(requestId: String, question: String, options: [String]) {
+        print("[EventHandler] User input requested: requestId=\(requestId), question=\(question), options=\(options)")
+
+        Task { @MainActor [weak self] in
+            guard let self = self, let core = self.core else {
+                print("[EventHandler] Error: EventHandler or core is nil, returning empty response")
+                _ = self?.core?.respondToUserInput(requestId: requestId, response: "")
+                return
+            }
+
+            // Check if we're in multi-turn mode
+            if self.isInMultiTurnMode {
+                // In multi-turn mode, post notification for conversation UI to handle
+                NotificationCenter.default.post(
+                    name: .userInputRequested,
+                    object: nil,
+                    userInfo: [
+                        "requestId": requestId,
+                        "question": question,
+                        "options": options,
+                        "core": core
+                    ]
+                )
+            } else {
+                // In halo mode, show input dialog
+                self.showUserInputDialog(requestId: requestId, question: question, options: options, core: core)
+            }
+        }
+    }
+
+    /// Show a user input dialog in Halo mode
+    @MainActor
+    private func showUserInputDialog(requestId: String, question: String, options: [String], core: AetherCore) {
+        if options.isEmpty {
+            // Free-form text input
+            let alert = NSAlert()
+            alert.messageText = L("user_input.title")
+            alert.informativeText = question
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: L("common.confirm"))
+            alert.addButton(withTitle: L("common.cancel"))
+
+            // Add text field for input
+            let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+            textField.placeholderString = L("user_input.placeholder")
+            alert.accessoryView = textField
+
+            let response = alert.runModal()
+            let userResponse = response == .alertFirstButtonReturn ? textField.stringValue : ""
+
+            print("[EventHandler] User input response: requestId=\(requestId), response=\(userResponse)")
+            _ = core.respondToUserInput(requestId: requestId, response: userResponse)
+        } else {
+            // Multiple choice options
+            let alert = NSAlert()
+            alert.messageText = L("user_input.title")
+            alert.informativeText = question
+            alert.alertStyle = .informational
+
+            // Add buttons for each option (up to 3)
+            for option in options.prefix(3) {
+                alert.addButton(withTitle: option)
+            }
+            alert.addButton(withTitle: L("common.cancel"))
+
+            let response = alert.runModal()
+            let buttonIndex = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+
+            var userResponse = ""
+            if buttonIndex >= 0 && buttonIndex < options.count {
+                userResponse = options[buttonIndex]
+            }
+
+            print("[EventHandler] User input response: requestId=\(requestId), response=\(userResponse)")
+            _ = core.respondToUserInput(requestId: requestId, response: userResponse)
+        }
     }
 
     // MARK: - Error Notification

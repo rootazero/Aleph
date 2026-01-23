@@ -398,6 +398,13 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod20)(uint64_t, Rust
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD21
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD21
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod21)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AGENT_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AGENT_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceAgentProgressHandlerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
@@ -464,6 +471,7 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod18 _Nonnull onSubagentStarted;
     UniffiCallbackInterfaceAetherEventHandlerMethod19 _Nonnull onSubagentCompleted;
     UniffiCallbackInterfaceAetherEventHandlerMethod20 _Nonnull onPlanConfirmationRequired;
+    UniffiCallbackInterfaceAetherEventHandlerMethod21 _Nonnull onUserInputRequest;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -1011,6 +1019,11 @@ void uniffi_aethecore_fn_method_aethercore_refresh_skills(void*_Nonnull ptr, Rus
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RELOAD_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RELOAD_CONFIG
 void uniffi_aethecore_fn_method_aethercore_reload_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
+int8_t uniffi_aethecore_fn_method_aethercore_respond_to_user_input(void*_Nonnull ptr, RustBuffer request_id, RustBuffer response, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESUME_SESSION
@@ -2132,6 +2145,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_reload_config(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
+uint16_t uniffi_aethecore_checksum_method_aethercore_respond_to_user_input(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RESUME_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RESUME_SESSION
 uint16_t uniffi_aethecore_checksum_method_aethercore_resume_session(void
@@ -2405,6 +2424,12 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_complet
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PLAN_CONFIRMATION_REQUIRED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PLAN_CONFIRMATION_REQUIRED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_plan_confirmation_required(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_USER_INPUT_REQUEST
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_USER_INPUT_REQUEST
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_user_input_request(void
     
 );
 #endif

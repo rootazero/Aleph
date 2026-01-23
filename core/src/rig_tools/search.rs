@@ -111,10 +111,19 @@ impl SearchTool {
     /// * `Ok(SearchOutput)` - Search results with original query
     /// * `Err(ToolError)` - If API key missing or request fails
     pub async fn call(&self, args: SearchArgs) -> Result<SearchOutput, ToolError> {
+        use super::{notify_tool_result, notify_tool_start};
+
+        // Notify tool start
+        let args_summary = format!("搜索: {}", &args.query);
+        notify_tool_start(Self::NAME, &args_summary);
+
         let api_key = self
             .api_key
             .as_ref()
-            .ok_or_else(|| ToolError::InvalidArgs("TAVILY_API_KEY not set".to_string()))?;
+            .ok_or_else(|| {
+                notify_tool_result(Self::NAME, "API key not configured", false);
+                ToolError::InvalidArgs("TAVILY_API_KEY not set".to_string())
+            })?;
 
         info!(query = %args.query, limit = args.limit, "Executing Tavily search");
 
@@ -143,17 +152,17 @@ impl SearchTool {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ToolError::Execution(format!(
-                "Tavily API returned status {}: {}",
-                status, error_text
-            )));
+            let error_msg = format!("Tavily API returned status {}: {}", status, error_text);
+            notify_tool_result(Self::NAME, &error_msg, false);
+            return Err(ToolError::Execution(error_msg));
         }
 
         // Parse response
-        let tavily_response: TavilyResponse = response
-            .json()
-            .await
-            .map_err(|e| ToolError::Execution(format!("Failed to parse response: {}", e)))?;
+        let tavily_response: TavilyResponse = response.json().await.map_err(|e| {
+            let error_msg = format!("Failed to parse response: {}", e);
+            notify_tool_result(Self::NAME, &error_msg, false);
+            ToolError::Execution(error_msg)
+        })?;
 
         // Convert to our SearchResult format
         let results: Vec<SearchResult> = tavily_response
@@ -167,6 +176,10 @@ impl SearchTool {
             .collect();
 
         info!(count = results.len(), "Search completed successfully");
+
+        // Notify success
+        let result_summary = format!("找到 {} 条搜索结果", results.len());
+        notify_tool_result(Self::NAME, &result_summary, true);
 
         Ok(SearchOutput {
             results,

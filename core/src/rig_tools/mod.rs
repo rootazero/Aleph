@@ -39,6 +39,7 @@ pub mod mcp_wrapper;
 pub mod meta_tools;
 pub mod pdf_generate;
 pub mod search;
+pub mod skill_reader;
 pub mod web_fetch;
 pub mod youtube;
 
@@ -53,6 +54,10 @@ pub use meta_tools::{
 };
 pub use pdf_generate::{PdfGenerateArgs, PdfGenerateTool};
 pub use search::{SearchArgs, SearchTool};
+pub use skill_reader::{
+    ListSkillsArgs, ListSkillsOutput, ListSkillsTool, ReadSkillArgs, ReadSkillOutput,
+    ReadSkillTool, SkillSummary,
+};
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
 pub use youtube::{YouTubeArgs, YouTubeTool};
 

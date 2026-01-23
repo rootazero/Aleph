@@ -40,12 +40,14 @@ impl AetherCore {
         };
 
         // Extract provider settings (same logic as init_core)
-        let (provider, model, api_key, base_url, system_prompt, temperature, max_tokens, timeout_seconds) = {
+        // provider_name is the config key (e.g., "t8star"), provider is the type (e.g., "openai")
+        let (provider_name, provider, model, api_key, base_url, system_prompt, temperature, max_tokens, timeout_seconds) = {
             let default_provider = full_config.get_default_provider();
             if let Some(ref name) = default_provider {
                 if let Some(provider_config) = full_config.providers.get(name) {
                     let provider_type = provider_config.infer_provider_type(name);
                     (
+                        Some(name.clone()),
                         provider_type,
                         provider_config.model.clone(),
                         provider_config.api_key.clone(),
@@ -58,6 +60,7 @@ impl AetherCore {
                 } else {
                     info!(provider = %name, "Default provider config not found, using defaults");
                     (
+                        None,
                         "openai".to_string(),
                         "gpt-4o".to_string(),
                         None,
@@ -71,6 +74,7 @@ impl AetherCore {
             } else {
                 info!("No default provider configured, using openai defaults");
                 (
+                    None,
                     "openai".to_string(),
                     "gpt-4o".to_string(),
                     None,
@@ -85,6 +89,7 @@ impl AetherCore {
 
         // Create new RigAgentConfig with loaded values
         let new_config = RigAgentConfig {
+            provider_name,
             provider,
             model,
             temperature: temperature.unwrap_or(0.7),
@@ -98,7 +103,8 @@ impl AetherCore {
         };
 
         info!(
-            provider = %new_config.provider,
+            provider_name = new_config.provider_name.as_deref().unwrap_or("(default)"),
+            provider_type = %new_config.provider,
             model = %new_config.model,
             has_api_key = new_config.api_key.is_some(),
             has_base_url = new_config.base_url.is_some(),

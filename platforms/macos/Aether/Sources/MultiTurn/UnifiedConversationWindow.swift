@@ -238,6 +238,37 @@ final class UnifiedConversationWindow: NSWindow {
             }
         }
         notificationObservers.append(dagConfirmObserver)
+
+        // User input request - show inline in conversation for user to respond
+        let userInputObserver = NotificationCenter.default.addObserver(
+            forName: .userInputRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            // Extract data from notification BEFORE MainActor block to avoid Sendable issues
+            guard let requestId = notification.userInfo?["requestId"] as? String,
+                  let question = notification.userInfo?["question"] as? String,
+                  let options = notification.userInfo?["options"] as? [String],
+                  let core = notification.userInfo?["core"] as? AetherCore else {
+                print("[UnifiedConversationWindow] Invalid user input request notification data")
+                return
+            }
+
+            MainActor.assumeIsolated {
+                guard let self = self else { return }
+
+                print("[UnifiedConversationWindow] Showing inline user input request: requestId=\(requestId), question=\(question)")
+
+                // Set the pending user input request in ViewModel
+                self.viewModel.setPendingUserInputRequest(
+                    requestId: requestId,
+                    question: question,
+                    options: options,
+                    core: core
+                )
+            }
+        }
+        notificationObservers.append(userInputObserver)
     }
 
     private func removeNotificationObservers() {

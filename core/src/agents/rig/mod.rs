@@ -34,7 +34,7 @@
 //! ```
 
 pub mod config;
-pub mod manager;
+mod manager;
 mod message_history;
 mod types;
 

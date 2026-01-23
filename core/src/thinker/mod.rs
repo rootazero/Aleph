@@ -221,8 +221,26 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
         // 7. Call LLM
         let response = self.call_llm(provider, &system, &messages).await?;
 
+        // Log raw LLM response for debugging parse failures
+        tracing::debug!(
+            response_len = response.len(),
+            response_preview = %response.chars().take(500).collect::<String>(),
+            "LLM raw response (preview)"
+        );
+
         // 8. Parse response
-        let thinking = self.parse_response(&response)?;
+        let thinking = self.parse_response(&response);
+
+        // Log parse result for debugging
+        if thinking.is_err() {
+            tracing::warn!(
+                response_len = response.len(),
+                response_full = %response,
+                "Failed to parse LLM response - full content logged"
+            );
+        }
+
+        let thinking = thinking?;
 
         // 9. Validate decision
         self.decision_parser.validate(&thinking.decision)?;

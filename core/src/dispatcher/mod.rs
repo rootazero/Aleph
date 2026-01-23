@@ -91,10 +91,12 @@ pub use integration::{
 };
 pub use registry::ToolRegistry;
 pub use types::{
-    ConflictInfo, ConflictResolution, RoutingLayer, ToolCategory, ToolDefinition, ToolIndex,
-    ToolIndexCategory, ToolIndexEntry, ToolPriority, ToolResult, ToolSafetyLevel, ToolSource,
-    ToolSourceType, UnifiedTool, UnifiedToolInfo,
+    ConflictInfo, ConflictResolution, RoutingLayer, StructuredToolMeta, ToolCategory,
+    ToolDefinition, ToolDiff, ToolIndex, ToolIndexCategory, ToolIndexEntry, ToolPriority,
+    ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
+// Note: types::Capability is NOT re-exported here to avoid conflict with model_router::Capability
+// Use types::Capability directly if needed for structured tool descriptions
 
 // === Re-exports: Task Orchestration ===
 pub use callback::{

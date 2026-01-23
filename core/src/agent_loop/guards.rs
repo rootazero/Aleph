@@ -131,12 +131,14 @@ pub struct LoopGuard {
 impl LoopGuard {
     /// Create a new guard with given config
     pub fn new(config: LoopConfig) -> Self {
+        let stuck_threshold = config.stuck_threshold;
+        let failure_threshold = config.failure_threshold;
         Self {
             config,
             recent_actions: Vec::new(),
-            stuck_threshold: 3,      // Same action 3 times = stuck
-            failure_threshold: 3,    // 3 failures on similar action = repeated failures
-            failure_window: 5,       // Look at last 5 actions for failure patterns
+            stuck_threshold,
+            failure_threshold,
+            failure_window: failure_threshold + 2, // Allow some headroom
         }
     }
 
@@ -212,24 +214,25 @@ impl LoopGuard {
 
     /// Normalize action pattern for grouping
     ///
+    /// For tool calls, the format is "tool:name" or "tool:name:operation" where
+    /// operation is a semantic operation type (like "mkdir", "write", "read").
+    /// The operation is preserved to distinguish different operations on the same tool.
+    ///
     /// Examples:
     /// - "search:query about rust" -> "search"
     /// - "read_file:/path/to/file.rs" -> "read_file"
     /// - "tool:write_file" -> "tool:write_file"
-    /// - "tool:write_file:/some/path" -> "tool:write_file"
+    /// - "tool:file_ops:mkdir" -> "tool:file_ops:mkdir"
+    /// - "tool:file_ops:write" -> "tool:file_ops:write"
     fn normalize_action_pattern(action: &str) -> String {
         // Split on first colon to get tool/action type
         if let Some(colon_pos) = action.find(':') {
             let prefix = &action[..colon_pos];
-            // If prefix is "tool", include the tool name (format: "tool:name" or "tool:name:args")
+            // If prefix is "tool", preserve the full pattern including operation
+            // Format: "tool:name" or "tool:name:operation"
             if prefix == "tool" {
-                let rest = &action[colon_pos + 1..];
-                // Find second colon (if args are present)
-                if let Some(second_colon) = rest.find(':') {
-                    // Return "tool:name" (exclude args after second colon)
-                    return format!("tool:{}", &rest[..second_colon]);
-                }
-                // No second colon, just "tool:name" - return entire string
+                // Return the entire action string as-is
+                // The action_type() method already formats it properly
                 return action.to_string();
             }
             prefix.to_string()
@@ -337,6 +340,8 @@ mod tests {
             max_tokens: 1000,
             timeout: Duration::from_secs(60),
             require_confirmation: vec!["delete".to_string(), "write_file".to_string()],
+            stuck_threshold: 3,      // Use lower threshold for tests
+            failure_threshold: 3,    // Use lower threshold for tests
             ..Default::default()
         }
     }
@@ -451,13 +456,20 @@ mod tests {
 
     #[test]
     fn test_action_pattern_normalization() {
+        // Non-tool patterns: extract prefix before first colon
         assert_eq!(LoopGuard::normalize_action_pattern("search:query about rust"), "search");
         assert_eq!(LoopGuard::normalize_action_pattern("read_file:/path/to/file.rs"), "read_file");
-        assert_eq!(LoopGuard::normalize_action_pattern("tool:write_file:/some/path"), "tool:write_file");
+        assert_eq!(LoopGuard::normalize_action_pattern("simple_action"), "simple_action");
+
+        // Tool patterns: preserve full pattern including operation
         assert_eq!(LoopGuard::normalize_action_pattern("tool:write_file"), "tool:write_file");
         assert_eq!(LoopGuard::normalize_action_pattern("tool:tool_0"), "tool:tool_0");
         assert_eq!(LoopGuard::normalize_action_pattern("tool:read_file"), "tool:read_file");
-        assert_eq!(LoopGuard::normalize_action_pattern("simple_action"), "simple_action");
+
+        // Tool patterns with operation: preserve operation type
+        assert_eq!(LoopGuard::normalize_action_pattern("tool:file_ops:mkdir"), "tool:file_ops:mkdir");
+        assert_eq!(LoopGuard::normalize_action_pattern("tool:file_ops:write"), "tool:file_ops:write");
+        assert_eq!(LoopGuard::normalize_action_pattern("tool:file_ops:read"), "tool:file_ops:read");
     }
 
     #[test]

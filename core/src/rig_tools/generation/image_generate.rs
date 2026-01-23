@@ -91,7 +91,17 @@ impl ImageGenerateTool {
 
     /// Execute image generation
     pub async fn call(&self, args: ImageGenerateArgs) -> Result<ImageGenerateOutput, ToolError> {
+        use crate::rig_tools::{notify_tool_result, notify_tool_start};
+
         let start = Instant::now();
+
+        // Notify tool start
+        let prompt_display = if args.prompt.len() > 60 {
+            format!("{}...", &args.prompt[..60])
+        } else {
+            args.prompt.clone()
+        };
+        notify_tool_start(Self::NAME, &format!("生成图像: {}", prompt_display));
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting image generation");
 
@@ -99,20 +109,23 @@ impl ImageGenerateTool {
         let (provider_name, provider) = {
             // Acquire read lock on registry
             let registry = self.registry.read().map_err(|e| {
-                ToolError::Execution(format!("Failed to acquire registry lock: {}", e))
+                let error_msg = format!("Failed to acquire registry lock: {}", e);
+                notify_tool_result(Self::NAME, &error_msg, false);
+                ToolError::Execution(error_msg)
             })?;
 
             if let Some(name) = &args.provider {
                 let provider = registry.get(name).ok_or_else(|| {
-                    ToolError::InvalidArgs(format!("Provider '{}' not found", name))
+                    let error_msg = format!("Provider '{}' not found", name);
+                    notify_tool_result(Self::NAME, &error_msg, false);
+                    ToolError::InvalidArgs(error_msg)
                 })?;
 
                 // Check if provider supports image generation
                 if !provider.supports(GenerationType::Image) {
-                    return Err(ToolError::InvalidArgs(format!(
-                        "Provider '{}' does not support image generation",
-                        name
-                    )));
+                    let error_msg = format!("Provider '{}' does not support image generation", name);
+                    notify_tool_result(Self::NAME, &error_msg, false);
+                    return Err(ToolError::InvalidArgs(error_msg));
                 }
 
                 (name.clone(), provider)
@@ -121,7 +134,9 @@ impl ImageGenerateTool {
                 registry
                     .first_for_type(GenerationType::Image)
                     .ok_or_else(|| {
-                        ToolError::InvalidArgs("No image generation provider available".to_string())
+                        let error_msg = "No image generation provider available".to_string();
+                        notify_tool_result(Self::NAME, &error_msg, false);
+                        ToolError::InvalidArgs(error_msg)
                     })?
             }
             // Lock is dropped here at end of block
@@ -149,7 +164,11 @@ impl ImageGenerateTool {
 
         // Execute generation
         let output: crate::generation::GenerationOutput =
-            provider.generate(request).await.map_err(ToolError::from)?;
+            provider.generate(request).await.map_err(|e| {
+                let error_msg = format!("Image generation failed: {}", e);
+                notify_tool_result(Self::NAME, &error_msg, false);
+                ToolError::from(e)
+            })?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -179,6 +198,13 @@ impl ImageGenerateTool {
             location_type = %location_type,
             "Image generation completed"
         );
+
+        // Notify success
+        let result_summary = format!(
+            "图像生成完成 ({} ms, provider: {})",
+            duration_ms, provider_name
+        );
+        notify_tool_result(Self::NAME, &result_summary, true);
 
         Ok(ImageGenerateOutput {
             image_location,

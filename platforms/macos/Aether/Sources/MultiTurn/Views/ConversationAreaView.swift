@@ -38,13 +38,8 @@ struct ConversationAreaView: View {
                 emptyState
             }
 
-            // Progress indicator for multi-turn tasks
-            if !viewModel.planSteps.isEmpty || viewModel.currentToolCall != nil {
-                progressIndicator
-            }
-
-            // Loading indicator (show only if no plan steps)
-            if viewModel.isLoading && viewModel.planSteps.isEmpty {
+            // Loading indicator (show only if no streaming and no plan steps)
+            if viewModel.isLoading && viewModel.streamingMessageId == nil && viewModel.planSteps.isEmpty {
                 loadingIndicator
             }
 
@@ -87,9 +82,9 @@ struct ConversationAreaView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 12) {
-                    // Display completed messages (not streaming)
+                    // Display completed messages only (skip streaming message - shown in bottom status area)
                     ForEach(viewModel.messages) { message in
-                        // Skip the streaming message in ForEach - it's displayed separately below
+                        // Skip the streaming message - it will be displayed in the bottom status area
                         if message.id != viewModel.streamingMessageId {
                             MessageBubbleView(
                                 message: message,
@@ -97,21 +92,6 @@ struct ConversationAreaView: View {
                             )
                             .id(message.id)
                         }
-                    }
-
-                    // Display streaming message separately with high-performance view
-                    if let streamingId = viewModel.streamingMessageId {
-                        StreamingMessageBubble(
-                            messageId: streamingId,
-                            content: viewModel.streamingText,
-                            isUser: false,
-                            isStreaming: true,
-                            onCopy: {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(viewModel.streamingText, forType: .string)
-                            }
-                        )
-                        .id(streamingId)
                     }
 
                     // Display inline plan confirmation if pending
@@ -122,6 +102,19 @@ struct ConversationAreaView: View {
                             onCancel: { viewModel.cancelPendingPlan() }
                         )
                         .id("plan_confirmation_\(confirmation.planId)")
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    }
+
+                    // Display inline user input request if pending
+                    if let inputRequest = viewModel.pendingUserInputRequest {
+                        UserInputBubbleView(
+                            request: inputRequest,
+                            onRespond: { response in
+                                viewModel.respondToUserInput(response: response)
+                            },
+                            onCancel: { viewModel.cancelUserInputRequest() }
+                        )
+                        .id("user_input_\(inputRequest.requestId)")
                         .transition(.opacity.combined(with: .scale(scale: 0.95)))
                     }
                 }
@@ -152,17 +145,19 @@ struct ConversationAreaView: View {
                     }
                 }
             }
-            // Scroll when streaming text updates significantly
-            .onChange(of: viewModel.streamingText.count / 100) { _, _ in
-                if let streamingId = viewModel.streamingMessageId {
-                    proxy.scrollTo(streamingId, anchor: .bottom)
-                }
-            }
             // Scroll to confirmation when it appears
             .onChange(of: viewModel.pendingPlanConfirmation?.planId) { _, newId in
                 if let planId = newId {
                     withAnimation {
                         proxy.scrollTo("plan_confirmation_\(planId)", anchor: .bottom)
+                    }
+                }
+            }
+            // Scroll to user input request when it appears
+            .onChange(of: viewModel.pendingUserInputRequest?.requestId) { _, newId in
+                if let requestId = newId {
+                    withAnimation {
+                        proxy.scrollTo("user_input_\(requestId)", anchor: .bottom)
                     }
                 }
             }
@@ -187,9 +182,62 @@ struct ConversationAreaView: View {
         .padding()
     }
 
-    // MARK: - Progress Indicator
+    // MARK: - Streaming Status Area
 
-    private var progressIndicator: some View {
+    /// Bottom status area showing streaming content and progress
+    private var streamingStatusArea: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+                .opacity(0.3)
+                .padding(.horizontal, 12)
+
+            // Streaming text content (shown at bottom, not in message list)
+            if viewModel.streamingMessageId != nil && !viewModel.streamingText.isEmpty {
+                streamingContentView
+            }
+
+            // Progress indicator: tool calls and plan steps
+            progressIndicatorContent
+        }
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial.opacity(0.3))
+    }
+
+    /// Streaming content view with scrollable text
+    private var streamingContentView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Header with "Generating..." label
+            HStack(spacing: 6) {
+                ProgressView()
+                    .scaleEffect(0.6)
+                    .frame(width: 12, height: 12)
+
+                Text(NSLocalizedString("streaming.generating", comment: "Generating response"))
+                    .font(.caption)
+                    .liquidGlassSecondaryText()
+
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+
+            // Scrollable streaming text
+            ScrollView {
+                PerformantTextView(
+                    text: viewModel.streamingText,
+                    isUser: false,
+                    fontSize: 13,
+                    maxWidth: 700
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+            }
+            .frame(maxHeight: 100)  // Limit height for streaming area
+        }
+    }
+
+    // MARK: - Progress Indicator Content
+
+    private var progressIndicatorContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Current tool execution
             if let toolName = viewModel.currentToolCall {
@@ -202,6 +250,7 @@ struct ConversationAreaView: View {
                         .font(.caption)
                         .liquidGlassText()
                 }
+                .padding(.horizontal, 14)
             }
 
             // Plan steps (if any)
@@ -221,12 +270,9 @@ struct ConversationAreaView: View {
                         }
                     }
                 }
+                .padding(.horizontal, 14)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial.opacity(0.3))
     }
 
     @ViewBuilder

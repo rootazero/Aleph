@@ -150,6 +150,12 @@ extension Notification.Name {
     /// Posted when a DAG task plan requires user confirmation before execution
     /// - UserInfo: ["planId": String, "plan": DagTaskPlan, "core": AetherCore]
     static let dagPlanConfirmationRequired = Notification.Name("AetherDagPlanConfirmationRequired")
+
+    // MARK: - User Input Request (Agent Loop Interactive Input)
+
+    /// Posted when the agent loop needs user input
+    /// - UserInfo: ["requestId": String, "question": String, "options": [String], "core": AetherCore]
+    static let userInputRequested = Notification.Name("AetherUserInputRequested")
 }
 
 // MARK: - UserInfo Keys

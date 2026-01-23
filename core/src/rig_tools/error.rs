@@ -11,6 +11,10 @@ pub enum ToolError {
     InvalidArgs(String),
     /// Execution failed
     Execution(String),
+    /// Execution failed (alias for Execution)
+    ExecutionFailed(String),
+    /// Resource not found
+    NotFound(String),
 }
 
 impl fmt::Display for ToolError {
@@ -19,6 +23,8 @@ impl fmt::Display for ToolError {
             ToolError::Network(msg) => write!(f, "Network error: {}", msg),
             ToolError::InvalidArgs(msg) => write!(f, "Invalid arguments: {}", msg),
             ToolError::Execution(msg) => write!(f, "Execution error: {}", msg),
+            ToolError::ExecutionFailed(msg) => write!(f, "Execution failed: {}", msg),
+            ToolError::NotFound(msg) => write!(f, "Not found: {}", msg),
         }
     }
 }

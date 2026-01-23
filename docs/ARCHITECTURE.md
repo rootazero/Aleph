@@ -863,39 +863,230 @@ pub struct McpResource {
 
 ### Skills System
 
-**Status**: ✅ Implemented (2026-01-08)
+**Status**: ✅ Implemented (2026-01-08, Redesigned 2026-01-21)
 
 **Implementation Details**:
 - **Claude Agent Skills standard**: SKILL.md format with YAML frontmatter + Markdown body
-- **Strategy Pattern integration**: `SkillsStrategy` implements `CapabilityStrategy` trait
+- **Progressive Disclosure**: Three-level loading (Metadata → Instructions → Resources)
+- **Hybrid Mode**: Slash commands pre-load, general chat uses read_skill tool
 - **Installation methods**: GitHub URL, ZIP file upload, manual file placement
 - **Hot reload**: Skills changes take effect immediately
 - **Built-in skills**: refine-text, translate, summarize
 
 **Architecture**:
-- `Skill` struct for skill data parsing
+- `ReadSkillTool` (`rig_tools/skill_reader.rs`) - Agent-initiated skill reading
+- `ListSkillsTool` (`rig_tools/skill_reader.rs`) - List available skills
 - `SkillsRegistry` for skill management and lookup
 - `SkillsInstaller` for GitHub/ZIP installation
-- `SkillsStrategy` (priority 4) for capability execution
-- `PromptAssembler::format_skill_instructions_markdown()` for formatting
+- Path traversal security checks
 
-**Data Structure**:
-```rust
-pub struct Skill {
-    pub id: String,
-    pub frontmatter: SkillFrontmatter,  // name, description, allowed_tools
-    pub body: String,                    // Markdown instructions
-}
+**Three-Level Loading**:
+| Level | Timing | Token Cost | Content |
+|-------|--------|------------|---------|
+| Level 1: Metadata | Startup | ~100/skill | name + description (YAML frontmatter) |
+| Level 2: Instructions | On-demand | <5k | SKILL.md body via `read_skill` |
+| Level 3: Resources | On-demand | Unlimited | ADVANCED.md, REFERENCE.md, etc. |
+
+**Data Flow**:
+```
+User: "help me refine this text"
+  → Agent sees "Available Skills: refine-text..."
+  → Agent calls read_skill(skill_id="refine-text")
+  → Tool returns full SKILL.md content
+  → Agent treats it as TASK DIRECTIVE (not reference)
+  → Agent executes instructions strictly
 ```
 
 **Usage**:
 ```
-/skill refine-text Please improve this paragraph...
-/skill translate Convert this to French...
-/skill summarize Give me a summary of...
+/refine-text Please improve this paragraph...  # Pre-load mode
+"帮我润色这段文字"                              # Progressive disclosure mode
 ```
 
 **Documentation**: See [SKILLS.md](./SKILLS.md)
+
+---
+
+### Smart Tool Discovery System
+
+**Status**: ✅ Implemented (2026-01-21)
+
+**Location**: `core/src/ffi/tool_discovery.rs`
+
+**Purpose**: Intelligent tool filtering to reduce token consumption by only sending relevant tools to the LLM.
+
+**Components**:
+- `ToolCategory` enum: FileOps, Search, WebFetch, YouTube, ImageGen, VideoGen, AudioGen, SpeechGen
+- `infer_required_tools()`: Analyze skill instructions + user request to determine needed tools
+- `filter_tools_by_categories()`: Filter tool list based on inferred categories
+- `get_builtin_tool_descriptions()`: Get tool descriptions with dynamic generation tools
+
+**Two-Stage Tool Discovery**:
+
+```
+Stage 1: Intent Inference (Before Agent Loop)
+┌─────────────────────────────────────────┐
+│ infer_required_tools(instructions, req) │
+│ → Keyword analysis for tool categories  │
+│   • "文件" → FileOps                     │
+│   • "搜索" → Search                      │
+│   • "图像" → ImageGen                    │
+└─────────────────────────────────────────┘
+           ↓
+Stage 2: Tool Index (Smart Discovery Mode)
+┌─────────────────────────────────────────┐
+│ System Prompt:                          │
+│ ## Available Tools (full schema)        │
+│   - file_ops, search, etc.              │
+│ ## Additional Tools (index only)        │
+│   - Use get_tool_schema(name) to get    │
+│     full parameters before calling      │
+└─────────────────────────────────────────┘
+```
+
+**Keyword Matching Rules**:
+| Category | Keywords |
+|----------|----------|
+| FileOps | file, read, write, save, 文件, 保存, 目录 |
+| Search | search, 搜索, 查找, look up |
+| WebFetch | fetch, url, http, 网页, 链接 |
+| YouTube | youtube, video, transcript, 视频 |
+| ImageGen | image, picture, 图像, graph, 可视化 |
+| VideoGen | generate video, 生成视频 |
+| AudioGen | generate audio, 生成音乐 |
+| SpeechGen | speech, tts, 语音 |
+
+**Performance Benefits**:
+- Token savings: >50% (via tool indexing instead of full schema)
+- Response latency: <10ms (fast filtering)
+- Supports 50+ tools without pressure
+
+---
+
+## FFI Layer Architecture
+
+**Location**: `core/src/ffi/`
+
+The FFI layer provides the bridge between Rust core and platform UI (Swift/Tauri).
+
+### Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `agent_loop_adapter.rs` | FfiLoopCallback for agent loop events |
+| `tool_discovery.rs` | Smart tool filtering and category inference |
+| `dag_executor.rs` | DAG task execution for generation tasks |
+| `prompt_helpers.rs` | Prompt building utilities |
+| `provider_factory.rs` | AI provider creation from config |
+| `processing.rs` | Request processing pipeline |
+| `config.rs` | FFI configuration handling |
+
+### tool_discovery.rs
+
+Provides intelligent tool filtering:
+
+```rust
+pub fn infer_required_tools(
+    skill_instructions: &str,
+    user_request: &str,
+) -> Vec<ToolCategory>
+
+pub fn filter_tools_by_categories(
+    all_tools: Vec<ToolDescription>,
+    categories: &[ToolCategory],
+) -> Vec<ToolDescription>
+
+pub fn get_builtin_tool_descriptions(
+    generation_config: &GenerationConfig,
+) -> Vec<ToolDescription>
+```
+
+### prompt_helpers.rs
+
+Utilities for prompt construction:
+
+```rust
+pub fn format_generation_models_for_prompt(config) -> Option<String>
+pub fn build_history_summary_from_conversations(histories, topic_id) -> String
+pub fn extract_attachment_text(attachments) -> Option<String>
+pub fn response_needs_user_input(response) -> bool
+```
+
+### dag_executor.rs
+
+Executes DAG tasks for media generation:
+
+```rust
+pub struct DagTaskExecutor {
+    provider: Arc<dyn AiProvider>,
+    generation_registry: Arc<RwLock<GenerationProviderRegistry>>,
+}
+
+// Task execution methods
+execute_image_generation()  // → Actual generation API
+execute_video_generation()
+execute_audio_generation()
+execute_llm_task()          // → LLM completion
+```
+
+---
+
+## Thinker Layer
+
+**Location**: `core/src/thinker/`
+
+The Thinker layer is the LLM decision-making component of the Agent Loop.
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| PromptBuilder | `prompt_builder.rs` | Build system prompts with tools, runtimes, models |
+| DecisionParser | `decision_parser.rs` | Parse LLM responses into actions |
+| ToolFilter | `tool_filter.rs` | Filter tools based on observation context |
+
+### PromptConfig
+
+Configuration for prompt building:
+
+```rust
+pub struct PromptConfig {
+    pub persona: Option<String>,
+    pub language: Option<String>,
+    pub custom_instructions: Option<String>,
+    pub max_tool_description_tokens: usize,
+    pub runtime_capabilities: Option<String>,   // Available runtimes
+    pub generation_models: Option<String>,      // Available models
+    pub tool_index: Option<String>,             // Smart discovery index
+    pub skill_mode: bool,                       // Strict workflow mode
+}
+```
+
+### System Prompt Structure
+
+```
+1. Role Definition
+   "You are an AI assistant executing tasks step by step."
+
+2. Available Runtimes (optional)
+   Python, Node.js, FFmpeg, etc.
+
+3. Available Tools
+   - Full schema tools (immediate use)
+   - Tool index (use get_tool_schema first)
+
+4. Media Generation Models (optional)
+   DALL-E 3, Midjourney, etc.
+
+5. Special Actions
+   complete, ask_user, fail
+
+6. Response Format (JSON)
+   { "reasoning": "...", "action": {...} }
+
+7. Skill Execution Mode (optional)
+   Strict workflow completion requirements
+```
 
 ---
 
@@ -908,6 +1099,6 @@ pub struct Skill {
 
 ---
 
-**Last Updated**: 2026-01-21
+**Last Updated**: 2026-01-23
 **Implemented In**: Aether v0.1.0
-**OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`, `enhance-intent-routing-pipeline`
+**OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`, `enhance-intent-routing-pipeline`, `smart-tool-discovery`

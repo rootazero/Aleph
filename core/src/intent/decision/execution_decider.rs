@@ -97,6 +97,8 @@ pub struct SkillInvocation {
     pub instructions: String,
     /// Raw arguments from the command
     pub args: String,
+    /// Allowed tools for this skill (empty means all tools allowed)
+    pub allowed_tools: Vec<String>,
 }
 
 /// MCP server invocation details
@@ -554,6 +556,7 @@ impl ExecutionIntentDecider {
                     skill_id,
                     instructions,
                     display_name,
+                    allowed_tools,
                 } = cmd.context
                 {
                     ExecutionMode::Skill(SkillInvocation {
@@ -561,6 +564,7 @@ impl ExecutionIntentDecider {
                         display_name,
                         instructions,
                         args,
+                        allowed_tools,
                     })
                 } else {
                     // Fallback to general execution

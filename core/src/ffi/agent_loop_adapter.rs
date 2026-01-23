@@ -163,6 +163,36 @@ fn format_tool_description(tool_name: &str, arguments: &Value) -> (String, Strin
                 "生成图像".to_string(),
             )
         }
+        "generate_video" => {
+            let prompt = obj
+                .and_then(|o| o.get("prompt"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let prompt_display = if prompt.len() > 40 {
+                format!("{}...", &prompt[..40])
+            } else {
+                prompt.to_string()
+            };
+            (
+                format!("正在生成视频: {}", prompt_display),
+                "生成视频".to_string(),
+            )
+        }
+        "generate_audio" => {
+            let prompt = obj
+                .and_then(|o| o.get("prompt"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let prompt_display = if prompt.len() > 40 {
+                format!("{}...", &prompt[..40])
+            } else {
+                prompt.to_string()
+            };
+            (
+                format!("正在生成音频: {}", prompt_display),
+                "生成音频".to_string(),
+            )
+        }
         "pdf_generate" => (
             "正在生成 PDF 文档".to_string(),
             "生成PDF".to_string(),
@@ -219,6 +249,10 @@ pub struct FfiLoopCallback {
     status_buffer: RwLock<String>,
     /// Whether streaming has started
     streaming_started: RwLock<bool>,
+    /// Whether to skip calling on_complete during finalize_response
+    /// Set to true when the caller will manually call on_complete with additional data
+    /// (e.g., to append [GENERATED_FILES] block)
+    skip_on_complete_on_finalize: bool,
 }
 
 impl FfiLoopCallback {
@@ -229,6 +263,23 @@ impl FfiLoopCallback {
             response_buffer: RwLock::new(String::new()),
             status_buffer: RwLock::new(String::new()),
             streaming_started: RwLock::new(false),
+            skip_on_complete_on_finalize: false,
+        }
+    }
+
+    /// Create a new FFI callback adapter with manual completion control
+    ///
+    /// When `skip_on_complete_on_finalize` is true, the adapter will NOT call
+    /// `on_complete` during `finalize_response()`. This is useful when the caller
+    /// needs to append additional data (e.g., [GENERATED_FILES] block) before
+    /// signaling completion.
+    pub fn new_with_manual_completion(handler: Arc<dyn AetherEventHandler>) -> Self {
+        Self {
+            handler,
+            response_buffer: RwLock::new(String::new()),
+            status_buffer: RwLock::new(String::new()),
+            streaming_started: RwLock::new(false),
+            skip_on_complete_on_finalize: true,
         }
     }
 
@@ -238,6 +289,10 @@ impl FfiLoopCallback {
     }
 
     /// Set status text (replaces previous status, temporary display)
+    ///
+    /// Status messages are transient progress indicators (tool calls, thinking).
+    /// They replace each other and are NOT accumulated with previous responses.
+    /// This prevents historical step clutter in the streaming display.
     async fn set_status(&self, text: &str) {
         let mut started = self.streaming_started.write().await;
         if !*started {
@@ -248,16 +303,9 @@ impl FfiLoopCallback {
         let mut status = self.status_buffer.write().await;
         *status = text.to_string();
 
-        // Stream combined: response + current status
-        let response = self.response_buffer.read().await;
-        let display = if response.is_empty() {
-            status.clone()
-        } else if status.is_empty() {
-            response.clone()
-        } else {
-            format!("{}\n{}", response, status)
-        };
-        self.handler.on_stream_chunk(display);
+        // Stream only the current status (replaces previous)
+        // Do NOT combine with response_buffer to avoid accumulation
+        self.handler.on_stream_chunk(status.clone());
     }
 
     /// Append text to response buffer (actual content, persists)
@@ -286,8 +334,9 @@ impl FfiLoopCallback {
         let buffer = self.response_buffer.read().await;
         let started = self.streaming_started.read().await;
 
-        if *started {
+        if *started && !self.skip_on_complete_on_finalize {
             // Use on_complete to signal completion
+            // When skip_on_complete_on_finalize is true, caller will handle completion manually
             self.handler.on_complete(buffer.clone());
         }
     }

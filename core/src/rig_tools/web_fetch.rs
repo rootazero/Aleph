@@ -94,14 +94,26 @@ impl WebFetchTool {
 
     /// Fetch and extract content from a URL
     pub async fn call(&self, args: WebFetchArgs) -> Result<WebFetchResult, ToolError> {
+        use super::{notify_tool_result, notify_tool_start};
+
+        // Notify tool start
+        let url_display = if args.url.len() > 50 {
+            format!("{}...", &args.url[..50])
+        } else {
+            args.url.clone()
+        };
+        notify_tool_start(Self::NAME, &format!("获取网页: {}", url_display));
+
         info!("Fetching URL: {}", args.url);
 
         // Validate URL format
         if !args.url.starts_with("http://") && !args.url.starts_with("https://") {
-            return Err(ToolError::InvalidArgs(format!(
+            let error_msg = format!(
                 "Invalid URL format: {}. URL must start with http:// or https://",
                 args.url
-            )));
+            );
+            notify_tool_result(Self::NAME, &error_msg, false);
+            return Err(ToolError::InvalidArgs(error_msg));
         }
 
         // Fetch the page
@@ -111,22 +123,25 @@ impl WebFetchTool {
             .header("User-Agent", &self.user_agent)
             .send()
             .await
-            .map_err(|e| ToolError::Network(format!("Failed to fetch URL: {}", e)))?;
+            .map_err(|e| {
+                let error_msg = format!("Failed to fetch URL: {}", e);
+                notify_tool_result(Self::NAME, &error_msg, false);
+                ToolError::Network(error_msg)
+            })?;
 
         // Check status
         if !response.status().is_success() {
-            return Err(ToolError::Network(format!(
-                "HTTP error: {} for URL: {}",
-                response.status(),
-                args.url
-            )));
+            let error_msg = format!("HTTP error: {} for URL: {}", response.status(), args.url);
+            notify_tool_result(Self::NAME, &error_msg, false);
+            return Err(ToolError::Network(error_msg));
         }
 
         // Get HTML content
-        let html_content = response
-            .text()
-            .await
-            .map_err(|e| ToolError::Network(format!("Failed to read response body: {}", e)))?;
+        let html_content = response.text().await.map_err(|e| {
+            let error_msg = format!("Failed to read response body: {}", e);
+            notify_tool_result(Self::NAME, &error_msg, false);
+            ToolError::Network(error_msg)
+        })?;
 
         debug!("Fetched {} bytes from {}", html_content.len(), args.url);
 
@@ -140,6 +155,13 @@ impl WebFetchTool {
         // Extract main content
         let content = self.extract_content(&document);
         debug!("Extracted {} chars of content", content.len());
+
+        // Notify success
+        let result_summary = format!(
+            "已获取网页内容 ({} 字符)",
+            content.len()
+        );
+        notify_tool_result(Self::NAME, &result_summary, true);
 
         Ok(WebFetchResult {
             url: args.url,

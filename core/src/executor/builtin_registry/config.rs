@@ -1,0 +1,22 @@
+//! Configuration types for the builtin tool registry
+
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
+
+use crate::agents::sub_agents::SubAgentDispatcher;
+use crate::dispatcher::ToolRegistry as DispatcherToolRegistry;
+use crate::generation::GenerationProviderRegistry;
+
+/// Configuration for builtin tools
+#[derive(Clone, Default)]
+pub struct BuiltinToolConfig {
+    /// Tavily API key for search tool
+    pub tavily_api_key: Option<String>,
+    /// Generation provider registry for image/video/audio generation
+    pub generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
+    /// Dispatcher tool registry for meta tools (smart tool discovery)
+    pub dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
+    /// Sub-agent dispatcher for delegation (smart tool discovery)
+    pub sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
+}

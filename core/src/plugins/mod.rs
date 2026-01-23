@@ -10,20 +10,26 @@
 //! ```text
 //! plugin-root/
 //! ├── .claude-plugin/
-//! │   └── plugin.json        # Required manifest
-//! ├── commands/              # User-triggered commands
-//! │   └── hello/
-//! │       └── SKILL.md
-//! ├── skills/                # AI-invocable skills
+//! │   └── plugin.json        # Required manifest (ONLY plugin.json goes here)
+//! ├── commands/              # User-triggered commands (two formats supported)
+//! │   ├── hello.md           # Simple format: direct .md file
+//! │   └── complex/           # Directory format: for commands with scripts
+//! │       ├── SKILL.md
+//! │       └── scripts/
+//! ├── skills/                # AI-invocable skills (directory format only)
 //! │   └── code-review/
 //! │       └── SKILL.md
 //! ├── agents/                # Custom agents
-//! │   └── reviewer/
+//! │   ├── reviewer.md        # Simple format: direct .md file
+//! │   └── tester/            # Directory format
 //! │       └── agent.md
 //! ├── hooks/
 //! │   └── hooks.json         # Event hooks
 //! └── .mcp.json              # MCP server configurations
 //! ```
+//!
+//! **Important**: Only `plugin.json` goes inside `.claude-plugin/`.
+//! All other directories must be at the plugin root level.
 //!
 //! # Usage
 //!
@@ -160,8 +166,46 @@ impl PluginManager {
         self
     }
 
+    /// Ensure required directories exist
+    ///
+    /// Creates the following directory structure on first run:
+    /// - `plugins/` - Plugin installation directory
+    /// - `skills/` - User-level skills (like ~/.claude/skills/)
+    /// - `commands/` - User-level commands (like ~/.claude/commands/)
+    pub fn ensure_directories(&self) -> PluginResult<()> {
+        let plugins_dir = self.scanner.plugins_dir();
+
+        // Get the parent config directory (e.g., ~/.config/aether/)
+        let config_dir = plugins_dir
+            .parent()
+            .ok_or_else(|| PluginError::DirectoryNotFound(plugins_dir.to_path_buf()))?;
+
+        // Directories to create
+        let dirs = [
+            plugins_dir.to_path_buf(),          // plugins/
+            config_dir.join("skills"),          // skills/ (user-level)
+            config_dir.join("commands"),        // commands/ (user-level)
+        ];
+
+        for dir in &dirs {
+            if !dir.exists() {
+                std::fs::create_dir_all(dir)?;
+                tracing::info!("Created directory: {:?}", dir);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Load all plugins from the plugins directory
+    ///
+    /// This also ensures required directories exist on first run.
     pub fn load_all(&mut self) -> PluginResult<Vec<PluginInfo>> {
+        // Ensure directories exist on first run
+        if let Err(e) = self.ensure_directories() {
+            tracing::warn!("Failed to create plugin directories: {}", e);
+        }
+
         let plugin_paths = self.scanner.scan()?;
         let mut loaded = Vec::new();
 

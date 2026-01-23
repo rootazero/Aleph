@@ -191,7 +191,7 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **Agentic Loop** | 8 components: IntentAnalyzer, TaskPlanner, ToolExecutor, LoopController, SessionRecorder, SessionCompactor, SubAgentHandler, CallbackBridge |
 | **intent** | Three-layer intent detection: L1 Regex → L2 Keywords → L3 AI |
 | **dispatcher** | Multi-layer routing hub with 16 sub-modules: planner/, scheduler/, executor/, model_router/, monitor/, context/, analyzer/, risk/, callback/, agent_types/, registry, confirmation, async_confirmation, integration, types, engine |
-| **thinker** | LLM decision-making layer with model routing and prompt building |
+| **thinker** | LLM decision-making layer with model routing, prompt building, tool filtering |
 | **three_layer** | Control architecture: Orchestrator (FSM) / Skill (DAG) / Tools (Safety) |
 | **rig-core** | AI provider abstraction (OpenAI, Anthropic, Gemini) |
 | **Dual-Layer Memory** | Raw history + AI-extracted facts |
@@ -201,6 +201,8 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **event** | Type-safe event bus for event-driven architecture |
 | **plugins** | Claude Code compatible plugin system |
 | **init_unified** | Unified initialization coordinator |
+| **Smart Tool Discovery** | Intelligent tool filtering by content analysis (ffi/tool_discovery) |
+| **Skill Reader Tools** | Progressive Disclosure for skills: read_skill, list_skills (rig_tools/skill_reader) |
 
 See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md)
 

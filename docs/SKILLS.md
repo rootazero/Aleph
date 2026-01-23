@@ -5,6 +5,8 @@ Aether supports the [Claude Agent Skills](https://platform.claude.com/docs/en/ag
 ## Table of Contents
 
 - [Overview](#overview)
+- [Progressive Disclosure Architecture](#progressive-disclosure-architecture)
+- [Hybrid Mode](#hybrid-mode)
 - [SKILL.md Format](#skillmd-format)
 - [Using Skills](#using-skills)
 - [Installing Skills](#installing-skills)
@@ -25,6 +27,158 @@ Claude Agent Skills are **not executable code** but rather **structured instruct
 - **Interoperable**: Compatible with Claude Code, GitHub Copilot, and other tools using the same standard
 - **Safe**: No code execution - only instruction injection
 - **Portable**: Simple text files, easy to backup and share
+- **Token Efficient**: Progressive Disclosure reduces unnecessary token consumption
+
+---
+
+## Progressive Disclosure Architecture
+
+Aether implements Claude's official **Progressive Disclosure** pattern for skills:
+
+### Three-Level Loading
+
+| Level | Timing | Token Cost | Content |
+|-------|--------|------------|---------|
+| **Level 1: Metadata** | Startup | ~100 tokens/skill | name + description (YAML frontmatter) |
+| **Level 2: Instructions** | On-demand | <5k tokens | SKILL.md body via `read_skill` tool |
+| **Level 3: Resources** | On-demand | Unlimited | ADVANCED.md, REFERENCE.md, scripts |
+
+### Why Progressive Disclosure?
+
+**Problem with Pre-loading**:
+- Full instructions injected into system prompt = "background context"
+- LLM may treat as "reference information" and ignore
+- Wastes tokens for unused skills
+
+**Progressive Disclosure Solution**:
+- System prompt only contains metadata (name + description)
+- Agent actively calls `read_skill(skill_id)` when needed
+- Instructions returned from tool = **task directive** (must follow)
+- Agent treats tool results as commands, not suggestions
+
+### Mental Model Comparison
+
+```
+❌ Pre-loading (Old):
+┌─────────────────────────────────────────────────────┐
+│ System Prompt + Context:                            │
+│   ## Skill Instructions                             │  ← As context
+│   [Full SKILL.md content]                           │  ← Mixed with Memory etc.
+└─────────────────────────────────────────────────────┘
+                    ↓
+Agent: "This is reference info, I can choose to ignore" ← Problem!
+
+
+✅ Progressive Disclosure (Current):
+┌─────────────────────────────────────────────────────┐
+│ System Prompt: "Available Skills: refine-text..."   │  ← Only metadata
+└─────────────────────────────────────────────────────┘
+                    ↓
+Agent: "I'll use the refine-text skill"
+→ Decision: UseTool { read_skill, {id: "refine-text"} }  ← Agent decides
+                    ↓
+┌─────────────────────────────────────────────────────┐
+│ Tool Result: [SKILL.md full content]                │
+│ → Agent treats as "task directive to execute"       │  ← Task instruction
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+## Hybrid Mode
+
+Aether uses a **hybrid approach** that combines the best of both modes:
+
+### 1. Slash Command Mode (Pre-load)
+
+When user explicitly invokes a skill via slash command:
+
+```
+/refine-text Please improve this paragraph...
+```
+
+- Instructions are **pre-loaded** into context
+- Immediate execution without extra tool call
+- Agent knows user explicitly wants this skill
+
+### 2. General Chat Mode (Progressive Disclosure)
+
+When user's intent implies a skill:
+
+```
+"帮我润色这段文字"
+```
+
+- System prompt shows skill metadata only
+- Agent sees "Available Skills: refine-text - Improve and polish writing"
+- Agent decides to call `read_skill("refine-text")`
+- Returns full instructions → Agent executes
+
+### Mode Selection Logic
+
+```rust
+if context.is_slash_command {
+    // Pre-load instructions immediately
+    SkillLoadMode::PreLoad { instructions }
+} else {
+    // Let agent discover and load on-demand
+    SkillLoadMode::Progressive
+}
+```
+
+---
+
+## Skill Tools
+
+### read_skill
+
+Read skill instructions or additional resources:
+
+```json
+{
+  "name": "read_skill",
+  "description": "Read the instructions of an installed skill...",
+  "parameters": {
+    "skill_id": "string (required)",
+    "file_name": "string (optional, default: SKILL.md)"
+  }
+}
+```
+
+**Examples**:
+- `read_skill(skill_id="refine-text")` → Read SKILL.md
+- `read_skill(skill_id="code-review", file_name="CHECKLIST.md")` → Read Level 3 resource
+
+### list_skills
+
+List all available skills with metadata:
+
+```json
+{
+  "name": "list_skills",
+  "description": "List all available skills installed on the system...",
+  "parameters": {
+    "filter": "string (optional)"
+  }
+}
+```
+
+**Output**:
+```json
+{
+  "success": true,
+  "count": 3,
+  "skills": [
+    {
+      "id": "refine-text",
+      "name": "Refine Text",
+      "description": "Improve and polish writing",
+      "triggers": ["refine", "polish"],
+      "files": ["SKILL.md", "EXAMPLES.md"]
+    }
+  ]
+}
+```
 
 ---
 
@@ -179,12 +333,38 @@ To edit a skill, modify the `SKILL.md` file directly. Changes take effect immedi
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                 CompositeCapabilityExecutor                      │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │
-│  │ Memory   │ │ Search   │ │ MCP      │ │ Video    │ │ Skills │ │
-│  │ Strategy │ │ Strategy │ │ Strategy │ │ Strategy │ │Strategy│ │
-│  │ (0)      │ │ (1)      │ │ (2)      │ │ (3)      │ │ (4)    │ │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │
+│                        System Prompt                             │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ ## Available Skills                                        │  │
+│  │ - **refine-text**: Improve and polish writing              │  │
+│  │ - **translate**: Translate text between languages          │  │
+│  │                                                            │  │
+│  │ To use a skill:                                            │  │
+│  │ 1. Call read_skill(skill_id) to load its instructions     │  │
+│  │ 2. Follow the instructions exactly                        │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                        Tool Registry                             │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
+│  │   read_skill    │  │   list_skills   │  │   file_ops      │  │
+│  │                 │  │                 │  │                 │  │
+│  │ Read SKILL.md   │  │ List available  │  │ File operations │  │
+│  │ or resources    │  │ skills          │  │                 │  │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                     Skills Directory                             │
+│  ~/.config/aether/skills/                                        │
+│  ├── refine-text/                                                │
+│  │   ├── SKILL.md           # Level 2: Instructions             │
+│  │   └── EXAMPLES.md        # Level 3: Resources                │
+│  ├── translate/                                                  │
+│  │   └── SKILL.md                                                │
+│  └── summarize/                                                  │
+│      └── SKILL.md                                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -192,32 +372,63 @@ To edit a skill, modify the `SKILL.md` file directly. Changes take effect immedi
 
 | Component | Location | Description |
 |-----------|----------|-------------|
+| `ReadSkillTool` | `rig_tools/skill_reader.rs` | Read skill instructions (Progressive Disclosure) |
+| `ListSkillsTool` | `rig_tools/skill_reader.rs` | List available skills with metadata |
 | `Skill` | `skills/mod.rs` | Skill data structure with YAML/Markdown parsing |
 | `SkillInfo` | `skills/mod.rs` | FFI-safe skill information for UI |
 | `SkillsRegistry` | `skills/registry.rs` | Manages skill loading and lookup |
 | `SkillsInstaller` | `skills/installer.rs` | GitHub/ZIP installation |
-| `SkillsStrategy` | `capability/strategies/skills.rs` | Capability execution |
-| `Capability::Skills` | `payload/capability.rs` | Priority 4 capability variant |
+| `PromptConfig.skill_mode` | `thinker/prompt_builder.rs` | Strict workflow execution mode |
 
-### Execution Flow
+### Execution Flow (Progressive Disclosure)
 
-1. User invokes `/skill <name> <input>`
-2. Router identifies skill command, extracts skill name
-3. `SkillsStrategy` looks up skill in `SkillsRegistry`
-4. Skill instructions are injected into `AgentPayload.context.skill_instructions`
-5. `PromptAssembler` formats instructions into system prompt
-6. AI provider receives augmented prompt
+```
+1. Agent Loop starts
+   ├─ Load SkillsRegistry
+   ├─ Extract all skill metadata
+   └─ Inject into "Available Skills" section of system prompt
+
+2. User request: "帮我润色这段文字"
+   ↓
+3. Thinker analyzes
+   ├─ Sees "Available Skills" includes refine-text
+   ├─ Decision: UseTool { read_skill, { skill_id: "refine-text" } }
+   └─ Issues tool call
+
+4. ReadSkillTool executes
+   ├─ Read ~/.config/aether/skills/refine-text/SKILL.md
+   ├─ Return full content
+   └─ ActionResult::ToolSuccess { output: { content: "..." } }
+
+5. Agent receives tool result
+   ├─ Treats returned instructions as "task directive"
+   ├─ Follows instructions strictly
+   └─ Completes task
+```
+
+### Security Mechanisms
+
+```rust
+// Path traversal prevention
+fn validate_skill_id(&self, skill_id: &str) -> Result<()> {
+    // ✗ Reject: "..", "/", "\\"
+    // ✗ Reject: hidden files (".")
+    // ✓ Allow: alphanumeric + hyphen
+}
+
+// File size limit
+const MAX_FILE_SIZE: u64 = 5 * 1024 * 1024; // 5MB
+```
 
 ### Integration Points
 
-**Router** (`router/mod.rs`):
-- Parses `/skill <name>` command
-- Sets `Intent::BuiltinSkills`
-- Extracts skill name for Strategy
+**PromptBuilder** (`thinker/prompt_builder.rs`):
+- Injects skill metadata into system prompt
+- Supports `skill_mode` for strict workflow execution
 
-**PromptAssembler** (`payload/assembler.rs`):
-- Formats skill instructions into system prompt
-- Supports Markdown format (default)
+**BuiltinToolRegistry** (`executor/builtin_registry.rs`):
+- Registers `read_skill` and `list_skills` tools
+- Handles tool execution
 
 **UniFFI Interface** (`aether.udl`):
 - `list_installed_skills()` - List all skills
@@ -385,9 +596,10 @@ The skill appears immediately in Settings > Skills and can be used with:
 - [Anthropic Skills GitHub](https://github.com/anthropics/skills)
 - [Simon Willison: Claude Skills](https://simonwillison.net/2025/Oct/16/claude-skills/)
 - OpenSpec Proposal: `openspec/changes/add-skills-capability/`
+- Design Doc: [SKILLS_ARCHITECTURE_REDESIGN.md](./SKILLS_ARCHITECTURE_REDESIGN.md)
 
 ---
 
-**Last Updated**: 2026-01-08
+**Last Updated**: 2026-01-23
 **Implemented In**: Aether v0.1.0
-**OpenSpec Change**: `add-skills-capability`
+**OpenSpec Changes**: `add-skills-capability`, `skills-progressive-disclosure`

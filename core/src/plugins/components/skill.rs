@@ -1,13 +1,22 @@
-//! SKILL.md parser
+//! Skill and Command parser
 //!
-//! Parses Claude Code compatible SKILL.md files from commands/ and skills/ directories.
+//! Parses Claude Code compatible skill and command files.
+//!
+//! ## File Formats
+//!
+//! Commands support two formats:
+//! - Simple: `commands/name.md` - Direct markdown file (recommended for simple commands)
+//! - Directory: `commands/name/SKILL.md` - For commands with supporting files
+//!
+//! Skills always use directory format:
+//! - `skills/name/SKILL.md` - With optional supporting files
 
 use std::path::Path;
 
 use crate::plugins::error::{PluginError, PluginResult};
 use crate::plugins::types::{PluginSkill, SkillFrontmatter, SkillType};
 
-/// Skill loader for parsing SKILL.md files
+/// Skill loader for parsing skill and command files
 #[derive(Debug, Default)]
 pub struct SkillLoader;
 
@@ -18,22 +27,65 @@ impl SkillLoader {
     }
 
     /// Load commands from a commands/ directory
+    ///
+    /// Supports two formats:
+    /// - `commands/name.md` - Simple markdown file
+    /// - `commands/name/SKILL.md` - Directory with SKILL.md
     pub fn load_commands(&self, dir: &Path, plugin_name: &str) -> PluginResult<Vec<PluginSkill>> {
-        self.load_skills_from_dir(dir, plugin_name, SkillType::Command)
+        let mut skills = Vec::new();
+
+        if !dir.exists() {
+            return Ok(skills);
+        }
+
+        let entries = std::fs::read_dir(dir)?;
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+
+            // Get the name (file stem or directory name)
+            let name = path
+                .file_stem()
+                .or_else(|| path.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+
+            // Skip hidden files/directories
+            if name.starts_with('.') {
+                continue;
+            }
+
+            if path.is_dir() {
+                // Directory format: commands/name/SKILL.md
+                let skill_md = path.join("SKILL.md");
+                if skill_md.exists() {
+                    match self.parse_skill_file(&skill_md, plugin_name, &name, SkillType::Command) {
+                        Ok(skill) => skills.push(skill),
+                        Err(e) => {
+                            tracing::warn!("Failed to parse command {:?}: {}", skill_md, e);
+                        }
+                    }
+                }
+            } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+                // Simple format: commands/name.md
+                match self.parse_skill_file(&path, plugin_name, &name, SkillType::Command) {
+                    Ok(skill) => skills.push(skill),
+                    Err(e) => {
+                        tracing::warn!("Failed to parse command {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+
+        Ok(skills)
     }
 
     /// Load skills from a skills/ directory
+    ///
+    /// Skills always use directory format: `skills/name/SKILL.md`
     pub fn load_skills(&self, dir: &Path, plugin_name: &str) -> PluginResult<Vec<PluginSkill>> {
-        self.load_skills_from_dir(dir, plugin_name, SkillType::Skill)
-    }
-
-    /// Load skills from a directory
-    fn load_skills_from_dir(
-        &self,
-        dir: &Path,
-        plugin_name: &str,
-        skill_type: SkillType,
-    ) -> PluginResult<Vec<PluginSkill>> {
         let mut skills = Vec::new();
 
         if !dir.exists() {
@@ -63,7 +115,7 @@ impl SkillLoader {
 
             let skill_md = path.join("SKILL.md");
             if skill_md.exists() {
-                match self.parse_skill_file(&skill_md, plugin_name, &skill_name, skill_type) {
+                match self.parse_skill_file(&skill_md, plugin_name, &skill_name, SkillType::Skill) {
                     Ok(skill) => skills.push(skill),
                     Err(e) => {
                         tracing::warn!("Failed to parse skill {:?}: {}", skill_md, e);
@@ -287,11 +339,11 @@ Content here."#;
     }
 
     #[test]
-    fn test_load_commands_directory() {
+    fn test_load_commands_directory_format() {
         let temp = TempDir::new().unwrap();
         let commands_dir = temp.path().join("commands");
 
-        // Create a command
+        // Create a command using directory format
         let hello_dir = commands_dir.join("hello");
         fs::create_dir_all(&hello_dir).unwrap();
         fs::write(
@@ -304,16 +356,38 @@ Say hello to $ARGUMENTS"#,
         )
         .unwrap();
 
-        // Create another command
-        let bye_dir = commands_dir.join("bye");
-        fs::create_dir_all(&bye_dir).unwrap();
+        let loader = SkillLoader::new();
+        let skills = loader.load_commands(&commands_dir, "test-plugin").unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].skill_name, "hello");
+        assert_eq!(skills[0].skill_type, SkillType::Command);
+    }
+
+    #[test]
+    fn test_load_commands_simple_md_format() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join("commands");
+        fs::create_dir_all(&commands_dir).unwrap();
+
+        // Create commands using simple .md file format
         fs::write(
-            bye_dir.join("SKILL.md"),
+            commands_dir.join("commit.md"),
             r#"---
-description: Say goodbye
+description: Create a git commit
 ---
 
-Say goodbye"#,
+Create a commit with message: $ARGUMENTS"#,
+        )
+        .unwrap();
+
+        fs::write(
+            commands_dir.join("review.md"),
+            r#"---
+description: Review code changes
+---
+
+Review the current code changes."#,
         )
         .unwrap();
 
@@ -321,7 +395,76 @@ Say goodbye"#,
         let skills = loader.load_commands(&commands_dir, "test-plugin").unwrap();
 
         assert_eq!(skills.len(), 2);
-        assert!(skills.iter().any(|s| s.skill_name == "hello"));
-        assert!(skills.iter().any(|s| s.skill_name == "bye"));
+        assert!(skills.iter().any(|s| s.skill_name == "commit"));
+        assert!(skills.iter().any(|s| s.skill_name == "review"));
+
+        let commit = skills.iter().find(|s| s.skill_name == "commit").unwrap();
+        assert_eq!(commit.description, "Create a git commit");
+        assert_eq!(commit.skill_type, SkillType::Command);
+    }
+
+    #[test]
+    fn test_load_commands_mixed_formats() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join("commands");
+        fs::create_dir_all(&commands_dir).unwrap();
+
+        // Simple .md file format
+        fs::write(
+            commands_dir.join("simple.md"),
+            r#"---
+description: Simple command
+---
+
+Do simple things."#,
+        )
+        .unwrap();
+
+        // Directory format with SKILL.md
+        let complex_dir = commands_dir.join("complex");
+        fs::create_dir_all(&complex_dir).unwrap();
+        fs::write(
+            complex_dir.join("SKILL.md"),
+            r#"---
+description: Complex command with scripts
+---
+
+Do complex things with supporting files."#,
+        )
+        .unwrap();
+
+        let loader = SkillLoader::new();
+        let skills = loader.load_commands(&commands_dir, "test-plugin").unwrap();
+
+        assert_eq!(skills.len(), 2);
+        assert!(skills.iter().any(|s| s.skill_name == "simple"));
+        assert!(skills.iter().any(|s| s.skill_name == "complex"));
+    }
+
+    #[test]
+    fn test_load_commands_skips_hidden_files() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join("commands");
+        fs::create_dir_all(&commands_dir).unwrap();
+
+        // Hidden file should be skipped
+        fs::write(
+            commands_dir.join(".hidden.md"),
+            "---\ndescription: Hidden\n---\nHidden content",
+        )
+        .unwrap();
+
+        // Visible file should be loaded
+        fs::write(
+            commands_dir.join("visible.md"),
+            "---\ndescription: Visible\n---\nVisible content",
+        )
+        .unwrap();
+
+        let loader = SkillLoader::new();
+        let skills = loader.load_commands(&commands_dir, "test-plugin").unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].skill_name, "visible");
     }
 }

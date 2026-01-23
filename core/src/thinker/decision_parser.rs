@@ -59,6 +59,11 @@ impl DecisionParser {
             return Ok(thinking);
         }
 
+        // Try alternative JSON field names (e.g., "thought" instead of "reasoning")
+        if let Some(thinking) = self.try_parse_alternative_format(response) {
+            return Ok(thinking);
+        }
+
         // Try to extract tool call from response
         if let Some(thinking) = self.try_extract_tool_call(response) {
             return Ok(thinking);
@@ -83,6 +88,103 @@ impl DecisionParser {
                 },
             })
         }
+    }
+
+    /// Try to parse with alternative field names that LLMs might use
+    fn try_parse_alternative_format(&self, response: &str) -> Option<Thinking> {
+        let json_str = self.extract_json(response).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&json_str).ok()?;
+        let obj = value.as_object()?;
+
+        // Extract reasoning (try multiple field names)
+        let reasoning = obj
+            .get("reasoning")
+            .or_else(|| obj.get("thought"))
+            .or_else(|| obj.get("thinking"))
+            .or_else(|| obj.get("rationale"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // Extract action object
+        let action_obj = obj.get("action").and_then(|v| v.as_object())?;
+
+        // Extract action type
+        let action_type = action_obj
+            .get("type")
+            .or_else(|| action_obj.get("action_type"))
+            .and_then(|v| v.as_str())?
+            .to_lowercase();
+
+        // Parse based on action type
+        let decision = match action_type.as_str() {
+            "tool" | "use_tool" | "tool_call" => {
+                let tool_name = action_obj
+                    .get("tool_name")
+                    .or_else(|| action_obj.get("name"))
+                    .or_else(|| action_obj.get("tool"))
+                    .and_then(|v| v.as_str())?
+                    .to_string();
+
+                let arguments = action_obj
+                    .get("arguments")
+                    .or_else(|| action_obj.get("args"))
+                    .or_else(|| action_obj.get("params"))
+                    .or_else(|| action_obj.get("parameters"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+                Decision::UseTool {
+                    tool_name,
+                    arguments,
+                }
+            }
+            "ask_user" | "ask" | "question" | "clarify" => {
+                let question = action_obj
+                    .get("question")
+                    .or_else(|| action_obj.get("message"))
+                    .or_else(|| action_obj.get("text"))
+                    .and_then(|v| v.as_str())?
+                    .to_string();
+
+                let options = action_obj
+                    .get("options")
+                    .or_else(|| action_obj.get("choices"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    });
+
+                Decision::AskUser { question, options }
+            }
+            "complete" | "done" | "finish" | "success" => {
+                let summary = action_obj
+                    .get("summary")
+                    .or_else(|| action_obj.get("result"))
+                    .or_else(|| action_obj.get("message"))
+                    .or_else(|| action_obj.get("output"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Task completed")
+                    .to_string();
+
+                Decision::Complete { summary }
+            }
+            "fail" | "error" | "failure" | "abort" => {
+                let reason = action_obj
+                    .get("reason")
+                    .or_else(|| action_obj.get("error"))
+                    .or_else(|| action_obj.get("message"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string();
+
+                Decision::Fail { reason }
+            }
+            _ => return None,
+        };
+
+        Some(Thinking { reasoning, decision })
     }
 
     /// Extract JSON from response (handles markdown code blocks)
@@ -411,5 +513,51 @@ Hope that helps!"#;
         let response = "Task complete! I have finished searching for the information.";
         let thinking = parser.parse_with_fallback(response).unwrap();
         assert!(matches!(thinking.decision, Decision::Complete { .. }));
+    }
+
+    #[test]
+    fn test_alternative_format_parsing() {
+        let parser = DecisionParser::new();
+
+        // Test with alternative field names: "thought" instead of "reasoning"
+        // and "name" instead of "tool_name"
+        let response = r#"{
+            "thought": "I should write the file now",
+            "action": {
+                "type": "tool",
+                "name": "file_ops",
+                "args": {"operation": "write", "path": "/tmp/test.txt", "content": "hello"}
+            }
+        }"#;
+
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        assert!(thinking.reasoning.as_deref() == Some("I should write the file now"));
+        if let Decision::UseTool { tool_name, arguments } = thinking.decision {
+            assert_eq!(tool_name, "file_ops");
+            assert_eq!(arguments["operation"], "write");
+        } else {
+            panic!("Expected UseTool decision");
+        }
+    }
+
+    #[test]
+    fn test_alternative_complete_format() {
+        let parser = DecisionParser::new();
+
+        // Test with "done" instead of "complete" and "result" instead of "summary"
+        let response = r#"{
+            "thinking": "Task is done",
+            "action": {
+                "type": "done",
+                "result": "Successfully wrote all files"
+            }
+        }"#;
+
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        if let Decision::Complete { summary } = thinking.decision {
+            assert_eq!(summary, "Successfully wrote all files");
+        } else {
+            panic!("Expected Complete decision");
+        }
     }
 }

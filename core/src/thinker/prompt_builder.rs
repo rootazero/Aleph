@@ -29,6 +29,10 @@ pub struct PromptConfig {
     /// - Additional tools are listed in this index (name + summary only)
     /// - LLM can call `get_tool_schema` to get full schema for indexed tools
     pub tool_index: Option<String>,
+    /// Skill execution mode - when true, enforces strict workflow completion
+    /// The agent MUST complete all steps specified in the skill instructions
+    /// and generate all required output files before calling `complete`
+    pub skill_mode: bool,
 }
 
 impl Default for PromptConfig {
@@ -41,6 +45,7 @@ impl Default for PromptConfig {
             runtime_capabilities: None,
             generation_models: None,
             tool_index: None,
+            skill_mode: false,
         }
     }
 }
@@ -146,6 +151,25 @@ impl PromptBuilder {
             "4. Complete when: task is done, or you've provided the requested information\n",
         );
         prompt.push_str("5. Fail when: impossible to proceed, missing critical resources\n\n");
+
+        // Skill mode specific requirements
+        if self.config.skill_mode {
+            prompt.push_str("## ⚠️ Skill Execution Mode\n\n");
+            prompt.push_str("You are executing a SKILL workflow. This requires STRICT adherence to all steps.\n\n");
+            prompt.push_str("**MANDATORY Requirements:**\n");
+            prompt.push_str("1. Complete ALL steps in the skill workflow - NO exceptions\n");
+            prompt.push_str("2. Generate ALL output files specified (JSON, .mmd, .txt, images, etc.)\n");
+            prompt.push_str("3. Use `file_ops` with `operation: \"write\"` to save each file\n");
+            prompt.push_str("4. DO NOT skip any step, even if you think it's redundant\n");
+            prompt.push_str("5. Before calling `complete`, verify ALL required outputs exist\n\n");
+            prompt.push_str("**Common skill outputs to generate:**\n");
+            prompt.push_str("- Data files: `triples.json`, `*.json`\n");
+            prompt.push_str("- Visualization code: `graph.mmd`, `*.mmd`\n");
+            prompt.push_str("- Prompts: `image-prompt.txt`, `*.txt`\n");
+            prompt.push_str("- Images: via `generate_image` tool\n");
+            prompt.push_str("- Merged outputs: `merged-*.json`, `full-*.mmd`\n\n");
+            prompt.push_str("**If you skip ANY required output, you have FAILED the task.**\n\n");
+        }
 
         // Custom instructions
         if let Some(instructions) = &self.config.custom_instructions {

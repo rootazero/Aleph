@@ -499,4 +499,6 @@ class PreviewEventHandler: AetherEventHandler {
     func onRuntimeUpdatesAvailable(updates: [RuntimeUpdateInfo]) {}
     // DAG Plan Confirmation callback
     func onPlanConfirmationRequired(planId: String, plan: DagTaskPlan) {}
+    // User Input Request callback
+    func onUserInputRequest(requestId: String, question: String, options: [String]) {}
 }

@@ -86,6 +86,16 @@ impl YouTubeTool {
 
     /// Execute transcript extraction
     pub async fn call(&self, args: YouTubeArgs) -> Result<YouTubeResult, ToolError> {
+        use super::{notify_tool_result, notify_tool_start};
+
+        // Notify tool start
+        let url_display = if args.url.len() > 50 {
+            format!("{}...", &args.url[..50])
+        } else {
+            args.url.clone()
+        };
+        notify_tool_start(Self::NAME, &format!("提取视频字幕: {}", url_display));
+
         info!("Extracting YouTube transcript: {}", args.url);
 
         // Create config with preferred language from args
@@ -99,7 +109,11 @@ impl YouTubeTool {
         let transcript = extractor
             .extract_transcript(&args.url)
             .await
-            .map_err(|e| ToolError::Execution(format!("Failed to extract transcript: {}", e)))?;
+            .map_err(|e| {
+                let error_msg = format!("Failed to extract transcript: {}", e);
+                notify_tool_result(Self::NAME, &error_msg, false);
+                ToolError::Execution(error_msg)
+            })?;
 
         debug!(
             video_id = %transcript.video_id,
@@ -107,6 +121,14 @@ impl YouTubeTool {
             segments = transcript.segments.len(),
             "Transcript extracted successfully"
         );
+
+        // Notify success
+        let result_summary = format!(
+            "已提取视频 \"{}\" 的字幕 ({} 秒)",
+            transcript.title,
+            transcript.total_duration_seconds as i64
+        );
+        notify_tool_result(Self::NAME, &result_summary, true);
 
         Ok(YouTubeResult::from(transcript))
     }

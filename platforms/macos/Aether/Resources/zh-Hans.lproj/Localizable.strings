@@ -28,6 +28,11 @@
 "common.replace" = "替换";
 "common.optional" = "可选";
 "common.required" = "必填";
+"common.confirm" = "确认";
+
+// MARK: - User Input Request
+"user_input.title" = "需要输入";
+"user_input.placeholder" = "输入您的回复...";
 
 // MARK: - Settings Window - Sidebar
 "settings.sidebar.title" = "Aether";
@@ -698,6 +703,9 @@
 "conversation.chat_command" = "开始多轮对话";
 "conversation.empty" = "开始对话";
 "conversation.copy.all" = "复制所有消息";
+
+// MARK: - Streaming Status
+"streaming.generating" = "正在生成回复...";
 
 // MARK: - Multi-turn Input Area
 "multiturn.input.placeholder" = "输入消息或 /命令...";

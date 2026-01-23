@@ -28,6 +28,11 @@
 "common.replace" = "Replace";
 "common.optional" = "Optional";
 "common.required" = "Required";
+"common.confirm" = "Confirm";
+
+// MARK: - User Input Request
+"user_input.title" = "Input Required";
+"user_input.placeholder" = "Enter your response...";
 
 // MARK: - Settings Window - Sidebar
 "settings.sidebar.title" = "Aether";
@@ -696,6 +701,9 @@
 "conversation.chat_command" = "Start multi-turn conversation";
 "conversation.empty" = "Start a conversation";
 "conversation.copy.all" = "Copy all messages";
+
+// MARK: - Streaming Status
+"streaming.generating" = "Generating response...";
 
 // MARK: - Multi-turn Input Area
 "multiturn.input.placeholder" = "Enter message or /command...";

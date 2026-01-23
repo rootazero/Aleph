@@ -17,6 +17,7 @@
 
 mod agent_loop_adapter;
 mod config;
+mod dag_executor;
 mod dispatcher;
 pub mod dispatcher_types;
 mod generation;
@@ -27,11 +28,16 @@ mod memory;
 pub mod plan_confirmation;
 mod plugins;
 mod processing;
+// Note: processing is now a directory module (processing/mod.rs)
+mod prompt_helpers;
+mod provider_factory;
 mod runtime;
 mod session;
 mod skills;
+mod tool_discovery;
 mod tools;
 mod typo_correction;
+mod user_input;
 
 // Agent Loop FFI adapter for new architecture
 pub use agent_loop_adapter::FfiLoopCallback;
@@ -220,6 +226,33 @@ pub trait AetherEventHandler: Send + Sync {
     /// * `plan_id` - Unique identifier for this confirmation request
     /// * `plan` - The task plan that needs confirmation
     fn on_plan_confirmation_required(&self, plan_id: String, plan: crate::dispatcher::DagTaskPlan);
+
+    // ========================================================================
+    // USER INPUT CALLBACKS (Agent Loop Interactive Input)
+    // ========================================================================
+
+    /// Called when the agent loop needs user input
+    ///
+    /// This callback is triggered when the LLM requests user input during
+    /// agent execution (e.g., ask_user action). The UI should display the
+    /// question and optionally present choices to the user.
+    ///
+    /// After receiving this callback, Swift should:
+    /// 1. Display the question to the user
+    /// 2. If options are provided, show them as choices
+    /// 3. Wait for user to type response or select option
+    /// 4. Call `AetherCore.respond_to_user_input(request_id, response)` with the response
+    ///
+    /// # Arguments
+    ///
+    /// * `request_id` - Unique identifier for this input request
+    /// * `question` - The question to ask the user
+    /// * `options` - Optional list of choices (empty if free-form input)
+    fn on_user_input_request(&self, request_id: String, question: String, options: Vec<String>) {
+        // Default: no-op (auto-respond with empty string)
+        // UI implementations should override to show input dialog
+        let _ = (request_id, question, options);
+    }
 }
 
 /// Tool information for UI display
@@ -491,6 +524,7 @@ pub fn init_core(
 
     // Create RigAgentConfig with loaded values
     let rig_config = RigAgentConfig {
+        provider_name: provider_name_for_log.clone(),
         provider,
         model,
         temperature: temperature.unwrap_or(0.7),

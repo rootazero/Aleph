@@ -104,6 +104,18 @@ pub struct LoopConfig {
     /// Whether to save session to database
     #[serde(default = "default_true")]
     pub persist_session: bool,
+
+    /// Stuck detection threshold: number of identical actions before triggering guard
+    /// Default is 3. Higher values are recommended for multi-step skills that
+    /// legitimately call the same tool multiple times (e.g., knowledge-graph skill
+    /// calling file_ops for mkdir, write, write operations).
+    #[serde(default = "default_stuck_threshold")]
+    pub stuck_threshold: usize,
+
+    /// Failure threshold: number of consecutive failures on same action pattern
+    /// before triggering guard. Default is 3.
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: usize,
 }
 
 impl Default for LoopConfig {
@@ -120,6 +132,8 @@ impl Default for LoopConfig {
             model_routing: ModelRoutingConfig::default(),
             enable_thinking_stream: true,
             persist_session: true,
+            stuck_threshold: default_stuck_threshold(),
+            failure_threshold: default_failure_threshold(),
         }
     }
 }
@@ -221,6 +235,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_stuck_threshold() -> usize {
+    5 // Higher than before (was 3) to allow multi-step skills
+}
+
+fn default_failure_threshold() -> usize {
+    3
+}
+
 fn default_model() -> String {
     "claude-sonnet-4-20250514".to_string()
 }
@@ -294,6 +316,18 @@ impl LoopConfig {
         self
     }
 
+    /// Builder pattern: set stuck detection threshold
+    pub fn with_stuck_threshold(mut self, threshold: usize) -> Self {
+        self.stuck_threshold = threshold;
+        self
+    }
+
+    /// Builder pattern: set failure threshold
+    pub fn with_failure_threshold(mut self, threshold: usize) -> Self {
+        self.failure_threshold = threshold;
+        self
+    }
+
     /// Check if the current mode allows a specific tool
     ///
     /// In PlanMode, only read operations are allowed.
@@ -364,6 +398,8 @@ impl LoopConfig {
             model_routing: ModelRoutingConfig::default(),
             enable_thinking_stream: false,
             persist_session: false,
+            stuck_threshold: 3,
+            failure_threshold: 3,
         }
     }
 
