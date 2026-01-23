@@ -70,15 +70,15 @@ export function BehaviorSettings() {
 
         <SettingsCard
           title="Typing Speed"
-          description="Speed of typewriter effect (0-100)"
+          description="Speed of typewriter effect (50-400 chars/sec)"
         >
           <div className="flex items-center gap-3 w-48">
             <Slider
               value={[behavior.typing_speed]}
               onValueChange={([value]) => updateBehavior({ typing_speed: value })}
-              min={0}
-              max={100}
-              step={5}
+              min={50}
+              max={400}
+              step={10}
               className="flex-1"
             />
             <span className="text-caption text-muted-foreground w-8 text-right">

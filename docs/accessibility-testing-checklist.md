@@ -150,7 +150,7 @@ This document provides comprehensive accessibility testing procedures to ensure 
 - [ ] **Typing Speed Slider**:
   - [ ] Announced as: "Typing speed, 50 characters per second, slider"
   - [ ] Current value announced when adjusted
-  - [ ] Min/max announced: "Minimum 10, maximum 200"
+  - [ ] Min/max announced: "Minimum 50, maximum 400"
 - [ ] **PII Scrubbing Toggle**:
   - [ ] Announced as: "Enable PII scrubbing, checkbox" or "toggle"
   - [ ] State announced: "checked" or "unchecked"

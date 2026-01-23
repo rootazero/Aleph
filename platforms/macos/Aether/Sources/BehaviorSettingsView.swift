@@ -152,7 +152,7 @@ struct BehaviorSettingsView: View {
                                     .font(DesignTokens.Typography.body)
                                     .frame(width: 80, alignment: .leading)
 
-                                Slider(value: $typingSpeed, in: 10...200, step: 5)
+                                Slider(value: $typingSpeed, in: 50...400, step: 10)
 
                                 Text("\(Int(typingSpeed)) chars/sec")
                                     .font(DesignTokens.Typography.code)
@@ -176,7 +176,7 @@ struct BehaviorSettingsView: View {
                                         // Speed indicator
                                         RoundedRectangle(cornerRadius: 2)
                                             .fill(speedColor)
-                                            .frame(width: geometry.size.width * CGFloat((typingSpeed - 10) / 190), height: 4)
+                                            .frame(width: geometry.size.width * CGFloat((typingSpeed - 50) / 350), height: 4)
                                     }
                                 }
                                 .frame(height: 4)
@@ -371,11 +371,11 @@ struct BehaviorSettingsView: View {
 
     private var speedColor: Color {
         switch typingSpeed {
-        case 10..<50:
-            return .green
         case 50..<100:
+            return .green
+        case 100..<200:
             return .blue
-        case 100..<150:
+        case 200..<300:
             return .orange
         default:
             return .red

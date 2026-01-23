@@ -95,7 +95,7 @@ impl Default for ShortcutsConfig {
 ///
 /// Active fields:
 /// - output_mode: "typewriter" (character-by-character) or "instant" (all at once)
-/// - typing_speed: Characters per second for typewriter mode (10-200)
+/// - typing_speed: Characters per second for typewriter mode (50-400)
 ///
 /// Deprecated fields (kept for backward compatibility, ignored by code):
 /// - input_mode: Replaced by trigger system
@@ -107,7 +107,7 @@ pub struct BehaviorConfig {
     /// Output mode: "typewriter" or "instant"
     #[serde(default = "default_output_mode")]
     pub output_mode: String,
-    /// Typing speed in characters per second (10-200)
+    /// Typing speed in characters per second (50-400)
     #[serde(default = "default_typing_speed")]
     pub typing_speed: u32,
 }

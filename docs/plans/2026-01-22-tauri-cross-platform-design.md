@@ -284,7 +284,7 @@ const tabGroups = [
 
 #### Behavior 设置
 - 输出模式（Typewriter / Instant）
-- 打字速度滑块（10-200 chars/sec）
+- 打字速度滑块（50-400 chars/sec）
 - 速度预览窗口
 - PII 数据清洗（邮箱、电话、SSN、信用卡）
 

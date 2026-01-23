@@ -331,13 +331,13 @@ Configure how Aether captures input and displays output.
 
 **Only applies when Output Mode = Typewriter**
 
-**Range**: 10-200 characters per second
+**Range**: 50-400 characters per second
 
 **Slider positions:**
-- **10 cps**: Very slow (dramatic effect)
-- **50 cps**: Default (balanced, readable)
-- **100 cps**: Fast (quick results)
-- **200 cps**: Very fast (minimal delay)
+- **50 cps**: Slow (readable, dramatic effect)
+- **100 cps**: Default (balanced)
+- **200 cps**: Fast (quick results)
+- **400 cps**: Very fast (minimal delay)
 
 **How to adjust:**
 1. Drag slider to desired speed

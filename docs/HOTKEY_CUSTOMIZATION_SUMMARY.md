@@ -176,7 +176,7 @@ Created project at /Users/zouguojun/Workspace/Aether/Aether.xcodeproj
 - [ ] 5.1 创建 `BehaviorSettingsView.swift`
   - Input Mode: Cut vs Copy
   - Output Mode: Typewriter vs Instant
-  - Typing Speed 滑块 (10-200 chars/sec)
+  - Typing Speed 滑块 (50-400 chars/sec)
   - PII Scrubbing 配置
 
 - [ ] 5.2 PII 清洗配置

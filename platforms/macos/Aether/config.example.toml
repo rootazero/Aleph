@@ -77,11 +77,11 @@ input_mode = "cut"
 output_mode = "typewriter"
 
 # Typing speed (only applies when output_mode = "typewriter")
-# Range: 10-200 characters per second
-# - 10  : Very slow (dramatic effect)
-# - 50  : Default (balanced, readable)
-# - 100 : Fast (quick results)
-# - 200 : Very fast (minimal delay)
+# Range: 50-400 characters per second
+# - 50  : Slow (readable, dramatic effect)
+# - 100 : Default (balanced)
+# - 200 : Fast (quick results)
+# - 400 : Very fast (minimal delay)
 typing_speed = 50
 
 # PII (Personally Identifiable Information) scrubbing
