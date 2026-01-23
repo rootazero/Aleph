@@ -1,17 +1,18 @@
-//! MCP Tool Wrapper for rig-core
+//! MCP Tool Wrapper
 //!
-//! Wraps external MCP server tools as rig-compatible tools for dynamic registration.
+//! Wraps external MCP server tools for dynamic registration.
 //!
-//! This allows MCP tools to be added to the ToolServerHandle at runtime (hot-reload).
+//! This allows MCP tools to be added to the AetherToolServerHandle at runtime (hot-reload).
 
 use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::Future;
-use rig::completion::ToolDefinition;
-use rig::tool::{ToolDyn, ToolError};
 
+use crate::dispatcher::{ToolCategory, ToolDefinition};
+use crate::error::Result;
 use crate::mcp::{McpClient, McpTool};
+use crate::tools::AetherToolDyn;
 
 /// Wrapper for MCP tools that implements rig's ToolDyn trait
 ///
@@ -70,79 +71,49 @@ impl McpToolWrapper {
     }
 }
 
-// Implement rig's ToolDyn trait for dynamic dispatch
-impl ToolDyn for McpToolWrapper {
-    fn name(&self) -> String {
-        self.tool_def.name.clone()
+// Implement AetherToolDyn trait for dynamic dispatch
+impl AetherToolDyn for McpToolWrapper {
+    fn name(&self) -> &str {
+        &self.tool_def.name
     }
 
-    fn definition<'a>(
-        &'a self,
-        _prompt: String,
-    ) -> Pin<Box<dyn Future<Output = ToolDefinition> + Send + 'a>> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: self.tool_def.name.clone(),
-                description: self.tool_def.description.clone(),
-                parameters: self.tool_def.input_schema.clone(),
-            }
-        })
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            &self.tool_def.name,
+            &self.tool_def.description,
+            self.tool_def.input_schema.clone(),
+            ToolCategory::Mcp,
+        )
     }
 
-    fn call<'a>(
-        &'a self,
-        args: String,
-    ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + 'a>> {
+    fn call(
+        &self,
+        args: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
         Box::pin(async move {
-            // Parse JSON arguments
-            let args_value: serde_json::Value =
-                serde_json::from_str(&args).map_err(ToolError::JsonError)?;
-
             // Call through MCP client
-            let mcp_result = self
-                .client
-                .call_tool(&self.tool_def.name, args_value)
-                .await
-                .map_err(|e: crate::error::AetherError| {
-                    ToolError::ToolCallError(Box::new(McpToolWrapperError(e.to_string())))
-                })?;
+            let mcp_result = self.client.call_tool(&self.tool_def.name, args).await?;
 
-            // Convert result to string
+            // Convert result to Value
             if mcp_result.success {
-                match &mcp_result.content {
-                    serde_json::Value::String(s) => Ok(s.clone()),
-                    serde_json::Value::Null => Ok(String::new()),
-                    other => serde_json::to_string(other).map_err(ToolError::JsonError),
-                }
+                Ok(mcp_result.content)
             } else {
-                Err(ToolError::ToolCallError(Box::new(McpToolWrapperError(
+                Err(crate::error::AetherError::tool(
                     mcp_result
                         .error
                         .unwrap_or_else(|| "Unknown MCP tool error".to_string()),
-                ))))
+                ))
             }
         })
     }
 }
-
-/// Error type for MCP tool wrapper
-#[derive(Debug)]
-pub struct McpToolWrapperError(String);
-
-impl std::fmt::Display for McpToolWrapperError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MCP tool error: {}", self.0)
-    }
-}
-
-impl std::error::Error for McpToolWrapperError {}
 
 // SAFETY: McpToolWrapper is Send + Sync because:
 // - tool_def (McpTool) contains only String and serde_json::Value (both Send + Sync)
 // - client (Arc<McpClient>) is Send + Sync (Arc<T> is Send + Sync when T: Send + Sync,
 //   and McpClient uses RwLock for interior mutability which is Send + Sync)
 // - server_name (String) is Send + Sync
-// This is required by ToolDyn trait which has Send + Sync bounds.
+// This is required by AetherToolDyn trait which has Send + Sync bounds.
 unsafe impl Send for McpToolWrapper {}
 unsafe impl Sync for McpToolWrapper {}
 
@@ -178,13 +149,13 @@ mod tests {
         assert_eq!(wrapper.server_name(), "test");
     }
 
-    #[tokio::test]
-    async fn test_wrapper_definition() {
+    #[test]
+    fn test_wrapper_definition() {
         let tool = create_test_tool();
         let client = Arc::new(McpClient::new());
         let wrapper = McpToolWrapper::new(tool, client, "test".to_string());
 
-        let def = wrapper.definition("".to_string()).await;
+        let def = wrapper.definition();
         assert_eq!(def.name, "test:read_file");
         assert_eq!(def.description, "Read a file from the filesystem");
         assert!(def.parameters.get("properties").is_some());

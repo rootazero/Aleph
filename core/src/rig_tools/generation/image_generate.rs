@@ -241,49 +241,11 @@ impl AetherTool for ImageGenerateTool {
     }
 }
 
-// rig::tool::Tool implementation required for ToolServer registration
-impl rig::tool::Tool for ImageGenerateTool {
-    const NAME: &'static str = "generate_image";
-
-    type Error = ToolError;
-    type Args = ImageGenerateArgs;
-    type Output = ImageGenerateOutput;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        let schema = schemars::schema_for!(ImageGenerateArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
-            json!({
-                "type": "object",
-                "properties": {
-                    "prompt": { "type": "string" },
-                    "width": { "type": "integer" },
-                    "height": { "type": "integer" },
-                    "quality": { "type": "string" },
-                    "style": { "type": "string" },
-                    "provider": { "type": "string" }
-                },
-                "required": ["prompt"]
-            })
-        });
-
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters,
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.call_impl(args).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::generation::MockGenerationProvider;
     use crate::tools::AetherTool;
-    use rig::tool::Tool;
 
     fn create_test_registry() -> Arc<RwLock<GenerationProviderRegistry>> {
         let mut registry = GenerationProviderRegistry::new();
@@ -424,30 +386,6 @@ mod tests {
 
         let output = result.unwrap();
         assert_eq!(output.provider, "mock-dalle");
-    }
-
-    #[tokio::test]
-    async fn test_rig_tool_trait() {
-        let registry = create_test_registry();
-        let tool = ImageGenerateTool::new(registry);
-
-        // Test definition via rig trait (fully qualified)
-        let definition = <ImageGenerateTool as Tool>::definition(&tool, "test".to_string()).await;
-        assert_eq!(definition.name, "generate_image");
-        assert!(!definition.description.is_empty());
-
-        // Test call via trait
-        let args = ImageGenerateArgs {
-            prompt: "Trait test".to_string(),
-            width: None,
-            height: None,
-            quality: None,
-            style: None,
-            provider: Some("mock-dalle".to_string()),
-        };
-
-        let result = <ImageGenerateTool as Tool>::call(&tool, args).await;
-        assert!(result.is_ok());
     }
 
     #[test]

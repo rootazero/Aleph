@@ -48,8 +48,8 @@ use crate::agents::RigAgentConfig;
 use crate::config::Config;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::memory::MemoryEntry;
+use crate::tools::AetherToolServerHandle;
 use crate::utils::paths::get_memory_db_path;
-use rig::tool::server::ToolServerHandle;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -354,9 +354,9 @@ pub struct AetherCore {
     /// Current operation's cancellation token
     /// Each new operation gets a fresh token, allowing cancellation state to be reset
     pub(crate) current_op_token: Arc<RwLock<CancellationToken>>,
-    /// Shared ToolServerHandle for hot-reload support
-    /// This handle is shared across all RigAgentManager instances
-    pub(crate) tool_server_handle: ToolServerHandle,
+    /// Shared AetherToolServerHandle for hot-reload support
+    /// This handle is shared across all tool server instances
+    pub(crate) tool_server_handle: AetherToolServerHandle,
     /// Names of registered tools (for tracking and display)
     pub(crate) registered_tools: Arc<RwLock<Vec<String>>>,
     /// Agent engine for task orchestration (lazily initialized)
@@ -606,18 +606,12 @@ pub fn init_core(
         }
     };
 
-    // Create shared ToolServerHandle with built-in tools for hot-reload support
-    // NOTE: ToolServer::run() requires a tokio runtime context (uses tokio::spawn)
-    // We use runtime.enter() to set the current runtime context before creating the handle
-    let (tool_server_handle, registered_tools) = {
-        let _guard = runtime.enter(); // Enter runtime context for tokio::spawn
-        let tool_server_handle = create_builtin_tool_server(Some(&builtin_tool_config)).run();
-        let registered_tools = Arc::new(RwLock::new(create_builtin_tools_list()));
-        (tool_server_handle, registered_tools)
-    };
+    // Create shared AetherToolServerHandle with built-in tools for hot-reload support
+    let tool_server_handle = create_builtin_tool_server(Some(&builtin_tool_config));
+    let registered_tools = Arc::new(RwLock::new(create_builtin_tools_list()));
     info!(
         tools = ?registered_tools.read().unwrap(),
-        "Created shared ToolServerHandle with built-in tools"
+        "Created shared AetherToolServerHandle with built-in tools"
     );
 
     let core = Arc::new(AetherCore {

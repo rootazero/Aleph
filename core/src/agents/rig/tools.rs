@@ -4,7 +4,7 @@ use crate::generation::GenerationProviderRegistry;
 use crate::rig_tools::{
     FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool,
 };
-use rig::tool::server::ToolServer;
+use crate::tools::{AetherToolServer, AetherToolServerHandle};
 use std::sync::{Arc, RwLock};
 use tracing::info;
 
@@ -46,15 +46,17 @@ impl std::fmt::Debug for BuiltinToolConfig {
     }
 }
 
-/// Create a tool server with built-in tools
-pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> ToolServer {
+/// Create a tool server handle with built-in tools
+///
+/// Returns an `AetherToolServerHandle` that can be shared across threads.
+pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AetherToolServerHandle {
     let search_tool = if let Some(cfg) = config {
         SearchTool::with_api_key(cfg.tavily_api_key.clone())
     } else {
         SearchTool::new()
     };
 
-    let mut server = ToolServer::new()
+    let mut server = AetherToolServer::new()
         .tool(search_tool)
         .tool(WebFetchTool::new())
         .tool(YouTubeTool::new())
@@ -78,7 +80,7 @@ pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> ToolSer
         info!("No builtin tool config provided, using default tools only");
     }
 
-    server
+    server.handle()
 }
 
 /// Create initial registered tools list

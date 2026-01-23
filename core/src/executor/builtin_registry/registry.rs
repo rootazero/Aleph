@@ -437,7 +437,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
-            // Delegate tool for sub-agent delegation (uses rig::tool::Tool)
+            // Delegate tool for sub-agent delegation (uses AetherTool)
             "delegate" => Box::pin(async move { self.execute_delegate(arguments).await }),
 
             // Skill reading tools - use call_json

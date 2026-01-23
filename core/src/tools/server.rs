@@ -64,6 +64,24 @@ impl AetherToolServer {
         }
     }
 
+    /// Builder method to add a tool (sync, for construction).
+    ///
+    /// This method is useful for chaining during server construction:
+    /// ```rust,ignore
+    /// let server = AetherToolServer::new()
+    ///     .tool(SearchTool::new())
+    ///     .tool(WebFetchTool::new());
+    /// ```
+    pub fn tool(self, tool: impl AetherToolDyn + 'static) -> Self {
+        // Get mutable access synchronously during construction
+        // Safe because we own the server and no other references exist
+        if let Ok(mut tools) = self.tools.try_write() {
+            let name = tool.name().to_string();
+            tools.insert(name, Arc::new(tool));
+        }
+        self
+    }
+
     /// Add a tool to the server.
     ///
     /// If a tool with the same name already exists, it will be replaced.

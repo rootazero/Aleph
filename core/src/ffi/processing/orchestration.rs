@@ -13,6 +13,7 @@ use crate::ffi::AetherEventHandler;
 use crate::generation::GenerationProviderRegistry;
 use crate::intent::{IntentRouter, RouteResult};
 use crate::skills::SkillsRegistry;
+use crate::tools::AetherToolServerHandle;
 use crate::utils::paths::get_skills_dir;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -51,7 +52,7 @@ pub fn process_with_agent_loop(
     app_context: &Option<String>,
     window_title: &Option<String>,
     config: &RigAgentConfig,
-    tool_server_handle: rig::tool::server::ToolServerHandle,
+    tool_server_handle: AetherToolServerHandle,
     registered_tools: Arc<RwLock<Vec<String>>>,
     conversation_histories: &Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
     topic_id: &Option<String>,

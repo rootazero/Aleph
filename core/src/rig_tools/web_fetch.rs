@@ -3,6 +3,7 @@
 //! Implements AetherTool trait for AI agent integration.
 
 use async_trait::async_trait;
+use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::tools::AetherTool;
@@ -12,7 +13,6 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use super::error::ToolError;
 
 /// Arguments for web fetch tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -276,30 +276,6 @@ impl AetherTool for WebFetchTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)
-    }
-}
-
-// rig::tool::Tool implementation required for ToolServer registration
-impl rig::tool::Tool for WebFetchTool {
-    const NAME: &'static str = "web_fetch";
-
-    type Error = ToolError;
-    type Args = WebFetchArgs;
-    type Output = WebFetchResult;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        let schema = schemars::schema_for!(WebFetchArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_default();
-
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters,
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.call_impl(args).await
     }
 }
 

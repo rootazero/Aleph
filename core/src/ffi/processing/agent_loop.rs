@@ -23,6 +23,7 @@ use crate::intent::ThinkingContext;
 use crate::rig_tools::file_ops::{clear_written_files, take_written_files};
 use crate::runtimes::{RuntimeCapability, RuntimeRegistry};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
+use crate::tools::AetherToolServerHandle;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -37,7 +38,7 @@ pub fn run_agent_loop(
     input: &str,
     ctx: ThinkingContext,
     config: &RigAgentConfig,
-    _tool_server_handle: rig::tool::server::ToolServerHandle,
+    _tool_server_handle: AetherToolServerHandle,
     _registered_tools: Arc<RwLock<Vec<String>>>,
     op_token: &CancellationToken,
     handler: &Arc<dyn AetherEventHandler>,

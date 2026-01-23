@@ -1,5 +1,6 @@
 //! Direct route handling for slash commands, skills, MCP, etc.
 
+use crate::agents::rig::ChatMessage;
 use crate::agents::RigAgentConfig;
 use crate::config::GenerationConfig;
 use crate::core::MediaAttachment;
@@ -8,7 +9,7 @@ use crate::ffi::prompt_helpers::extract_attachment_text;
 use crate::ffi::tool_discovery::get_builtin_tool_descriptions;
 use crate::generation::GenerationProviderRegistry;
 use crate::intent::{AgentModePrompt, DirectMode, ThinkingContext};
-use crate::agents::rig::ChatMessage;
+use crate::tools::AetherToolServerHandle;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -24,7 +25,7 @@ pub fn handle_direct_route(
     input: &str,
     mode: DirectMode,
     config: &RigAgentConfig,
-    tool_server_handle: rig::tool::server::ToolServerHandle,
+    tool_server_handle: AetherToolServerHandle,
     registered_tools: Arc<RwLock<Vec<String>>>,
     op_token: &CancellationToken,
     handler: &Arc<dyn AetherEventHandler>,

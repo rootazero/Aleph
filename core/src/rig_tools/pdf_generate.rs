@@ -22,9 +22,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{debug, info, warn};
 
+use super::error::ToolError;
 use crate::error::Result;
 use crate::tools::AetherTool;
-use super::error::ToolError;
 
 /// Page size options
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
@@ -658,66 +658,6 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.generate(args).map_err(Into::into)
-    }
-}
-
-// rig::tool::Tool implementation required for ToolServer registration
-impl rig::tool::Tool for PdfGenerateTool {
-    const NAME: &'static str = "pdf_generate";
-
-    type Args = PdfGenerateArgs;
-    type Output = PdfGenerateOutput;
-    type Error = ToolError;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "Content to convert to PDF"
-                    },
-                    "output_path": {
-                        "type": "string",
-                        "description": "Output file path for the PDF"
-                    },
-                    "format": {
-                        "type": "string",
-                        "enum": ["text", "markdown"],
-                        "description": "Content format (default: text)"
-                    },
-                    "page_size": {
-                        "type": "string",
-                        "enum": ["a4", "letter", "a3"],
-                        "description": "Page size (default: a4)"
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Document title (optional)"
-                    },
-                    "font_size": {
-                        "type": "number",
-                        "description": "Font size in points (default: 12)"
-                    },
-                    "line_spacing": {
-                        "type": "number",
-                        "description": "Line spacing multiplier (default: 1.5)"
-                    },
-                    "margin_mm": {
-                        "type": "number",
-                        "description": "Page margins in mm (default: 20)"
-                    }
-                },
-                "required": ["content", "output_path"]
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.generate(args)
     }
 }
 

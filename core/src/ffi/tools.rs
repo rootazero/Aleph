@@ -98,10 +98,7 @@ impl AetherCore {
         let tool_name_clone = tool_name.clone();
 
         self.runtime.block_on(async move {
-            handle
-                .add_tool(wrapper)
-                .await
-                .map_err(|e| AetherFfiError::Tool(format!("Failed to add tool: {}", e)))?;
+            handle.add_tool(wrapper).await;
 
             // Track the tool
             let mut tools = registered_tools.write().unwrap();
@@ -129,16 +126,17 @@ impl AetherCore {
         let tool_name_clone = tool_name.clone();
 
         self.runtime.block_on(async move {
-            handle
-                .remove_tool(&tool_name_clone)
-                .await
-                .map_err(|e| AetherFfiError::Tool(format!("Failed to remove tool: {}", e)))?;
+            let removed = handle.remove_tool(&tool_name_clone).await;
 
-            // Update tracking
-            let mut tools = registered_tools.write().unwrap();
-            tools.retain(|t| t != &tool_name_clone);
+            if removed {
+                // Update tracking
+                let mut tools = registered_tools.write().unwrap();
+                tools.retain(|t| t != &tool_name_clone);
+                info!(tool_name = %tool_name_clone, "Tool removed successfully");
+            } else {
+                info!(tool_name = %tool_name_clone, "Tool not found, nothing to remove");
+            }
 
-            info!(tool_name = %tool_name_clone, "Tool removed successfully");
             Ok(())
         })
     }

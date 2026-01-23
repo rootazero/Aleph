@@ -211,33 +211,6 @@ impl AetherTool for SearchTool {
     }
 }
 
-// rig::tool::Tool implementation required for ToolServer registration
-impl rig::tool::Tool for SearchTool {
-    const NAME: &'static str = "search";
-
-    type Error = ToolError;
-    type Args = SearchArgs;
-    type Output = SearchOutput;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        let schema = schemars::schema_for!(SearchArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_default();
-
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters,
-        }
-    }
-
-    async fn call(
-        &self,
-        args: Self::Args,
-    ) -> std::result::Result<Self::Output, Self::Error> {
-        self.call_impl(args).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
