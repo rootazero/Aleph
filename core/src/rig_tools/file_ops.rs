@@ -93,6 +93,72 @@ pub struct FileOpsOutput {
     pub items_affected: Option<usize>,
 }
 
+// Thread-local working directory for the current session/topic
+// This is set at the start of processing and used for relative path resolution
+std::thread_local! {
+    static CURRENT_WORKING_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+// Thread-local registry of files written during the current session
+// This allows tracking generated files for attachment display
+std::thread_local! {
+    static WRITTEN_FILES: std::cell::RefCell<Vec<WrittenFile>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Information about a file written during tool execution
+#[derive(Debug, Clone)]
+pub struct WrittenFile {
+    /// Full path to the written file
+    pub path: PathBuf,
+    /// File size in bytes
+    pub size: u64,
+    /// Operation that created this file (write, copy, etc.)
+    pub operation: String,
+}
+
+/// Set the working directory for the current thread/session
+/// Relative paths will be resolved to this directory
+pub fn set_working_dir(dir: Option<PathBuf>) {
+    CURRENT_WORKING_DIR.with(|wd| {
+        *wd.borrow_mut() = dir;
+    });
+}
+
+/// Get the working directory for the current thread/session
+pub fn get_working_dir() -> Option<PathBuf> {
+    CURRENT_WORKING_DIR.with(|wd| wd.borrow().clone())
+}
+
+/// Clear the written files registry for a new session
+pub fn clear_written_files() {
+    WRITTEN_FILES.with(|files| {
+        files.borrow_mut().clear();
+    });
+}
+
+/// Record a file that was written during tool execution
+pub fn record_written_file(path: PathBuf, size: u64, operation: &str) {
+    WRITTEN_FILES.with(|files| {
+        files.borrow_mut().push(WrittenFile {
+            path,
+            size,
+            operation: operation.to_string(),
+        });
+    });
+}
+
+/// Get all files written during the current session and clear the registry
+pub fn take_written_files() -> Vec<WrittenFile> {
+    WRITTEN_FILES.with(|files| {
+        std::mem::take(&mut *files.borrow_mut())
+    })
+}
+
+/// Get all files written during the current session without clearing
+pub fn get_written_files() -> Vec<WrittenFile> {
+    WRITTEN_FILES.with(|files| files.borrow().clone())
+}
+
 /// File operations tool
 pub struct FileOpsTool {
     /// Maximum file size for read operations (100MB default)
@@ -139,6 +205,7 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         // Add specific Aether config files (not the entire directory)
         // We allow the output directory but deny sensitive config files
         if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
+            info!(config_dir = %config_dir.display(), "FileOpsTool: config_dir for denied_paths");
             // Deny config files but NOT the output directory
             denied_paths.push(format!("{}/config.toml", config_dir.display()));
             denied_paths.push(format!("{}/memory.db", config_dir.display()));
@@ -165,6 +232,8 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             ]);
         }
 
+        info!(denied_paths_count = denied_paths.len(), "FileOpsTool: initialized with denied_paths");
+
         Self {
             max_read_size: 100 * 1024 * 1024, // 100MB
             denied_paths,
@@ -178,6 +247,8 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
     /// 2. Home paths (starting with `~`) - expanded to home directory
     /// 3. Relative paths - resolved relative to output directory (~/.config/aether/output/)
     fn check_path(&self, path: &Path) -> Result<PathBuf, ToolError> {
+        info!(path = %path.display(), "check_path: input path");
+
         // Expand ~ to home directory
         let expanded = if path.starts_with("~") {
             let home = dirs::home_dir().ok_or_else(|| {
@@ -185,15 +256,25 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             })?;
             home.join(path.strip_prefix("~").unwrap())
         } else if path.is_relative() {
-            // Relative paths are resolved to the output directory
-            // This ensures files are written to a known writable location
-            let output_dir = crate::utils::paths::get_output_dir().map_err(|e| {
-                ToolError::Execution(format!("Failed to get output directory: {}", e))
-            })?;
-            output_dir.join(path)
+            // Relative paths are resolved to:
+            // 1. Current working directory (if set by session/topic)
+            // 2. Default output directory (~/.config/aether/output/)
+            let base_dir = if let Some(wd) = get_working_dir() {
+                info!(working_dir = %wd.display(), "check_path: using session working directory");
+                wd
+            } else {
+                let output_dir = crate::utils::paths::get_output_dir().map_err(|e| {
+                    ToolError::Execution(format!("Failed to get output directory: {}", e))
+                })?;
+                info!(output_dir = %output_dir.display(), "check_path: using default output directory");
+                output_dir
+            };
+            base_dir.join(path)
         } else {
             path.to_path_buf()
         };
+
+        info!(expanded = %expanded.display(), exists = expanded.exists(), "check_path: expanded path");
 
         // Canonicalize if exists, otherwise use as-is for new files
         let canonical = if expanded.exists() {
@@ -203,6 +284,8 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         } else {
             expanded
         };
+
+        info!(canonical = %canonical.display(), "check_path: canonical path");
 
         // Check against denied paths
         let path_str = canonical.to_string_lossy();
@@ -220,6 +303,12 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             };
 
             if path_str.starts_with(&denied_expanded) {
+                info!(
+                    path_str = %path_str,
+                    denied = %denied,
+                    denied_expanded = %denied_expanded,
+                    "check_path: ACCESS DENIED - path matches denied pattern"
+                );
                 return Err(ToolError::InvalidArgs(format!(
                     "Access denied: {} is in a protected location",
                     path.display()
@@ -227,6 +316,7 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             }
         }
 
+        info!(canonical = %canonical.display(), "check_path: path allowed");
         Ok(canonical)
     }
 
@@ -364,6 +454,9 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
         info!(path = %canonical.display(), bytes, "Wrote file");
 
+        // Record the written file for attachment tracking
+        record_written_file(canonical.clone(), bytes, "write");
+
         Ok(FileOpsOutput {
             success: true,
             operation: "write".to_string(),
@@ -460,6 +553,9 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         };
 
         info!(from = %from_canonical.display(), to = %to_canonical.display(), bytes, "Copied");
+
+        // Record the copied file for attachment tracking
+        record_written_file(to_canonical.clone(), bytes, "copy");
 
         Ok(FileOpsOutput {
             success: true,
@@ -1189,5 +1285,85 @@ mod tests {
         let result = tool.call(args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.items_affected, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_mkdir_relative_in_output_dir() {
+        // Test that relative paths resolve to the output directory correctly
+        let tool = FileOpsTool::new();
+
+        // "test_subdir" should resolve to ~/.config/aether/output/test_subdir
+        let args = FileOpsArgs {
+            operation: FileOperation::Mkdir,
+            path: "test_mkdir_relative_subdir".to_string(),
+            destination: None,
+            content: None,
+            pattern: None,
+            create_parents: true,
+        };
+
+        let result = tool.call(args).await;
+
+        // This should succeed - output directory should be writable
+        match &result {
+            Ok(output) => {
+                assert!(output.success);
+                println!("mkdir succeeded: {}", output.message);
+                // Clean up - delete the created directory
+                let output_dir = crate::utils::paths::get_output_dir().unwrap();
+                let created_path = output_dir.join("test_mkdir_relative_subdir");
+                if created_path.exists() {
+                    fs::remove_dir(&created_path).ok();
+                }
+            }
+            Err(e) => {
+                panic!(
+                    "mkdir for relative path should succeed in output dir, but got error: {:?}",
+                    e
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_path_denies_protected() {
+        let tool = FileOpsTool::new();
+
+        // Test that protected paths are denied
+        let protected_paths = vec![
+            "~/.ssh/test",
+            "~/.gnupg/test",
+            "~/.aws/test",
+        ];
+
+        for path in protected_paths {
+            let result = tool.check_path(Path::new(path));
+            assert!(
+                result.is_err(),
+                "Path {} should be denied but was allowed",
+                path
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_path_allows_output_subdir() {
+        let tool = FileOpsTool::new();
+
+        // Test that output subdirectories are allowed
+        // Relative paths like "chapter-1" should resolve to ~/.config/aether/output/chapter-1
+        let result = tool.check_path(Path::new("chapter-1"));
+        assert!(
+            result.is_ok(),
+            "Relative path 'chapter-1' should be allowed in output directory"
+        );
+
+        if let Ok(canonical) = result {
+            let output_dir = crate::utils::paths::get_output_dir().unwrap();
+            assert!(
+                canonical.starts_with(&output_dir),
+                "Resolved path should be under output directory"
+            );
+        }
     }
 }

@@ -361,6 +361,14 @@ final class UnifiedConversationViewModel {
         self.displayState = messages.isEmpty ? .empty : .conversation
     }
 
+    /// Clear current topic (for new session before first message)
+    func clearTopic() {
+        self.topic = nil
+        self.messages = []
+        self.errorMessage = nil
+        self.displayState = .empty
+    }
+
     func addUserMessage(_ content: String) {
         guard let topicId = topic?.id else { return }
 
@@ -407,14 +415,18 @@ final class UnifiedConversationViewModel {
     func addAssistantMessage(_ content: String) {
         guard let topicId = topic?.id else { return }
 
+        // Extract and save attachments BEFORE stripping the block
+        // Strip the [GENERATED_FILES] block from content for display
+        let displayContent = stripGeneratedFilesBlock(from: content)
+
         if let message = ConversationStore.shared.addMessage(
             topicId: topicId,
             role: .assistant,
-            content: content
+            content: displayContent
         ) {
             messages.append(message)
 
-            // Extract and save image URLs from assistant response
+            // Extract and save image URLs from original content (with file block)
             extractAndSaveImageURLs(from: content, messageId: message.id)
         }
         isLoading = false
@@ -446,29 +458,60 @@ final class UnifiedConversationViewModel {
     func finishStreamingMessage() {
         if let messageId = streamingMessageId,
            let index = messages.firstIndex(where: { $0.id == messageId }) {
+            // Extract and save attachments BEFORE stripping the block
+            extractAndSaveImageURLs(from: streamingText, messageId: messageId)
+
+            // Strip the [GENERATED_FILES] block from content for display
+            let displayContent = stripGeneratedFilesBlock(from: streamingText)
+
             // Update the message content in the array ONLY when streaming finishes
             // This triggers a single re-render with the final content
-            messages[index].content = streamingText
+            messages[index].content = displayContent
 
             // Persist to store
             ConversationStore.shared.updateMessageContent(
                 messageId: messageId,
-                content: streamingText
+                content: displayContent
             )
-
-            // Extract and save image URLs from assistant response
-            extractAndSaveImageURLs(from: streamingText, messageId: messageId)
         }
         streamingMessageId = nil
         streamingText = ""
         isLoading = false
     }
 
-    /// Extract image URLs from content and save as attachments
+    /// Strip [GENERATED_FILES] block from content for display
+    /// - Parameter content: The full content with potential file block
+    /// - Returns: Content without the generated files metadata block
+    private func stripGeneratedFilesBlock(from content: String) -> String {
+        // Remove [GENERATED_FILES]...[/GENERATED_FILES] block from content
+        guard let startRange = content.range(of: "\n\n[GENERATED_FILES]"),
+              let endRange = content.range(of: "[/GENERATED_FILES]") else {
+            // Try without leading newlines
+            guard let startRange = content.range(of: "[GENERATED_FILES]"),
+                  let endRange = content.range(of: "[/GENERATED_FILES]") else {
+                return content
+            }
+            // Remove the block
+            var result = content
+            result.removeSubrange(startRange.lowerBound..<endRange.upperBound)
+            return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Remove the block including leading newlines
+        var result = content
+        result.removeSubrange(startRange.lowerBound..<endRange.upperBound)
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Extract image URLs and generated files from content and save as attachments
     /// - Parameters:
     ///   - content: The message content to parse
     ///   - messageId: The message ID to link attachments to
     private func extractAndSaveImageURLs(from content: String, messageId: String) {
+        // First, extract generated files from [GENERATED_FILES] block
+        let generatedFiles = extractGeneratedFiles(from: content)
+
+        // Then parse content for image URLs
         let segments = ContentParser.parse(content)
         var imageURLs: [String] = []
 
@@ -478,10 +521,18 @@ final class UnifiedConversationViewModel {
             }
         }
 
-        guard !imageURLs.isEmpty else { return }
+        // Combine: generated files + inline image URLs (deduplicate)
+        var allURLs = generatedFiles
+        for url in imageURLs {
+            if !allURLs.contains(url) {
+                allURLs.append(url)
+            }
+        }
 
-        // Save each image URL as a remote attachment
-        for urlString in imageURLs {
+        guard !allURLs.isEmpty else { return }
+
+        // Save each URL as an attachment (local file or remote URL)
+        for urlString in allURLs {
             guard let url = URL(string: urlString) else { continue }
 
             // Determine if it's a local file (from output directory) or remote URL
@@ -527,7 +578,28 @@ final class UnifiedConversationViewModel {
             }
         }
 
-        print("[UnifiedViewModel] Extracted \(imageURLs.count) image URLs from assistant response")
+        print("[UnifiedViewModel] Extracted \(allURLs.count) URLs from assistant response (images: \(imageURLs.count), generated files: \(generatedFiles.count))")
+    }
+
+    /// Extract file URLs from [GENERATED_FILES] block in response
+    /// - Parameter content: The full response content
+    /// - Returns: Array of file URL strings
+    private func extractGeneratedFiles(from content: String) -> [String] {
+        // Look for [GENERATED_FILES]...[/GENERATED_FILES] block
+        guard let startRange = content.range(of: "[GENERATED_FILES]"),
+              let endRange = content.range(of: "[/GENERATED_FILES]"),
+              startRange.upperBound < endRange.lowerBound else {
+            return []
+        }
+
+        let filesBlock = String(content[startRange.upperBound..<endRange.lowerBound])
+        let fileURLs = filesBlock
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        print("[UnifiedViewModel] Found \(fileURLs.count) generated files in response")
+        return fileURLs
     }
 
     func setLoading(_ loading: Bool) {
@@ -593,11 +665,13 @@ final class UnifiedConversationViewModel {
 
     /// Update tool call status
     func setToolCallStarted(_ toolName: String) {
+        print("[UnifiedViewModel] setToolCallStarted: \(toolName)")
         currentToolCall = toolName
         // Update current step status to running
         if currentStepIndex < planSteps.count {
             planSteps[currentStepIndex].status = .running
         }
+        print("[UnifiedViewModel] currentToolCall is now: \(currentToolCall ?? "nil")")
     }
 
     /// Mark tool call as completed

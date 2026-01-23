@@ -15,6 +15,7 @@ use crate::config::RoutingRuleConfig;
 use crate::intent::{AgentModePrompt, ToolDescription};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
 use crate::skills::SkillsRegistry;
+use crate::rig_tools::file_ops::{clear_written_files, take_written_files};
 use crate::utils::paths::get_skills_dir;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -350,6 +351,9 @@ fn execute_with_agent_manager(
     app_context: &Option<String>,
     window_title: &Option<String>,
 ) {
+    // Clear any previously tracked written files for this session
+    clear_written_files();
+
     // Create manager with shared ToolServerHandle (all tools persist across calls)
     let manager =
         RigAgentManager::with_shared_handle(config.clone(), tool_server_handle, registered_tools);
@@ -357,6 +361,9 @@ fn execute_with_agent_manager(
     // Notify UI that we're processing with tools
     // This provides feedback when using skills/slash commands that may invoke tools
     handler.on_tool_start("processing".to_string());
+
+    // Stream initial progress to show the skill is being executed
+    handler.on_stream_chunk("\n**[开始]** 正在执行任务...\n".to_string());
 
     // Get or create conversation history for this topic
     let topic_key = topic_id
@@ -397,6 +404,29 @@ fn execute_with_agent_manager(
             // Notify UI that tool processing completed
             handler.on_tool_result("processing".to_string(), "completed".to_string());
 
+            // Collect files written during tool execution
+            let written_files = take_written_files();
+            let final_content = if written_files.is_empty() {
+                response.content.clone()
+            } else {
+                // Append file markers that Swift can parse
+                // Format: \n\n[GENERATED_FILES]\nfile:///path/to/file1\nfile:///path/to/file2\n[/GENERATED_FILES]
+                let file_urls: Vec<String> = written_files
+                    .iter()
+                    .map(|f| format!("file://{}", f.path.display()))
+                    .collect();
+                info!(
+                    file_count = written_files.len(),
+                    files = ?file_urls,
+                    "Appending generated files to response"
+                );
+                format!(
+                    "{}\n\n[GENERATED_FILES]\n{}\n[/GENERATED_FILES]",
+                    response.content,
+                    file_urls.join("\n")
+                )
+            };
+
             // Store memory if enabled
             if memory_config.enabled {
                 if let Some(ref db_path) = memory_path {
@@ -426,7 +456,7 @@ fn execute_with_agent_manager(
             }
 
             // If tokio::select! returned the result branch, the operation completed successfully
-            handler.on_complete(response.content);
+            handler.on_complete(final_content);
         }
         Err(e) => {
             // Notify UI that tool processing failed
@@ -671,7 +701,7 @@ fn process_with_agent_loop(
     _conversation_histories: &Arc<
         std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
     >,
-    _topic_id: &Option<String>,
+    topic_id: &Option<String>,
     attachments: Option<&[crate::core::MediaAttachment]>,
     op_token: &CancellationToken,
     handler: &Arc<dyn crate::ffi::AetherEventHandler>,
@@ -682,6 +712,25 @@ fn process_with_agent_loop(
     routing_rules: &[RoutingRuleConfig],
     generation_registry: &Arc<std::sync::RwLock<crate::generation::GenerationProviderRegistry>>,
 ) {
+    // ================================================================
+    // Step 0: Set up working directory for this session/topic
+    // ================================================================
+    // If topic_id is provided, create and use a topic-specific output directory
+    // This organizes outputs by conversation/session for better file management
+    if let Some(tid) = topic_id {
+        if let Ok(output_dir) = crate::utils::paths::get_output_dir() {
+            let topic_dir = output_dir.join(tid);
+            // Create topic directory if it doesn't exist
+            if std::fs::create_dir_all(&topic_dir).is_ok() {
+                info!(topic_dir = %topic_dir.display(), topic_id = %tid, "Setting session working directory");
+                crate::rig_tools::file_ops::set_working_dir(Some(topic_dir));
+            }
+        }
+    } else {
+        // Clear any previous working directory for single-turn mode
+        crate::rig_tools::file_ops::set_working_dir(None);
+    }
+
     // ================================================================
     // Step 1: Build IntentRouter with dynamic command sources
     // ================================================================
@@ -1036,6 +1085,9 @@ fn run_agent_loop(
         return;
     }
 
+    // Clear any previously tracked written files for this session
+    clear_written_files();
+
     // Build input with attachment content if present
     let full_input = if let Some(attachment_text) = extract_attachment_text(attachments) {
         info!(
@@ -1148,6 +1200,28 @@ fn run_agent_loop(
         LoopResult::Completed { summary, steps, .. } => {
             info!(steps = steps, "Agent Loop completed");
 
+            // Collect files written during tool execution
+            let written_files = take_written_files();
+            let final_summary = if written_files.is_empty() {
+                summary.clone()
+            } else {
+                // Append file markers that Swift can parse
+                let file_urls: Vec<String> = written_files
+                    .iter()
+                    .map(|f| format!("file://{}", f.path.display()))
+                    .collect();
+                info!(
+                    file_count = written_files.len(),
+                    files = ?file_urls,
+                    "Appending generated files to agent loop response"
+                );
+                format!(
+                    "{}\n\n[GENERATED_FILES]\n{}\n[/GENERATED_FILES]",
+                    summary,
+                    file_urls.join("\n")
+                )
+            };
+
             // Store memory if enabled
             if memory_config.enabled {
                 if let Some(ref db_path) = memory_path {
@@ -1170,7 +1244,7 @@ fn run_agent_loop(
                 }
             }
 
-            handler.on_complete(summary);
+            handler.on_complete(final_summary);
         }
 
         LoopResult::Failed { reason, steps } => {

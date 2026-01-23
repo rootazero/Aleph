@@ -104,24 +104,21 @@ final class MultiTurnCoordinator {
 
     /// Start a new multi-turn session
     private func start() {
-        print("[MultiTurnCoordinator] Starting new session")
+        print("[MultiTurnCoordinator] Starting new session (lazy topic creation)")
         isActive = true
         _multiTurnActiveState = true  // Sync global state for FFI callbacks
 
-        // Create new topic
-        currentTopic = ConversationStore.shared.createTopic()
-        guard let topic = currentTopic else {
-            print("[MultiTurnCoordinator] Failed to create topic")
-            return
-        }
+        // Don't create topic yet - wait until first message is sent
+        // This avoids creating empty "new conversation" topics when user just opens and closes the window
+        currentTopic = nil
 
-        // Reset and configure unified window
+        // Reset and configure unified window for new session
         unifiedWindow.viewModel.reset()
-        unifiedWindow.viewModel.loadTopic(topic)
+        unifiedWindow.viewModel.clearTopic()  // Clear any previous topic
         unifiedWindow.updateTurnCount(0)
         unifiedWindow.showPositioned()
 
-        print("[MultiTurnCoordinator] Session started, topic: \(topic.id)")
+        print("[MultiTurnCoordinator] Session window shown (topic will be created on first message)")
     }
 
     /// Exit multi-turn mode
@@ -133,6 +130,15 @@ final class MultiTurnCoordinator {
         // Cancel any ongoing typewriter output
         typewriterTask?.cancel()
         typewriterTask = nil
+
+        // Clean up empty topics (topics with no messages)
+        if let topic = currentTopic {
+            let messageCount = ConversationStore.shared.getMessageCount(topicId: topic.id)
+            if messageCount == 0 {
+                print("[MultiTurnCoordinator] Deleting empty topic: \(topic.id)")
+                ConversationStore.shared.deleteTopic(id: topic.id)
+            }
+        }
 
         unifiedWindow.hide()
         currentTopic = nil
@@ -158,9 +164,25 @@ final class MultiTurnCoordinator {
     ///   - text: User input text
     ///   - attachments: Pending attachments from the input area
     private func handleInput(_ text: String, attachments: [PendingAttachment]) {
-        guard let topic = currentTopic, core != nil else {
-            print("[MultiTurnCoordinator] No active topic or core")
+        guard core != nil else {
+            print("[MultiTurnCoordinator] No core available")
             return
+        }
+
+        // Lazy topic creation: create topic on first message
+        let topic: Topic
+        if let existingTopic = currentTopic {
+            topic = existingTopic
+        } else {
+            // Create new topic now (first message in session)
+            guard let newTopic = ConversationStore.shared.createTopic() else {
+                print("[MultiTurnCoordinator] Failed to create topic")
+                return
+            }
+            currentTopic = newTopic
+            topic = newTopic
+            unifiedWindow.viewModel.loadTopic(topic)
+            print("[MultiTurnCoordinator] Created topic on first message: \(topic.id)")
         }
 
         print("[MultiTurnCoordinator] Processing input: \(text.prefix(50))... with \(attachments.count) attachment(s)")
@@ -465,9 +487,14 @@ final class MultiTurnCoordinator {
     /// Handle tool execution start
     /// Called by EventHandler.onToolStart() when a tool begins executing
     func handleToolStart(toolName: String) {
-        guard pendingTopic != nil else { return }
+        print("[MultiTurnCoordinator] handleToolStart called: \(toolName), pendingTopic: \(pendingTopic != nil)")
+        guard pendingTopic != nil else {
+            print("[MultiTurnCoordinator] ⚠️ handleToolStart ignored - no pending topic")
+            return
+        }
 
         DispatchQueue.main.async { [weak self] in
+            print("[MultiTurnCoordinator] setToolCallStarted: \(toolName)")
             self?.unifiedWindow.viewModel.setToolCallStarted(toolName)
         }
     }
