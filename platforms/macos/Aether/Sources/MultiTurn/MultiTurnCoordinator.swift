@@ -462,6 +462,32 @@ final class MultiTurnCoordinator {
         }
     }
 
+    /// Handle tool execution start
+    /// Called by EventHandler.onToolStart() when a tool begins executing
+    func handleToolStart(toolName: String) {
+        guard pendingTopic != nil else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.unifiedWindow.viewModel.setToolCallStarted(toolName)
+        }
+    }
+
+    /// Handle tool execution result
+    /// Called by EventHandler.onToolResult() when a tool completes
+    func handleToolResult(toolName: String, result: String) {
+        guard pendingTopic != nil else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            // Check if result indicates error
+            if result.hasPrefix("Error:") {
+                self.unifiedWindow.viewModel.setToolCallFailed()
+            } else {
+                self.unifiedWindow.viewModel.setToolCallCompleted()
+            }
+        }
+    }
+
     /// Check if processing is pending
     var isProcessingPending: Bool {
         pendingTopic != nil

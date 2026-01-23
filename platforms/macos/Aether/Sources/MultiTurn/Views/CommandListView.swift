@@ -131,3 +131,114 @@ struct TopicListView: View {
         }
     }
 }
+
+// MARK: - CommandRowView
+
+/// A single command row in the command list
+struct CommandRowView: View {
+    let command: CommandNode
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                Image(systemName: command.icon)
+                    .font(.system(size: 16))
+                    .frame(width: 24)
+                    .liquidGlassSecondaryText()
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("/\(command.key)")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
+
+                    Text(command.description)
+                        .font(.system(size: 11))
+                        .liquidGlassSecondaryText()
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                if command.hasChildren {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .liquidGlassSecondaryText()
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - TopicRowView
+
+/// A single topic row in the topic list with swipe actions
+struct TopicRowView: View {
+    let topic: Topic
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onDelete: () -> Void
+    let onRename: (String) -> Void
+
+    @State private var isEditing = false
+    @State private var editedTitle = ""
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 14))
+                    .liquidGlassSecondaryText()
+                    .frame(width: 24)
+
+                if isEditing {
+                    TextField("", text: $editedTitle, onCommit: {
+                        onRename(editedTitle)
+                        isEditing = false
+                    })
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .onExitCommand {
+                        isEditing = false
+                    }
+                } else {
+                    Text(topic.title)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Text(topic.updatedAt.formatted(.relative(presentation: .named)))
+                    .font(.system(size: 10))
+                    .liquidGlassSecondaryText()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                editedTitle = topic.title
+                isEditing = true
+            } label: {
+                Label(NSLocalizedString("topic.rename", comment: ""), systemImage: "pencil")
+            }
+
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label(NSLocalizedString("topic.delete", comment: ""), systemImage: "trash")
+            }
+        }
+    }
+}

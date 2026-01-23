@@ -29,16 +29,16 @@ struct MessageBubbleView: View {
             if isUser { Spacer(minLength: 40) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
-                // Stored attachments (user uploads)
-                if isUser && !storedAttachments.isEmpty {
-                    AttachmentGridView(attachments: storedAttachments)
-                }
-
                 // Rich message content (text + images from content)
                 RichMessageContentView(
                     content: message.content,
                     isUser: isUser
                 )
+
+                // Stored attachments (displayed below text for both user and AI)
+                if !storedAttachments.isEmpty {
+                    AttachmentGridView(attachments: storedAttachments, isUser: isUser)
+                }
 
                 // Copy button (on hover)
                 if isHovering {
@@ -78,7 +78,8 @@ struct MessageBubbleView: View {
 
 // MARK: - RichMessageContentView
 
-/// Displays message content with embedded images
+/// Displays message text content only
+/// Images/attachments are displayed separately below via AttachmentGridView
 struct RichMessageContentView: View {
     let content: String
     let isUser: Bool
@@ -88,29 +89,25 @@ struct RichMessageContentView: View {
         ContentParser.parse(content)
     }
 
-    var body: some View {
-        VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
-            ForEach(segments.indices, id: \.self) { index in
-                segmentView(for: segments[index])
+    /// Extract only text content (remove image URLs for clean display)
+    private var textOnlyContent: String {
+        segments.compactMap { segment -> String? in
+            if case .text(let text) = segment {
+                return text
             }
-        }
+            return nil
+        }.joined()
     }
 
-    @ViewBuilder
-    private func segmentView(for segment: ContentSegment) -> some View {
-        switch segment {
-        case .text(let text):
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(text)
-                    .font(.system(size: 13))
-                    .liquidGlassText()
-                    .textSelection(.enabled)
-                    .padding(12)
-                    .glassBubble(isUser: isUser)
-            }
-
-        case .image(let urlString):
-            ImageContentView(urlString: urlString)
+    var body: some View {
+        // Display only text, images shown in AttachmentGridView below
+        if !textOnlyContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text(textOnlyContent)
+                .font(.system(size: 13))
+                .liquidGlassText()
+                .textSelection(.enabled)
+                .padding(12)
+                .glassBubble(isUser: isUser)
         }
     }
 }

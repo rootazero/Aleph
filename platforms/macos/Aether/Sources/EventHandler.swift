@@ -122,9 +122,12 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Skip halo in multi-turn mode
-            guard !self.isInMultiTurnMode else {
-                print("[EventHandler] Skipping tool start state (multi-turn mode)")
+
+            // Forward to MultiTurnCoordinator in multi-turn mode
+            if self.isInMultiTurnMode {
+                if MultiTurnCoordinator.shared.isProcessingPending {
+                    MultiTurnCoordinator.shared.handleToolStart(toolName: toolName)
+                }
                 return
             }
 
@@ -144,9 +147,12 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Skip halo in multi-turn mode
-            guard !self.isInMultiTurnMode else {
-                print("[EventHandler] Skipping tool result state (multi-turn mode)")
+
+            // Forward to MultiTurnCoordinator in multi-turn mode
+            if self.isInMultiTurnMode {
+                if MultiTurnCoordinator.shared.isProcessingPending {
+                    MultiTurnCoordinator.shared.handleToolResult(toolName: toolName, result: result)
+                }
                 return
             }
 

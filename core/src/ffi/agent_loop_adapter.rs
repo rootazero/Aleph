@@ -92,8 +92,12 @@ impl LoopCallback for FfiLoopCallback {
     }
 
     async fn on_step_start(&self, step: usize) {
-        debug!(step = step, "AgentLoop step started");
-        // Could update UI with step progress indicator
+        info!(step = step, "AgentLoop step started");
+        // Notify UI about step progress (step is 0-indexed, display as 1-indexed)
+        if step > 0 {
+            // After first step, show iteration progress
+            self.stream_text(&format!("\n--- Step {} ---\n", step + 1)).await;
+        }
     }
 
     async fn on_thinking_start(&self, step: usize) {
@@ -124,8 +128,9 @@ impl LoopCallback for FfiLoopCallback {
 
         match action {
             Action::ToolCall { tool_name, .. } => {
-                // Optionally notify UI about tool execution
-                debug!(tool = %tool_name, "Executing tool");
+                // Notify UI about tool execution start
+                info!(tool = %tool_name, "Executing tool");
+                self.handler.on_tool_start(tool_name.clone());
             }
             Action::Completion { summary } => {
                 // Stream the completion summary as response
@@ -149,13 +154,35 @@ impl LoopCallback for FfiLoopCallback {
             "Action completed"
         );
 
-        // For tool results, we might want to include them in the response
-        if let ActionResult::ToolSuccess { output, duration_ms } = result {
-            debug!(
-                duration_ms = duration_ms,
-                output_size = output.to_string().len(),
-                "Tool execution successful"
-            );
+        // Notify UI about tool execution results
+        if let Action::ToolCall { tool_name, .. } = action {
+            match result {
+                ActionResult::ToolSuccess { output, duration_ms } => {
+                    info!(
+                        tool = %tool_name,
+                        duration_ms = duration_ms,
+                        output_size = output.to_string().len(),
+                        "Tool execution successful"
+                    );
+                    // Send tool result to UI (truncate for display)
+                    let output_str = output.to_string();
+                    let display_output = if output_str.len() > 500 {
+                        format!("{}...", &output_str[..500])
+                    } else {
+                        output_str
+                    };
+                    self.handler.on_tool_result(tool_name.clone(), display_output);
+                }
+                ActionResult::ToolError { error, .. } => {
+                    warn!(
+                        tool = %tool_name,
+                        error = %error,
+                        "Tool execution failed"
+                    );
+                    self.handler.on_tool_result(tool_name.clone(), format!("Error: {}", error));
+                }
+                _ => {}
+            }
         }
     }
 

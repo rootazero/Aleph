@@ -82,7 +82,7 @@ final class UnifiedConversationWindow: NSWindow {
         hasShadow = true
         alphaValue = 0  // Start hidden
 
-        collectionBehavior = [.canJoinAllSpaces, .stationary]
+        collectionBehavior = [.stationary]
         hidesOnDeactivate = false
         isMovableByWindowBackground = true
 

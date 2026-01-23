@@ -14,6 +14,7 @@ import AppKit
 /// Grid view displaying stored attachments for a message
 struct AttachmentGridView: View {
     let attachments: [StoredAttachment]
+    var isUser: Bool = false
 
     private let columns = [
         GridItem(.adaptive(minimum: 80, maximum: 120), spacing: 8)
@@ -21,13 +22,20 @@ struct AttachmentGridView: View {
 
     var body: some View {
         if !attachments.isEmpty {
-            LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(attachments) { attachment in
-                    AttachmentThumbnailView(attachment: attachment)
+            HStack {
+                if isUser { Spacer(minLength: 0) }
+
+                LazyVGrid(columns: columns, alignment: isUser ? .trailing : .leading, spacing: 8) {
+                    ForEach(attachments) { attachment in
+                        AttachmentThumbnailView(attachment: attachment)
+                    }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .frame(maxWidth: 320)  // Limit grid width
+
+                if !isUser { Spacer(minLength: 0) }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
         }
     }
 }

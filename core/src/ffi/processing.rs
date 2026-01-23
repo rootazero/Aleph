@@ -718,6 +718,7 @@ fn process_with_agent_loop(
                 input_for_memory,
                 app_context,
                 generation_config,
+                attachments,
             );
         }
 
@@ -766,6 +767,7 @@ fn process_with_agent_loop(
                         app_context,
                         window_title,
                         generation_config,
+                        attachments,
                     );
                 }
                 Ok(AnalysisResult::MultiStep {
@@ -820,6 +822,7 @@ fn process_with_agent_loop(
                         app_context,
                         window_title,
                         generation_config,
+                        attachments,
                     );
                 }
             }
@@ -843,7 +846,10 @@ fn handle_direct_route(
     input_for_memory: &str,
     app_context: &Option<String>,
     generation_config: &crate::config::GenerationConfig,
+    attachments: Option<&[crate::core::MediaAttachment]>,
 ) {
+    // Extract attachment text if present
+    let attachment_text = extract_attachment_text(attachments);
     let tool_descriptions = get_builtin_tool_descriptions(generation_config);
     let conversation_histories = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
     let topic_id = None;
@@ -887,10 +893,22 @@ fn handle_direct_route(
                 .with_generation_config(generation_config)
                 .generate();
 
-            let processed_input = format!(
-                "# Skill: {}\n\n{}\n\n---\n\n{}\n\n---\n\n用户请求: {}",
-                skill.display_name, skill.instructions, agent_prompt, skill.args
-            );
+            // Include attachment content if present
+            let processed_input = if let Some(ref att_text) = attachment_text {
+                info!(
+                    attachment_len = att_text.len(),
+                    "Including attachment text in skill context"
+                );
+                format!(
+                    "# Skill: {}\n\n{}\n\n---\n\n{}\n\n---\n\n用户请求: {}\n\n---\n\n{}",
+                    skill.display_name, skill.instructions, agent_prompt, skill.args, att_text
+                )
+            } else {
+                format!(
+                    "# Skill: {}\n\n{}\n\n---\n\n{}\n\n---\n\n用户请求: {}",
+                    skill.display_name, skill.instructions, agent_prompt, skill.args
+                )
+            };
 
             execute_with_agent_manager(
                 runtime,
@@ -1000,12 +1018,24 @@ fn run_agent_loop(
     app_context: &Option<String>,
     window_title: &Option<String>,
     generation_config: &crate::config::GenerationConfig,
+    attachments: Option<&[crate::core::MediaAttachment]>,
 ) {
     // Check if already cancelled
     if op_token.is_cancelled() {
         handler.on_error("Operation cancelled".to_string());
         return;
     }
+
+    // Build input with attachment content if present
+    let full_input = if let Some(attachment_text) = extract_attachment_text(attachments) {
+        info!(
+            attachment_len = attachment_text.len(),
+            "Including attachment text in agent loop context"
+        );
+        format!("{}\n\n{}", input, attachment_text)
+    } else {
+        input.to_string()
+    };
 
     // Get available tools for the loop
     let tool_descriptions = get_builtin_tool_descriptions(generation_config);
@@ -1094,7 +1124,7 @@ fn run_agent_loop(
 
         agent_loop
             .run(
-                input.to_string(),
+                full_input.clone(),
                 request_context,
                 tools,
                 &callback,

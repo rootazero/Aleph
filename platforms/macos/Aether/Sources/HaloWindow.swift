@@ -121,7 +121,7 @@ final class HaloWindow: NSWindow {
         case .planProgress:
             size = NSSize(width: 380, height: 420)  // Plan progress needs most space
         case .conversationInput:
-            size = NSSize(width: 0, height: 0)  // Handled by MultiTurnInputWindow
+            size = NSSize(width: 0, height: 0)  // Handled by UnifiedConversationWindow
         case .taskGraphConfirmation:
             size = NSSize(width: 400, height: 450)  // Task graph confirmation with DAG view
         case .taskGraphProgress:
