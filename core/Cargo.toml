@@ -83,9 +83,9 @@ schemars = "0.8"
 scraper = "0.22"
 # For URL parsing and validation
 url = "2.5"
-# Rig framework
-rig-core = "0.28"
-rig-sqlite = "0.1.31"
+# Rig framework - REMOVED (migrated to self-implemented tools)
+# rig-core = "0.28"
+# rig-sqlite = "0.1.31"
 # LRU cache for intent caching
 lru = "0.12"
 # For tar.gz extraction (runtime manager - cross-platform)
