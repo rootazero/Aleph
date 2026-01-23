@@ -15,9 +15,8 @@
 //! 3. System returns the full JSON Schema
 //! 4. LLM can then call the tool with correct parameters
 
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::{schema_for, JsonSchema};
+use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -26,6 +25,8 @@ use tracing::debug;
 
 use super::error::ToolError;
 use crate::dispatcher::{ToolIndexEntry, ToolRegistry};
+use crate::error::Result;
+use crate::tools::AetherTool;
 
 // ============================================================================
 // ListToolsTool
@@ -84,8 +85,8 @@ impl ListToolsTool {
         Self { registry }
     }
 
-    /// Execute the list operation
-    pub async fn call(&self, args: ListToolsArgs) -> Result<ListToolsOutput, ToolError> {
+    /// Execute the list operation (internal implementation)
+    async fn call_impl(&self, args: ListToolsArgs) -> std::result::Result<ListToolsOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
         let category_filter = args.category.as_deref().unwrap_or("all");
@@ -130,15 +131,33 @@ impl Clone for ListToolsTool {
     }
 }
 
-impl Tool for ListToolsTool {
+/// Implementation of AetherTool trait for ListToolsTool
+#[async_trait]
+impl AetherTool for ListToolsTool {
+    const NAME: &'static str = "list_tools";
+    const DESCRIPTION: &'static str = "List available tools by category. Use this to discover what tools are available before calling get_tool_schema for specific tools.";
+
+    type Args = ListToolsArgs;
+    type Output = ListToolsOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for ListToolsTool {
     const NAME: &'static str = "list_tools";
 
     type Error = ToolError;
     type Args = ListToolsArgs;
     type Output = ListToolsOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let schema = schema_for!(ListToolsArgs);
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        let schema = schemars::schema_for!(ListToolsArgs);
         let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
             json!({
                 "type": "object",
@@ -153,15 +172,15 @@ impl Tool for ListToolsTool {
             })
         });
 
-        ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters,
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        ListToolsTool::call(self, args).await
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }
 
@@ -241,8 +260,8 @@ impl GetToolSchemaTool {
         Self { registry }
     }
 
-    /// Execute the schema lookup
-    pub async fn call(&self, args: GetToolSchemaArgs) -> Result<GetToolSchemaOutput, ToolError> {
+    /// Execute the schema lookup (internal implementation)
+    async fn call_impl(&self, args: GetToolSchemaArgs) -> std::result::Result<GetToolSchemaOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
         notify_tool_start(Self::NAME, &format!("获取工具定义: {}", args.tool_name));
@@ -318,15 +337,33 @@ impl Clone for GetToolSchemaTool {
     }
 }
 
-impl Tool for GetToolSchemaTool {
+/// Implementation of AetherTool trait for GetToolSchemaTool
+#[async_trait]
+impl AetherTool for GetToolSchemaTool {
+    const NAME: &'static str = "get_tool_schema";
+    const DESCRIPTION: &'static str = "Get the full JSON Schema definition for a specific tool. Use this before calling a tool that's not in your full-schema set.";
+
+    type Args = GetToolSchemaArgs;
+    type Output = GetToolSchemaOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for GetToolSchemaTool {
     const NAME: &'static str = "get_tool_schema";
 
     type Error = ToolError;
     type Args = GetToolSchemaArgs;
     type Output = GetToolSchemaOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let schema = schema_for!(GetToolSchemaArgs);
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        let schema = schemars::schema_for!(GetToolSchemaArgs);
         let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
             json!({
                 "type": "object",
@@ -340,15 +377,15 @@ impl Tool for GetToolSchemaTool {
             })
         });
 
-        ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters,
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        GetToolSchemaTool::call(self, args).await
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }
 

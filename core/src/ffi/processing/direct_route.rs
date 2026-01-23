@@ -7,14 +7,14 @@ use crate::ffi::AetherEventHandler;
 use crate::ffi::prompt_helpers::extract_attachment_text;
 use crate::ffi::tool_discovery::get_builtin_tool_descriptions;
 use crate::generation::GenerationProviderRegistry;
-use crate::intent::{AgentModePrompt, DirectMode};
+use crate::intent::{AgentModePrompt, DirectMode, ThinkingContext};
 use rig::completion::Message;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::agent_manager::execute_with_agent_manager;
+use super::agent_loop::run_agent_loop;
 use super::skill::run_skill_with_agent_loop;
 
 /// Handle direct route cases (slash commands, skills, MCP, custom)
@@ -55,15 +55,21 @@ pub fn handle_direct_route(
                 agent_prompt, tool.tool_id, tool.args
             );
 
-            execute_with_agent_manager(
+            // Create a default ThinkingContext for direct execution
+            let ctx = ThinkingContext {
+                category_hint: None,
+                bias_execute: true,
+                hint_layer: None,
+                latency_us: 0,
+            };
+
+            run_agent_loop(
                 runtime,
                 &processed_input,
+                ctx,
                 config,
                 tool_server_handle,
                 registered_tools,
-                &conversation_histories,
-                &topic_id,
-                None,
                 op_token,
                 handler,
                 memory_config,
@@ -71,6 +77,11 @@ pub fn handle_direct_route(
                 input_for_memory,
                 app_context,
                 &None,
+                generation_config,
+                attachments,
+                &conversation_histories,
+                &topic_id,
+                generation_registry,
             );
         }
 
@@ -117,15 +128,21 @@ pub fn handle_direct_route(
 
             let processed_input = format!("{}\n\n---\n\n{}", agent_prompt, tool_hint);
 
-            execute_with_agent_manager(
+            // Create a default ThinkingContext for direct execution
+            let ctx = ThinkingContext {
+                category_hint: None,
+                bias_execute: true,
+                hint_layer: None,
+                latency_us: 0,
+            };
+
+            run_agent_loop(
                 runtime,
                 &processed_input,
+                ctx,
                 config,
                 tool_server_handle,
                 registered_tools,
-                &conversation_histories,
-                &topic_id,
-                None,
                 op_token,
                 handler,
                 memory_config,
@@ -133,6 +150,11 @@ pub fn handle_direct_route(
                 input_for_memory,
                 app_context,
                 &None,
+                generation_config,
+                attachments,
+                &conversation_histories,
+                &topic_id,
+                generation_registry,
             );
         }
 
@@ -147,15 +169,21 @@ pub fn handle_direct_route(
 
             let processed_input = format!("{}\n\n---\n\n用户输入: {}", prompt, input);
 
-            execute_with_agent_manager(
+            // Create a default ThinkingContext for direct execution
+            let ctx = ThinkingContext {
+                category_hint: None,
+                bias_execute: true,
+                hint_layer: None,
+                latency_us: 0,
+            };
+
+            run_agent_loop(
                 runtime,
                 &processed_input,
+                ctx,
                 config,
                 tool_server_handle,
                 registered_tools,
-                &conversation_histories,
-                &topic_id,
-                None,
                 op_token,
                 handler,
                 memory_config,
@@ -163,6 +191,11 @@ pub fn handle_direct_route(
                 input_for_memory,
                 app_context,
                 &None,
+                generation_config,
+                attachments,
+                &conversation_histories,
+                &topic_id,
+                generation_registry,
             );
         }
     }

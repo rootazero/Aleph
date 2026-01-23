@@ -97,6 +97,7 @@ pub mod skills; // NEW: Claude Agent Skills support
 pub mod suggestion; // NEW: AI response suggestion parsing
 pub mod thinker; // NEW: LLM decision-making layer for Agent Loop
 mod title_generator; // Title generation for conversation topics
+pub mod tools; // NEW: Unified tool system (replacing rig-core Tool trait)
 pub mod typo_correction; // NEW: Quick typo correction with double-space trigger
 pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module
 pub mod utils; // NEW: Capability executor for enriching payloads
@@ -473,25 +474,29 @@ pub use crate::compressor::{
     RuleBasedStrategy,
 };
 
-// Agent system exports (unified: rig-core agent + sub-agent delegation)
+// Tool system exports (unified tool traits replacing rig-core)
+pub use crate::tools::{AetherTool, AetherToolDyn, AetherToolServer, AetherToolServerHandle};
+
+// Agent system exports (unified: agent loop + sub-agent delegation)
 pub use crate::agents::{
     // Sub-agent delegation
     builtin_agents,
-    // Rig-core AI agent (re-exported from agents::rig)
+    // Agent configuration (re-exported from agents::rig)
     AgentConfig,
     AgentDef,
     AgentMode,
     AgentRegistry,
-    AgentResponse,
     BuiltinToolConfig,
     ChatMessage,
     ConversationHistory,
     MessageRole,
     RigAgentConfig,
-    RigAgentManager,
     TaskTool,
     TaskToolError,
     TaskToolResult,
+    // Tool server utilities
+    create_builtin_tool_server,
+    create_builtin_tools_list,
 };
 // Note: ToolCallInfo/ToolCallResult from agents::rig::types are internal;
 // use crate::event::ToolCallResult for event system

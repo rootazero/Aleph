@@ -1,15 +1,15 @@
 //! Web fetch tool for retrieving and extracting content from web pages
 //!
-//! Implements rig's Tool trait for AI agent integration.
+//! Implements AetherTool trait for AI agent integration.
 
+use async_trait::async_trait;
 use crate::config::WebFetchPolicy;
+use crate::error::Result;
+use crate::tools::AetherTool;
 use reqwest::Client;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::{schema_for, JsonSchema};
+use schemars::JsonSchema;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tracing::{debug, info};
 
 use super::error::ToolError;
@@ -92,8 +92,8 @@ impl WebFetchTool {
         }
     }
 
-    /// Fetch and extract content from a URL
-    pub async fn call(&self, args: WebFetchArgs) -> Result<WebFetchResult, ToolError> {
+    /// Fetch and extract content from a URL (internal implementation)
+    async fn call_impl(&self, args: WebFetchArgs) -> std::result::Result<WebFetchResult, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
         // Notify tool start
@@ -265,49 +265,51 @@ impl Clone for WebFetchTool {
     }
 }
 
-/// Implementation of rig's Tool trait for WebFetchTool
-///
-/// This allows WebFetchTool to be used with rig agents via the `.tool()` method.
-impl Tool for WebFetchTool {
+/// Implementation of AetherTool trait for WebFetchTool
+#[async_trait]
+impl AetherTool for WebFetchTool {
+    const NAME: &'static str = "web_fetch";
+    const DESCRIPTION: &'static str = "Fetch and extract text content from a web page URL.";
+
+    type Args = WebFetchArgs;
+    type Output = WebFetchResult;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for WebFetchTool {
     const NAME: &'static str = "web_fetch";
 
     type Error = ToolError;
     type Args = WebFetchArgs;
     type Output = WebFetchResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        // Use schemars to generate JSON Schema for the arguments
-        let schema = schema_for!(WebFetchArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
-            // Fallback to manually defined schema if generation fails
-            json!({
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL to fetch (must start with http:// or https://)"
-                    }
-                },
-                "required": ["url"]
-            })
-        });
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        let schema = schemars::schema_for!(WebFetchArgs);
+        let parameters = serde_json::to_value(&schema).unwrap_or_default();
 
-        ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters,
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        // Delegate to the existing call implementation
-        WebFetchTool::call(self, args).await
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::AetherTool;
 
     #[test]
     fn test_web_fetch_args() {
@@ -331,7 +333,8 @@ mod tests {
             url: "https://example.com".to_string(),
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_ok(), "Expected success, got: {:?}", result);
 
         let result = result.unwrap();
@@ -351,16 +354,14 @@ mod tests {
             url: "not-a-valid-url".to_string(),
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax to avoid ambiguity
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_err(), "Expected error for invalid URL");
 
+        // Error is now AetherError
         let err = result.unwrap_err();
-        match err {
-            ToolError::InvalidArgs(msg) => {
-                assert!(msg.contains("Invalid URL format"));
-            }
-            _ => panic!("Expected InvalidArgs error, got: {:?}", err),
-        }
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("Invalid URL format"), "Expected 'Invalid URL format' error, got: {}", err_msg);
     }
 
     #[test]

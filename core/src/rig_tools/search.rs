@@ -1,17 +1,17 @@
 //! Web search tool with Tavily API integration
 //!
-//! Implements rig's Tool trait for AI agent integration.
+//! Implements AetherTool trait for AI agent integration.
 
+use async_trait::async_trait;
 use reqwest::Client;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::{schema_for, JsonSchema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::env;
 use tracing::{debug, info, warn};
 
 use super::error::ToolError;
+use crate::error::Result;
+use crate::tools::AetherTool;
 
 /// Arguments for search tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -102,15 +102,8 @@ impl SearchTool {
         }
     }
 
-    /// Execute a web search using Tavily API
-    ///
-    /// # Arguments
-    /// * `args` - Search arguments including query and limit
-    ///
-    /// # Returns
-    /// * `Ok(SearchOutput)` - Search results with original query
-    /// * `Err(ToolError)` - If API key missing or request fails
-    pub async fn call(&self, args: SearchArgs) -> Result<SearchOutput, ToolError> {
+    /// Execute a web search using Tavily API (internal implementation)
+    async fn call_impl(&self, args: SearchArgs) -> std::result::Result<SearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
         // Notify tool start
@@ -200,48 +193,55 @@ impl Clone for SearchTool {
     }
 }
 
+/// Implementation of AetherTool trait for SearchTool
+///
+/// This allows SearchTool to be used with Aether's unified tool system.
+#[async_trait]
+impl AetherTool for SearchTool {
+    const NAME: &'static str = "search";
+    const DESCRIPTION: &'static str =
+        "Search the internet for current information. Use for questions requiring up-to-date data.";
+
+    type Args = SearchArgs;
+    type Output = SearchOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Delegate to the internal implementation, converting ToolError to AetherError
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
 /// Implementation of rig's Tool trait for SearchTool
 ///
-/// This allows SearchTool to be used with rig agents via the `.tool()` method.
-impl Tool for SearchTool {
+/// Required for rig::tool::server::ToolServer hot-reload support.
+/// Will be removed when rig-core dependency is fully removed.
+impl rig::tool::Tool for SearchTool {
     const NAME: &'static str = "search";
 
     type Error = ToolError;
     type Args = SearchArgs;
     type Output = SearchOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        // Use schemars to generate JSON Schema for the arguments
-        let schema = schema_for!(SearchArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
-            // Fallback to manually defined schema if generation fails
-            json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max results (default 5)",
-                        "default": 5
-                    }
-                },
-                "required": ["query"]
-            })
-        });
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        let schema = schemars::schema_for!(SearchArgs);
+        let parameters = serde_json::to_value(&schema).unwrap_or_default();
 
-        ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters,
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        // Delegate to the existing call implementation
-        SearchTool::call(self, args).await
+    async fn call(
+        &self,
+        args: Self::Args,
+    ) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }
 
@@ -286,14 +286,18 @@ mod tests {
             limit: 5,
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax to avoid ambiguity with blanket impl
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        if let Err(ToolError::InvalidArgs(msg)) = result {
-            assert!(msg.contains("TAVILY_API_KEY"));
-        } else {
-            panic!("Expected InvalidArgs error");
-        }
+        // Error is now AetherError (converted from ToolError)
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("TAVILY_API_KEY"),
+            "Error message should contain 'TAVILY_API_KEY': {}",
+            err_msg
+        );
 
         // Restore original key if it existed
         if let Some(key) = original_key {

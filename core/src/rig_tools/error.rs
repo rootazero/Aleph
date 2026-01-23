@@ -30,3 +30,15 @@ impl fmt::Display for ToolError {
 }
 
 impl std::error::Error for ToolError {}
+
+impl From<ToolError> for crate::error::AetherError {
+    fn from(e: ToolError) -> Self {
+        match e {
+            ToolError::Network(msg) => crate::error::AetherError::network(msg),
+            ToolError::InvalidArgs(msg) => crate::error::AetherError::tool(msg),
+            ToolError::Execution(msg) => crate::error::AetherError::tool(msg),
+            ToolError::ExecutionFailed(msg) => crate::error::AetherError::tool(msg),
+            ToolError::NotFound(msg) => crate::error::AetherError::NotFound(msg),
+        }
+    }
+}

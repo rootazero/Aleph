@@ -1,13 +1,14 @@
-//! FileOpsTool implementation with rig Tool trait
+//! FileOpsTool implementation with AetherTool trait
 
 use std::path::Path;
 
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use async_trait::async_trait;
 use serde_json::json;
 use tracing::info;
 
+use crate::error::Result;
 use crate::rig_tools::error::ToolError;
+use crate::tools::AetherTool;
 use super::batch::{execute_batch_move, execute_organize};
 use super::ops::{
     execute_copy, execute_delete, execute_list, execute_mkdir, execute_move, execute_read,
@@ -63,12 +64,12 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
     }
 
     /// Check if path is allowed (exposed for testing)
-    pub fn check_path(&self, path: &Path) -> Result<std::path::PathBuf, ToolError> {
+    pub fn check_path(&self, path: &Path) -> std::result::Result<std::path::PathBuf, ToolError> {
         check_and_resolve_path(path, &self.denied_paths)
     }
 
-    /// Execute file operation based on args
-    pub async fn call(&self, args: FileOpsArgs) -> Result<FileOpsOutput, ToolError> {
+    /// Execute file operation based on args (internal implementation)
+    async fn call_impl(&self, args: FileOpsArgs) -> std::result::Result<FileOpsOutput, ToolError> {
         use crate::rig_tools::{notify_tool_result, notify_tool_start};
 
         // Format operation description for notification
@@ -186,15 +187,43 @@ impl Clone for FileOpsTool {
 }
 
 /// Implementation of rig's Tool trait for FileOpsTool
-impl Tool for FileOpsTool {
+/// Implementation of AetherTool trait for FileOpsTool
+#[async_trait]
+impl AetherTool for FileOpsTool {
+    const NAME: &'static str = "file_ops";
+    const DESCRIPTION: &'static str = r#"Perform file system operations. Operations:
+- list: List directory contents with file types and sizes
+- read: Read file content (text files only)
+- write: Write content to file
+- move: Move/rename single file or directory
+- copy: Copy single file or directory
+- delete: Delete file or directory
+- mkdir: Create directory
+- search: Search files by glob pattern
+- batch_move: Move ALL files matching a pattern to destination
+- organize: Auto-organize files by type into categorized folders"#;
+
+    type Args = FileOpsArgs;
+    type Output = FileOpsOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for FileOpsTool {
     const NAME: &'static str = "file_ops";
 
     type Error = ToolError;
     type Args = FileOpsArgs;
     type Output = FileOpsOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters: json!({
@@ -203,27 +232,27 @@ impl Tool for FileOpsTool {
                     "operation": {
                         "type": "string",
                         "enum": ["list", "read", "write", "move", "copy", "delete", "mkdir", "search", "batch_move", "organize"],
-                        "description": "The file operation to perform. Use 'organize' to auto-sort files by type, or 'batch_move' to move files matching a pattern."
+                        "description": "The file operation to perform"
                     },
                     "path": {
                         "type": "string",
-                        "description": "Primary path (source directory for batch_move/organize, target for others)"
+                        "description": "Primary path"
                     },
                     "destination": {
                         "type": "string",
-                        "description": "Destination path (required for move/copy/batch_move operations)"
+                        "description": "Destination path (for move/copy/batch_move)"
                     },
                     "content": {
                         "type": "string",
-                        "description": "Content to write (required for write operation)"
+                        "description": "Content to write (for write operation)"
                     },
                     "pattern": {
                         "type": "string",
-                        "description": "Glob pattern for search/batch_move (e.g., '*.pdf', '*.jpg', '**/*.png')"
+                        "description": "Glob pattern for search/batch_move"
                     },
                     "create_parents": {
                         "type": "boolean",
-                        "description": "Create parent directories if needed (default: true)",
+                        "description": "Create parent directories if needed",
                         "default": true
                     }
                 },
@@ -232,7 +261,7 @@ impl Tool for FileOpsTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        FileOpsTool::call(self, args).await
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }

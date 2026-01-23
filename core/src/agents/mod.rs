@@ -8,10 +8,11 @@
 //! - `AgentRegistry`: Registry for managing agents
 //! - `TaskTool`: Tool for calling sub-agents
 //!
-//! ## Rig-core AI Agent (`agents::rig::`)
-//! - `RigAgentManager`: Main AI agent implementation using rig-core
-//! - `RigAgentConfig`: Configuration for RigAgentManager
+//! ## Agent Configuration (`agents::rig::`)
+//! - `RigAgentConfig`: Configuration for the agent loop
 //! - `ChatMessage`, `ConversationHistory`: Message history management
+//! - `BuiltinToolConfig`: Configuration for built-in tools
+//! - `create_builtin_tool_server`: Create a ToolServer with built-in tools
 //!
 //! ## Specialized Sub-Agents (`agents::sub_agents::`)
 //! - `SubAgent`: Trait for specialized sub-agents
@@ -40,8 +41,8 @@ pub use types::{AgentDef, AgentMode};
 
 // Re-export rig module types for convenience
 pub use rig::{
-    AgentConfig, AgentResponse, BuiltinToolConfig, ChatMessage, ConversationHistory, MessageRole,
-    RigAgentConfig, RigAgentManager, ToolCallInfo, ToolCallResult,
+    create_builtin_tool_server, create_builtin_tools_list, AgentConfig, BuiltinToolConfig,
+    ChatMessage, ConversationHistory, MessageRole, RigAgentConfig, ToolCallInfo, ToolCallResult,
 };
 
 // Re-export sub_agents module types for convenience

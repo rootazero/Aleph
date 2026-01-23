@@ -15,6 +15,7 @@ use crate::rig_tools::{CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerate
 use crate::rig_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::rig_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 use crate::three_layer::{Capability, CapabilityGate};
+use crate::tools::AetherTool;
 use tokio::sync::RwLock;
 
 use super::{BuiltinToolConfig, ToolRegistry};
@@ -399,25 +400,50 @@ impl ToolRegistry for BuiltinToolRegistry {
             return Box::pin(async move { Err(e) });
         }
 
-        // Match tool name before creating future to avoid lifetime issues
+        // Use AetherTool::call_json directly for migrated tools
+        // This simplifies the code by avoiding intermediate execute_* methods
         match tool_name {
-            "search" => Box::pin(async move { self.execute_search(arguments).await }),
-            "web_fetch" => Box::pin(async move { self.execute_web_fetch(arguments).await }),
-            "youtube" => Box::pin(async move { self.execute_youtube(arguments).await }),
-            "file_ops" => Box::pin(async move { self.execute_file_ops(arguments).await }),
-            "code_exec" => Box::pin(async move { self.execute_code_exec(arguments).await }),
-            "pdf_generate" => Box::pin(async move { self.execute_pdf_generate(arguments).await }),
-            "generate_image" => Box::pin(async move { self.execute_image_generate(arguments).await }),
+            // Core tools - use call_json directly via AetherTool trait
+            "search" => Box::pin(async move { self.search_tool.call_json(arguments).await }),
+            "web_fetch" => Box::pin(async move { self.web_fetch_tool.call_json(arguments).await }),
+            "youtube" => Box::pin(async move { self.youtube_tool.call_json(arguments).await }),
+            "file_ops" => Box::pin(async move { self.file_ops_tool.call_json(arguments).await }),
+            "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),
+            "pdf_generate" => Box::pin(async move { self.pdf_generate_tool.call_json(arguments).await }),
+
+            // Generation tools - image uses AetherTool, video/audio use legacy execute_* methods
+            "generate_image" => Box::pin(async move {
+                let tool = self.image_generate_tool.as_ref().ok_or_else(|| {
+                    AetherError::tool("Image generation not available: no generation registry configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
             "generate_video" => Box::pin(async move { self.execute_video_generate(arguments).await }),
             "generate_audio" => Box::pin(async move { self.execute_audio_generate(arguments).await }),
-            // Meta tools for smart tool discovery
-            "list_tools" => Box::pin(async move { self.execute_list_tools(arguments).await }),
-            "get_tool_schema" => Box::pin(async move { self.execute_get_tool_schema(arguments).await }),
-            // Delegate tool for sub-agent delegation
+
+            // Meta tools for smart tool discovery - use call_json
+            "list_tools" => Box::pin(async move {
+                let registry = self.dispatcher_registry.as_ref().ok_or_else(|| {
+                    AetherError::tool("list_tools not available: no dispatcher registry configured")
+                })?;
+                let tool = ListToolsTool::new(Arc::clone(registry));
+                tool.call_json(arguments).await
+            }),
+            "get_tool_schema" => Box::pin(async move {
+                let registry = self.dispatcher_registry.as_ref().ok_or_else(|| {
+                    AetherError::tool("get_tool_schema not available: no dispatcher registry configured")
+                })?;
+                let tool = GetToolSchemaTool::new(Arc::clone(registry));
+                tool.call_json(arguments).await
+            }),
+
+            // Delegate tool for sub-agent delegation (uses rig::tool::Tool)
             "delegate" => Box::pin(async move { self.execute_delegate(arguments).await }),
-            // Skill reading tools (Progressive Disclosure pattern)
-            "read_skill" => Box::pin(async move { self.execute_read_skill(arguments).await }),
-            "list_skills" => Box::pin(async move { self.execute_list_skills(arguments).await }),
+
+            // Skill reading tools - use call_json
+            "read_skill" => Box::pin(async move { self.read_skill_tool.call_json(arguments).await }),
+            "list_skills" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
+
             _ => {
                 let tool = tool_name.to_string();
                 error!(tool = %tool, "Unknown tool requested");

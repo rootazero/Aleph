@@ -11,8 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -20,6 +19,8 @@ use tracing::{debug, info};
 
 use super::error::ToolError;
 use super::{notify_tool_result, notify_tool_start};
+use crate::error::Result;
+use crate::tools::AetherTool;
 
 // ============================================================================
 // ReadSkillTool - Read skill instructions (Level 2) or resources (Level 3)
@@ -113,7 +114,7 @@ You can also read additional resources within a skill by specifying file_name:
     }
 
     /// Validate skill_id to prevent path traversal attacks
-    fn validate_skill_id(&self, skill_id: &str) -> Result<(), ToolError> {
+    fn validate_skill_id(&self, skill_id: &str) -> std::result::Result<(), ToolError> {
         // Check for empty
         if skill_id.is_empty() {
             return Err(ToolError::InvalidArgs("skill_id cannot be empty".to_string()));
@@ -137,7 +138,7 @@ You can also read additional resources within a skill by specifying file_name:
     }
 
     /// Validate file_name to prevent path traversal
-    fn validate_file_name(&self, file_name: &str) -> Result<(), ToolError> {
+    fn validate_file_name(&self, file_name: &str) -> std::result::Result<(), ToolError> {
         if file_name.contains("..") || file_name.contains('/') || file_name.contains('\\') {
             return Err(ToolError::InvalidArgs(
                 "file_name cannot contain path separators or '..'".to_string(),
@@ -176,8 +177,8 @@ You can also read additional resources within a skill by specifying file_name:
         files
     }
 
-    /// Execute the read_skill operation
-    pub async fn call(&self, args: ReadSkillArgs) -> Result<ReadSkillOutput, ToolError> {
+    /// Execute the read_skill operation (internal implementation)
+    async fn call_impl(&self, args: ReadSkillArgs) -> std::result::Result<ReadSkillOutput, ToolError> {
         let args_summary = format!(
             "Reading skill: {} (file: {})",
             args.skill_id,
@@ -281,16 +282,39 @@ impl Clone for ReadSkillTool {
     }
 }
 
-/// Implementation of rig's Tool trait for ReadSkillTool
-impl Tool for ReadSkillTool {
+/// Implementation of AetherTool trait for ReadSkillTool
+#[async_trait]
+impl AetherTool for ReadSkillTool {
+    const NAME: &'static str = "read_skill";
+    const DESCRIPTION: &'static str = r#"Read the instructions of an installed skill.
+
+Use this tool when you need to execute a task that matches a skill's purpose.
+The skill instructions tell you exactly how to approach the task.
+
+After reading a skill, you MUST follow its instructions exactly.
+Skill instructions are task directives, not suggestions."#;
+
+    type Args = ReadSkillArgs;
+    type Output = ReadSkillOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for ReadSkillTool {
     const NAME: &'static str = "read_skill";
 
     type Error = ToolError;
     type Args = ReadSkillArgs;
     type Output = ReadSkillOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters: json!({
@@ -310,8 +334,8 @@ impl Tool for ReadSkillTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        ReadSkillTool::call(self, args).await
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }
 
@@ -433,8 +457,8 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
         files
     }
 
-    /// Execute the list_skills operation
-    pub async fn call(&self, args: ListSkillsArgs) -> Result<ListSkillsOutput, ToolError> {
+    /// Execute the list_skills operation (internal implementation)
+    async fn call_impl(&self, args: ListSkillsArgs) -> std::result::Result<ListSkillsOutput, ToolError> {
         let args_summary = match &args.filter {
             Some(f) => format!("Listing skills (filter: {})", f),
             None => "Listing all skills".to_string(),
@@ -528,16 +552,38 @@ impl Clone for ListSkillsTool {
     }
 }
 
-/// Implementation of rig's Tool trait for ListSkillsTool
-impl Tool for ListSkillsTool {
+/// Implementation of AetherTool trait for ListSkillsTool
+#[async_trait]
+impl AetherTool for ListSkillsTool {
+    const NAME: &'static str = "list_skills";
+    const DESCRIPTION: &'static str = r#"List all available skills installed on the system.
+
+Use this tool to discover what skills are available before using read_skill.
+Each skill has an ID, name, description, and optional trigger keywords.
+
+After finding a relevant skill, use read_skill(skill_id) to load its full instructions."#;
+
+    type Args = ListSkillsArgs;
+    type Output = ListSkillsOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for ListSkillsTool {
     const NAME: &'static str = "list_skills";
 
     type Error = ToolError;
     type Args = ListSkillsArgs;
     type Output = ListSkillsOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters: json!({
@@ -553,8 +599,8 @@ impl Tool for ListSkillsTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        ListSkillsTool::call(self, args).await
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }
 
@@ -565,6 +611,8 @@ impl Tool for ListSkillsTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::AetherTool;
+    use rig::tool::Tool;
     use tempfile::TempDir;
 
     fn create_test_skill(dir: &Path, id: &str, name: &str, description: &str) {
@@ -610,7 +658,8 @@ Follow them carefully.
             file_name: None,
         };
 
-        let result = tool.call(args).await.unwrap();
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.skill_id, "test-skill");
         assert_eq!(result.file_name, "SKILL.md");
@@ -633,7 +682,8 @@ Follow them carefully.
             file_name: Some("REFERENCE.md".to_string()),
         };
 
-        let result = tool.call(args).await.unwrap();
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.file_name, "REFERENCE.md");
         assert!(result.content.contains("Additional reference material"));
@@ -650,8 +700,11 @@ Follow them carefully.
             file_name: None,
         };
 
-        let result = tool.call(args).await;
-        assert!(matches!(result, Err(ToolError::NotFound(_))));
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("not found") || err_msg.contains("NotFound"), "Error should indicate not found: {}", err_msg);
     }
 
     #[tokio::test]
@@ -666,16 +719,17 @@ Follow them carefully.
             skill_id: "../etc/passwd".to_string(),
             file_name: None,
         };
-        let result = tool.call(args).await;
-        assert!(matches!(result, Err(ToolError::InvalidArgs(_))));
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
+        assert!(result.is_err());
 
         // Test file_name path traversal
         let args = ReadSkillArgs {
             skill_id: "test".to_string(),
             file_name: Some("../../../etc/passwd".to_string()),
         };
-        let result = tool.call(args).await;
-        assert!(matches!(result, Err(ToolError::InvalidArgs(_))));
+        let result = AetherTool::call(&tool, args).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -689,7 +743,8 @@ Follow them carefully.
         let tool = ListSkillsTool::new(skills_dir);
         let args = ListSkillsArgs { filter: None };
 
-        let result = tool.call(args).await.unwrap();
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.count, 2);
         assert_eq!(result.skills[0].id, "skill-a");
@@ -709,7 +764,8 @@ Follow them carefully.
             filter: Some("writing".to_string()),
         };
 
-        let result = tool.call(args).await.unwrap();
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.count, 1);
         assert_eq!(result.skills[0].id, "refine-text");

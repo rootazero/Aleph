@@ -1,6 +1,6 @@
 //! Code execution tool for AI agent integration
 //!
-//! Implements rig's Tool trait to provide code/script execution capabilities.
+//! Implements AetherTool trait to provide code/script execution capabilities.
 //! Supports: Python, JavaScript/Node.js, Shell (bash)
 //!
 //! # Safety
@@ -14,9 +14,8 @@
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use regex::Regex;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -26,6 +25,8 @@ use tracing::{debug, info, warn};
 
 use super::error::ToolError;
 use crate::dispatcher::{DEFAULT_CODE_EXEC_TIMEOUT, MAX_STDERR_SIZE, MAX_STDOUT_SIZE};
+use crate::error::Result;
+use crate::tools::AetherTool;
 
 /// Supported programming languages
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -113,6 +114,7 @@ fn is_code_blocked(code: &str) -> Option<String> {
 }
 
 /// Code execution tool
+#[derive(Clone)]
 pub struct CodeExecTool {
     /// Allowed environment variables to pass through
     pass_env: Vec<String>,
@@ -152,7 +154,7 @@ Examples:
     }
 
     /// Execute code and return result
-    async fn execute(&self, args: CodeExecArgs) -> Result<CodeExecOutput, ToolError> {
+    async fn execute(&self, args: CodeExecArgs) -> std::result::Result<CodeExecOutput, ToolError> {
         // Check for blocked patterns
         if let Some(reason) = is_code_blocked(&args.code) {
             return Ok(CodeExecOutput {
@@ -365,15 +367,39 @@ impl Default for CodeExecTool {
     }
 }
 
-impl Tool for CodeExecTool {
+/// Implementation of AetherTool trait for CodeExecTool
+#[async_trait]
+impl AetherTool for CodeExecTool {
+    const NAME: &'static str = "code_exec";
+    const DESCRIPTION: &'static str = r#"Execute code in various programming languages. Supported languages:
+- python: Execute Python 3 code
+- javascript: Execute JavaScript code using Node.js
+- shell: Execute shell commands using bash
+
+Safety: Dangerous commands (sudo, rm -rf /, etc.) are blocked.
+Timeout: Default 60 seconds, configurable."#;
+
+    type Args = CodeExecArgs;
+    type Output = CodeExecOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.execute(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for CodeExecTool {
     const NAME: &'static str = "code_exec";
 
     type Args = CodeExecArgs;
     type Output = CodeExecOutput;
     type Error = ToolError;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters: json!({
@@ -402,7 +428,7 @@ impl Tool for CodeExecTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
         self.execute(args).await
     }
 }

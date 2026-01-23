@@ -1,6 +1,6 @@
 //! PDF generation tool for AI agent integration
 //!
-//! Implements rig's Tool trait to provide PDF generation capabilities.
+//! Implements AetherTool trait to provide PDF generation capabilities.
 //! Supports plain text and Markdown to PDF conversion.
 //!
 //! # Features
@@ -14,15 +14,16 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 
+use async_trait::async_trait;
 use printpdf::*;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{debug, info, warn};
 
+use crate::error::Result;
+use crate::tools::AetherTool;
 use super::error::ToolError;
 
 /// Page size options
@@ -111,6 +112,7 @@ pub struct PdfGenerateOutput {
 }
 
 /// PDF generation tool
+#[derive(Clone)]
 pub struct PdfGenerateTool {
     /// Default output directory
     default_output_dir: Option<PathBuf>,
@@ -187,8 +189,8 @@ Examples:\n\
         None
     }
 
-    /// Generate PDF from content
-    fn generate(&self, args: PdfGenerateArgs) -> Result<PdfGenerateOutput, ToolError> {
+    /// Generate PDF from content (internal implementation)
+    fn generate(&self, args: PdfGenerateArgs) -> std::result::Result<PdfGenerateOutput, ToolError> {
         let (page_width_mm, page_height_mm) = args.page_size.dimensions_mm();
         let _margin = Mm(args.margin_mm);
 
@@ -635,15 +637,43 @@ impl Default for PdfGenerateTool {
     }
 }
 
-impl Tool for PdfGenerateTool {
+/// Implementation of AetherTool trait for PdfGenerateTool
+#[async_trait]
+impl AetherTool for PdfGenerateTool {
+    const NAME: &'static str = "pdf_generate";
+    const DESCRIPTION: &'static str = "Generate PDF documents from text or Markdown content.\n\n\
+Features:\n\
+- Plain text to PDF conversion\n\
+- Markdown support (headings, paragraphs, lists, code blocks, bold, italic)\n\
+- Configurable page size (A4, Letter, A3, or custom)\n\
+- Adjustable font size, line spacing, and margins\n\n\
+PATH RESOLUTION:\n\
+- Relative paths (e.g., \"article.pdf\") → saved to ~/.config/aether/output/\n\
+- Home paths (e.g., \"~/Desktop/doc.pdf\") → expanded to user's home directory\n\
+- Absolute paths (e.g., \"/Users/name/doc.pdf\") → used as-is\n\n\
+DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs.";
+
+    type Args = PdfGenerateArgs;
+    type Output = PdfGenerateOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.generate(args).map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for PdfGenerateTool {
     const NAME: &'static str = "pdf_generate";
 
     type Args = PdfGenerateArgs;
     type Output = PdfGenerateOutput;
     type Error = ToolError;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters: json!({
@@ -689,7 +719,7 @@ impl Tool for PdfGenerateTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
         self.generate(args)
     }
 }

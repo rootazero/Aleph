@@ -9,7 +9,6 @@
 //! - Agent Loop: LLM-based thinking for complex tasks
 
 mod agent_loop;
-mod agent_manager;
 mod core;
 mod direct_route;
 mod memory;

@@ -1,15 +1,15 @@
 //! YouTube transcript tool for extracting video transcripts
 //!
-//! Implements rig's Tool trait for AI agent integration.
+//! Implements AetherTool trait for AI agent integration.
 
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::{schema_for, JsonSchema};
+use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tracing::{debug, info};
 
 use crate::config::VideoConfig;
+use crate::error::Result;
+use crate::tools::AetherTool;
 use crate::video::{VideoTranscript, YouTubeExtractor};
 
 use super::error::ToolError;
@@ -84,8 +84,8 @@ impl YouTubeTool {
         Self { config }
     }
 
-    /// Execute transcript extraction
-    pub async fn call(&self, args: YouTubeArgs) -> Result<YouTubeResult, ToolError> {
+    /// Execute transcript extraction (internal implementation)
+    async fn call_impl(&self, args: YouTubeArgs) -> std::result::Result<YouTubeResult, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
         // Notify tool start
@@ -148,49 +148,53 @@ impl Clone for YouTubeTool {
     }
 }
 
-/// Implementation of rig's Tool trait for YouTubeTool
-impl Tool for YouTubeTool {
+/// Implementation of AetherTool trait for YouTubeTool
+#[async_trait]
+impl AetherTool for YouTubeTool {
+    const NAME: &'static str = "youtube";
+    const DESCRIPTION: &'static str =
+        "Extract transcript from a YouTube video URL. Returns the video title and full transcript text. Use this when user provides a YouTube URL or asks about video content.";
+
+    type Args = YouTubeArgs;
+    type Output = YouTubeResult;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for YouTubeTool {
     const NAME: &'static str = "youtube";
 
     type Error = ToolError;
     type Args = YouTubeArgs;
     type Output = YouTubeResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let schema = schema_for!(YouTubeArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
-            json!({
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "YouTube video URL"
-                    },
-                    "language": {
-                        "type": "string",
-                        "description": "Preferred transcript language (ISO 639-1)",
-                        "default": "en"
-                    }
-                },
-                "required": ["url"]
-            })
-        });
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        let schema = schemars::schema_for!(YouTubeArgs);
+        let parameters = serde_json::to_value(&schema).unwrap_or_default();
 
-        ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters,
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        YouTubeTool::call(self, args).await
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::AetherTool;
+    use rig::tool::Tool;
 
     #[test]
     fn test_youtube_args() {
@@ -219,7 +223,8 @@ mod tests {
     #[tokio::test]
     async fn test_youtube_tool_definition() {
         let tool = YouTubeTool::new();
-        let def = tool.definition("test".to_string()).await;
+        // Test rig::tool::Tool trait (takes prompt argument and is async)
+        let def = <YouTubeTool as Tool>::definition(&tool, "test".to_string()).await;
 
         assert_eq!(def.name, "youtube");
         assert!(!def.description.is_empty());

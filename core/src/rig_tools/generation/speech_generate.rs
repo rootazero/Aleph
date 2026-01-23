@@ -1,21 +1,22 @@
 //! Speech generation tool (Text-to-Speech)
 //!
 //! Generates speech audio from text using configured AI providers.
-//! Implements rig's Tool trait for AI agent integration.
+//! Implements AetherTool trait for AI agent integration.
 
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::{schema_for, JsonSchema};
+use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info};
 
+use crate::error::Result;
 use crate::generation::{
     GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
 use crate::rig_tools::error::ToolError;
+use crate::tools::AetherTool;
 
 /// Arguments for speech generation
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -86,7 +87,7 @@ impl SpeechGenerateTool {
     }
 
     /// Validate the arguments
-    fn validate_args(args: &SpeechGenerateArgs) -> Result<(), ToolError> {
+    fn validate_args(args: &SpeechGenerateArgs) -> std::result::Result<(), ToolError> {
         // Validate text is not empty
         if args.text.trim().is_empty() {
             return Err(ToolError::InvalidArgs("Text cannot be empty".to_string()));
@@ -105,8 +106,8 @@ impl SpeechGenerateTool {
         Ok(())
     }
 
-    /// Execute speech generation
-    pub async fn call(&self, args: SpeechGenerateArgs) -> Result<SpeechGenerateOutput, ToolError> {
+    /// Execute speech generation (internal implementation)
+    async fn call_impl(&self, args: SpeechGenerateArgs) -> std::result::Result<SpeechGenerateOutput, ToolError> {
         // Validate arguments first
         Self::validate_args(&args)?;
 
@@ -237,18 +238,34 @@ impl Clone for SpeechGenerateTool {
     }
 }
 
-impl Tool for SpeechGenerateTool {
+/// Implementation of AetherTool trait for SpeechGenerateTool
+#[async_trait]
+impl AetherTool for SpeechGenerateTool {
+    const NAME: &'static str = "generate_speech";
+    const DESCRIPTION: &'static str = "Convert text to speech audio. Use this when you need to generate spoken audio from text content.";
+
+    type Args = SpeechGenerateArgs;
+    type Output = SpeechGenerateOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for SpeechGenerateTool {
     const NAME: &'static str = "generate_speech";
 
     type Error = ToolError;
     type Args = SpeechGenerateArgs;
     type Output = SpeechGenerateOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        // Use schemars to generate JSON Schema for the arguments
-        let schema = schema_for!(SpeechGenerateArgs);
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        let schema = schemars::schema_for!(SpeechGenerateArgs);
         let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
-            // Fallback to manually defined schema if generation fails
             json!({
                 "type": "object",
                 "properties": {
@@ -277,15 +294,15 @@ impl Tool for SpeechGenerateTool {
             })
         });
 
-        ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters,
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        SpeechGenerateTool::call(self, args).await
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }
 
@@ -293,6 +310,8 @@ impl Tool for SpeechGenerateTool {
 mod tests {
     use super::*;
     use crate::generation::MockGenerationProvider;
+    use crate::tools::AetherTool;
+    use rig::tool::Tool;
 
     fn create_test_registry() -> Arc<GenerationProviderRegistry> {
         let mut registry = GenerationProviderRegistry::new();
@@ -425,7 +444,8 @@ mod tests {
             provider: Some("mock-tts".to_string()),
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_ok());
 
         let output = result.unwrap();
@@ -448,14 +468,14 @@ mod tests {
             provider: Some("nonexistent".to_string()),
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        if let Err(ToolError::InvalidArgs(msg)) = result {
-            assert!(msg.contains("not found"));
-        } else {
-            panic!("Expected InvalidArgs error");
-        }
+        // Error is now AetherError
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("not found"), "Error should contain 'not found': {}", err_msg);
     }
 
     #[tokio::test]
@@ -471,14 +491,14 @@ mod tests {
             provider: None,
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        if let Err(ToolError::InvalidArgs(msg)) = result {
-            assert!(msg.contains("No speech generation provider"));
-        } else {
-            panic!("Expected InvalidArgs error");
-        }
+        // Error is now AetherError
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("No speech generation provider"), "Error should contain 'No speech generation provider': {}", err_msg);
     }
 
     #[tokio::test]
@@ -494,14 +514,14 @@ mod tests {
             provider: Some("mock-tts".to_string()),
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        if let Err(ToolError::InvalidArgs(msg)) = result {
-            assert!(msg.contains("empty"));
-        } else {
-            panic!("Expected InvalidArgs error");
-        }
+        // Error is now AetherError
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("empty"), "Error should contain 'empty': {}", err_msg);
     }
 
     #[tokio::test]
@@ -517,7 +537,8 @@ mod tests {
             provider: None, // Let it auto-select
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_ok());
 
         let output = result.unwrap();
@@ -529,12 +550,12 @@ mod tests {
         let registry = create_test_registry();
         let tool = SpeechGenerateTool::new(registry);
 
-        // Test definition
-        let definition = tool.definition("test".to_string()).await;
+        // Test definition via rig trait (fully qualified)
+        let definition = <SpeechGenerateTool as Tool>::definition(&tool, "test".to_string()).await;
         assert_eq!(definition.name, "generate_speech");
         assert!(!definition.description.is_empty());
 
-        // Test call via trait
+        // Test call via rig trait
         let args = SpeechGenerateArgs {
             text: "Trait test".to_string(),
             voice: None,

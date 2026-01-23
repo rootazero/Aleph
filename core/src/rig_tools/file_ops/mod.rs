@@ -22,6 +22,7 @@ pub use types::{FileInfo, FileOperation, FileOpsArgs, FileOpsOutput};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::AetherTool;
     use std::fs;
     use tempfile::tempdir;
 
@@ -43,7 +44,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = tool.call(args).await.unwrap();
+        let result = AetherTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.items_affected, Some(2));
     }
@@ -64,7 +65,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = tool.call(write_args).await.unwrap();
+        let result = AetherTool::call(&tool, write_args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.bytes_written, Some(13));
 
@@ -78,7 +79,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = tool.call(read_args).await.unwrap();
+        let result = AetherTool::call(&tool, read_args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.content, Some("Hello, World!".to_string()));
     }
@@ -98,7 +99,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = tool.call(args).await.unwrap();
+        let result = AetherTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert!(new_dir.exists());
     }
@@ -122,7 +123,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = tool.call(args).await.unwrap();
+        let result = AetherTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert!(!from.exists());
         assert!(to.exists());
@@ -147,7 +148,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = tool.call(args).await.unwrap();
+        let result = AetherTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.items_affected, Some(2));
     }
@@ -167,7 +168,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = tool.call(args).await;
+        let result = AetherTool::call(&tool, args).await;
 
         // This should succeed - output directory should be writable
         match &result {

@@ -1,6 +1,6 @@
 //! Agent Module for rig-core AI Agent
 //!
-//! This module provides the `RigAgentManager` which implements AI agent functionality
+//! This module provides configuration and tool server functionality for AI agents
 //! using the rig-core library with tool calling support.
 //!
 //! # Architecture
@@ -9,36 +9,24 @@
 //! User Input
 //!      ↓
 //! ┌─────────────────────────────────────────────────────┐
-//! │                  RigAgentManager                     │
+//! │              Agent Loop (self-implemented)          │
 //! │                                                      │
 //! │  ┌─────────────────────────────────────────────────┐│
-//! │  │ rig-core Agent with ToolServer                  ││
+//! │  │ rig-core ToolServer for hot-reload support      ││
 //! │  │ - SearchTool, WebFetchTool, YouTubeTool         ││
 //! │  │ - McpToolWrapper (hot-reload MCP tools)         ││
 //! │  └─────────────────────────────────────────────────┘│
 //! └─────────────────────────────────────────────────────┘
 //!      ↓
-//! AgentResponse { content, tool_calls, ... }
-//! ```
-//!
-//! # Usage
-//!
-//! ```rust,ignore
-//! use aethecore::agents::rig::{RigAgentManager, RigAgentConfig};
-//!
-//! let config = RigAgentConfig::default();
-//! let manager = RigAgentManager::new(config)?;
-//!
-//! let response = manager.process("Search for AI news").await?;
-//! println!("Response: {}", response.content);
+//! Response { content, tool_calls, ... }
 //! ```
 
 pub mod config;
-mod manager;
 mod message_history;
+pub mod tools;
 mod types;
 
 pub use config::RigAgentConfig;
-pub use manager::{AgentResponse, BuiltinToolConfig, RigAgentManager};
 pub use message_history::{ChatMessage, ConversationHistory, MessageRole};
+pub use tools::{create_builtin_tool_server, create_builtin_tools_list, BuiltinToolConfig};
 pub use types::{AgentConfig, AgentResult, ToolCallInfo, ToolCallResult};

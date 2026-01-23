@@ -1,21 +1,22 @@
 //! Image generation tool
 //!
 //! Generates images from text prompts using configured AI providers.
-//! Implements rig's Tool trait for AI agent integration.
+//! Implements AetherTool trait for AI agent integration.
 
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::{schema_for, JsonSchema};
+use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tracing::{debug, info};
 
+use crate::error::Result;
 use crate::generation::{
     GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
 use crate::rig_tools::error::ToolError;
+use crate::tools::AetherTool;
 
 /// Arguments for image generation
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -89,8 +90,8 @@ impl ImageGenerateTool {
         Self { registry }
     }
 
-    /// Execute image generation
-    pub async fn call(&self, args: ImageGenerateArgs) -> Result<ImageGenerateOutput, ToolError> {
+    /// Execute image generation (internal implementation)
+    async fn call_impl(&self, args: ImageGenerateArgs) -> std::result::Result<ImageGenerateOutput, ToolError> {
         use crate::rig_tools::{notify_tool_result, notify_tool_start};
 
         let start = Instant::now();
@@ -226,59 +227,57 @@ impl Clone for ImageGenerateTool {
     }
 }
 
-impl Tool for ImageGenerateTool {
+/// Implementation of AetherTool trait for ImageGenerateTool
+#[async_trait]
+impl AetherTool for ImageGenerateTool {
+    const NAME: &'static str = "generate_image";
+    const DESCRIPTION: &'static str = r#"Generate images from text prompts using AI image generation providers."#;
+
+    type Args = ImageGenerateArgs;
+    type Output = ImageGenerateOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// =============================================================================
+// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
+// =============================================================================
+
+impl rig::tool::Tool for ImageGenerateTool {
     const NAME: &'static str = "generate_image";
 
     type Error = ToolError;
     type Args = ImageGenerateArgs;
     type Output = ImageGenerateOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        // Use schemars to generate JSON Schema for the arguments
-        let schema = schema_for!(ImageGenerateArgs);
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        let schema = schemars::schema_for!(ImageGenerateArgs);
         let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
-            // Fallback to manually defined schema if generation fails
             json!({
                 "type": "object",
                 "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "The text prompt describing the image to generate"
-                    },
-                    "width": {
-                        "type": "integer",
-                        "description": "Image width in pixels (default: 1024)"
-                    },
-                    "height": {
-                        "type": "integer",
-                        "description": "Image height in pixels (default: 1024)"
-                    },
-                    "quality": {
-                        "type": "string",
-                        "description": "Quality level: 'standard' or 'hd' (default: 'standard')"
-                    },
-                    "style": {
-                        "type": "string",
-                        "description": "Style preset: 'vivid' or 'natural' (default: 'vivid')"
-                    },
-                    "provider": {
-                        "type": "string",
-                        "description": "Provider name to use (default: first available)"
-                    }
+                    "prompt": { "type": "string" },
+                    "width": { "type": "integer" },
+                    "height": { "type": "integer" },
+                    "quality": { "type": "string" },
+                    "style": { "type": "string" },
+                    "provider": { "type": "string" }
                 },
                 "required": ["prompt"]
             })
         });
 
-        ToolDefinition {
+        rig::completion::ToolDefinition {
             name: Self::NAME.to_string(),
             description: Self::DESCRIPTION.to_string(),
             parameters,
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        ImageGenerateTool::call(self, args).await
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        self.call_impl(args).await
     }
 }
 
@@ -286,6 +285,8 @@ impl Tool for ImageGenerateTool {
 mod tests {
     use super::*;
     use crate::generation::MockGenerationProvider;
+    use crate::tools::AetherTool;
+    use rig::tool::Tool;
 
     fn create_test_registry() -> Arc<RwLock<GenerationProviderRegistry>> {
         let mut registry = GenerationProviderRegistry::new();
@@ -347,7 +348,8 @@ mod tests {
             provider: Some("mock-dalle".to_string()),
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax to avoid ambiguity
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_ok());
 
         let output = result.unwrap();
@@ -371,14 +373,14 @@ mod tests {
             provider: Some("nonexistent".to_string()),
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        if let Err(ToolError::InvalidArgs(msg)) = result {
-            assert!(msg.contains("not found"));
-        } else {
-            panic!("Expected InvalidArgs error");
-        }
+        // Error is now AetherError
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("not found"), "Error should contain 'not found': {}", err_msg);
     }
 
     #[tokio::test]
@@ -395,14 +397,14 @@ mod tests {
             provider: None,
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        if let Err(ToolError::InvalidArgs(msg)) = result {
-            assert!(msg.contains("No image generation provider"));
-        } else {
-            panic!("Expected InvalidArgs error");
-        }
+        // Error is now AetherError
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("No image generation provider"), "Error should contain 'No image generation provider': {}", err_msg);
     }
 
     #[tokio::test]
@@ -419,7 +421,8 @@ mod tests {
             provider: None, // Let it auto-select
         };
 
-        let result = tool.call(args).await;
+        // Use fully qualified syntax
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_ok());
 
         let output = result.unwrap();
@@ -431,8 +434,8 @@ mod tests {
         let registry = create_test_registry();
         let tool = ImageGenerateTool::new(registry);
 
-        // Test definition
-        let definition = tool.definition("test".to_string()).await;
+        // Test definition via rig trait (fully qualified)
+        let definition = <ImageGenerateTool as Tool>::definition(&tool, "test".to_string()).await;
         assert_eq!(definition.name, "generate_image");
         assert!(!definition.description.is_empty());
 

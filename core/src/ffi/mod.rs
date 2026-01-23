@@ -42,7 +42,8 @@ mod user_input;
 // Agent Loop FFI adapter for new architecture
 pub use agent_loop_adapter::FfiLoopCallback;
 
-use crate::agents::{BuiltinToolConfig, RigAgentConfig, RigAgentManager};
+use crate::agents::RigAgentConfig;
+use crate::agents::rig::tools::{create_builtin_tool_server, create_builtin_tools_list, BuiltinToolConfig};
 use crate::config::Config;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::memory::MemoryEntry;
@@ -610,7 +611,9 @@ pub fn init_core(
     // We use runtime.enter() to set the current runtime context before creating the handle
     let (tool_server_handle, registered_tools) = {
         let _guard = runtime.enter(); // Enter runtime context for tokio::spawn
-        RigAgentManager::create_shared_handle_with_config(builtin_tool_config)
+        let tool_server_handle = create_builtin_tool_server(Some(&builtin_tool_config)).run();
+        let registered_tools = Arc::new(RwLock::new(create_builtin_tools_list()));
+        (tool_server_handle, registered_tools)
     };
     info!(
         tools = ?registered_tools.read().unwrap(),
