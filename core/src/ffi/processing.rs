@@ -977,6 +977,7 @@ fn process_with_agent_loop(
                 input_for_memory,
                 app_context,
                 generation_config,
+                generation_registry,
                 attachments,
             );
         }
@@ -1029,6 +1030,7 @@ fn process_with_agent_loop(
                         attachments,
                         conversation_histories,
                         topic_id,
+                        generation_registry,
                     );
                 }
                 Ok(AnalysisResult::MultiStep {
@@ -1086,6 +1088,7 @@ fn process_with_agent_loop(
                         attachments,
                         conversation_histories,
                         topic_id,
+                        generation_registry,
                     );
                 }
             }
@@ -1109,6 +1112,7 @@ fn handle_direct_route(
     input_for_memory: &str,
     app_context: &Option<String>,
     generation_config: &crate::config::GenerationConfig,
+    generation_registry: &Arc<std::sync::RwLock<crate::generation::GenerationProviderRegistry>>,
     attachments: Option<&[crate::core::MediaAttachment]>,
 ) {
     // Extract attachment text if present
@@ -1165,6 +1169,7 @@ fn handle_direct_route(
                 input_for_memory,
                 app_context,
                 generation_config,
+                generation_registry,
                 attachments,
                 attachment_text.as_deref(),
             );
@@ -1413,6 +1418,7 @@ fn run_agent_loop(
     attachments: Option<&[crate::core::MediaAttachment]>,
     conversation_histories: &Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>>,
     topic_id: &Option<String>,
+    generation_registry: &Arc<std::sync::RwLock<crate::generation::GenerationProviderRegistry>>,
 ) {
     // Check if already cancelled
     if op_token.is_cancelled() {
@@ -1509,8 +1515,12 @@ fn run_agent_loop(
     let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));
     let thinker = Arc::new(Thinker::new(provider_registry, thinker_config));
 
-    // Create executor with builtin tool registry
-    let tool_registry = Arc::new(BuiltinToolRegistry::new());
+    // Create executor with builtin tool registry (with generation support)
+    let tool_config = crate::executor::BuiltinToolConfig {
+        generation_registry: Some(generation_registry.clone()),
+        ..Default::default()
+    };
+    let tool_registry = Arc::new(BuiltinToolRegistry::with_config(tool_config));
     let executor = Arc::new(SingleStepExecutor::new(tool_registry));
 
     // Create compressor (rule-based for now)
@@ -1636,6 +1646,7 @@ fn run_skill_with_agent_loop(
     input_for_memory: &str,
     app_context: &Option<String>,
     generation_config: &crate::config::GenerationConfig,
+    generation_registry: &Arc<std::sync::RwLock<crate::generation::GenerationProviderRegistry>>,
     _attachments: Option<&[crate::core::MediaAttachment]>,
     attachment_text: Option<&str>,
 ) {
@@ -1731,16 +1742,21 @@ fn run_skill_with_agent_loop(
         }
     };
 
-    // Create thinker config with runtime capabilities
+    // Create thinker config with runtime capabilities and generation models
     let mut thinker_config = ThinkerConfig::default();
     thinker_config.prompt.runtime_capabilities = runtime_capabilities;
+    thinker_config.prompt.generation_models = format_generation_models_for_prompt(generation_config);
 
     // Create components
     let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));
     let thinker = Arc::new(Thinker::new(provider_registry, thinker_config));
 
-    // Create executor with builtin tool registry
-    let tool_registry = Arc::new(BuiltinToolRegistry::new());
+    // Create executor with builtin tool registry (with generation support)
+    let tool_config = crate::executor::BuiltinToolConfig {
+        generation_registry: Some(generation_registry.clone()),
+        ..Default::default()
+    };
+    let tool_registry = Arc::new(BuiltinToolRegistry::with_config(tool_config));
     let executor = Arc::new(SingleStepExecutor::new(tool_registry));
 
     // Create compressor (no-op for now)
