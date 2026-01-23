@@ -202,11 +202,21 @@ fn truncate_path(path: &str, max_len: usize) -> String {
 ///
 /// This adapter translates AgentLoop callback events into
 /// AetherEventHandler calls that the UI layer understands.
+///
+/// # Streaming Display Strategy
+///
+/// The adapter separates streaming content into two parts:
+/// - **Status**: Temporary progress info (tool calls, thinking) - gets replaced each step
+/// - **Response**: Actual content (completion summary) - accumulates
+///
+/// This ensures the UI shows current activity without cluttering with historical steps.
 pub struct FfiLoopCallback {
     /// The underlying FFI event handler
     handler: Arc<dyn AetherEventHandler>,
-    /// Accumulated response text for streaming
+    /// Accumulated response text (actual content, persists)
     response_buffer: RwLock<String>,
+    /// Current status text (temporary, replaced each step)
+    status_buffer: RwLock<String>,
     /// Whether streaming has started
     streaming_started: RwLock<bool>,
 }
@@ -217,6 +227,7 @@ impl FfiLoopCallback {
         Self {
             handler,
             response_buffer: RwLock::new(String::new()),
+            status_buffer: RwLock::new(String::new()),
             streaming_started: RwLock::new(false),
         }
     }
@@ -226,21 +237,47 @@ impl FfiLoopCallback {
         self.response_buffer.read().await.clone()
     }
 
-    /// Append text to response and stream it
-    async fn stream_text(&self, text: &str) {
+    /// Set status text (replaces previous status, temporary display)
+    async fn set_status(&self, text: &str) {
         let mut started = self.streaming_started.write().await;
         if !*started {
-            // Use on_thinking to signal start (no dedicated on_response_start)
-            // The handler is already called on_thinking in on_loop_start
             *started = true;
         }
         drop(started);
 
+        let mut status = self.status_buffer.write().await;
+        *status = text.to_string();
+
+        // Stream combined: response + current status
+        let response = self.response_buffer.read().await;
+        let display = if response.is_empty() {
+            status.clone()
+        } else if status.is_empty() {
+            response.clone()
+        } else {
+            format!("{}\n{}", response, status)
+        };
+        self.handler.on_stream_chunk(display);
+    }
+
+    /// Append text to response buffer (actual content, persists)
+    async fn append_response(&self, text: &str) {
+        let mut started = self.streaming_started.write().await;
+        if !*started {
+            *started = true;
+        }
+        drop(started);
+
+        // Clear status when appending real content
+        {
+            let mut status = self.status_buffer.write().await;
+            status.clear();
+        }
+
         let mut buffer = self.response_buffer.write().await;
         buffer.push_str(text);
 
-        // Stream the accumulated text to UI (Swift expects full accumulated text, not chunks)
-        // The UI layer replaces its streamingText with this value
+        // Stream the response content
         self.handler.on_stream_chunk(buffer.clone());
     }
 
@@ -269,12 +306,8 @@ impl LoopCallback for FfiLoopCallback {
 
     async fn on_step_start(&self, step: usize) {
         info!(step = step, "AgentLoop step started");
-        // Notify UI about step progress (step is 0-indexed, display as 1-indexed)
-        if step > 0 {
-            // After first step, show iteration progress
-            // Use `step` (not step+1) so step=1 displays as "Step 1"
-            self.stream_text(&format!("\n--- Step {} ---\n", step)).await;
-        }
+        // Don't show step headers - each step's status will replace the previous one
+        // The UI will show current activity without historical step clutter
     }
 
     async fn on_thinking_start(&self, step: usize) {
@@ -296,11 +329,10 @@ impl LoopCallback for FfiLoopCallback {
     }
 
     async fn on_thinking_stream(&self, content: &str) {
-        // Stream thinking content to UI for Claude Code CLI style display
-        // Format thinking content with distinctive marker and accumulate with response
+        // Stream thinking content to UI as status (replaces previous status)
         if !content.is_empty() {
             let formatted = format!("💭 {}", content);
-            self.stream_text(&formatted).await;
+            self.set_status(&formatted).await;
             debug!(content_len = content.len(), "Thinking stream chunk sent to UI");
         }
     }
@@ -315,22 +347,22 @@ impl LoopCallback for FfiLoopCallback {
                 // Format tool call with human-readable description
                 let (description, _verb) = format_tool_description(tool_name, arguments);
 
-                // Stream the description without Markdown (UI doesn't parse it)
-                let message = format!("\n⚡ {}\n", description);
-                self.stream_text(&message).await;
+                // Show as status (replaces previous status, not accumulated)
+                let message = format!("⚡ {}", description);
+                self.set_status(&message).await;
                 self.handler.on_tool_start(tool_name.clone());
             }
             Action::Completion { summary } => {
-                // Stream the completion summary as response
-                self.stream_text(summary).await;
+                // Append the completion summary to response (actual content, persists)
+                self.append_response(summary).await;
             }
             Action::UserInteraction { question, .. } => {
                 // This will be handled by on_user_input_required
                 debug!(question = %question, "User interaction requested");
             }
             Action::Failure { reason } => {
-                // Stream the failure reason without Markdown
-                self.stream_text(&format!("\n❌ 错误: {}\n", reason)).await;
+                // Append failure reason to response (persists)
+                self.append_response(&format!("❌ 错误: {}\n", reason)).await;
             }
         }
     }
@@ -363,9 +395,9 @@ impl LoopCallback for FfiLoopCallback {
                         output_str.clone()
                     };
 
-                    // Stream success message without Markdown
-                    let message = format!("✓ {}完成 ({}ms)\n", verb, duration_ms);
-                    self.stream_text(&message).await;
+                    // Show success as status (replaces tool call status)
+                    let message = format!("✓ {}完成 ({}ms)", verb, duration_ms);
+                    self.set_status(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), display_output);
                 }
                 ActionResult::ToolError { error, .. } => {
@@ -374,9 +406,9 @@ impl LoopCallback for FfiLoopCallback {
                         error = %error,
                         "Tool execution failed"
                     );
-                    // Stream error message without Markdown
-                    let message = format!("✗ {}失败: {}\n", verb, error);
-                    self.stream_text(&message).await;
+                    // Show error as status (replaces tool call status)
+                    let message = format!("✗ {}失败: {}", verb, error);
+                    self.set_status(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), format!("Error: {}", error));
                 }
                 _ => {}
@@ -407,17 +439,15 @@ impl LoopCallback for FfiLoopCallback {
             "User input required"
         );
 
-        // Stream the question to the user (no Markdown)
-        let formatted_question = format!("\n❓ {}\n", question);
-        self.stream_text(&formatted_question).await;
-
-        // If there are options, stream them as well
+        // Build question display with options
+        let mut question_display = format!("❓ {}", question);
         if let Some(opts) = options {
             for (i, opt) in opts.iter().enumerate() {
-                let option_text = format!("  {}. {}\n", i + 1, opt);
-                self.stream_text(&option_text).await;
+                question_display.push_str(&format!("\n  {}. {}", i + 1, opt));
             }
         }
+        // Show question as status (temporary)
+        self.set_status(&question_display).await;
 
         // Create pending input request and notify Swift UI
         let options_vec = options.map(|opts| opts.to_vec()).unwrap_or_default();
@@ -444,10 +474,10 @@ impl LoopCallback for FfiLoopCallback {
                     "Received user input response"
                 );
 
-                // Stream the user's response for visibility (no Markdown)
+                // Append user's response to response buffer (visible in final output)
                 if !response.is_empty() {
                     let response_text = format!("📝 用户回复: {}\n\n", response);
-                    self.stream_text(&response_text).await;
+                    self.append_response(&response_text).await;
                 }
 
                 response
@@ -465,9 +495,9 @@ impl LoopCallback for FfiLoopCallback {
             "Guard triggered"
         );
 
-        // Notify UI about the guard violation
+        // Append guard violation to response (persists)
         let message = format!("Limit reached: {}", violation.description());
-        self.stream_text(&message).await;
+        self.append_response(&message).await;
     }
 
     async fn on_complete(&self, summary: &str) {
@@ -477,7 +507,7 @@ impl LoopCallback for FfiLoopCallback {
         let buffer = self.response_buffer.read().await;
         if !buffer.contains(summary) {
             drop(buffer);
-            self.stream_text(summary).await;
+            self.append_response(summary).await;
         }
 
         // Finalize the response
@@ -487,8 +517,8 @@ impl LoopCallback for FfiLoopCallback {
     async fn on_failed(&self, reason: &str) {
         warn!(reason = %reason, "AgentLoop failed");
 
-        // Stream the error
-        self.stream_text(&format!("\n\nError: {}", reason)).await;
+        // Append error to response (persists)
+        self.append_response(&format!("\n\nError: {}", reason)).await;
 
         // Call error handler
         self.handler.on_error(reason.to_string());
@@ -585,14 +615,19 @@ mod tests {
         let handler = Arc::new(MockEventHandler::new());
         let callback = FfiLoopCallback::new(handler.clone());
 
-        // Simulate streaming
-        callback.stream_text("Hello, ").await;
-        callback.stream_text("world!").await;
+        // Simulate streaming with status (replaces) and response (accumulates)
+        callback.set_status("Loading...").await;
+        callback.set_status("Processing...").await; // Replaces previous status
+        callback.append_response("Hello, ").await; // Clears status, adds to response
+        callback.append_response("world!").await; // Accumulates
         callback.finalize_response().await;
 
         let events = handler.events();
+        // Status updates replace each other
+        assert!(events.contains(&"chunk:Loading...".to_string()));
+        assert!(events.contains(&"chunk:Processing...".to_string()));
+        // Response accumulates
         assert!(events.contains(&"chunk:Hello, ".to_string()));
-        // stream_text sends accumulated buffer, so second call sends "Hello, world!"
         assert!(events.contains(&"chunk:Hello, world!".to_string()));
 
         let response = callback.get_response().await;
