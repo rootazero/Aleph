@@ -354,6 +354,10 @@ fn execute_with_agent_manager(
     let manager =
         RigAgentManager::with_shared_handle(config.clone(), tool_server_handle, registered_tools);
 
+    // Notify UI that we're processing with tools
+    // This provides feedback when using skills/slash commands that may invoke tools
+    handler.on_tool_start("processing".to_string());
+
     // Get or create conversation history for this topic
     let topic_key = topic_id
         .clone()
@@ -390,6 +394,9 @@ fn execute_with_agent_manager(
 
     match result {
         Ok(response) => {
+            // Notify UI that tool processing completed
+            handler.on_tool_result("processing".to_string(), "completed".to_string());
+
             // Store memory if enabled
             if memory_config.enabled {
                 if let Some(ref db_path) = memory_path {
@@ -422,6 +429,9 @@ fn execute_with_agent_manager(
             handler.on_complete(response.content);
         }
         Err(e) => {
+            // Notify UI that tool processing failed
+            handler.on_tool_result("processing".to_string(), format!("Error: {}", e));
+
             // Check if the error is due to cancellation
             if op_token.is_cancelled() {
                 handler.on_error("Operation cancelled".to_string());

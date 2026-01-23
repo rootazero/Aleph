@@ -136,9 +136,17 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             "~/.aws".to_string(),
         ];
 
-        // Add Aether config directory dynamically (cross-platform)
+        // Add specific Aether config files (not the entire directory)
+        // We allow the output directory but deny sensitive config files
         if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
-            denied_paths.push(config_dir.to_string_lossy().to_string());
+            // Deny config files but NOT the output directory
+            denied_paths.push(format!("{}/config.toml", config_dir.display()));
+            denied_paths.push(format!("{}/memory.db", config_dir.display()));
+            denied_paths.push(format!("{}/conversations.db", config_dir.display()));
+            denied_paths.push(format!("{}/skills", config_dir.display()));
+            denied_paths.push(format!("{}/plugins", config_dir.display()));
+            denied_paths.push(format!("{}/mcp", config_dir.display()));
+            // Note: output directory is intentionally NOT denied
         }
 
         // Add Unix-specific paths
