@@ -3,6 +3,7 @@
 use crate::agent_loop::{
     AgentLoop, LoopConfig, LoopResult, RequestContext as AgentRequestContext,
 };
+use crate::agents::rig::ChatMessage;
 use crate::agents::RigAgentConfig;
 use crate::compressor::NoOpCompressor;
 use crate::config::GenerationConfig;
@@ -15,14 +16,13 @@ use crate::ffi::prompt_helpers::{
 };
 use crate::ffi::provider_factory::create_provider_from_config;
 use crate::ffi::tool_discovery::get_builtin_tool_descriptions;
-use crate::ffi::FfiLoopCallback;
 use crate::ffi::AetherEventHandler;
+use crate::ffi::FfiLoopCallback;
 use crate::generation::GenerationProviderRegistry;
 use crate::intent::ThinkingContext;
 use crate::rig_tools::file_ops::{clear_written_files, take_written_files};
 use crate::runtimes::{RuntimeCapability, RuntimeRegistry};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
-use rig::completion::Message;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -48,7 +48,7 @@ pub fn run_agent_loop(
     window_title: &Option<String>,
     generation_config: &GenerationConfig,
     attachments: Option<&[MediaAttachment]>,
-    conversation_histories: &Arc<RwLock<HashMap<String, Vec<Message>>>>,
+    conversation_histories: &Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
     topic_id: &Option<String>,
     generation_registry: &Arc<RwLock<GenerationProviderRegistry>>,
 ) {

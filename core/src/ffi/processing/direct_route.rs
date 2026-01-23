@@ -8,7 +8,7 @@ use crate::ffi::prompt_helpers::extract_attachment_text;
 use crate::ffi::tool_discovery::get_builtin_tool_descriptions;
 use crate::generation::GenerationProviderRegistry;
 use crate::intent::{AgentModePrompt, DirectMode, ThinkingContext};
-use rig::completion::Message;
+use crate::agents::rig::ChatMessage;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -39,7 +39,7 @@ pub fn handle_direct_route(
     // Extract attachment text if present
     let attachment_text = extract_attachment_text(attachments);
     let tool_descriptions = get_builtin_tool_descriptions(generation_config);
-    let conversation_histories = Arc::new(RwLock::new(HashMap::<String, Vec<Message>>::new()));
+    let conversation_histories = Arc::new(RwLock::new(HashMap::<String, Vec<ChatMessage>>::new()));
     let topic_id = None;
 
     match mode {

@@ -19,6 +19,7 @@ use aethecore::dispatcher::{
 use aethecore::rig_tools::meta_tools::{
     GetToolSchemaArgs, GetToolSchemaTool, ListToolsArgs, ListToolsTool,
 };
+use aethecore::tools::AetherTool;
 
 /// Helper to register a tool in the registry (via Arc<RwLock<>>)
 async fn register_tool(registry: &Arc<RwLock<ToolRegistry>>, tool: UnifiedTool) {

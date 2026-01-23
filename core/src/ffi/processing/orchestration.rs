@@ -1,5 +1,6 @@
 //! Main orchestration logic for processing with agent loop
 
+use crate::agents::rig::ChatMessage;
 use crate::agents::RigAgentConfig;
 use crate::command::CommandParser;
 use crate::config::{GenerationConfig, RoutingRuleConfig};
@@ -13,7 +14,6 @@ use crate::generation::GenerationProviderRegistry;
 use crate::intent::{IntentRouter, RouteResult};
 use crate::skills::SkillsRegistry;
 use crate::utils::paths::get_skills_dir;
-use rig::completion::Message;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -53,7 +53,7 @@ pub fn process_with_agent_loop(
     config: &RigAgentConfig,
     tool_server_handle: rig::tool::server::ToolServerHandle,
     registered_tools: Arc<RwLock<Vec<String>>>,
-    conversation_histories: &Arc<RwLock<HashMap<String, Vec<Message>>>>,
+    conversation_histories: &Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
     topic_id: &Option<String>,
     attachments: Option<&[MediaAttachment]>,
     op_token: &CancellationToken,

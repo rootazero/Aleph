@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use crate::agents::rig::{ChatMessage, MessageRole};
+
 /// Format generation model information for system prompt injection
 ///
 /// This formats the configured generation providers and their model aliases
@@ -68,14 +70,10 @@ pub fn format_generation_models_for_prompt(
 /// This extracts recent messages from the conversation history for a given topic
 /// and formats them as a summary for the agent loop's initial context.
 pub fn build_history_summary_from_conversations(
-    histories: &Arc<
-        std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
-    >,
+    histories: &Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<ChatMessage>>>>,
     topic_id: &Option<String>,
     max_chars: usize,
 ) -> String {
-    use rig::completion::Message;
-
     let tid = match topic_id {
         Some(t) => t,
         None => return String::new(),
@@ -103,15 +101,11 @@ pub fn build_history_summary_from_conversations(
         .into_iter()
         .rev()
     {
-        let (role, content_str) = match msg {
-            Message::User { content } => {
-                let text = extract_text_from_user_content(content);
-                ("User", text)
-            }
-            Message::Assistant { content, .. } => {
-                let text = extract_text_from_assistant_content(content);
-                ("Assistant", text)
-            }
+        let (role, content_str) = match msg.role {
+            MessageRole::User => ("User", msg.content.clone().unwrap_or_default()),
+            MessageRole::Assistant => ("Assistant", msg.content.clone().unwrap_or_default()),
+            MessageRole::System => continue, // Skip system messages
+            MessageRole::Tool => continue,   // Skip tool messages
         };
 
         if content_str.is_empty() {
@@ -134,34 +128,6 @@ pub fn build_history_summary_from_conversations(
     }
 
     summary
-}
-
-/// Extract text content from OneOrMany<UserContent>
-pub fn extract_text_from_user_content(
-    content: &rig::OneOrMany<rig::completion::message::UserContent>,
-) -> String {
-    use rig::completion::message::UserContent;
-
-    for item in content.iter() {
-        if let UserContent::Text(text) = item {
-            return text.text.clone();
-        }
-    }
-    String::new()
-}
-
-/// Extract text content from OneOrMany<AssistantContent>
-pub fn extract_text_from_assistant_content(
-    content: &rig::OneOrMany<rig::completion::AssistantContent>,
-) -> String {
-    use rig::completion::AssistantContent;
-
-    for item in content.iter() {
-        if let AssistantContent::Text(text) = item {
-            return text.text.clone();
-        }
-    }
-    String::new()
 }
 
 /// Check if the response indicates the user needs to provide more input

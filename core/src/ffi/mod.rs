@@ -42,13 +42,13 @@ mod user_input;
 // Agent Loop FFI adapter for new architecture
 pub use agent_loop_adapter::FfiLoopCallback;
 
-use crate::agents::RigAgentConfig;
 use crate::agents::rig::tools::{create_builtin_tool_server, create_builtin_tools_list, BuiltinToolConfig};
+use crate::agents::rig::ChatMessage;
+use crate::agents::RigAgentConfig;
 use crate::config::Config;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::memory::MemoryEntry;
 use crate::utils::paths::get_memory_db_path;
-use rig::completion::Message;
 use rig::tool::server::ToolServerHandle;
 use std::collections::HashMap;
 use std::path::Path;
@@ -362,7 +362,7 @@ pub struct AetherCore {
     /// Agent engine for task orchestration (lazily initialized)
     pub(crate) agent_engine: Arc<RwLock<Option<Arc<crate::dispatcher::AgentEngine>>>>,
     /// Conversation histories keyed by topic_id for multi-turn support
-    pub(crate) conversation_histories: Arc<RwLock<HashMap<String, Vec<Message>>>>,
+    pub(crate) conversation_histories: Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
     /// Generation provider registry for media generation (image, speech, etc.)
     pub(crate) generation_registry: Arc<RwLock<crate::generation::GenerationProviderRegistry>>,
 }
