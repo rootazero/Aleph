@@ -23,6 +23,12 @@ pub struct PromptConfig {
     /// Generation models (pre-formatted prompt text)
     /// Describes available image/video/audio generation models and aliases
     pub generation_models: Option<String>,
+    /// Tool index for smart tool discovery (pre-formatted markdown)
+    /// When set, enables two-stage tool discovery mode:
+    /// - Tools passed to `build_system_prompt` get full schema
+    /// - Additional tools are listed in this index (name + summary only)
+    /// - LLM can call `get_tool_schema` to get full schema for indexed tools
+    pub tool_index: Option<String>,
 }
 
 impl Default for PromptConfig {
@@ -34,6 +40,7 @@ impl Default for PromptConfig {
             max_tool_description_tokens: 2000,
             runtime_capabilities: None,
             generation_models: None,
+            tool_index: None,
         }
     }
 }
@@ -69,17 +76,30 @@ impl PromptBuilder {
             prompt.push('\n');
         }
 
-        // Available tools
+        // Available tools (with full schema)
         prompt.push_str("## Available Tools\n");
-        if tools.is_empty() {
+        if tools.is_empty() && self.config.tool_index.is_none() {
             prompt.push_str("No tools available. You can only use special actions.\n\n");
         } else {
-            for tool in tools {
-                prompt.push_str(&format!("### {}\n", tool.name));
-                prompt.push_str(&format!("{}\n", tool.description));
-                if !tool.parameters_schema.is_empty() {
-                    prompt.push_str(&format!("Parameters: {}\n", tool.parameters_schema));
+            // Tools with full schema
+            if !tools.is_empty() {
+                prompt.push_str("### Tools (with full parameters)\n");
+                for tool in tools {
+                    prompt.push_str(&format!("#### {}\n", tool.name));
+                    prompt.push_str(&format!("{}\n", tool.description));
+                    if !tool.parameters_schema.is_empty() {
+                        prompt.push_str(&format!("Parameters: {}\n", tool.parameters_schema));
+                    }
+                    prompt.push('\n');
                 }
+            }
+
+            // Tool index (smart discovery mode)
+            if let Some(ref index) = self.config.tool_index {
+                prompt.push_str("### Additional Tools (use `get_tool_schema` to get parameters)\n");
+                prompt.push_str("The following tools are available but not shown with full parameters.\n");
+                prompt.push_str("Call `get_tool_schema(tool_name)` to get the complete parameter schema before using.\n\n");
+                prompt.push_str(index);
                 prompt.push('\n');
             }
         }
@@ -397,5 +417,52 @@ mod tests {
 
         // Verify runtime capabilities section is NOT present
         assert!(!prompt.contains("## Available Runtimes"));
+    }
+
+    #[test]
+    fn test_system_prompt_with_tool_index() {
+        let mut config = PromptConfig::default();
+        config.tool_index = Some(
+            "- github:pr_list: List pull requests\n\
+             - github:issue_create: Create an issue\n\
+             - notion:page_read: Read a Notion page\n"
+                .to_string(),
+        );
+
+        let builder = PromptBuilder::new(config);
+
+        // Only core tools with full schema
+        let core_tools = vec![ToolInfo {
+            name: "search".to_string(),
+            description: "Search the web".to_string(),
+            parameters_schema: r#"{"query": "string"}"#.to_string(),
+            category: None,
+        }];
+
+        let prompt = builder.build_system_prompt(&core_tools);
+
+        // Verify core tool has full schema
+        assert!(prompt.contains("search"));
+        assert!(prompt.contains("Search the web"));
+        assert!(prompt.contains(r#"{"query": "string"}"#));
+
+        // Verify tool index section is present
+        assert!(prompt.contains("### Additional Tools"));
+        assert!(prompt.contains("get_tool_schema"));
+        assert!(prompt.contains("github:pr_list"));
+        assert!(prompt.contains("notion:page_read"));
+    }
+
+    #[test]
+    fn test_system_prompt_smart_discovery_no_full_tools() {
+        let mut config = PromptConfig::default();
+        config.tool_index = Some("- tool1: Description 1\n- tool2: Description 2\n".to_string());
+
+        let builder = PromptBuilder::new(config);
+        let prompt = builder.build_system_prompt(&[]);
+
+        // Should not say "No tools available" because we have tool index
+        assert!(!prompt.contains("No tools available"));
+        assert!(prompt.contains("### Additional Tools"));
     }
 }

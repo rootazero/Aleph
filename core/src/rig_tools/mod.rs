@@ -13,15 +13,30 @@
 //! - [`ImageGenerateTool`] - Image generation from text prompts
 //! - [`SpeechGenerateTool`] - Text-to-speech generation
 //!
+//! # Meta Tools (Smart Tool Discovery)
+//!
+//! - [`ListToolsTool`] - List available tools by category
+//! - [`GetToolSchemaTool`] - Get full JSON Schema for a specific tool
+//!
 //! # Tool Wrappers (for hot-reload)
 //!
 //! - [`McpToolWrapper`] - Wraps MCP server tools as rig-compatible tools
+//!
+//! # Tool Progress Callbacks
+//!
+//! This module provides a global callback mechanism for monitoring tool execution.
+//! Use `set_tool_progress_handler` to receive notifications when tools start/complete.
+
+use once_cell::sync::Lazy;
+use std::sync::{Arc, Mutex};
+use tracing::debug;
 
 pub mod code_exec;
 pub mod error;
 pub mod file_ops;
 pub mod generation;
 pub mod mcp_wrapper;
+pub mod meta_tools;
 pub mod pdf_generate;
 pub mod search;
 pub mod web_fetch;
@@ -32,7 +47,89 @@ pub use error::ToolError;
 pub use file_ops::{FileOpsArgs, FileOpsTool};
 pub use generation::{ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool};
 pub use mcp_wrapper::McpToolWrapper;
+pub use meta_tools::{
+    GetToolSchemaArgs, GetToolSchemaOutput, GetToolSchemaTool, ListToolsArgs, ListToolsOutput,
+    ListToolsTool,
+};
 pub use pdf_generate::{PdfGenerateArgs, PdfGenerateTool};
 pub use search::{SearchArgs, SearchTool};
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
 pub use youtube::{YouTubeArgs, YouTubeTool};
+
+// ============================================================================
+// Tool Progress Callback System
+// ============================================================================
+
+/// Callback trait for monitoring tool execution progress
+///
+/// Implement this trait to receive notifications when tools start and complete.
+/// This enables streaming progress updates to the UI during agent execution.
+pub trait ToolProgressCallback: Send + Sync {
+    /// Called when a tool starts execution
+    ///
+    /// # Arguments
+    /// * `tool_name` - Name of the tool being executed
+    /// * `args_summary` - Brief summary of the arguments (may be truncated for display)
+    fn on_tool_start(&self, tool_name: &str, args_summary: &str);
+
+    /// Called when a tool completes execution
+    ///
+    /// # Arguments
+    /// * `tool_name` - Name of the tool that completed
+    /// * `result_summary` - Brief summary of the result (may be truncated for display)
+    /// * `success` - Whether the tool completed successfully
+    fn on_tool_result(&self, tool_name: &str, result_summary: &str, success: bool);
+}
+
+/// Global storage for the tool progress callback
+static TOOL_PROGRESS_CALLBACK: Lazy<Mutex<Option<Arc<dyn ToolProgressCallback>>>> =
+    Lazy::new(|| Mutex::new(None));
+
+/// Set the global tool progress handler
+///
+/// Call this before executing agent operations to receive progress updates.
+/// Pass `None` to clear the handler after execution completes.
+///
+/// # Thread Safety
+/// This function is thread-safe. Only one handler can be active at a time.
+///
+/// # Example
+/// ```ignore
+/// let handler = Arc::new(MyHandler::new());
+/// set_tool_progress_handler(Some(handler));
+/// // ... execute agent operations ...
+/// set_tool_progress_handler(None); // Clear after done
+/// ```
+pub fn set_tool_progress_handler(handler: Option<Arc<dyn ToolProgressCallback>>) {
+    if let Ok(mut callback) = TOOL_PROGRESS_CALLBACK.lock() {
+        *callback = handler;
+        debug!(
+            has_handler = callback.is_some(),
+            "Tool progress handler updated"
+        );
+    }
+}
+
+/// Notify that a tool has started execution
+///
+/// Called by tool implementations at the start of their `call` method.
+/// If no handler is set, this is a no-op.
+pub fn notify_tool_start(tool_name: &str, args_summary: &str) {
+    if let Ok(callback) = TOOL_PROGRESS_CALLBACK.lock() {
+        if let Some(ref handler) = *callback {
+            handler.on_tool_start(tool_name, args_summary);
+        }
+    }
+}
+
+/// Notify that a tool has completed execution
+///
+/// Called by tool implementations at the end of their `call` method.
+/// If no handler is set, this is a no-op.
+pub fn notify_tool_result(tool_name: &str, result_summary: &str, success: bool) {
+    if let Ok(callback) = TOOL_PROGRESS_CALLBACK.lock() {
+        if let Some(ref handler) = *callback {
+            handler.on_tool_result(tool_name, result_summary, success);
+        }
+    }
+}

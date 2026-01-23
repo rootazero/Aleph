@@ -32,11 +32,14 @@ use rig::tool::Tool;
 use serde_json::Value;
 use tracing::{debug, error, info};
 
-use crate::dispatcher::{ToolSource, UnifiedTool};
+use crate::agents::sub_agents::{DelegateTool, DelegateArgs, SubAgentDispatcher};
+use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AetherError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::rig_tools::{CodeExecTool, FileOpsTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
+use crate::rig_tools::{CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
+use crate::rig_tools::meta_tools::{ListToolsTool, GetToolSchemaTool, ListToolsArgs, GetToolSchemaArgs};
 use crate::three_layer::{Capability, CapabilityGate};
+use tokio::sync::RwLock;
 
 use super::ToolRegistry;
 
@@ -47,6 +50,10 @@ pub struct BuiltinToolConfig {
     pub tavily_api_key: Option<String>,
     /// Generation provider registry for image/video/audio generation
     pub generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
+    /// Dispatcher tool registry for meta tools (smart tool discovery)
+    pub dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
+    /// Sub-agent dispatcher for delegation (smart tool discovery)
+    pub sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
 }
 
 /// Registry of builtin tools for Agent Loop
@@ -66,6 +73,14 @@ pub struct BuiltinToolRegistry {
     code_exec_tool: CodeExecTool,
     /// PDF generation tool instance
     pdf_generate_tool: PdfGenerateTool,
+    /// Image generation tool instance (optional - requires generation registry)
+    image_generate_tool: Option<ImageGenerateTool>,
+    /// Generation provider registry for video/audio generation
+    generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
+    /// Dispatcher tool registry for meta tools (smart tool discovery)
+    dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
+    /// Sub-agent dispatcher for delegation (smart tool discovery)
+    sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
     /// Capability gate for security enforcement
@@ -131,6 +146,12 @@ impl BuiltinToolRegistry {
         let code_exec_tool = CodeExecTool::new();
         let pdf_generate_tool = PdfGenerateTool::new();
 
+        // Create image generation tool if generation registry is provided
+        let image_generate_tool = config.generation_registry.as_ref().map(|registry| {
+            info!("Creating ImageGenerateTool with generation registry");
+            ImageGenerateTool::new(Arc::clone(registry))
+        });
+
         // Build tool metadata
         let mut tools = HashMap::new();
 
@@ -194,7 +215,97 @@ impl BuiltinToolRegistry {
             ),
         );
 
-        // TODO: Add image generation tool when generation_registry is provided
+        // Add generation tools if registry is available
+        let generation_registry = config.generation_registry.clone();
+        if let Some(ref registry) = generation_registry {
+            // Add image generation tool
+            if image_generate_tool.is_some() {
+                tools.insert(
+                    "generate_image".to_string(),
+                    UnifiedTool::new(
+                        "builtin:generate_image",
+                        "generate_image",
+                        ImageGenerateTool::DESCRIPTION,
+                        ToolSource::Builtin,
+                    ),
+                );
+                info!("Registered generate_image tool in BuiltinToolRegistry");
+            }
+
+            // Check if video generation providers are available and add tool
+            if let Ok(reg) = registry.read() {
+                use crate::generation::GenerationType;
+
+                // Add video generation tool if providers are available
+                if reg.first_for_type(GenerationType::Video).is_some() {
+                    tools.insert(
+                        "generate_video".to_string(),
+                        UnifiedTool::new(
+                            "builtin:generate_video",
+                            "generate_video",
+                            "Generate videos from text descriptions",
+                            ToolSource::Builtin,
+                        ),
+                    );
+                    info!("Registered generate_video tool in BuiltinToolRegistry");
+                }
+
+                // Add audio generation tool if providers are available
+                if reg.first_for_type(GenerationType::Audio).is_some() {
+                    tools.insert(
+                        "generate_audio".to_string(),
+                        UnifiedTool::new(
+                            "builtin:generate_audio",
+                            "generate_audio",
+                            "Generate audio/music from text descriptions",
+                            ToolSource::Builtin,
+                        ),
+                    );
+                    info!("Registered generate_audio tool in BuiltinToolRegistry");
+                }
+            }
+        }
+
+        // Add meta tools for smart tool discovery (if dispatcher registry is provided)
+        let dispatcher_registry = config.dispatcher_registry.clone();
+        if dispatcher_registry.is_some() {
+            tools.insert(
+                "list_tools".to_string(),
+                UnifiedTool::new(
+                    "builtin:list_tools",
+                    "list_tools",
+                    ListToolsTool::DESCRIPTION,
+                    ToolSource::Builtin,
+                ),
+            );
+
+            tools.insert(
+                "get_tool_schema".to_string(),
+                UnifiedTool::new(
+                    "builtin:get_tool_schema",
+                    "get_tool_schema",
+                    GetToolSchemaTool::DESCRIPTION,
+                    ToolSource::Builtin,
+                ),
+            );
+
+            info!("Registered meta tools (list_tools, get_tool_schema) in BuiltinToolRegistry");
+        }
+
+        // Add delegate tool for sub-agent delegation (if sub_agent_dispatcher is provided)
+        let sub_agent_dispatcher = config.sub_agent_dispatcher.clone();
+        if sub_agent_dispatcher.is_some() {
+            tools.insert(
+                "delegate".to_string(),
+                UnifiedTool::new(
+                    "builtin:delegate",
+                    "delegate",
+                    "Delegate a task to a specialized sub-agent for tool discovery (MCP tools or skill workflows)",
+                    ToolSource::Builtin,
+                ),
+            );
+            info!("Registered delegate tool in BuiltinToolRegistry");
+        }
 
         Self {
             search_tool,
@@ -203,6 +314,10 @@ impl BuiltinToolRegistry {
             file_ops_tool,
             code_exec_tool,
             pdf_generate_tool,
+            image_generate_tool,
+            generation_registry,
+            dispatcher_registry,
+            sub_agent_dispatcher,
             tools,
             capability_gate,
         }
@@ -232,6 +347,13 @@ impl BuiltinToolRegistry {
             }
             "code_exec" => Some(Capability::ShellExec), // Code execution requires shell capability
             "pdf_generate" => Some(Capability::FileWrite), // PDF generation writes files
+            "generate_image" => Some(Capability::LlmCall), // Image generation uses LLM-like API
+            "generate_video" => Some(Capability::LlmCall), // Video generation uses LLM-like API
+            "generate_audio" => Some(Capability::LlmCall), // Audio generation uses LLM-like API
+            // Meta tools for smart tool discovery - no special capability required
+            "list_tools" | "get_tool_schema" => None,
+            // Delegate tool - no special capability required (sub-agents handle their own capabilities)
+            "delegate" => None,
             _ => None,
         }
     }
@@ -344,6 +466,215 @@ impl BuiltinToolRegistry {
         serde_json::to_value(result)
             .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))
     }
+
+    /// Execute the image generation tool
+    async fn execute_image_generate(&self, arguments: Value) -> Result<Value> {
+        let tool = self.image_generate_tool.as_ref().ok_or_else(|| {
+            AetherError::tool("Image generation not available: no generation registry configured")
+        })?;
+
+        let args: crate::rig_tools::ImageGenerateArgs =
+            serde_json::from_value(arguments).map_err(|e| {
+                AetherError::tool(format!("Invalid generate_image arguments: {}", e))
+            })?;
+
+        let result = tool.call(args).await.map_err(|e| {
+            AetherError::tool(format!("Image generation failed: {}", e))
+        })?;
+
+        serde_json::to_value(result)
+            .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))
+    }
+
+    /// Execute the video generation tool
+    async fn execute_video_generate(&self, arguments: Value) -> Result<Value> {
+        use crate::generation::{GenerationRequest, GenerationType};
+
+        let registry = self.generation_registry.as_ref().ok_or_else(|| {
+            AetherError::tool("Video generation not available: no generation registry configured")
+        })?;
+
+        // Parse arguments
+        let obj = arguments.as_object().ok_or_else(|| {
+            AetherError::tool("Invalid generate_video arguments: expected object")
+        })?;
+
+        let prompt = obj.get("prompt")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| AetherError::tool("Missing required parameter: prompt"))?;
+
+        let provider_name = obj.get("provider").and_then(|v| v.as_str());
+
+        // Get provider from registry
+        let (name, provider) = {
+            let reg = registry.read().map_err(|e| {
+                AetherError::tool(format!("Failed to acquire registry lock: {}", e))
+            })?;
+
+            if let Some(pname) = provider_name {
+                let p = reg.get(pname).ok_or_else(|| {
+                    AetherError::tool(format!("Provider '{}' not found", pname))
+                })?;
+                if !p.supports(GenerationType::Video) {
+                    return Err(AetherError::tool(format!(
+                        "Provider '{}' does not support video generation", pname
+                    )));
+                }
+                (pname.to_string(), p)
+            } else {
+                reg.first_for_type(GenerationType::Video)
+                    .ok_or_else(|| AetherError::tool("No video generation provider available"))?
+            }
+        };
+
+        info!(provider = %name, prompt = %prompt, "Executing video generation");
+
+        // Create request and generate
+        let request = GenerationRequest::video(prompt);
+        let output = provider.generate(request).await.map_err(|e| {
+            AetherError::tool(format!("Video generation failed: {}", e))
+        })?;
+
+        // Build result
+        let result = serde_json::json!({
+            "provider": name,
+            "prompt": prompt,
+            "data": match &output.data {
+                crate::generation::GenerationData::Url(url) => serde_json::json!({"type": "url", "value": url}),
+                crate::generation::GenerationData::LocalPath(path) => serde_json::json!({"type": "file", "value": path}),
+                crate::generation::GenerationData::Bytes(bytes) => serde_json::json!({"type": "bytes", "size": bytes.len()}),
+            },
+            "model": output.metadata.model,
+            "duration_ms": output.metadata.duration.map(|d| d.as_millis()),
+        });
+
+        Ok(result)
+    }
+
+    /// Execute the audio generation tool
+    async fn execute_audio_generate(&self, arguments: Value) -> Result<Value> {
+        use crate::generation::{GenerationRequest, GenerationType};
+
+        let registry = self.generation_registry.as_ref().ok_or_else(|| {
+            AetherError::tool("Audio generation not available: no generation registry configured")
+        })?;
+
+        // Parse arguments
+        let obj = arguments.as_object().ok_or_else(|| {
+            AetherError::tool("Invalid generate_audio arguments: expected object")
+        })?;
+
+        let prompt = obj.get("prompt")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| AetherError::tool("Missing required parameter: prompt"))?;
+
+        let provider_name = obj.get("provider").and_then(|v| v.as_str());
+
+        // Get provider from registry
+        let (name, provider) = {
+            let reg = registry.read().map_err(|e| {
+                AetherError::tool(format!("Failed to acquire registry lock: {}", e))
+            })?;
+
+            if let Some(pname) = provider_name {
+                let p = reg.get(pname).ok_or_else(|| {
+                    AetherError::tool(format!("Provider '{}' not found", pname))
+                })?;
+                if !p.supports(GenerationType::Audio) {
+                    return Err(AetherError::tool(format!(
+                        "Provider '{}' does not support audio generation", pname
+                    )));
+                }
+                (pname.to_string(), p)
+            } else {
+                reg.first_for_type(GenerationType::Audio)
+                    .ok_or_else(|| AetherError::tool("No audio generation provider available"))?
+            }
+        };
+
+        info!(provider = %name, prompt = %prompt, "Executing audio generation");
+
+        // Create request and generate
+        let request = GenerationRequest::audio(prompt);
+        let output = provider.generate(request).await.map_err(|e| {
+            AetherError::tool(format!("Audio generation failed: {}", e))
+        })?;
+
+        // Build result
+        let result = serde_json::json!({
+            "provider": name,
+            "prompt": prompt,
+            "data": match &output.data {
+                crate::generation::GenerationData::Url(url) => serde_json::json!({"type": "url", "value": url}),
+                crate::generation::GenerationData::LocalPath(path) => serde_json::json!({"type": "file", "value": path}),
+                crate::generation::GenerationData::Bytes(bytes) => serde_json::json!({"type": "bytes", "size": bytes.len()}),
+            },
+            "model": output.metadata.model,
+            "duration_ms": output.metadata.duration.map(|d| d.as_millis()),
+        });
+
+        Ok(result)
+    }
+
+    /// Execute the list_tools meta tool
+    async fn execute_list_tools(&self, arguments: Value) -> Result<Value> {
+        let registry = self.dispatcher_registry.as_ref().ok_or_else(|| {
+            AetherError::tool("list_tools not available: no dispatcher registry configured")
+        })?;
+
+        let args: ListToolsArgs = serde_json::from_value(arguments).map_err(|e| {
+            AetherError::tool(format!("Invalid list_tools arguments: {}", e))
+        })?;
+
+        // Create a temporary ListToolsTool and execute
+        let tool = ListToolsTool::new(Arc::clone(registry));
+        let result = tool.call(args).await.map_err(|e| {
+            AetherError::tool(format!("list_tools failed: {}", e))
+        })?;
+
+        serde_json::to_value(result)
+            .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))
+    }
+
+    /// Execute the get_tool_schema meta tool
+    async fn execute_get_tool_schema(&self, arguments: Value) -> Result<Value> {
+        let registry = self.dispatcher_registry.as_ref().ok_or_else(|| {
+            AetherError::tool("get_tool_schema not available: no dispatcher registry configured")
+        })?;
+
+        let args: GetToolSchemaArgs = serde_json::from_value(arguments).map_err(|e| {
+            AetherError::tool(format!("Invalid get_tool_schema arguments: {}", e))
+        })?;
+
+        // Create a temporary GetToolSchemaTool and execute
+        let tool = GetToolSchemaTool::new(Arc::clone(registry));
+        let result = tool.call(args).await.map_err(|e| {
+            AetherError::tool(format!("get_tool_schema failed: {}", e))
+        })?;
+
+        serde_json::to_value(result)
+            .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))
+    }
+
+    /// Execute the delegate tool for sub-agent delegation
+    async fn execute_delegate(&self, arguments: Value) -> Result<Value> {
+        let dispatcher = self.sub_agent_dispatcher.as_ref().ok_or_else(|| {
+            AetherError::tool("delegate not available: no sub_agent_dispatcher configured")
+        })?;
+
+        let args: DelegateArgs = serde_json::from_value(arguments).map_err(|e| {
+            AetherError::tool(format!("Invalid delegate arguments: {}", e))
+        })?;
+
+        // Create a temporary DelegateTool and execute
+        let tool = DelegateTool::new(Arc::clone(dispatcher));
+        let result = tool.call(args).await.map_err(|e| {
+            AetherError::tool(format!("delegate failed: {}", e))
+        })?;
+
+        serde_json::to_value(result)
+            .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))
+    }
 }
 
 impl Default for BuiltinToolRegistry {
@@ -377,6 +708,14 @@ impl ToolRegistry for BuiltinToolRegistry {
             "file_ops" => Box::pin(async move { self.execute_file_ops(arguments).await }),
             "code_exec" => Box::pin(async move { self.execute_code_exec(arguments).await }),
             "pdf_generate" => Box::pin(async move { self.execute_pdf_generate(arguments).await }),
+            "generate_image" => Box::pin(async move { self.execute_image_generate(arguments).await }),
+            "generate_video" => Box::pin(async move { self.execute_video_generate(arguments).await }),
+            "generate_audio" => Box::pin(async move { self.execute_audio_generate(arguments).await }),
+            // Meta tools for smart tool discovery
+            "list_tools" => Box::pin(async move { self.execute_list_tools(arguments).await }),
+            "get_tool_schema" => Box::pin(async move { self.execute_get_tool_schema(arguments).await }),
+            // Delegate tool for sub-agent delegation
+            "delegate" => Box::pin(async move { self.execute_delegate(arguments).await }),
             _ => {
                 let tool = tool_name.to_string();
                 error!(tool = %tool, "Unknown tool requested");
@@ -571,5 +910,120 @@ mod tests {
         // PDF generate capability check should pass
         let check = registry.check_capability("pdf_generate", &serde_json::json!({}));
         assert!(check.is_ok(), "FileWrite should be allowed for pdf_generate");
+    }
+
+    #[test]
+    fn test_meta_tools_not_registered_without_dispatcher_registry() {
+        // Without dispatcher registry, meta tools should not be registered
+        let registry = BuiltinToolRegistry::new();
+
+        assert!(registry.get_tool("list_tools").is_none());
+        assert!(registry.get_tool("get_tool_schema").is_none());
+    }
+
+    #[test]
+    fn test_meta_tools_registered_with_dispatcher_registry() {
+        // With dispatcher registry, meta tools should be registered
+        let dispatcher_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
+        let config = BuiltinToolConfig {
+            dispatcher_registry: Some(dispatcher_registry),
+            ..Default::default()
+        };
+        let registry = BuiltinToolRegistry::with_config(config);
+
+        assert!(registry.get_tool("list_tools").is_some());
+        assert!(registry.get_tool("get_tool_schema").is_some());
+    }
+
+    #[test]
+    fn test_meta_tools_no_special_capability() {
+        // Meta tools should not require any special capability
+        let dispatcher_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
+        let config = BuiltinToolConfig {
+            dispatcher_registry: Some(dispatcher_registry),
+            ..Default::default()
+        };
+        let registry = BuiltinToolRegistry::with_config(config);
+
+        assert_eq!(
+            registry.required_capability("list_tools", &serde_json::json!({})),
+            None
+        );
+        assert_eq!(
+            registry.required_capability("get_tool_schema", &serde_json::json!({})),
+            None
+        );
+    }
+
+    #[test]
+    fn test_delegate_tool_not_registered_without_dispatcher() {
+        // Without sub_agent_dispatcher, delegate tool should not be registered
+        let registry = BuiltinToolRegistry::new();
+
+        assert!(registry.get_tool("delegate").is_none());
+    }
+
+    #[test]
+    fn test_delegate_tool_registered_with_dispatcher() {
+        // With sub_agent_dispatcher, delegate tool should be registered
+        let tool_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
+        let sub_agent_dispatcher = Arc::new(RwLock::new(
+            SubAgentDispatcher::with_defaults(tool_registry)
+        ));
+        let config = BuiltinToolConfig {
+            sub_agent_dispatcher: Some(sub_agent_dispatcher),
+            ..Default::default()
+        };
+        let registry = BuiltinToolRegistry::with_config(config);
+
+        assert!(registry.get_tool("delegate").is_some());
+        let delegate = registry.get_tool("delegate").unwrap();
+        assert_eq!(delegate.name, "delegate");
+        assert_eq!(delegate.id, "builtin:delegate");
+    }
+
+    #[test]
+    fn test_delegate_tool_no_special_capability() {
+        // Delegate tool should not require any special capability
+        let tool_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
+        let sub_agent_dispatcher = Arc::new(RwLock::new(
+            SubAgentDispatcher::with_defaults(tool_registry)
+        ));
+        let config = BuiltinToolConfig {
+            sub_agent_dispatcher: Some(sub_agent_dispatcher),
+            ..Default::default()
+        };
+        let registry = BuiltinToolRegistry::with_config(config);
+
+        assert_eq!(
+            registry.required_capability("delegate", &serde_json::json!({})),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delegate_tool_execution() {
+        // With sub_agent_dispatcher, delegate tool should execute
+        let tool_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
+        let sub_agent_dispatcher = Arc::new(RwLock::new(
+            SubAgentDispatcher::with_defaults(tool_registry)
+        ));
+        let config = BuiltinToolConfig {
+            sub_agent_dispatcher: Some(sub_agent_dispatcher),
+            ..Default::default()
+        };
+        let registry = BuiltinToolRegistry::with_config(config);
+
+        // Execute delegate tool
+        let result = registry.execute_tool(
+            "delegate",
+            serde_json::json!({
+                "prompt": "List available MCP tools",
+                "agent": "mcp"
+            })
+        ).await;
+
+        // Should succeed (even with no tools available, it returns info about available servers)
+        assert!(result.is_ok());
     }
 }

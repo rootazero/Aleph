@@ -43,7 +43,7 @@ pub use model_router::{ModelId, RoutingCondition, RoutingRule, ThinkerModelSelec
 #[deprecated(since = "0.2.0", note = "Use ThinkerModelSelector instead")]
 pub type ModelRouter = ThinkerModelSelector;
 pub use prompt_builder::{Message, MessageRole, PromptBuilder, PromptConfig};
-pub use tool_filter::{ToolFilter, ToolFilterConfig};
+pub use tool_filter::{IntentFilterConfig, IntentFilterResult, ToolFilter, ToolFilterConfig};
 
 use crate::agent_loop::{
     CompressionConfig, LoopState, ModelRoutingConfig, Observation, ThinkerTrait, Thinking, ToolInfo,

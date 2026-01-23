@@ -73,6 +73,9 @@ pub mod analyzer;
 // === Risk Evaluation ===
 pub mod risk;
 
+// === Tool Filtering ===
+pub mod tool_filter;
+
 // === Re-exports: Tool Management ===
 pub use async_confirmation::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
@@ -88,8 +91,9 @@ pub use integration::{
 };
 pub use registry::ToolRegistry;
 pub use types::{
-    ConflictInfo, ConflictResolution, RoutingLayer, ToolCategory, ToolDefinition, ToolPriority,
-    ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
+    ConflictInfo, ConflictResolution, RoutingLayer, ToolCategory, ToolDefinition, ToolIndex,
+    ToolIndexCategory, ToolIndexEntry, ToolPriority, ToolResult, ToolSafetyLevel, ToolSource,
+    ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
 
 // === Re-exports: Task Orchestration ===
@@ -128,6 +132,9 @@ pub use analyzer::{AnalysisResult, TaskAnalyzer};
 
 // === Re-exports: Risk Evaluation ===
 pub use risk::{RiskEvaluator, RiskLevel};
+
+// === Re-exports: Tool Filtering ===
+pub use tool_filter::{FilterResult, ToolFilter, ToolFilterConfig};
 
 #[cfg(test)]
 mod tests {

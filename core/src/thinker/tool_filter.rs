@@ -2,12 +2,33 @@
 //!
 //! This module provides intelligent tool filtering to reduce
 //! the number of tools presented to the LLM based on context.
+//!
+//! # Two-Level Filtering
+//!
+//! Tool filtering happens at two levels:
+//!
+//! 1. **Intent-based filtering** (`dispatcher::tool_filter`):
+//!    - Runs before Agent Loop
+//!    - Filters based on detected TaskCategory
+//!    - Produces full_schema_tools + indexed_tools
+//!
+//! 2. **Observation-based filtering** (this module):
+//!    - Runs within Agent Loop
+//!    - Filters based on runtime context (history, attachments)
+//!    - Further refines the tool set based on current step
+//!
+//! The two filters work together:
+//! - Dispatcher filter determines what tools are available
+//! - Thinker filter refines based on what's relevant for current step
 
 use std::collections::{HashMap, HashSet};
 
 use crate::agent_loop::{Observation, ToolInfo};
-use crate::dispatcher::UnifiedTool;
+use crate::dispatcher::{tool_filter as intent_filter, UnifiedTool};
 use crate::intent::TaskCategory;
+
+// Re-export intent filter types for convenience
+pub use intent_filter::{FilterResult as IntentFilterResult, ToolFilterConfig as IntentFilterConfig};
 
 /// Tool filter configuration
 #[derive(Debug, Clone)]
@@ -83,12 +104,45 @@ impl ToolFilterConfig {
 /// Tool filter for reducing tool set based on context
 pub struct ToolFilter {
     config: ToolFilterConfig,
+    /// Optional intent-based filter for pre-filtering
+    intent_filter: Option<intent_filter::ToolFilter>,
 }
 
 impl ToolFilter {
     /// Create a new tool filter
     pub fn new(config: ToolFilterConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            intent_filter: None,
+        }
+    }
+
+    /// Create a new tool filter with intent-based pre-filtering
+    pub fn with_intent_filter(config: ToolFilterConfig, intent_config: intent_filter::ToolFilterConfig) -> Self {
+        Self {
+            config,
+            intent_filter: Some(intent_filter::ToolFilter::new(intent_config)),
+        }
+    }
+
+    /// Pre-filter tools by task category using intent-based filter
+    ///
+    /// Returns a FilterResult containing:
+    /// - core_tools: Always available with full schema
+    /// - filtered_tools: Relevant to the category with full schema
+    /// - indexed_tools: Available but need get_tool_schema to use
+    pub fn pre_filter_by_category(
+        &self,
+        tools: &[UnifiedTool],
+        category: TaskCategory,
+    ) -> intent_filter::FilterResult {
+        if let Some(ref filter) = self.intent_filter {
+            filter.filter_by_category(tools, category)
+        } else {
+            // Fallback: use default intent filter
+            let default_filter = intent_filter::ToolFilter::default_config();
+            default_filter.filter_by_category(tools, category)
+        }
     }
 
     /// Filter tools based on observation context

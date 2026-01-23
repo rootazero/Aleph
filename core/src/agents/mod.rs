@@ -12,6 +12,13 @@
 //! - `RigAgentManager`: Main AI agent implementation using rig-core
 //! - `RigAgentConfig`: Configuration for RigAgentManager
 //! - `ChatMessage`, `ConversationHistory`: Message history management
+//!
+//! ## Specialized Sub-Agents (`agents::sub_agents::`)
+//! - `SubAgent`: Trait for specialized sub-agents
+//! - `McpSubAgent`: Sub-agent for MCP tool execution
+//! - `SkillSubAgent`: Sub-agent for skill execution
+//! - `DelegateTool`: Tool for delegating to sub-agents
+//! - `SubAgentDispatcher`: Routes requests to appropriate sub-agents
 
 mod registry;
 mod task_tool;
@@ -19,6 +26,9 @@ mod types;
 
 /// Rig-core based AI agent implementation.
 pub mod rig;
+
+/// Specialized sub-agents for task delegation.
+pub mod sub_agents;
 
 #[cfg(test)]
 mod integration_test;
@@ -32,4 +42,10 @@ pub use types::{AgentDef, AgentMode};
 pub use rig::{
     AgentConfig, AgentResponse, BuiltinToolConfig, ChatMessage, ConversationHistory, MessageRole,
     RigAgentConfig, RigAgentManager, ToolCallInfo, ToolCallResult,
+};
+
+// Re-export sub_agents module types for convenience
+pub use sub_agents::{
+    DelegateTool, McpSubAgent, SkillSubAgent, SubAgent, SubAgentCapability, SubAgentDispatcher,
+    SubAgentRequest, SubAgentResult, SubAgentType,
 };
