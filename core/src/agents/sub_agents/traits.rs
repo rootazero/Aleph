@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -61,7 +62,7 @@ pub struct SubAgentRequest {
 }
 
 /// Execution context passed from main agent to sub-agents
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ExecutionContextInfo {
     /// Working directory for file operations
     pub working_directory: Option<String>,
@@ -80,7 +81,7 @@ pub struct ExecutionContextInfo {
 }
 
 /// Summary of a recent step for context passing
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StepContextInfo {
     /// What action was taken
     pub action_type: String,

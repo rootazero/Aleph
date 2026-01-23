@@ -211,14 +211,7 @@ impl AetherTool for SearchTool {
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
-/// Implementation of rig's Tool trait for SearchTool
-///
-/// Required for rig::tool::server::ToolServer hot-reload support.
-/// Will be removed when rig-core dependency is fully removed.
+// rig::tool::Tool implementation required for ToolServer registration
 impl rig::tool::Tool for SearchTool {
     const NAME: &'static str = "search";
 

@@ -5,18 +5,20 @@
 
 use std::sync::Arc;
 
-use rig::tool::{Tool, ToolError};
+use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::info;
 
 use super::dispatcher::SubAgentDispatcher;
-use super::traits::{SubAgentRequest, ExecutionContextInfo};
+use super::traits::{ExecutionContextInfo, SubAgentRequest};
 use crate::error::Result;
+use crate::tools::AetherTool;
 
 /// Arguments for the delegate tool
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DelegateArgs {
     /// The task/prompt to delegate
     pub prompt: String,
@@ -38,7 +40,7 @@ pub struct DelegateArgs {
 }
 
 /// Result from the delegate tool
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DelegateResult {
     /// Whether the delegation was successful
     pub success: bool,
@@ -59,7 +61,7 @@ pub struct DelegateResult {
 }
 
 /// Information about an artifact produced by sub-agent
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactInfo {
     /// Artifact type (file, url, data)
     pub artifact_type: String,
@@ -70,7 +72,7 @@ pub struct ArtifactInfo {
 }
 
 /// Information about a tool call made by sub-agent
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolCallInfo {
     /// Tool name
     pub name: String,
@@ -96,6 +98,7 @@ pub struct ToolCallInfo {
 ///   "context": {"repo": "owner/repo"}
 /// }
 /// ```
+#[derive(Clone)]
 pub struct DelegateTool {
     /// Sub-agent dispatcher
     dispatcher: Arc<RwLock<SubAgentDispatcher>>,
@@ -198,57 +201,21 @@ impl DelegateTool {
     }
 }
 
-// Implement rig-core Tool trait
-impl Tool for DelegateTool {
+/// Implementation of AetherTool trait for DelegateTool
+#[async_trait]
+impl AetherTool for DelegateTool {
     const NAME: &'static str = "delegate";
+    const DESCRIPTION: &'static str = "Delegate a task to a specialized sub-agent. Use this when:\n\
+        - You need to discover MCP tools from external servers (agent: \"mcp\")\n\
+        - You need to find available skill workflows (agent: \"skill\")\n\
+        - A task requires specialized tool discovery\n\n\
+        The sub-agent will analyze available tools and provide recommendations.";
 
-    type Error = ToolError;
     type Args = DelegateArgs;
     type Output = DelegateResult;
 
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Delegate a task to a specialized sub-agent. Use this when:\n\
-                - You need to discover MCP tools from external servers (agent: \"mcp\")\n\
-                - You need to find available skill workflows (agent: \"skill\")\n\
-                - A task requires specialized tool discovery\n\n\
-                The sub-agent will analyze available tools and provide recommendations."
-                .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "The task to delegate to the sub-agent"
-                    },
-                    "agent": {
-                        "type": "string",
-                        "enum": ["mcp", "skill"],
-                        "description": "The type of sub-agent to use: 'mcp' for MCP tools, 'skill' for skill workflows"
-                    },
-                    "target": {
-                        "type": "string",
-                        "description": "Target for the sub-agent (e.g., MCP server name like 'github', or skill ID)"
-                    },
-                    "context": {
-                        "type": "object",
-                        "description": "Additional context to pass to the sub-agent"
-                    },
-                    "max_iterations": {
-                        "type": "integer",
-                        "description": "Maximum iterations for the sub-agent (default: 10)"
-                    }
-                },
-                "required": ["prompt"]
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.delegate(args)
-            .await
-            .map_err(|e| ToolError::ToolCallError(e.to_string().into()))
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.delegate(args).await
     }
 }
 
@@ -256,6 +223,7 @@ impl Tool for DelegateTool {
 mod tests {
     use super::*;
     use crate::dispatcher::ToolRegistry;
+    use crate::tools::AetherTool;
 
     #[tokio::test]
     async fn test_delegate_tool_creation() {
@@ -267,13 +235,13 @@ mod tests {
         assert!(tool.session_id.is_none());
     }
 
-    #[tokio::test]
-    async fn test_delegate_tool_definition() {
+    #[test]
+    fn test_delegate_tool_definition() {
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let dispatcher = Arc::new(RwLock::new(SubAgentDispatcher::with_defaults(registry)));
         let tool = DelegateTool::new(dispatcher);
 
-        let definition = Tool::definition(&tool, "test".to_string()).await;
+        let definition = AetherTool::definition(&tool);
         assert_eq!(definition.name, "delegate");
         assert!(definition.description.contains("sub-agent"));
     }

@@ -4,12 +4,12 @@
 //! This file only contains execute_* methods for tools that haven't been
 //! migrated to AetherTool (video/audio generation, delegate).
 
-use rig::tool::Tool;
 use serde_json::Value;
 use tracing::info;
 
 use crate::agents::sub_agents::{DelegateArgs, DelegateTool};
 use crate::error::{AetherError, Result};
+use crate::tools::AetherTool;
 
 use super::BuiltinToolRegistry;
 
@@ -155,9 +155,6 @@ impl BuiltinToolRegistry {
     }
 
     /// Execute the delegate tool for sub-agent delegation
-    ///
-    /// Note: DelegateTool uses rig::tool::Tool directly and hasn't been
-    /// migrated to AetherTool yet (planned for Phase 4).
     pub(crate) async fn execute_delegate(&self, arguments: Value) -> Result<Value> {
         let dispatcher = self.sub_agent_dispatcher.as_ref().ok_or_else(|| {
             AetherError::tool("delegate not available: no sub_agent_dispatcher configured")
@@ -167,11 +164,9 @@ impl BuiltinToolRegistry {
             AetherError::tool(format!("Invalid delegate arguments: {}", e))
         })?;
 
-        // Create a temporary DelegateTool and execute via rig::tool::Tool trait
+        // Create a temporary DelegateTool and execute via AetherTool trait
         let tool = DelegateTool::new(std::sync::Arc::clone(dispatcher));
-        let result = Tool::call(&tool, args).await.map_err(|e| {
-            AetherError::tool(format!("delegate failed: {}", e))
-        })?;
+        let result = AetherTool::call(&tool, args).await?;
 
         serde_json::to_value(result)
             .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))

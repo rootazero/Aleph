@@ -241,10 +241,7 @@ impl AetherTool for ImageGenerateTool {
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
+// rig::tool::Tool implementation required for ToolServer registration
 impl rig::tool::Tool for ImageGenerateTool {
     const NAME: &'static str = "generate_image";
 

@@ -163,10 +163,7 @@ impl AetherTool for YouTubeTool {
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
+// rig::tool::Tool implementation required for ToolServer registration
 impl rig::tool::Tool for YouTubeTool {
     const NAME: &'static str = "youtube";
 
@@ -194,7 +191,6 @@ impl rig::tool::Tool for YouTubeTool {
 mod tests {
     use super::*;
     use crate::tools::AetherTool;
-    use rig::tool::Tool;
 
     #[test]
     fn test_youtube_args() {
@@ -220,11 +216,11 @@ mod tests {
         drop(tool);
     }
 
-    #[tokio::test]
-    async fn test_youtube_tool_definition() {
+    #[test]
+    fn test_youtube_tool_definition() {
         let tool = YouTubeTool::new();
-        // Test rig::tool::Tool trait (takes prompt argument and is async)
-        let def = <YouTubeTool as Tool>::definition(&tool, "test".to_string()).await;
+        // Test AetherTool::definition()
+        let def = AetherTool::definition(&tool);
 
         assert_eq!(def.name, "youtube");
         assert!(!def.description.is_empty());

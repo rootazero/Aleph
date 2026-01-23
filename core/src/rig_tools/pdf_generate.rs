@@ -661,10 +661,7 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
+// rig::tool::Tool implementation required for ToolServer registration
 impl rig::tool::Tool for PdfGenerateTool {
     const NAME: &'static str = "pdf_generate";
 

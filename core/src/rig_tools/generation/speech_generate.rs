@@ -252,66 +252,11 @@ impl AetherTool for SpeechGenerateTool {
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
-impl rig::tool::Tool for SpeechGenerateTool {
-    const NAME: &'static str = "generate_speech";
-
-    type Error = ToolError;
-    type Args = SpeechGenerateArgs;
-    type Output = SpeechGenerateOutput;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        let schema = schemars::schema_for!(SpeechGenerateArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
-            json!({
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "The text to convert to speech"
-                    },
-                    "voice": {
-                        "type": "string",
-                        "description": "Voice to use (provider-specific, e.g., 'alloy', 'echo', 'fable')"
-                    },
-                    "speed": {
-                        "type": "number",
-                        "description": "Speaking speed (0.25 to 4.0, default: 1.0)"
-                    },
-                    "format": {
-                        "type": "string",
-                        "description": "Output audio format: 'mp3', 'opus', 'aac', 'flac', 'wav' (default: 'mp3')"
-                    },
-                    "provider": {
-                        "type": "string",
-                        "description": "Provider name to use (default: first available)"
-                    }
-                },
-                "required": ["text"]
-            })
-        });
-
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters,
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.call_impl(args).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::generation::MockGenerationProvider;
     use crate::tools::AetherTool;
-    use rig::tool::Tool;
 
     fn create_test_registry() -> Arc<GenerationProviderRegistry> {
         let mut registry = GenerationProviderRegistry::new();
@@ -546,16 +491,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rig_tool_trait() {
+    async fn test_aether_tool_trait() {
         let registry = create_test_registry();
         let tool = SpeechGenerateTool::new(registry);
 
-        // Test definition via rig trait (fully qualified)
-        let definition = <SpeechGenerateTool as Tool>::definition(&tool, "test".to_string()).await;
+        // Test definition via AetherTool trait
+        let definition = AetherTool::definition(&tool);
         assert_eq!(definition.name, "generate_speech");
         assert!(!definition.description.is_empty());
 
-        // Test call via rig trait
+        // Test call via AetherTool trait
         let args = SpeechGenerateArgs {
             text: "Trait test".to_string(),
             voice: None,
@@ -564,7 +509,7 @@ mod tests {
             provider: Some("mock-tts".to_string()),
         };
 
-        let result = <SpeechGenerateTool as Tool>::call(&tool, args).await;
+        let result = AetherTool::call(&tool, args).await;
         assert!(result.is_ok());
     }
 

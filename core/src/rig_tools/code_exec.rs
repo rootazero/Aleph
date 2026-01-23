@@ -387,52 +387,6 @@ Timeout: Default 60 seconds, configurable."#;
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
-impl rig::tool::Tool for CodeExecTool {
-    const NAME: &'static str = "code_exec";
-
-    type Args = CodeExecArgs;
-    type Output = CodeExecOutput;
-    type Error = ToolError;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "language": {
-                        "type": "string",
-                        "enum": ["python", "javascript", "shell"],
-                        "description": "Programming language to use"
-                    },
-                    "code": {
-                        "type": "string",
-                        "description": "Code to execute"
-                    },
-                    "working_dir": {
-                        "type": "string",
-                        "description": "Working directory for execution (optional)"
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "description": "Execution timeout in seconds (optional, default 60)"
-                    }
-                },
-                "required": ["language", "code"]
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.execute(args).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

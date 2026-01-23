@@ -145,45 +145,6 @@ impl AetherTool for ListToolsTool {
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
-impl rig::tool::Tool for ListToolsTool {
-    const NAME: &'static str = "list_tools";
-
-    type Error = ToolError;
-    type Args = ListToolsArgs;
-    type Output = ListToolsOutput;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        let schema = schemars::schema_for!(ListToolsArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
-            json!({
-                "type": "object",
-                "properties": {
-                    "category": {
-                        "type": "string",
-                        "description": "Category filter: core, builtin, mcp, skill, custom. Omit for all categories.",
-                        "enum": ["core", "builtin", "mcp", "skill", "custom"]
-                    }
-                },
-                "required": []
-            })
-        });
-
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters,
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.call_impl(args).await
-    }
-}
-
 // ============================================================================
 // GetToolSchemaTool
 // ============================================================================
@@ -348,44 +309,6 @@ impl AetherTool for GetToolSchemaTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)
-    }
-}
-
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
-impl rig::tool::Tool for GetToolSchemaTool {
-    const NAME: &'static str = "get_tool_schema";
-
-    type Error = ToolError;
-    type Args = GetToolSchemaArgs;
-    type Output = GetToolSchemaOutput;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        let schema = schemars::schema_for!(GetToolSchemaArgs);
-        let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
-            json!({
-                "type": "object",
-                "properties": {
-                    "tool_name": {
-                        "type": "string",
-                        "description": "Name of the tool to get schema for"
-                    }
-                },
-                "required": ["tool_name"]
-            })
-        });
-
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters,
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.call_impl(args).await
     }
 }
 

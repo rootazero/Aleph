@@ -302,43 +302,6 @@ Skill instructions are task directives, not suggestions."#;
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
-impl rig::tool::Tool for ReadSkillTool {
-    const NAME: &'static str = "read_skill";
-
-    type Error = ToolError;
-    type Args = ReadSkillArgs;
-    type Output = ReadSkillOutput;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "skill_id": {
-                        "type": "string",
-                        "description": "The skill identifier (directory name). Examples: 'refine-text', 'translate', 'summarize', 'code-review'"
-                    },
-                    "file_name": {
-                        "type": "string",
-                        "description": "Optional: specific file to read (default: 'SKILL.md'). Use this to access additional resources like 'ADVANCED.md', 'CHECKLIST.md', etc."
-                    }
-                },
-                "required": ["skill_id"]
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.call_impl(args).await
-    }
-}
-
 // ============================================================================
 // ListSkillsTool - List available skills (Level 1 metadata)
 // ============================================================================
@@ -571,39 +534,6 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
-impl rig::tool::Tool for ListSkillsTool {
-    const NAME: &'static str = "list_skills";
-
-    type Error = ToolError;
-    type Args = ListSkillsArgs;
-    type Output = ListSkillsOutput;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "filter": {
-                        "type": "string",
-                        "description": "Optional: filter skills by keyword in name or description"
-                    }
-                },
-                "required": []
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        self.call_impl(args).await
-    }
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -612,7 +542,6 @@ impl rig::tool::Tool for ListSkillsTool {
 mod tests {
     use super::*;
     use crate::tools::AetherTool;
-    use rig::tool::Tool;
     use tempfile::TempDir;
 
     fn create_test_skill(dir: &Path, id: &str, name: &str, description: &str) {

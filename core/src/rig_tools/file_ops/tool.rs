@@ -211,10 +211,7 @@ impl AetherTool for FileOpsTool {
     }
 }
 
-// =============================================================================
-// Transitional rig::tool::Tool implementation (to be removed in Phase 4)
-// =============================================================================
-
+// rig::tool::Tool implementation required for ToolServer registration
 impl rig::tool::Tool for FileOpsTool {
     const NAME: &'static str = "file_ops";
 
