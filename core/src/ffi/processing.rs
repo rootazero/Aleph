@@ -16,6 +16,7 @@ use crate::intent::{AgentModePrompt, ToolDescription};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
 use crate::skills::SkillsRegistry;
 use crate::rig_tools::file_ops::{clear_written_files, take_written_files};
+use crate::rig_tools::set_tool_progress_handler;
 use crate::utils::paths::get_skills_dir;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -209,6 +210,9 @@ impl AetherCore {
     pub fn cancel(&self) {
         info!("Cancel requested, triggering cancellation");
         self.current_op_token.read().unwrap().cancel();
+
+        // Also cancel any pending user inputs
+        crate::ffi::user_input::cancel_all_pending_inputs();
     }
 
     /// Check if the current operation has been cancelled
@@ -329,7 +333,69 @@ impl AetherCore {
                 .map_err(|e| AetherFfiError::Config(format!("OCR failed: {}", e)))
         })
     }
+
+    /// Respond to a user input request from the agent loop
+    ///
+    /// This method is called from Swift after the user provides input in response
+    /// to an `on_user_input_request` callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_id` - The request ID from the `on_user_input_request` callback
+    /// * `response` - The user's response text
+    ///
+    /// # Returns
+    ///
+    /// `true` if the request was found and completed, `false` if not found.
+    pub fn respond_to_user_input(&self, request_id: String, response: String) -> bool {
+        info!(
+            request_id = %request_id,
+            response_len = response.len(),
+            "Responding to user input request from FFI"
+        );
+
+        crate::ffi::user_input::complete_pending_input(&request_id, response)
+    }
 }
+// ============================================================================
+// Tool Progress Callback Adapter
+// ============================================================================
+
+use crate::rig_tools::ToolProgressCallback;
+
+/// Adapter to bridge tool progress callbacks to the FFI event handler
+///
+/// This enables real-time streaming of tool execution progress during agent operations.
+struct FfiToolProgressAdapter {
+    handler: Arc<dyn crate::ffi::AetherEventHandler>,
+}
+
+impl FfiToolProgressAdapter {
+    fn new(handler: Arc<dyn crate::ffi::AetherEventHandler>) -> Self {
+        Self { handler }
+    }
+}
+
+impl ToolProgressCallback for FfiToolProgressAdapter {
+    fn on_tool_start(&self, tool_name: &str, args_summary: &str) {
+        // Stream tool start as a formatted message
+        let message = format!("\n**[工具]** {} - {}\n", tool_name, args_summary);
+        self.handler.on_stream_chunk(message);
+        // Also notify via dedicated tool callback
+        self.handler.on_tool_start(tool_name.to_string());
+    }
+
+    fn on_tool_result(&self, tool_name: &str, result_summary: &str, success: bool) {
+        // Stream result as a formatted message
+        let status = if success { "✓" } else { "✗" };
+        let message = format!("**[{}]** {}: {}\n", status, tool_name, result_summary);
+        self.handler.on_stream_chunk(message);
+        // Also notify via dedicated tool callback
+        self.handler
+            .on_tool_result(tool_name.to_string(), result_summary.to_string());
+    }
+}
+
 /// Execute input using RigAgentManager (existing code path)
 #[allow(clippy::too_many_arguments)]
 fn execute_with_agent_manager(
@@ -354,16 +420,18 @@ fn execute_with_agent_manager(
     // Clear any previously tracked written files for this session
     clear_written_files();
 
+    // Set up tool progress callback for streaming updates
+    let progress_adapter = Arc::new(FfiToolProgressAdapter::new(handler.clone()));
+    set_tool_progress_handler(Some(progress_adapter));
+
     // Create manager with shared ToolServerHandle (all tools persist across calls)
     let manager =
         RigAgentManager::with_shared_handle(config.clone(), tool_server_handle, registered_tools);
 
-    // Notify UI that we're processing with tools
-    // This provides feedback when using skills/slash commands that may invoke tools
-    handler.on_tool_start("processing".to_string());
-
     // Stream initial progress to show the skill is being executed
-    handler.on_stream_chunk("\n**[开始]** 正在执行任务...\n".to_string());
+    let initial_chunk = "\n**[开始]** 正在执行任务...\n".to_string();
+    info!(chunk_len = initial_chunk.len(), "Sending initial stream chunk");
+    handler.on_stream_chunk(initial_chunk);
 
     // Get or create conversation history for this topic
     let topic_key = topic_id
@@ -399,11 +467,11 @@ fn execute_with_agent_manager(
         debug!(topic_id = %topic_key, "Conversation history updated");
     }
 
+    // Clear tool progress callback after execution completes
+    set_tool_progress_handler(None);
+
     match result {
         Ok(response) => {
-            // Notify UI that tool processing completed
-            handler.on_tool_result("processing".to_string(), "completed".to_string());
-
             // Collect files written during tool execution
             let written_files = take_written_files();
             let final_content = if written_files.is_empty() {
@@ -455,18 +523,20 @@ fn execute_with_agent_manager(
                 }
             }
 
+            // Stream completion message
+            handler.on_stream_chunk("\n**[完成]** 任务执行成功\n".to_string());
+
             // If tokio::select! returned the result branch, the operation completed successfully
             handler.on_complete(final_content);
         }
         Err(e) => {
-            // Notify UI that tool processing failed
-            handler.on_tool_result("processing".to_string(), format!("Error: {}", e));
-
             // Check if the error is due to cancellation
             if op_token.is_cancelled() {
+                handler.on_stream_chunk("\n**[取消]** 操作已取消\n".to_string());
                 handler.on_error("Operation cancelled".to_string());
             } else {
                 error!(error = %e, "Processing failed");
+                handler.on_stream_chunk(format!("\n**[错误]** {}\n", e));
                 handler.on_error(e.to_string());
             }
         }
@@ -536,23 +606,81 @@ fn get_builtin_tool_descriptions(
     generation_config: &crate::config::GenerationConfig,
 ) -> Vec<ToolDescription> {
     use crate::generation::GenerationType;
+    use serde_json::json;
 
     let mut tools = vec![
-        ToolDescription::new(
+        ToolDescription::with_schema(
             "file_ops",
-            "文件系统操作 - 支持 list(列出目录)、read、write、move、copy、delete、mkdir、search、**organize**(一键按类型整理到 Images/Documents/Videos/Audio/Archives/Code/Others)、**batch_move**(批量移动匹配文件)"
+            "文件系统操作 - 支持 list(列出目录)、read、write、move、copy、delete、mkdir、search、**organize**(一键按类型整理到 Images/Documents/Videos/Audio/Archives/Code/Others)、**batch_move**(批量移动匹配文件)",
+            json!({
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["list", "read", "write", "move", "copy", "delete", "mkdir", "search", "batch_move", "organize"],
+                        "description": "The file operation to perform"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Primary path (source directory for batch_move/organize, target for others)"
+                    },
+                    "destination": {
+                        "type": "string",
+                        "description": "Destination path (required for move/copy/batch_move operations)"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Content to write (required for write operation)"
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern for search/batch_move (e.g., '*.pdf', '*.jpg')"
+                    }
+                },
+                "required": ["operation", "path"]
+            })
         ),
-        ToolDescription::new(
+        ToolDescription::with_schema(
             "search",
-            "网络搜索 - 搜索互联网获取最新信息"
+            "网络搜索 - 搜索互联网获取最新信息",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query"
+                    }
+                },
+                "required": ["query"]
+            })
         ),
-        ToolDescription::new(
+        ToolDescription::with_schema(
             "web_fetch",
-            "获取网页内容 - 读取指定URL的网页内容"
+            "获取网页内容 - 读取指定URL的网页内容",
+            json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to fetch"
+                    }
+                },
+                "required": ["url"]
+            })
         ),
-        ToolDescription::new(
+        ToolDescription::with_schema(
             "youtube",
-            "YouTube视频信息 - 获取YouTube视频的标题、描述、字幕等信息"
+            "YouTube视频信息 - 获取YouTube视频的标题、描述、字幕等信息",
+            json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "YouTube video URL"
+                    }
+                },
+                "required": ["url"]
+            })
         ),
     ];
 
@@ -584,12 +712,30 @@ fn get_builtin_tool_descriptions(
     );
 
     if !image_providers.is_empty() {
-        tools.push(ToolDescription::new(
+        tools.push(ToolDescription::with_schema(
             "generate_image",
             format!(
                 "Image generation - generate images from text descriptions. Available providers: {}. Use the provider parameter to specify which model to use.",
                 image_providers.join(", ")
-            )
+            ),
+            json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Text description of the image to generate"
+                    },
+                    "provider": {
+                        "type": "string",
+                        "description": "Image generation provider name"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Specific model to use (optional)"
+                    }
+                },
+                "required": ["prompt", "provider"]
+            })
         ));
         info!(
             providers = ?image_providers,
@@ -605,12 +751,30 @@ fn get_builtin_tool_descriptions(
         .collect();
 
     if !video_providers.is_empty() {
-        tools.push(ToolDescription::new(
+        tools.push(ToolDescription::with_schema(
             "generate_video",
             format!(
                 "Video generation - generate videos from text descriptions. Available providers: {}. Use the provider parameter to specify which model to use.",
                 video_providers.join(", ")
-            )
+            ),
+            json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Text description of the video to generate"
+                    },
+                    "provider": {
+                        "type": "string",
+                        "description": "Video generation provider name"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Specific model to use (optional)"
+                    }
+                },
+                "required": ["prompt", "provider"]
+            })
         ));
         info!(
             providers = ?video_providers,
@@ -626,12 +790,30 @@ fn get_builtin_tool_descriptions(
         .collect();
 
     if !audio_providers.is_empty() {
-        tools.push(ToolDescription::new(
+        tools.push(ToolDescription::with_schema(
             "generate_audio",
             format!(
                 "Audio/music generation - generate music or audio from text descriptions. Available providers: {}. Use the provider parameter to specify which model to use.",
                 audio_providers.join(", ")
-            )
+            ),
+            json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Text description of the audio to generate"
+                    },
+                    "provider": {
+                        "type": "string",
+                        "description": "Audio generation provider name"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Specific model to use (optional)"
+                    }
+                },
+                "required": ["prompt", "provider"]
+            })
         ));
         info!(
             providers = ?audio_providers,
@@ -647,12 +829,30 @@ fn get_builtin_tool_descriptions(
         .collect();
 
     if !speech_providers.is_empty() {
-        tools.push(ToolDescription::new(
+        tools.push(ToolDescription::with_schema(
             "generate_speech",
             format!(
                 "Speech/TTS generation - convert text to speech. Available providers: {}. Use the provider parameter to specify which model to use.",
                 speech_providers.join(", ")
-            )
+            ),
+            json!({
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Text to convert to speech"
+                    },
+                    "provider": {
+                        "type": "string",
+                        "description": "Speech generation provider name"
+                    },
+                    "voice": {
+                        "type": "string",
+                        "description": "Voice to use (optional)"
+                    }
+                },
+                "required": ["text", "provider"]
+            })
         ));
         info!(
             providers = ?speech_providers,
@@ -698,7 +898,7 @@ fn process_with_agent_loop(
     config: &crate::agents::RigAgentConfig,
     tool_server_handle: rig::tool::server::ToolServerHandle,
     registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
-    _conversation_histories: &Arc<
+    conversation_histories: &Arc<
         std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
     >,
     topic_id: &Option<String>,
@@ -827,6 +1027,8 @@ fn process_with_agent_loop(
                         window_title,
                         generation_config,
                         attachments,
+                        conversation_histories,
+                        topic_id,
                     );
                 }
                 Ok(AnalysisResult::MultiStep {
@@ -882,6 +1084,8 @@ fn process_with_agent_loop(
                         window_title,
                         generation_config,
                         attachments,
+                        conversation_histories,
+                        topic_id,
                     );
                 }
             }
@@ -946,45 +1150,23 @@ fn handle_direct_route(
         }
 
         DirectMode::Skill(skill) => {
-            info!(skill_id = %skill.skill_id, "Direct skill execution");
+            info!(skill_id = %skill.skill_id, "Direct skill execution via AgentLoop");
 
-            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
-                .with_generation_config(generation_config)
-                .generate();
-
-            // Include attachment content if present
-            let processed_input = if let Some(ref att_text) = attachment_text {
-                info!(
-                    attachment_len = att_text.len(),
-                    "Including attachment text in skill context"
-                );
-                format!(
-                    "# Skill: {}\n\n{}\n\n---\n\n{}\n\n---\n\n用户请求: {}\n\n---\n\n{}",
-                    skill.display_name, skill.instructions, agent_prompt, skill.args, att_text
-                )
-            } else {
-                format!(
-                    "# Skill: {}\n\n{}\n\n---\n\n{}\n\n---\n\n用户请求: {}",
-                    skill.display_name, skill.instructions, agent_prompt, skill.args
-                )
-            };
-
-            execute_with_agent_manager(
+            // Route skill execution through AgentLoop for full streaming support
+            // This provides Claude Code CLI style progress updates
+            run_skill_with_agent_loop(
                 runtime,
-                &processed_input,
+                &skill,
                 config,
-                tool_server_handle,
-                registered_tools,
-                &conversation_histories,
-                &topic_id,
-                None,
                 op_token,
                 handler,
                 memory_config,
                 memory_path,
                 input_for_memory,
                 app_context,
-                &None,
+                generation_config,
+                attachments,
+                attachment_text.as_deref(),
             );
         }
 
@@ -1060,6 +1242,157 @@ fn handle_direct_route(
     }
 }
 
+/// Format generation model information for system prompt injection
+///
+/// This formats the configured generation providers and their model aliases
+/// so the LLM knows what models are available for image/video/audio generation.
+fn format_generation_models_for_prompt(config: &crate::config::GenerationConfig) -> Option<String> {
+    use crate::generation::GenerationType;
+
+    let enabled_providers: Vec<_> = config
+        .providers
+        .iter()
+        .filter(|(_, cfg)| cfg.enabled)
+        .collect();
+
+    if enabled_providers.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![];
+    lines.push("**Use generate_image tool for image generation**".to_string());
+    lines.push(String::new());
+    lines.push("**Model Alias Mapping (Important):**".to_string());
+
+    for (name, cfg) in &enabled_providers {
+        // Model aliases
+        for (alias, model) in &cfg.models {
+            lines.push(format!(
+                "- \"{}\" → provider: \"{}\", model: \"{}\"",
+                alias, name, model
+            ));
+        }
+
+        // Capability description
+        let caps: Vec<&str> = cfg
+            .capabilities
+            .iter()
+            .map(|c| match c {
+                GenerationType::Image => "图像",
+                GenerationType::Video => "视频",
+                GenerationType::Audio => "音频",
+                GenerationType::Speech => "语音",
+            })
+            .collect();
+
+        if let Some(ref default_model) = cfg.model {
+            lines.push(format!(
+                "- **{}** ({}) - default: {}",
+                name,
+                caps.join("/"),
+                default_model
+            ));
+        }
+    }
+
+    Some(lines.join("\n"))
+}
+
+/// Build history summary from conversation histories for cross-session context
+///
+/// This extracts recent messages from the conversation history for a given topic
+/// and formats them as a summary for the agent loop's initial context.
+/// Note: We only read from history, we don't write to it from AgentLoop since
+/// rig's Message type is complex. The execute_with_agent_manager path already
+/// handles conversation history properly.
+fn build_history_summary_from_conversations(
+    histories: &Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>>,
+    topic_id: &Option<String>,
+    max_chars: usize,
+) -> String {
+    use rig::completion::Message;
+
+    let tid = match topic_id {
+        Some(t) => t,
+        None => return String::new(),
+    };
+
+    let histories_guard = match histories.read() {
+        Ok(g) => g,
+        Err(_) => return String::new(),
+    };
+
+    let messages = match histories_guard.get(tid) {
+        Some(m) if !m.is_empty() => m,
+        _ => return String::new(),
+    };
+
+    let mut summary = String::from("[Previous conversation]\n");
+    let mut current_len = summary.len();
+
+    // Take recent messages, preserving order (oldest to newest)
+    for msg in messages.iter().rev().take(10).collect::<Vec<_>>().into_iter().rev() {
+        // Extract role and content from Message enum variants
+        // Note: content is OneOrMany<UserContent/AssistantContent>, we extract first text
+        let (role, content_str) = match msg {
+            Message::User { content } => {
+                let text = extract_text_from_user_content(content);
+                ("User", text)
+            }
+            Message::Assistant { content, .. } => {
+                let text = extract_text_from_assistant_content(content);
+                ("Assistant", text)
+            }
+        };
+
+        if content_str.is_empty() {
+            continue;
+        }
+
+        let display_content = if content_str.len() > 150 {
+            format!("{}...", &content_str[..150])
+        } else {
+            content_str
+        };
+
+        let line = format!("{}: {}\n", role, display_content);
+        if current_len + line.len() > max_chars {
+            summary.push_str("...(earlier messages truncated)\n");
+            break;
+        }
+        summary.push_str(&line);
+        current_len += line.len();
+    }
+
+    summary
+}
+
+/// Extract text content from OneOrMany<UserContent>
+fn extract_text_from_user_content(content: &rig::OneOrMany<rig::completion::message::UserContent>) -> String {
+    use rig::completion::message::UserContent;
+
+    // OneOrMany implements IntoIterator, iterate and find first text
+    for item in content.iter() {
+        if let UserContent::Text(text) = item {
+            return text.text.clone();
+        }
+    }
+    String::new()
+}
+
+/// Extract text content from OneOrMany<AssistantContent>
+fn extract_text_from_assistant_content(content: &rig::OneOrMany<rig::completion::AssistantContent>) -> String {
+    use rig::completion::AssistantContent;
+
+    // OneOrMany implements IntoIterator, iterate and find first text
+    for item in content.iter() {
+        if let AssistantContent::Text(text) = item {
+            return text.text.clone();
+        }
+    }
+    String::new()
+}
+
 /// Run the Agent Loop for tasks requiring LLM thinking
 #[allow(clippy::too_many_arguments)]
 fn run_agent_loop(
@@ -1078,6 +1411,8 @@ fn run_agent_loop(
     window_title: &Option<String>,
     generation_config: &crate::config::GenerationConfig,
     attachments: Option<&[crate::core::MediaAttachment]>,
+    conversation_histories: &Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>>,
+    topic_id: &Option<String>,
 ) {
     // Check if already cancelled
     if op_token.is_cancelled() {
@@ -1104,12 +1439,16 @@ fn run_agent_loop(
     let tools: Vec<crate::dispatcher::UnifiedTool> = tool_descriptions
         .iter()
         .map(|td| {
-            crate::dispatcher::UnifiedTool::new(
+            let mut tool = crate::dispatcher::UnifiedTool::new(
                 &format!("builtin:{}", td.name),
                 &td.name,
                 &td.description,
                 crate::dispatcher::ToolSource::Native,
-            )
+            );
+            if let Some(ref schema) = td.parameters_schema {
+                tool = tool.with_parameters_schema(schema.clone());
+            }
+            tool
         })
         .collect();
 
@@ -1138,6 +1477,13 @@ fn run_agent_loop(
         .with_max_steps(20)
         .with_max_tokens(100_000);
 
+    // Build initial history from conversation histories (for cross-session context)
+    let initial_history = build_history_summary_from_conversations(
+        conversation_histories,
+        topic_id,
+        2000, // Max 2000 characters for history summary
+    );
+
     // Get runtime capabilities for system prompt injection
     let runtime_capabilities = match RuntimeRegistry::new() {
         Ok(registry) => {
@@ -1154,9 +1500,10 @@ fn run_agent_loop(
         }
     };
 
-    // Create thinker config with runtime capabilities
+    // Create thinker config with runtime capabilities and generation models
     let mut thinker_config = ThinkerConfig::default();
     thinker_config.prompt.runtime_capabilities = runtime_capabilities;
+    thinker_config.prompt.generation_models = format_generation_models_for_prompt(generation_config);
 
     // Create components
     let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));
@@ -1191,9 +1538,16 @@ fn run_agent_loop(
                 tools,
                 &callback,
                 Some(abort_rx),
+                if initial_history.is_empty() { None } else { Some(initial_history.clone()) },
             )
             .await
     });
+
+    // Note: We don't save AgentLoop results to conversation_histories because
+    // rig's Message type is complex (OneOrMany<UserContent>). The initial_history
+    // mechanism provides cross-session context by reading existing history at start.
+    // For full multi-turn support, use execute_with_agent_manager which handles
+    // rig's Message format properly.
 
     // Handle result
     match result {
@@ -1259,6 +1613,252 @@ fn run_agent_loop(
 
         LoopResult::UserAborted => {
             info!("Agent Loop aborted by user");
+            handler.on_error("Operation cancelled".to_string());
+        }
+    }
+}
+
+/// Run a Skill through AgentLoop for full streaming support
+///
+/// This provides Claude Code CLI style progress updates including:
+/// - Thinking process streaming
+/// - Tool call start/end notifications
+/// - Step-by-step progress
+#[allow(clippy::too_many_arguments)]
+fn run_skill_with_agent_loop(
+    runtime: &tokio::runtime::Handle,
+    skill: &crate::intent::SkillInvocation,
+    config: &crate::agents::RigAgentConfig,
+    op_token: &CancellationToken,
+    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
+    memory_config: &crate::config::MemoryConfig,
+    memory_path: &Option<String>,
+    input_for_memory: &str,
+    app_context: &Option<String>,
+    generation_config: &crate::config::GenerationConfig,
+    _attachments: Option<&[crate::core::MediaAttachment]>,
+    attachment_text: Option<&str>,
+) {
+    // Check if already cancelled
+    if op_token.is_cancelled() {
+        handler.on_error("Operation cancelled".to_string());
+        return;
+    }
+
+    // Clear any previously tracked written files for this session
+    clear_written_files();
+
+    // Set up tool progress callback for additional streaming updates
+    let progress_adapter = Arc::new(FfiToolProgressAdapter::new(handler.clone()));
+    set_tool_progress_handler(Some(progress_adapter));
+
+    // Build the skill execution prompt
+    // Include attachment content if present, placing it FIRST with clear instructions
+    let full_input = if let Some(att_text) = attachment_text {
+        info!(
+            attachment_len = att_text.len(),
+            skill_id = %skill.skill_id,
+            "Including attachment text in skill agent loop context"
+        );
+        format!(
+            "# 用户附件内容 (已内联提供，无需从磁盘读取)\n\n{}\n\n---\n\n# Skill: {}\n\n{}\n\n---\n\n用户请求: {}",
+            att_text, skill.display_name, skill.instructions, skill.args
+        )
+    } else {
+        format!(
+            "# Skill: {}\n\n{}\n\n---\n\n用户请求: {}",
+            skill.display_name, skill.instructions, skill.args
+        )
+    };
+
+    // Get available tools for the loop
+    let tool_descriptions = get_builtin_tool_descriptions(generation_config);
+    let tools: Vec<crate::dispatcher::UnifiedTool> = tool_descriptions
+        .iter()
+        .map(|td| {
+            let mut tool = crate::dispatcher::UnifiedTool::new(
+                &format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                crate::dispatcher::ToolSource::Native,
+            );
+            if let Some(ref schema) = td.parameters_schema {
+                tool = tool.with_parameters_schema(schema.clone());
+            }
+            tool
+        })
+        .collect();
+
+    // Create the AI provider
+    let provider = match create_provider_from_config(config) {
+        Ok(p) => p,
+        Err(e) => {
+            error!(error = %e, "Failed to create provider for skill");
+            set_tool_progress_handler(None);
+            handler.on_error(format!("Provider error: {}", e));
+            return;
+        }
+    };
+
+    // Build request context with skill metadata
+    let mut request_context = AgentRequestContext::empty();
+    request_context.current_app = app_context.clone();
+    request_context
+        .metadata
+        .insert("skill_id".to_string(), skill.skill_id.clone());
+    request_context
+        .metadata
+        .insert("skill_name".to_string(), skill.display_name.clone());
+
+    // Create loop config - skills may need more steps for complex operations
+    let loop_config = LoopConfig::default()
+        .with_max_steps(30)
+        .with_max_tokens(150_000);
+
+    // Get runtime capabilities for system prompt injection
+    let runtime_capabilities = match RuntimeRegistry::new() {
+        Ok(registry) => {
+            let capabilities = RuntimeCapability::get_installed_from_registry(&registry);
+            if capabilities.is_empty() {
+                None
+            } else {
+                Some(RuntimeCapability::format_for_prompt(&capabilities))
+            }
+        }
+        Err(e) => {
+            debug!(error = %e, "Failed to get runtime capabilities (non-blocking)");
+            None
+        }
+    };
+
+    // Create thinker config with runtime capabilities
+    let mut thinker_config = ThinkerConfig::default();
+    thinker_config.prompt.runtime_capabilities = runtime_capabilities;
+
+    // Create components
+    let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));
+    let thinker = Arc::new(Thinker::new(provider_registry, thinker_config));
+
+    // Create executor with builtin tool registry
+    let tool_registry = Arc::new(BuiltinToolRegistry::new());
+    let executor = Arc::new(SingleStepExecutor::new(tool_registry));
+
+    // Create compressor (no-op for now)
+    let compressor = Arc::new(NoOpCompressor);
+
+    // Create callback adapter for streaming to UI
+    let callback = FfiLoopCallback::new(handler.clone());
+
+    // Create abort signal from cancellation token
+    let (abort_tx, abort_rx) = tokio::sync::watch::channel(false);
+    let op_token_clone = op_token.clone();
+    runtime.spawn(async move {
+        op_token_clone.cancelled().await;
+        let _ = abort_tx.send(true);
+    });
+
+    info!(
+        skill_id = %skill.skill_id,
+        skill_name = %skill.display_name,
+        "Starting skill execution via AgentLoop"
+    );
+
+    // Run the Agent Loop
+    let result = runtime.block_on(async {
+        let agent_loop = AgentLoop::new(thinker, executor, compressor, loop_config);
+
+        agent_loop
+            .run(
+                full_input.clone(),
+                request_context,
+                tools,
+                &callback,
+                Some(abort_rx),
+                None, // Skills don't use cross-session history
+            )
+            .await
+    });
+
+    // Clear tool progress callback
+    set_tool_progress_handler(None);
+
+    // Handle result
+    match result {
+        LoopResult::Completed { summary, steps, .. } => {
+            info!(
+                skill_id = %skill.skill_id,
+                steps = steps,
+                "Skill execution via AgentLoop completed"
+            );
+
+            // Collect files written during tool execution
+            let written_files = take_written_files();
+            let final_summary = if written_files.is_empty() {
+                summary.clone()
+            } else {
+                // Append file markers that Swift can parse
+                let file_urls: Vec<String> = written_files
+                    .iter()
+                    .map(|f| format!("file://{}", f.path.display()))
+                    .collect();
+                info!(
+                    file_count = written_files.len(),
+                    files = ?file_urls,
+                    "Appending generated files to skill response"
+                );
+                format!(
+                    "{}\n\n[GENERATED_FILES]\n{}\n[/GENERATED_FILES]",
+                    summary,
+                    file_urls.join("\n")
+                )
+            };
+
+            // Store memory if enabled
+            if memory_config.enabled {
+                if let Some(ref db_path) = memory_path {
+                    let store_result = runtime.block_on(async {
+                        store_memory_after_response(
+                            db_path,
+                            memory_config,
+                            input_for_memory,
+                            &summary,
+                            app_context.as_deref(),
+                            None,
+                            None,
+                        )
+                        .await
+                    });
+
+                    if let Err(e) = store_result {
+                        warn!(error = %e, "Failed to store memory (non-blocking)");
+                    }
+                }
+            }
+
+            handler.on_complete(final_summary);
+        }
+
+        LoopResult::Failed { reason, steps } => {
+            warn!(
+                skill_id = %skill.skill_id,
+                steps = steps,
+                reason = %reason,
+                "Skill execution via AgentLoop failed"
+            );
+            handler.on_error(reason);
+        }
+
+        LoopResult::GuardTriggered(violation) => {
+            warn!(
+                skill_id = %skill.skill_id,
+                violation = ?violation,
+                "Skill execution guard triggered"
+            );
+            handler.on_error(format!("Limit reached: {}", violation.description()));
+        }
+
+        LoopResult::UserAborted => {
+            info!(skill_id = %skill.skill_id, "Skill execution aborted by user");
             handler.on_error("Operation cancelled".to_string());
         }
     }
@@ -1791,7 +2391,7 @@ fn extract_attachment_text(attachments: Option<&[crate::core::MediaAttachment]>)
                         if let Ok(text) = String::from_utf8(decoded) {
                             let filename = attachment.filename.as_deref().unwrap_or("attachment");
                             text_parts.push(format!(
-                                "=== 附件内容: {} ===\n{}\n=== 附件结束 ===",
+                                "## 附件文件: {}\n\n以下是该文件的完整内容（直接使用此内容，无需调用 file_ops 读取）：\n\n```\n{}\n```",
                                 filename, text
                             ));
                             debug!(filename = filename, "Extracted text from attachment for DAG context");

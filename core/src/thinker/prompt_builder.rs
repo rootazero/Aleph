@@ -20,6 +20,9 @@ pub struct PromptConfig {
     /// Runtime capabilities (pre-formatted prompt text)
     /// Describes available runtimes (Python, Node.js, FFmpeg, etc.)
     pub runtime_capabilities: Option<String>,
+    /// Generation models (pre-formatted prompt text)
+    /// Describes available image/video/audio generation models and aliases
+    pub generation_models: Option<String>,
 }
 
 impl Default for PromptConfig {
@@ -30,6 +33,7 @@ impl Default for PromptConfig {
             custom_instructions: None,
             max_tool_description_tokens: 2000,
             runtime_capabilities: None,
+            generation_models: None,
         }
     }
 }
@@ -78,6 +82,13 @@ impl PromptBuilder {
                 }
                 prompt.push('\n');
             }
+        }
+
+        // Generation models (injected if available)
+        if let Some(ref models) = self.config.generation_models {
+            prompt.push_str("## Media Generation Models\n\n");
+            prompt.push_str(models);
+            prompt.push('\n');
         }
 
         // Special actions

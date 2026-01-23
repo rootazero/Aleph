@@ -197,6 +197,14 @@ where
     ///
     /// This is the main entry point that executes the observe-think-act-feedback
     /// cycle until the task is complete or a guard is triggered.
+    ///
+    /// # Arguments
+    /// * `request` - The user's request
+    /// * `context` - Request context (attachments, app context, etc.)
+    /// * `tools` - Available tools for this loop
+    /// * `callback` - Callback for loop events
+    /// * `abort_signal` - Optional signal to abort the loop
+    /// * `initial_history` - Optional history summary from previous conversations
     pub async fn run(
         &self,
         request: String,
@@ -204,12 +212,18 @@ where
         tools: Vec<crate::dispatcher::UnifiedTool>,
         callback: impl LoopCallback,
         abort_signal: Option<watch::Receiver<bool>>,
+        initial_history: Option<String>,
     ) -> LoopResult {
         // Generate session ID
         let session_id = uuid::Uuid::new_v4().to_string();
 
         // Initialize state
         let mut state = LoopState::new(session_id, request, context);
+
+        // Inject initial history if provided (for cross-session context)
+        if let Some(history) = initial_history {
+            state.history_summary = history;
+        }
 
         // Initialize guard
         let mut guard = LoopGuard::new(self.config.clone());
@@ -475,6 +489,7 @@ mod tests {
                 vec![],
                 NoOpLoopCallback,
                 None,
+                None, // No initial history
             )
             .await;
 
@@ -515,6 +530,7 @@ mod tests {
                 vec![],
                 &callback,
                 None,
+                None, // No initial history
             )
             .await;
 
@@ -550,6 +566,7 @@ mod tests {
                 vec![],
                 NoOpLoopCallback,
                 None,
+                None, // No initial history
             )
             .await;
 
