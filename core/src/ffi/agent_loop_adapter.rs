@@ -64,8 +64,9 @@ impl FfiLoopCallback {
         let mut buffer = self.response_buffer.write().await;
         buffer.push_str(text);
 
-        // Stream the chunk to UI using on_stream_chunk
-        self.handler.on_stream_chunk(text.to_string());
+        // Stream the accumulated text to UI (Swift expects full accumulated text, not chunks)
+        // The UI layer replaces its streamingText with this value
+        self.handler.on_stream_chunk(buffer.clone());
     }
 
     /// Finalize the response
@@ -119,17 +120,39 @@ impl LoopCallback for FfiLoopCallback {
     }
 
     async fn on_thinking_stream(&self, content: &str) {
-        // Stream thinking content (optional, for verbose mode)
-        debug!(content_len = content.len(), "Thinking stream chunk");
+        // Stream thinking content to UI for Claude Code CLI style display
+        // Format thinking content with distinctive marker and accumulate with response
+        if !content.is_empty() {
+            let formatted = format!("💭 {}", content);
+            self.stream_text(&formatted).await;
+            debug!(content_len = content.len(), "Thinking stream chunk sent to UI");
+        }
     }
 
     async fn on_action_start(&self, action: &Action) {
         info!(action_type = %action.action_type(), "Action started");
 
         match action {
-            Action::ToolCall { tool_name, .. } => {
-                // Notify UI about tool execution start
+            Action::ToolCall { tool_name, arguments } => {
+                // Notify UI about tool execution start with Claude Code CLI style
                 info!(tool = %tool_name, "Executing tool");
+
+                // Format tool call notification with arguments preview
+                let args_str = arguments.to_string();
+                let args_preview = if args_str.len() > 100 {
+                    format!("{}...", &args_str[..100])
+                } else if args_str == "null" || args_str == "{}" {
+                    String::new()
+                } else {
+                    args_str
+                };
+
+                let message = if args_preview.is_empty() {
+                    format!("\n**⚡ 调用工具:** {}\n", tool_name)
+                } else {
+                    format!("\n**⚡ 调用工具:** {} - {}\n", tool_name, args_preview)
+                };
+                self.stream_text(&message).await;
                 self.handler.on_tool_start(tool_name.clone());
             }
             Action::Completion { summary } => {
@@ -142,7 +165,7 @@ impl LoopCallback for FfiLoopCallback {
             }
             Action::Failure { reason } => {
                 // Stream the failure reason
-                self.stream_text(&format!("Error: {}", reason)).await;
+                self.stream_text(&format!("\n**❌ 错误:** {}\n", reason)).await;
             }
         }
     }
@@ -154,7 +177,7 @@ impl LoopCallback for FfiLoopCallback {
             "Action completed"
         );
 
-        // Notify UI about tool execution results
+        // Notify UI about tool execution results with Claude Code CLI style
         if let Action::ToolCall { tool_name, .. } = action {
             match result {
                 ActionResult::ToolSuccess { output, duration_ms } => {
@@ -166,11 +189,18 @@ impl LoopCallback for FfiLoopCallback {
                     );
                     // Send tool result to UI (truncate for display)
                     let output_str = output.to_string();
-                    let display_output = if output_str.len() > 500 {
-                        format!("{}...", &output_str[..500])
+                    let display_output = if output_str.len() > 200 {
+                        format!("{}...", &output_str[..200])
                     } else {
-                        output_str
+                        output_str.clone()
                     };
+
+                    // Stream success message
+                    let message = format!(
+                        "**✓ {}** 完成 ({} ms)\n",
+                        tool_name, duration_ms
+                    );
+                    self.stream_text(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), display_output);
                 }
                 ActionResult::ToolError { error, .. } => {
@@ -179,6 +209,9 @@ impl LoopCallback for FfiLoopCallback {
                         error = %error,
                         "Tool execution failed"
                     );
+                    // Stream error message
+                    let message = format!("**✗ {}** 失败: {}\n", tool_name, error);
+                    self.stream_text(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), format!("Error: {}", error));
                 }
                 _ => {}
@@ -209,13 +242,56 @@ impl LoopCallback for FfiLoopCallback {
             "User input required"
         );
 
-        // Stream the question to the user
-        self.stream_text(question).await;
+        // Stream the question to the user with formatting
+        let formatted_question = format!("\n**❓ {}**\n", question);
+        self.stream_text(&formatted_question).await;
 
-        // For now, return a placeholder. In the future, this should
-        // block until user provides input through the FFI layer
-        warn!("Returning placeholder user response (interactive input not implemented)");
-        "ok".to_string()
+        // If there are options, stream them as well
+        if let Some(opts) = options {
+            for (i, opt) in opts.iter().enumerate() {
+                let option_text = format!("  {}. {}\n", i + 1, opt);
+                self.stream_text(&option_text).await;
+            }
+        }
+
+        // Create pending input request and notify Swift UI
+        let options_vec = options.map(|opts| opts.to_vec()).unwrap_or_default();
+        let (request_id, receiver) = crate::ffi::user_input::store_pending_input(
+            question.to_string(),
+            if options_vec.is_empty() { None } else { Some(options_vec.clone()) },
+        );
+
+        info!(request_id = %request_id, "Waiting for user input via FFI callback");
+
+        // Notify Swift UI to show input dialog
+        self.handler.on_user_input_request(
+            request_id.clone(),
+            question.to_string(),
+            options_vec,
+        );
+
+        // Wait for user response via oneshot channel
+        match receiver.await {
+            Ok(response) => {
+                info!(
+                    request_id = %request_id,
+                    response_len = response.len(),
+                    "Received user input response"
+                );
+
+                // Stream the user's response for visibility
+                if !response.is_empty() {
+                    let response_text = format!("**📝 用户回复:** {}\n\n", response);
+                    self.stream_text(&response_text).await;
+                }
+
+                response
+            }
+            Err(_) => {
+                warn!(request_id = %request_id, "User input channel closed, returning empty response");
+                String::new()
+            }
+        }
     }
 
     async fn on_guard_triggered(&self, violation: &GuardViolation) {
@@ -333,6 +409,10 @@ mod tests {
         fn on_subagent_completed(&self, _child_session_id: String, _success: bool, _summary: String) {}
 
         fn on_plan_confirmation_required(&self, _plan_id: String, _plan: crate::dispatcher::DagTaskPlan) {}
+
+        fn on_user_input_request(&self, request_id: String, question: String, _options: Vec<String>) {
+            self.events.lock().unwrap().push(format!("user_input_request:{}:{}", request_id, question));
+        }
     }
 
     #[tokio::test]

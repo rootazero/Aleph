@@ -45,7 +45,7 @@ fn default_max_turns() -> usize {
 }
 
 fn default_timeout_seconds() -> u64 {
-    30 // Default 30 seconds, can be overridden by user config
+    300 // Default 5 minutes - agent loops may need longer for complex tasks
 }
 
 impl Default for RigAgentConfig {
