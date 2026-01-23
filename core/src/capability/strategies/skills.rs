@@ -104,39 +104,68 @@ impl CapabilityStrategy for SkillsStrategy {
             return Ok(payload);
         };
 
-        // Check if a skill is explicitly specified via Intent::Skills
-        let skill_id = payload.meta.intent.skills_id();
+        // Hybrid Mode: Slash Commands vs Progressive Disclosure
+        //
+        // 1. Explicit slash command (Intent::Skills) → Pre-load instructions for immediate execution
+        // 2. General chat → Progressive Disclosure (Agent uses read_skill tool on-demand)
+        //
+        // This preserves good UX for slash commands while following Claude's official
+        // Progressive Disclosure pattern for Agent-driven skill discovery.
 
-        // If skill_id is specified, look up directly
-        if let Some(id) = skill_id {
-            if let Some(skill) = registry.get_skill(id) {
+        // Check if this is an explicit skill invocation via slash command
+        if let crate::payload::Intent::Skills(skill_id) = &payload.meta.intent {
+            // Explicit slash command: pre-load the specific skill's instructions
+            if let Some(skill) = registry.get_skill(skill_id) {
                 info!(
-                    skill_id = %id,
-                    skill_name = %skill.name(),
-                    "Injecting skill instructions from explicit /skill command"
+                    skill_id = %skill_id,
+                    "Explicit skill invocation via slash command - pre-loading instructions"
                 );
                 payload.context.skill_instructions = Some(skill.instructions.clone());
+                // Also populate available_skills for consistency
+                payload.context.available_skills = Some(vec![crate::payload::SkillMetadata {
+                    id: skill.id.clone(),
+                    description: skill.description().to_string(),
+                }]);
                 return Ok(payload);
             } else {
                 warn!(
-                    skill_id = %id,
-                    "Skill not found in registry"
+                    skill_id = %skill_id,
+                    "Requested skill not found in registry"
                 );
-                return Ok(payload);
+                // Fall through to Progressive Disclosure mode
             }
         }
 
-        // Otherwise, try to auto-match skill based on user input
-        if let Some(skill) = registry.find_matching(&payload.user_input) {
+        // Progressive Disclosure Pattern (Claude Official Skills Architecture):
+        // - Level 1: Only metadata (id + description) goes into system prompt
+        // - Level 2: Full instructions loaded on-demand via read_skill tool
+        // - Level 3: Additional resources loaded as needed
+        //
+        // This ensures the agent actively reads skill instructions (treating them
+        // as task directives) rather than passively receiving them (treating as context).
+
+        // Collect skill metadata for all available skills
+        let skills = registry.list_skills();
+        if !skills.is_empty() {
+            let metadata: Vec<crate::payload::SkillMetadata> = skills
+                .iter()
+                .map(|s| crate::payload::SkillMetadata {
+                    id: s.id.clone(),
+                    description: s.description().to_string(),
+                })
+                .collect();
+
             info!(
-                skill_id = %skill.id,
-                skill_name = %skill.name(),
-                "Auto-matched skill based on user input"
+                skill_count = metadata.len(),
+                "Populated available_skills metadata for Progressive Disclosure"
             );
-            payload.context.skill_instructions = Some(skill.instructions.clone());
+            payload.context.available_skills = Some(metadata);
         } else {
-            debug!("No skill matched for user input");
+            debug!("No skills available in registry");
         }
+
+        // For general chat, agent will use read_skill tool to load instructions when needed.
+        // This is the key change for Progressive Disclosure pattern.
 
         Ok(payload)
     }
@@ -190,7 +219,9 @@ description: {}
     }
 
     #[tokio::test]
-    async fn test_skills_strategy_explicit_skill() {
+    async fn test_skills_strategy_explicit_slash_command_preloads() {
+        // Hybrid Mode: Explicit slash command (Intent::Skills) should pre-load instructions
+        // for immediate execution, preserving good UX
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().to_path_buf();
 
@@ -219,14 +250,27 @@ description: {}
             .unwrap();
 
         let result = strategy.execute(payload).await.unwrap();
+
+        // Hybrid Mode: explicit slash command pre-loads instructions
         assert!(result.context.skill_instructions.is_some());
-        let instructions = result.context.skill_instructions.unwrap();
-        assert!(instructions.contains("Refine Text"));
-        assert!(instructions.contains("clarity and conciseness"));
+        assert!(result
+            .context
+            .skill_instructions
+            .as_ref()
+            .unwrap()
+            .contains("focus on clarity and conciseness"));
+
+        // Also populates available_skills for consistency
+        assert!(result.context.available_skills.is_some());
+        let skills = result.context.available_skills.unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "refine-text");
     }
 
     #[tokio::test]
-    async fn test_skills_strategy_auto_match() {
+    async fn test_skills_strategy_general_chat_progressive_disclosure() {
+        // Progressive Disclosure: general chat should NOT pre-load instructions
+        // Agent uses read_skill tool on-demand
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().to_path_buf();
 
@@ -234,7 +278,58 @@ description: {}
             &skills_dir,
             "refine-text",
             "Improve and polish writing",
-            "# Refine Text\n\nWhen refining text, focus on clarity.",
+            "# Refine Text\n\nWhen refining text, focus on clarity and conciseness.",
+        );
+
+        let registry = Arc::new(SkillsRegistry::new(skills_dir));
+        registry.load_all().unwrap();
+
+        let strategy = SkillsStrategy::new(Some(registry));
+
+        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        // GeneralChat instead of Intent::Skills
+        let payload = PayloadBuilder::new()
+            .meta(Intent::GeneralChat, 1000, anchor)
+            .config(
+                "openai".to_string(),
+                vec![Capability::Skills],
+                ContextFormat::Markdown,
+            )
+            .user_input("Please improve this text".to_string())
+            .build()
+            .unwrap();
+
+        let result = strategy.execute(payload).await.unwrap();
+
+        // Progressive Disclosure: only metadata, no pre-loaded instructions
+        assert!(result.context.skill_instructions.is_none());
+
+        // available_skills is populated with metadata
+        assert!(result.context.available_skills.is_some());
+        let skills = result.context.available_skills.unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "refine-text");
+        assert_eq!(skills[0].description, "Improve and polish writing");
+    }
+
+    #[tokio::test]
+    async fn test_skills_strategy_multiple_skills() {
+        // All available skills should be listed in metadata
+        let temp_dir = TempDir::new().unwrap();
+        let skills_dir = temp_dir.path().to_path_buf();
+
+        create_test_skill(
+            &skills_dir,
+            "refine-text",
+            "Improve and polish writing",
+            "# Refine Text\n\nInstructions.",
+        );
+
+        create_test_skill(
+            &skills_dir,
+            "translate",
+            "Translate text between languages",
+            "# Translate\n\nInstructions.",
         );
 
         let registry = Arc::new(SkillsRegistry::new(skills_dir));
@@ -250,25 +345,26 @@ description: {}
                 vec![Capability::Skills],
                 ContextFormat::Markdown,
             )
-            .user_input("Please improve this text".to_string())
+            .user_input("Hello".to_string())
             .build()
             .unwrap();
 
         let result = strategy.execute(payload).await.unwrap();
-        assert!(result.context.skill_instructions.is_some());
+
+        // Both skills should be in available_skills
+        assert!(result.context.available_skills.is_some());
+        let skills = result.context.available_skills.unwrap();
+        assert_eq!(skills.len(), 2);
+
+        // No skill_instructions (Progressive Disclosure)
+        assert!(result.context.skill_instructions.is_none());
     }
 
     #[tokio::test]
-    async fn test_skills_strategy_no_match() {
+    async fn test_skills_strategy_no_skills() {
+        // Empty skills directory
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().to_path_buf();
-
-        create_test_skill(
-            &skills_dir,
-            "refine-text",
-            "Improve and polish writing",
-            "# Refine Text\n\nInstructions here.",
-        );
 
         let registry = Arc::new(SkillsRegistry::new(skills_dir));
         registry.load_all().unwrap();
@@ -288,11 +384,15 @@ description: {}
             .unwrap();
 
         let result = strategy.execute(payload).await.unwrap();
+
+        // No skills available
+        assert!(result.context.available_skills.is_none());
         assert!(result.context.skill_instructions.is_none());
     }
 
     #[tokio::test]
-    async fn test_skills_strategy_skill_not_found() {
+    async fn test_skills_strategy_empty_registry() {
+        // With empty registry, available_skills should be None
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().to_path_buf();
 
@@ -314,6 +414,10 @@ description: {}
             .unwrap();
 
         let result = strategy.execute(payload).await.unwrap();
+
+        // No skills in registry, so no available_skills
+        assert!(result.context.available_skills.is_none());
+        // No skill_instructions (agent uses read_skill tool, which will fail)
         assert!(result.context.skill_instructions.is_none());
     }
 }
