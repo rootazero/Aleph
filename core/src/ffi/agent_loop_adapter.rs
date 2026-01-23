@@ -23,6 +23,181 @@ use crate::agent_loop::{
 };
 use crate::ffi::AetherEventHandler;
 
+/// Format tool action into a human-readable description
+///
+/// Returns a tuple of (action_description, action_verb) for display.
+/// - action_description: "正在创建目录: output"
+/// - action_verb: "创建目录" (used for completion message)
+fn format_tool_description(tool_name: &str, arguments: &Value) -> (String, String) {
+    let obj = arguments.as_object();
+
+    match tool_name {
+        "file_ops" => {
+            let operation = obj
+                .and_then(|o| o.get("operation"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("操作");
+            let path = obj
+                .and_then(|o| o.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let path_display = truncate_path(path, 50);
+
+            match operation {
+                "mkdir" => (
+                    format!("正在创建目录: {}", path_display),
+                    "创建目录".to_string(),
+                ),
+                "write" => (
+                    format!("正在写入文件: {}", path_display),
+                    "写入文件".to_string(),
+                ),
+                "read" => (
+                    format!("正在读取文件: {}", path_display),
+                    "读取文件".to_string(),
+                ),
+                "delete" => (
+                    format!("正在删除: {}", path_display),
+                    "删除".to_string(),
+                ),
+                "move" => {
+                    let dest = obj
+                        .and_then(|o| o.get("destination"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    (
+                        format!("正在移动: {} → {}", path_display, truncate_path(dest, 30)),
+                        "移动文件".to_string(),
+                    )
+                }
+                "copy" => {
+                    let dest = obj
+                        .and_then(|o| o.get("destination"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    (
+                        format!("正在复制: {} → {}", path_display, truncate_path(dest, 30)),
+                        "复制文件".to_string(),
+                    )
+                }
+                "list" => (
+                    format!("正在列出目录: {}", path_display),
+                    "列出目录".to_string(),
+                ),
+                "search" => {
+                    let pattern = obj
+                        .and_then(|o| o.get("pattern"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("*");
+                    (
+                        format!("正在搜索文件: {} ({})", pattern, path_display),
+                        "搜索文件".to_string(),
+                    )
+                }
+                "organize" => (
+                    format!("正在整理目录: {}", path_display),
+                    "整理目录".to_string(),
+                ),
+                "batch_move" => (
+                    format!("正在批量移动文件: {}", path_display),
+                    "批量移动".to_string(),
+                ),
+                _ => (
+                    format!("正在执行文件操作: {}", path_display),
+                    "文件操作".to_string(),
+                ),
+            }
+        }
+        "search" => {
+            let query = obj
+                .and_then(|o| o.get("query"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let query_display = if query.len() > 50 {
+                format!("{}...", &query[..50])
+            } else {
+                query.to_string()
+            };
+            (
+                format!("正在搜索: {}", query_display),
+                "搜索".to_string(),
+            )
+        }
+        "web_fetch" => {
+            let url = obj
+                .and_then(|o| o.get("url"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let url_display = if url.len() > 60 {
+                format!("{}...", &url[..60])
+            } else {
+                url.to_string()
+            };
+            (
+                format!("正在获取网页: {}", url_display),
+                "获取网页".to_string(),
+            )
+        }
+        "youtube" => {
+            let url = obj
+                .and_then(|o| o.get("url"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            (
+                format!("正在获取视频信息: {}", truncate_path(url, 50)),
+                "获取视频".to_string(),
+            )
+        }
+        "generate_image" => {
+            let prompt = obj
+                .and_then(|o| o.get("prompt"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let prompt_display = if prompt.len() > 40 {
+                format!("{}...", &prompt[..40])
+            } else {
+                prompt.to_string()
+            };
+            (
+                format!("正在生成图像: {}", prompt_display),
+                "生成图像".to_string(),
+            )
+        }
+        "pdf_generate" => (
+            "正在生成 PDF 文档".to_string(),
+            "生成PDF".to_string(),
+        ),
+        _ => {
+            // Generic fallback for unknown tools
+            (
+                format!("正在执行: {}", tool_name),
+                tool_name.to_string(),
+            )
+        }
+    }
+}
+
+/// Truncate a path for display, preserving the filename
+fn truncate_path(path: &str, max_len: usize) -> String {
+    if path.len() <= max_len {
+        return path.to_string();
+    }
+
+    // Try to preserve the filename
+    if let Some(pos) = path.rfind('/') {
+        let filename = &path[pos + 1..];
+        if filename.len() < max_len - 3 {
+            let available = max_len - filename.len() - 4; // ".../" takes 4 chars
+            if available > 0 && pos > available {
+                return format!("...{}", &path[pos - available..]);
+            }
+        }
+    }
+
+    // Simple truncation
+    format!("{}...", &path[..max_len - 3])
+}
+
 /// FFI-compatible callback adapter for AgentLoop
 ///
 /// This adapter translates AgentLoop callback events into
@@ -97,7 +272,8 @@ impl LoopCallback for FfiLoopCallback {
         // Notify UI about step progress (step is 0-indexed, display as 1-indexed)
         if step > 0 {
             // After first step, show iteration progress
-            self.stream_text(&format!("\n--- Step {} ---\n", step + 1)).await;
+            // Use `step` (not step+1) so step=1 displays as "Step 1"
+            self.stream_text(&format!("\n--- Step {} ---\n", step)).await;
         }
     }
 
@@ -134,24 +310,13 @@ impl LoopCallback for FfiLoopCallback {
 
         match action {
             Action::ToolCall { tool_name, arguments } => {
-                // Notify UI about tool execution start with Claude Code CLI style
                 info!(tool = %tool_name, "Executing tool");
 
-                // Format tool call notification with arguments preview
-                let args_str = arguments.to_string();
-                let args_preview = if args_str.len() > 100 {
-                    format!("{}...", &args_str[..100])
-                } else if args_str == "null" || args_str == "{}" {
-                    String::new()
-                } else {
-                    args_str
-                };
+                // Format tool call with human-readable description
+                let (description, _verb) = format_tool_description(tool_name, arguments);
 
-                let message = if args_preview.is_empty() {
-                    format!("\n**⚡ 调用工具:** {}\n", tool_name)
-                } else {
-                    format!("\n**⚡ 调用工具:** {} - {}\n", tool_name, args_preview)
-                };
+                // Stream the description without Markdown (UI doesn't parse it)
+                let message = format!("\n⚡ {}\n", description);
                 self.stream_text(&message).await;
                 self.handler.on_tool_start(tool_name.clone());
             }
@@ -164,8 +329,8 @@ impl LoopCallback for FfiLoopCallback {
                 debug!(question = %question, "User interaction requested");
             }
             Action::Failure { reason } => {
-                // Stream the failure reason
-                self.stream_text(&format!("\n**❌ 错误:** {}\n", reason)).await;
+                // Stream the failure reason without Markdown
+                self.stream_text(&format!("\n❌ 错误: {}\n", reason)).await;
             }
         }
     }
@@ -177,8 +342,11 @@ impl LoopCallback for FfiLoopCallback {
             "Action completed"
         );
 
-        // Notify UI about tool execution results with Claude Code CLI style
-        if let Action::ToolCall { tool_name, .. } = action {
+        // Notify UI about tool execution results
+        if let Action::ToolCall { tool_name, arguments } = action {
+            // Get the action verb for completion message
+            let (_description, verb) = format_tool_description(tool_name, arguments);
+
             match result {
                 ActionResult::ToolSuccess { output, duration_ms } => {
                     info!(
@@ -195,11 +363,8 @@ impl LoopCallback for FfiLoopCallback {
                         output_str.clone()
                     };
 
-                    // Stream success message
-                    let message = format!(
-                        "**✓ {}** 完成 ({} ms)\n",
-                        tool_name, duration_ms
-                    );
+                    // Stream success message without Markdown
+                    let message = format!("✓ {}完成 ({}ms)\n", verb, duration_ms);
                     self.stream_text(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), display_output);
                 }
@@ -209,8 +374,8 @@ impl LoopCallback for FfiLoopCallback {
                         error = %error,
                         "Tool execution failed"
                     );
-                    // Stream error message
-                    let message = format!("**✗ {}** 失败: {}\n", tool_name, error);
+                    // Stream error message without Markdown
+                    let message = format!("✗ {}失败: {}\n", verb, error);
                     self.stream_text(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), format!("Error: {}", error));
                 }
@@ -242,8 +407,8 @@ impl LoopCallback for FfiLoopCallback {
             "User input required"
         );
 
-        // Stream the question to the user with formatting
-        let formatted_question = format!("\n**❓ {}**\n", question);
+        // Stream the question to the user (no Markdown)
+        let formatted_question = format!("\n❓ {}\n", question);
         self.stream_text(&formatted_question).await;
 
         // If there are options, stream them as well
@@ -279,9 +444,9 @@ impl LoopCallback for FfiLoopCallback {
                     "Received user input response"
                 );
 
-                // Stream the user's response for visibility
+                // Stream the user's response for visibility (no Markdown)
                 if !response.is_empty() {
-                    let response_text = format!("**📝 用户回复:** {}\n\n", response);
+                    let response_text = format!("📝 用户回复: {}\n\n", response);
                     self.stream_text(&response_text).await;
                 }
 
@@ -427,7 +592,8 @@ mod tests {
 
         let events = handler.events();
         assert!(events.contains(&"chunk:Hello, ".to_string()));
-        assert!(events.contains(&"chunk:world!".to_string()));
+        // stream_text sends accumulated buffer, so second call sends "Hello, world!"
+        assert!(events.contains(&"chunk:Hello, world!".to_string()));
 
         let response = callback.get_response().await;
         assert_eq!(response, "Hello, world!");
@@ -447,5 +613,67 @@ mod tests {
 
         let events = handler.events();
         assert!(events.iter().any(|e| e.starts_with("complete:")));
+    }
+
+    #[test]
+    fn test_format_tool_description() {
+        use serde_json::json;
+
+        // Test file_ops with different operations
+        let args = json!({"operation": "mkdir", "path": "/tmp/test"});
+        let (desc, verb) = format_tool_description("file_ops", &args);
+        assert!(desc.contains("正在创建目录"));
+        assert!(desc.contains("/tmp/test"));
+        assert_eq!(verb, "创建目录");
+
+        let args = json!({"operation": "write", "path": "/tmp/test.txt"});
+        let (desc, verb) = format_tool_description("file_ops", &args);
+        assert!(desc.contains("正在写入文件"));
+        assert_eq!(verb, "写入文件");
+
+        let args = json!({"operation": "read", "path": "/tmp/test.txt"});
+        let (desc, verb) = format_tool_description("file_ops", &args);
+        assert!(desc.contains("正在读取文件"));
+        assert_eq!(verb, "读取文件");
+
+        // Test search tool
+        let args = json!({"query": "rust async programming"});
+        let (desc, verb) = format_tool_description("search", &args);
+        assert!(desc.contains("正在搜索"));
+        assert!(desc.contains("rust async programming"));
+        assert_eq!(verb, "搜索");
+
+        // Test web_fetch tool
+        let args = json!({"url": "https://example.com/page"});
+        let (desc, verb) = format_tool_description("web_fetch", &args);
+        assert!(desc.contains("正在获取网页"));
+        assert!(desc.contains("example.com"));
+        assert_eq!(verb, "获取网页");
+
+        // Test generate_image tool
+        let args = json!({"prompt": "a beautiful sunset", "provider": "dalle"});
+        let (desc, verb) = format_tool_description("generate_image", &args);
+        assert!(desc.contains("正在生成图像"));
+        assert!(desc.contains("beautiful sunset"));
+        assert_eq!(verb, "生成图像");
+
+        // Test unknown tool
+        let args = json!({"param": "value"});
+        let (desc, verb) = format_tool_description("custom_tool", &args);
+        assert!(desc.contains("正在执行"));
+        assert!(desc.contains("custom_tool"));
+        assert_eq!(verb, "custom_tool");
+    }
+
+    #[test]
+    fn test_truncate_path() {
+        // Short path should not be truncated
+        assert_eq!(truncate_path("/tmp/test.txt", 50), "/tmp/test.txt");
+
+        // Long path should be truncated
+        let long_path = "/Users/user/.config/aether/output/E75F2A21-50DE-4FB2-8B6B-13E59CFBD90B/chapter-1/triples.json";
+        let truncated = truncate_path(long_path, 40);
+        assert!(truncated.len() <= 40);
+        assert!(truncated.contains("..."));
     }
 }
