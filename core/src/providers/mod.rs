@@ -32,22 +32,32 @@ use std::pin::Pin;
 
 // Sub-modules
 pub mod claude;
+pub mod deepseek;
+pub mod doubao;
 pub mod gemini;
 pub mod mock;
+pub mod moonshot;
 pub mod ollama;
 pub mod openai;
+pub mod openai_compatible;
 pub mod registry;
 pub mod retry;
 pub mod shared;
+pub mod t8star;
 
 // Re-exports
 pub use claude::ClaudeProvider;
+pub use deepseek::DeepSeekProvider;
+pub use doubao::DoubaoProvider;
 pub use gemini::GeminiProvider;
 pub use mock::{MockError, MockProvider};
+pub use moonshot::MoonshotProvider;
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
+pub use openai_compatible::OpenAiCompatibleProvider;
 pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
+pub use t8star::T8StarProvider;
 
 use crate::config::ProviderConfig;
 use crate::error::AetherError;
@@ -118,11 +128,42 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 /// # }
 /// ```
 pub fn create_provider(name: &str, config: ProviderConfig) -> Result<Arc<dyn AiProvider>> {
+    // First check for preset providers by name (case-insensitive)
+    // Preset providers have auto-configured endpoints
+    let name_lower = name.to_lowercase();
+    match name_lower.as_str() {
+        // OpenAI-compatible preset providers (with specialized wrappers)
+        "deepseek" => {
+            let provider = DeepSeekProvider::new(name.to_string(), config)?;
+            return Ok(Arc::new(provider));
+        }
+        "doubao" | "volcengine" | "ark" => {
+            let provider = DoubaoProvider::new(name.to_string(), config)?;
+            return Ok(Arc::new(provider));
+        }
+        "moonshot" | "kimi" => {
+            let provider = MoonshotProvider::new(name.to_string(), config)?;
+            return Ok(Arc::new(provider));
+        }
+        "t8star" => {
+            let provider = T8StarProvider::new(name.to_string(), config)?;
+            return Ok(Arc::new(provider));
+        }
+        "openai" => {
+            // Official OpenAI API
+            let provider = OpenAiProvider::new(name.to_string(), config)?;
+            return Ok(Arc::new(provider));
+        }
+        _ => {} // Fall through to provider_type check
+    }
+
+    // Then check provider_type for non-preset providers
     let provider_type = config.infer_provider_type(name);
 
     match provider_type.as_str() {
         "openai" => {
-            let provider = OpenAiProvider::new(name.to_string(), config)?;
+            // Custom OpenAI-compatible provider (requires base_url)
+            let provider = OpenAiCompatibleProvider::new(name.to_string(), config)?;
             Ok(Arc::new(provider))
         }
         "claude" => {
@@ -143,7 +184,8 @@ pub fn create_provider(name: &str, config: ProviderConfig) -> Result<Arc<dyn AiP
             Ok(Arc::new(provider))
         }
         unknown => Err(AetherError::invalid_config(format!(
-            "Unknown provider type: '{}'. Supported types: openai, claude, gemini, ollama, mock",
+            "Unknown provider type: '{}'. Supported types: openai, claude, gemini, ollama, mock.\n\
+             For OpenAI-compatible APIs, use provider_type='openai' and set base_url.",
             unknown
         ))),
     }

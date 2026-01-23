@@ -16,10 +16,10 @@ echo "📦 Building Rust core..."
 cd "$ROOT_DIR/core"
 if [ "$CONFIG" = "debug" ]; then
     cargo build --features uniffi
-    LIB_PATH="target/debug/libaethecore.dylib"
+    LIB_PATH="$ROOT_DIR/target/debug/libaethecore.dylib"
 else
     cargo build --release --features uniffi
-    LIB_PATH="target/release/libaethecore.dylib"
+    LIB_PATH="$ROOT_DIR/target/release/libaethecore.dylib"
 fi
 
 # Step 2: Copy library

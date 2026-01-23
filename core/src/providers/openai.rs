@@ -66,6 +66,15 @@ pub struct OpenAiProvider {
     endpoint: String,
 }
 
+impl std::fmt::Debug for OpenAiProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiProvider")
+            .field("name", &self.name)
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Request body for OpenAI chat completion API
 #[derive(Debug, Serialize)]
 struct ChatCompletionRequest {
@@ -200,17 +209,22 @@ impl OpenAiProvider {
 
 
         // Build API endpoint
-        // Use provider-specific default URL if base_url is not configured
-        // Normalize URL: handle both /v1 (OpenAI) and /v3 (Volcengine) API versions
+        // Default to OpenAI official API if base_url is not configured
         let raw_base_url = config
             .base_url
             .as_ref()
+            // Filter out empty strings - treat them as None
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| Self::default_base_url(&name).to_string());
-        
+            .unwrap_or_else(|| {
+                // Default to OpenAI official endpoint
+                info!(provider = %name, "Using OpenAI official API endpoint");
+                "https://api.openai.com/v1".to_string()
+            });
+
         // Detect API version from the URL (v1 or v3)
         let is_v3_api = raw_base_url.contains("/v3") || raw_base_url.contains("/api/v3");
-        
+
         // Normalize URL: remove trailing slashes and version suffixes
         let base_url = raw_base_url
             .trim_end_matches('/')
@@ -219,13 +233,15 @@ impl OpenAiProvider {
             .trim_end_matches("/v1")
             .trim_end_matches('/')
             .to_string();
-        
+
         // Build endpoint with appropriate API version
         let endpoint = if is_v3_api {
             format!("{}/v3/chat/completions", base_url)
         } else {
             format!("{}/v1/chat/completions", base_url)
         };
+
+        info!(provider = %name, endpoint = %endpoint, "OpenAI provider initialized");
 
 
         Ok(Self {
@@ -236,31 +252,6 @@ impl OpenAiProvider {
         })
     }
 
-    /// Get the default base URL for a given provider name
-    ///
-    /// This allows different OpenAI-compatible providers to have their own default URLs
-    /// when the user doesn't specify a custom base_url in the configuration.
-    fn default_base_url(provider_name: &str) -> &'static str {
-        match provider_name.to_lowercase().as_str() {
-            // Official OpenAI API
-            "openai" => "https://api.openai.com/v1",
-            // DeepSeek AI
-            "deepseek" => "https://api.deepseek.com",
-            // Moonshot AI (Kimi)
-            "moonshot" => "https://api.moonshot.cn/v1",
-            // OpenRouter - unified API for multiple models
-            "openrouter" => "https://openrouter.ai/api/v1",
-            // Volcengine (ByteDance) - Doubao models
-            // API docs: https://www.volcengine.com/docs/82379/1330626
-            "volcengine" | "doubao" | "ark" => "https://ark.cn-beijing.volces.com/api/v3",
-            // Azure OpenAI - requires user configuration (no default)
-            // "azure-openai" => user must configure
-            // GitHub Copilot - requires user configuration (no default)
-            // "github-copilot" => user must configure
-            // Default to OpenAI for unknown providers
-            _ => "https://api.openai.com/v1",
-        }
-    }
 
     /// Build text content for image/multimodal requests.
     /// Handles prepend mode for system prompts and provides default description for images.
@@ -1202,9 +1193,11 @@ mod tests {
     }
 
     #[test]
-    fn test_volcengine_default_base_url() {
-        // Test "volcengine" alias
-        let config = create_test_config();
+    fn test_v3_api_detection() {
+        // Test that v3 API is correctly detected and formatted
+        let mut config = create_test_config();
+        config.base_url = Some("https://ark.cn-beijing.volces.com/api/v3".to_string());
+
         let provider = OpenAiProvider::new("volcengine".to_string(), config).unwrap();
         assert_eq!(
             provider.endpoint,
@@ -1213,24 +1206,13 @@ mod tests {
     }
 
     #[test]
-    fn test_doubao_default_base_url() {
-        // Test "doubao" alias
+    fn test_default_to_openai() {
+        // Test that missing base_url defaults to OpenAI
         let config = create_test_config();
-        let provider = OpenAiProvider::new("doubao".to_string(), config).unwrap();
+        let provider = OpenAiProvider::new("openai".to_string(), config).unwrap();
         assert_eq!(
             provider.endpoint,
-            "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
-        );
-    }
-
-    #[test]
-    fn test_ark_default_base_url() {
-        // Test "ark" alias
-        let config = create_test_config();
-        let provider = OpenAiProvider::new("ark".to_string(), config).unwrap();
-        assert_eq!(
-            provider.endpoint,
-            "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+            "https://api.openai.com/v1/chat/completions"
         );
     }
 
