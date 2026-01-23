@@ -168,8 +168,9 @@ impl PromptBuilder {
                 step.reasoning, step.action_type, step.action_args
             )));
 
-            // Tool result
-            messages.push(Message::tool_result(&step.action_type, &step.result_summary));
+            // Tool result - use full output to ensure LLM sees complete data
+            // (e.g., full file paths, complete JSON output)
+            messages.push(Message::tool_result(&step.action_type, &step.result_output));
         }
 
         // 4. Current context and request for next action
@@ -334,6 +335,7 @@ mod tests {
                 action_type: "tool:search".to_string(),
                 action_args: r#"{"query": "rust"}"#.to_string(),
                 result_summary: "Found 10 results".to_string(),
+                result_output: r#"{"results": 10, "items": []}"#.to_string(),
                 success: true,
             }],
             available_tools: vec![],

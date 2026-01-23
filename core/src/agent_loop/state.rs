@@ -218,8 +218,11 @@ pub struct StepSummary {
     pub action_type: String,
     /// Action arguments (serialized)
     pub action_args: String,
-    /// Result summary
+    /// Result summary (truncated for display)
     pub result_summary: String,
+    /// Full result output for LLM context (not truncated)
+    /// This is used when building prompts to ensure LLM sees complete data
+    pub result_output: String,
     /// Whether action succeeded
     pub success: bool,
 }
@@ -236,6 +239,7 @@ impl From<&LoopStep> for StepSummary {
             action_type: step.action.action_type(),
             action_args: step.action.args_summary(),
             result_summary: step.result.summary(),
+            result_output: step.result.full_output(),
             success: step.result.is_success(),
         }
     }

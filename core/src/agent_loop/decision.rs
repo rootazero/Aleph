@@ -75,9 +75,34 @@ pub enum Action {
 
 impl Action {
     /// Get action type as string
+    ///
+    /// For tools with an "operation" field in arguments (like file_ops),
+    /// the operation is included in the action type to distinguish
+    /// different operations (e.g., "tool:file_ops:mkdir" vs "tool:file_ops:write").
+    /// This prevents false StuckLoop detection when the same tool is called
+    /// with different operations.
     pub fn action_type(&self) -> String {
         match self {
-            Action::ToolCall { tool_name, .. } => format!("tool:{}", tool_name),
+            Action::ToolCall {
+                tool_name,
+                arguments,
+            } => {
+                // Check if arguments has an "operation" field
+                // Supports both string values ("mkdir") and Value types
+                if let Some(operation) = arguments.get("operation") {
+                    // Try to get as string directly
+                    if let Some(op_str) = operation.as_str() {
+                        return format!("tool:{}:{}", tool_name, op_str);
+                    }
+                    // Log unexpected operation type for debugging
+                    tracing::debug!(
+                        tool = %tool_name,
+                        operation_type = ?operation,
+                        "operation field exists but is not a string"
+                    );
+                }
+                format!("tool:{}", tool_name)
+            }
             Action::UserInteraction { .. } => "ask_user".to_string(),
             Action::Completion { .. } => "complete".to_string(),
             Action::Failure { .. } => "fail".to_string(),
@@ -167,7 +192,7 @@ impl ActionResult {
         matches!(self, ActionResult::ToolError { retryable: true, .. })
     }
 
-    /// Get result summary
+    /// Get result summary (truncated for display)
     pub fn summary(&self) -> String {
         match self {
             ActionResult::ToolSuccess { output, duration_ms } => {
@@ -181,6 +206,27 @@ impl ActionResult {
             }
             ActionResult::ToolError { error, retryable } => {
                 format!("Error (retryable={}): {}", retryable, error)
+            }
+            ActionResult::UserResponse { response } => {
+                format!("User: {}", response)
+            }
+            ActionResult::Completed => "Completed".to_string(),
+            ActionResult::Failed => "Failed".to_string(),
+        }
+    }
+
+    /// Get full output for LLM context (not truncated)
+    ///
+    /// This method returns the complete tool output without truncation,
+    /// ensuring the LLM has access to full file paths, complete JSON data,
+    /// and other information needed for accurate decision making.
+    pub fn full_output(&self) -> String {
+        match self {
+            ActionResult::ToolSuccess { output, .. } => {
+                output.to_string()
+            }
+            ActionResult::ToolError { error, .. } => {
+                format!("Error: {}", error)
             }
             ActionResult::UserResponse { response } => {
                 format!("User: {}", response)
@@ -320,5 +366,53 @@ mod tests {
 
         let decision: Decision = response.action.into();
         assert!(matches!(decision, Decision::UseTool { .. }));
+    }
+
+    #[test]
+    fn test_action_type_with_operation() {
+        // Tool without operation field
+        let action = Action::ToolCall {
+            tool_name: "search".to_string(),
+            arguments: json!({"query": "rust tutorial"}),
+        };
+        assert_eq!(action.action_type(), "tool:search");
+
+        // Tool with operation field (like file_ops)
+        let action_with_op = Action::ToolCall {
+            tool_name: "file_ops".to_string(),
+            arguments: json!({"operation": "mkdir", "path": "/tmp/test"}),
+        };
+        assert_eq!(action_with_op.action_type(), "tool:file_ops:mkdir");
+
+        // Different operation on same tool
+        let action_write = Action::ToolCall {
+            tool_name: "file_ops".to_string(),
+            arguments: json!({"operation": "write", "path": "/tmp/test.txt", "content": "hello"}),
+        };
+        assert_eq!(action_write.action_type(), "tool:file_ops:write");
+
+        // Non-tool actions
+        assert_eq!(
+            Action::UserInteraction {
+                question: "test?".to_string(),
+                options: None
+            }
+            .action_type(),
+            "ask_user"
+        );
+        assert_eq!(
+            Action::Completion {
+                summary: "done".to_string()
+            }
+            .action_type(),
+            "complete"
+        );
+        assert_eq!(
+            Action::Failure {
+                reason: "error".to_string()
+            }
+            .action_type(),
+            "fail"
+        );
     }
 }

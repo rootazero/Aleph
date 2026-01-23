@@ -344,6 +344,7 @@ mod tests {
                 action_type: "tool:execute_code".to_string(),
                 action_args: "{}".to_string(),
                 result_summary: "Success".to_string(),
+                result_output: "Success".to_string(),
                 success: true,
             }],
             available_tools: vec![],

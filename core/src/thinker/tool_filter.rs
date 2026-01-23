@@ -281,6 +281,7 @@ mod tests {
                 action_type: "tool:search".to_string(),
                 action_args: "{}".to_string(),
                 result_summary: "Found results".to_string(),
+                result_output: r#"{"results": ["item1", "item2"]}"#.to_string(),
                 success: true,
             }],
             available_tools: vec![],
