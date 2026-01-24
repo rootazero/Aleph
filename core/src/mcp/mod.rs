@@ -11,14 +11,18 @@
 //!   - Connected via transport abstraction ([`McpTransport`] trait)
 //!   - Tools discovered via JSON-RPC
 //!
+//! - **Resources**: Files, data, and content exposed by servers ([`McpResourceManager`])
+//!
+//! - **Prompts**: Reusable prompt templates from servers ([`McpPromptManager`])
+//!
 //! # Transport Layer
 //!
 //! The [`McpTransport`] trait provides an abstraction for different transport
 //! mechanisms:
 //!
 //! - [`StdioTransport`] - Local servers via subprocess stdio
-//! - `HttpTransport` - Remote servers via HTTP POST (planned)
-//! - `SseTransport` - Remote servers via HTTP + SSE (planned)
+//! - [`HttpTransport`] - Remote servers via HTTP POST
+//! - [`SseTransport`] - Remote servers via HTTP + SSE (notifications)
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
@@ -28,8 +32,10 @@
 //! │  (see crate::rig_tools)    │  (see this mcp module)             │
 //! │  ├── SearchTool            │  ├── McpTransport trait            │
 //! │  ├── WebFetchTool          │  │   ├── StdioTransport            │
-//! │  ├── YouTubeTool           │  │   ├── HttpTransport (planned)   │
-//! │  └── McpToolWrapper        │  │   └── SseTransport (planned)    │
+//! │  ├── YouTubeTool           │  │   ├── HttpTransport             │
+//! │  └── McpToolWrapper        │  │   └── SseTransport              │
+//! │                            │  ├── Resources (McpResourceManager)│
+//! │                            │  ├── Prompts (McpPromptManager)    │
 //! │                            │  └── Runtime Detection             │
 //! │                            │      (node, python, bun)           │
 //! └─────────────────────────────────────────────────────────────────┘
@@ -38,6 +44,7 @@
 mod client;
 pub mod external;
 pub mod jsonrpc;
+mod resources;
 pub mod transport;
 pub mod types;
 
@@ -46,9 +53,13 @@ pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{
     IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
 };
-pub use transport::{McpTransport, NotificationCallback, StdioTransport};
+pub use resources::{McpResourceManager, ResourceContent};
+pub use transport::{
+    HttpTransport, HttpTransportConfig, McpTransport, NotificationCallback, SseTransport,
+    SseTransportConfig, StdioTransport,
+};
 pub use types::{
-    McpEnvVar, McpResource, McpServerConfig, McpServerPermissions, McpServerStatus,
-    McpServerStatusInfo, McpServerType, McpServiceInfo, McpSettingsConfig, McpTool, McpToolCall,
-    McpToolInfo, McpToolResult,
+    McpEnvVar, McpRemoteServerConfig, McpResource, McpServerConfig, McpServerPermissions,
+    McpServerStatus, McpServerStatusInfo, McpServerType, McpServiceInfo, McpSettingsConfig,
+    McpTool, McpToolCall, McpToolInfo, McpToolResult, TransportPreference,
 };
