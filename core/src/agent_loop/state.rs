@@ -126,7 +126,7 @@ pub struct Thinking {
 /// RequestContext captures the user's environment when a request is made,
 /// including attachments, clipboard content, and the current application.
 /// Use `to_execution_context()` to convert to lower-level ExecutionContext.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RequestContext {
     /// Media attachments (images, files, etc.)
     pub attachments: Vec<MediaAttachment>,

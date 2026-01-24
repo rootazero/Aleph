@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::agent_loop::RequestContext;
 use crate::dispatcher::ToolRegistry;
 use crate::event::EventBus;
 
@@ -22,6 +23,30 @@ pub struct ExecutionSession {
     pub model: String,
     pub created_at: i64,
     pub updated_at: i64,
+
+    // =========================================================================
+    // Unified session model fields (from LoopState)
+    // =========================================================================
+
+    /// User's original request (from LoopState)
+    #[serde(default)]
+    pub original_request: String,
+
+    /// Request context (attachments, selected files, clipboard, etc.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<RequestContext>,
+
+    /// Session start timestamp (from LoopState, unix timestamp)
+    #[serde(default)]
+    pub started_at: i64,
+
+    /// Whether session needs compaction (for SessionCompactor integration)
+    #[serde(default)]
+    pub needs_compaction: bool,
+
+    /// Last compaction index (step index up to which compaction was applied)
+    #[serde(default)]
+    pub last_compaction_index: usize,
 }
 
 impl Default for ExecutionSession {
@@ -45,11 +70,29 @@ impl ExecutionSession {
             model: "default".into(),
             created_at: now,
             updated_at: now,
+            // Unified session model fields
+            original_request: String::new(),
+            context: None,
+            started_at: now,
+            needs_compaction: false,
+            last_compaction_index: 0,
         }
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
         self.model = model.into();
+        self
+    }
+
+    /// Set the original request (builder pattern)
+    pub fn with_original_request(mut self, request: impl Into<String>) -> Self {
+        self.original_request = request.into();
+        self
+    }
+
+    /// Set the request context (builder pattern)
+    pub fn with_context(mut self, context: RequestContext) -> Self {
+        self.context = Some(context);
         self
     }
 }
@@ -960,5 +1003,25 @@ mod tests {
         assert_eq!(format!("{}", PartEventType::Added), "added");
         assert_eq!(format!("{}", PartEventType::Updated), "updated");
         assert_eq!(format!("{}", PartEventType::Removed), "removed");
+    }
+
+    #[test]
+    fn test_execution_session_with_request_context() {
+        use crate::agent_loop::RequestContext;
+
+        let ctx = RequestContext {
+            current_app: Some("Terminal".to_string()),
+            working_directory: Some("/tmp".to_string()),
+            ..Default::default()
+        };
+
+        let session = ExecutionSession::new()
+            .with_original_request("Find files")
+            .with_context(ctx);
+
+        assert_eq!(session.original_request, "Find files");
+        assert!(session.context.is_some());
+        assert_eq!(session.context.as_ref().unwrap().current_app, Some("Terminal".to_string()));
+        assert!(!session.needs_compaction);
     }
 }

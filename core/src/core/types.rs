@@ -7,6 +7,8 @@
 //! - MemoryEntryFFI: Memory entry for FFI
 //! - AppMemoryInfo: App memory info for UI
 
+use serde::{Deserialize, Serialize};
+
 /// Media attachment for multimodal content (add-multimodal-content-support)
 /// Supports images, videos, and documents from clipboard
 ///
@@ -14,7 +16,7 @@
 /// The `data` field format depends on the `encoding` field:
 /// - "base64": Binary content encoded as Base64 (images, PDFs)
 /// - "utf8": Plain text content (markdown, txt, extracted text)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaAttachment {
     pub media_type: String,       // "image", "document", "video", "file"
     pub mime_type: String,        // "image/png", "text/markdown", "application/pdf", etc.
