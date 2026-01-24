@@ -996,31 +996,72 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     /// - Sub-agent progress display
     ///
     /// - Parameter event: Part update event from Rust core
-    func onPartUpdate(event: PartUpdateEventFFI) {
+    func onPartUpdate(event: PartUpdateEventFfi) {
         print("[EventHandler] Part update: partId=\(event.partId), type=\(event.partType), event=\(event.eventType)")
+
+        // Copy event data to avoid data race issues
+        // Note: PartEventTypeFfi is not Sendable, so we convert to/from string
+        let sessionId = event.sessionId
+        let partId = event.partId
+        let partType = event.partType
+        let eventTypeString = eventTypeToString(event.eventType)
+        let partJson = event.partJson
+        let delta = event.delta
+        let timestamp = event.timestamp
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
+
+            let eventType = stringToEventType(eventTypeString)
 
             // Post notification for UI components
             NotificationCenter.default.post(
                 name: .partUpdated,
                 object: nil,
                 userInfo: [
-                    "sessionId": event.sessionId,
-                    "partId": event.partId,
-                    "partType": event.partType,
-                    "eventType": event.eventType,
-                    "partJson": event.partJson,
-                    "delta": event.delta as Any,
-                    "timestamp": event.timestamp
+                    "sessionId": sessionId,
+                    "partId": partId,
+                    "partType": partType,
+                    "eventType": eventType,
+                    "partJson": partJson,
+                    "delta": delta as Any,
+                    "timestamp": timestamp
                 ]
             )
 
             // Forward to MultiTurnCoordinator in multi-turn mode
             if self.isInMultiTurnMode {
-                MultiTurnCoordinator.shared.handlePartUpdate(event: event)
+                // Create a new event struct with copied data
+                let copiedEvent = PartUpdateEventFfi(
+                    sessionId: sessionId,
+                    partId: partId,
+                    partType: partType,
+                    eventType: eventType,
+                    partJson: partJson,
+                    delta: delta,
+                    timestamp: timestamp
+                )
+                MultiTurnCoordinator.shared.handlePartUpdate(event: copiedEvent)
             }
+        }
+    }
+
+    /// Convert PartEventTypeFfi to string for thread-safe passing
+    private func eventTypeToString(_ eventType: PartEventTypeFfi) -> String {
+        switch eventType {
+        case .added: return "added"
+        case .updated: return "updated"
+        case .removed: return "removed"
+        }
+    }
+
+    /// Convert string back to PartEventTypeFfi
+    private func stringToEventType(_ str: String) -> PartEventTypeFfi {
+        switch str {
+        case "added": return .added
+        case "updated": return .updated
+        case "removed": return .removed
+        default: return .updated
         }
     }
 

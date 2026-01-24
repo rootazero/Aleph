@@ -501,4 +501,6 @@ class PreviewEventHandler: AetherEventHandler {
     func onPlanConfirmationRequired(planId: String, plan: DagTaskPlan) {}
     // User Input Request callback
     func onUserInputRequest(requestId: String, question: String, options: [String]) {}
+    // Part Update callback (message flow)
+    func onPartUpdate(event: PartUpdateEventFfi) {}
 }
