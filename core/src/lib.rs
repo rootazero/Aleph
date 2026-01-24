@@ -84,6 +84,8 @@ pub mod logging;
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod memory;
 pub mod plugins; // NEW: Claude Code compatible plugin system
+pub mod discovery; // NEW: Multi-level component discovery system (Claude Code compatible)
+pub mod extension; // NEW: Extension system v2 (replacing plugins in future)
 pub mod metrics;
 pub mod three_layer; // Three-layer control architecture (Orchestrator/Skill-DAG/Tools)
 pub mod payload; // Structured context protocol with capability support
@@ -295,6 +297,20 @@ pub use crate::plugins::{
     build_skill_instructions, build_skill_prompt, plugin_agent_to_agent_def,
     register_plugin_agents, resolve_mcp_command, HookContext, HookExecutor, HookResult,
     PluginHookHandler,
+};
+// Extension system v2 exports (recommended for new code)
+pub use crate::extension::{
+    // Core types
+    AetherConfig, AgentMode as ExtAgentMode, ComponentLoader, ComponentRegistry, ConfigManager,
+    ExtensionAgent, ExtensionCommand, ExtensionConfig, ExtensionError, ExtensionManager,
+    ExtensionPlugin, ExtensionResult, ExtensionSkill, HookAction as ExtHookAction, HookConfig,
+    HookEvent as ExtHookEvent, LoadSummary, McpServerConfig as ExtMcpServerConfig,
+    PermissionAction, PermissionRule, PluginInfo as ExtPluginInfo, SkillFrontmatter,
+    SkillType as ExtSkillType,
+    // Hook execution
+    hooks::{HookContext as ExtHookContext, HookExecutor as ExtHookExecutor, HookResult as ExtHookResult},
+    // Config types
+    config::{AgentConfigOverride, McpConfig, OAuthConfig, ProviderOverride},
 };
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::utils::pii;
