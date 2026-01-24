@@ -60,6 +60,15 @@ pub enum ExtensionError {
 
     #[error("Plugin bridge error: {0}")]
     PluginBridge(String),
+
+    #[error("Permission denied for skill: {0}")]
+    PermissionDenied(String),
+
+    #[error("Template error: {0}")]
+    TemplateError(String),
+
+    #[error("File reference error in {path}: {message}")]
+    FileReference { path: PathBuf, message: String },
 }
 
 pub type ExtensionResult<T> = Result<T, ExtensionError>;
@@ -111,5 +120,18 @@ impl ExtensionError {
             package: package.into(),
             message: message.into(),
         }
+    }
+
+    /// Create a file reference error
+    pub fn file_reference(path: impl Into<PathBuf>, message: impl Into<String>) -> Self {
+        Self::FileReference {
+            path: path.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Create a template error
+    pub fn template_error(message: impl Into<String>) -> Self {
+        Self::TemplateError(message.into())
     }
 }

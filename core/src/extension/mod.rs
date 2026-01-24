@@ -52,12 +52,16 @@ mod error;
 mod loader;
 mod manifest;
 mod registry;
+mod skill_tool;
+mod template;
 mod types;
 
 pub use error::*;
 pub use loader::*;
 pub use manifest::*;
 pub use registry::*;
+pub use skill_tool::{build_skill_tool_description, check_skill_permission};
+pub use template::SkillTemplate;
 pub use types::*;
 
 // Re-export config types
@@ -71,7 +75,21 @@ use hooks::{HookContext, HookExecutor, HookResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
+
+// =============================================================================
+// Cache State
+// =============================================================================
+
+/// Cache state for lazy-loading
+#[derive(Debug, Default)]
+struct CacheState {
+    /// Whether components have been loaded
+    loaded: bool,
+    /// When components were loaded (for potential expiration)
+    loaded_at: Option<Instant>,
+}
 
 /// Extension system configuration
 #[derive(Debug, Clone)]
@@ -116,6 +134,9 @@ pub struct ExtensionManager {
 
     /// Hook executor
     hook_executor: Arc<RwLock<HookExecutor>>,
+
+    /// Cache state for lazy-loading
+    cache_state: Arc<RwLock<CacheState>>,
 }
 
 impl ExtensionManager {
@@ -126,6 +147,7 @@ impl ExtensionManager {
         let registry = Arc::new(RwLock::new(ComponentRegistry::new()));
         let loader = ComponentLoader::new();
         let hook_executor = Arc::new(RwLock::new(HookExecutor::empty()));
+        let cache_state = Arc::new(RwLock::new(CacheState::default()));
 
         Ok(Self {
             config,
@@ -134,6 +156,7 @@ impl ExtensionManager {
             registry,
             loader,
             hook_executor,
+            cache_state,
         })
     }
 
@@ -238,7 +261,70 @@ impl ExtensionManager {
             summary.hooks_loaded
         );
 
+        // Update cache state
+        {
+            let mut state = self.cache_state.write().await;
+            state.loaded = true;
+            state.loaded_at = Some(Instant::now());
+        }
+
         Ok(summary)
+    }
+
+    /// Ensure extensions are loaded (lazy-loading entry point)
+    ///
+    /// This method is idempotent - calling it multiple times only loads once.
+    /// Use `reload()` to force a fresh load.
+    pub async fn ensure_loaded(&self) -> ExtensionResult<()> {
+        // Fast path: check if already loaded
+        {
+            let state = self.cache_state.read().await;
+            if state.loaded {
+                return Ok(());
+            }
+        }
+
+        // Slow path: acquire write lock and load
+        // Double-check after acquiring write lock to avoid race
+        let state = self.cache_state.write().await;
+        if state.loaded {
+            return Ok(());
+        }
+
+        // Release lock before loading (load_all will acquire its own locks)
+        drop(state);
+
+        // Load all extensions
+        self.load_all().await?;
+
+        Ok(())
+    }
+
+    /// Force reload all extensions
+    ///
+    /// Clears the cache and reloads everything from disk.
+    /// Useful for hot-reloading during development.
+    pub async fn reload(&self) -> ExtensionResult<LoadSummary> {
+        // Clear cache state
+        {
+            let mut state = self.cache_state.write().await;
+            state.loaded = false;
+            state.loaded_at = None;
+        }
+
+        // Clear registry
+        self.registry.write().await.clear();
+
+        // Clear hooks
+        *self.hook_executor.write().await = HookExecutor::empty();
+
+        // Reload everything
+        self.load_all().await
+    }
+
+    /// Check if extensions have been loaded
+    pub async fn is_loaded(&self) -> bool {
+        self.cache_state.read().await.loaded
     }
 
     /// Get all skills (from enabled sources)
@@ -341,6 +427,53 @@ impl ExtensionManager {
         })?;
 
         Ok(cmd.with_arguments(arguments))
+    }
+
+    // =========================================================================
+    // Skill Tool (LLM-callable)
+    // =========================================================================
+
+    /// Invoke a skill as an LLM tool
+    ///
+    /// This is the primary method for LLM to invoke skills. It:
+    /// 1. Ensures extensions are loaded
+    /// 2. Checks permissions
+    /// 3. Renders templates (including file references)
+    /// 4. Returns structured result with metadata
+    ///
+    /// # Arguments
+    /// * `qualified_name` - Skill name (e.g., "my-skill" or "plugin:skill")
+    /// * `arguments` - Arguments to substitute for $ARGUMENTS
+    /// * `ctx` - Execution context with session and permission info
+    ///
+    /// # Returns
+    /// * `SkillToolResult` with rendered content, base directory, and metadata
+    pub async fn invoke_skill_tool(
+        &self,
+        qualified_name: &str,
+        arguments: &str,
+        ctx: &SkillContext,
+    ) -> ExtensionResult<SkillToolResult> {
+        // Ensure extensions are loaded
+        self.ensure_loaded().await?;
+
+        // Get the skill
+        let skill = self.get_skill(qualified_name).await.ok_or_else(|| {
+            ExtensionError::SkillNotFound(qualified_name.to_string())
+        })?;
+
+        // Invoke using skill_tool module
+        skill_tool::invoke_skill(&skill, arguments, ctx).await
+    }
+
+    /// Get skill tool description for LLM
+    ///
+    /// Generates a description of available skills in XML format,
+    /// suitable for inclusion in tool definitions.
+    pub async fn get_skill_tool_description(&self) -> String {
+        self.ensure_loaded().await.ok();
+        let skills = self.get_auto_invocable_skills().await;
+        skill_tool::build_skill_tool_description(&skills)
     }
 
     // =========================================================================

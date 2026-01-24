@@ -8,6 +8,49 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 // =============================================================================
+// Skill Tool Types
+// =============================================================================
+
+/// Result of skill tool invocation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillToolResult {
+    /// Display title (e.g., "Loaded skill: my-skill")
+    pub title: String,
+
+    /// Rendered skill content with templates expanded
+    pub content: String,
+
+    /// Base directory for relative path references
+    pub base_dir: PathBuf,
+
+    /// Skill metadata
+    pub metadata: SkillMetadata,
+}
+
+/// Metadata about an invoked skill
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillMetadata {
+    /// Skill name
+    pub name: String,
+
+    /// Fully qualified name (plugin:skill or skill)
+    pub qualified_name: String,
+
+    /// Discovery source
+    pub source: DiscoverySource,
+}
+
+/// Context for skill tool invocation (passed from agent loop)
+#[derive(Debug, Clone, Default)]
+pub struct SkillContext {
+    /// Session identifier
+    pub session_id: String,
+
+    /// Agent-level permission rules (if any)
+    pub agent_permissions: Option<HashMap<String, PermissionRule>>,
+}
+
+// =============================================================================
 // Skill Types
 // =============================================================================
 
