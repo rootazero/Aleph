@@ -106,6 +106,32 @@ pub enum SessionStatus {
     Compacting,
 }
 
+/// Type of system reminder
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ReminderType {
+    /// Multi-step task context reminder
+    ContinueTask,
+    /// Approaching max steps warning
+    MaxStepsWarning { current: usize, max: usize },
+    /// Approaching token limit warning
+    TokenLimitWarning { usage_percent: u8 },
+    /// Plan mode reminder
+    PlanMode { plan_file: String },
+    /// Custom reminder (from plugins/skills)
+    Custom { source: String },
+}
+
+/// System reminder part for context injection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemReminderPart {
+    /// Reminder content
+    pub content: String,
+    /// Type of reminder
+    pub reminder_type: ReminderType,
+    /// Timestamp when created
+    pub timestamp: i64,
+}
+
 /// Session part - fine-grained execution records
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SessionPart {
@@ -119,6 +145,8 @@ pub enum SessionPart {
     /// Marker for compaction boundary - used by filter_compacted() to find
     /// the point where old context was summarized
     CompactionMarker(CompactionMarker),
+    /// System reminder for context injection (aligns with OpenCode's <system-reminder>)
+    SystemReminder(SystemReminderPart),
 }
 
 impl SessionPart {
@@ -132,6 +160,7 @@ impl SessionPart {
             SessionPart::SubAgentCall(_) => "sub_agent_call",
             SessionPart::Summary(_) => "summary",
             SessionPart::CompactionMarker(_) => "compaction_marker",
+            SessionPart::SystemReminder(_) => "system_reminder",
         }
     }
 }
@@ -233,6 +262,7 @@ impl PartId for SessionPart {
             SessionPart::SubAgentCall(p) => format!("subagent_{}", p.agent_id),
             SessionPart::Summary(p) => format!("summary_{}", p.compacted_at),
             SessionPart::CompactionMarker(p) => format!("compaction_marker_{}", p.timestamp),
+            SessionPart::SystemReminder(p) => format!("reminder_{}", p.timestamp),
         }
     }
 }
@@ -1003,6 +1033,18 @@ mod tests {
         assert_eq!(format!("{}", PartEventType::Added), "added");
         assert_eq!(format!("{}", PartEventType::Updated), "updated");
         assert_eq!(format!("{}", PartEventType::Removed), "removed");
+    }
+
+    #[test]
+    fn test_system_reminder_part() {
+        let reminder = SessionPart::SystemReminder(SystemReminderPart {
+            content: "Continue with your tasks".to_string(),
+            reminder_type: ReminderType::ContinueTask,
+            timestamp: 1000,
+        });
+
+        assert_eq!(reminder.type_name(), "system_reminder");
+        assert!(reminder.part_id().starts_with("reminder_"));
     }
 
     #[test]

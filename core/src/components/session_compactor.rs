@@ -630,6 +630,9 @@ impl SessionCompactor {
                     let trigger = if m.auto { "auto" } else { "manual" };
                     context_parts.push(format!("[Compaction Marker]: {} ({})", m.timestamp, trigger));
                 }
+                SessionPart::SystemReminder(r) => {
+                    context_parts.push(format!("[System Reminder]: {}", r.content));
+                }
             }
         }
 
@@ -818,6 +821,7 @@ impl SessionCompactor {
                 }
                 SessionPart::Summary(summary) => TokenTracker::estimate_tokens(&summary.content),
                 SessionPart::CompactionMarker(_) => 0, // Markers don't consume tokens
+                SessionPart::SystemReminder(reminder) => TokenTracker::estimate_tokens(&reminder.content),
             };
         }
 
