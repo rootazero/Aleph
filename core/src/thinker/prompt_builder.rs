@@ -154,21 +154,29 @@ impl PromptBuilder {
 
         // Skill mode specific requirements
         if self.config.skill_mode {
-            prompt.push_str("## ⚠️ Skill Execution Mode\n\n");
-            prompt.push_str("You are executing a SKILL workflow. This requires STRICT adherence to all steps.\n\n");
-            prompt.push_str("**MANDATORY Requirements:**\n");
+            prompt.push_str("## ⚠️ Skill Execution Mode - CRITICAL RULES\n\n");
+            prompt.push_str("You are executing a SKILL workflow. You MUST follow these rules EXACTLY:\n\n");
+            prompt.push_str("### 🔴 RESPONSE FORMAT (MANDATORY)\n");
+            prompt.push_str("**EVERY response MUST be a valid JSON action object. NEVER output raw content directly!**\n\n");
+            prompt.push_str("❌ WRONG: Outputting processed text, data, or results directly\n");
+            prompt.push_str("✅ CORRECT: Always return {\"reasoning\": \"...\", \"action\": {...}}\n\n");
+            prompt.push_str("If you need to process data and save it, use the `file_ops` tool:\n");
+            prompt.push_str("```json\n");
+            prompt.push_str("{\"reasoning\": \"Writing processed data to file\", \"action\": {\"type\": \"tool\", \"tool_name\": \"file_ops\", \"arguments\": {\"operation\": \"write\", \"path\": \"output.json\", \"content\": \"...\"}}}\n");
+            prompt.push_str("```\n\n");
+            prompt.push_str("### Workflow Requirements\n");
             prompt.push_str("1. Complete ALL steps in the skill workflow - NO exceptions\n");
             prompt.push_str("2. Generate ALL output files specified (JSON, .mmd, .txt, images, etc.)\n");
             prompt.push_str("3. Use `file_ops` with `operation: \"write\"` to save each file\n");
             prompt.push_str("4. DO NOT skip any step, even if you think it's redundant\n");
             prompt.push_str("5. Before calling `complete`, verify ALL required outputs exist\n\n");
-            prompt.push_str("**Common skill outputs to generate:**\n");
+            prompt.push_str("### Common skill outputs to generate\n");
             prompt.push_str("- Data files: `triples.json`, `*.json`\n");
             prompt.push_str("- Visualization code: `graph.mmd`, `*.mmd`\n");
             prompt.push_str("- Prompts: `image-prompt.txt`, `*.txt`\n");
             prompt.push_str("- Images: via `generate_image` tool\n");
             prompt.push_str("- Merged outputs: `merged-*.json`, `full-*.mmd`\n\n");
-            prompt.push_str("**If you skip ANY required output, you have FAILED the task.**\n\n");
+            prompt.push_str("**If you output raw content instead of JSON action, you have FAILED.**\n\n");
         }
 
         // Custom instructions
@@ -488,5 +496,36 @@ mod tests {
         // Should not say "No tools available" because we have tool index
         assert!(!prompt.contains("No tools available"));
         assert!(prompt.contains("### Additional Tools"));
+    }
+
+    #[test]
+    fn test_system_prompt_with_skill_mode() {
+        let mut config = PromptConfig::default();
+        config.skill_mode = true;
+
+        let builder = PromptBuilder::new(config);
+        let prompt = builder.build_system_prompt(&[]);
+
+        // Verify skill mode section is present
+        assert!(prompt.contains("Skill Execution Mode"));
+        // Verify it emphasizes JSON response format
+        assert!(prompt.contains("RESPONSE FORMAT"));
+        assert!(prompt.contains("EVERY response MUST be a valid JSON action object"));
+        // Verify it warns against direct output
+        assert!(prompt.contains("NEVER output raw content directly"));
+        // Verify workflow requirements
+        assert!(prompt.contains("Complete ALL steps"));
+        assert!(prompt.contains("file_ops"));
+    }
+
+    #[test]
+    fn test_system_prompt_without_skill_mode() {
+        let config = PromptConfig::default();
+        let builder = PromptBuilder::new(config);
+        let prompt = builder.build_system_prompt(&[]);
+
+        // Verify skill mode section is NOT present
+        assert!(!prompt.contains("Skill Execution Mode"));
+        assert!(!prompt.contains("NEVER output raw content directly"));
     }
 }

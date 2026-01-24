@@ -146,6 +146,8 @@ pub fn run_skill_with_agent_loop(
     thinker_config.prompt.runtime_capabilities = runtime_capabilities;
     thinker_config.prompt.generation_models =
         format_generation_models_for_prompt(generation_config);
+    // Enable skill mode for strict workflow execution
+    thinker_config.prompt.skill_mode = true;
 
     // Create components
     let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));

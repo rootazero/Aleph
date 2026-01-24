@@ -14490,7 +14490,7 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
+    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
         onThinking: { (
             uniffiHandle: UInt64,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -15065,7 +15065,7 @@ private func uniffiCallbackInitAetherEventHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
-    fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
+    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
 }
 
 #if swift(>=5.8)
@@ -15121,7 +15121,7 @@ fileprivate struct UniffiCallbackInterfaceAgentProgressHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceAgentProgressHandler = UniffiVTableCallbackInterfaceAgentProgressHandler(
+    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAgentProgressHandler = UniffiVTableCallbackInterfaceAgentProgressHandler(
         onProgressEvent: { (
             uniffiHandle: UInt64,
             event: RustBuffer,
@@ -15164,7 +15164,7 @@ private func uniffiCallbackInitAgentProgressHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAgentProgressHandler {
-    fileprivate static var handleMap = UniffiHandleMap<AgentProgressHandler>()
+    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AgentProgressHandler>()
 }
 
 #if swift(>=5.8)
@@ -15272,7 +15272,7 @@ fileprivate struct UniffiCallbackInterfaceInitProgressHandlerFFI {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
+    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
         onPhaseStarted: { (
             uniffiHandle: UInt64,
             phase: RustBuffer,
@@ -15427,7 +15427,7 @@ private func uniffiCallbackInitInitProgressHandlerFFI() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceInitProgressHandlerFfi {
-    fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
+    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
 }
 
 #if swift(>=5.8)
@@ -17092,7 +17092,7 @@ private enum InitializationResult {
 }
 // Use a global variable to perform the versioning checks. Swift ensures that
 // the code inside is only computed once.
-private var initializationResult: InitializationResult = {
+nonisolated(unsafe) private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
     // Get the scaffolding contract version by calling the into the dylib

@@ -196,7 +196,17 @@ impl DecisionParser {
             return Ok(json);
         }
 
-        // Try to find raw JSON object
+        // Try to find action JSON specifically (for long responses with embedded data)
+        if let Some(json) = self.extract_action_json(trimmed) {
+            return Ok(json);
+        }
+
+        // Try to find raw JSON object from the end (LLM might output action at the end)
+        if let Some(json) = self.extract_raw_json_from_end(trimmed) {
+            return Ok(json);
+        }
+
+        // Try to find raw JSON object from the start
         if let Some(json) = self.extract_raw_json(trimmed) {
             return Ok(json);
         }
@@ -206,33 +216,60 @@ impl DecisionParser {
     }
 
     /// Extract JSON from markdown code block
+    ///
+    /// Only extracts if the JSON looks like an action JSON (contains "action" and "type")
     fn extract_from_code_block(&self, response: &str) -> Option<String> {
+        // Collect all potential code blocks
+        let mut candidates = Vec::new();
+
         // Try ```json ... ``` format
-        if let Some(start) = response.find("```json") {
-            let content_start = start + 7;
+        let mut search_start = 0;
+        while let Some(start) = response[search_start..].find("```json") {
+            let abs_start = search_start + start;
+            let content_start = abs_start + 7;
             if let Some(end) = response[content_start..].find("```") {
-                return Some(response[content_start..content_start + end].trim().to_string());
+                let content = response[content_start..content_start + end].trim().to_string();
+                candidates.push(content);
+                search_start = content_start + end + 3;
+            } else {
+                break;
             }
         }
 
-        // Try ``` ... ``` format (without json marker)
-        if let Some(start) = response.find("```") {
-            let content_start = start + 3;
-            // Skip language identifier if present
-            let content_start = response[content_start..]
-                .find('\n')
-                .map(|i| content_start + i + 1)
-                .unwrap_or(content_start);
+        // Try ``` ... ``` format (without json marker) - only if no json blocks found
+        if candidates.is_empty() {
+            search_start = 0;
+            while let Some(start) = response[search_start..].find("```") {
+                let abs_start = search_start + start;
+                let content_start = abs_start + 3;
+                // Skip language identifier if present
+                let content_start = response[content_start..]
+                    .find('\n')
+                    .map(|i| content_start + i + 1)
+                    .unwrap_or(content_start);
 
-            if let Some(end) = response[content_start..].find("```") {
-                let content = response[content_start..content_start + end].trim();
-                // Verify it looks like JSON
-                if content.starts_with('{') {
-                    return Some(content.to_string());
+                if let Some(end) = response[content_start..].find("```") {
+                    let content = response[content_start..content_start + end].trim();
+                    // Verify it looks like JSON
+                    if content.starts_with('{') {
+                        candidates.push(content.to_string());
+                    }
+                    search_start = content_start + end + 3;
+                } else {
+                    break;
                 }
             }
         }
 
+        // Return first candidate that looks like an action JSON
+        for candidate in &candidates {
+            if candidate.contains("\"action\"") && candidate.contains("\"type\"") {
+                return Some(candidate.clone());
+            }
+        }
+
+        // If no action JSON found in code blocks, return None
+        // and let other extraction methods try to find the action JSON
         None
     }
 
@@ -240,6 +277,99 @@ impl DecisionParser {
     fn extract_raw_json(&self, response: &str) -> Option<String> {
         // Find first { and matching }
         let start = response.find('{')?;
+        let mut depth = 0;
+        let mut end = start;
+
+        for (i, c) in response[start..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = start + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if depth == 0 && end > start {
+            Some(response[start..end].to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Extract action JSON specifically from response
+    ///
+    /// Looks for JSON objects that contain "action" field with a "type" field,
+    /// which is the expected format for LLM decisions.
+    /// This handles cases where LLM outputs content before/after the action JSON.
+    fn extract_action_json(&self, response: &str) -> Option<String> {
+        // Look for patterns that indicate action JSON
+        // Pattern 1: {"reasoning":... (with or without leading whitespace)
+        // Pattern 2: {"action":... (some LLMs skip reasoning)
+
+        let action_patterns = [
+            r#"{"reasoning""#,
+            r#"{ "reasoning""#,
+            r#"{"action""#,
+            r#"{ "action""#,
+        ];
+
+        for pattern in action_patterns {
+            if let Some(pos) = response.find(pattern) {
+                // Extract JSON starting from this position
+                if let Some(json) = self.extract_json_at(response, pos) {
+                    // Validate it looks like an action JSON
+                    if json.contains("\"action\"") && json.contains("\"type\"") {
+                        return Some(json);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Extract raw JSON from the end of response (for long responses where action is at the end)
+    fn extract_raw_json_from_end(&self, response: &str) -> Option<String> {
+        // Find last } and matching {
+        let end = response.rfind('}')?;
+
+        let response_bytes = response.as_bytes();
+        let mut depth = 0;
+        let mut start = end;
+
+        // Walk backwards to find matching {
+        for i in (0..=end).rev() {
+            match response_bytes[i] as char {
+                '}' => depth += 1,
+                '{' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        start = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if depth == 0 && start < end {
+            let json = &response[start..=end];
+            // Validate it looks like an action JSON (has "action" and "type")
+            if json.contains("\"action\"") && json.contains("\"type\"") {
+                return Some(json.to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Extract JSON starting at a specific position
+    fn extract_json_at(&self, response: &str, start: usize) -> Option<String> {
         let mut depth = 0;
         let mut end = start;
 
@@ -559,5 +689,100 @@ Hope that helps!"#;
         } else {
             panic!("Expected Complete decision");
         }
+    }
+
+    #[test]
+    fn test_extract_action_json_with_leading_content() {
+        let parser = DecisionParser::new();
+
+        // Simulate LLM outputting large content before the action JSON
+        let response = r#"Here is the processed content:
+
+## Chapter 1: Introduction
+This is a long document with lots of content...
+{"data": [1, 2, 3], "nested": {"key": "value"}}
+
+## Chapter 2: More content
+Even more text here with JSON-like content...
+
+Now here is my action:
+{"reasoning": "I have processed all chapters", "action": {"type": "complete", "summary": "Processed 2 chapters successfully"}}
+"#;
+
+        let thinking = parser.parse(response).unwrap();
+        assert!(matches!(thinking.decision, Decision::Complete { .. }));
+        if let Decision::Complete { summary } = thinking.decision {
+            assert!(summary.contains("Processed 2 chapters"));
+        }
+    }
+
+    #[test]
+    fn test_extract_action_json_from_end() {
+        let parser = DecisionParser::new();
+
+        // Action JSON at the very end with lots of content before
+        let response = r#"# Knowledge Graph Analysis
+
+## Entities Found:
+- Person: John (id: 1)
+- Organization: Acme Corp (id: 2)
+
+## Relationships:
+{"source": 1, "target": 2, "type": "works_at"}
+
+## Summary
+Analysis complete.
+
+{"reasoning": "Generated knowledge graph with 2 entities and 1 relationship", "action": {"type": "complete", "summary": "Knowledge graph generated successfully"}}"#;
+
+        let thinking = parser.parse(response).unwrap();
+        assert!(matches!(thinking.decision, Decision::Complete { .. }));
+    }
+
+    #[test]
+    fn test_extract_action_json_with_data_json() {
+        let parser = DecisionParser::new();
+
+        // Response with data JSON followed by action JSON
+        let response = r#"Here are the triples I extracted:
+
+```json
+{
+  "triples": [
+    {"subject": "Claude", "predicate": "is", "object": "AI"},
+    {"subject": "Anthropic", "predicate": "created", "object": "Claude"}
+  ]
+}
+```
+
+Now I need to write these to a file:
+
+{"reasoning": "I will write the triples to a file", "action": {"type": "tool", "tool_name": "file_ops", "arguments": {"operation": "write", "path": "triples.json"}}}"#;
+
+        let thinking = parser.parse(response).unwrap();
+        assert!(matches!(thinking.decision, Decision::UseTool { .. }));
+        if let Decision::UseTool { tool_name, .. } = thinking.decision {
+            assert_eq!(tool_name, "file_ops");
+        }
+    }
+
+    #[test]
+    fn test_very_long_response_with_action() {
+        let parser = DecisionParser::new();
+
+        // Simulate a very long response (like 122KB) with action at the end
+        let mut long_content = String::new();
+        for i in 0..1000 {
+            long_content.push_str(&format!(
+                "Line {}: This is some content that the LLM generated. {{\"data\": {}}}\n",
+                i, i
+            ));
+        }
+        long_content.push_str(
+            r#"{"reasoning": "Processed all content", "action": {"type": "complete", "summary": "Done processing 1000 lines"}}"#,
+        );
+
+        let thinking = parser.parse(&long_content).unwrap();
+        assert!(matches!(thinking.decision, Decision::Complete { .. }));
     }
 }
