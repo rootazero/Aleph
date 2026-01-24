@@ -73,6 +73,9 @@ pub enum SessionPart {
     PlanCreated(PlanPart),
     SubAgentCall(SubAgentPart),
     Summary(SummaryPart),
+    /// Marker for compaction boundary - used by filter_compacted() to find
+    /// the point where old context was summarized
+    CompactionMarker(CompactionMarker),
 }
 
 impl SessionPart {
@@ -85,6 +88,7 @@ impl SessionPart {
             SessionPart::PlanCreated(_) => "plan_created",
             SessionPart::SubAgentCall(_) => "sub_agent_call",
             SessionPart::Summary(_) => "summary",
+            SessionPart::CompactionMarker(_) => "compaction_marker",
         }
     }
 }
@@ -152,6 +156,19 @@ pub struct SummaryPart {
     pub compacted_at: i64,
 }
 
+/// Marker for compaction boundary
+///
+/// This marker is inserted into the session when compaction occurs,
+/// allowing filter_compacted() to find the boundary and discard
+/// old context that has been summarized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionMarker {
+    /// When compaction occurred
+    pub timestamp: i64,
+    /// Whether this was automatic or user-triggered
+    pub auto: bool,
+}
+
 // =============================================================================
 // Part ID Trait and Update Types (for UI message flow)
 // =============================================================================
@@ -172,6 +189,7 @@ impl PartId for SessionPart {
             SessionPart::PlanCreated(p) => p.plan_id.clone(),
             SessionPart::SubAgentCall(p) => format!("subagent_{}", p.agent_id),
             SessionPart::Summary(p) => format!("summary_{}", p.compacted_at),
+            SessionPart::CompactionMarker(p) => format!("compaction_marker_{}", p.timestamp),
         }
     }
 }

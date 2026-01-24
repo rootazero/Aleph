@@ -15,7 +15,9 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 
-use crate::components::types::{ExecutionSession, SessionPart, SessionStatus, SummaryPart};
+use crate::components::types::{
+    CompactionMarker, ExecutionSession, SessionPart, SessionStatus, SummaryPart,
+};
 
 // ============================================================================
 // Compaction Prompt
@@ -608,6 +610,10 @@ impl SessionCompactor {
                     }).unwrap_or_else(|| "[pending]".to_string());
                     context_parts.push(format!("[SubAgent {}]: {} -> {}", sa.agent_id, sa.prompt, result));
                 }
+                SessionPart::CompactionMarker(m) => {
+                    let trigger = if m.auto { "auto" } else { "manual" };
+                    context_parts.push(format!("[Compaction Marker]: {} ({})", m.timestamp, trigger));
+                }
             }
         }
 
@@ -795,11 +801,97 @@ impl SessionCompactor {
                     tokens
                 }
                 SessionPart::Summary(summary) => TokenTracker::estimate_tokens(&summary.content),
+                SessionPart::CompactionMarker(_) => 0, // Markers don't consume tokens
             };
         }
 
         session.total_tokens = total;
     }
+
+    // ========================================================================
+    // Filter Compacted Methods (Context Windowing)
+    // ========================================================================
+
+    /// Filter session parts to only include those after the last compaction boundary
+    ///
+    /// This matches OpenCode's filterCompacted() function:
+    /// - Iterates backward through messages
+    /// - Finds completed summary messages (compacted_at > 0)
+    /// - Breaks at compaction markers
+    /// - Returns only parts after the boundary
+    ///
+    /// This creates natural breakpoints at summary points, discarding old context
+    /// that has already been summarized into the Summary part.
+    ///
+    /// # Arguments
+    /// * `session` - The execution session to filter
+    ///
+    /// # Returns
+    /// A Vec of SessionParts containing only parts after the last compaction boundary
+    pub fn filter_compacted(&self, session: &ExecutionSession) -> Vec<SessionPart> {
+        let mut result: Vec<SessionPart> = Vec::new();
+        let mut found_completed_summary = false;
+
+        // Iterate backward to find the boundary
+        for part in session.parts.iter().rev() {
+            match part {
+                SessionPart::Summary(s) if s.compacted_at > 0 => {
+                    // Found a completed summary - this is after a compaction
+                    found_completed_summary = true;
+                    result.push(part.clone());
+                }
+                SessionPart::CompactionMarker(_) if found_completed_summary => {
+                    // Found the compaction marker after seeing its summary
+                    // This is the boundary - stop collecting
+                    break;
+                }
+                _ => {
+                    result.push(part.clone());
+                }
+            }
+        }
+
+        // Reverse to get chronological order
+        result.reverse();
+        result
+    }
+
+    /// Get messages for model, respecting compaction boundaries
+    ///
+    /// Creates a filtered copy of the session containing only parts after
+    /// the last compaction boundary. This is useful for sending to the LLM
+    /// to avoid exceeding context limits while preserving relevant context.
+    ///
+    /// # Arguments
+    /// * `session` - The execution session to filter
+    ///
+    /// # Returns
+    /// A new ExecutionSession with filtered parts
+    pub fn get_filtered_session(&self, session: &ExecutionSession) -> ExecutionSession {
+        let mut filtered = session.clone();
+        filtered.parts = self.filter_compacted(session);
+        filtered
+    }
+
+    /// Insert a compaction marker before performing compaction
+    ///
+    /// This should be called before replace_with_summary to create
+    /// a boundary that filter_compacted can detect.
+    ///
+    /// # Arguments
+    /// * `session` - The execution session to mark
+    /// * `auto` - Whether this is automatic (true) or user-triggered (false)
+    pub fn insert_compaction_marker(&self, session: &mut ExecutionSession, auto: bool) {
+        let marker = CompactionMarker {
+            timestamp: chrono::Utc::now().timestamp(),
+            auto,
+        };
+        session.parts.push(SessionPart::CompactionMarker(marker));
+    }
+
+    // ========================================================================
+    // Core Compaction Methods
+    // ========================================================================
 
     /// Compact the session to reduce token usage
     ///
@@ -2256,5 +2348,389 @@ mod tests {
         // Should be truncated
         assert!(context.contains("..."), "Long subagent result should be truncated");
         assert!(!context.contains(&"x".repeat(500)), "Full result should not appear");
+    }
+
+    // ========================================================================
+    // Filter Compacted Tests (Task 5)
+    // ========================================================================
+
+    #[test]
+    fn test_filter_compacted_creates_boundary() {
+        use crate::components::types::CompactionMarker;
+
+        let mut session = ExecutionSession::new();
+
+        // Add some history before compaction
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Old request".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        // Add compaction marker
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 2000,
+            auto: true,
+        }));
+
+        // Add summary
+        session.parts.push(SessionPart::Summary(SummaryPart {
+            content: "Summary of old context".to_string(),
+            original_count: 5,
+            compacted_at: 2000,
+        }));
+
+        // Add new history after compaction
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "New request".to_string(),
+            context: None,
+            timestamp: 3000,
+        }));
+
+        let compactor = SessionCompactor::new();
+        let filtered = compactor.filter_compacted(&session);
+
+        // Should only return parts after the compaction boundary (summary + new)
+        assert_eq!(filtered.len(), 2, "Expected 2 parts (summary + new user input), got {}", filtered.len());
+        assert!(matches!(filtered[0], SessionPart::Summary(_)), "First part should be Summary");
+        assert!(matches!(filtered[1], SessionPart::UserInput(_)), "Second part should be UserInput");
+
+        // Verify the content
+        if let SessionPart::Summary(s) = &filtered[0] {
+            assert_eq!(s.content, "Summary of old context");
+        }
+        if let SessionPart::UserInput(u) = &filtered[1] {
+            assert_eq!(u.text, "New request");
+        }
+    }
+
+    #[test]
+    fn test_filter_compacted_no_boundary() {
+        let session = create_test_session(); // No compaction markers
+        let compactor = SessionCompactor::new();
+        let filtered = compactor.filter_compacted(&session);
+
+        // Without compaction, should return all parts
+        assert_eq!(filtered.len(), session.parts.len(),
+            "Without compaction boundary, all {} parts should be returned", session.parts.len());
+    }
+
+    #[test]
+    fn test_filter_compacted_incomplete_summary() {
+        use crate::components::types::CompactionMarker;
+
+        let mut session = ExecutionSession::new();
+
+        // Add old history
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Old request".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        // Add compaction marker
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 2000,
+            auto: true,
+        }));
+
+        // Add incomplete summary (compacted_at = 0)
+        session.parts.push(SessionPart::Summary(SummaryPart {
+            content: "Incomplete summary".to_string(),
+            original_count: 5,
+            compacted_at: 0, // Not completed
+        }));
+
+        // Add new history
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "New request".to_string(),
+            context: None,
+            timestamp: 3000,
+        }));
+
+        let compactor = SessionCompactor::new();
+        let filtered = compactor.filter_compacted(&session);
+
+        // With incomplete summary (compacted_at = 0), should return all parts
+        // because we never find a "completed" summary to trigger boundary detection
+        assert_eq!(filtered.len(), session.parts.len(),
+            "With incomplete summary, all parts should be returned");
+    }
+
+    #[test]
+    fn test_filter_compacted_multiple_boundaries() {
+        use crate::components::types::CompactionMarker;
+
+        let mut session = ExecutionSession::new();
+
+        // First compaction cycle
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Very old request".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 2000,
+            auto: true,
+        }));
+        session.parts.push(SessionPart::Summary(SummaryPart {
+            content: "First summary".to_string(),
+            original_count: 3,
+            compacted_at: 2000,
+        }));
+
+        // Second compaction cycle
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Old request".to_string(),
+            context: None,
+            timestamp: 3000,
+        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 4000,
+            auto: false,
+        }));
+        session.parts.push(SessionPart::Summary(SummaryPart {
+            content: "Second summary".to_string(),
+            original_count: 5,
+            compacted_at: 4000,
+        }));
+
+        // Current context
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Current request".to_string(),
+            context: None,
+            timestamp: 5000,
+        }));
+
+        let compactor = SessionCompactor::new();
+        let filtered = compactor.filter_compacted(&session);
+
+        // Should only return parts after the LAST compaction boundary
+        // (second summary + current request)
+        assert_eq!(filtered.len(), 2, "Expected 2 parts after last boundary, got {}", filtered.len());
+
+        if let SessionPart::Summary(s) = &filtered[0] {
+            assert_eq!(s.content, "Second summary", "Should have the most recent summary");
+        } else {
+            panic!("First filtered part should be Summary");
+        }
+
+        if let SessionPart::UserInput(u) = &filtered[1] {
+            assert_eq!(u.text, "Current request");
+        } else {
+            panic!("Second filtered part should be UserInput");
+        }
+    }
+
+    #[test]
+    fn test_get_filtered_session() {
+        use crate::components::types::CompactionMarker;
+
+        let mut session = ExecutionSession::new().with_model("gpt-4-turbo");
+        session.id = "test-session-123".to_string();
+
+        // Add old history
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Old request".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        // Add compaction marker
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 2000,
+            auto: true,
+        }));
+
+        // Add summary
+        session.parts.push(SessionPart::Summary(SummaryPart {
+            content: "Summary".to_string(),
+            original_count: 5,
+            compacted_at: 2000,
+        }));
+
+        // Add new history
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "New request".to_string(),
+            context: None,
+            timestamp: 3000,
+        }));
+
+        let compactor = SessionCompactor::new();
+        let filtered_session = compactor.get_filtered_session(&session);
+
+        // Session metadata should be preserved
+        assert_eq!(filtered_session.id, "test-session-123");
+        assert_eq!(filtered_session.model, "gpt-4-turbo");
+
+        // Parts should be filtered
+        assert_eq!(filtered_session.parts.len(), 2);
+    }
+
+    #[test]
+    fn test_insert_compaction_marker_auto() {
+        let compactor = SessionCompactor::new();
+        let mut session = ExecutionSession::new();
+
+        compactor.insert_compaction_marker(&mut session, true);
+
+        assert_eq!(session.parts.len(), 1);
+        if let SessionPart::CompactionMarker(m) = &session.parts[0] {
+            assert!(m.auto, "Auto flag should be true");
+            assert!(m.timestamp > 0, "Timestamp should be set");
+        } else {
+            panic!("Should have added CompactionMarker");
+        }
+    }
+
+    #[test]
+    fn test_insert_compaction_marker_manual() {
+        let compactor = SessionCompactor::new();
+        let mut session = ExecutionSession::new();
+
+        compactor.insert_compaction_marker(&mut session, false);
+
+        assert_eq!(session.parts.len(), 1);
+        if let SessionPart::CompactionMarker(m) = &session.parts[0] {
+            assert!(!m.auto, "Auto flag should be false for manual trigger");
+        } else {
+            panic!("Should have added CompactionMarker");
+        }
+    }
+
+    #[test]
+    fn test_filter_compacted_preserves_order() {
+        use crate::components::types::CompactionMarker;
+
+        let mut session = ExecutionSession::new();
+
+        // Old content
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Old".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        // Compaction
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 2000,
+            auto: true,
+        }));
+        session.parts.push(SessionPart::Summary(SummaryPart {
+            content: "Summary".to_string(),
+            original_count: 1,
+            compacted_at: 2000,
+        }));
+
+        // New content in specific order
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Request 1".to_string(),
+            context: None,
+            timestamp: 3000,
+        }));
+        session.parts.push(SessionPart::AiResponse(AiResponsePart {
+            content: "Response 1".to_string(),
+            reasoning: None,
+            timestamp: 3100,
+        }));
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Request 2".to_string(),
+            context: None,
+            timestamp: 3200,
+        }));
+
+        let compactor = SessionCompactor::new();
+        let filtered = compactor.filter_compacted(&session);
+
+        // Should preserve chronological order
+        assert_eq!(filtered.len(), 4);
+        assert!(matches!(filtered[0], SessionPart::Summary(_)));
+        assert!(matches!(filtered[1], SessionPart::UserInput(_)));
+        assert!(matches!(filtered[2], SessionPart::AiResponse(_)));
+        assert!(matches!(filtered[3], SessionPart::UserInput(_)));
+
+        // Verify specific order
+        if let SessionPart::UserInput(u) = &filtered[1] {
+            assert_eq!(u.text, "Request 1");
+        }
+        if let SessionPart::UserInput(u) = &filtered[3] {
+            assert_eq!(u.text, "Request 2");
+        }
+    }
+
+    #[test]
+    fn test_compaction_marker_type_name() {
+        use crate::components::types::CompactionMarker;
+
+        let marker = SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 1000,
+            auto: true,
+        });
+
+        assert_eq!(marker.type_name(), "compaction_marker");
+    }
+
+    #[test]
+    fn test_build_summary_context_with_compaction_marker() {
+        use crate::components::types::CompactionMarker;
+
+        let compactor = SessionCompactor::new();
+        let mut session = ExecutionSession::new();
+
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 1000,
+            auto: true,
+        }));
+
+        let context = compactor.build_summary_context(&session);
+
+        assert!(context.contains("[Compaction Marker]:"), "Should contain marker");
+        assert!(context.contains("1000"), "Should contain timestamp");
+        assert!(context.contains("auto"), "Should indicate auto trigger");
+    }
+
+    #[test]
+    fn test_build_summary_context_with_manual_compaction_marker() {
+        use crate::components::types::CompactionMarker;
+
+        let compactor = SessionCompactor::new();
+        let mut session = ExecutionSession::new();
+
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 2000,
+            auto: false,
+        }));
+
+        let context = compactor.build_summary_context(&session);
+
+        assert!(context.contains("[Compaction Marker]:"));
+        assert!(context.contains("manual"), "Should indicate manual trigger");
+    }
+
+    #[test]
+    fn test_recalculate_tokens_with_compaction_marker() {
+        use crate::components::types::CompactionMarker;
+
+        let compactor = SessionCompactor::new();
+        let mut session = ExecutionSession::new();
+
+        // Add a compaction marker
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 1000,
+            auto: true,
+        }));
+
+        // Add some actual content for comparison
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Hello".to_string(),
+            context: None,
+            timestamp: 2000,
+        }));
+
+        compactor.recalculate_tokens(&mut session);
+
+        // Compaction markers should not add to token count
+        // Only the "Hello" text should contribute (5 chars * 0.4 = 2 tokens)
+        assert_eq!(session.total_tokens, 2, "Only user input should contribute tokens");
     }
 }
