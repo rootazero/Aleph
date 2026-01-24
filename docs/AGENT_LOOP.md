@@ -462,6 +462,60 @@ On timeout, partial results (completed tool calls) are still available via `part
 
 ---
 
+## Overflow Detection
+
+**Status**: Implemented (2026-01-24)
+
+**Location**: `core/src/agent_loop/overflow.rs`
+
+The OverflowDetector provides real-time context overflow detection for proactive compaction triggers before context window limits are exceeded.
+
+### OverflowDetector
+
+```rust
+use aether_core::agent_loop::overflow::{OverflowDetector, OverflowConfig};
+
+let detector = OverflowDetector::new(OverflowConfig::default());
+
+// Check if overflow threshold exceeded
+if detector.is_overflow(&session) {
+    // Trigger compaction
+}
+
+// Get usage percentage (0.0 - 1.0)
+let usage = detector.usage_percent(&session);
+```
+
+### Model Limits
+
+The detector uses predefined model limits for accurate overflow detection:
+
+| Model | Context | Max Output | Usable Tokens |
+|-------|---------|------------|---------------|
+| claude-3.5-sonnet | 200K | 8K | ~173K |
+| claude-3-opus | 200K | 4K | ~177K |
+| gpt-4o | 128K | 16K | ~101K |
+| gpt-4-turbo | 128K | 4K | ~112K |
+| gemini-1.5-pro | 2M | 8K | ~1.8M |
+
+### Integration with Agent Loop
+
+The OverflowDetector is integrated at the start of each agent loop iteration:
+
+1. **Before Think Phase**: Check if current token usage exceeds threshold
+2. **Threshold Action**: If overflow detected, inject warning into system prompt
+3. **Compaction Trigger**: Signal to MessageBuilder to trigger compaction
+
+```rust
+// In AgentLoop iteration
+let overflow_result = self.overflow_detector.check(&session);
+if overflow_result.is_overflow {
+    message_builder.inject_token_limit_warning(overflow_result.usage_percent);
+}
+```
+
+---
+
 ## Session Compaction
 
 The Agent Loop integrates with the SessionCompactor to manage token usage and prevent context overflow.

@@ -9,11 +9,11 @@ Aether is a Monorepo with platform-specific directories:
 - **Tauri**: Cross-platform (Windows, Linux) with React + TypeScript
 - **Windows (Native)**: ARCHIVED - use Tauri instead
 
-## Rust Core Module Count: ~35 Public Modules
+## Rust Core Module Count: ~40 Public Modules
 
 | Category | Modules |
 |----------|---------|
-| **FFI** | 21 sub-modules (ffi/) |
+| **FFI** | 22 sub-modules (ffi/) |
 | **Agent** | agent_loop/, agents/, components/ (8 components) |
 | **Config** | config/ (types + policies + watcher) |
 | **AI** | generation/ (10+ providers), providers/, rig_tools/ |
@@ -21,7 +21,9 @@ Aether is a Monorepo with platform-specific directories:
 | **Routing** | dispatcher/ (planner, scheduler, executor, model_router), intent/ (3 layers) |
 | **Tools** | mcp/, skills/, search/ (6 providers), video/, vision/ |
 | **Runtime** | runtimes/ (uv, fnm, yt-dlp, ffmpeg) |
-| **Infra** | services/, event/, conversation/, payload/, three_layer/, thinker/ |
+| **Infra** | services/, event/ (GlobalBus), conversation/, payload/, three_layer/, thinker/ |
+| **Permission** | permission/ (rules, config, manager), question/ (structured Q&A) |
+| **Compressor** | compressor/ (SmartCompactor, TurnProtector, ToolTruncator) |
 
 ## Complete Directory Tree
 
@@ -73,7 +75,7 @@ aether/
 │       │   ├── mod.rs, types.rs, registry.rs, suggestions.rs
 │       │
 │       ├── components/                # 8 Core agentic loop components
-│       │   ├── mod.rs
+│       │   ├── mod.rs, types.rs       # SessionPart types (enhanced with StepStart/Finish, Snapshot, Patch)
 │       │   ├── callback_bridge.rs     # Rust-Swift communication
 │       │   ├── intent_analyzer.rs     # Intent detection
 │       │   ├── loop_controller.rs     # Agentic loop state
@@ -91,8 +93,13 @@ aether/
 │       ├── conversation/              # Multi-turn conversation
 │       │   ├── mod.rs, manager.rs, session.rs, turn.rs
 │       │
-│       ├── compressor/                # Context compression
-│       │   ├── mod.rs, context.rs
+│       ├── compressor/                # Smart context compression
+│       │   ├── mod.rs, context_stats.rs, strategy.rs
+│       │   ├── smart_strategy.rs      # SmartCompactionStrategy (NEW)
+│       │   ├── smart_compactor.rs     # Unified SmartCompactor (NEW)
+│       │   ├── tool_truncator.rs      # ToolTruncator with summary (NEW)
+│       │   ├── turn_protector.rs      # TurnProtector for recent turns (NEW)
+│       │   └── tests_integration/     # Integration tests
 │       │
 │       ├── core/                      # Internal core types
 │       │   ├── mod.rs, types.rs, memory_types.rs
@@ -112,19 +119,25 @@ aether/
 │       │       ├── intelligent/       # Smart routing P2
 │       │       └── advanced/          # Advanced features P3
 │       │
-│       ├── event/                     # Event-driven architecture
-│       │   ├── mod.rs, bus.rs, types.rs, handlers.rs
+│       ├── event/                     # Event-driven architecture (Enhanced)
+│       │   ├── mod.rs, bus.rs, types.rs, handler.rs
+│       │   ├── global_bus.rs          # GlobalBus singleton (NEW)
+│       │   ├── filter.rs              # EventFilter with builder (NEW)
+│       │   ├── permission.rs          # Permission event types (NEW)
+│       │   ├── question.rs            # Question event types (NEW)
+│       │   └── tests/integration.rs   # Integration tests (NEW)
 │       │
-│       ├── ffi/                       # 21 FFI sub-modules
+│       ├── ffi/                       # 22 FFI sub-modules
 │       │   ├── mod.rs, processing.rs, tools.rs, memory.rs
 │       │   ├── config.rs, skills.rs, mcp.rs, dispatcher.rs
 │       │   ├── dispatcher_types.rs, generation.rs, init.rs
 │       │   ├── session.rs, runtime.rs, agent_loop_adapter.rs
 │       │   ├── plugins.rs, plan_confirmation.rs
-│       │   ├── tool_discovery.rs      # Smart tool filtering (NEW)
-│       │   ├── dag_executor.rs        # DAG task execution (NEW)
-│       │   ├── prompt_helpers.rs      # Prompt building utils (NEW)
-│       │   ├── provider_factory.rs    # AI provider creation (NEW)
+│       │   ├── tool_discovery.rs      # Smart tool filtering
+│       │   ├── dag_executor.rs        # DAG task execution
+│       │   ├── prompt_helpers.rs      # Prompt building utils
+│       │   ├── provider_factory.rs    # AI provider creation
+│       │   ├── subscription.rs        # Event subscription FFI (NEW)
 │       │   ├── typo_correction.rs, user_input.rs
 │       │
 │       ├── generation/                # Media generation providers
@@ -183,6 +196,16 @@ aether/
 │       ├── payload/                   # Structured context protocol
 │       │   ├── mod.rs, builder.rs, assembler.rs
 │       │   ├── capability.rs, context_format.rs, intent.rs
+│       │
+│       ├── permission/                # Permission system (NEW - OpenCode compatible)
+│       │   ├── mod.rs, error.rs       # Module exports and error types
+│       │   ├── rule.rs                # PermissionRule, PermissionEvaluator
+│       │   ├── config.rs              # PermissionConfig, default_config()
+│       │   └── manager.rs             # PermissionManager with async ask/reply
+│       │
+│       ├── question/                  # Structured Q&A system (NEW)
+│       │   ├── mod.rs, error.rs       # Module exports and error types
+│       │   └── manager.rs             # QuestionManager with ask/reply
 │       │
 │       ├── discovery/                 # Multi-level component discovery (Claude Code compatible)
 │       │   ├── mod.rs, scanner.rs, paths.rs, types.rs

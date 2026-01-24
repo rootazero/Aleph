@@ -10,6 +10,8 @@ This document describes the internal architecture of Aether's Rust core, particu
 - [Core Components](#core-components)
 - [Data Structures](#data-structures)
 - [Configuration Reference](#configuration-reference)
+- [GlobalBus - Cross-Agent Event System](#globalbus---cross-agent-event-system)
+- [Permission System](#permission-system)
 
 ---
 
@@ -1479,6 +1481,98 @@ pub async fn global_bus_subscribe(
 pub async fn global_bus_unsubscribe(
     subscription_id: String,
 ) -> Result<(), AetherError>
+```
+
+---
+
+## Permission System
+
+**Status**: Implemented (2026-01-24)
+
+**Location**: `core/src/permission/`, `core/src/question/`
+
+Aether implements a permission system inspired by OpenCode and Claude Code, providing granular control over tool execution with pattern-based rules.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Permission Flow                           │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│   Tool Call Request                                          │
+│         │                                                    │
+│         ▼                                                    │
+│   ┌─────────────────┐                                        │
+│   │ PermissionManager│                                       │
+│   │   .ask(request)  │                                       │
+│   └────────┬────────┘                                        │
+│            │                                                 │
+│            ▼                                                 │
+│   ┌─────────────────┐      ┌──────────────────┐             │
+│   │ PermissionEval  │─────▶│ Ruleset (merged) │             │
+│   │   .evaluate()   │      │ Config + Approved│             │
+│   └────────┬────────┘      └──────────────────┘             │
+│            │                                                 │
+│   ┌────────┴────────┬──────────────┐                        │
+│   ▼                 ▼              ▼                        │
+│ Allow             Deny           Ask (UI)                   │
+│   │                 │              │                        │
+│   └─────────────────┴──────────────┘                        │
+│                     │                                        │
+│                     ▼                                        │
+│              Permission Result                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Permission Rules
+
+Rules use pattern matching with wildcards (`*`, `?`):
+
+```rust
+use aether_core::permission::{PermissionRule, PermissionEvaluator};
+
+// Allow git commands
+PermissionRule::allow("bash", "git *");
+
+// Deny dangerous commands
+PermissionRule::deny("bash", "rm -rf *");
+
+// Ask for all other bash commands
+PermissionRule::ask("bash", "*");
+```
+
+**Rule Priority**: Later rules win (last match takes precedence).
+
+### Default Configuration
+
+| Permission | Pattern | Action |
+|------------|---------|--------|
+| `read` | `*` | Allow |
+| `edit` | `*` | Ask |
+| `bash` | `git *` | Allow |
+| `bash` | `cargo *` | Allow |
+| `bash` | `rm -rf *` | Deny |
+| `bash` | `*` | Ask |
+
+### Question System
+
+The QuestionManager provides structured Q&A interaction:
+
+```rust
+use aether_core::question::{QuestionManager, QuestionRequest, QuestionInfo};
+
+let question = QuestionInfo::new(
+    "Which option do you prefer?",
+    "Preference",
+    vec![
+        QuestionOption::new("Option A", "First option"),
+        QuestionOption::new("Option B", "Second option"),
+    ],
+);
+
+let request = QuestionRequest::single("q-1", "session-1", question);
+let answers = question_manager.ask(request).await?;
 ```
 
 ---
