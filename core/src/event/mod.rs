@@ -18,6 +18,8 @@ mod types;
 
 #[cfg(test)]
 mod integration_test;
+#[cfg(test)]
+mod tests;
 
 pub use bus::{EventBus, EventBusConfig, EventBusError, EventSubscriber};
 pub use handler::{EventContext, EventHandler, EventHandlerRegistry, HandlerError};

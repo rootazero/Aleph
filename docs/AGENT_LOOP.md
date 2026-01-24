@@ -175,6 +175,50 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md#message-flow-system) for complete messag
 
 ## Tool Execution
 
+### Multi-Tool Execution (NEW)
+
+The Agent Loop now supports executing multiple tools in a single decision:
+
+```
+Decision Types:
+├─ UseTool       → Single tool execution
+├─ UseTools      → Multiple tools (parallel or sequential)
+└─ ExecuteGraph  → Task graph with dependencies (DAG)
+```
+
+**Parallel Execution** (`UseTools { parallel: true }`):
+- All tools execute concurrently using `tokio::join_all`
+- Results aggregated in `MultiToolResults`
+- Maximum 25 tools per batch (`MAX_BATCH_TOOLS`)
+
+**Sequential Execution** (`UseTools { parallel: false }`):
+- Tools execute one after another
+- Output from previous tool available to subsequent
+- Continues even if individual tools fail
+
+**Graph Execution** (`ExecuteGraph`):
+- Tasks with explicit dependencies
+- DAG-based scheduling
+- Cycle detection and validation
+
+**LLM Response Format**:
+```json
+{
+  "reasoning": "I need to read multiple files",
+  "action": {
+    "type": "tools",
+    "tools": [
+      {"tool_name": "file_ops", "arguments": {"path": "/a.txt"}},
+      {"tool_name": "file_ops", "arguments": {"path": "/b.txt"}}
+    ],
+    "parallel": true
+  }
+}
+```
+
+**Alternative: batch_execute Tool**:
+For LLMs that only support single-tool responses, the `batch_execute` tool provides equivalent functionality.
+
 ### Tool Call Repair (`tools/server.rs`)
 
 Automatic correction of invalid tool calls:
@@ -500,6 +544,183 @@ protected_tools = ["skill"]  # Tools that are never pruned
 ```
 
 See [SESSION_COMPACTION.md](./SESSION_COMPACTION.md) for complete compaction documentation.
+
+---
+
+## Smart Compaction
+
+**Status**: Implemented (2026-01-24)
+
+**Location**: `core/src/compressor/`
+
+Smart Compaction provides intelligent context management using a unified compactor that combines strategy, truncation, and turn protection for fine-grained control over what gets compacted.
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **SmartCompactor** | `smart_compactor.rs` | Unified compaction component combining all sub-components |
+| **SmartCompactionStrategy** | `smart_strategy.rs` | Decision-making for which parts to compact |
+| **ToolTruncator** | `tool_truncator.rs` | Truncates large tool outputs with summary generation |
+| **TurnProtector** | `turn_protector.rs` | Protects recent conversation turns from compaction |
+
+### SmartCompactor
+
+The main entry point for intelligent compaction:
+
+```rust
+use aether_core::compressor::{SmartCompactor, SmartCompactionStrategy};
+
+// Create with default settings
+let compactor = SmartCompactor::new();
+
+// Or with custom strategy
+let strategy = SmartCompactionStrategy::new()
+    .with_compaction_threshold(0.90)   // Trigger at 90% usage
+    .with_protected_turns(3)            // Protect last 3 turns
+    .with_tool_output_max_chars(2000)   // Max chars per tool output
+    .add_protected_tool("skill");       // Never compact skill output
+
+let compactor = SmartCompactor::with_strategy(strategy);
+
+// Compact session parts
+let result = compactor.compact(&session_parts, 0.92);
+if result.marker.is_some() {
+    println!("Compacted {} parts, freed ~{} tokens",
+        result.parts_compacted, result.tokens_freed_estimate);
+}
+```
+
+### Compaction Actions
+
+The strategy evaluates each session part and returns an action:
+
+```rust
+pub enum CompactionAction {
+    Keep,           // Leave unchanged
+    Truncate {      // Truncate with summary
+        max_chars: usize,
+        summary: String,
+    },
+    RemoveOutput,   // Remove output entirely (keep call record)
+    Summarize {     // Merge multiple parts (future)
+        original_count: usize,
+    },
+}
+```
+
+### Turn Protection
+
+The TurnProtector ensures recent conversation context is preserved:
+
+```rust
+use aether_core::compressor::TurnProtector;
+
+let protector = TurnProtector::new(2); // Protect last 2 turns
+
+// A "turn" = one UserInput + all subsequent parts until next UserInput
+// Example with 5 turns and protected_turns=2:
+// - Turns 0, 1, 2: NOT protected (can be compacted)
+// - Turns 3, 4: PROTECTED (never compacted)
+
+// Check if a specific turn is protected
+if protector.is_protected(4, 5) {
+    println!("Turn 4 is in the protected window");
+}
+
+// Get all protected part indices
+let protected_indices = protector.protected_part_indices(&session.parts);
+```
+
+### Tool Output Truncation
+
+The ToolTruncator handles large outputs with summary generation:
+
+```rust
+use aether_core::compressor::ToolTruncator;
+
+let truncator = ToolTruncator::new(2000)
+    .with_summary_template("[Truncated {tool_name}: {original_len} -> {truncated_len}] {preview}...");
+
+let output = truncator.truncate(&large_output, "read_file");
+if output.was_truncated {
+    println!("Original: {} chars, Truncated: {} chars",
+        output.original_len, output.content.len());
+    println!("Summary: {}", output.summary);
+}
+```
+
+### Protected Tools
+
+Certain tools are never compacted regardless of size:
+
+```rust
+let strategy = SmartCompactionStrategy::new()
+    .add_protected_tool("skill")    // Skill execution output
+    .add_protected_tool("plan");    // Planning output
+
+// Default protected tools: ["skill", "plan"]
+```
+
+### Step and Compaction Markers
+
+Smart compaction works with session part types for step tracking:
+
+```rust
+/// Marks the start of an agent loop step
+pub struct StepStartPart {
+    pub step_id: usize,
+    pub timestamp: i64,
+    pub snapshot_id: Option<String>,  // For file revert capability
+}
+
+/// Marks the finish of an agent loop step
+pub struct StepFinishPart {
+    pub step_id: usize,
+    pub reason: StepFinishReason,     // Completed, Failed, UserAborted, etc.
+    pub tokens: Option<StepTokenUsage>,
+    pub duration_ms: u64,
+}
+
+/// Marker indicating compaction occurred
+pub struct CompactionMarker {
+    pub timestamp: i64,
+    pub auto: bool,           // Auto-triggered vs manual
+    pub marker_id: Option<String>,
+    pub parts_compacted: Option<usize>,
+    pub tokens_freed: Option<u64>,
+}
+```
+
+These parts enable:
+- **Audit Trail**: Track when compaction occurred
+- **Restoration**: Identify compaction points for potential rollback
+- **Analytics**: Measure compaction effectiveness over time
+
+### Configuration
+
+```toml
+[smart_compaction]
+enabled = true
+compaction_threshold = 0.85     # Trigger at 85% context usage
+protected_turns = 2             # Protect last 2 turns
+tool_output_max_chars = 2000    # Max chars per tool output
+protected_tools = ["skill", "plan"]
+```
+
+### Integration with Agent Loop
+
+Smart compaction integrates with the agent loop via MessageBuilder:
+
+```rust
+// In agent loop iteration
+let message_builder = MessageBuilder::new()
+    .with_smart_compaction(compactor.clone());
+
+// During message construction, compaction is applied
+// based on current context usage
+let messages = message_builder.build(&session_parts, token_usage);
+```
 
 ---
 

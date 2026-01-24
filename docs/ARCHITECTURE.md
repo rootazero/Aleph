@@ -1324,9 +1324,168 @@ pub struct PromptConfig {
 
 ---
 
+## GlobalBus - Cross-Agent Event System
+
+**Status**: Implemented (2026-01-24)
+
+**Location**: `core/src/event/global_bus.rs`, `core/src/event/filter.rs`
+
+The GlobalBus provides a centralized event aggregation system for cross-agent communication. It enables parent agents to monitor sub-agent progress, facilitates system-wide event observation, and supports filtered subscriptions for efficient event routing.
+
+### Architecture
+
+```
++-----------------------------------------------------------------+
+|                         GlobalBus                                |
++-----------------------------------------------------------------+
+|                                                                  |
+|   +-----------------------------------------------------------+ |
+|   |                   Broadcast Channel                        | |
+|   |   (tokio::broadcast with 1024 buffer)                     | |
+|   +-----------------------------------------------------------+ |
+|                              |                                   |
+|        +---------------------+---------------------+            |
+|        v                     v                     v            |
+|   +---------+          +---------+          +---------+        |
+|   |EventBus |          |EventBus |          |EventBus |        |
+|   |Agent-1  |          |Agent-2  |          |Agent-3  |        |
+|   +---------+          +---------+          +---------+        |
+|        |                     |                     |            |
+|   +----v---------------------v---------------------v--------+  |
+|   |              Filtered Subscriptions                      |  |
+|   |                                                          |  |
+|   |  +------------------------------------------------------+|  |
+|   |  | EventFilter                                          ||  |
+|   |  |  - by session_id: ["session-1", "session-2"]        ||  |
+|   |  |  - by agent_id: ["agent-1"]                          ||  |
+|   |  |  - by event_type: [LoopStop, ToolCallCompleted]     ||  |
+|   |  +------------------------------------------------------+|  |
+|   +----------------------------------------------------------+  |
+|                                                                  |
++-----------------------------------------------------------------+
+```
+
+### Key Components
+
+#### GlobalBus
+
+The singleton event aggregator that receives events from all EventBus instances:
+
+```rust
+use aether_core::event::{GlobalBus, EventFilter};
+
+// Get the global singleton
+let global_bus = GlobalBus::global();
+
+// Subscribe to all events
+let mut receiver = global_bus.subscribe_broadcast();
+
+// Subscribe with filter (async callback)
+let filter = EventFilter::new(vec![EventType::LoopStop])
+    .with_session("session-1")
+    .with_agent("agent-1");
+
+let sub_id = global_bus.subscribe_async(filter, |event| {
+    println!("Received: {:?}", event);
+}).await;
+
+// Unsubscribe
+global_bus.unsubscribe(&sub_id).await;
+```
+
+#### EventFilter
+
+Flexible filtering for subscription-based event routing:
+
+```rust
+// Filter by event type
+let filter = EventFilter::new(vec![
+    EventType::ToolCallStarted,
+    EventType::ToolCallCompleted,
+]);
+
+// Filter by session
+let filter = EventFilter::all()
+    .with_session("session-1");
+
+// Filter by agent
+let filter = EventFilter::all()
+    .with_agent("sub-agent-1");
+
+// Combined filters (AND logic)
+let filter = EventFilter::new(vec![EventType::LoopStop])
+    .with_session("session-1")
+    .with_agent("agent-1");
+```
+
+#### EventBus Integration
+
+EventBus instances can optionally connect to GlobalBus for automatic event broadcasting:
+
+```rust
+use aether_core::event::{EventBus, GlobalBus};
+
+let bus = EventBus::new()
+    .with_agent_id("agent-1")
+    .with_session_id("session-1")
+    .with_global_bus(GlobalBus::global());
+
+// All events published to this bus are automatically
+// broadcast to GlobalBus with agent/session context
+bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+```
+
+### GlobalEvent
+
+Events in GlobalBus are wrapped with source context:
+
+```rust
+pub struct GlobalEvent {
+    pub source_agent_id: String,
+    pub source_session_id: String,
+    pub event: AetherEvent,
+    pub sequence: u64,
+    pub timestamp: i64,
+}
+```
+
+### Use Cases
+
+1. **Parent Agent Monitoring Sub-Agent Progress**
+   - Subscribe to sub-agent's session events
+   - Wait for `LoopStop` event to know when complete
+   - Collect tool call results from `ToolCallCompleted` events
+
+2. **System-Wide Event Logging**
+   - Subscribe with `EventFilter::all()` to capture all events
+   - Log to file or monitoring system
+
+3. **Cross-Agent Coordination**
+   - Multiple agents can subscribe to each other's events
+   - Enables reactive workflows based on agent completion
+
+### FFI Interface
+
+For Swift/Kotlin integration (via UniFFI):
+
+```rust
+// FFI-friendly subscription
+pub async fn global_bus_subscribe(
+    filter_json: String,
+    callback_id: String,
+) -> Result<String, AetherError>
+
+// FFI-friendly unsubscribe
+pub async fn global_bus_unsubscribe(
+    subscription_id: String,
+) -> Result<(), AetherError>
+```
+
+---
+
 ## References
 
-- **Agent Loop**: [AGENT_LOOP.md](./AGENT_LOOP.md) - Doom loop detection, retry mechanism, tool repair, output truncation
+- **Agent Loop**: [AGENT_LOOP.md](./AGENT_LOOP.md) - Doom loop detection, retry mechanism, tool repair, output truncation, smart compaction
 - **Dispatcher**: [DISPATCHER.md](./DISPATCHER.md) - Tool routing and confirmation flow
 - **OpenSpec Proposal**: `openspec/changes/implement-structured-context-protocol/`
 - **Design Document**: `openspec/changes/implement-structured-context-protocol/design.md`
@@ -1337,4 +1496,4 @@ pub struct PromptConfig {
 
 **Last Updated**: 2026-01-24
 **Implemented In**: Aether v0.1.0
-**OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`, `enhance-intent-routing-pipeline`, `smart-tool-discovery`
+**OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`, `enhance-intent-routing-pipeline`, `smart-tool-discovery`, `event-bus-smart-compaction`

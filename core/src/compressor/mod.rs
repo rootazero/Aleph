@@ -41,6 +41,9 @@ pub mod strategy;
 pub mod tool_truncator;
 pub mod turn_protector;
 
+#[cfg(test)]
+mod tests_integration;
+
 use std::sync::Arc;
 
 pub use context_stats::{CompressionFocus, ContextStats, UsageBreakdown, WarningLevel};
