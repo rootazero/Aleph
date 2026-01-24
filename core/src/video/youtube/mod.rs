@@ -305,11 +305,9 @@ mod integration_tests {
                 println!("Title: {}", transcript.title);
                 println!("Language: {}", transcript.language);
                 println!("Segments: {}", transcript.segments.len());
-                println!(
-                    "First 200 chars: {}",
-                    &transcript.format_for_context()
-                        [..200.min(transcript.format_for_context().len())]
-                );
+                let context = transcript.format_for_context();
+                let preview: String = context.chars().take(200).collect();
+                println!("First 200 chars: {}", preview);
             }
             Err(e) => {
                 println!("Failed: {:?}", e);
@@ -342,9 +340,7 @@ mod integration_tests {
         let (caption_url, lang) =
             YouTubeExtractor::find_caption_url(&player_response, "en").unwrap();
         println!("4. Caption URL found for language: {}", lang);
-        println!(
-            "   URL preview: {}...",
-            &caption_url[..100.min(caption_url.len())]
-        );
+        let url_preview: String = caption_url.chars().take(100).collect();
+        println!("   URL preview: {}...", url_preview);
     }
 }

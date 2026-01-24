@@ -8579,15 +8579,17 @@ public struct ProcessOptions {
     public var topicId: String?
     public var stream: Bool
     public var attachments: [MediaAttachment]?
+    public var preferredLanguage: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(appContext: String?, windowTitle: String?, topicId: String?, stream: Bool, attachments: [MediaAttachment]?) {
+    public init(appContext: String?, windowTitle: String?, topicId: String?, stream: Bool, attachments: [MediaAttachment]?, preferredLanguage: String?) {
         self.appContext = appContext
         self.windowTitle = windowTitle
         self.topicId = topicId
         self.stream = stream
         self.attachments = attachments
+        self.preferredLanguage = preferredLanguage
     }
 }
 
@@ -8610,6 +8612,9 @@ extension ProcessOptions: Equatable, Hashable {
         if lhs.attachments != rhs.attachments {
             return false
         }
+        if lhs.preferredLanguage != rhs.preferredLanguage {
+            return false
+        }
         return true
     }
 
@@ -8619,6 +8624,7 @@ extension ProcessOptions: Equatable, Hashable {
         hasher.combine(topicId)
         hasher.combine(stream)
         hasher.combine(attachments)
+        hasher.combine(preferredLanguage)
     }
 }
 
@@ -8634,7 +8640,8 @@ public struct FfiConverterTypeProcessOptions: FfiConverterRustBuffer {
                 windowTitle: FfiConverterOptionString.read(from: &buf), 
                 topicId: FfiConverterOptionString.read(from: &buf), 
                 stream: FfiConverterBool.read(from: &buf), 
-                attachments: FfiConverterOptionSequenceTypeMediaAttachment.read(from: &buf)
+                attachments: FfiConverterOptionSequenceTypeMediaAttachment.read(from: &buf), 
+                preferredLanguage: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -8644,6 +8651,7 @@ public struct FfiConverterTypeProcessOptions: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.topicId, into: &buf)
         FfiConverterBool.write(value.stream, into: &buf)
         FfiConverterOptionSequenceTypeMediaAttachment.write(value.attachments, into: &buf)
+        FfiConverterOptionString.write(value.preferredLanguage, into: &buf)
     }
 }
 

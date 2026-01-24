@@ -6,6 +6,19 @@ use super::{AetherCore, AetherFfiError, ToolInfoFFI};
 use std::sync::Arc;
 use tracing::info;
 
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
+
 impl AetherCore {
     /// List available tools
     ///
@@ -341,13 +354,7 @@ impl AetherCore {
                 let description = rule
                     .system_prompt
                     .as_ref()
-                    .map(|s: &String| {
-                        if s.len() > 50 {
-                            format!("{}...", &s[..47])
-                        } else {
-                            s.clone()
-                        }
-                    })
+                    .map(|s: &String| truncate_str(s, 25))
                     .unwrap_or_else(|| format!("Custom command /{}", command_name));
 
                 commands.push(crate::command::CommandNode {

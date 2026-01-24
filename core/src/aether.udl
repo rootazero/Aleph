@@ -1512,6 +1512,7 @@ dictionary ProcessOptions {
     string? topic_id;    // Topic ID for multi-turn conversations (nil = "single-turn")
     boolean stream;
     sequence<MediaAttachment>? attachments;
+    string? preferred_language;  // Preferred language for AI responses (e.g., "zh-Hans", "en")
 };
 
 dictionary ToolInfoFFI {

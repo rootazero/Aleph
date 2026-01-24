@@ -53,7 +53,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 
 pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent, NoOpLoopCallback};
-pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig};
+pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig, ThinkRetryConfig};
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
 pub use guards::{GuardViolation, LoopGuard};
 pub use state::{LoopState, LoopStep, Observation, RequestContext, StepSummary, Thinking, ToolInfo};
@@ -325,6 +325,46 @@ where
                     tool_name,
                     arguments,
                 } => {
+                    // Record tool call for doom loop detection BEFORE checking
+                    guard.record_tool_call(tool_name, arguments);
+
+                    // Check for doom loop (exact same tool + arguments repeated)
+                    if let Some(GuardViolation::DoomLoop {
+                        tool_name: doom_tool,
+                        repeat_count,
+                        ..
+                    }) = guard.check(&state)
+                    {
+                        // Only handle DoomLoop here, let other guards be checked at loop start
+                        if matches!(
+                            guard.check(&state),
+                            Some(GuardViolation::DoomLoop { .. })
+                        ) {
+                            // Ask user if they want to continue
+                            let should_continue = callback
+                                .on_doom_loop_detected(&doom_tool, arguments, repeat_count)
+                                .await;
+
+                            if should_continue {
+                                // User wants to continue - reset detection and proceed
+                                guard.reset_doom_loop_detection();
+                            } else {
+                                // User doesn't want to continue - trigger guard
+                                let violation = GuardViolation::DoomLoop {
+                                    tool_name: doom_tool,
+                                    repeat_count,
+                                    arguments_preview: serde_json::to_string(arguments)
+                                        .unwrap_or_default()
+                                        .chars()
+                                        .take(100)
+                                        .collect(),
+                                };
+                                callback.on_guard_triggered(&violation).await;
+                                return LoopResult::GuardTriggered(violation);
+                            }
+                        }
+                    }
+
                     // Check if confirmation required
                     if guard.requires_confirmation(tool_name) {
                         let confirmed = callback

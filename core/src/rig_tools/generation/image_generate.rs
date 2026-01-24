@@ -96,8 +96,15 @@ impl ImageGenerateTool {
         let start = Instant::now();
 
         // Notify tool start
-        let prompt_display = if args.prompt.len() > 60 {
-            format!("{}...", &args.prompt[..60])
+        // Use char_indices for safe UTF-8 truncation (avoids panic on multi-byte chars)
+        let prompt_display = if args.prompt.chars().count() > 30 {
+            let end_byte = args
+                .prompt
+                .char_indices()
+                .nth(30)
+                .map(|(i, _)| i)
+                .unwrap_or(args.prompt.len());
+            format!("{}...", &args.prompt[..end_byte])
         } else {
             args.prompt.clone()
         };

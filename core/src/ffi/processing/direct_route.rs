@@ -36,6 +36,7 @@ pub fn handle_direct_route(
     generation_config: &GenerationConfig,
     generation_registry: &Arc<RwLock<GenerationProviderRegistry>>,
     attachments: Option<&[MediaAttachment]>,
+    preferred_language: &Option<String>,
 ) {
     // Extract attachment text if present
     let attachment_text = extract_attachment_text(attachments);
@@ -83,6 +84,7 @@ pub fn handle_direct_route(
                 &conversation_histories,
                 &topic_id,
                 generation_registry,
+                preferred_language,
             );
         }
 
@@ -105,6 +107,7 @@ pub fn handle_direct_route(
                 generation_registry,
                 attachments,
                 attachment_text.as_deref(),
+                preferred_language,
             );
         }
 
@@ -156,6 +159,7 @@ pub fn handle_direct_route(
                 &conversation_histories,
                 &topic_id,
                 generation_registry,
+                preferred_language,
             );
         }
 
@@ -197,6 +201,7 @@ pub fn handle_direct_route(
                 &conversation_histories,
                 &topic_id,
                 generation_registry,
+                preferred_language,
             );
         }
     }

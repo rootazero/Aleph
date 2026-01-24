@@ -39,6 +39,7 @@ impl AetherCore {
         let window_title = options.window_title.clone();
         let topic_id = options.topic_id.clone();
         let _stream = options.stream; // TODO: Use streaming mode in orchestrator
+        let preferred_language = options.preferred_language.clone();
 
         let handler = Arc::clone(&self.handler);
         // Acquire read lock to get current config (supports config reload)
@@ -108,6 +109,7 @@ impl AetherCore {
                 &generation_config,
                 &routing_rules,
                 &generation_registry,
+                &preferred_language,
             );
         });
 

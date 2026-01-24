@@ -15,6 +15,10 @@ pub struct ProcessOptions {
     pub stream: bool,
     /// Media attachments for multimodal content (images, etc.)
     pub attachments: Option<Vec<MediaAttachment>>,
+    /// Preferred language for AI responses (e.g., "zh-Hans", "en")
+    /// When set, the AI will respond in this language by default,
+    /// unless the task requires a different language (e.g., translation)
+    pub preferred_language: Option<String>,
 }
 
 impl Default for ProcessOptions {
@@ -22,9 +26,10 @@ impl Default for ProcessOptions {
         Self {
             app_context: None,
             window_title: None,
-            topic_id: None, // None means "single-turn"
-            stream: true,   // Streaming enabled by default
+            topic_id: None,         // None means "single-turn"
+            stream: true,           // Streaming enabled by default
             attachments: None,
+            preferred_language: None, // System default
         }
     }
 }
@@ -50,6 +55,12 @@ impl ProcessOptions {
     /// Set streaming mode
     pub fn with_stream(mut self, stream: bool) -> Self {
         self.stream = stream;
+        self
+    }
+
+    /// Set the preferred language for AI responses
+    pub fn with_preferred_language(mut self, language: String) -> Self {
+        self.preferred_language = Some(language);
         self
     }
 }

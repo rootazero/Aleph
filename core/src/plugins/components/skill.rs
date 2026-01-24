@@ -16,6 +16,19 @@ use std::path::Path;
 use crate::plugins::error::{PluginError, PluginResult};
 use crate::plugins::types::{PluginSkill, SkillFrontmatter, SkillType};
 
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
+
 /// Skill loader for parsing skill and command files
 #[derive(Debug, Default)]
 pub struct SkillLoader;
@@ -229,11 +242,7 @@ fn extract_description(body: &str) -> String {
     let first_line = first_para.lines().next().unwrap_or("");
     let description = first_line.trim();
 
-    if description.len() > 100 {
-        format!("{}...", &description[..97])
-    } else {
-        description.to_string()
-    }
+    truncate_str(description, 50)
 }
 
 /// Substitute $ARGUMENTS placeholder in skill content

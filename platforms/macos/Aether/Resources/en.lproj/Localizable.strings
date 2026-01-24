@@ -547,6 +547,7 @@
 "menu.settings" = "Settings...";
 "menu.quit" = "Quit Aether";
 "menu.about" = "About Aether";
+"menu.show_conversation" = "Show Conversation Window";
 "menu.default_provider" = "Default Provider";
 "menu.no_providers" = "No providers available";
 

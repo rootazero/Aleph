@@ -48,6 +48,7 @@ pub fn run_skill_with_agent_loop(
     generation_registry: &Arc<RwLock<GenerationProviderRegistry>>,
     _attachments: Option<&[MediaAttachment]>,
     attachment_text: Option<&str>,
+    preferred_language: &Option<String>,
 ) {
     // Check if already cancelled
     if op_token.is_cancelled() {
@@ -148,6 +149,8 @@ pub fn run_skill_with_agent_loop(
         format_generation_models_for_prompt(generation_config);
     // Enable skill mode for strict workflow execution
     thinker_config.prompt.skill_mode = true;
+    // Set preferred language for AI responses
+    thinker_config.prompt.language = preferred_language.clone();
 
     // Create components
     let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));

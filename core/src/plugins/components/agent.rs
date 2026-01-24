@@ -7,6 +7,19 @@ use std::path::Path;
 use crate::plugins::error::{PluginError, PluginResult};
 use crate::plugins::types::{AgentFrontmatter, PluginAgent};
 
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
+
 /// Agent loader for parsing agent.md files
 #[derive(Debug, Default)]
 pub struct AgentLoader;
@@ -155,11 +168,7 @@ fn extract_description(body: &str) -> String {
     let first_para = body.trim().split("\n\n").next().unwrap_or("");
     let first_line = first_para.lines().next().unwrap_or("");
 
-    if first_line.len() > 100 {
-        format!("{}...", &first_line[..97])
-    } else {
-        first_line.to_string()
-    }
+    truncate_str(first_line, 50)
 }
 
 #[cfg(test)]

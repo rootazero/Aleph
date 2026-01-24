@@ -160,3 +160,230 @@ pub fn get_output_dir() -> Result<PathBuf> {
 pub fn get_output_dir_string() -> Result<String> {
     Ok(get_output_dir()?.to_string_lossy().to_string())
 }
+
+/// Get the data directory for application data
+///
+/// This is an alias for get_config_dir() as all Aether data is stored
+/// under the unified config directory.
+///
+/// Returns: `<config_dir>/` (same as get_config_dir)
+pub fn get_data_dir() -> Result<PathBuf> {
+    get_config_dir()
+}
+
+// ============================================================================
+// Multi-location Skills Discovery (OpenCode Compatible)
+// ============================================================================
+
+/// Find the git repository root by traversing up from the start directory
+///
+/// Looks for a .git directory (or file for worktrees) starting from `start`
+/// and traversing up to the filesystem root.
+///
+/// # Arguments
+///
+/// * `start` - The directory to start searching from
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - The git root directory, or None if not found
+pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+
+    loop {
+        let git_path = current.join(".git");
+        if git_path.exists() {
+            return Some(current);
+        }
+
+        // Move up one directory
+        if !current.pop() {
+            // Reached filesystem root
+            return None;
+        }
+    }
+}
+
+/// Get all skills directories in priority order
+///
+/// Implements multi-location skill discovery following OpenCode's pattern:
+///
+/// 1. **Project level** (traverse up from current directory to git root):
+///    - `.aether/skills/` - Aether native
+///    - `.claude/skills/` - Claude Code compatibility
+///
+/// 2. **User level** (global):
+///    - `~/.config/aether/skills` - Aether native
+///    - `~/.claude/skills` - Claude Code compatibility
+///
+/// # Arguments
+///
+/// * `project_dir` - Optional project directory to start from. If None, uses current directory.
+///
+/// # Returns
+///
+/// * `Vec<PathBuf>` - List of skill directories that exist, in priority order
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let dirs = get_all_skills_dirs(Some("/path/to/project"))?;
+/// for dir in dirs {
+///     // Scan for SKILL.md files
+/// }
+/// ```
+pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+
+    // Determine start directory
+    let start_dir = match project_dir {
+        Some(p) => p.to_path_buf(),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+
+    // Find git root to limit traversal
+    let git_root = find_git_root(&start_dir);
+    let stop_at = git_root.as_ref().map(|p| p.as_path());
+
+    // 1. Project level: traverse up from start to git root
+    let mut current = start_dir.clone();
+    loop {
+        // Check .aether/skills/
+        let aether_skills = current.join(".aether").join("skills");
+        if aether_skills.is_dir() && !dirs.contains(&aether_skills) {
+            dirs.push(aether_skills);
+        }
+
+        // Check .claude/skills/ (Claude Code compatibility)
+        let claude_skills = current.join(".claude").join("skills");
+        if claude_skills.is_dir() && !dirs.contains(&claude_skills) {
+            dirs.push(claude_skills);
+        }
+
+        // Stop at git root or if we've reached filesystem root
+        if let Some(stop) = stop_at {
+            if current == stop {
+                break;
+            }
+        }
+
+        if !current.pop() {
+            break;
+        }
+    }
+
+    // 2. User level: global directories
+    if let Ok(home) = get_home_dir() {
+        // ~/.config/aether/skills
+        let global_aether = home.join(".config").join("aether").join("skills");
+        if global_aether.is_dir() && !dirs.contains(&global_aether) {
+            dirs.push(global_aether);
+        }
+
+        // ~/.claude/skills (Claude Code compatibility)
+        let global_claude = home.join(".claude").join("skills");
+        if global_claude.is_dir() && !dirs.contains(&global_claude) {
+            dirs.push(global_claude);
+        }
+    }
+
+    Ok(dirs)
+}
+
+/// Get the tool output directory for storing full outputs
+///
+/// Returns: `<data_dir>/tool_output/`
+///
+/// The directory is created if it doesn't exist.
+pub fn get_tool_output_dir() -> Result<PathBuf> {
+    let output_dir = get_data_dir()?.join("tool_output");
+
+    // Create directory if it doesn't exist
+    if !output_dir.exists() {
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| AetherError::config(format!("Failed to create tool output directory: {}", e)))?;
+    }
+
+    Ok(output_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_find_git_root() {
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("project");
+        let subdir = project.join("src").join("lib");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        // Create .git directory
+        std::fs::create_dir(project.join(".git")).unwrap();
+
+        // Should find git root from subdirectory
+        let root = find_git_root(&subdir);
+        assert!(root.is_some());
+        assert_eq!(root.unwrap(), project);
+
+        // Should find git root from project root
+        let root = find_git_root(&project);
+        assert!(root.is_some());
+        assert_eq!(root.unwrap(), project);
+
+        // Should not find git root from temp dir (above project)
+        let root = find_git_root(temp_dir.path());
+        assert!(root.is_none());
+    }
+
+    #[test]
+    fn test_get_all_skills_dirs() {
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        // Create .git
+        std::fs::create_dir(project.join(".git")).unwrap();
+
+        // Create project-level skills
+        let aether_skills = project.join(".aether").join("skills");
+        std::fs::create_dir_all(&aether_skills).unwrap();
+
+        let claude_skills = project.join(".claude").join("skills");
+        std::fs::create_dir_all(&claude_skills).unwrap();
+
+        // Get all skills dirs
+        let dirs = get_all_skills_dirs(Some(&project)).unwrap();
+
+        // Should find both project-level directories
+        assert!(dirs.iter().any(|d| d == &aether_skills));
+        assert!(dirs.iter().any(|d| d == &claude_skills));
+
+        // .aether should come before .claude (priority order)
+        let aether_idx = dirs.iter().position(|d| d == &aether_skills);
+        let claude_idx = dirs.iter().position(|d| d == &claude_skills);
+        assert!(aether_idx < claude_idx);
+    }
+
+    #[test]
+    fn test_get_all_skills_dirs_subdir() {
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("project");
+        let subdir = project.join("src").join("lib");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        // Create .git at project root
+        std::fs::create_dir(project.join(".git")).unwrap();
+
+        // Create skills dir at project root
+        let aether_skills = project.join(".aether").join("skills");
+        std::fs::create_dir_all(&aether_skills).unwrap();
+
+        // Search from subdirectory
+        let dirs = get_all_skills_dirs(Some(&subdir)).unwrap();
+
+        // Should find the skills dir at project root
+        assert!(dirs.iter().any(|d| d == &aether_skills));
+    }
+}

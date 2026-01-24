@@ -35,6 +35,7 @@ pub mod code_exec;
 pub mod error;
 pub mod file_ops;
 pub mod generation;
+pub mod invalid;
 pub mod mcp_wrapper;
 pub mod meta_tools;
 pub mod pdf_generate;
@@ -46,6 +47,7 @@ pub mod youtube;
 pub use code_exec::{CodeExecArgs, CodeExecTool};
 pub use error::ToolError;
 pub use file_ops::{FileOpsArgs, FileOpsTool};
+pub use invalid::{InvalidTool, InvalidToolArgs, InvalidToolOutput};
 pub use generation::{ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool};
 pub use mcp_wrapper::McpToolWrapper;
 pub use meta_tools::{

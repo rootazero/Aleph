@@ -154,8 +154,14 @@ impl CalibrationHistory {
     /// - Truncates to first 50 characters
     fn normalize_input(input: &str) -> String {
         let normalized = input.trim().to_lowercase();
-        if normalized.len() > 50 {
-            normalized[..50].to_string()
+        // UTF-8 safe truncation: limit to 25 characters
+        if normalized.chars().count() > 25 {
+            let end_byte = normalized
+                .char_indices()
+                .nth(25)
+                .map(|(i, _)| i)
+                .unwrap_or(normalized.len());
+            normalized[..end_byte].to_string()
         } else {
             normalized
         }

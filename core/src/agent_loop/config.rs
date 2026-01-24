@@ -116,6 +116,87 @@ pub struct LoopConfig {
     /// before triggering guard. Default is 3.
     #[serde(default = "default_failure_threshold")]
     pub failure_threshold: usize,
+
+    /// Doom loop detection threshold: number of consecutive identical tool calls
+    /// with exact same arguments before triggering guard. Default is 3.
+    /// This is more precise than stuck_threshold as it checks exact argument match.
+    #[serde(default = "default_doom_loop_threshold")]
+    pub doom_loop_threshold: usize,
+
+    /// Retry configuration for think operations (LLM calls)
+    #[serde(default)]
+    pub think_retry: ThinkRetryConfig,
+}
+
+/// Retry configuration for think operations (LLM calls)
+///
+/// Inspired by OpenCode's retry.ts with exponential backoff
+/// and retry-after header support.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkRetryConfig {
+    /// Maximum number of retry attempts (default: 3)
+    #[serde(default = "default_think_max_retries")]
+    pub max_retries: u32,
+
+    /// Initial backoff duration in milliseconds (default: 2000)
+    #[serde(default = "default_think_initial_backoff_ms")]
+    pub initial_backoff_ms: u64,
+
+    /// Backoff multiplier for exponential growth (default: 2.0)
+    #[serde(default = "default_think_backoff_multiplier")]
+    pub backoff_multiplier: f64,
+
+    /// Maximum backoff duration in milliseconds (default: 30000)
+    #[serde(default = "default_think_max_backoff_ms")]
+    pub max_backoff_ms: u64,
+
+    /// Whether to respect Retry-After headers from providers (default: true)
+    #[serde(default = "default_true")]
+    pub respect_retry_after: bool,
+}
+
+impl Default for ThinkRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: default_think_max_retries(),
+            initial_backoff_ms: default_think_initial_backoff_ms(),
+            backoff_multiplier: default_think_backoff_multiplier(),
+            max_backoff_ms: default_think_max_backoff_ms(),
+            respect_retry_after: true,
+        }
+    }
+}
+
+impl ThinkRetryConfig {
+    /// Calculate delay for a given attempt number
+    ///
+    /// Uses exponential backoff: initial_backoff_ms * multiplier^(attempt-1)
+    /// Capped at max_backoff_ms.
+    pub fn calculate_delay(&self, attempt: u32) -> Duration {
+        if attempt == 0 {
+            return Duration::ZERO;
+        }
+        let delay_ms = (self.initial_backoff_ms as f64)
+            * self.backoff_multiplier.powi((attempt - 1) as i32);
+        let capped_ms = delay_ms.min(self.max_backoff_ms as f64) as u64;
+        Duration::from_millis(capped_ms)
+    }
+
+    /// Calculate delay respecting retry-after header if provided
+    pub fn calculate_delay_with_retry_after(
+        &self,
+        attempt: u32,
+        retry_after_ms: Option<u64>,
+    ) -> Duration {
+        if self.respect_retry_after {
+            if let Some(ms) = retry_after_ms {
+                // Use retry-after value, but still respect max_backoff
+                let capped = ms.min(self.max_backoff_ms);
+                return Duration::from_millis(capped);
+            }
+        }
+        self.calculate_delay(attempt)
+    }
 }
 
 impl Default for LoopConfig {
@@ -134,6 +215,8 @@ impl Default for LoopConfig {
             persist_session: true,
             stuck_threshold: default_stuck_threshold(),
             failure_threshold: default_failure_threshold(),
+            doom_loop_threshold: default_doom_loop_threshold(),
+            think_retry: ThinkRetryConfig::default(),
         }
     }
 }
@@ -243,6 +326,26 @@ fn default_failure_threshold() -> usize {
     3
 }
 
+fn default_doom_loop_threshold() -> usize {
+    3 // Match OpenCode: DOOM_LOOP_THRESHOLD = 3
+}
+
+fn default_think_max_retries() -> u32 {
+    3 // Match OpenCode retry settings
+}
+
+fn default_think_initial_backoff_ms() -> u64 {
+    2000 // 2 seconds, matches OpenCode: RETRY_INITIAL_DELAY = 2000
+}
+
+fn default_think_backoff_multiplier() -> f64 {
+    2.0 // Match OpenCode: RETRY_BACKOFF_FACTOR = 2
+}
+
+fn default_think_max_backoff_ms() -> u64 {
+    30_000 // 30 seconds, matches OpenCode: RETRY_MAX_DELAY_NO_HEADERS = 30_000
+}
+
 fn default_model() -> String {
     "claude-sonnet-4-20250514".to_string()
 }
@@ -328,6 +431,18 @@ impl LoopConfig {
         self
     }
 
+    /// Builder pattern: set doom loop threshold
+    pub fn with_doom_loop_threshold(mut self, threshold: usize) -> Self {
+        self.doom_loop_threshold = threshold;
+        self
+    }
+
+    /// Builder pattern: set think retry configuration
+    pub fn with_think_retry(mut self, config: ThinkRetryConfig) -> Self {
+        self.think_retry = config;
+        self
+    }
+
     /// Check if the current mode allows a specific tool
     ///
     /// In PlanMode, only read operations are allowed.
@@ -400,6 +515,14 @@ impl LoopConfig {
             persist_session: false,
             stuck_threshold: 3,
             failure_threshold: 3,
+            doom_loop_threshold: 3,
+            think_retry: ThinkRetryConfig {
+                max_retries: 2,
+                initial_backoff_ms: 100, // Faster for tests
+                backoff_multiplier: 2.0,
+                max_backoff_ms: 1000,
+                respect_retry_after: true,
+            },
         }
     }
 
@@ -527,5 +650,85 @@ mod tests {
 
         let parsed: LoopConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.permission_mode, PermissionMode::PlanMode);
+    }
+
+    #[test]
+    fn test_doom_loop_threshold() {
+        let config = LoopConfig::default();
+        assert_eq!(config.doom_loop_threshold, 3);
+
+        let config = LoopConfig::default().with_doom_loop_threshold(5);
+        assert_eq!(config.doom_loop_threshold, 5);
+    }
+
+    #[test]
+    fn test_think_retry_config_defaults() {
+        let config = ThinkRetryConfig::default();
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.initial_backoff_ms, 2000);
+        assert_eq!(config.backoff_multiplier, 2.0);
+        assert_eq!(config.max_backoff_ms, 30_000);
+        assert!(config.respect_retry_after);
+    }
+
+    #[test]
+    fn test_think_retry_calculate_delay() {
+        let config = ThinkRetryConfig::default();
+
+        // Attempt 0 should return zero
+        assert_eq!(config.calculate_delay(0), Duration::ZERO);
+
+        // Attempt 1: 2000ms
+        assert_eq!(config.calculate_delay(1), Duration::from_millis(2000));
+
+        // Attempt 2: 2000 * 2 = 4000ms
+        assert_eq!(config.calculate_delay(2), Duration::from_millis(4000));
+
+        // Attempt 3: 2000 * 4 = 8000ms
+        assert_eq!(config.calculate_delay(3), Duration::from_millis(8000));
+
+        // Attempt 4: 2000 * 8 = 16000ms
+        assert_eq!(config.calculate_delay(4), Duration::from_millis(16000));
+
+        // Attempt 5: 2000 * 16 = 32000ms, but capped at 30000ms
+        assert_eq!(config.calculate_delay(5), Duration::from_millis(30000));
+    }
+
+    #[test]
+    fn test_think_retry_with_retry_after() {
+        let config = ThinkRetryConfig::default();
+
+        // With retry-after header
+        let delay = config.calculate_delay_with_retry_after(1, Some(5000));
+        assert_eq!(delay, Duration::from_millis(5000));
+
+        // With retry-after exceeding max
+        let delay = config.calculate_delay_with_retry_after(1, Some(60000));
+        assert_eq!(delay, Duration::from_millis(30000)); // Capped
+
+        // Without retry-after header, use exponential backoff
+        let delay = config.calculate_delay_with_retry_after(2, None);
+        assert_eq!(delay, Duration::from_millis(4000));
+
+        // With respect_retry_after = false
+        let mut config = ThinkRetryConfig::default();
+        config.respect_retry_after = false;
+        let delay = config.calculate_delay_with_retry_after(1, Some(5000));
+        assert_eq!(delay, Duration::from_millis(2000)); // Ignores retry-after
+    }
+
+    #[test]
+    fn test_loop_config_with_think_retry() {
+        let retry_config = ThinkRetryConfig {
+            max_retries: 5,
+            initial_backoff_ms: 1000,
+            backoff_multiplier: 1.5,
+            max_backoff_ms: 10000,
+            respect_retry_after: false,
+        };
+
+        let config = LoopConfig::default().with_think_retry(retry_config.clone());
+        assert_eq!(config.think_retry.max_retries, 5);
+        assert_eq!(config.think_retry.initial_backoff_ms, 1000);
     }
 }

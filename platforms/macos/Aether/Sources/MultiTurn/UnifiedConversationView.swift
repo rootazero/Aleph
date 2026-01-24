@@ -39,18 +39,19 @@ struct UnifiedConversationView: View {
             // Content area (mutually exclusive)
             contentArea
 
-            // Divider before status/input
-            if viewModel.shouldShowConversation ||
-               viewModel.shouldShowCommandList ||
-               viewModel.shouldShowTopicList {
+            // Status bar: appears together with conversation area as a unit
+            // Always visible when conversation is shown, prevents height jitter
+            if viewModel.shouldShowConversation {
                 Divider()
                     .opacity(0.3)
-                    .padding(.horizontal, 12)  // Prevent divider from reaching edges
-            }
+                    .padding(.horizontal, 12)
 
-            // Status area: streaming content + progress indicator (between conversation and input)
-            if viewModel.streamingMessageId != nil || !viewModel.planSteps.isEmpty || viewModel.currentToolCall != nil {
-                streamingStatusArea
+                infoStreamStatusBar
+
+                // Divider between status bar and input area
+                Divider()
+                    .opacity(0.3)
+                    .padding(.horizontal, 12)
             }
 
             // Input area (always visible)
@@ -61,113 +62,30 @@ struct UnifiedConversationView: View {
         .animation(.smooth(duration: 0.25), value: viewModel.displayState)
     }
 
-    // MARK: - Streaming Status Area
+    // MARK: - Status Bar (Minimal Single-Line Design)
 
-    /// Status area showing streaming content and progress (between conversation and input)
-    private var streamingStatusArea: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Streaming text content
-            if viewModel.streamingMessageId != nil && !viewModel.streamingText.isEmpty {
-                streamingContentView
-            }
-
-            // Progress indicator: tool calls and plan steps
-            progressIndicatorContent
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-    }
-
-    /// Streaming content view with scrollable text
-    private var streamingContentView: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Header with "Generating..." label
-            HStack(spacing: 6) {
+    /// Minimal status bar: single line, ~20px height
+    /// Shows what Agent is doing in plain language, not technical details
+    private var infoStreamStatusBar: some View {
+        HStack(spacing: 6) {
+            // Spinner when active
+            if viewModel.statusIsLoading {
                 ProgressView()
-                    .scaleEffect(0.6)
+                    .scaleEffect(0.5)
                     .frame(width: 12, height: 12)
-
-                Text(NSLocalizedString("streaming.generating", comment: "Generating response"))
-                    .font(.caption)
-                    .liquidGlassSecondaryText()
-
-                Spacer()
             }
 
-            // Scrollable streaming text
-            ScrollView {
-                Text(viewModel.streamingText)
-                    .font(.system(size: 13))
-                    .liquidGlassText()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-            .frame(maxHeight: 100)  // Limit height for streaming area
+            // Single line status text (plain language)
+            Text(viewModel.statusText)
+                .font(.system(size: 11))
+                .foregroundColor(GlassColors.secondaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer()
         }
-    }
-
-    /// Progress indicator showing current tool and plan steps
-    private var progressIndicatorContent: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Current tool execution
-            if let toolName = viewModel.currentToolCall {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                        .frame(width: 12, height: 12)
-
-                    Text("🔧 \(toolName)")
-                        .font(.caption)
-                        .liquidGlassText()
-                }
-            }
-
-            // Plan steps (if any)
-            if !viewModel.planSteps.isEmpty {
-                ForEach(viewModel.planSteps) { step in
-                    HStack(spacing: 6) {
-                        stepStatusIcon(step.status)
-                            .frame(width: 12, height: 12)
-
-                        Text(step.description)
-                            .font(.caption)
-                            .foregroundColor(stepTextColor(step.status))
-                            .lineLimit(1)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func stepStatusIcon(_ status: StepStatus) -> some View {
-        switch status {
-        case .pending:
-            Circle()
-                .stroke(GlassColors.secondaryText, lineWidth: 1.5)
-        case .running:
-            ProgressView()
-                .scaleEffect(0.5)
-        case .completed:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundColor(.green)
-        case .failed:
-            Image(systemName: "xmark.circle.fill")
-                .foregroundColor(.red)
-        }
-    }
-
-    private func stepTextColor(_ status: StepStatus) -> Color {
-        switch status {
-        case .pending:
-            return GlassColors.secondaryText
-        case .running:
-            return GlassColors.text
-        case .completed:
-            return .green
-        case .failed:
-            return .red
-        }
+        .frame(height: 20)
+        .padding(.horizontal, 14)
     }
 
     // MARK: - Content Area (Mutually Exclusive)

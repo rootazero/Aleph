@@ -4,6 +4,19 @@
 //! Facts are third-person statements about the user.
 
 use crate::error::AetherError;
+
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
 use crate::memory::context::{FactType, MemoryEntry, MemoryFact};
 use crate::memory::embedding::EmbeddingModel;
 use crate::providers::AiProvider;
@@ -271,7 +284,7 @@ EXAMPLE OUTPUT:
 
         Err(AetherError::other(format!(
             "Could not find valid JSON in response: {}",
-            &trimmed[..trimmed.len().min(200)]
+            truncate_str(trimmed, 200)
         )))
     }
 }

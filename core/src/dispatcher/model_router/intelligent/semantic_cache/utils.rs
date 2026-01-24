@@ -44,10 +44,18 @@ pub fn hash_prompt(prompt: &str) -> String {
 }
 
 /// Generate a short preview of a prompt (first N characters)
-pub fn prompt_preview(prompt: &str, max_len: usize) -> String {
-    if prompt.len() <= max_len {
+///
+/// Uses character count rather than byte count to ensure UTF-8 safety.
+/// This prevents panics when truncating strings with multi-byte characters.
+pub fn prompt_preview(prompt: &str, max_chars: usize) -> String {
+    if prompt.chars().count() <= max_chars {
         prompt.to_string()
     } else {
-        format!("{}...", &prompt[..max_len.min(prompt.len())])
+        let end_byte = prompt
+            .char_indices()
+            .nth(max_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(prompt.len());
+        format!("{}...", &prompt[..end_byte])
     }
 }

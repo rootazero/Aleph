@@ -33,14 +33,43 @@ impl DecisionParser {
     /// Parse LLM response into Thinking struct
     pub fn parse(&self, response: &str) -> Result<Thinking> {
         // Try to extract JSON from response
-        let json_str = self.extract_json(response)?;
+        let json_str = match self.extract_json(response) {
+            Ok(json) => json,
+            Err(_) => {
+                // Log a preview of the response for debugging
+                let preview: String = response.chars().take(200).collect();
+                let preview_suffix = if response.len() > 200 { "..." } else { "" };
+                tracing::warn!(
+                    response_len = response.len(),
+                    preview = %format!("{}{}", preview, preview_suffix),
+                    "LLM did not return JSON action format"
+                );
+                return Err(AetherError::Other {
+                    message: "LLM did not return valid JSON action format".to_string(),
+                    suggestion: Some(format!(
+                        "The LLM returned plain text instead of JSON action. Response preview: '{}{}'",
+                        preview, preview_suffix
+                    )),
+                });
+            }
+        };
 
         // Parse JSON
         let llm_response: LlmResponse = serde_json::from_str(&json_str).map_err(|e| {
+            // Log the extracted JSON for debugging
+            let json_preview: String = json_str.chars().take(300).collect();
+            tracing::warn!(
+                error = %e,
+                json_preview = %json_preview,
+                "Failed to parse extracted JSON as LlmResponse"
+            );
             AetherError::Other {
-            message: format!("Failed to parse LLM response: {}", e),
-            suggestion: Some("Ensure the LLM response is valid JSON".to_string()),
-        }
+                message: format!("Failed to parse LLM response JSON: {}", e),
+                suggestion: Some(format!(
+                    "Extracted JSON is malformed. Expected format: {{\"reasoning\": \"...\", \"action\": {{\"type\": \"tool|complete|fail|ask_user\", ...}}}}. Got: {}",
+                    json_preview
+                )),
+            }
         })?;
 
         // Convert to Thinking
@@ -211,8 +240,17 @@ impl DecisionParser {
             return Ok(json);
         }
 
-        // Return trimmed response as-is and let JSON parser handle errors
-        Ok(trimmed.to_string())
+        // If response starts with { but we couldn't extract valid JSON, still return it
+        // and let the JSON parser provide a more specific error
+        if trimmed.starts_with('{') {
+            return Ok(trimmed.to_string());
+        }
+
+        // No JSON found at all - return error
+        Err(AetherError::Other {
+            message: "No JSON object found in response".to_string(),
+            suggestion: Some("LLM response does not contain a JSON action object".to_string()),
+        })
     }
 
     /// Extract JSON from markdown code block

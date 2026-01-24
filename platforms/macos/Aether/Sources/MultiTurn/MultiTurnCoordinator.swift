@@ -88,14 +88,55 @@ final class MultiTurnCoordinator {
     // MARK: - Hotkey Handling
 
     /// Handle hotkey press (Cmd+Opt+/)
+    /// Behavior:
+    /// - If window is not shown: show window
+    /// - If window is shown but obscured: bring to front
+    /// - If window is shown and is key window: hide window
     func handleHotkey() {
-        print("[MultiTurnCoordinator] Hotkey pressed, isActive: \(isActive)")
+        print("[MultiTurnCoordinator] Hotkey pressed, isActive: \(isActive), isKeyWindow: \(unifiedWindow.isKeyWindow)")
 
         if isActive {
-            // Toggle off if already active
-            exit()
+            // Window is active - check if it's the key window (user is interacting with it)
+            if unifiedWindow.isKeyWindow {
+                // User is actively using the window, hide it
+                exit()
+            } else {
+                // Window is active but not key (obscured by other windows)
+                // Bring it to front instead of hiding
+                bringToFront()
+            }
         } else {
             // Start new session
+            start()
+        }
+    }
+
+    /// Bring existing window to front
+    /// Used when window is active but obscured by other windows
+    func bringToFront() {
+        guard isActive else {
+            // Not active, start new session instead
+            start()
+            return
+        }
+
+        print("[MultiTurnCoordinator] Bringing window to front")
+
+        // Activate app and bring window to front
+        NSApp.activate(ignoringOtherApps: true)
+        unifiedWindow.makeKeyAndOrderFront(nil)
+    }
+
+    /// Toggle window visibility or bring to front
+    /// Called from menu bar item
+    func showOrBringToFront() {
+        print("[MultiTurnCoordinator] showOrBringToFront called, isActive: \(isActive)")
+
+        if isActive {
+            // Window exists, bring to front
+            bringToFront()
+        } else {
+            // Window doesn't exist, start new session
             start()
         }
     }
@@ -233,12 +274,14 @@ final class MultiTurnCoordinator {
         pendingUserInput = userDisplayText
         pendingIsFirstMessage = isFirstMessage
 
+        // Pass preferred language from LocalizationManager for AI responses
         let options = ProcessOptions(
             appContext: "com.aether.multi-turn",
             windowTitle: nil,
             topicId: topic.id,  // Pass topic ID for memory storage
             stream: true,
-            attachments: attachments.isEmpty ? nil : attachments
+            attachments: attachments.isEmpty ? nil : attachments,
+            preferredLanguage: LocalizationManager.shared.currentLanguage
         )
 
         do {
@@ -417,16 +460,30 @@ final class MultiTurnCoordinator {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
+            let streamingId = self.unifiedWindow.viewModel.streamingMessageId
+            let streamingTextLen = self.unifiedWindow.viewModel.streamingText.count
+            print("[MultiTurnCoordinator] completion processing: streamingId=\(streamingId ?? "nil"), streamingTextLen=\(streamingTextLen), responseLen=\(response.count)")
+
             // If streaming was already in progress, just finish it
-            if self.unifiedWindow.viewModel.streamingMessageId != nil {
+            if streamingId != nil {
+                // Use streaming text if response is empty (response might just be final signal)
+                let finalText = response.isEmpty ? self.unifiedWindow.viewModel.streamingText : response
+
                 // Update with final response if different from streamed content
-                if !response.isEmpty && response != self.unifiedWindow.viewModel.streamingText {
-                    self.unifiedWindow.viewModel.updateStreamingText(response)
+                if !finalText.isEmpty && finalText != self.unifiedWindow.viewModel.streamingText {
+                    print("[MultiTurnCoordinator] Updating streaming text with final content (\(finalText.count) chars)")
+                    self.unifiedWindow.viewModel.updateStreamingText(finalText)
                 }
+
+                print("[MultiTurnCoordinator] Finishing streaming message")
                 self.unifiedWindow.viewModel.finishStreamingMessage()
-                self.finishResponse(topic: topic, userInput: userInput, aiResponse: response, isFirstMessage: isFirstMessage)
+
+                // Use finalText for AI response
+                let aiResponse = finalText.isEmpty ? response : finalText
+                self.finishResponse(topic: topic, userInput: userInput, aiResponse: aiResponse, isFirstMessage: isFirstMessage)
             } else {
                 // No streaming in progress, use normal response handling (with typewriter)
+                print("[MultiTurnCoordinator] No streaming in progress, using handleAIResponse")
                 self.handleAIResponse(response, topic: topic, userInput: userInput, isFirstMessage: isFirstMessage)
             }
         }

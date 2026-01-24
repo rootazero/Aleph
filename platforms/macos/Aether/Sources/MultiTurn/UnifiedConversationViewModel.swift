@@ -54,6 +54,14 @@ final class UnifiedConversationViewModel {
     /// Current step index in the plan
     var currentStepIndex: Int = 0
 
+    // MARK: - Status Bar Display (minimal single-line)
+
+    /// Current status text - plain language description of what Agent is doing
+    var statusText: String = ""
+
+    /// Whether status bar is showing a loading/thinking state
+    var statusIsLoading: Bool = false
+
     // MARK: - DAG Plan Confirmation (inline in conversation)
 
     /// Pending plan confirmation (shown inline in conversation area)
@@ -460,18 +468,19 @@ final class UnifiedConversationViewModel {
     }
 
     func updateStreamingText(_ text: String) {
-        let wasEmpty = streamingText.isEmpty
         // Only update streamingText - do NOT update messages array during streaming
         // This avoids triggering SwiftUI's expensive array diff and re-render
-        // The streaming message is displayed separately using StreamingMessageBubble
         streamingText = text
-        // Trigger height update when streaming text goes from empty to non-empty
-        if wasEmpty && !text.isEmpty {
-            refreshWindowHeight()
-        }
+
+        // Update status bar with the latest streaming text (truncated for display)
+        let displayText = text.count > 80 ? "..." + String(text.suffix(80)) : text
+        let singleLine = displayText.replacingOccurrences(of: "\n", with: " ")
+        updateStatus(singleLine, isLoading: true)
     }
 
     func finishStreamingMessage() {
+        print("[UnifiedViewModel] finishStreamingMessage: messageId=\(streamingMessageId ?? "nil"), streamingTextLen=\(streamingText.count)")
+
         if let messageId = streamingMessageId,
            let index = messages.firstIndex(where: { $0.id == messageId }) {
             // Extract and save attachments BEFORE stripping the block
@@ -479,6 +488,8 @@ final class UnifiedConversationViewModel {
 
             // Strip the [GENERATED_FILES] block from content for display
             let displayContent = stripGeneratedFilesBlock(from: streamingText)
+
+            print("[UnifiedViewModel] Updating message content: index=\(index), contentLen=\(displayContent.count)")
 
             // Update the message content in the array ONLY when streaming finishes
             // This triggers a single re-render with the final content
@@ -489,11 +500,19 @@ final class UnifiedConversationViewModel {
                 messageId: messageId,
                 content: displayContent
             )
+
+            print("[UnifiedViewModel] Message updated and persisted")
+        } else {
+            print("[UnifiedViewModel] Warning: No streaming message to finish")
         }
+
         streamingMessageId = nil
         streamingText = ""
         isLoading = false
-        refreshWindowHeight()
+
+        // Update status to show completion, keep visible until next message
+        // Status will be cleared/overwritten by the next user message or operation
+        updateStatus("✓ 完成", isLoading: false)
     }
 
     /// Strip [GENERATED_FILES] block from content for display
@@ -629,41 +648,53 @@ final class UnifiedConversationViewModel {
     }
 
     func reportHeightChange(_ height: CGFloat) {
-        // Save content height for later use when status bar changes
         lastContentHeight = height
-        // Add status bar height when streaming/progress is active
-        let statusBarHeight = calculateStatusBarHeight()
+        // Status bar height (20px) is included in conversation area layout
+        // Add status bar height when conversation is visible
+        let statusBarHeight: CGFloat = shouldShowConversation ? 20 : 0
         onHeightChanged?(height + statusBarHeight)
     }
 
-    /// Refresh window height when status bar state changes
-    private func refreshWindowHeight() {
-        guard lastContentHeight > 0 else { return }
-        let statusBarHeight = calculateStatusBarHeight()
-        onHeightChanged?(lastContentHeight + statusBarHeight)
+    // MARK: - Status Bar Management
+
+    /// Update status text (for streaming AI response)
+    func updateStatus(_ text: String, isLoading: Bool = true) {
+        statusText = text
+        statusIsLoading = isLoading
+        // No height refresh needed - status bar height is fixed
     }
 
-    /// Calculate the height of the streaming status area
-    private func calculateStatusBarHeight() -> CGFloat {
-        // Status bar only shows when there's streaming content, tool calls, or plan steps
-        guard streamingMessageId != nil || currentToolCall != nil || !planSteps.isEmpty else {
-            return 0
+    /// Clear current status
+    func clearCurrentStatus() {
+        statusText = ""
+        statusIsLoading = false
+    }
+
+    /// Clear all status (alias for clearCurrentStatus)
+    func clearAllStatus() {
+        clearCurrentStatus()
+    }
+
+    /// Natural language status for end users
+    private func friendlyToolName(_ toolName: String) -> String {
+        let baseName = toolName.components(separatedBy: ":").first ?? toolName
+
+        switch baseName.lowercased() {
+        case "file_ops", "file_operations", "read_file", "write_file":
+            return "正在处理文件..."
+        case "web_search", "search":
+            return "正在帮你搜索..."
+        case "code_exec", "execute_code", "shell", "bash", "terminal":
+            return "正在执行..."
+        case "generate_image", "image_gen":
+            return "正在生成图片..."
+        case "browser", "web_browse":
+            return "正在浏览网页..."
+        case "thinking", "analyze":
+            return "思考中..."
+        default:
+            return "思考中..."
         }
-
-        // Dynamic height based on content
-        var height: CGFloat = 12  // VStack padding (vertical 6 * 2)
-
-        // Streaming text: header (~20) + scrollview (max 80)
-        if streamingMessageId != nil && !streamingText.isEmpty {
-            height += 100
-        }
-
-        // Tool call indicator (~12)
-        if currentToolCall != nil {
-            height += 12
-        }
-
-        return height
     }
 
     // MARK: - Copy Actions
@@ -712,7 +743,7 @@ final class UnifiedConversationViewModel {
         currentToolCall = nil
         planSteps = []
         currentStepIndex = 0
-        refreshWindowHeight()
+        clearAllStatus()
     }
 
     /// Update tool call status
@@ -724,7 +755,10 @@ final class UnifiedConversationViewModel {
             planSteps[currentStepIndex].status = .running
         }
         print("[UnifiedViewModel] currentToolCall is now: \(currentToolCall ?? "nil")")
-        refreshWindowHeight()
+
+        // Update status bar with friendly tool name
+        let friendlyName = friendlyToolName(toolName)
+        updateStatus(friendlyName, isLoading: true)
     }
 
     /// Mark tool call as completed
@@ -735,17 +769,27 @@ final class UnifiedConversationViewModel {
         }
         currentToolCall = nil
         currentStepIndex += 1
-        refreshWindowHeight()
+
+        // Keep status showing completion state - don't clear immediately
+        // The streaming text will take over if there's AI response, or
+        // status will persist until next user message
+        updateStatus("✓ 完成", isLoading: false)
     }
 
     /// Mark tool call as failed
-    func setToolCallFailed() {
+    func setToolCallFailed(error: String? = nil) {
+        let failedToolName = currentToolCall ?? "tool"
+
         // Update current step status to failed
         if currentStepIndex < planSteps.count {
             planSteps[currentStepIndex].status = .failed
         }
         currentToolCall = nil
-        refreshWindowHeight()
+
+        // Show error briefly
+        let friendlyName = friendlyToolName(failedToolName)
+        let errorText = error != nil ? "\(friendlyName) 失败" : "\(friendlyName) 失败"
+        updateStatus(errorText, isLoading: false)
     }
 
     /// Set plan steps from notification
@@ -754,7 +798,11 @@ final class UnifiedConversationViewModel {
             PlanStep(id: "step_\(index)", description: description)
         }
         currentStepIndex = 0
-        refreshWindowHeight()
+
+        // Show first step in status bar
+        if let firstStep = steps.first {
+            updateStatus(firstStep, isLoading: true)
+        }
     }
 
     // MARK: - Plan Confirmation Methods
@@ -870,3 +918,4 @@ struct PendingUserInputRequest: Sendable {
         !options.isEmpty
     }
 }
+

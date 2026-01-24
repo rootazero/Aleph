@@ -6,6 +6,19 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
+
 /// LLM's decision for the next action
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -115,11 +128,7 @@ impl Action {
             Action::ToolCall { arguments, .. } => {
                 // Truncate long arguments
                 let s = arguments.to_string();
-                if s.len() > 200 {
-                    format!("{}...", &s[..200])
-                } else {
-                    s
-                }
+                truncate_str(&s, 100)
             }
             Action::UserInteraction { question, .. } => question.clone(),
             Action::Completion { summary } => summary.clone(),
@@ -197,11 +206,7 @@ impl ActionResult {
         match self {
             ActionResult::ToolSuccess { output, duration_ms } => {
                 let s = output.to_string();
-                let truncated = if s.len() > 100 {
-                    format!("{}...", &s[..100])
-                } else {
-                    s
-                };
+                let truncated = truncate_str(&s, 50);
                 format!("Success ({}ms): {}", duration_ms, truncated)
             }
             ActionResult::ToolError { error, retryable } => {

@@ -28,6 +28,19 @@ use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
 use crate::tools::AetherToolServerHandle;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
 use tokio::sync::RwLock as TokioRwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -55,6 +68,7 @@ pub fn run_agent_loop(
     conversation_histories: &Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
     topic_id: &Option<String>,
     generation_registry: &Arc<RwLock<GenerationProviderRegistry>>,
+    preferred_language: &Option<String>,
 ) {
     // Check if already cancelled
     if op_token.is_cancelled() {
@@ -117,11 +131,7 @@ pub fn run_agent_loop(
         for tool in &filter_result.indexed_tools {
             let category = ToolIndexCategory::from(&tool.source);
             // Truncate description to ~50 chars for compact index
-            let summary = if tool.description.len() > 50 {
-                format!("{}...", &tool.description[..47])
-            } else {
-                tool.description.clone()
-            };
+            let summary = truncate_str(&tool.description, 25);
             let entry = ToolIndexEntry::new(&tool.name, category, summary);
             index.add(entry);
         }
@@ -190,6 +200,8 @@ pub fn run_agent_loop(
         format_generation_models_for_prompt(generation_config);
     // Enable two-stage tool discovery with tool index
     thinker_config.prompt.tool_index = tool_index_prompt;
+    // Set preferred language for AI responses
+    thinker_config.prompt.language = preferred_language.clone();
 
     // Create dispatcher tool registry for meta tools (smart tool discovery)
     let dispatcher_registry = Arc::new(TokioRwLock::new(DispatcherToolRegistry::new()));

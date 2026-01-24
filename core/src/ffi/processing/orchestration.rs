@@ -65,6 +65,7 @@ pub fn process_with_agent_loop(
     generation_config: &GenerationConfig,
     routing_rules: &[RoutingRuleConfig],
     generation_registry: &Arc<RwLock<GenerationProviderRegistry>>,
+    preferred_language: &Option<String>,
 ) {
     // ================================================================
     // Step 0: Set up working directory for this session/topic
@@ -133,6 +134,7 @@ pub fn process_with_agent_loop(
                 generation_config,
                 generation_registry,
                 attachments,
+                preferred_language,
             );
         }
 
@@ -183,6 +185,7 @@ pub fn process_with_agent_loop(
                         conversation_histories,
                         topic_id,
                         generation_registry,
+                        preferred_language,
                     );
                 }
                 Ok(AnalysisResult::MultiStep {
@@ -240,6 +243,7 @@ pub fn process_with_agent_loop(
                         conversation_histories,
                         topic_id,
                         generation_registry,
+                        preferred_language,
                     );
                 }
             }

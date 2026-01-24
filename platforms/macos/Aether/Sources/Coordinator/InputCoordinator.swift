@@ -438,12 +438,14 @@ final class InputCoordinator {
                 }
 
                 // Create process options with attachments for multimodal support
+                // Pass preferred language from LocalizationManager for AI responses
                 let options = ProcessOptions(
                     appContext: capturedContext.appBundleId,
                     windowTitle: capturedContext.windowTitle,
                     topicId: nil,  // Single-turn mode
                     stream: true,
-                    attachments: capturedContext.attachments
+                    attachments: capturedContext.attachments,
+                    preferredLanguage: LocalizationManager.shared.currentLanguage
                 )
 
                 // Call async process - response comes via EventHandler callbacks

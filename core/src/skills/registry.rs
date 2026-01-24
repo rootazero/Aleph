@@ -2,102 +2,256 @@
 //!
 //! The registry scans the skills directory for SKILL.md files, parses them,
 //! and provides lookup functionality.
+//!
+//! ## Multi-location Discovery
+//!
+//! Skills are discovered from multiple locations in priority order:
+//! 1. Project level: `.aether/skills/`, `.claude/skills/` (traverse up to git root)
+//! 2. User level: `~/.config/aether/skills`, `~/.claude/skills`
+//!
+//! ## Progressive Disclosure
+//!
+//! Skills support Progressive Disclosure for efficient context usage:
+//! - **Level 1 (Metadata)**: Name, description, location - always available in system prompt
+//! - **Level 2 (Instructions)**: Full SKILL.md content - loaded via read_skill tool
+//! - **Level 3 (Resources)**: Additional files - loaded on-demand via file_name parameter
 
 use crate::error::{AetherError, Result};
 use crate::skills::Skill;
+use crate::utils::paths::get_all_skills_dirs;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
 use tracing::{debug, info, warn};
 
+// ============================================================================
+// Skill Metadata (Progressive Disclosure Level 1)
+// ============================================================================
+
+/// Skill metadata for Progressive Disclosure Level 1
+///
+/// Contains only the essential information needed for the system prompt.
+/// Full content is loaded on-demand via the read_skill tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillMetadata {
+    /// Skill ID (directory name)
+    pub id: String,
+
+    /// Human-readable name
+    pub name: String,
+
+    /// Brief description for tool selection
+    pub description: String,
+
+    /// Full path to the skill directory
+    pub location: PathBuf,
+
+    /// Source of this skill (project or global)
+    pub source: SkillSource,
+}
+
+/// Where a skill was discovered from
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillSource {
+    /// Project-level skill (.aether/skills or .claude/skills)
+    Project,
+    /// Global user-level skill (~/.config/aether/skills or ~/.claude/skills)
+    Global,
+}
+
+// ============================================================================
+// Skills Registry
+// ============================================================================
+
 /// Skills Registry manages loaded skills
 pub struct SkillsRegistry {
-    /// Skills directory path
+    /// Primary skills directory path (for backwards compatibility)
     skills_dir: PathBuf,
+
+    /// All skills directories (for multi-location discovery)
+    skills_dirs: Vec<PathBuf>,
 
     /// Loaded skills indexed by ID
     skills: RwLock<HashMap<String, Skill>>,
+
+    /// Skill metadata indexed by ID (for Progressive Disclosure)
+    metadata: RwLock<HashMap<String, SkillMetadata>>,
 }
 
 impl SkillsRegistry {
-    /// Create a new skills registry
+    /// Create a new skills registry with a single skills directory
     ///
     /// # Arguments
     ///
     /// * `skills_dir` - Path to the skills directory
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
+            skills_dirs: vec![skills_dir.clone()],
             skills_dir,
             skills: RwLock::new(HashMap::new()),
+            metadata: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Load all skills from the skills directory
+    /// Create a skills registry with multi-location discovery
+    ///
+    /// Automatically discovers skills from:
+    /// - Project level: .aether/skills/, .claude/skills/
+    /// - Global level: ~/.config/aether/skills, ~/.claude/skills
+    ///
+    /// # Arguments
+    ///
+    /// * `project_dir` - Optional project directory to start discovery from
+    pub fn with_auto_discover(project_dir: Option<&std::path::Path>) -> Result<Self> {
+        let skills_dirs = get_all_skills_dirs(project_dir)?;
+
+        // Use first directory as primary (for backwards compatibility)
+        let skills_dir = skills_dirs.first().cloned().unwrap_or_else(|| {
+            crate::utils::paths::get_skills_dir().unwrap_or_else(|_| PathBuf::from("~/.config/aether/skills"))
+        });
+
+        Ok(Self {
+            skills_dirs,
+            skills_dir,
+            skills: RwLock::new(HashMap::new()),
+            metadata: RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Create a skills registry with specific directories
+    ///
+    /// # Arguments
+    ///
+    /// * `skills_dirs` - List of skills directories in priority order
+    pub fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
+        let skills_dir = skills_dirs.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+
+        Self {
+            skills_dirs,
+            skills_dir,
+            skills: RwLock::new(HashMap::new()),
+            metadata: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Load all skills from all configured skills directories
     ///
     /// Scans subdirectories for SKILL.md files and parses them.
     /// Invalid skills are logged and skipped.
+    /// Earlier directories take priority (first occurrence wins).
     pub fn load_all(&self) -> Result<()> {
         let mut skills = self
             .skills
             .write()
             .map_err(|_| AetherError::config("Failed to acquire write lock on skills registry"))?;
 
+        let mut metadata = self
+            .metadata
+            .write()
+            .map_err(|_| AetherError::config("Failed to acquire write lock on skills metadata"))?;
+
         skills.clear();
+        metadata.clear();
 
-        if !self.skills_dir.exists() {
-            info!(path = %self.skills_dir.display(), "Skills directory does not exist");
-            return Ok(());
-        }
+        // Get home directory for determining source
+        let home_dir = crate::utils::paths::get_home_dir().ok();
 
-        let entries = std::fs::read_dir(&self.skills_dir).map_err(|e| {
-            AetherError::config(format!(
-                "Failed to read skills directory {}: {}",
-                self.skills_dir.display(),
-                e
-            ))
-        })?;
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-
-            // Only process directories
-            if !path.is_dir() {
+        // Scan all directories
+        for skills_dir in &self.skills_dirs {
+            if !skills_dir.exists() {
+                debug!(path = %skills_dir.display(), "Skills directory does not exist");
                 continue;
             }
 
-            let skill_id = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default()
-                .to_string();
-
-            // Skip hidden directories
-            if skill_id.starts_with('.') {
-                continue;
-            }
-
-            let skill_md_path = path.join("SKILL.md");
-
-            if !skill_md_path.exists() {
-                debug!(skill_id = %skill_id, "No SKILL.md found, skipping");
-                continue;
-            }
-
-            match self.load_skill(&skill_id, &skill_md_path) {
-                Ok(skill) => {
-                    info!(
-                        skill_id = %skill_id,
-                        name = %skill.frontmatter.name,
-                        "Loaded skill"
-                    );
-                    skills.insert(skill_id, skill);
-                }
+            let entries = match std::fs::read_dir(skills_dir) {
+                Ok(e) => e,
                 Err(e) => {
                     warn!(
-                        skill_id = %skill_id,
+                        path = %skills_dir.display(),
                         error = %e,
-                        "Failed to load skill, skipping"
+                        "Failed to read skills directory"
                     );
+                    continue;
+                }
+            };
+
+            // Determine source (project vs global)
+            let source = if let Some(ref home) = home_dir {
+                if skills_dir.starts_with(home) {
+                    SkillSource::Global
+                } else {
+                    SkillSource::Project
+                }
+            } else {
+                SkillSource::Project
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                // Only process directories
+                if !path.is_dir() {
+                    continue;
+                }
+
+                let skill_id = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+
+                // Skip hidden directories
+                if skill_id.starts_with('.') {
+                    continue;
+                }
+
+                // Skip if already loaded (first occurrence wins)
+                if skills.contains_key(&skill_id) {
+                    debug!(
+                        skill_id = %skill_id,
+                        path = %path.display(),
+                        "Skill already loaded from earlier directory, skipping duplicate"
+                    );
+                    continue;
+                }
+
+                let skill_md_path = path.join("SKILL.md");
+
+                if !skill_md_path.exists() {
+                    debug!(skill_id = %skill_id, "No SKILL.md found, skipping");
+                    continue;
+                }
+
+                match self.load_skill(&skill_id, &skill_md_path) {
+                    Ok(skill) => {
+                        info!(
+                            skill_id = %skill_id,
+                            name = %skill.frontmatter.name,
+                            source = ?source,
+                            "Loaded skill"
+                        );
+
+                        // Create metadata for Progressive Disclosure
+                        let meta = SkillMetadata {
+                            id: skill_id.clone(),
+                            name: skill.frontmatter.name.clone(),
+                            description: skill.frontmatter.description.clone(),
+                            location: path.clone(),
+                            source,
+                        };
+                        metadata.insert(skill_id.clone(), meta);
+
+                        skills.insert(skill_id, skill);
+                    }
+                    Err(e) => {
+                        warn!(
+                            skill_id = %skill_id,
+                            error = %e,
+                            "Failed to load skill, skipping"
+                        );
+                    }
                 }
             }
         }
@@ -141,6 +295,99 @@ impl SkillsRegistry {
         };
 
         skills.values().cloned().collect()
+    }
+
+    /// List skill metadata for Progressive Disclosure Level 1
+    ///
+    /// Returns only the essential metadata (id, name, description, location)
+    /// without loading full skill content. This is suitable for system prompts.
+    pub fn list_skill_metadata(&self) -> Vec<SkillMetadata> {
+        let metadata = match self.metadata.read() {
+            Ok(m) => m,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut result: Vec<_> = metadata.values().cloned().collect();
+        // Sort by source (Project first), then by name
+        result.sort_by(|a, b| {
+            match (a.source, b.source) {
+                (SkillSource::Project, SkillSource::Global) => std::cmp::Ordering::Less,
+                (SkillSource::Global, SkillSource::Project) => std::cmp::Ordering::Greater,
+                _ => a.name.cmp(&b.name),
+            }
+        });
+        result
+    }
+
+    /// Get skill metadata by ID
+    pub fn get_skill_metadata(&self, id: &str) -> Option<SkillMetadata> {
+        let metadata = self.metadata.read().ok()?;
+        metadata.get(id).cloned()
+    }
+
+    /// Get the full content of a skill file
+    ///
+    /// This loads the skill content on-demand (Progressive Disclosure Level 2).
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The skill ID
+    /// * `file_name` - Optional file name within the skill directory (defaults to "SKILL.md")
+    ///
+    /// # Returns
+    ///
+    /// The file content if found
+    pub fn get_skill_content(&self, id: &str, file_name: Option<&str>) -> Result<String> {
+        let metadata = self.metadata.read()
+            .map_err(|_| AetherError::config("Failed to acquire read lock on skills metadata"))?;
+
+        let meta = metadata.get(id)
+            .ok_or_else(|| AetherError::config(format!("Skill '{}' not found", id)))?;
+
+        let file = file_name.unwrap_or("SKILL.md");
+        let file_path = meta.location.join(file);
+
+        if !file_path.exists() {
+            return Err(AetherError::config(format!(
+                "File '{}' not found in skill '{}'",
+                file, id
+            )));
+        }
+
+        std::fs::read_to_string(&file_path)
+            .map_err(|e| AetherError::config(format!("Failed to read skill file: {}", e)))
+    }
+
+    /// List files available in a skill directory
+    pub fn list_skill_files(&self, id: &str) -> Result<Vec<String>> {
+        let metadata = self.metadata.read()
+            .map_err(|_| AetherError::config("Failed to acquire read lock on skills metadata"))?;
+
+        let meta = metadata.get(id)
+            .ok_or_else(|| AetherError::config(format!("Skill '{}' not found", id)))?;
+
+        let mut files = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&meta.location) {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type() {
+                    if file_type.is_file() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if !name.starts_with('.') {
+                                files.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        files.sort();
+        Ok(files)
+    }
+
+    /// Get all configured skills directories
+    pub fn skills_dirs(&self) -> &[PathBuf] {
+        &self.skills_dirs
     }
 
     /// Find a skill matching the user input (keyword matching)

@@ -5,6 +5,19 @@
 /// for automatic conversion to Swift/Kotlin exceptions.
 use thiserror::Error;
 
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
+
 #[derive(Debug, Error)]
 pub enum AetherError {
     /// Error occurred in hotkey listener subsystem
@@ -474,12 +487,8 @@ impl AetherError {
                 format!(
                     "任务 '{}' 需要更多信息才能继续执行。请提供所需内容后重试。\n详情: {}",
                     task_name,
-                    // Truncate message if too long
-                    if message.len() > 200 {
-                        format!("{}...", &message[..200])
-                    } else {
-                        message.clone()
-                    }
+                    // Truncate message if too long (UTF-8 safe)
+                    truncate_str(message, 100)
                 )
             }
             AetherError::CorruptData(msg) => {

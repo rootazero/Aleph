@@ -288,6 +288,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         menuBarManager?.setup(
             target: self,
             showAboutAction: #selector(showAbout),
+            showConversationAction: #selector(showConversation),
             showSettingsAction: #selector(showSettings),
             quitAction: #selector(quit),
             debugActions: debugActions
@@ -304,6 +305,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             message: L("alert.about.message", "0.1.0 (Phase 2)"),
             autoDismiss: true
         )
+    }
+
+    /// Show or bring conversation window to front
+    /// Called from menu bar item
+    @objc private func showConversation() {
+        MultiTurnCoordinator.shared.showOrBringToFront()
     }
 
     @objc private func showSettings() {
@@ -652,7 +659,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 windowTitle: windowTitle,
                 topicId: nil,  // Single-turn mode
                 stream: stream,
-                attachments: nil  // No attachments for direct process calls
+                attachments: nil,  // No attachments for direct process calls
+                preferredLanguage: LocalizationManager.shared.currentLanguage
             )
             try core.process(input: input, options: options)
         } catch {

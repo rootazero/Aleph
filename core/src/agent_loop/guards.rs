@@ -3,6 +3,8 @@
 //! This module provides safety guards to prevent runaway loops,
 //! excessive resource consumption, and dangerous operations.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use super::config::LoopConfig;
@@ -36,6 +38,15 @@ pub enum GuardViolation {
         pattern: String,
         failure_count: usize,
         total_attempts: usize,
+    },
+    /// Doom loop detected: exact same tool call with identical arguments repeated
+    /// This is more precise than StuckLoop as it checks both tool name AND arguments.
+    /// Inspired by OpenCode's doom loop detection.
+    DoomLoop {
+        tool_name: String,
+        repeat_count: usize,
+        /// Preview of the arguments (truncated for display)
+        arguments_preview: String,
     },
 }
 
@@ -81,6 +92,16 @@ impl GuardViolation {
                     pattern, failure_count, total_attempts
                 )
             }
+            GuardViolation::DoomLoop {
+                tool_name,
+                repeat_count,
+                arguments_preview,
+            } => {
+                format!(
+                    "Doom loop detected: tool '{}' called {} times with identical arguments: {}",
+                    tool_name, repeat_count, arguments_preview
+                )
+            }
         }
     }
 
@@ -102,6 +123,9 @@ impl GuardViolation {
             GuardViolation::RepeatedFailures { .. } => {
                 "The same action keeps failing. This might indicate an environmental issue, missing permissions, or incorrect approach. Try a different strategy.".to_string()
             }
+            GuardViolation::DoomLoop { .. } => {
+                "The agent is making the exact same tool call repeatedly without progress. This usually indicates a logic error or misunderstanding. Please clarify your request or try a different approach.".to_string()
+            }
         }
     }
 }
@@ -115,6 +139,52 @@ struct TrackedAction {
     succeeded: bool,
 }
 
+/// Tool call record for doom loop detection
+///
+/// Tracks precise tool calls including their arguments for detecting
+/// exact repeated calls (doom loops).
+#[derive(Debug, Clone)]
+struct ToolCallRecord {
+    /// The tool name
+    tool_name: String,
+    /// Hash of the arguments for efficient comparison
+    arguments_hash: u64,
+    /// Original arguments (for display in error message)
+    arguments: serde_json::Value,
+}
+
+impl ToolCallRecord {
+    /// Create a new tool call record
+    fn new(tool_name: String, arguments: serde_json::Value) -> Self {
+        // Compute hash of serialized arguments for efficient comparison
+        let args_str = serde_json::to_string(&arguments).unwrap_or_default();
+        let mut hasher = DefaultHasher::new();
+        args_str.hash(&mut hasher);
+        let arguments_hash = hasher.finish();
+
+        Self {
+            tool_name,
+            arguments_hash,
+            arguments,
+        }
+    }
+
+    /// Check if this record matches another (same tool name and arguments)
+    fn matches(&self, other: &ToolCallRecord) -> bool {
+        self.tool_name == other.tool_name && self.arguments_hash == other.arguments_hash
+    }
+
+    /// Get a truncated preview of arguments for display
+    fn arguments_preview(&self, max_len: usize) -> String {
+        let args_str = serde_json::to_string(&self.arguments).unwrap_or_default();
+        if args_str.len() <= max_len {
+            args_str
+        } else {
+            format!("{}...", &args_str[..max_len])
+        }
+    }
+}
+
 /// Guard checker for Agent Loop
 pub struct LoopGuard {
     config: LoopConfig,
@@ -126,6 +196,10 @@ pub struct LoopGuard {
     failure_threshold: usize,
     /// Window size for failure pattern detection
     failure_window: usize,
+    /// Track recent tool calls for doom loop detection
+    recent_tool_calls: Vec<ToolCallRecord>,
+    /// Doom loop detection threshold
+    doom_loop_threshold: usize,
 }
 
 impl LoopGuard {
@@ -133,24 +207,36 @@ impl LoopGuard {
     pub fn new(config: LoopConfig) -> Self {
         let stuck_threshold = config.stuck_threshold;
         let failure_threshold = config.failure_threshold;
+        let doom_loop_threshold = config.doom_loop_threshold;
         Self {
             config,
             recent_actions: Vec::new(),
             stuck_threshold,
             failure_threshold,
             failure_window: failure_threshold + 2, // Allow some headroom
+            recent_tool_calls: Vec::new(),
+            doom_loop_threshold,
         }
     }
 
     /// Create a guard with custom thresholds
     pub fn with_thresholds(config: LoopConfig, stuck_threshold: usize, failure_threshold: usize) -> Self {
+        let doom_loop_threshold = config.doom_loop_threshold;
         Self {
             config,
             recent_actions: Vec::new(),
             stuck_threshold,
             failure_threshold,
             failure_window: failure_threshold + 2, // Allow some headroom
+            recent_tool_calls: Vec::new(),
+            doom_loop_threshold,
         }
+    }
+
+    /// Create a guard with custom doom loop threshold
+    pub fn with_doom_loop_threshold(mut self, threshold: usize) -> Self {
+        self.doom_loop_threshold = threshold;
+        self
     }
 
     /// Check all guards and return violation if any
@@ -178,6 +264,11 @@ impl LoopGuard {
                 elapsed,
                 limit: self.config.timeout,
             });
+        }
+
+        // Check for doom loop (exact same tool call repeated) - most precise check
+        if let Some(violation) = self.check_doom_loop() {
+            return Some(violation);
         }
 
         // Check for stuck loop (same action repeated)
@@ -210,6 +301,46 @@ impl LoopGuard {
         if self.recent_actions.len() > max_history {
             self.recent_actions.remove(0);
         }
+    }
+
+    /// Record a tool call for doom loop detection
+    ///
+    /// This should be called for every tool call with the exact arguments.
+    pub fn record_tool_call(&mut self, tool_name: &str, arguments: &serde_json::Value) {
+        let record = ToolCallRecord::new(tool_name.to_string(), arguments.clone());
+        self.recent_tool_calls.push(record);
+
+        // Keep bounded
+        let max_history = self.doom_loop_threshold * 2;
+        if self.recent_tool_calls.len() > max_history {
+            self.recent_tool_calls.remove(0);
+        }
+    }
+
+    /// Check for doom loop (exact same tool call with identical arguments repeated)
+    ///
+    /// This is more precise than check_stuck() as it compares exact argument values.
+    /// Inspired by OpenCode's doom loop detection.
+    fn check_doom_loop(&self) -> Option<GuardViolation> {
+        if self.recent_tool_calls.len() < self.doom_loop_threshold {
+            return None;
+        }
+
+        // Get last N tool calls
+        let last_n = &self.recent_tool_calls
+            [self.recent_tool_calls.len() - self.doom_loop_threshold..];
+        let first = &last_n[0];
+
+        // Check if all last N calls are identical (same tool + same arguments)
+        if last_n.iter().all(|call| call.matches(first)) {
+            return Some(GuardViolation::DoomLoop {
+                tool_name: first.tool_name.clone(),
+                repeat_count: self.doom_loop_threshold,
+                arguments_preview: first.arguments_preview(100),
+            });
+        }
+
+        None
     }
 
     /// Normalize action pattern for grouping
@@ -326,6 +457,22 @@ impl LoopGuard {
     /// Reset stuck detection
     pub fn reset_stuck_detection(&mut self) {
         self.recent_actions.clear();
+    }
+
+    /// Reset doom loop detection
+    pub fn reset_doom_loop_detection(&mut self) {
+        self.recent_tool_calls.clear();
+    }
+
+    /// Reset all loop detection (stuck and doom loop)
+    pub fn reset_all_detection(&mut self) {
+        self.recent_actions.clear();
+        self.recent_tool_calls.clear();
+    }
+
+    /// Get doom loop threshold
+    pub fn doom_loop_threshold(&self) -> usize {
+        self.doom_loop_threshold
     }
 }
 
@@ -509,11 +656,134 @@ mod tests {
             GuardViolation::Timeout { elapsed: Duration::from_secs(60), limit: Duration::from_secs(60) },
             GuardViolation::StuckLoop { action: "search".to_string(), repeat_count: 3 },
             GuardViolation::RepeatedFailures { pattern: "search".to_string(), failure_count: 3, total_attempts: 5 },
+            GuardViolation::DoomLoop { tool_name: "web_search".to_string(), repeat_count: 3, arguments_preview: r#"{"query": "test"}"#.to_string() },
         ];
 
         for violation in violations {
             assert!(!violation.description().is_empty());
             assert!(!violation.suggestion().is_empty());
         }
+    }
+
+    #[test]
+    fn test_doom_loop_detection() {
+        let config = create_test_config();
+        let mut guard = LoopGuard::new(config);
+
+        // Record 3 identical tool calls
+        let args = serde_json::json!({"query": "same query"});
+        guard.record_tool_call("web_search", &args);
+        guard.record_tool_call("web_search", &args);
+        guard.record_tool_call("web_search", &args);
+
+        let violation = guard.check_doom_loop();
+        assert!(violation.is_some());
+        if let Some(GuardViolation::DoomLoop { tool_name, repeat_count, .. }) = violation {
+            assert_eq!(tool_name, "web_search");
+            assert_eq!(repeat_count, 3);
+        } else {
+            panic!("Expected DoomLoop violation");
+        }
+    }
+
+    #[test]
+    fn test_no_doom_loop_with_different_args() {
+        let config = create_test_config();
+        let mut guard = LoopGuard::new(config);
+
+        // Same tool, different arguments - should NOT trigger doom loop
+        guard.record_tool_call("web_search", &serde_json::json!({"query": "query1"}));
+        guard.record_tool_call("web_search", &serde_json::json!({"query": "query2"}));
+        guard.record_tool_call("web_search", &serde_json::json!({"query": "query3"}));
+
+        let violation = guard.check_doom_loop();
+        assert!(violation.is_none());
+    }
+
+    #[test]
+    fn test_no_doom_loop_with_different_tools() {
+        let config = create_test_config();
+        let mut guard = LoopGuard::new(config);
+
+        // Different tools, same arguments - should NOT trigger doom loop
+        let args = serde_json::json!({"path": "/test"});
+        guard.record_tool_call("read_file", &args);
+        guard.record_tool_call("write_file", &args);
+        guard.record_tool_call("delete_file", &args);
+
+        let violation = guard.check_doom_loop();
+        assert!(violation.is_none());
+    }
+
+    #[test]
+    fn test_doom_loop_with_complex_args() {
+        let config = create_test_config();
+        let mut guard = LoopGuard::new(config);
+
+        // Complex nested arguments
+        let args = serde_json::json!({
+            "options": {
+                "recursive": true,
+                "depth": 3,
+                "filters": ["*.rs", "*.toml"]
+            },
+            "path": "/some/path"
+        });
+
+        guard.record_tool_call("search", &args);
+        guard.record_tool_call("search", &args);
+        guard.record_tool_call("search", &args);
+
+        let violation = guard.check_doom_loop();
+        assert!(violation.is_some());
+    }
+
+    #[test]
+    fn test_doom_loop_reset() {
+        let config = create_test_config();
+        let mut guard = LoopGuard::new(config);
+
+        let args = serde_json::json!({"query": "test"});
+        guard.record_tool_call("search", &args);
+        guard.record_tool_call("search", &args);
+        guard.record_tool_call("search", &args);
+
+        assert!(guard.check_doom_loop().is_some());
+
+        guard.reset_doom_loop_detection();
+        assert!(guard.check_doom_loop().is_none());
+    }
+
+    #[test]
+    fn test_tool_call_record_matching() {
+        let args1 = serde_json::json!({"a": 1, "b": 2});
+        let args2 = serde_json::json!({"a": 1, "b": 2});
+        let args3 = serde_json::json!({"a": 1, "b": 3});
+
+        let record1 = ToolCallRecord::new("tool".to_string(), args1);
+        let record2 = ToolCallRecord::new("tool".to_string(), args2);
+        let record3 = ToolCallRecord::new("tool".to_string(), args3);
+        let record4 = ToolCallRecord::new("other_tool".to_string(), serde_json::json!({"a": 1, "b": 2}));
+
+        // Same tool, same args
+        assert!(record1.matches(&record2));
+
+        // Same tool, different args
+        assert!(!record1.matches(&record3));
+
+        // Different tool, same args
+        assert!(!record1.matches(&record4));
+    }
+
+    #[test]
+    fn test_arguments_preview_truncation() {
+        let long_args = serde_json::json!({
+            "very_long_key": "a".repeat(200)
+        });
+        let record = ToolCallRecord::new("tool".to_string(), long_args);
+
+        let preview = record.arguments_preview(50);
+        assert!(preview.len() <= 53); // 50 + "..."
+        assert!(preview.ends_with("..."));
     }
 }

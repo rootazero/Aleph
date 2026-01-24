@@ -7,6 +7,19 @@ use std::sync::Arc;
 
 use crate::agents::rig::{ChatMessage, MessageRole};
 
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
+
 /// Format generation model information for system prompt injection
 ///
 /// This formats the configured generation providers and their model aliases
@@ -112,11 +125,7 @@ pub fn build_history_summary_from_conversations(
             continue;
         }
 
-        let display_content = if content_str.len() > 150 {
-            format!("{}...", &content_str[..150])
-        } else {
-            content_str
-        };
+        let display_content = truncate_str(&content_str, 75);
 
         let line = format!("{}: {}\n", role, display_content);
         if current_len + line.len() > max_chars {

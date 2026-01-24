@@ -189,8 +189,18 @@ impl<P: ProviderRegistry> Thinker<P> {
     }
 
     /// Parse LLM response into Thinking
+    ///
+    /// In skill mode, uses strict parsing to enforce JSON response format.
+    /// In normal mode, allows fallback heuristics for lenient parsing.
     fn parse_response(&self, response: &str) -> Result<Thinking> {
-        self.decision_parser.parse_with_fallback(response)
+        if self.config.prompt.skill_mode {
+            // Skill mode: strict parsing, no fallback heuristics
+            // This ensures the agent follows the JSON response format requirement
+            self.decision_parser.parse(response)
+        } else {
+            // Normal mode: lenient parsing with fallback
+            self.decision_parser.parse_with_fallback(response)
+        }
     }
 }
 

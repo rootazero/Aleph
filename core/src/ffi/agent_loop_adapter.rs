@@ -23,6 +23,22 @@ use crate::agent_loop::{
 };
 use crate::ffi::AetherEventHandler;
 
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+///
+/// Unlike byte-based truncation `&s[..n]` which panics on multi-byte chars,
+/// this function truncates at character count, ensuring valid UTF-8 output.
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
+
 /// Format tool action into a human-readable description
 ///
 /// Returns a tuple of (action_description, action_verb) for display.
@@ -113,11 +129,7 @@ fn format_tool_description(tool_name: &str, arguments: &Value) -> (String, Strin
                 .and_then(|o| o.get("query"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let query_display = if query.len() > 50 {
-                format!("{}...", &query[..50])
-            } else {
-                query.to_string()
-            };
+            let query_display = truncate_str(query, 25);
             (
                 format!("正在搜索: {}", query_display),
                 "搜索".to_string(),
@@ -128,11 +140,7 @@ fn format_tool_description(tool_name: &str, arguments: &Value) -> (String, Strin
                 .and_then(|o| o.get("url"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let url_display = if url.len() > 60 {
-                format!("{}...", &url[..60])
-            } else {
-                url.to_string()
-            };
+            let url_display = truncate_str(url, 50);
             (
                 format!("正在获取网页: {}", url_display),
                 "获取网页".to_string(),
@@ -153,11 +161,7 @@ fn format_tool_description(tool_name: &str, arguments: &Value) -> (String, Strin
                 .and_then(|o| o.get("prompt"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let prompt_display = if prompt.len() > 40 {
-                format!("{}...", &prompt[..40])
-            } else {
-                prompt.to_string()
-            };
+            let prompt_display = truncate_str(prompt, 20);
             (
                 format!("正在生成图像: {}", prompt_display),
                 "生成图像".to_string(),
@@ -168,11 +172,7 @@ fn format_tool_description(tool_name: &str, arguments: &Value) -> (String, Strin
                 .and_then(|o| o.get("prompt"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let prompt_display = if prompt.len() > 40 {
-                format!("{}...", &prompt[..40])
-            } else {
-                prompt.to_string()
-            };
+            let prompt_display = truncate_str(prompt, 20);
             (
                 format!("正在生成视频: {}", prompt_display),
                 "生成视频".to_string(),
@@ -183,11 +183,7 @@ fn format_tool_description(tool_name: &str, arguments: &Value) -> (String, Strin
                 .and_then(|o| o.get("prompt"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let prompt_display = if prompt.len() > 40 {
-                format!("{}...", &prompt[..40])
-            } else {
-                prompt.to_string()
-            };
+            let prompt_display = truncate_str(prompt, 20);
             (
                 format!("正在生成音频: {}", prompt_display),
                 "生成音频".to_string(),
@@ -207,25 +203,34 @@ fn format_tool_description(tool_name: &str, arguments: &Value) -> (String, Strin
     }
 }
 
-/// Truncate a path for display, preserving the filename
-fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
+/// Truncate a path for display, preserving the filename (UTF-8 safe)
+fn truncate_path(path: &str, max_chars: usize) -> String {
+    let char_count = path.chars().count();
+    if char_count <= max_chars {
         return path.to_string();
     }
 
     // Try to preserve the filename
     if let Some(pos) = path.rfind('/') {
         let filename = &path[pos + 1..];
-        if filename.len() < max_len - 3 {
-            let available = max_len - filename.len() - 4; // ".../" takes 4 chars
-            if available > 0 && pos > available {
-                return format!("...{}", &path[pos - available..]);
+        let filename_chars = filename.chars().count();
+        if filename_chars < max_chars.saturating_sub(3) {
+            let available = max_chars.saturating_sub(filename_chars).saturating_sub(4);
+            if available > 0 {
+                // Find byte position for character-safe slicing
+                let path_chars: Vec<(usize, char)> = path.char_indices().collect();
+                if let Some(start_idx) = path_chars.iter().position(|(i, _)| *i == pos) {
+                    if start_idx >= available {
+                        let start_byte = path_chars[start_idx - available].0;
+                        return format!("...{}", &path[start_byte..]);
+                    }
+                }
             }
         }
     }
 
-    // Simple truncation
-    format!("{}...", &path[..max_len - 3])
+    // Simple truncation at character boundary
+    truncate_str(path, max_chars.saturating_sub(3))
 }
 
 /// FFI-compatible callback adapter for AgentLoop
@@ -438,11 +443,7 @@ impl LoopCallback for FfiLoopCallback {
                     );
                     // Send tool result to UI (truncate for display)
                     let output_str = output.to_string();
-                    let display_output = if output_str.len() > 200 {
-                        format!("{}...", &output_str[..200])
-                    } else {
-                        output_str.clone()
-                    };
+                    let display_output = truncate_str(&output_str, 100);
 
                     // Show success as status (replaces tool call status)
                     let message = format!("✓ {}完成 ({}ms)", verb, duration_ms);

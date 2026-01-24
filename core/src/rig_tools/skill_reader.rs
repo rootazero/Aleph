@@ -68,9 +68,13 @@ pub struct ReadSkillOutput {
 /// - The agent sees skill metadata in the system prompt
 /// - The agent calls this tool to load full instructions when needed
 /// - The agent can request additional resources as needed
+///
+/// Supports multi-location discovery:
+/// - Project level: .aether/skills/, .claude/skills/
+/// - Global level: ~/.config/aether/skills, ~/.claude/skills
 pub struct ReadSkillTool {
-    /// Directory containing all skills
-    skills_dir: PathBuf,
+    /// All skills directories (for multi-location discovery)
+    skills_dirs: Vec<PathBuf>,
 
     /// Maximum file size to read (5MB default)
     max_file_size: u64,
@@ -89,6 +93,10 @@ The skill instructions tell you exactly how to approach the task.
 After reading a skill, you MUST follow its instructions exactly.
 Skill instructions are task directives, not suggestions.
 
+Skills are discovered from multiple locations:
+- Project level: .aether/skills/, .claude/skills/ (traverse up to git root)
+- Global level: ~/.config/aether/skills, ~/.claude/skills
+
 Examples:
 - User asks to "refine this text" → read_skill(skill_id="refine-text")
 - User asks to "translate to Chinese" → read_skill(skill_id="translate")
@@ -98,11 +106,40 @@ You can also read additional resources within a skill by specifying file_name:
 - read_skill(skill_id="code-review", file_name="CHECKLIST.md")
 "#;
 
-    /// Create a new ReadSkillTool
+    /// Create a new ReadSkillTool with a single directory (backwards compatible)
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
-            skills_dir,
+            skills_dirs: vec![skills_dir],
             max_file_size: 5 * 1024 * 1024, // 5MB
+        }
+    }
+
+    /// Create a ReadSkillTool with multiple directories
+    pub fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
+        Self {
+            skills_dirs,
+            max_file_size: 5 * 1024 * 1024,
+        }
+    }
+
+    /// Create a ReadSkillTool with auto-discovery
+    pub fn with_auto_discover(project_dir: Option<&Path>) -> Self {
+        let skills_dirs = crate::utils::paths::get_all_skills_dirs(project_dir)
+            .unwrap_or_else(|_| vec![]);
+
+        if skills_dirs.is_empty() {
+            // Fallback to default directory
+            let default_dir = crate::utils::paths::get_skills_dir()
+                .unwrap_or_else(|_| PathBuf::from("~/.config/aether/skills"));
+            Self {
+                skills_dirs: vec![default_dir],
+                max_file_size: 5 * 1024 * 1024,
+            }
+        } else {
+            Self {
+                skills_dirs,
+                max_file_size: 5 * 1024 * 1024,
+            }
         }
     }
 
@@ -110,6 +147,17 @@ You can also read additional resources within a skill by specifying file_name:
     pub fn with_max_size(mut self, max_size: u64) -> Self {
         self.max_file_size = max_size;
         self
+    }
+
+    /// Find the skill directory by ID across all configured directories
+    fn find_skill_dir(&self, skill_id: &str) -> Option<PathBuf> {
+        for skills_dir in &self.skills_dirs {
+            let skill_dir = skills_dir.join(skill_id);
+            if skill_dir.is_dir() && skill_dir.join("SKILL.md").exists() {
+                return Some(skill_dir);
+            }
+        }
+        None
     }
 
     /// Validate skill_id to prevent path traversal attacks
@@ -192,16 +240,14 @@ You can also read additional resources within a skill by specifying file_name:
         let file_name = args.file_name.as_deref().unwrap_or("SKILL.md");
         self.validate_file_name(file_name)?;
 
-        // Build paths
-        let skill_dir = self.skills_dir.join(&args.skill_id);
-        let file_path = skill_dir.join(file_name);
-
-        // Check skill directory exists
-        if !skill_dir.exists() || !skill_dir.is_dir() {
+        // Find skill directory across all configured locations
+        let skill_dir = self.find_skill_dir(&args.skill_id).ok_or_else(|| {
             let error_msg = format!("Skill '{}' not found", args.skill_id);
             notify_tool_result(Self::NAME, &error_msg, false);
-            return Err(ToolError::NotFound(error_msg));
-        }
+            ToolError::NotFound(error_msg)
+        })?;
+
+        let file_path = skill_dir.join(file_name);
 
         // Check file exists
         if !file_path.exists() || !file_path.is_file() {
@@ -265,17 +311,14 @@ You can also read additional resources within a skill by specifying file_name:
 
 impl Default for ReadSkillTool {
     fn default() -> Self {
-        // Use default skills directory
-        let skills_dir = crate::utils::paths::get_skills_dir()
-            .unwrap_or_else(|_| PathBuf::from("~/.config/aether/skills"));
-        Self::new(skills_dir)
+        Self::with_auto_discover(None)
     }
 }
 
 impl Clone for ReadSkillTool {
     fn clone(&self) -> Self {
         Self {
-            skills_dir: self.skills_dir.clone(),
+            skills_dirs: self.skills_dirs.clone(),
             max_file_size: self.max_file_size,
         }
     }
@@ -330,6 +373,14 @@ pub struct SkillSummary {
 
     /// Files available in this skill
     pub files: Vec<String>,
+
+    /// Source location type (project or global)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+
+    /// Full path to the skill directory
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<PathBuf>,
 }
 
 /// Output from list_skills tool
@@ -349,9 +400,13 @@ pub struct ListSkillsOutput {
 ///
 /// Lists all available skills with their metadata.
 /// Useful for discovering what skills are installed.
+///
+/// Supports multi-location discovery:
+/// - Project level: .aether/skills/, .claude/skills/
+/// - Global level: ~/.config/aether/skills, ~/.claude/skills
 pub struct ListSkillsTool {
-    /// Directory containing all skills
-    skills_dir: PathBuf,
+    /// All skills directories (for multi-location discovery)
+    skills_dirs: Vec<PathBuf>,
 }
 
 impl ListSkillsTool {
@@ -364,12 +419,50 @@ impl ListSkillsTool {
 Use this tool to discover what skills are available before using read_skill.
 Each skill has an ID, name, description, and optional trigger keywords.
 
+Skills are discovered from multiple locations:
+- Project level: .aether/skills/, .claude/skills/ (traverse up to git root)
+- Global level: ~/.config/aether/skills, ~/.claude/skills
+
 After finding a relevant skill, use read_skill(skill_id) to load its full instructions.
 "#;
 
-    /// Create a new ListSkillsTool
+    /// Create a new ListSkillsTool with a single directory (backwards compatible)
     pub fn new(skills_dir: PathBuf) -> Self {
-        Self { skills_dir }
+        Self {
+            skills_dirs: vec![skills_dir],
+        }
+    }
+
+    /// Create a ListSkillsTool with multiple directories
+    pub fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
+        Self { skills_dirs }
+    }
+
+    /// Create a ListSkillsTool with auto-discovery
+    pub fn with_auto_discover(project_dir: Option<&Path>) -> Self {
+        let skills_dirs = crate::utils::paths::get_all_skills_dirs(project_dir)
+            .unwrap_or_else(|_| vec![]);
+
+        if skills_dirs.is_empty() {
+            // Fallback to default directory
+            let default_dir = crate::utils::paths::get_skills_dir()
+                .unwrap_or_else(|_| PathBuf::from("~/.config/aether/skills"));
+            Self {
+                skills_dirs: vec![default_dir],
+            }
+        } else {
+            Self { skills_dirs }
+        }
+    }
+
+    /// Determine source type based on path
+    fn get_source_type(&self, skill_dir: &Path) -> String {
+        if let Ok(home) = crate::utils::paths::get_home_dir() {
+            if skill_dir.starts_with(&home) {
+                return "global".to_string();
+            }
+        }
+        "project".to_string()
     }
 
     /// Parse skill frontmatter to extract metadata
@@ -388,12 +481,17 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
         // List files
         let files = self.list_skill_files(skill_dir);
 
+        // Determine source
+        let source = self.get_source_type(skill_dir);
+
         Some(SkillSummary {
             id,
             name: skill.frontmatter.name,
             description: skill.frontmatter.description,
             triggers: skill.frontmatter.triggers,
             files,
+            source: Some(source),
+            location: Some(skill_dir.to_path_buf()),
         })
     }
 
@@ -428,61 +526,76 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
         notify_tool_start(Self::NAME, &args_summary);
 
         let mut skills = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
 
-        // Check skills directory exists
-        if !self.skills_dir.exists() {
-            debug!(
-                skills_dir = %self.skills_dir.display(),
-                "Skills directory does not exist"
-            );
-            notify_tool_result(Self::NAME, "Skills directory not found", false);
-            return Ok(ListSkillsOutput {
-                success: true,
-                count: 0,
-                skills: vec![],
-            });
-        }
+        // Scan all skills directories
+        for skills_dir in &self.skills_dirs {
+            if !skills_dir.exists() {
+                debug!(
+                    skills_dir = %skills_dir.display(),
+                    "Skills directory does not exist"
+                );
+                continue;
+            }
 
-        // Scan skills directory
-        if let Ok(entries) = fs::read_dir(&self.skills_dir) {
-            for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_dir() {
-                        let skill_dir = entry.path();
+            if let Ok(entries) = fs::read_dir(skills_dir) {
+                for entry in entries.flatten() {
+                    if let Ok(file_type) = entry.file_type() {
+                        if file_type.is_dir() {
+                            let skill_dir = entry.path();
 
-                        // Skip hidden directories
-                        if let Some(name) = skill_dir.file_name() {
-                            if name.to_str().map_or(false, |n| n.starts_with('.')) {
-                                continue;
-                            }
-                        }
-
-                        // Try to parse skill metadata
-                        if let Some(summary) = self.parse_skill_metadata(&skill_dir) {
-                            // Apply filter if specified
-                            if let Some(ref filter) = args.filter {
-                                let filter_lower = filter.to_lowercase();
-                                let matches = summary.id.to_lowercase().contains(&filter_lower)
-                                    || summary.name.to_lowercase().contains(&filter_lower)
-                                    || summary.description.to_lowercase().contains(&filter_lower)
-                                    || summary.triggers.iter().any(|t| {
-                                        t.to_lowercase().contains(&filter_lower)
-                                    });
-
-                                if !matches {
+                            // Skip hidden directories
+                            if let Some(name) = skill_dir.file_name() {
+                                if name.to_str().map_or(false, |n| n.starts_with('.')) {
                                     continue;
                                 }
                             }
 
-                            skills.push(summary);
+                            // Try to parse skill metadata
+                            if let Some(summary) = self.parse_skill_metadata(&skill_dir) {
+                                // Skip if already seen (first occurrence wins)
+                                if seen_ids.contains(&summary.id) {
+                                    debug!(
+                                        skill_id = %summary.id,
+                                        "Skill already discovered, skipping duplicate"
+                                    );
+                                    continue;
+                                }
+
+                                // Apply filter if specified
+                                if let Some(ref filter) = args.filter {
+                                    let filter_lower = filter.to_lowercase();
+                                    let matches = summary.id.to_lowercase().contains(&filter_lower)
+                                        || summary.name.to_lowercase().contains(&filter_lower)
+                                        || summary.description.to_lowercase().contains(&filter_lower)
+                                        || summary.triggers.iter().any(|t| {
+                                            t.to_lowercase().contains(&filter_lower)
+                                        });
+
+                                    if !matches {
+                                        continue;
+                                    }
+                                }
+
+                                seen_ids.insert(summary.id.clone());
+                                skills.push(summary);
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Sort by ID
-        skills.sort_by(|a, b| a.id.cmp(&b.id));
+        // Sort by source (project first), then by ID
+        skills.sort_by(|a, b| {
+            let a_source = a.source.as_deref().unwrap_or("global");
+            let b_source = b.source.as_deref().unwrap_or("global");
+            match (a_source, b_source) {
+                ("project", "global") => std::cmp::Ordering::Less,
+                ("global", "project") => std::cmp::Ordering::Greater,
+                _ => a.id.cmp(&b.id),
+            }
+        });
 
         let count = skills.len();
         let result_msg = format!("Found {} skills", count);
@@ -500,16 +613,14 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
 
 impl Default for ListSkillsTool {
     fn default() -> Self {
-        let skills_dir = crate::utils::paths::get_skills_dir()
-            .unwrap_or_else(|_| PathBuf::from("~/.config/aether/skills"));
-        Self::new(skills_dir)
+        Self::with_auto_discover(None)
     }
 }
 
 impl Clone for ListSkillsTool {
     fn clone(&self) -> Self {
         Self {
-            skills_dir: self.skills_dir.clone(),
+            skills_dirs: self.skills_dirs.clone(),
         }
     }
 }
@@ -697,5 +808,79 @@ Follow them carefully.
         assert!(result.success);
         assert_eq!(result.count, 1);
         assert_eq!(result.skills[0].id, "refine-text");
+    }
+
+    #[tokio::test]
+    async fn test_multi_directory_discovery() {
+        // Create two separate skills directories
+        let temp_dir1 = TempDir::new().unwrap();
+        let temp_dir2 = TempDir::new().unwrap();
+        let skills_dir1 = temp_dir1.path().to_path_buf();
+        let skills_dir2 = temp_dir2.path().to_path_buf();
+
+        // Create skills in different directories
+        create_test_skill(&skills_dir1, "skill-a", "Skill A", "From directory 1");
+        create_test_skill(&skills_dir2, "skill-b", "Skill B", "From directory 2");
+
+        // Test ListSkillsTool with multiple directories
+        let tool = ListSkillsTool::with_directories(vec![skills_dir1.clone(), skills_dir2.clone()]);
+        let args = ListSkillsArgs { filter: None };
+
+        let result = AetherTool::call(&tool, args).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.count, 2);
+
+        // Both skills should be found
+        let ids: Vec<&str> = result.skills.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"skill-a"));
+        assert!(ids.contains(&"skill-b"));
+    }
+
+    #[tokio::test]
+    async fn test_multi_directory_deduplication() {
+        // Create two directories with the same skill
+        let temp_dir1 = TempDir::new().unwrap();
+        let temp_dir2 = TempDir::new().unwrap();
+        let skills_dir1 = temp_dir1.path().to_path_buf();
+        let skills_dir2 = temp_dir2.path().to_path_buf();
+
+        // Create same skill ID in both directories
+        create_test_skill(&skills_dir1, "same-skill", "Skill From Dir1", "First directory");
+        create_test_skill(&skills_dir2, "same-skill", "Skill From Dir2", "Second directory");
+
+        // Test that first occurrence wins
+        let tool = ListSkillsTool::with_directories(vec![skills_dir1.clone(), skills_dir2.clone()]);
+        let args = ListSkillsArgs { filter: None };
+
+        let result = AetherTool::call(&tool, args).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.count, 1);
+        assert_eq!(result.skills[0].id, "same-skill");
+        // Should get the one from dir1 (first in list)
+        assert!(result.skills[0].description.contains("First directory"));
+    }
+
+    #[tokio::test]
+    async fn test_read_skill_multi_directory() {
+        // Create two directories
+        let temp_dir1 = TempDir::new().unwrap();
+        let temp_dir2 = TempDir::new().unwrap();
+        let skills_dir1 = temp_dir1.path().to_path_buf();
+        let skills_dir2 = temp_dir2.path().to_path_buf();
+
+        // Only create skill in the second directory
+        create_test_skill(&skills_dir2, "unique-skill", "Unique Skill", "Only in dir2");
+
+        // ReadSkillTool should find it even though it's in the second directory
+        let tool = ReadSkillTool::with_directories(vec![skills_dir1, skills_dir2]);
+        let args = ReadSkillArgs {
+            skill_id: "unique-skill".to_string(),
+            file_name: None,
+        };
+
+        let result = AetherTool::call(&tool, args).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.skill_id, "unique-skill");
+        assert!(result.content.contains("Unique Skill"));
     }
 }

@@ -122,7 +122,12 @@ impl PromptBuilder {
 
         // Special actions
         prompt.push_str("## Special Actions\n");
-        prompt.push_str("- `complete`: Call when the task is fully done\n");
+        prompt.push_str("- `complete`: Call when the task is fully done. The `summary` field MUST be a comprehensive report that includes:\n");
+        prompt.push_str("  1. A brief overview of what was accomplished\n");
+        prompt.push_str("  2. Key results and findings (data, insights, metrics)\n");
+        prompt.push_str("  3. List of all generated files with their purposes\n");
+        prompt.push_str("  4. Any important notes or recommendations\n");
+        prompt.push_str("  **DO NOT** just say 'Task completed'. Write a detailed summary the user can immediately understand.\n");
         prompt.push_str("- `ask_user`: Call when you need clarification or user decision\n");
         prompt.push_str("- `fail`: Call when the task cannot be completed\n\n");
 
@@ -138,10 +143,23 @@ impl PromptBuilder {
         prompt.push_str("    \"arguments\": {...},       // if type=tool\n");
         prompt.push_str("    \"question\": \"...\",        // if type=ask_user\n");
         prompt.push_str("    \"options\": [...],         // if type=ask_user (optional)\n");
-        prompt.push_str("    \"summary\": \"...\",         // if type=complete\n");
+        prompt.push_str("    \"summary\": \"...\",         // if type=complete (MUST be detailed report)\n");
         prompt.push_str("    \"reason\": \"...\"           // if type=fail\n");
         prompt.push_str("  }\n");
         prompt.push_str("}\n");
+        prompt.push_str("```\n\n");
+        prompt.push_str("### Completion Summary Format\n");
+        prompt.push_str("When `type=complete`, the `summary` should be a well-formatted report:\n");
+        prompt.push_str("```\n");
+        prompt.push_str("## Task Completed\n");
+        prompt.push_str("[Brief description of what was accomplished]\n\n");
+        prompt.push_str("### Results\n");
+        prompt.push_str("[Key findings, data, or outcomes]\n\n");
+        prompt.push_str("### Generated Files\n");
+        prompt.push_str("- file1.json: [description]\n");
+        prompt.push_str("- file2.png: [description]\n\n");
+        prompt.push_str("### Notes\n");
+        prompt.push_str("[Any recommendations or important observations]\n");
         prompt.push_str("```\n\n");
 
         // Guidelines
@@ -192,7 +210,26 @@ impl PromptBuilder {
 
         // Language setting
         if let Some(lang) = &self.config.language {
-            prompt.push_str(&format!("Respond in {}.\n", lang));
+            let language_name = match lang.as_str() {
+                "zh-Hans" => "Chinese (Simplified)",
+                "zh-Hant" => "Chinese (Traditional)",
+                "en" => "English",
+                "ja" => "Japanese",
+                "ko" => "Korean",
+                "de" => "German",
+                "fr" => "French",
+                "es" => "Spanish",
+                "it" => "Italian",
+                "pt" => "Portuguese",
+                "ru" => "Russian",
+                _ => lang.as_str(),
+            };
+            prompt.push_str("## Response Language\n");
+            prompt.push_str(&format!(
+                "Respond in {} by default. Exception: If the task explicitly requires a different language \
+                (e.g., translation, writing in a specific language), use the requested language instead.\n\n",
+                language_name
+            ));
         }
 
         prompt
@@ -315,13 +352,22 @@ impl Message {
     }
 }
 
+/// Safely truncate a string at character boundaries (UTF-8 safe)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let end_byte = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end_byte])
+}
+
 /// Format attachment for display
 fn format_attachment(attachment: &MediaAttachment) -> String {
-    let preview = if attachment.data.len() > 50 {
-        format!("{}...", &attachment.data[..50.min(attachment.data.len())])
-    } else {
-        attachment.data.clone()
-    };
+    let preview = truncate_str(&attachment.data, 50);
 
     match attachment.media_type.as_str() {
         "image" => {

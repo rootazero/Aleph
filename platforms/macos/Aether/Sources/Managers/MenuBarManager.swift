@@ -44,12 +44,14 @@ final class MenuBarManager {
     /// - Parameters:
     ///   - target: Target for menu item actions
     ///   - showAboutAction: Selector for "About" action
+    ///   - showConversationAction: Selector for "Show Conversation" action
     ///   - showSettingsAction: Selector for "Settings" action
     ///   - quitAction: Selector for "Quit" action
     ///   - debugActions: Optional debug action selectors
     func setup(
         target: AnyObject,
         showAboutAction: Selector,
+        showConversationAction: Selector,
         showSettingsAction: Selector,
         quitAction: Selector,
         debugActions: [(title: String, action: Selector, keyEquivalent: String)]? = nil
@@ -78,6 +80,17 @@ final class MenuBarManager {
         )
         aboutItem.target = target
         menu.addItem(aboutItem)
+        menu.addItem(NSMenuItem.separator())
+
+        // Add "Show Conversation Window" menu item
+        let conversationItem = NSMenuItem(
+            title: L("menu.show_conversation"),
+            action: showConversationAction,
+            keyEquivalent: "/"
+        )
+        conversationItem.keyEquivalentModifierMask = [.command, .option]
+        conversationItem.target = target
+        menu.addItem(conversationItem)
         menu.addItem(NSMenuItem.separator())
 
         // Add "Default Provider" submenu (will be populated later)

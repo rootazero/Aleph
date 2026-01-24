@@ -1,7 +1,9 @@
 //! Tool Server with Hot-Reload Support
 //!
 //! Provides a thread-safe tool registry that supports runtime
-//! addition and removal of tools.
+//! addition and removal of tools, including automatic tool name repair.
+//!
+//! Inspired by OpenCode's experimental_repairToolCall pattern.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -11,6 +13,65 @@ use tokio::sync::RwLock;
 use super::traits::AetherToolDyn;
 use crate::dispatcher::ToolDefinition;
 use crate::error::{AetherError, Result};
+
+// =============================================================================
+// Tool Repair Types
+// =============================================================================
+
+/// Information about a tool name repair that was performed
+#[derive(Debug, Clone)]
+pub struct ToolRepairInfo {
+    /// The original tool name that was requested
+    pub original_name: String,
+    /// The repaired tool name that was actually used
+    pub repaired_name: String,
+    /// The type of repair that was performed
+    pub repair_type: ToolRepairType,
+}
+
+/// Types of tool name repairs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRepairType {
+    /// Converted to lowercase (e.g., "Search" -> "search")
+    CaseInsensitive,
+    /// Converted to snake_case (e.g., "WebSearch" -> "web_search")
+    SnakeCase,
+    /// Routed to the "invalid" tool as a fallback
+    InvalidFallback,
+}
+
+impl ToolRepairInfo {
+    /// Check if this was a successful repair (not a fallback to invalid)
+    pub fn was_successful(&self) -> bool {
+        !matches!(self.repair_type, ToolRepairType::InvalidFallback)
+    }
+}
+
+/// Convert a string to snake_case
+///
+/// Examples:
+/// - "WebSearch" -> "web_search"
+/// - "searchAPI" -> "search_api"
+/// - "already_snake" -> "already_snake"
+fn to_snake_case(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 4);
+    let mut prev_was_lower = false;
+
+    for c in s.chars() {
+        if c.is_uppercase() {
+            if prev_was_lower {
+                result.push('_');
+            }
+            result.push(c.to_lowercase().next().unwrap_or(c));
+            prev_was_lower = false;
+        } else {
+            result.push(c);
+            prev_was_lower = c.is_lowercase();
+        }
+    }
+
+    result
+}
 
 // =============================================================================
 // AetherToolServer
@@ -158,6 +219,138 @@ impl AetherToolServer {
         tool.call(args).await
     }
 
+    /// Call a tool with automatic repair for common errors.
+    ///
+    /// This method attempts to:
+    /// 1. Call the tool directly if found
+    /// 2. Try case-insensitive matching if exact match fails
+    /// 3. Route to "invalid" tool if no match found
+    ///
+    /// Inspired by OpenCode's experimental_repairToolCall pattern.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (result, repair_info) where repair_info is Some if a repair was made.
+    pub async fn call_with_repair(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> (Result<Value>, Option<ToolRepairInfo>) {
+        let tools = self.tools.read().await;
+
+        // 1. Try exact match first
+        if let Some(tool) = tools.get(name) {
+            let tool = Arc::clone(tool);
+            drop(tools);
+            return (tool.call(args).await, None);
+        }
+
+        // 2. Try case-insensitive repair
+        let lower_name = name.to_lowercase();
+        if lower_name != name {
+            if let Some(tool) = tools.get(&lower_name) {
+                let tool = Arc::clone(tool);
+                drop(tools);
+                tracing::info!(
+                    original = name,
+                    repaired = lower_name,
+                    "Repaired tool name (case-insensitive)"
+                );
+                return (
+                    tool.call(args).await,
+                    Some(ToolRepairInfo {
+                        original_name: name.to_string(),
+                        repaired_name: lower_name,
+                        repair_type: ToolRepairType::CaseInsensitive,
+                    }),
+                );
+            }
+        }
+
+        // 3. Try snake_case conversion (e.g., "WebSearch" -> "web_search")
+        let snake_name = to_snake_case(name);
+        if snake_name != name && snake_name != lower_name {
+            if let Some(tool) = tools.get(&snake_name) {
+                let tool = Arc::clone(tool);
+                drop(tools);
+                tracing::info!(
+                    original = name,
+                    repaired = snake_name,
+                    "Repaired tool name (snake_case)"
+                );
+                return (
+                    tool.call(args).await,
+                    Some(ToolRepairInfo {
+                        original_name: name.to_string(),
+                        repaired_name: snake_name,
+                        repair_type: ToolRepairType::SnakeCase,
+                    }),
+                );
+            }
+        }
+
+        // 4. Route to "invalid" tool if available
+        if let Some(invalid_tool) = tools.get("invalid") {
+            let invalid_tool = Arc::clone(invalid_tool);
+            drop(tools);
+
+            tracing::info!(
+                tool = name,
+                "Routing unknown tool to invalid handler"
+            );
+
+            let invalid_args = serde_json::json!({
+                "tool": name,
+                "error": format!("Tool '{}' not found in registry", name)
+            });
+
+            return (
+                invalid_tool.call(invalid_args).await,
+                Some(ToolRepairInfo {
+                    original_name: name.to_string(),
+                    repaired_name: "invalid".to_string(),
+                    repair_type: ToolRepairType::InvalidFallback,
+                }),
+            );
+        }
+
+        // 5. No repair possible
+        drop(tools);
+        (
+            Err(AetherError::tool_not_found_with_suggestion(
+                name,
+                "Use list_tools to see available tools",
+            )),
+            None,
+        )
+    }
+
+    /// Try to repair a tool name using various normalization strategies.
+    ///
+    /// Returns the repaired name if a match is found, None otherwise.
+    pub async fn try_repair_tool_name(&self, name: &str) -> Option<String> {
+        let tools = self.tools.read().await;
+
+        // Exact match
+        if tools.contains_key(name) {
+            return Some(name.to_string());
+        }
+
+        // Case-insensitive
+        let lower_name = name.to_lowercase();
+        if tools.contains_key(&lower_name) {
+            return Some(lower_name);
+        }
+
+        // Snake case
+        let snake_name = to_snake_case(name);
+        if tools.contains_key(&snake_name) {
+            return Some(snake_name);
+        }
+
+        None
+    }
+
     /// Get a lightweight handle for sharing across tasks.
     ///
     /// The handle shares the same underlying tool registry and can be
@@ -271,6 +464,119 @@ impl AetherToolServerHandle {
         drop(tools);
 
         tool.call(args).await
+    }
+
+    /// Call a tool with automatic repair for common errors.
+    ///
+    /// See `AetherToolServer::call_with_repair` for details.
+    pub async fn call_with_repair(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> (Result<Value>, Option<ToolRepairInfo>) {
+        let tools = self.tools.read().await;
+
+        // 1. Try exact match first
+        if let Some(tool) = tools.get(name) {
+            let tool = Arc::clone(tool);
+            drop(tools);
+            return (tool.call(args).await, None);
+        }
+
+        // 2. Try case-insensitive repair
+        let lower_name = name.to_lowercase();
+        if lower_name != name {
+            if let Some(tool) = tools.get(&lower_name) {
+                let tool = Arc::clone(tool);
+                drop(tools);
+                tracing::info!(
+                    original = name,
+                    repaired = lower_name,
+                    "Repaired tool name (case-insensitive)"
+                );
+                return (
+                    tool.call(args).await,
+                    Some(ToolRepairInfo {
+                        original_name: name.to_string(),
+                        repaired_name: lower_name,
+                        repair_type: ToolRepairType::CaseInsensitive,
+                    }),
+                );
+            }
+        }
+
+        // 3. Try snake_case conversion
+        let snake_name = to_snake_case(name);
+        if snake_name != name && snake_name != lower_name {
+            if let Some(tool) = tools.get(&snake_name) {
+                let tool = Arc::clone(tool);
+                drop(tools);
+                tracing::info!(
+                    original = name,
+                    repaired = snake_name,
+                    "Repaired tool name (snake_case)"
+                );
+                return (
+                    tool.call(args).await,
+                    Some(ToolRepairInfo {
+                        original_name: name.to_string(),
+                        repaired_name: snake_name,
+                        repair_type: ToolRepairType::SnakeCase,
+                    }),
+                );
+            }
+        }
+
+        // 4. Route to "invalid" tool if available
+        if let Some(invalid_tool) = tools.get("invalid") {
+            let invalid_tool = Arc::clone(invalid_tool);
+            drop(tools);
+
+            let invalid_args = serde_json::json!({
+                "tool": name,
+                "error": format!("Tool '{}' not found in registry", name)
+            });
+
+            return (
+                invalid_tool.call(invalid_args).await,
+                Some(ToolRepairInfo {
+                    original_name: name.to_string(),
+                    repaired_name: "invalid".to_string(),
+                    repair_type: ToolRepairType::InvalidFallback,
+                }),
+            );
+        }
+
+        // 5. No repair possible
+        drop(tools);
+        (
+            Err(AetherError::tool_not_found_with_suggestion(
+                name,
+                "Use list_tools to see available tools",
+            )),
+            None,
+        )
+    }
+
+    /// Try to repair a tool name using various normalization strategies.
+    pub async fn try_repair_tool_name(&self, name: &str) -> Option<String> {
+        let tools = self.tools.read().await;
+
+        if tools.contains_key(name) {
+            return Some(name.to_string());
+        }
+
+        let lower_name = name.to_lowercase();
+        if tools.contains_key(&lower_name) {
+            return Some(lower_name);
+        }
+
+        let snake_name = to_snake_case(name);
+        if tools.contains_key(&snake_name) {
+            return Some(snake_name);
+        }
+
+        None
     }
 
     /// Clear all tools from the server.
@@ -469,5 +775,144 @@ mod tests {
         server.clear().await;
 
         assert!(server.is_empty().await);
+    }
+
+    #[test]
+    fn test_to_snake_case() {
+        assert_eq!(to_snake_case("WebSearch"), "web_search");
+        assert_eq!(to_snake_case("searchAPI"), "search_api");
+        assert_eq!(to_snake_case("already_snake"), "already_snake");
+        assert_eq!(to_snake_case("HTTPRequest"), "httprequest");
+        assert_eq!(to_snake_case("Search"), "search");
+        assert_eq!(to_snake_case("search"), "search");
+    }
+
+    #[tokio::test]
+    async fn test_call_with_repair_exact_match() {
+        let server = AetherToolServer::new();
+        server
+            .add_tool(DynamicMockTool {
+                name: "search".to_string(),
+            })
+            .await;
+
+        let (result, repair_info) = server
+            .call_with_repair("search", serde_json::json!({"input": "test"}))
+            .await;
+
+        assert!(result.is_ok());
+        assert!(repair_info.is_none()); // No repair needed
+    }
+
+    #[tokio::test]
+    async fn test_call_with_repair_case_insensitive() {
+        let server = AetherToolServer::new();
+        server
+            .add_tool(DynamicMockTool {
+                name: "search".to_string(),
+            })
+            .await;
+
+        let (result, repair_info) = server
+            .call_with_repair("Search", serde_json::json!({"input": "test"}))
+            .await;
+
+        assert!(result.is_ok());
+        assert!(repair_info.is_some());
+        let info = repair_info.unwrap();
+        assert_eq!(info.original_name, "Search");
+        assert_eq!(info.repaired_name, "search");
+        assert_eq!(info.repair_type, ToolRepairType::CaseInsensitive);
+        assert!(info.was_successful());
+    }
+
+    #[tokio::test]
+    async fn test_call_with_repair_snake_case() {
+        let server = AetherToolServer::new();
+        server
+            .add_tool(DynamicMockTool {
+                name: "web_search".to_string(),
+            })
+            .await;
+
+        let (result, repair_info) = server
+            .call_with_repair("WebSearch", serde_json::json!({"input": "test"}))
+            .await;
+
+        assert!(result.is_ok());
+        assert!(repair_info.is_some());
+        let info = repair_info.unwrap();
+        assert_eq!(info.original_name, "WebSearch");
+        assert_eq!(info.repaired_name, "web_search");
+        assert_eq!(info.repair_type, ToolRepairType::SnakeCase);
+        assert!(info.was_successful());
+    }
+
+    #[tokio::test]
+    async fn test_call_with_repair_invalid_fallback() {
+        let server = AetherToolServer::new();
+
+        // Add an "invalid" tool for fallback
+        server
+            .add_tool(DynamicMockTool {
+                name: "invalid".to_string(),
+            })
+            .await;
+
+        let (result, repair_info) = server
+            .call_with_repair("nonexistent", serde_json::json!({"input": "test"}))
+            .await;
+
+        assert!(result.is_ok());
+        assert!(repair_info.is_some());
+        let info = repair_info.unwrap();
+        assert_eq!(info.original_name, "nonexistent");
+        assert_eq!(info.repaired_name, "invalid");
+        assert_eq!(info.repair_type, ToolRepairType::InvalidFallback);
+        assert!(!info.was_successful()); // Fallback is not a "successful" repair
+    }
+
+    #[tokio::test]
+    async fn test_call_with_repair_no_fallback() {
+        let server = AetherToolServer::new();
+
+        // No "invalid" tool, so should return error
+        let (result, repair_info) = server
+            .call_with_repair("nonexistent", serde_json::json!({}))
+            .await;
+
+        assert!(result.is_err());
+        assert!(repair_info.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_try_repair_tool_name() {
+        let server = AetherToolServer::new();
+        server
+            .add_tool(DynamicMockTool {
+                name: "web_search".to_string(),
+            })
+            .await;
+
+        // Exact match
+        assert_eq!(
+            server.try_repair_tool_name("web_search").await,
+            Some("web_search".to_string())
+        );
+
+        // Case insensitive
+        assert_eq!(
+            server.try_repair_tool_name("Web_Search").await,
+            Some("web_search".to_string())
+        );
+
+        // Snake case conversion
+        assert_eq!(
+            server.try_repair_tool_name("WebSearch").await,
+            Some("web_search".to_string())
+        );
+
+        // No match
+        assert_eq!(server.try_repair_tool_name("nonexistent").await, None);
     }
 }

@@ -1,13 +1,19 @@
 /// Retry logic with exponential backoff for AI provider requests
 ///
 /// This module provides utilities for retrying failed requests with
-/// exponential backoff strategy.
+/// exponential backoff strategy. Inspired by OpenCode's retry.ts.
 use crate::config::RetryPolicy;
 use crate::dispatcher::DEFAULT_MAX_RETRIES;
 use crate::error::{AetherError, Result};
 use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, info, warn};
+
+/// Constants matching OpenCode's retry.ts
+pub const RETRY_INITIAL_DELAY_MS: u64 = 2000; // 2 seconds
+pub const RETRY_BACKOFF_FACTOR: f64 = 2.0;
+pub const RETRY_MAX_DELAY_NO_HEADERS_MS: u64 = 30_000; // 30 seconds
+pub const RETRY_MAX_DELAY_WITH_HEADERS_MS: u64 = i32::MAX as u64; // ~24 days (matches JS max setTimeout)
 
 /// Initial backoff duration (1 second) (default, used when no policy provided)
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -27,7 +33,7 @@ fn is_retryable(error: &AetherError) -> bool {
 ///
 /// Non-retryable errors:
 /// - Authentication errors (401)
-/// - Rate limit errors (429)
+/// - Rate limit errors (429) - UNLESS it's an overloaded error
 /// - Invalid configuration
 /// - Provider-specific errors not matching policy
 fn is_retryable_with_policy(error: &AetherError, policy: &RetryPolicy) -> bool {
@@ -35,18 +41,102 @@ fn is_retryable_with_policy(error: &AetherError, policy: &RetryPolicy) -> bool {
         AetherError::NetworkError { .. } => policy.retry_on_network_error,
         AetherError::Timeout { .. } => policy.retry_on_timeout,
         AetherError::ProviderError { message, .. } => {
+            // Check for overloaded messages (retryable like OpenCode)
+            if is_overloaded_message(message) {
+                return true;
+            }
             // Check if message contains any retryable status code
             policy
                 .retryable_status_codes
                 .iter()
                 .any(|code| message.contains(&code.to_string()))
         }
+        // Rate limit with retry-after is potentially retryable
+        AetherError::RateLimitError { message, .. } => {
+            // Match OpenCode: retry on "too_many_requests" or overloaded
+            is_overloaded_message(message)
+        }
         // Don't retry these errors
         AetherError::AuthenticationError { .. } => false,
-        AetherError::RateLimitError { .. } => false,
         AetherError::InvalidConfig { .. } => false,
         _ => false,
     }
+}
+
+/// Check if error message indicates an overloaded condition (retryable)
+///
+/// Matches OpenCode's detection of overloaded providers.
+fn is_overloaded_message(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("overloaded")
+        || lower.contains("too_many_requests")
+        || lower.contains("exhausted")
+        || lower.contains("capacity")
+        || lower.contains("rate limit")
+}
+
+/// Extended retryable check that returns the reason if retryable
+///
+/// Matches OpenCode's retryable() function signature.
+pub fn retryable_reason(error: &AetherError) -> Option<String> {
+    let default_policy = RetryPolicy::default();
+    if is_retryable_with_policy(error, &default_policy) {
+        Some(format!("{}", error))
+    } else {
+        None
+    }
+}
+
+/// Calculate delay for a retry attempt
+///
+/// This matches OpenCode's delay() function from retry.ts.
+/// Priority:
+/// 1. Use retry_after_ms if provided (from Retry-After-Ms header)
+/// 2. Use retry_after_secs if provided (from Retry-After header, parsed)
+/// 3. Fall back to exponential backoff
+pub fn calculate_delay(
+    attempt: u32,
+    retry_after_ms: Option<u64>,
+    has_retry_header: bool,
+) -> Duration {
+    // Check for retry-after header values
+    if let Some(ms) = retry_after_ms {
+        let max_delay = if has_retry_header {
+            RETRY_MAX_DELAY_WITH_HEADERS_MS
+        } else {
+            RETRY_MAX_DELAY_NO_HEADERS_MS
+        };
+        return Duration::from_millis(ms.min(max_delay));
+    }
+
+    // Exponential backoff: initial * factor^(attempt-1)
+    let delay_ms = (RETRY_INITIAL_DELAY_MS as f64) * RETRY_BACKOFF_FACTOR.powi((attempt - 1) as i32);
+    let capped_ms = (delay_ms as u64).min(RETRY_MAX_DELAY_NO_HEADERS_MS);
+    Duration::from_millis(capped_ms)
+}
+
+/// Parse Retry-After header value
+///
+/// The header can be either:
+/// - A number of seconds (e.g., "120")
+/// - An HTTP date (e.g., "Wed, 21 Oct 2015 07:28:00 GMT")
+///
+/// Returns the delay in milliseconds.
+pub fn parse_retry_after(value: &str) -> Option<u64> {
+    // Try parsing as seconds first
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(secs * 1000);
+    }
+
+    // Try parsing as HTTP date
+    if let Ok(date) = httpdate::parse_http_date(value) {
+        let now = std::time::SystemTime::now();
+        if let Ok(duration) = date.duration_since(now) {
+            return Some(duration.as_millis() as u64);
+        }
+    }
+
+    None
 }
 
 /// Retry a future with exponential backoff
@@ -349,5 +439,76 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(counter.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn test_is_overloaded_message() {
+        assert!(is_overloaded_message("Server is overloaded"));
+        assert!(is_overloaded_message("too_many_requests"));
+        assert!(is_overloaded_message("Rate limit exceeded"));
+        assert!(is_overloaded_message("Resource exhausted"));
+        assert!(is_overloaded_message("At capacity"));
+        assert!(!is_overloaded_message("Invalid request"));
+        assert!(!is_overloaded_message("Authentication failed"));
+    }
+
+    #[test]
+    fn test_calculate_delay() {
+        // First attempt: 2000ms
+        assert_eq!(calculate_delay(1, None, false), Duration::from_millis(2000));
+
+        // Second attempt: 4000ms
+        assert_eq!(calculate_delay(2, None, false), Duration::from_millis(4000));
+
+        // Third attempt: 8000ms
+        assert_eq!(calculate_delay(3, None, false), Duration::from_millis(8000));
+
+        // Fifth attempt: 32000ms but capped at 30000ms
+        assert_eq!(calculate_delay(5, None, false), Duration::from_millis(30000));
+    }
+
+    #[test]
+    fn test_calculate_delay_with_retry_after() {
+        // Use retry-after value
+        assert_eq!(
+            calculate_delay(1, Some(5000), false),
+            Duration::from_millis(5000)
+        );
+
+        // Cap at max when no headers
+        assert_eq!(
+            calculate_delay(1, Some(60000), false),
+            Duration::from_millis(30000)
+        );
+
+        // Allow higher values with headers
+        assert_eq!(
+            calculate_delay(1, Some(60000), true),
+            Duration::from_millis(60000)
+        );
+    }
+
+    #[test]
+    fn test_parse_retry_after() {
+        // Parse seconds
+        assert_eq!(parse_retry_after("120"), Some(120000));
+        assert_eq!(parse_retry_after("60"), Some(60000));
+        assert_eq!(parse_retry_after("0"), Some(0));
+
+        // Invalid values
+        assert!(parse_retry_after("invalid").is_none());
+        assert!(parse_retry_after("-1").is_none());
+    }
+
+    #[test]
+    fn test_retryable_reason() {
+        // Retryable
+        assert!(retryable_reason(&AetherError::network("connection failed")).is_some());
+        assert!(retryable_reason(&AetherError::Timeout { suggestion: None }).is_some());
+        assert!(retryable_reason(&AetherError::provider("500 Internal Server Error")).is_some());
+
+        // Not retryable
+        assert!(retryable_reason(&AetherError::authentication("Test", "invalid key")).is_none());
+        assert!(retryable_reason(&AetherError::invalid_config("bad config")).is_none());
     }
 }

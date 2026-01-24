@@ -64,6 +64,36 @@ pub trait LoopCallback: Send + Sync {
     async fn on_aborted(&self) {
         // Default: no-op
     }
+
+    /// Called when a doom loop is detected
+    ///
+    /// This is a more severe condition than a guard violation, indicating
+    /// that the agent is making the exact same call repeatedly.
+    /// Returns true if the user wants to continue anyway (will reset detection).
+    async fn on_doom_loop_detected(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        repeat_count: usize,
+    ) -> bool {
+        // Default: don't continue
+        let _ = (tool_name, arguments, repeat_count);
+        false
+    }
+
+    /// Called when a retry is scheduled for a failed operation
+    ///
+    /// This informs the UI that a retry will be attempted after the specified delay.
+    async fn on_retry_scheduled(&self, attempt: u32, max_retries: u32, delay_ms: u64, error: &str) {
+        // Default: no-op
+        let _ = (attempt, max_retries, delay_ms, error);
+    }
+
+    /// Called when a retryable error occurs but retries are exhausted
+    async fn on_retries_exhausted(&self, attempts: u32, error: &str) {
+        // Default: no-op
+        let _ = (attempts, error);
+    }
 }
 
 /// Blanket implementation for references to LoopCallback
@@ -111,6 +141,24 @@ impl<T: LoopCallback + ?Sized> LoopCallback for &T {
     }
     async fn on_aborted(&self) {
         (*self).on_aborted().await
+    }
+    async fn on_doom_loop_detected(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        repeat_count: usize,
+    ) -> bool {
+        (*self)
+            .on_doom_loop_detected(tool_name, arguments, repeat_count)
+            .await
+    }
+    async fn on_retry_scheduled(&self, attempt: u32, max_retries: u32, delay_ms: u64, error: &str) {
+        (*self)
+            .on_retry_scheduled(attempt, max_retries, delay_ms, error)
+            .await
+    }
+    async fn on_retries_exhausted(&self, attempts: u32, error: &str) {
+        (*self).on_retries_exhausted(attempts, error).await
     }
 }
 
@@ -232,6 +280,41 @@ impl LoopCallback for LoggingCallback {
     async fn on_failed(&self, reason: &str) {
         tracing::error!("{} Loop failed: {}", self.prefix, reason);
     }
+
+    async fn on_doom_loop_detected(
+        &self,
+        tool_name: &str,
+        _arguments: &Value,
+        repeat_count: usize,
+    ) -> bool {
+        tracing::error!(
+            "{} Doom loop detected: {} called {} times with identical arguments",
+            self.prefix,
+            tool_name,
+            repeat_count
+        );
+        false // Don't continue by default
+    }
+
+    async fn on_retry_scheduled(&self, attempt: u32, max_retries: u32, delay_ms: u64, error: &str) {
+        tracing::warn!(
+            "{} Retry scheduled: attempt {}/{}, delay {}ms, error: {}",
+            self.prefix,
+            attempt,
+            max_retries,
+            delay_ms,
+            error
+        );
+    }
+
+    async fn on_retries_exhausted(&self, attempts: u32, error: &str) {
+        tracing::error!(
+            "{} Retries exhausted after {} attempts: {}",
+            self.prefix,
+            attempts,
+            error
+        );
+    }
 }
 
 /// Callback that collects events for testing/inspection
@@ -254,6 +337,9 @@ pub enum LoopEvent {
     GuardTriggered { description: String },
     Complete { summary: String },
     Failed { reason: String },
+    DoomLoopDetected { tool_name: String, repeat_count: usize },
+    RetryScheduled { attempt: u32, max_retries: u32, delay_ms: u64, error: String },
+    RetriesExhausted { attempts: u32, error: String },
 }
 
 impl CollectingCallback {
@@ -338,6 +424,35 @@ impl LoopCallback for CollectingCallback {
     async fn on_failed(&self, reason: &str) {
         self.push(LoopEvent::Failed {
             reason: reason.to_string(),
+        });
+    }
+
+    async fn on_doom_loop_detected(
+        &self,
+        tool_name: &str,
+        _arguments: &Value,
+        repeat_count: usize,
+    ) -> bool {
+        self.push(LoopEvent::DoomLoopDetected {
+            tool_name: tool_name.to_string(),
+            repeat_count,
+        });
+        false // Don't continue
+    }
+
+    async fn on_retry_scheduled(&self, attempt: u32, max_retries: u32, delay_ms: u64, error: &str) {
+        self.push(LoopEvent::RetryScheduled {
+            attempt,
+            max_retries,
+            delay_ms,
+            error: error.to_string(),
+        });
+    }
+
+    async fn on_retries_exhausted(&self, attempts: u32, error: &str) {
+        self.push(LoopEvent::RetriesExhausted {
+            attempts,
+            error: error.to_string(),
         });
     }
 }
