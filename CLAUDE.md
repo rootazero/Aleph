@@ -25,7 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Aether** is a system-level AI middleware for macOS (native) and cross-platform (Tauri). It acts as an invisible "ether" connecting user intent with AI models through a frictionless interface.
 
-**Current Status**: Phase 9 In Progress (Agent Loop Hardening - Doom Loop, Retry, Tool Repair, Skills Discovery)
+**Current Status**: Phase 9 Complete (Agent Loop Hardening - Doom Loop, Retry, Tool Repair, Skills Discovery, Sub-Agent Synchronization)
 
 ### Core Philosophy: "Ghost" Aesthetic
 
@@ -50,6 +50,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `dispatcher/executor`: 任务执行引擎
 - `components/TaskPlanner`: Agentic Loop 中的任务规划组件
 - `agent_loop`: 核心 observe-think-act-feedback 循环
+- `agents/sub_agents`: 子代理同步执行框架 (ExecutionCoordinator, ResultCollector, SubAgentDispatcher)
 
 **没有多步骤任务支持，Aether 就不是真正的 Agent。**
 
@@ -207,6 +208,7 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **tool_output** | Output truncation (2000 lines/50KB) with file storage and 7-day cleanup |
 | **InvalidTool** | Graceful unknown tool handling with suggestions (rig_tools/invalid) |
 | **Message Flow System** | Real-time Part events for UI rendering: PartAdded/Updated/Removed via EventBus → FFI callback (ffi/agent_loop_adapter, components/callback_bridge) |
+| **Sub-Agent Sync** | Synchronous sub-agent execution with result aggregation (agents/sub_agents/coordinator, result_collector) - dispatch_sync(), dispatch_parallel_sync() |
 
 See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md), [AGENT_LOOP](./docs/AGENT_LOOP.md)
 

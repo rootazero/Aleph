@@ -251,17 +251,32 @@ This document outlines the development phases for Aether, tracking progress and 
 
 ## Phase 9: Production Hardening
 
-**Status**: ⏳ PLANNED
+**Status**: ⏳ IN PROGRESS
 
 **Goal**: Production-ready deployment and monitoring
 
-### Planned Tasks
+### Agent Loop Hardening ✅ COMPLETED
+
+- [x] **Sub-Agent Synchronization System**
+  - [x] ExecutionCoordinator - Synchronous wait with oneshot channels
+  - [x] ResultCollector - Tool call aggregation during sub-agent execution
+  - [x] SubAgentConfig - Configuration for timeouts, concurrency, TTL
+  - [x] Context Propagation - Parent context passed to sub-agents
+  - [x] dispatch_sync() / dispatch_parallel_sync() methods
+  - [x] Concurrency limiting with semaphore-based queue
+
+- [x] **Enhanced Event Types**
+  - [x] session_id tracking for ToolCallStarted/ToolCallResult/ToolCallError
+  - [x] SubAgentResult with tools_called and execution_duration_ms
+  - [x] ToolCallSummaryEvent for aggregated results
+
+### Deployment Infrastructure (Planned)
 
 - [ ] Auto-update mechanism (Sparkle for macOS)
 - [ ] Crash reporting (opt-in)
 - [ ] Performance monitoring dashboard
-- [ ] Windows implementation (C# + WinUI 3)
-- [ ] Linux implementation (Rust + GTK4)
+- [ ] Windows implementation (Tauri)
+- [ ] Linux implementation (Tauri)
 - [ ] Comprehensive error recovery
 
 ### Future Enhancements
@@ -280,7 +295,7 @@ This document outlines the development phases for Aether, tracking progress and 
 | Category | Modules |
 |----------|---------|
 | **FFI** | 15 sub-modules (processing, tools, memory, config, skills, mcp, dispatcher, etc.) |
-| **Agent** | agent/, agents/, components/ (8 modules) |
+| **Agent** | agent/, agents/ (sub_agents: coordinator, result_collector, dispatcher), components/ (8 modules) |
 | **Config** | 10 type modules + policies |
 | **AI** | generation/ (10+ providers), providers/, rig_tools/ |
 | **Memory** | Dual-layer (Raw + Facts), compression |
