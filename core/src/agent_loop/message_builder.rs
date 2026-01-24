@@ -36,6 +36,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent_loop::overflow::OverflowDetector;
 use crate::components::{
     ExecutionSession, SessionCompactor, SessionPart, ToolCallPart, ToolCallStatus,
 };
@@ -219,7 +220,8 @@ pub struct MessageBuilder {
     config: MessageBuilderConfig,
     /// Optional session compactor for filter_compacted functionality
     compactor: Option<Arc<SessionCompactor>>,
-    // Note: overflow_detector will be added in a later task (7)
+    /// Optional overflow detector for token limit warnings
+    overflow_detector: Option<Arc<OverflowDetector>>,
 }
 
 impl MessageBuilder {
@@ -228,6 +230,7 @@ impl MessageBuilder {
         Self {
             config,
             compactor: None,
+            overflow_detector: None,
         }
     }
 
@@ -239,6 +242,37 @@ impl MessageBuilder {
         Self {
             config,
             compactor: Some(compactor),
+            overflow_detector: None,
+        }
+    }
+
+    /// Create a new MessageBuilder with an overflow detector for token limit warnings
+    ///
+    /// When an overflow detector is provided, `inject_reminders` will inject
+    /// a warning when token usage exceeds 80%.
+    pub fn with_overflow_detector(
+        config: MessageBuilderConfig,
+        detector: Arc<OverflowDetector>,
+    ) -> Self {
+        Self {
+            config,
+            compactor: None,
+            overflow_detector: Some(detector),
+        }
+    }
+
+    /// Create a new MessageBuilder with both compactor and overflow detector
+    ///
+    /// This provides full functionality: compaction filtering and token limit warnings.
+    pub fn with_all(
+        config: MessageBuilderConfig,
+        compactor: Option<Arc<SessionCompactor>>,
+        detector: Option<Arc<OverflowDetector>>,
+    ) -> Self {
+        Self {
+            config,
+            compactor,
+            overflow_detector: detector,
         }
     }
 
@@ -404,9 +438,7 @@ impl MessageBuilder {
         }
 
         // Find the last user message
-        let last_user_idx = messages
-            .iter()
-            .rposition(|m| m.role == "user");
+        let last_user_idx = messages.iter().rposition(|m| m.role == "user");
 
         if let Some(idx) = last_user_idx {
             let original_content = messages[idx].content.clone();
@@ -418,6 +450,34 @@ impl MessageBuilder {
             );
 
             messages[idx].content = wrapped_content;
+        }
+
+        // Inject token limit warnings if overflow detector is configured
+        self.inject_limit_warnings(messages, session);
+    }
+
+    /// Inject token limit warning when usage is high (>=80%)
+    ///
+    /// When the overflow detector is configured and token usage exceeds 80%,
+    /// a system reminder is inserted after the last user message to warn
+    /// that the session may need to be compacted soon.
+    fn inject_limit_warnings(&self, messages: &mut Vec<Message>, session: &ExecutionSession) {
+        if let Some(ref detector) = self.overflow_detector {
+            let usage = detector.usage_percent(session);
+
+            if usage >= 80 {
+                let warning = format!(
+                    "<system-reminder>\n\
+                    Context usage is at {}%. Consider wrapping up or the session will be compacted.\n\
+                    </system-reminder>",
+                    usage
+                );
+
+                // Insert after last user message
+                if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
+                    messages.insert(idx + 1, Message::user(&warning));
+                }
+            }
         }
     }
 
@@ -453,6 +513,7 @@ impl MessageBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_loop::overflow::OverflowConfig;
     use crate::components::{
         AiResponsePart, CompactionMarker, SessionCompactor, SummaryPart, ToolCallPart,
         ToolCallStatus, UserInputPart,
@@ -923,5 +984,198 @@ mod tests {
 
         // Verify the compactor is set
         assert!(builder.compactor.is_some());
+    }
+
+    #[test]
+    fn test_inject_token_limit_warning() {
+        // Create detector with test config
+        // Test model: 10K context, 1K output, 10% reserve
+        // Usable: (10000 - 1000) * 0.9 = 8100
+        let overflow_config = OverflowConfig::for_testing();
+        let detector = Arc::new(OverflowDetector::new(overflow_config));
+
+        // Create builder with overflow detector
+        let config = MessageBuilderConfig::default()
+            .with_inject_reminders(true)
+            .with_reminder_threshold(1);
+        let builder = MessageBuilder::with_overflow_detector(config, detector);
+
+        let mut messages = vec![
+            Message::user("First message"),
+            Message::assistant("Response"),
+            Message::user("Second message"),
+        ];
+
+        // Set session.total_tokens to ~85% of usable (8100)
+        // 85% of 8100 = 6885
+        let mut session = ExecutionSession::new().with_model("test-model");
+        session.total_tokens = 6885;
+        session.iteration_count = 2; // Above reminder threshold
+
+        builder.inject_reminders(&mut messages, &session);
+
+        // Verify messages contain "Context usage" warning
+        let warning_found = messages
+            .iter()
+            .any(|m| m.content.contains("Context usage is at"));
+        assert!(warning_found, "Token limit warning should be injected");
+
+        // Verify the warning contains the approximate percentage
+        let warning_msg = messages
+            .iter()
+            .find(|m| m.content.contains("Context usage"))
+            .unwrap();
+        assert!(
+            warning_msg.content.contains("85%") || warning_msg.content.contains("84%"),
+            "Warning should show ~85% usage"
+        );
+
+        // Verify warning is inserted after last user message (at index 3)
+        // Original: [0] user, [1] assistant, [2] user (wrapped)
+        // After warning: [0] user, [1] assistant, [2] user (wrapped), [3] warning
+        assert_eq!(messages.len(), 4);
+        assert!(messages[3].content.contains("Context usage"));
+    }
+
+    #[test]
+    fn test_no_warning_below_threshold() {
+        // Create detector with test config
+        let overflow_config = OverflowConfig::for_testing();
+        let detector = Arc::new(OverflowDetector::new(overflow_config));
+
+        // Create builder with overflow detector
+        let config = MessageBuilderConfig::default()
+            .with_inject_reminders(true)
+            .with_reminder_threshold(1);
+        let builder = MessageBuilder::with_overflow_detector(config, detector);
+
+        let mut messages = vec![
+            Message::user("First message"),
+            Message::assistant("Response"),
+            Message::user("Second message"),
+        ];
+
+        // Set session.total_tokens to ~50% of usable (8100)
+        // 50% of 8100 = 4050
+        let mut session = ExecutionSession::new().with_model("test-model");
+        session.total_tokens = 4050;
+        session.iteration_count = 2; // Above reminder threshold
+
+        builder.inject_reminders(&mut messages, &session);
+
+        // Verify no warning is injected (only 3 messages)
+        let warning_found = messages
+            .iter()
+            .any(|m| m.content.contains("Context usage is at"));
+        assert!(!warning_found, "No warning should be injected when usage < 80%");
+
+        // Original messages count + wrapped reminder message should still be 3
+        assert_eq!(messages.len(), 3);
+    }
+
+    #[test]
+    fn test_with_overflow_detector_constructor() {
+        let overflow_config = OverflowConfig::for_testing();
+        let detector = Arc::new(OverflowDetector::new(overflow_config));
+        let config = MessageBuilderConfig::default();
+        let builder = MessageBuilder::with_overflow_detector(config, detector);
+
+        // Verify the overflow_detector is set
+        assert!(builder.overflow_detector.is_some());
+        // Verify compactor is not set
+        assert!(builder.compactor.is_none());
+    }
+
+    #[test]
+    fn test_with_all_constructor() {
+        let compactor = Arc::new(SessionCompactor::new());
+        let overflow_config = OverflowConfig::for_testing();
+        let detector = Arc::new(OverflowDetector::new(overflow_config));
+        let config = MessageBuilderConfig::default();
+
+        let builder = MessageBuilder::with_all(config, Some(compactor), Some(detector));
+
+        // Verify both are set
+        assert!(builder.compactor.is_some());
+        assert!(builder.overflow_detector.is_some());
+    }
+
+    #[test]
+    fn test_with_all_constructor_optional() {
+        let config = MessageBuilderConfig::default();
+
+        // Test with only compactor
+        let compactor = Arc::new(SessionCompactor::new());
+        let builder = MessageBuilder::with_all(config.clone(), Some(compactor), None);
+        assert!(builder.compactor.is_some());
+        assert!(builder.overflow_detector.is_none());
+
+        // Test with only detector
+        let overflow_config = OverflowConfig::for_testing();
+        let detector = Arc::new(OverflowDetector::new(overflow_config));
+        let builder2 = MessageBuilder::with_all(config.clone(), None, Some(detector));
+        assert!(builder2.compactor.is_none());
+        assert!(builder2.overflow_detector.is_some());
+
+        // Test with neither
+        let builder3 = MessageBuilder::with_all(config, None, None);
+        assert!(builder3.compactor.is_none());
+        assert!(builder3.overflow_detector.is_none());
+    }
+
+    #[test]
+    fn test_warning_at_exact_threshold() {
+        // Test that warning is injected at exactly 80%
+        let overflow_config = OverflowConfig::for_testing();
+        let detector = Arc::new(OverflowDetector::new(overflow_config));
+
+        let config = MessageBuilderConfig::default()
+            .with_inject_reminders(true)
+            .with_reminder_threshold(1);
+        let builder = MessageBuilder::with_overflow_detector(config, detector);
+
+        let mut messages = vec![Message::user("Test message")];
+
+        // Set session.total_tokens to exactly 80% of usable (8100)
+        // 80% of 8100 = 6480
+        let mut session = ExecutionSession::new().with_model("test-model");
+        session.total_tokens = 6480;
+        session.iteration_count = 2;
+
+        builder.inject_reminders(&mut messages, &session);
+
+        // Warning should be injected at exactly 80%
+        let warning_found = messages
+            .iter()
+            .any(|m| m.content.contains("Context usage is at"));
+        assert!(warning_found, "Warning should be injected at exactly 80%");
+    }
+
+    #[test]
+    fn test_warning_just_below_threshold() {
+        // Test that warning is NOT injected just below 80% (79%)
+        let overflow_config = OverflowConfig::for_testing();
+        let detector = Arc::new(OverflowDetector::new(overflow_config));
+
+        let config = MessageBuilderConfig::default()
+            .with_inject_reminders(true)
+            .with_reminder_threshold(1);
+        let builder = MessageBuilder::with_overflow_detector(config, detector);
+
+        let mut messages = vec![Message::user("Test message")];
+
+        // Set session.total_tokens to 79% of usable (8100)
+        // 79% of 8100 = 6399
+        let mut session = ExecutionSession::new().with_model("test-model");
+        session.total_tokens = 6399;
+        session.iteration_count = 2;
+
+        builder.inject_reminders(&mut messages, &session);
+
+        // Warning should NOT be injected below 80%
+        let warning_found = messages
+            .iter()
+            .any(|m| m.content.contains("Context usage is at"));
+        assert!(!warning_found, "Warning should NOT be injected below 80%");
     }
 }
