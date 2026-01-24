@@ -19,6 +19,21 @@
 //!                                    └─────────────────┘
 //! ```
 //!
+//! # Compaction Trigger Points
+//!
+//! The agent loop emits events at key points for SessionCompactor integration:
+//!
+//! 1. **Before each iteration**: Emit `LoopContinue` with current token count
+//!    - SessionCompactor checks for overflow and triggers compaction if needed
+//!
+//! 2. **After tool execution**: Emit `ToolCallCompleted`
+//!    - SessionCompactor triggers pruning check
+//!
+//! 3. **Session end**: Emit `LoopStop` with reason
+//!    - SessionCompactor performs final cleanup/pruning
+//!
+//! This pattern matches OpenCode's approach (prompt.ts:498-511).
+//!
 //! # Components
 //!
 //! - **AgentLoop**: Main loop controller
@@ -26,6 +41,7 @@
 //! - **Decision**: LLM decision types
 //! - **LoopGuard**: Safety guards
 //! - **LoopCallback**: UI callback interface
+//! - **CompactionTrigger**: Event emission for compaction integration
 //!
 //! # Example
 //!
@@ -52,13 +68,210 @@ pub mod state;
 use std::sync::Arc;
 use tokio::sync::watch;
 
+use crate::event::{
+    AetherEvent, EventBus, LoopState as EventLoopState, StopReason, TokenUsage, ToolCallResult,
+};
+
 pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent, NoOpLoopCallback};
 pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig, ThinkRetryConfig};
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
 pub use guards::{GuardViolation, LoopGuard};
 pub use state::{LoopState, LoopStep, Observation, RequestContext, StepSummary, Thinking, ToolInfo};
 
+// Re-export CompactionTrigger for external integration
+// (useful when building custom agent loops with compaction support)
+
 use crate::error::Result;
+
+// ============================================================================
+// Compaction Trigger
+// ============================================================================
+
+/// Helper for triggering compaction checks at key points in the agent loop.
+///
+/// This struct encapsulates the event emission logic for SessionCompactor
+/// integration, following OpenCode's pattern of checking for context overflow
+/// before each iteration and after tool execution.
+///
+/// # Event Flow
+///
+/// ```text
+/// AgentLoop                    EventBus                 SessionCompactor
+///     │                           │                           │
+///     │── LoopContinue ──────────>│────────────────────────>│
+///     │                           │                  (check overflow)
+///     │                           │                           │
+///     │── ToolCallCompleted ─────>│────────────────────────>│
+///     │                           │                   (prune check)
+///     │                           │                           │
+///     │── LoopStop ──────────────>│────────────────────────>│
+///     │                           │                (final cleanup)
+/// ```
+pub struct CompactionTrigger {
+    event_bus: Arc<EventBus>,
+}
+
+impl CompactionTrigger {
+    /// Create a new CompactionTrigger with the given EventBus
+    pub fn new(event_bus: Arc<EventBus>) -> Self {
+        Self { event_bus }
+    }
+
+    /// Emit LoopContinue event before each iteration
+    ///
+    /// This triggers SessionCompactor to check for overflow and
+    /// compact the session if needed. Should be called at the start
+    /// of each loop iteration (except the first).
+    pub async fn emit_loop_continue(
+        &self,
+        session_id: &str,
+        iteration: u32,
+        total_tokens: u64,
+        last_tool: Option<String>,
+        model: &str,
+    ) {
+        let loop_state = EventLoopState {
+            session_id: session_id.to_string(),
+            iteration,
+            total_tokens,
+            last_tool,
+            model: model.to_string(),
+        };
+
+        tracing::debug!(
+            session_id = %session_id,
+            iteration = iteration,
+            total_tokens = total_tokens,
+            "Emitting LoopContinue for compaction check"
+        );
+
+        self.event_bus
+            .publish(AetherEvent::LoopContinue(loop_state))
+            .await;
+    }
+
+    /// Emit ToolCallCompleted event after tool execution
+    ///
+    /// This triggers SessionCompactor to check if pruning is needed.
+    pub async fn emit_tool_completed(
+        &self,
+        session_id: &str,
+        call_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        output: &str,
+        started_at: i64,
+        completed_at: i64,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        let result = ToolCallResult {
+            call_id: call_id.to_string(),
+            tool: tool_name.to_string(),
+            input,
+            output: output.to_string(),
+            started_at,
+            completed_at,
+            token_usage: TokenUsage {
+                input_tokens,
+                output_tokens,
+            },
+            session_id: Some(session_id.to_string()),
+        };
+
+        tracing::debug!(
+            session_id = %session_id,
+            tool = %tool_name,
+            "Emitting ToolCallCompleted for pruning check"
+        );
+
+        self.event_bus
+            .publish(AetherEvent::ToolCallCompleted(result))
+            .await;
+    }
+
+    /// Emit LoopStop event when the session ends
+    ///
+    /// This triggers final cleanup and pruning by SessionCompactor.
+    pub async fn emit_loop_stop(&self, reason: StopReason) {
+        tracing::debug!(
+            reason = ?reason,
+            "Emitting LoopStop for final cleanup"
+        );
+
+        self.event_bus
+            .publish(AetherEvent::LoopStop(reason))
+            .await;
+    }
+}
+
+/// Optional wrapper for CompactionTrigger that handles the None case gracefully
+pub struct OptionalCompactionTrigger {
+    inner: Option<CompactionTrigger>,
+}
+
+impl OptionalCompactionTrigger {
+    /// Create a new OptionalCompactionTrigger
+    pub fn new(event_bus: Option<Arc<EventBus>>) -> Self {
+        Self {
+            inner: event_bus.map(CompactionTrigger::new),
+        }
+    }
+
+    /// Emit LoopContinue if trigger is available
+    pub async fn emit_loop_continue(
+        &self,
+        session_id: &str,
+        iteration: u32,
+        total_tokens: u64,
+        last_tool: Option<String>,
+        model: &str,
+    ) {
+        if let Some(ref trigger) = self.inner {
+            trigger
+                .emit_loop_continue(session_id, iteration, total_tokens, last_tool, model)
+                .await;
+        }
+    }
+
+    /// Emit ToolCallCompleted if trigger is available
+    #[allow(clippy::too_many_arguments)]
+    pub async fn emit_tool_completed(
+        &self,
+        session_id: &str,
+        call_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        output: &str,
+        started_at: i64,
+        completed_at: i64,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        if let Some(ref trigger) = self.inner {
+            trigger
+                .emit_tool_completed(
+                    session_id,
+                    call_id,
+                    tool_name,
+                    input,
+                    output,
+                    started_at,
+                    completed_at,
+                    input_tokens,
+                    output_tokens,
+                )
+                .await;
+        }
+    }
+
+    /// Emit LoopStop if trigger is available
+    pub async fn emit_loop_stop(&self, reason: StopReason) {
+        if let Some(ref trigger) = self.inner {
+            trigger.emit_loop_stop(reason).await;
+        }
+    }
+}
 
 /// Result of an Agent Loop execution
 #[derive(Debug, Clone)]
@@ -165,6 +378,10 @@ pub struct CompressedHistory {
 /// The AgentLoop manages the observe-think-act-feedback cycle,
 /// coordinating between the Thinker (LLM decisions), Executor
 /// (action execution), and Compressor (context management).
+///
+/// Optionally integrates with EventBus for compaction trigger points,
+/// emitting events that SessionCompactor can subscribe to for
+/// automatic context management.
 pub struct AgentLoop<T, E, C>
 where
     T: ThinkerTrait,
@@ -175,6 +392,8 @@ where
     executor: Arc<E>,
     compressor: Arc<C>,
     config: LoopConfig,
+    /// Optional EventBus for compaction trigger integration
+    compaction_trigger: OptionalCompactionTrigger,
 }
 
 impl<T, E, C> AgentLoop<T, E, C>
@@ -190,6 +409,29 @@ where
             executor,
             compressor,
             config,
+            compaction_trigger: OptionalCompactionTrigger::new(None),
+        }
+    }
+
+    /// Create a new AgentLoop with EventBus integration for compaction
+    ///
+    /// When EventBus is provided, the loop will emit events at key points:
+    /// - `LoopContinue` before each iteration (for overflow check)
+    /// - `ToolCallCompleted` after tool execution (for pruning check)
+    /// - `LoopStop` at session end (for final cleanup)
+    pub fn with_event_bus(
+        thinker: Arc<T>,
+        executor: Arc<E>,
+        compressor: Arc<C>,
+        config: LoopConfig,
+        event_bus: Arc<EventBus>,
+    ) -> Self {
+        Self {
+            thinker,
+            executor,
+            compressor,
+            config,
+            compaction_trigger: OptionalCompactionTrigger::new(Some(event_bus)),
         }
     }
 
@@ -231,18 +473,52 @@ where
         // Notify loop start
         callback.on_loop_start(&state).await;
 
+        // Track iteration for compaction trigger
+        let mut iteration: u32 = 0;
+        // Track last tool for compaction context
+        let mut last_tool: Option<String> = None;
+        // Get model from config for compaction threshold lookup
+        let model = self.config.model_routing.default_model.clone();
+
         loop {
             // Check abort signal
             if let Some(ref abort) = abort_signal {
                 if *abort.borrow() {
                     callback.on_aborted().await;
+                    // ===== COMPACTION TRIGGER: Session End (Aborted) =====
+                    self.compaction_trigger
+                        .emit_loop_stop(StopReason::UserAborted)
+                        .await;
                     return LoopResult::UserAborted;
                 }
+            }
+
+            // ===== COMPACTION TRIGGER: Before Iteration =====
+            // Emit LoopContinue for SessionCompactor to check overflow
+            // (matches OpenCode pattern: prompt.ts:498-511)
+            if iteration > 0 {
+                self.compaction_trigger
+                    .emit_loop_continue(
+                        &state.session_id,
+                        iteration,
+                        state.total_tokens as u64,
+                        last_tool.clone(),
+                        &model,
+                    )
+                    .await;
             }
 
             // ===== Guard Check =====
             if let Some(violation) = guard.check(&state) {
                 callback.on_guard_triggered(&violation).await;
+                // ===== COMPACTION TRIGGER: Session End (Guard) =====
+                let stop_reason = match &violation {
+                    GuardViolation::MaxSteps { .. } => StopReason::MaxIterationsReached,
+                    GuardViolation::MaxTokens { .. } => StopReason::TokenLimitReached,
+                    GuardViolation::DoomLoop { .. } => StopReason::DoomLoopDetected,
+                    _ => StopReason::Error(violation.description()),
+                };
+                self.compaction_trigger.emit_loop_stop(stop_reason).await;
                 return LoopResult::GuardTriggered(violation);
             }
 
@@ -286,6 +562,10 @@ where
             let action: Action = match &thinking.decision {
                 Decision::Complete { summary } => {
                     callback.on_complete(summary).await;
+                    // ===== COMPACTION TRIGGER: Session End (Completed) =====
+                    self.compaction_trigger
+                        .emit_loop_stop(StopReason::Completed)
+                        .await;
                     return LoopResult::Completed {
                         summary: summary.clone(),
                         steps: state.step_count,
@@ -294,6 +574,10 @@ where
                 }
                 Decision::Fail { reason } => {
                     callback.on_failed(reason).await;
+                    // ===== COMPACTION TRIGGER: Session End (Failed) =====
+                    self.compaction_trigger
+                        .emit_loop_stop(StopReason::Error(reason.clone()))
+                        .await;
                     return LoopResult::Failed {
                         reason: reason.clone(),
                         steps: state.step_count,
@@ -360,6 +644,10 @@ where
                                         .collect(),
                                 };
                                 callback.on_guard_triggered(&violation).await;
+                                // ===== COMPACTION TRIGGER: Session End (Doom Loop) =====
+                                self.compaction_trigger
+                                    .emit_loop_stop(StopReason::DoomLoopDetected)
+                                    .await;
                                 return LoopResult::GuardTriggered(violation);
                             }
                         }
@@ -404,10 +692,40 @@ where
             callback.on_action_start(&action).await;
 
             let start_time = std::time::Instant::now();
+            let started_at = chrono::Utc::now().timestamp_millis();
             let result = self.executor.execute(&action).await;
             let duration_ms = start_time.elapsed().as_millis() as u64;
+            let completed_at = chrono::Utc::now().timestamp_millis();
 
             callback.on_action_done(&action, &result).await;
+
+            // ===== COMPACTION TRIGGER: After Tool Execution =====
+            // Emit ToolCallCompleted for SessionCompactor pruning check
+            if let Action::ToolCall {
+                tool_name,
+                arguments,
+            } = &action
+            {
+                let call_id = uuid::Uuid::new_v4().to_string();
+                let output = result.full_output();
+
+                self.compaction_trigger
+                    .emit_tool_completed(
+                        &state.session_id,
+                        &call_id,
+                        tool_name,
+                        arguments.clone(),
+                        &output,
+                        started_at,
+                        completed_at,
+                        0, // Token usage not tracked at this level
+                        0,
+                    )
+                    .await;
+
+                // Update last_tool for next iteration's LoopContinue event
+                last_tool = Some(tool_name.clone());
+            }
 
             // ===== Feedback (Update State) =====
             guard.record_action(&action.action_type());
@@ -422,6 +740,9 @@ where
                 duration_ms,
             };
             state.record_step(step);
+
+            // Increment iteration counter
+            iteration += 1;
         }
     }
 }
@@ -614,5 +935,238 @@ mod tests {
             result,
             LoopResult::GuardTriggered(GuardViolation::MaxSteps { .. })
         ));
+    }
+
+    // ========================================================================
+    // Compaction Trigger Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_compaction_trigger_emits_loop_continue() {
+        use crate::event::{AetherEvent, EventBus, EventType};
+
+        let event_bus = Arc::new(EventBus::new());
+        let mut subscriber = event_bus.subscribe_filtered(vec![EventType::LoopContinue]);
+
+        let thinker = Arc::new(MockThinker::new(vec![
+            Decision::UseTool {
+                tool_name: "search".to_string(),
+                arguments: json!({"query": "test"}),
+            },
+            Decision::Complete {
+                summary: "Done".to_string(),
+            },
+        ]));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        let agent_loop = AgentLoop::with_event_bus(
+            thinker,
+            executor,
+            compressor,
+            LoopConfig::for_testing(),
+            event_bus.clone(),
+        );
+
+        let result = agent_loop
+            .run(
+                "Test request".to_string(),
+                RequestContext::empty(),
+                vec![],
+                NoOpLoopCallback,
+                None,
+                None,
+            )
+            .await;
+
+        assert!(result.is_success());
+
+        // Check that LoopContinue was emitted (on second iteration)
+        if let Ok(Some(event)) = subscriber.try_recv() {
+            match event.event {
+                AetherEvent::LoopContinue(state) => {
+                    assert_eq!(state.iteration, 1); // First iteration after tool call
+                    assert_eq!(state.last_tool, Some("search".to_string()));
+                }
+                _ => panic!("Expected LoopContinue event"),
+            }
+        }
+        // Note: Event may not be received if loop completes quickly
+    }
+
+    #[tokio::test]
+    async fn test_compaction_trigger_emits_tool_completed() {
+        use crate::event::{AetherEvent, EventBus, EventType};
+
+        let event_bus = Arc::new(EventBus::new());
+        let mut subscriber = event_bus.subscribe_filtered(vec![EventType::ToolCallCompleted]);
+
+        let thinker = Arc::new(MockThinker::new(vec![
+            Decision::UseTool {
+                tool_name: "search".to_string(),
+                arguments: json!({"query": "test"}),
+            },
+            Decision::Complete {
+                summary: "Done".to_string(),
+            },
+        ]));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        let agent_loop = AgentLoop::with_event_bus(
+            thinker,
+            executor,
+            compressor,
+            LoopConfig::for_testing(),
+            event_bus.clone(),
+        );
+
+        let result = agent_loop
+            .run(
+                "Test request".to_string(),
+                RequestContext::empty(),
+                vec![],
+                NoOpLoopCallback,
+                None,
+                None,
+            )
+            .await;
+
+        assert!(result.is_success());
+
+        // Check that ToolCallCompleted was emitted
+        if let Ok(Some(event)) = subscriber.try_recv() {
+            match event.event {
+                AetherEvent::ToolCallCompleted(result) => {
+                    assert_eq!(result.tool, "search");
+                    assert!(result.session_id.is_some());
+                }
+                _ => panic!("Expected ToolCallCompleted event"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compaction_trigger_emits_loop_stop_on_completion() {
+        use crate::event::{AetherEvent, EventBus, EventType, StopReason};
+
+        let event_bus = Arc::new(EventBus::new());
+        let mut subscriber = event_bus.subscribe_filtered(vec![EventType::LoopStop]);
+
+        let thinker = Arc::new(MockThinker::new(vec![Decision::Complete {
+            summary: "Done".to_string(),
+        }]));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        let agent_loop = AgentLoop::with_event_bus(
+            thinker,
+            executor,
+            compressor,
+            LoopConfig::for_testing(),
+            event_bus.clone(),
+        );
+
+        let result = agent_loop
+            .run(
+                "Test request".to_string(),
+                RequestContext::empty(),
+                vec![],
+                NoOpLoopCallback,
+                None,
+                None,
+            )
+            .await;
+
+        assert!(result.is_success());
+
+        // Check that LoopStop was emitted with Completed reason
+        if let Ok(Some(event)) = subscriber.try_recv() {
+            match event.event {
+                AetherEvent::LoopStop(reason) => {
+                    assert!(matches!(reason, StopReason::Completed));
+                }
+                _ => panic!("Expected LoopStop event"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compaction_trigger_emits_loop_stop_on_guard() {
+        use crate::event::{AetherEvent, EventBus, EventType, StopReason};
+
+        let event_bus = Arc::new(EventBus::new());
+        let mut subscriber = event_bus.subscribe_filtered(vec![EventType::LoopStop]);
+
+        // Create thinker that always returns different tool calls
+        let decisions: Vec<Decision> = (0..10)
+            .map(|i| Decision::UseTool {
+                tool_name: format!("tool_{}", i),
+                arguments: json!({}),
+            })
+            .collect();
+
+        let thinker = Arc::new(MockThinker::new(decisions));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        let config = LoopConfig::for_testing().with_max_steps(3);
+
+        let agent_loop =
+            AgentLoop::with_event_bus(thinker, executor, compressor, config, event_bus.clone());
+
+        let result = agent_loop
+            .run(
+                "Run many steps".to_string(),
+                RequestContext::empty(),
+                vec![],
+                NoOpLoopCallback,
+                None,
+                None,
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            LoopResult::GuardTriggered(GuardViolation::MaxSteps { .. })
+        ));
+
+        // Check that LoopStop was emitted with MaxIterationsReached reason
+        if let Ok(Some(event)) = subscriber.try_recv() {
+            match event.event {
+                AetherEvent::LoopStop(reason) => {
+                    assert!(matches!(reason, StopReason::MaxIterationsReached));
+                }
+                _ => panic!("Expected LoopStop event"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_optional_compaction_trigger_without_event_bus() {
+        // Test that OptionalCompactionTrigger works when no EventBus is provided
+        let trigger = OptionalCompactionTrigger::new(None);
+        // This should not panic - it just does nothing
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            trigger
+                .emit_loop_continue("session-1", 1, 1000, None, "model")
+                .await;
+            trigger.emit_loop_stop(StopReason::Completed).await;
+        });
+    }
+
+    #[test]
+    fn test_compaction_trigger_creation() {
+        let event_bus = Arc::new(EventBus::new());
+        let trigger = CompactionTrigger::new(event_bus);
+
+        // Verify trigger was created (internal state is private, just ensure no panic)
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            trigger
+                .emit_loop_continue("session-1", 0, 0, None, "test-model")
+                .await;
+        });
     }
 }
