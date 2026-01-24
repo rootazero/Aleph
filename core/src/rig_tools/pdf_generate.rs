@@ -129,10 +129,10 @@ Features:\n\
 - Configurable page size (A4, Letter, A3, or custom)\n\
 - Adjustable font size, line spacing, and margins\n\n\
 PATH RESOLUTION:\n\
-- Relative paths (e.g., \"article.pdf\") → saved to ~/.config/aether/output/\n\
+- Relative paths (e.g., \"article.pdf\") → saved to ~/.aether/output/\n\
 - Home paths (e.g., \"~/Desktop/doc.pdf\") → expanded to user's home directory\n\
 - Absolute paths (e.g., \"/Users/name/doc.pdf\") → used as-is\n\n\
-DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs. They will be saved to the default output directory (~/.config/aether/output/), which is always writable.\n\n\
+DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs. They will be saved to the default output directory (~/.aether/output/), which is always writable.\n\n\
 Examples:\n\
 - Simple: {\"content\": \"Hello World\", \"output_path\": \"hello.pdf\"}\n\
 - With title: {\"content\": \"Document content\", \"output_path\": \"doc.pdf\", \"title\": \"My Document\"}\n\
@@ -498,7 +498,7 @@ Examples:\n\
         // Path resolution rules:
         // 1. Absolute paths (starting with `/`) - used as-is
         // 2. Home paths (starting with `~`) - expanded to home directory
-        // 3. Relative paths - resolved to output directory (~/.config/aether/output/)
+        // 3. Relative paths - resolved to output directory (~/.aether/output/)
         let output_path = if args.output_path.starts_with('/') {
             PathBuf::from(&args.output_path)
         } else if args.output_path.starts_with('~') {
@@ -647,7 +647,7 @@ Features:\n\
 - Configurable page size (A4, Letter, A3, or custom)\n\
 - Adjustable font size, line spacing, and margins\n\n\
 PATH RESOLUTION:\n\
-- Relative paths (e.g., \"article.pdf\") → saved to ~/.config/aether/output/\n\
+- Relative paths (e.g., \"article.pdf\") → saved to ~/.aether/output/\n\
 - Home paths (e.g., \"~/Desktop/doc.pdf\") → expanded to user's home directory\n\
 - Absolute paths (e.g., \"/Users/name/doc.pdf\") → used as-is\n\n\
 DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs.";

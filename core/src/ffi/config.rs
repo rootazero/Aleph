@@ -25,7 +25,7 @@ impl AetherCore {
 
         // Load config from stored path (same logic as init_core)
         let full_config = if self.config_path.is_empty() {
-            // Use default path (~/.config/aether/config.toml)
+            // Use default path (~/.aether/config.toml)
             Config::load().map_err(|e| AetherFfiError::Config(e.to_string()))?
         } else {
             let path = Path::new(&self.config_path);

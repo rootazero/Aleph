@@ -9,7 +9,7 @@
 //! Phase 4: Added memory configuration support.
 //! Phase 5: Added AI provider configuration support.
 //! Phase 6: Added Keychain integration and file watching support.
-//! Phase 8: Added config file loading from ~/.config/aether/config.toml
+//! Phase 8: Added config file loading from ~/.aether/config.toml
 
 use crate::error::{AetherError, Result};
 use serde::{Deserialize, Serialize};
@@ -238,7 +238,7 @@ impl Config {
     /// Get the default config path using unified directory
     ///
     /// Returns unified path for all platforms:
-    /// - All platforms: ~/.config/aether/config.toml
+    /// - All platforms: ~/.aether/config.toml
     pub fn default_path() -> PathBuf {
         crate::utils::paths::get_config_dir()
             .map(|d| d.join("config.toml"))
@@ -373,7 +373,7 @@ impl Config {
         Ok(config)
     }
 
-    /// Load configuration from default path (~/.config/aether/config.toml)
+    /// Load configuration from default path (~/.aether/config.toml)
     /// Falls back to default config if file doesn't exist
     ///
     /// # Returns
@@ -1040,7 +1040,7 @@ impl Config {
 
     /// Save configuration to default path with atomic write
     ///
-    /// This is a convenience method that saves to ~/.config/aether/config.toml
+    /// This is a convenience method that saves to ~/.aether/config.toml
     /// using atomic write operation.
     ///
     /// # Example

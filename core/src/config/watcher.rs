@@ -1,6 +1,6 @@
 /// Config file watcher for hot-reload support
 ///
-/// This module watches the config file (~/.config/aether/config.toml) for external changes
+/// This module watches the config file (~/.aether/config.toml) for external changes
 /// and triggers a callback when modifications are detected. Uses macOS FSEvents for efficient
 /// file system monitoring with debouncing to avoid duplicate events.
 ///

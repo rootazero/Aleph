@@ -213,10 +213,9 @@ impl PluginRegistry {
 
 /// Get the default state file path
 pub fn default_state_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("aether")
-        .join("plugins.json")
+    crate::utils::paths::get_config_dir()
+        .map(|p| p.join("plugins.json"))
+        .unwrap_or_else(|_| PathBuf::from(".").join("aether").join("plugins.json"))
 }
 
 #[cfg(test)]

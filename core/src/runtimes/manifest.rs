@@ -1,7 +1,7 @@
 //! Manifest for runtime metadata persistence
 //!
 //! Stores installation timestamps, versions, and update check times
-//! in `~/.config/aether/runtimes/manifest.json`.
+//! in `~/.aether/runtimes/manifest.json`.
 
 use crate::error::{AetherError, Result};
 use serde::{Deserialize, Serialize};

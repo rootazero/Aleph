@@ -15,7 +15,7 @@ namespace aether {
 
   // SKILLS MODULE MANAGEMENT (add-skills-capability)
 
-  // Get the skills directory path (~/.config/aether/skills)
+  // Get the skills directory path (~/.aether/skills)
   [Throws=AetherException]
   string get_skills_dir_string();
 

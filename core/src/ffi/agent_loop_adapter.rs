@@ -859,7 +859,7 @@ mod tests {
         assert_eq!(truncate_path("/tmp/test.txt", 50), "/tmp/test.txt");
 
         // Long path should be truncated
-        let long_path = "/Users/user/.config/aether/output/E75F2A21-50DE-4FB2-8B6B-13E59CFBD90B/chapter-1/triples.json";
+        let long_path = "/Users/user/.aether/output/E75F2A21-50DE-4FB2-8B6B-13E59CFBD90B/chapter-1/triples.json";
         let truncated = truncate_path(long_path, 40);
         assert!(truncated.len() <= 40);
         assert!(truncated.contains("..."));

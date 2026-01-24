@@ -19,7 +19,7 @@ static mut _GUARD: Option<tracing_appender::non_blocking::WorkerGuard> = None;
 /// This function sets up:
 /// - Console output with PII scrubbing
 /// - File output with daily rotation and PII scrubbing
-/// - Log directory: `~/.config/aether/logs/`
+/// - Log directory: `~/.aether/logs/`
 /// - Log files: `aether-YYYY-MM-DD.log`
 /// - Environment-based filtering (RUST_LOG)
 /// - Automatic cleanup of old log files
@@ -76,7 +76,7 @@ pub fn init_file_logging_with_retention(
 fn setup_logging(
     retention_days: u32,
 ) -> Result<tracing_appender::non_blocking::WorkerGuard, Box<dyn std::error::Error>> {
-    // Get log directory: ~/.config/aether/logs/ (unified across all platforms)
+    // Get log directory: ~/.aether/logs/ (unified across all platforms)
     let log_dir = get_log_directory()?;
 
     // Create log directory if it doesn't exist
@@ -141,7 +141,7 @@ fn setup_logging(
 
 /// Get the log directory path
 ///
-/// Returns `~/.config/aether/logs/` on all platforms (unified path).
+/// Returns `~/.aether/logs/` on all platforms (unified path).
 /// Uses the same base directory as other Aether data for consistency.
 pub fn get_log_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let config_dir = get_config_dir().map_err(|e| e.to_string())?;

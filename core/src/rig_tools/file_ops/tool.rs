@@ -43,11 +43,11 @@ impl FileOpsTool {
 - organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Others)
 
 PATH RESOLUTION:
-- Relative paths (e.g., "output.pdf", "images/photo.jpg") → resolved to ~/.config/aether/output/
+- Relative paths (e.g., "output.pdf", "images/photo.jpg") → resolved to ~/.aether/output/
 - Home paths (e.g., "~/Desktop/file.txt") → expanded to user's home directory
 - Absolute paths (e.g., "/Users/name/file.txt") → used as-is
 
-DEFAULT OUTPUT: When generating files (PDFs, images, translations), use relative paths like "article.pdf" or "translated.txt". They will be saved to the default output directory (~/.config/aether/output/), which is always writable.
+DEFAULT OUTPUT: When generating files (PDFs, images, translations), use relative paths like "article.pdf" or "translated.txt". They will be saved to the default output directory (~/.aether/output/), which is always writable.
 
 IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead of multiple 'move' calls!"#;
 

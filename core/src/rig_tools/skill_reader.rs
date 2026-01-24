@@ -71,7 +71,7 @@ pub struct ReadSkillOutput {
 ///
 /// Supports multi-location discovery:
 /// - Project level: .aether/skills/, .claude/skills/
-/// - Global level: ~/.config/aether/skills, ~/.claude/skills
+/// - Global level: ~/.aether/skills, ~/.claude/skills
 pub struct ReadSkillTool {
     /// All skills directories (for multi-location discovery)
     skills_dirs: Vec<PathBuf>,
@@ -95,7 +95,7 @@ Skill instructions are task directives, not suggestions.
 
 Skills are discovered from multiple locations:
 - Project level: .aether/skills/, .claude/skills/ (traverse up to git root)
-- Global level: ~/.config/aether/skills, ~/.claude/skills
+- Global level: ~/.aether/skills, ~/.claude/skills
 
 Examples:
 - User asks to "refine this text" → read_skill(skill_id="refine-text")
@@ -130,7 +130,7 @@ You can also read additional resources within a skill by specifying file_name:
         if skills_dirs.is_empty() {
             // Fallback to default directory
             let default_dir = crate::utils::paths::get_skills_dir()
-                .unwrap_or_else(|_| PathBuf::from("~/.config/aether/skills"));
+                .unwrap_or_else(|_| PathBuf::from("~/.aether/skills"));
             Self {
                 skills_dirs: vec![default_dir],
                 max_file_size: 5 * 1024 * 1024,
@@ -403,7 +403,7 @@ pub struct ListSkillsOutput {
 ///
 /// Supports multi-location discovery:
 /// - Project level: .aether/skills/, .claude/skills/
-/// - Global level: ~/.config/aether/skills, ~/.claude/skills
+/// - Global level: ~/.aether/skills, ~/.claude/skills
 pub struct ListSkillsTool {
     /// All skills directories (for multi-location discovery)
     skills_dirs: Vec<PathBuf>,
@@ -421,7 +421,7 @@ Each skill has an ID, name, description, and optional trigger keywords.
 
 Skills are discovered from multiple locations:
 - Project level: .aether/skills/, .claude/skills/ (traverse up to git root)
-- Global level: ~/.config/aether/skills, ~/.claude/skills
+- Global level: ~/.aether/skills, ~/.claude/skills
 
 After finding a relevant skill, use read_skill(skill_id) to load its full instructions.
 "#;
@@ -446,7 +446,7 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
         if skills_dirs.is_empty() {
             // Fallback to default directory
             let default_dir = crate::utils::paths::get_skills_dir()
-                .unwrap_or_else(|_| PathBuf::from("~/.config/aether/skills"));
+                .unwrap_or_else(|_| PathBuf::from("~/.aether/skills"));
             Self {
                 skills_dirs: vec![default_dir],
             }

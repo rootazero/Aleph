@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime};
 /// use std::path::Path;
 /// use aethecore::logging::retention::cleanup_old_logs;
 ///
-/// let log_dir = Path::new("/Users/user/.config/aether/logs");
+/// let log_dir = Path::new("/Users/user/.aether/logs");
 /// let deleted = cleanup_old_logs(log_dir, 7).unwrap();
 /// println!("Deleted {} old log files", deleted);
 /// ```

@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_substitute_variables() {
-        let plugin_root = Path::new("/home/user/.config/aether/plugins/my-plugin");
+        let plugin_root = Path::new("/home/user/.aether/plugins/my-plugin");
 
         let result = substitute_variables(
             "${CLAUDE_PLUGIN_ROOT}/scripts/format.sh $FILE $ARGUMENTS",
@@ -241,7 +241,7 @@ mod tests {
 
         assert_eq!(
             result,
-            "/home/user/.config/aether/plugins/my-plugin/scripts/format.sh /tmp/test.rs --check"
+            "/home/user/.aether/plugins/my-plugin/scripts/format.sh /tmp/test.rs --check"
         );
     }
 

@@ -3,7 +3,6 @@
 /// This module provides local embedding inference for semantic similarity search
 /// using the bge-small-zh-v1.5 model optimized for Chinese text.
 use crate::error::AetherError;
-use crate::utils::paths::get_home_dir;
 use fastembed::{EmbeddingModel as FastEmbedModel, InitOptions, TextEmbedding};
 use once_cell::sync::OnceCell;
 use std::path::PathBuf;
@@ -38,20 +37,14 @@ impl EmbeddingModel {
 
     /// Get default model directory path
     ///
-    /// Returns the path to fastembed cache directory: ~/.config/aether/models/fastembed
+    /// Returns the path to fastembed cache directory: ~/.aether/models/fastembed
     /// This is where model files will be downloaded and cached.
     ///
     /// Cross-platform support:
-    /// - Unix: ~/.config/aether/models/fastembed
-    /// - Windows: %USERPROFILE%\.config\aether\models\fastembed
+    /// - Unix: ~/.aether/models/fastembed
+    /// - Windows: %USERPROFILE%\.aether\models\fastembed
     pub fn get_default_model_path() -> Result<PathBuf, AetherError> {
-        let home_dir = get_home_dir()?;
-
-        Ok(home_dir
-            .join(".config")
-            .join("aether")
-            .join("models")
-            .join("fastembed"))
+        Ok(crate::utils::paths::get_models_dir()?.join("fastembed"))
     }
 
     /// Get the fastembed cache directory
@@ -160,7 +153,8 @@ mod tests {
     #[test]
     fn test_get_default_model_path() {
         let path = EmbeddingModel::get_default_model_path().unwrap();
-        assert!(path.to_string_lossy().contains(".config/aether/models"));
+        assert!(path.to_string_lossy().contains(".aether"));
+        assert!(path.to_string_lossy().contains("models"));
         assert!(path.to_string_lossy().contains("fastembed"));
     }
 

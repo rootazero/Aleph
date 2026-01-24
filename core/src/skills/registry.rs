@@ -7,7 +7,7 @@
 //!
 //! Skills are discovered from multiple locations in priority order:
 //! 1. Project level: `.aether/skills/`, `.claude/skills/` (traverse up to git root)
-//! 2. User level: `~/.config/aether/skills`, `~/.claude/skills`
+//! 2. User level: `~/.aether/skills`, `~/.claude/skills`
 //!
 //! ## Progressive Disclosure
 //!
@@ -57,7 +57,7 @@ pub struct SkillMetadata {
 pub enum SkillSource {
     /// Project-level skill (.aether/skills or .claude/skills)
     Project,
-    /// Global user-level skill (~/.config/aether/skills or ~/.claude/skills)
+    /// Global user-level skill (~/.aether/skills or ~/.claude/skills)
     Global,
 }
 
@@ -99,7 +99,7 @@ impl SkillsRegistry {
     ///
     /// Automatically discovers skills from:
     /// - Project level: .aether/skills/, .claude/skills/
-    /// - Global level: ~/.config/aether/skills, ~/.claude/skills
+    /// - Global level: ~/.aether/skills, ~/.claude/skills
     ///
     /// # Arguments
     ///
@@ -109,7 +109,7 @@ impl SkillsRegistry {
 
         // Use first directory as primary (for backwards compatibility)
         let skills_dir = skills_dirs.first().cloned().unwrap_or_else(|| {
-            crate::utils::paths::get_skills_dir().unwrap_or_else(|_| PathBuf::from("~/.config/aether/skills"))
+            crate::utils::paths::get_skills_dir().unwrap_or_else(|_| PathBuf::from("~/.aether/skills"))
         });
 
         Ok(Self {

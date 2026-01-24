@@ -158,7 +158,7 @@ mod tests {
         // Test that relative paths resolve to the output directory correctly
         let tool = FileOpsTool::new();
 
-        // "test_subdir" should resolve to ~/.config/aether/output/test_subdir
+        // "test_subdir" should resolve to ~/.aether/output/test_subdir
         let args = FileOpsArgs {
             operation: FileOperation::Mkdir,
             path: "test_mkdir_relative_subdir".to_string(),
@@ -213,7 +213,7 @@ mod tests {
         let tool = FileOpsTool::new();
 
         // Test that output subdirectories are allowed
-        // Relative paths like "chapter-1" should resolve to ~/.config/aether/output/chapter-1
+        // Relative paths like "chapter-1" should resolve to ~/.aether/output/chapter-1
         let result = tool.check_path(std::path::Path::new("chapter-1"));
         assert!(
             result.is_ok(),

@@ -551,7 +551,7 @@ pub use crate::event_handler::MockEventHandler;
 ///
 /// # Log Files
 ///
-/// - Location: `~/.config/aether/logs/`
+/// - Location: `~/.aether/logs/`
 /// - Format: `aether-YYYY-MM-DD.log`
 /// - Rotation: Daily
 /// - Privacy: All PII automatically scrubbed

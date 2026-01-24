@@ -4,10 +4,10 @@
 //! Aether configuration and data directories.
 //!
 //! Cross-platform support:
-//! - All platforms: Uses ~/.config/aether/ (unified path)
+//! - All platforms: Uses ~/.aether/ (unified path)
 //!
-//! Note: This was changed from platform-specific paths (like ~/Library/Application Support
-//! on macOS) to a unified path for consistency across all platforms.
+//! Note: This was changed from ~/.config/aether/ to ~/.aether/ for better
+//! Windows compatibility (avoids nested .config directory).
 //!
 //! Fallback for home directory:
 //! - Unix: Uses $HOME environment variable
@@ -52,20 +52,20 @@ pub fn get_home_dir() -> Result<PathBuf> {
 /// Get the Aether configuration directory in a cross-platform way
 ///
 /// Uses a unified path across all platforms for consistency:
-/// - All platforms: ~/.config/aether/
+/// - All platforms: ~/.aether/
 ///
 /// This ensures that configuration, memory database, skills, and other
 /// data are stored in a consistent location regardless of the operating system.
 ///
 /// # Returns
-/// * `Result<PathBuf>` - Path to config directory (~/.config/aether/)
+/// * `Result<PathBuf>` - Path to config directory (~/.aether/)
 ///
 /// # Errors
 /// Returns error if home directory cannot be determined
 pub fn get_config_dir() -> Result<PathBuf> {
-    // Use unified path ~/.config/aether/ across all platforms
+    // Use unified path ~/.aether/ across all platforms
     let home_dir = get_home_dir()?;
-    Ok(home_dir.join(".config").join("aether"))
+    Ok(home_dir.join(".aether"))
 }
 
 /// Get the path for the config.toml file
@@ -78,11 +78,11 @@ pub fn get_config_file_path() -> Result<PathBuf> {
 /// Get the cache directory in a cross-platform way
 ///
 /// Uses a unified path across all platforms for consistency:
-/// - All platforms: ~/.config/aether/cache/
+/// - All platforms: ~/.aether/cache/
 ///
 /// This keeps all Aether data under the same root directory.
 pub fn get_cache_dir() -> Result<PathBuf> {
-    // Use unified path ~/.config/aether/cache/ across all platforms
+    // Use unified path ~/.aether/cache/ across all platforms
     Ok(get_config_dir()?.join("cache"))
 }
 
@@ -213,7 +213,7 @@ pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
 ///    - `.claude/skills/` - Claude Code compatibility
 ///
 /// 2. **User level** (global):
-///    - `~/.config/aether/skills` - Aether native
+///    - `~/.aether/skills` - Aether native
 ///    - `~/.claude/skills` - Claude Code compatibility
 ///
 /// # Arguments
@@ -274,8 +274,8 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
 
     // 2. User level: global directories
     if let Ok(home) = get_home_dir() {
-        // ~/.config/aether/skills
-        let global_aether = home.join(".config").join("aether").join("skills");
+        // ~/.aether/skills
+        let global_aether = home.join(".aether").join("skills");
         if global_aether.is_dir() && !dirs.contains(&global_aether) {
             dirs.push(global_aether);
         }

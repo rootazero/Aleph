@@ -175,7 +175,7 @@ impl PluginManager {
     pub fn ensure_directories(&self) -> PluginResult<()> {
         let plugins_dir = self.scanner.plugins_dir();
 
-        // Get the parent config directory (e.g., ~/.config/aether/)
+        // Get the parent config directory (e.g., ~/.aether/)
         let config_dir = plugins_dir
             .parent()
             .ok_or_else(|| PluginError::DirectoryNotFound(plugins_dir.to_path_buf()))?;

@@ -524,7 +524,7 @@ impl AetherCore {
 ///
 /// # Config Loading Behavior
 ///
-/// - If `config_path` is empty: Load from default path (~/.config/aether/config.toml)
+/// - If `config_path` is empty: Load from default path (~/.aether/config.toml)
 /// - If `config_path` is provided and file exists: Load from that path
 /// - If `config_path` is provided but file doesn't exist: Use defaults with info log
 /// - If config file exists but has parse errors: Return `AetherFfiError::Config`
@@ -558,7 +558,7 @@ pub fn init_core(
 
     // Load config from file
     let full_config = if config_path.is_empty() {
-        // Use default path (~/.config/aether/config.toml)
+        // Use default path (~/.aether/config.toml)
         Config::load().map_err(|e| AetherFfiError::Config(e.to_string()))?
     } else {
         let path = Path::new(&config_path);
@@ -650,7 +650,7 @@ pub fn init_core(
 
     // Set up memory store path if memory is enabled
     // Wrapped in Arc<RwLock> to support dynamic enable/disable of memory feature
-    // Uses unified path: ~/.config/aether/memory.db (cross-platform)
+    // Uses unified path: ~/.aether/memory.db (cross-platform)
     let memory_path = Arc::new(RwLock::new(if full_config.memory.enabled {
         match get_memory_db_path() {
             Ok(db_path) => {

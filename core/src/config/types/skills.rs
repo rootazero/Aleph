@@ -51,7 +51,7 @@ impl SkillsConfig {
     /// Get the full path to the skills directory (cross-platform)
     ///
     /// If skills_dir is relative, it's relative to the unified config directory:
-    /// - All platforms: ~/.config/aether/
+    /// - All platforms: ~/.aether/
     ///
     /// If absolute, use as-is
     pub fn get_skills_dir_path(&self) -> std::path::PathBuf {

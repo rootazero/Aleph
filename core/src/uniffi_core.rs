@@ -21,7 +21,7 @@
 //! use aethecore::uniffi_core::{AetherCore, init_core};
 //!
 //! let handler = Box::new(MyHandler::new());
-//! let core = init_core("~/.config/aether/config.toml", handler)?;
+//! let core = init_core("~/.aether/config.toml", handler)?;
 //!
 //! core.process("Hello, world!".to_string(), None)?;
 //! ```

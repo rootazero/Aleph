@@ -1,6 +1,6 @@
 # Configuration Schema
 
-This document describes Aether's configuration schema stored in `~/.config/aether/config.toml`.
+This document describes Aether's configuration schema stored in `~/.aether/config.toml`.
 
 ## Complete Configuration Example
 

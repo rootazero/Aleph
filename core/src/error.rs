@@ -221,7 +221,7 @@ impl AetherError {
         AetherError::ConfigError {
             message: msg.into(),
             suggestion: Some(
-                "Check your configuration file at ~/.config/aether/config.toml".to_string(),
+                "Check your configuration file at ~/.aether/config.toml".to_string(),
             ),
         }
     }
@@ -270,8 +270,7 @@ impl AetherError {
         AetherError::InvalidConfig {
             message: msg.into(),
             suggestion: Some(
-                "Edit your configuration in Settings or check ~/.config/aether/config.toml"
-                    .to_string(),
+                "Edit your configuration in Settings or check ~/.aether/config.toml".to_string(),
             ),
         }
     }

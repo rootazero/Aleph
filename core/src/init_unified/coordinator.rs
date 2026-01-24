@@ -277,7 +277,7 @@ impl InitializationCoordinator {
         }
 
         // Get our custom cache directory (same as EmbeddingModel uses at runtime)
-        // This ensures consistency: ~/.config/aether/models/fastembed/
+        // This ensures consistency: ~/.aether/models/fastembed/
         let cache_dir = AetherEmbeddingModel::get_default_model_path().map_err(|e| {
             InitError::new(
                 "embedding_model",

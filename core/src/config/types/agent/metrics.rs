@@ -22,7 +22,7 @@ use crate::dispatcher::model_router::ScoringConfig;
 /// buffer_size = 10000
 /// aggregation_interval_secs = 60
 /// flush_interval_secs = 300
-/// db_path = "~/.config/aether/metrics.db"
+/// db_path = "~/.aether/metrics.db"
 /// exploration_rate = 0.05
 ///
 /// [cowork.model_routing.metrics.windows]

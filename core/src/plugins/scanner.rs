@@ -134,10 +134,9 @@ pub fn is_valid_plugin_dir(path: &Path) -> bool {
 
 /// Get the default plugins directory
 pub fn default_plugins_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("aether")
-        .join("plugins")
+    crate::utils::paths::get_config_dir()
+        .map(|p| p.join("plugins"))
+        .unwrap_or_else(|_| PathBuf::from(".").join("aether").join("plugins"))
 }
 
 #[cfg(test)]

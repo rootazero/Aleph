@@ -5,7 +5,7 @@
 // - Builtin commands (from config.toml rules with ^/ prefix)
 // - MCP tools (dynamic, from connected MCP servers)
 // - User prompts (from config.toml rules)
-// - Skills (from ~/.config/aether/skills/)
+// - Skills (from ~/.aether/skills/)
 //
 // The command tree is exposed via UniFFI for Swift UI rendering.
 

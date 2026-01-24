@@ -167,7 +167,7 @@ pub fn check_embedding_model_exists() -> bool {
 /// Check if first-time initialization is needed
 ///
 /// Returns true if any of the following conditions are met:
-/// - Config directory (~/.config/aether) doesn't exist
+/// - Config directory (~/.aether) doesn't exist
 /// - config.toml doesn't exist
 /// - runtimes/manifest.json doesn't exist
 ///

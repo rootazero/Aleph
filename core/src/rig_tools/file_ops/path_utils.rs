@@ -53,7 +53,7 @@ pub fn get_denied_paths() -> Vec<String> {
 /// Path resolution rules:
 /// 1. Absolute paths (starting with `/`) - used as-is
 /// 2. Home paths (starting with `~`) - expanded to home directory
-/// 3. Relative paths - resolved relative to output directory (~/.config/aether/output/)
+/// 3. Relative paths - resolved relative to output directory (~/.aether/output/)
 pub fn check_and_resolve_path(path: &Path, denied_paths: &[String]) -> Result<PathBuf, ToolError> {
     info!(path = %path.display(), "check_path: input path");
 
@@ -66,7 +66,7 @@ pub fn check_and_resolve_path(path: &Path, denied_paths: &[String]) -> Result<Pa
     } else if path.is_relative() {
         // Relative paths are resolved to:
         // 1. Current working directory (if set by session/topic)
-        // 2. Default output directory (~/.config/aether/output/)
+        // 2. Default output directory (~/.aether/output/)
         let base_dir = if let Some(wd) = get_working_dir() {
             info!(working_dir = %wd.display(), "check_path: using session working directory");
             wd
