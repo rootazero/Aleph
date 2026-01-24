@@ -35,11 +35,13 @@
 //! ```
 
 pub mod context_stats;
+pub mod smart_strategy;
 pub mod strategy;
 
 use std::sync::Arc;
 
 pub use context_stats::{CompressionFocus, ContextStats, UsageBreakdown, WarningLevel};
+pub use smart_strategy::{CompactionAction, SmartCompactionStrategy};
 pub use strategy::{CompressionPrompt, KeyInfo, KeyInfoExtractor, RuleBasedStrategy};
 
 use crate::agent_loop::{CompressionConfig, CompressedHistory, CompressorTrait, LoopState, LoopStep};
