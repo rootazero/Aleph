@@ -973,13 +973,113 @@ The FFI layer provides the bridge between Rust core and platform UI (Swift/Tauri
 
 | Module | Purpose |
 |--------|---------|
-| `agent_loop_adapter.rs` | FfiLoopCallback for agent loop events |
+| `agent_loop_adapter.rs` | FfiLoopCallback for agent loop events and Part publishing |
 | `tool_discovery.rs` | Smart tool filtering and category inference |
 | `dag_executor.rs` | DAG task execution for generation tasks |
 | `prompt_helpers.rs` | Prompt building utilities |
 | `provider_factory.rs` | AI provider creation from config |
 | `processing.rs` | Request processing pipeline |
 | `config.rs` | FFI configuration handling |
+| `mod.rs` | FFI types including Part event structures |
+
+### Message Flow System
+
+**Status**: ✅ Implemented (2026-01-24)
+
+The Message Flow System enables Claude Code-style real-time UI updates for tool calls, streaming responses, and sub-agent progress.
+
+#### Architecture
+
+```
+Agent Loop                          FFI Layer                    Platform UI
+    │                                   │                            │
+    ├─ on_action_start() ──────────────▶│ PartAdded event           │
+    │                                   ├───────────────────────────▶│ Tool call starts
+    │                                   │                            │
+    ├─ on_thinking_stream() ───────────▶│ PartUpdated event (delta) │
+    │                                   ├───────────────────────────▶│ Streaming text
+    │                                   │                            │
+    ├─ on_action_done() ───────────────▶│ PartUpdated event         │
+    │                                   ├───────────────────────────▶│ Tool call completes
+    │                                   │                            │
+```
+
+#### Part Event Types
+
+**Location**: `core/src/components/types.rs`
+
+```rust
+pub enum PartEventType {
+    Added,    // New part created
+    Updated,  // Part state changed (status, delta, etc.)
+    Removed,  // Part removed
+}
+
+pub struct PartUpdateData {
+    pub session_id: String,
+    pub part_id: String,
+    pub part_type: String,    // "tool_call", "ai_response", etc.
+    pub event_type: PartEventType,
+    pub part_json: String,    // Full part state as JSON
+    pub delta: Option<String>, // Incremental text for streaming
+    pub timestamp: i64,
+}
+```
+
+#### FFI Callback
+
+**Location**: `core/src/ffi/mod.rs`
+
+```rust
+pub trait AetherEventHandler: Send + Sync {
+    // ... existing callbacks ...
+
+    /// Part update callback for real-time UI rendering
+    fn on_part_update(&self, event: PartUpdateEventFfi);
+}
+
+pub struct PartUpdateEventFfi {
+    pub session_id: String,
+    pub part_id: String,
+    pub part_type: String,
+    pub event_type: PartEventTypeFfi,
+    pub part_json: String,
+    pub delta: Option<String>,
+    pub timestamp: i64,
+}
+```
+
+#### Event Publishing
+
+Part events are published via EventBus and forwarded through CallbackBridge:
+
+1. **FfiLoopCallback** (`ffi/agent_loop_adapter.rs`) tracks active tool calls and publishes:
+   - `PartAdded` when tool call starts
+   - `PartUpdated` when tool call completes or streaming text arrives
+
+2. **CallbackBridge** (`components/callback_bridge.rs`) subscribes to Part events and converts them to FFI format
+
+3. **Platform UI** receives `on_part_update` callback and updates the message flow display
+
+#### Swift UI Integration
+
+**Location**: `platforms/macos/Aether/Sources/`
+
+| File | Purpose |
+|------|---------|
+| `MultiTurn/Models/PartModels.swift` | Swift models for Parts |
+| `MultiTurn/Views/ToolCallPartView.swift` | Collapsible tool call UI |
+| `EventHandler.swift` | `onPartUpdate` callback implementation |
+| `MultiTurn/UnifiedConversationViewModel.swift` | Part state management |
+
+**Part Status Flow**:
+```
+Pending → Running → Completed/Failed/Aborted
+```
+
+**UI Display Styles**:
+- **Collapsed**: One-line summary (e.g., "search completed (150ms)")
+- **Expanded**: Full input/output details with syntax highlighting
 
 ### tool_discovery.rs
 

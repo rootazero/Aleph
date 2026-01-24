@@ -125,6 +125,52 @@ pub trait AgentLoopCallback: Send + Sync {
 }
 ```
 
+### 4. Part Event Publishing (`ffi/agent_loop_adapter.rs`)
+
+The `FfiLoopCallback` publishes Part events for real-time UI rendering:
+
+```rust
+pub struct FfiLoopCallback {
+    handler: Arc<dyn AetherEventHandler>,
+    bus: Arc<EventBus>,
+    session_id: RwLock<String>,
+    active_tool_calls: RwLock<HashMap<String, ToolCallPart>>,
+}
+```
+
+**Part Event Flow**:
+
+```
+on_action_start()
+    │
+    ├─ Create ToolCallPart { id, tool_name, status: Running }
+    ├─ Store in active_tool_calls map
+    └─ Publish PartAdded event via EventBus
+           │
+           ▼
+on_action_done()
+    │
+    ├─ Update ToolCallPart { status: Completed/Failed, output }
+    ├─ Remove from active_tool_calls map
+    └─ Publish PartUpdated event via EventBus
+           │
+           ▼
+CallbackBridge.handle()
+    │
+    ├─ Convert to PartUpdateEventFfi
+    └─ Call handler.on_part_update(event)
+```
+
+**Event Types**:
+| Event | Trigger | Part Content |
+|-------|---------|--------------|
+| `PartAdded` | Tool call starts | ToolCallPart with `Running` status |
+| `PartUpdated` | Tool call completes | ToolCallPart with `Completed/Failed` status |
+| `PartUpdated` | Streaming delta | Delta text content |
+| `PartRemoved` | Part cleanup | Part ID only |
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md#message-flow-system) for complete message flow documentation.
+
 ---
 
 ## Tool Execution

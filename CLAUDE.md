@@ -206,6 +206,7 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **Skill Reader Tools** | Progressive Disclosure for skills with multi-location discovery (rig_tools/skill_reader) |
 | **tool_output** | Output truncation (2000 lines/50KB) with file storage and 7-day cleanup |
 | **InvalidTool** | Graceful unknown tool handling with suggestions (rig_tools/invalid) |
+| **Message Flow System** | Real-time Part events for UI rendering: PartAdded/Updated/Removed via EventBus → FFI callback (ffi/agent_loop_adapter, components/callback_bridge) |
 
 See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md), [AGENT_LOOP](./docs/AGENT_LOOP.md)
 
