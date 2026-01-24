@@ -33,8 +33,10 @@
 //! let tokens = provider.finish_authorization(&metadata, "client_id", &code, &state).await?;
 //! ```
 
+mod callback;
 mod provider;
 mod storage;
 
+pub use callback::{CallbackResult, CallbackServer, DEFAULT_CALLBACK_PORT, DEFAULT_CALLBACK_TIMEOUT};
 pub use provider::{AuthorizationRequest, OAuthProvider, OAuthServerMetadata};
 pub use storage::{ClientInfo, OAuthEntry, OAuthStorage, OAuthTokens};
