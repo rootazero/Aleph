@@ -151,8 +151,26 @@ aether/
 │       ├── logging/                   # Structured logging
 │       │   ├── mod.rs, file_logging.rs, pii_layer.rs
 │       │
-│       ├── mcp/                       # Model Context Protocol
-│       │   ├── mod.rs, types.rs, service.rs, manager.rs
+│       ├── mcp/                       # Model Context Protocol (Enhanced)
+│       │   ├── mod.rs                 # Module exports
+│       │   ├── client.rs              # McpClient, McpClientBuilder
+│       │   ├── types.rs               # MCP protocol types
+│       │   ├── notifications.rs       # McpNotificationRouter, McpEvent
+│       │   ├── prompts.rs             # McpPromptManager
+│       │   ├── resources.rs           # McpResourceManager
+│       │   ├── jsonrpc/               # JSON-RPC 2.0 protocol
+│       │   ├── external/              # Server connection management
+│       │   │   ├── connection.rs      # McpServerConnection
+│       │   │   └── runtime.rs         # Runtime detection
+│       │   ├── transport/             # Transport abstraction layer
+│       │   │   ├── traits.rs          # McpTransport trait
+│       │   │   ├── stdio.rs           # StdioTransport (local)
+│       │   │   ├── http.rs            # HttpTransport (remote)
+│       │   │   └── sse.rs             # SseTransport (bidirectional)
+│       │   └── auth/                  # OAuth 2.0 authentication
+│       │       ├── storage.rs         # OAuthStorage, OAuthTokens
+│       │       ├── provider.rs        # OAuthProvider (PKCE)
+│       │       └── callback.rs        # CallbackServer
 │       │
 │       ├── memory/                    # Dual-layer memory system
 │       │   ├── mod.rs, database.rs, context.rs, embedding.rs

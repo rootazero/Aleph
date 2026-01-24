@@ -199,7 +199,7 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **Dual-Layer Memory** | Raw history + AI-extracted facts |
 | **Cowork** | DAG task orchestration with model routing |
 | **Runtime Managers** | Auto-install uv, fnm, yt-dlp, ffmpeg |
-| **MCP** | Model Context Protocol (stdio transport) - ✅ Implemented |
+| **MCP** | Model Context Protocol - ✅ Full implementation with stdio/HTTP/SSE transports, OAuth 2.0 auth, resources, prompts, notifications |
 | **event** | Type-safe event bus for event-driven architecture |
 | **plugins** | Claude Code compatible plugin system |
 | **init_unified** | Unified initialization coordinator |

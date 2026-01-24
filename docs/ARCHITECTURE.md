@@ -18,7 +18,7 @@ This document describes the internal architecture of Aether's Rust core, particu
 Aether's core uses a **structured payload-based architecture** that replaces simple string concatenation with a rich, type-safe data flow system. This enables:
 
 - **Intelligent routing** based on user intent and context
-- **Dynamic capability execution** (Memory ✅, Search ✅, MCP tools 🔮)
+- **Dynamic capability execution** (Memory ✅, Search ✅, MCP tools ✅)
 - **Flexible context formatting** (Markdown, XML, JSON)
 - **Transparent memory augmentation** (local RAG)
 - **Web search integration** with 6 providers and fallback mechanism
@@ -50,7 +50,7 @@ User Input
 [CapabilityExecutor]
     ├─→ [Memory] ──────→ Vector DB
     ├─→ [Search] ──────→ SearchRegistry → Providers (Tavily/SearXNG/Google/Bing/Brave/Exa)
-    └─→ [MCP] ─────────→ (Future)
+    └─→ [MCP] ─────────→ MCP Servers (Local/Remote)
     ↓
 [AgentPayload + Context]
     ↓
@@ -99,7 +99,7 @@ executor.execute_all(&mut payload)?;
 // Execution sequence (sorted by Capability::Memory(0) < Search(1) < Mcp(2)):
 // 1. Memory: Retrieve similar conversations from vector DB
 // 2. Search: Execute web search via SearchRegistry (Tavily/SearXNG/Google/Bing/Brave/Exa)
-// 3. MCP: (Reserved) Tool/resource calls
+// 3. MCP: Tool/resource calls via MCP servers
 ```
 
 ### 4. Context Assembly Phase
@@ -194,10 +194,7 @@ pub async fn execute_all(&self, mut payload: AgentPayload) -> Result<AgentPayloa
         payload = match capability {
             Capability::Memory => self.execute_memory(payload).await?,
             Capability::Search => self.execute_search(payload).await?,
-            Capability::Mcp => {
-                warn!("MCP not implemented");
-                payload
-            },
+            Capability::Mcp => self.execute_mcp(payload).await?,
         }
     }
     Ok(payload)
@@ -874,30 +871,79 @@ pub struct SearchResult {
 
 ### MCP Integration
 
-**Status**: ✅ Implemented
+**Status**: ✅ Fully Implemented (Enhanced 2026-01-24)
 
 **Location**: `core/src/mcp/`
 
 **Implementation Details**:
-- **Transport**: stdio-based communication with MCP servers
-- **Client**: `McpClient` for JSON-RPC 2.0 protocol
-- **Server management**: Start/stop/restart MCP servers
+- **Transport Abstraction**: `McpTransport` trait with multiple implementations
+  - `StdioTransport` - Local servers via subprocess stdio
+  - `HttpTransport` - Remote servers via HTTP POST
+  - `SseTransport` - Remote servers via HTTP + Server-Sent Events
+- **Client**: `McpClient` for JSON-RPC 2.0 protocol with remote server support
+- **Server management**: Start/stop/restart both local and remote MCP servers
 - **Tool discovery**: Automatic tool registration from MCP servers
-- **Hot reload**: MCP tools available immediately after server start
+- **Resource management**: `McpResourceManager` for files, data, content
+- **Prompt templates**: `McpPromptManager` for reusable prompts
+- **Notifications**: `McpNotificationRouter` for server events
+- **OAuth 2.0 Authentication**: Complete auth flow for remote servers
+  - PKCE (Proof Key for Code Exchange) support
+  - Dynamic Client Registration (RFC 7591)
+  - Secure credential storage with Unix permissions
+  - Token refresh and expiration handling
+  - Lightweight HTTP callback server for authorization codes
 
 **Architecture**:
-- `mcp/client.rs` - McpClient for JSON-RPC communication
-- `mcp/transport/stdio.rs` - StdioTransport for process I/O
-- `mcp/types.rs` - MCP protocol types
-- `mcp/service.rs` - MCP service management
-- `mcp/manager.rs` - MCP server lifecycle
+```
+mcp/
+├── mod.rs                    # Module exports
+├── client.rs                 # McpClient, McpClientBuilder
+├── types.rs                  # MCP protocol types, configs
+├── notifications.rs          # McpNotificationRouter, McpEvent
+├── prompts.rs                # McpPromptManager
+├── resources.rs              # McpResourceManager
+├── jsonrpc/                  # JSON-RPC 2.0 protocol
+├── external/                 # Server connection management
+│   ├── connection.rs         # McpServerConnection
+│   └── runtime.rs            # Runtime detection (node, python, bun)
+├── transport/                # Transport layer
+│   ├── traits.rs             # McpTransport trait
+│   ├── stdio.rs              # StdioTransport (local)
+│   ├── http.rs               # HttpTransport (remote)
+│   └── sse.rs                # SseTransport (bidirectional)
+└── auth/                     # OAuth authentication
+    ├── storage.rs            # OAuthStorage, OAuthTokens
+    ├── provider.rs           # OAuthProvider (PKCE flow)
+    └── callback.rs           # CallbackServer
+```
 
-**Data Structure**:
+**Key Types**:
 ```rust
-pub struct McpResource {
-    pub tool_name: String,
-    pub parameters: serde_json::Value,
-    pub result: String,
+// Transport trait for different connection methods
+#[async_trait]
+pub trait McpTransport: Send + Sync {
+    async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse>;
+    async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()>;
+    async fn is_alive(&self) -> bool;
+    async fn close(&self) -> Result<()>;
+    fn server_name(&self) -> &str;
+}
+
+// Remote server configuration
+pub struct McpRemoteServerConfig {
+    pub name: String,
+    pub url: String,
+    pub headers: HashMap<String, String>,
+    pub transport: TransportPreference,  // Auto, Http, Sse
+    pub timeout_seconds: Option<u64>,
+}
+
+// OAuth tokens for authenticated servers
+pub struct OAuthTokens {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<i64>,
+    pub scope: Option<String>,
 }
 ```
 
