@@ -63,6 +63,7 @@ pub mod callback;
 pub mod config;
 pub mod decision;
 pub mod guards;
+pub mod message_builder;
 pub mod session_sync;
 pub mod state;
 
@@ -77,6 +78,7 @@ pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent,
 pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig, ThinkRetryConfig};
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
 pub use guards::{GuardViolation, LoopGuard};
+pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCall};
 pub use session_sync::SessionSync;
 pub use state::{LoopState, LoopStep, Observation, RequestContext, StepSummary, Thinking, ToolInfo};
 
