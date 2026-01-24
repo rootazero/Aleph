@@ -38,6 +38,27 @@ use crate::agent_loop::{Action, ActionExecutor, ActionResult};
 use crate::dispatcher::UnifiedTool;
 use crate::error::{AetherError, Result};
 
+/// Normalize tool name by extracting base tool name from various formats
+///
+/// LLMs sometimes return tool names with operation suffixes like:
+/// - "file_ops:mkdir" -> "file_ops"
+/// - "file_ops.write" -> "file_ops"
+/// - "file_ops:write:extra" -> "file_ops"
+///
+/// This function extracts the base tool name for registry lookup.
+fn normalize_tool_name(tool_name: &str) -> String {
+    // Check for colon separator (e.g., "file_ops:mkdir")
+    if let Some(pos) = tool_name.find(':') {
+        return tool_name[..pos].to_string();
+    }
+    // Check for dot separator (e.g., "file_ops.write")
+    if let Some(pos) = tool_name.find('.') {
+        return tool_name[..pos].to_string();
+    }
+    // No separator found, return as-is
+    tool_name.to_string()
+}
+
 /// Configuration for single-step executor
 #[derive(Debug, Clone)]
 pub struct SingleStepConfig {
@@ -98,21 +119,29 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
     /// Execute a tool call
     async fn execute_tool_call(&self, tool_name: &str, arguments: Value) -> ActionResult {
         let start = Instant::now();
-        debug!(tool = tool_name, "Executing tool call");
 
-        // Check if tool exists
-        if self.tool_registry.get_tool(tool_name).is_none() {
+        // Normalize tool name: extract base tool name from formats like "file_ops:mkdir" or "file_ops.write"
+        // LLMs sometimes return tool names with operation suffix, but we need the base tool name
+        let normalized_tool_name = normalize_tool_name(tool_name);
+        debug!(
+            original_tool = tool_name,
+            normalized_tool = %normalized_tool_name,
+            "Executing tool call"
+        );
+
+        // Check if tool exists using normalized name
+        if self.tool_registry.get_tool(&normalized_tool_name).is_none() {
             return ActionResult::ToolError {
                 error: format!("Tool not found: {}", tool_name),
                 retryable: false,
             };
         }
 
-        // Execute with timeout
+        // Execute with timeout using normalized tool name
         let timeout = tokio::time::Duration::from_secs(self.config.timeout_seconds);
         let result = tokio::time::timeout(
             timeout,
-            self.tool_registry.execute_tool(tool_name, arguments),
+            self.tool_registry.execute_tool(&normalized_tool_name, arguments),
         )
         .await;
 
@@ -318,5 +347,45 @@ mod tests {
         let result = executor.execute(&action).await;
 
         assert!(matches!(result, ActionResult::UserResponse { .. }));
+    }
+
+    #[test]
+    fn test_normalize_tool_name() {
+        // Test colon separator (e.g., "file_ops:mkdir")
+        assert_eq!(normalize_tool_name("file_ops:mkdir"), "file_ops");
+        assert_eq!(normalize_tool_name("file_ops:write"), "file_ops");
+        assert_eq!(normalize_tool_name("search:query"), "search");
+
+        // Test multiple colons (e.g., "file_ops:mkdir:extra")
+        assert_eq!(normalize_tool_name("file_ops:mkdir:extra"), "file_ops");
+
+        // Test dot separator (e.g., "file_ops.write")
+        assert_eq!(normalize_tool_name("file_ops.write"), "file_ops");
+
+        // Test no separator - should return as-is
+        assert_eq!(normalize_tool_name("file_ops"), "file_ops");
+        assert_eq!(normalize_tool_name("search"), "search");
+        assert_eq!(normalize_tool_name("generate_image"), "generate_image");
+    }
+
+    #[tokio::test]
+    async fn test_tool_execution_with_suffixed_name() {
+        // Test that "file_ops:mkdir" correctly executes the "file_ops" tool
+        let mut registry = MockToolRegistry::new();
+        registry.add_tool(create_test_tool("file_ops"));
+        registry.set_result("file_ops", json!({"operation": "mkdir", "success": true}));
+
+        let executor = SingleStepExecutor::new(Arc::new(registry));
+
+        // LLM returns tool name with suffix "file_ops:mkdir"
+        let action = Action::ToolCall {
+            tool_name: "file_ops:mkdir".to_string(),
+            arguments: json!({"operation": "mkdir", "path": "/tmp/test"}),
+        };
+
+        let result = executor.execute(&action).await;
+
+        // Should succeed because "file_ops:mkdir" is normalized to "file_ops"
+        assert!(matches!(result, ActionResult::ToolSuccess { .. }), "Expected ToolSuccess, got {:?}", result);
     }
 }

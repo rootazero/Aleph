@@ -77,8 +77,12 @@ impl PromptBuilder {
         // Runtime capabilities (injected if available)
         if let Some(ref runtimes) = self.config.runtime_capabilities {
             prompt.push_str("## Available Runtimes\n\n");
+            prompt.push_str("You can execute code using these installed runtimes:\n\n");
             prompt.push_str(runtimes);
-            prompt.push('\n');
+            prompt.push_str("\n**IMPORTANT**: Runtimes are NOT tools. They describe execution environments.\n");
+            prompt.push_str("- To execute Python code, use the `file_ops` tool to write a .py script, then use `bash` tool to run it\n");
+            prompt.push_str("- To execute Node.js code, use the `file_ops` tool to write a .js script, then use `bash` tool to run it\n");
+            prompt.push_str("- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n\n");
         }
 
         // Available tools (with full schema)
