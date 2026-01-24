@@ -633,6 +633,34 @@ impl SessionCompactor {
                 SessionPart::SystemReminder(r) => {
                     context_parts.push(format!("[System Reminder]: {}", r.content));
                 }
+                // Step boundaries provide execution tracking context
+                SessionPart::StepStart(s) => {
+                    context_parts.push(format!("[Step Start]: step {} at {}", s.step_id, s.timestamp));
+                }
+                SessionPart::StepFinish(s) => {
+                    context_parts.push(format!("[Step Finish]: step {} - {:?} ({}ms)",
+                        s.step_id, s.reason, s.duration_ms));
+                }
+                // Snapshots and patches are metadata for session revert
+                SessionPart::Snapshot(s) => {
+                    context_parts.push(format!("[Snapshot]: {} ({} files)",
+                        s.snapshot_id, s.files.len()));
+                }
+                SessionPart::Patch(p) => {
+                    context_parts.push(format!("[Patch]: {} based on {} ({} changes)",
+                        p.patch_id, p.base_snapshot_id, p.changes.len()));
+                }
+                // Streaming text is for UI, include final content if complete
+                SessionPart::StreamingText(t) => {
+                    if t.is_complete && !t.content.is_empty() {
+                        let preview = if t.content.len() > 200 {
+                            format!("{}...", &t.content[..200])
+                        } else {
+                            t.content.clone()
+                        };
+                        context_parts.push(format!("[Streaming]: {}", preview));
+                    }
+                }
             }
         }
 
@@ -822,6 +850,32 @@ impl SessionCompactor {
                 SessionPart::Summary(summary) => TokenTracker::estimate_tokens(&summary.content),
                 SessionPart::CompactionMarker(_) => 0, // Markers don't consume tokens
                 SessionPart::SystemReminder(reminder) => TokenTracker::estimate_tokens(&reminder.content),
+                // Step boundaries are minimal metadata, estimate fixed overhead
+                SessionPart::StepStart(_) => 10,
+                SessionPart::StepFinish(_) => 15,
+                // Snapshots list file paths and hashes
+                SessionPart::Snapshot(s) => {
+                    let mut tokens = TokenTracker::estimate_tokens(&s.snapshot_id);
+                    for file in &s.files {
+                        tokens += TokenTracker::estimate_tokens(&file.path);
+                        tokens += TokenTracker::estimate_tokens(&file.hash);
+                    }
+                    tokens
+                }
+                // Patches list changes
+                SessionPart::Patch(p) => {
+                    let mut tokens = TokenTracker::estimate_tokens(&p.patch_id);
+                    tokens += TokenTracker::estimate_tokens(&p.base_snapshot_id);
+                    for change in &p.changes {
+                        tokens += TokenTracker::estimate_tokens(&change.path);
+                        if let Some(ref hash) = change.content_hash {
+                            tokens += TokenTracker::estimate_tokens(hash);
+                        }
+                    }
+                    tokens
+                }
+                // Streaming text contains the full content
+                SessionPart::StreamingText(t) => TokenTracker::estimate_tokens(&t.content),
             };
         }
 
@@ -902,10 +956,7 @@ impl SessionCompactor {
     /// * `session` - The execution session to mark
     /// * `auto` - Whether this is automatic (true) or user-triggered (false)
     pub fn insert_compaction_marker(&self, session: &mut ExecutionSession, auto: bool) {
-        let marker = CompactionMarker {
-            timestamp: chrono::Utc::now().timestamp(),
-            auto,
-        };
+        let marker = CompactionMarker::new(auto);
         session.parts.push(SessionPart::CompactionMarker(marker));
     }
 
@@ -2408,10 +2459,7 @@ mod tests {
         }));
 
         // Add compaction marker
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 2000,
-            auto: true,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(2000, true)));
 
         // Add summary
         session.parts.push(SessionPart::Summary(SummaryPart {
@@ -2469,10 +2517,7 @@ mod tests {
         }));
 
         // Add compaction marker
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 2000,
-            auto: true,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(2000, true)));
 
         // Add incomplete summary (compacted_at = 0)
         session.parts.push(SessionPart::Summary(SummaryPart {
@@ -2509,10 +2554,7 @@ mod tests {
             context: None,
             timestamp: 1000,
         }));
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 2000,
-            auto: true,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(2000, true)));
         session.parts.push(SessionPart::Summary(SummaryPart {
             content: "First summary".to_string(),
             original_count: 3,
@@ -2525,10 +2567,7 @@ mod tests {
             context: None,
             timestamp: 3000,
         }));
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 4000,
-            auto: false,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(4000, false)));
         session.parts.push(SessionPart::Summary(SummaryPart {
             content: "Second summary".to_string(),
             original_count: 5,
@@ -2577,10 +2616,7 @@ mod tests {
         }));
 
         // Add compaction marker
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 2000,
-            auto: true,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(2000, true)));
 
         // Add summary
         session.parts.push(SessionPart::Summary(SummaryPart {
@@ -2652,10 +2688,7 @@ mod tests {
         }));
 
         // Compaction
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 2000,
-            auto: true,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(2000, true)));
         session.parts.push(SessionPart::Summary(SummaryPart {
             content: "Summary".to_string(),
             original_count: 1,
@@ -2702,10 +2735,7 @@ mod tests {
     fn test_compaction_marker_type_name() {
         use crate::components::types::CompactionMarker;
 
-        let marker = SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 1000,
-            auto: true,
-        });
+        let marker = SessionPart::CompactionMarker(CompactionMarker::with_timestamp(1000, true));
 
         assert_eq!(marker.type_name(), "compaction_marker");
     }
@@ -2717,10 +2747,7 @@ mod tests {
         let compactor = SessionCompactor::new();
         let mut session = ExecutionSession::new();
 
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 1000,
-            auto: true,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(1000, true)));
 
         let context = compactor.build_summary_context(&session);
 
@@ -2736,10 +2763,7 @@ mod tests {
         let compactor = SessionCompactor::new();
         let mut session = ExecutionSession::new();
 
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 2000,
-            auto: false,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(2000, false)));
 
         let context = compactor.build_summary_context(&session);
 
@@ -2755,10 +2779,7 @@ mod tests {
         let mut session = ExecutionSession::new();
 
         // Add a compaction marker
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 1000,
-            auto: true,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(1000, true)));
 
         // Add some actual content for comparison
         session.parts.push(SessionPart::UserInput(UserInputPart {

@@ -147,6 +147,16 @@ pub enum SessionPart {
     CompactionMarker(CompactionMarker),
     /// System reminder for context injection (aligns with OpenCode's <system-reminder>)
     SystemReminder(SystemReminderPart),
+    /// Step boundary - start
+    StepStart(StepStartPart),
+    /// Step boundary - finish
+    StepFinish(StepFinishPart),
+    /// Filesystem snapshot
+    Snapshot(SnapshotPart),
+    /// File change record
+    Patch(PatchPart),
+    /// Incremental streaming text
+    StreamingText(StreamingTextPart),
 }
 
 impl SessionPart {
@@ -161,6 +171,11 @@ impl SessionPart {
             SessionPart::Summary(_) => "summary",
             SessionPart::CompactionMarker(_) => "compaction_marker",
             SessionPart::SystemReminder(_) => "system_reminder",
+            SessionPart::StepStart(_) => "step_start",
+            SessionPart::StepFinish(_) => "step_finish",
+            SessionPart::Snapshot(_) => "snapshot",
+            SessionPart::Patch(_) => "patch",
+            SessionPart::StreamingText(_) => "streaming_text",
         }
     }
 }
@@ -239,6 +254,384 @@ pub struct CompactionMarker {
     pub timestamp: i64,
     /// Whether this was automatic or user-triggered
     pub auto: bool,
+    /// Unique marker identifier (optional for backward compatibility)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_id: Option<String>,
+    /// Number of parts that were compacted (optional for backward compatibility)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts_compacted: Option<usize>,
+    /// Number of tokens freed by compaction (optional for backward compatibility)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_freed: Option<u64>,
+}
+
+impl CompactionMarker {
+    /// Create a new basic compaction marker
+    pub fn new(auto: bool) -> Self {
+        Self {
+            timestamp: chrono::Utc::now().timestamp(),
+            auto,
+            marker_id: None,
+            parts_compacted: None,
+            tokens_freed: None,
+        }
+    }
+
+    /// Create a basic compaction marker with explicit timestamp
+    pub fn with_timestamp(timestamp: i64, auto: bool) -> Self {
+        Self {
+            timestamp,
+            auto,
+            marker_id: None,
+            parts_compacted: None,
+            tokens_freed: None,
+        }
+    }
+
+    /// Create a detailed compaction marker with full metadata
+    pub fn with_details(
+        auto: bool,
+        marker_id: String,
+        parts_compacted: usize,
+        tokens_freed: u64,
+    ) -> Self {
+        Self {
+            timestamp: chrono::Utc::now().timestamp(),
+            auto,
+            marker_id: Some(marker_id),
+            parts_compacted: Some(parts_compacted),
+            tokens_freed: Some(tokens_freed),
+        }
+    }
+}
+
+// =============================================================================
+// Step Boundary Types (for execution tracking)
+// =============================================================================
+
+/// Step start marker - marks the beginning of an agent loop step
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepStartPart {
+    /// Step number in the current session
+    pub step_id: usize,
+    /// When the step started
+    pub timestamp: i64,
+    /// Associated file snapshot ID (for revert capability)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+}
+
+impl StepStartPart {
+    /// Create a new step start marker
+    pub fn new(step_id: usize) -> Self {
+        Self {
+            step_id,
+            timestamp: chrono::Utc::now().timestamp(),
+            snapshot_id: None,
+        }
+    }
+
+    /// Create with associated snapshot
+    pub fn with_snapshot(step_id: usize, snapshot_id: String) -> Self {
+        Self {
+            step_id,
+            timestamp: chrono::Utc::now().timestamp(),
+            snapshot_id: Some(snapshot_id),
+        }
+    }
+}
+
+/// Reason why a step finished
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StepFinishReason {
+    /// Step completed successfully
+    Completed,
+    /// Step failed with an error
+    Failed,
+    /// User aborted the step
+    UserAborted,
+    /// Tool execution error
+    ToolError,
+    /// Maximum steps limit reached
+    MaxStepsReached,
+}
+
+impl Default for StepFinishReason {
+    fn default() -> Self {
+        Self::Completed
+    }
+}
+
+/// Token usage for a step (re-exported from event types or defined locally)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StepTokenUsage {
+    /// Input tokens consumed
+    pub input_tokens: u64,
+    /// Output tokens generated
+    pub output_tokens: u64,
+}
+
+impl StepTokenUsage {
+    /// Create new token usage
+    pub fn new(input_tokens: u64, output_tokens: u64) -> Self {
+        Self {
+            input_tokens,
+            output_tokens,
+        }
+    }
+
+    /// Total tokens used
+    pub fn total(&self) -> u64 {
+        self.input_tokens + self.output_tokens
+    }
+}
+
+/// Step finish marker - marks the end of an agent loop step
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepFinishPart {
+    /// Step number that finished
+    pub step_id: usize,
+    /// Reason for finishing
+    pub reason: StepFinishReason,
+    /// Token usage for this step (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<StepTokenUsage>,
+    /// Duration of the step in milliseconds
+    pub duration_ms: u64,
+}
+
+impl StepFinishPart {
+    /// Create a new step finish marker
+    pub fn new(step_id: usize, reason: StepFinishReason, duration_ms: u64) -> Self {
+        Self {
+            step_id,
+            reason,
+            tokens: None,
+            duration_ms,
+        }
+    }
+
+    /// Create with token usage
+    pub fn with_tokens(
+        step_id: usize,
+        reason: StepFinishReason,
+        duration_ms: u64,
+        tokens: StepTokenUsage,
+    ) -> Self {
+        Self {
+            step_id,
+            reason,
+            tokens: Some(tokens),
+            duration_ms,
+        }
+    }
+}
+
+// =============================================================================
+// Filesystem Snapshot Types (for session revert capability)
+// =============================================================================
+
+/// Individual file snapshot entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSnapshot {
+    /// File path (relative or absolute)
+    pub path: String,
+    /// Content hash (SHA256 or similar)
+    pub hash: String,
+}
+
+impl FileSnapshot {
+    /// Create a new file snapshot entry
+    pub fn new(path: impl Into<String>, hash: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            hash: hash.into(),
+        }
+    }
+}
+
+/// Filesystem snapshot - captures file state at a point in time
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotPart {
+    /// Unique snapshot identifier
+    pub snapshot_id: String,
+    /// List of files with their hashes
+    pub files: Vec<FileSnapshot>,
+    /// When the snapshot was taken
+    pub timestamp: i64,
+}
+
+impl SnapshotPart {
+    /// Create a new empty snapshot
+    pub fn new(snapshot_id: impl Into<String>) -> Self {
+        Self {
+            snapshot_id: snapshot_id.into(),
+            files: Vec::new(),
+            timestamp: chrono::Utc::now().timestamp(),
+        }
+    }
+
+    /// Create with files
+    pub fn with_files(snapshot_id: impl Into<String>, files: Vec<FileSnapshot>) -> Self {
+        Self {
+            snapshot_id: snapshot_id.into(),
+            files,
+            timestamp: chrono::Utc::now().timestamp(),
+        }
+    }
+
+    /// Add a file to the snapshot
+    pub fn add_file(&mut self, path: impl Into<String>, hash: impl Into<String>) {
+        self.files.push(FileSnapshot::new(path, hash));
+    }
+}
+
+// =============================================================================
+// File Change Types (for patches between snapshots)
+// =============================================================================
+
+/// Type of file change
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum FileChangeType {
+    /// File was added
+    Added,
+    /// File was modified
+    Modified,
+    /// File was deleted
+    Deleted,
+}
+
+/// Individual file change record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileChange {
+    /// File path
+    pub path: String,
+    /// Type of change
+    pub change_type: FileChangeType,
+    /// New content hash (for Added/Modified), None for Deleted
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+}
+
+impl FileChange {
+    /// Create a new file added change
+    pub fn added(path: impl Into<String>, hash: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            change_type: FileChangeType::Added,
+            content_hash: Some(hash.into()),
+        }
+    }
+
+    /// Create a new file modified change
+    pub fn modified(path: impl Into<String>, hash: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            change_type: FileChangeType::Modified,
+            content_hash: Some(hash.into()),
+        }
+    }
+
+    /// Create a new file deleted change
+    pub fn deleted(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            change_type: FileChangeType::Deleted,
+            content_hash: None,
+        }
+    }
+}
+
+/// Patch part - records file changes between snapshots
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchPart {
+    /// Unique patch identifier
+    pub patch_id: String,
+    /// Base snapshot this patch applies to
+    pub base_snapshot_id: String,
+    /// List of file changes
+    pub changes: Vec<FileChange>,
+}
+
+impl PatchPart {
+    /// Create a new empty patch
+    pub fn new(patch_id: impl Into<String>, base_snapshot_id: impl Into<String>) -> Self {
+        Self {
+            patch_id: patch_id.into(),
+            base_snapshot_id: base_snapshot_id.into(),
+            changes: Vec::new(),
+        }
+    }
+
+    /// Create with changes
+    pub fn with_changes(
+        patch_id: impl Into<String>,
+        base_snapshot_id: impl Into<String>,
+        changes: Vec<FileChange>,
+    ) -> Self {
+        Self {
+            patch_id: patch_id.into(),
+            base_snapshot_id: base_snapshot_id.into(),
+            changes,
+        }
+    }
+
+    /// Add a change to the patch
+    pub fn add_change(&mut self, change: FileChange) {
+        self.changes.push(change);
+    }
+}
+
+// =============================================================================
+// Streaming Text Type (for incremental UI updates)
+// =============================================================================
+
+/// Streaming text part - supports incremental text updates
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamingTextPart {
+    /// Unique part identifier
+    pub part_id: String,
+    /// Current full content
+    pub content: String,
+    /// Whether streaming has completed
+    pub is_complete: bool,
+    /// Incremental content delta (for event push)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<String>,
+}
+
+impl StreamingTextPart {
+    /// Create a new streaming text part
+    pub fn new(part_id: impl Into<String>) -> Self {
+        Self {
+            part_id: part_id.into(),
+            content: String::new(),
+            is_complete: false,
+            delta: None,
+        }
+    }
+
+    /// Create with initial content
+    pub fn with_content(part_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            part_id: part_id.into(),
+            content: content.into(),
+            is_complete: false,
+            delta: None,
+        }
+    }
+
+    /// Append delta to content
+    pub fn append(&mut self, delta: &str) {
+        self.content.push_str(delta);
+        self.delta = Some(delta.to_string());
+    }
+
+    /// Mark as complete
+    pub fn complete(&mut self) {
+        self.is_complete = true;
+        self.delta = None;
+    }
 }
 
 // =============================================================================
@@ -263,6 +656,11 @@ impl PartId for SessionPart {
             SessionPart::Summary(p) => format!("summary_{}", p.compacted_at),
             SessionPart::CompactionMarker(p) => format!("compaction_marker_{}", p.timestamp),
             SessionPart::SystemReminder(p) => format!("reminder_{}", p.timestamp),
+            SessionPart::StepStart(p) => format!("step_start_{}", p.step_id),
+            SessionPart::StepFinish(p) => format!("step_finish_{}", p.step_id),
+            SessionPart::Snapshot(p) => p.snapshot_id.clone(),
+            SessionPart::Patch(p) => p.patch_id.clone(),
+            SessionPart::StreamingText(p) => p.part_id.clone(),
         }
     }
 }
@@ -1065,5 +1463,203 @@ mod tests {
         assert!(session.context.is_some());
         assert_eq!(session.context.as_ref().unwrap().current_app, Some("Terminal".to_string()));
         assert!(!session.needs_compaction);
+    }
+
+    // =========================================================================
+    // Tests for new SessionPart types (step boundaries, snapshots, streaming)
+    // =========================================================================
+
+    #[test]
+    fn test_step_start_part() {
+        let step = StepStartPart::new(1);
+        assert_eq!(step.step_id, 1);
+        assert!(step.timestamp > 0);
+        assert!(step.snapshot_id.is_none());
+
+        let step_with_snapshot = StepStartPart::with_snapshot(2, "snap-123".to_string());
+        assert_eq!(step_with_snapshot.step_id, 2);
+        assert_eq!(step_with_snapshot.snapshot_id, Some("snap-123".to_string()));
+    }
+
+    #[test]
+    fn test_step_finish_part() {
+        let finish = StepFinishPart::new(1, StepFinishReason::Completed, 500);
+        assert_eq!(finish.step_id, 1);
+        assert_eq!(finish.reason, StepFinishReason::Completed);
+        assert_eq!(finish.duration_ms, 500);
+        assert!(finish.tokens.is_none());
+
+        let finish_with_tokens = StepFinishPart::with_tokens(
+            2,
+            StepFinishReason::Failed,
+            1000,
+            StepTokenUsage::new(100, 50),
+        );
+        assert_eq!(finish_with_tokens.step_id, 2);
+        assert_eq!(finish_with_tokens.reason, StepFinishReason::Failed);
+        assert_eq!(finish_with_tokens.tokens.as_ref().unwrap().total(), 150);
+    }
+
+    #[test]
+    fn test_step_finish_reason_variants() {
+        assert_eq!(StepFinishReason::default(), StepFinishReason::Completed);
+        assert_ne!(StepFinishReason::Failed, StepFinishReason::Completed);
+        assert_ne!(StepFinishReason::UserAborted, StepFinishReason::ToolError);
+        assert_ne!(StepFinishReason::MaxStepsReached, StepFinishReason::Failed);
+    }
+
+    #[test]
+    fn test_step_token_usage() {
+        let usage = StepTokenUsage::new(100, 50);
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.total(), 150);
+
+        let default = StepTokenUsage::default();
+        assert_eq!(default.total(), 0);
+    }
+
+    #[test]
+    fn test_file_snapshot() {
+        let file = FileSnapshot::new("/src/main.rs", "abc123");
+        assert_eq!(file.path, "/src/main.rs");
+        assert_eq!(file.hash, "abc123");
+    }
+
+    #[test]
+    fn test_snapshot_part() {
+        let mut snapshot = SnapshotPart::new("snap-001");
+        assert_eq!(snapshot.snapshot_id, "snap-001");
+        assert!(snapshot.files.is_empty());
+        assert!(snapshot.timestamp > 0);
+
+        snapshot.add_file("/src/main.rs", "hash1");
+        snapshot.add_file("/Cargo.toml", "hash2");
+        assert_eq!(snapshot.files.len(), 2);
+
+        let files = vec![
+            FileSnapshot::new("/a.rs", "h1"),
+            FileSnapshot::new("/b.rs", "h2"),
+        ];
+        let snapshot2 = SnapshotPart::with_files("snap-002", files);
+        assert_eq!(snapshot2.files.len(), 2);
+    }
+
+    #[test]
+    fn test_file_change() {
+        let added = FileChange::added("/new.rs", "hash1");
+        assert_eq!(added.change_type, FileChangeType::Added);
+        assert_eq!(added.content_hash, Some("hash1".to_string()));
+
+        let modified = FileChange::modified("/existing.rs", "hash2");
+        assert_eq!(modified.change_type, FileChangeType::Modified);
+        assert_eq!(modified.content_hash, Some("hash2".to_string()));
+
+        let deleted = FileChange::deleted("/old.rs");
+        assert_eq!(deleted.change_type, FileChangeType::Deleted);
+        assert!(deleted.content_hash.is_none());
+    }
+
+    #[test]
+    fn test_patch_part() {
+        let mut patch = PatchPart::new("patch-001", "snap-000");
+        assert_eq!(patch.patch_id, "patch-001");
+        assert_eq!(patch.base_snapshot_id, "snap-000");
+        assert!(patch.changes.is_empty());
+
+        patch.add_change(FileChange::added("/new.rs", "h1"));
+        patch.add_change(FileChange::modified("/main.rs", "h2"));
+        assert_eq!(patch.changes.len(), 2);
+
+        let changes = vec![
+            FileChange::added("/a.rs", "h1"),
+            FileChange::deleted("/b.rs"),
+        ];
+        let patch2 = PatchPart::with_changes("patch-002", "snap-001", changes);
+        assert_eq!(patch2.changes.len(), 2);
+    }
+
+    #[test]
+    fn test_streaming_text_part() {
+        let mut stream = StreamingTextPart::new("stream-001");
+        assert_eq!(stream.part_id, "stream-001");
+        assert!(stream.content.is_empty());
+        assert!(!stream.is_complete);
+        assert!(stream.delta.is_none());
+
+        stream.append("Hello, ");
+        assert_eq!(stream.content, "Hello, ");
+        assert_eq!(stream.delta, Some("Hello, ".to_string()));
+
+        stream.append("World!");
+        assert_eq!(stream.content, "Hello, World!");
+        assert_eq!(stream.delta, Some("World!".to_string()));
+
+        stream.complete();
+        assert!(stream.is_complete);
+        assert!(stream.delta.is_none());
+    }
+
+    #[test]
+    fn test_streaming_text_with_content() {
+        let stream = StreamingTextPart::with_content("stream-002", "Initial content");
+        assert_eq!(stream.content, "Initial content");
+        assert!(!stream.is_complete);
+    }
+
+    #[test]
+    fn test_compaction_marker_constructors() {
+        let marker = CompactionMarker::new(true);
+        assert!(marker.auto);
+        assert!(marker.timestamp > 0);
+        assert!(marker.marker_id.is_none());
+        assert!(marker.parts_compacted.is_none());
+        assert!(marker.tokens_freed.is_none());
+
+        let marker2 = CompactionMarker::with_timestamp(1000, false);
+        assert_eq!(marker2.timestamp, 1000);
+        assert!(!marker2.auto);
+
+        let marker3 = CompactionMarker::with_details(true, "m-001".to_string(), 10, 5000);
+        assert!(marker3.auto);
+        assert_eq!(marker3.marker_id, Some("m-001".to_string()));
+        assert_eq!(marker3.parts_compacted, Some(10));
+        assert_eq!(marker3.tokens_freed, Some(5000));
+    }
+
+    #[test]
+    fn test_new_session_part_type_names() {
+        let step_start = SessionPart::StepStart(StepStartPart::new(1));
+        assert_eq!(step_start.type_name(), "step_start");
+
+        let step_finish = SessionPart::StepFinish(StepFinishPart::new(1, StepFinishReason::Completed, 100));
+        assert_eq!(step_finish.type_name(), "step_finish");
+
+        let snapshot = SessionPart::Snapshot(SnapshotPart::new("s-001"));
+        assert_eq!(snapshot.type_name(), "snapshot");
+
+        let patch = SessionPart::Patch(PatchPart::new("p-001", "s-000"));
+        assert_eq!(patch.type_name(), "patch");
+
+        let streaming = SessionPart::StreamingText(StreamingTextPart::new("st-001"));
+        assert_eq!(streaming.type_name(), "streaming_text");
+    }
+
+    #[test]
+    fn test_new_session_part_ids() {
+        let step_start = SessionPart::StepStart(StepStartPart::new(5));
+        assert_eq!(step_start.part_id(), "step_start_5");
+
+        let step_finish = SessionPart::StepFinish(StepFinishPart::new(5, StepFinishReason::Completed, 100));
+        assert_eq!(step_finish.part_id(), "step_finish_5");
+
+        let snapshot = SessionPart::Snapshot(SnapshotPart::new("snap-123"));
+        assert_eq!(snapshot.part_id(), "snap-123");
+
+        let patch = SessionPart::Patch(PatchPart::new("patch-456", "snap-123"));
+        assert_eq!(patch.part_id(), "patch-456");
+
+        let streaming = SessionPart::StreamingText(StreamingTextPart::new("stream-789"));
+        assert_eq!(streaming.part_id(), "stream-789");
     }
 }

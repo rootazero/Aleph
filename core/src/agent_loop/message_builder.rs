@@ -391,9 +391,17 @@ impl MessageBuilder {
                     messages.push(Message::assistant(content));
                 }
 
-                // Skip markers and reminders - they are handled separately
+                // Skip markers, reminders, and metadata parts - they are handled separately
                 SessionPart::CompactionMarker(_) => {}
                 SessionPart::SystemReminder(_) => {}
+                // Step boundaries are metadata for execution tracking, not converted to messages
+                SessionPart::StepStart(_) => {}
+                SessionPart::StepFinish(_) => {}
+                // Snapshots and patches are for session revert, not message content
+                SessionPart::Snapshot(_) => {}
+                SessionPart::Patch(_) => {}
+                // StreamingText is for UI incremental updates, not final messages
+                SessionPart::StreamingText(_) => {}
             }
         }
 
@@ -920,10 +928,7 @@ mod tests {
         }));
 
         // Add compaction marker
-        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
-            timestamp: 2000,
-            auto: true,
-        }));
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker::with_timestamp(2000, true)));
 
         // Add summary (compacted_at > 0 means completed)
         session.parts.push(SessionPart::Summary(SummaryPart {
