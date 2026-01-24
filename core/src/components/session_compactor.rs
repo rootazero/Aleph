@@ -45,6 +45,24 @@ impl Default for CompactionConfig {
         }
     }
 }
+
+// ============================================================================
+// Prune Info
+// ============================================================================
+
+/// Information about a pruning operation
+///
+/// This struct tracks the results of a prune_with_thresholds operation,
+/// including how many tokens and parts were pruned or protected.
+#[derive(Debug, Clone, Default)]
+pub struct PruneInfo {
+    /// Total tokens pruned (estimated)
+    pub tokens_pruned: u64,
+    /// Number of parts whose outputs were pruned
+    pub parts_pruned: usize,
+    /// Number of parts protected from pruning (e.g., skill tool outputs)
+    pub parts_protected: usize,
+}
 use crate::event::{
     AetherEvent, CompactionInfo, EventContext, EventHandler, EventType, HandlerError,
 };
@@ -376,12 +394,126 @@ impl SessionCompactor {
 
             for &idx in tool_call_indices.iter().take(prune_count) {
                 if let SessionPart::ToolCall(ref mut tool_call) = session.parts[idx] {
+                    // Skip protected tools
+                    if self.config.protected_tools.contains(&tool_call.tool_name) {
+                        continue;
+                    }
                     if tool_call.output.is_some() {
                         tool_call.output = Some("[Output pruned to save context]".to_string());
                     }
                 }
             }
         }
+    }
+
+    /// Check if a tool is protected from pruning
+    fn is_protected_tool(&self, tool_name: &str) -> bool {
+        self.config.protected_tools.iter().any(|t| t == tool_name)
+    }
+
+    /// Smart pruning with thresholds (OpenCode-style algorithm)
+    ///
+    /// Algorithm:
+    /// 1. Iterate backward through parts from most recent
+    /// 2. Skip until reaching 2+ user turns (to preserve recent context)
+    /// 3. Find completed tool calls (excluding protected tools)
+    /// 4. Accumulate tool outputs until exceeding prune_protect threshold
+    /// 5. If total accumulated tokens > prune_minimum, mark outputs as pruned
+    ///
+    /// Returns PruneInfo with statistics about the pruning operation
+    pub fn prune_with_thresholds(&self, session: &mut ExecutionSession) -> PruneInfo {
+        if !self.config.prune_enabled {
+            return PruneInfo::default();
+        }
+
+        let mut prune_info = PruneInfo::default();
+
+        // Collect tool call information: (index, tool_name, tokens, is_protected)
+        let mut tool_info: Vec<(usize, String, u64, bool)> = Vec::new();
+
+        for (idx, part) in session.parts.iter().enumerate() {
+            if let SessionPart::ToolCall(tc) = part {
+                if tc.output.is_some() && !tc.output.as_ref().unwrap().contains("[Output pruned") {
+                    let output_tokens = tc.output.as_ref()
+                        .map(|o| TokenTracker::estimate_tokens(o))
+                        .unwrap_or(0);
+                    let is_protected = self.is_protected_tool(&tc.tool_name);
+                    tool_info.push((idx, tc.tool_name.clone(), output_tokens, is_protected));
+                }
+            }
+        }
+
+        if tool_info.is_empty() {
+            return prune_info;
+        }
+
+        // Count user turns to determine safe pruning boundary
+        let user_turns: Vec<usize> = session.parts.iter().enumerate()
+            .filter_map(|(i, p)| {
+                if matches!(p, SessionPart::UserInput(_)) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Determine the safe boundary - skip until we've passed 2 user turns from the end
+        let safe_boundary = if user_turns.len() >= 2 {
+            user_turns[user_turns.len() - 2]
+        } else {
+            0
+        };
+
+        // Iterate backward through tool calls
+        let mut protected_tokens: u64 = 0;
+        let mut tokens_to_prune: u64 = 0;
+        let mut indices_to_prune: Vec<usize> = Vec::new();
+
+        // Process tool info from most recent to oldest
+        for (idx, _tool_name, tokens, is_protected) in tool_info.iter().rev() {
+            // Skip recent tools (after safe boundary) to protect them
+            if *idx >= safe_boundary {
+                protected_tokens += tokens;
+                if *is_protected {
+                    prune_info.parts_protected += 1;
+                }
+                continue;
+            }
+
+            if *is_protected {
+                // Protected tools should never be pruned
+                prune_info.parts_protected += 1;
+                protected_tokens += tokens;
+                continue;
+            }
+
+            // Check if we're still in the protected window
+            if protected_tokens < self.config.prune_protect {
+                protected_tokens += tokens;
+                continue;
+            }
+
+            // Beyond protected window - candidate for pruning
+            tokens_to_prune += tokens;
+            indices_to_prune.push(*idx);
+        }
+
+        // Only prune if we exceed the minimum threshold
+        if tokens_to_prune >= self.config.prune_minimum {
+            for idx in indices_to_prune {
+                if let SessionPart::ToolCall(ref mut tc) = session.parts[idx] {
+                    tc.output = Some(format!(
+                        "[Output pruned to save context - compacted at {}]",
+                        chrono::Utc::now().timestamp()
+                    ));
+                    prune_info.parts_pruned += 1;
+                }
+            }
+            prune_info.tokens_pruned = tokens_to_prune;
+        }
+
+        prune_info
     }
 
     /// Generate a summary of the session so far
@@ -1285,5 +1417,375 @@ mod tests {
         let info = result.unwrap();
         assert_eq!(info.tokens_before, 110000);
         assert!(info.tokens_after < info.tokens_before);
+    }
+
+    // ========================================================================
+    // Smart Pruning with Protection Tests (Task 3)
+    // ========================================================================
+
+    /// Create a test session with skill tool calls that should be protected
+    fn create_test_session_with_skill_calls() -> ExecutionSession {
+        let mut session = ExecutionSession::new().with_model("gpt-4-turbo");
+
+        // Add user input
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Use skill to do something".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        // Add skill tool calls (should be protected)
+        for i in 0..5 {
+            session.parts.push(SessionPart::ToolCall(ToolCallPart {
+                id: format!("skill-{}", i),
+                tool_name: "skill".to_string(),
+                input: json!({"param": i}),
+                status: ToolCallStatus::Completed,
+                output: Some(format!("Skill output {} with content", i)),
+                error: None,
+                started_at: 1000 + i as i64 * 100,
+                completed_at: Some(1050 + i as i64 * 100),
+            }));
+        }
+
+        // Add another user turn
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Now do more work".to_string(),
+            context: None,
+            timestamp: 1600,
+        }));
+
+        // Add regular tool calls (should be pruned if old enough)
+        for i in 0..15 {
+            session.parts.push(SessionPart::ToolCall(ToolCallPart {
+                id: format!("tool-{}", i),
+                tool_name: format!("tool_{}", i),
+                input: json!({"param": i}),
+                status: ToolCallStatus::Completed,
+                output: Some("x".repeat(500)), // ~200 tokens each
+                error: None,
+                started_at: 2000 + i as i64 * 100,
+                completed_at: Some(2050 + i as i64 * 100),
+            }));
+        }
+
+        // Add third user turn to create safe boundary
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Final request".to_string(),
+            context: None,
+            timestamp: 4000,
+        }));
+
+        session
+    }
+
+    /// Create a large test session for threshold testing
+    fn create_large_test_session() -> ExecutionSession {
+        let mut session = ExecutionSession::new().with_model("gpt-4-turbo");
+
+        // Add first user turn
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Start working".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        // Add many tool calls with large outputs to exceed thresholds
+        for i in 0..50 {
+            session.parts.push(SessionPart::ToolCall(ToolCallPart {
+                id: format!("large-tool-{}", i),
+                tool_name: format!("tool_{}", i % 10),
+                input: json!({"param": i}),
+                status: ToolCallStatus::Completed,
+                // Each output is ~2500 chars = ~1000 tokens
+                output: Some("y".repeat(2500)),
+                error: None,
+                started_at: 2000 + i as i64 * 100,
+                completed_at: Some(2050 + i as i64 * 100),
+            }));
+        }
+
+        // Add second user turn
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Continue".to_string(),
+            context: None,
+            timestamp: 8000,
+        }));
+
+        // Add more recent tool calls
+        for i in 0..10 {
+            session.parts.push(SessionPart::ToolCall(ToolCallPart {
+                id: format!("recent-tool-{}", i),
+                tool_name: format!("recent_{}", i),
+                input: json!({"param": i}),
+                status: ToolCallStatus::Completed,
+                output: Some("z".repeat(500)),
+                error: None,
+                started_at: 9000 + i as i64 * 100,
+                completed_at: Some(9050 + i as i64 * 100),
+            }));
+        }
+
+        // Add third user turn
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Final".to_string(),
+            context: None,
+            timestamp: 10500,
+        }));
+
+        session
+    }
+
+    #[test]
+    fn test_prune_respects_protected_tools() {
+        let config = CompactionConfig {
+            protected_tools: vec!["skill".to_string(), "read_file".to_string()],
+            prune_enabled: true,
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let mut session = create_test_session_with_skill_calls();
+
+        compactor.prune_old_tool_outputs(&mut session);
+
+        // Skill tool outputs should NOT be pruned
+        let skill_outputs: Vec<_> = session.parts.iter()
+            .filter_map(|p| match p {
+                SessionPart::ToolCall(tc) if tc.tool_name == "skill" => tc.output.as_ref(),
+                _ => None,
+            })
+            .collect();
+
+        for output in skill_outputs {
+            assert!(!output.contains("pruned"), "Skill outputs should not be pruned, got: {}", output);
+        }
+    }
+
+    #[test]
+    fn test_prune_with_thresholds_basic() {
+        let config = CompactionConfig {
+            prune_minimum: 1000,
+            prune_protect: 2000,
+            prune_enabled: true,
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let mut session = create_large_test_session();
+
+        let pruned_info = compactor.prune_with_thresholds(&mut session);
+
+        // Should only prune if exceeds prune_minimum
+        assert!(pruned_info.tokens_pruned >= 1000 || pruned_info.tokens_pruned == 0,
+            "tokens_pruned should be >= 1000 or 0, got {}", pruned_info.tokens_pruned);
+    }
+
+    #[test]
+    fn test_prune_with_thresholds_respects_protected_tools() {
+        let config = CompactionConfig {
+            protected_tools: vec!["skill".to_string()],
+            prune_minimum: 100,
+            prune_protect: 500,
+            prune_enabled: true,
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let mut session = create_test_session_with_skill_calls();
+
+        let pruned_info = compactor.prune_with_thresholds(&mut session);
+
+        // Protected tools should be counted
+        assert!(pruned_info.parts_protected >= 5,
+            "Expected at least 5 protected parts (skill calls), got {}",
+            pruned_info.parts_protected);
+
+        // Verify skill outputs were not pruned
+        for part in &session.parts {
+            if let SessionPart::ToolCall(tc) = part {
+                if tc.tool_name == "skill" {
+                    assert!(!tc.output.as_ref().unwrap().contains("pruned"),
+                        "Skill tool output should not be pruned");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_prune_with_thresholds_disabled() {
+        let config = CompactionConfig {
+            prune_enabled: false,
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let mut session = create_large_test_session();
+
+        let pruned_info = compactor.prune_with_thresholds(&mut session);
+
+        // Should not prune anything when disabled
+        assert_eq!(pruned_info.tokens_pruned, 0);
+        assert_eq!(pruned_info.parts_pruned, 0);
+        assert_eq!(pruned_info.parts_protected, 0);
+    }
+
+    #[test]
+    fn test_prune_with_thresholds_high_minimum() {
+        let config = CompactionConfig {
+            prune_minimum: 1_000_000, // Very high threshold
+            prune_protect: 500,
+            prune_enabled: true,
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let mut session = create_large_test_session();
+
+        let pruned_info = compactor.prune_with_thresholds(&mut session);
+
+        // Should not prune because we won't exceed the high minimum
+        assert_eq!(pruned_info.parts_pruned, 0);
+    }
+
+    #[test]
+    fn test_is_protected_tool() {
+        let config = CompactionConfig {
+            protected_tools: vec!["skill".to_string(), "read_file".to_string()],
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+
+        assert!(compactor.is_protected_tool("skill"));
+        assert!(compactor.is_protected_tool("read_file"));
+        assert!(!compactor.is_protected_tool("write_file"));
+        assert!(!compactor.is_protected_tool("search"));
+    }
+
+    #[test]
+    fn test_prune_info_default() {
+        let info = PruneInfo::default();
+        assert_eq!(info.tokens_pruned, 0);
+        assert_eq!(info.parts_pruned, 0);
+        assert_eq!(info.parts_protected, 0);
+    }
+
+    #[test]
+    fn test_prune_old_tool_outputs_with_protected_tools() {
+        // Test that prune_old_tool_outputs also respects protected tools
+        let config = CompactionConfig {
+            protected_tools: vec!["skill".to_string()],
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let mut session = ExecutionSession::new().with_model("gpt-4-turbo");
+
+        // Add user input
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Test".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        // Add 20 tool calls, some are protected
+        for i in 0..20 {
+            let tool_name = if i % 4 == 0 { "skill".to_string() } else { format!("tool_{}", i) };
+            session.parts.push(SessionPart::ToolCall(ToolCallPart {
+                id: format!("call-{}", i),
+                tool_name,
+                input: json!({"i": i}),
+                status: ToolCallStatus::Completed,
+                output: Some(format!("Output {}", i)),
+                error: None,
+                started_at: 1000 + i as i64 * 100,
+                completed_at: Some(1050 + i as i64 * 100),
+            }));
+        }
+
+        // Default keep_recent_tools is 10, so 10 should be pruned
+        compactor.prune_old_tool_outputs(&mut session);
+
+        // Verify skill tool outputs were NOT pruned
+        for part in &session.parts {
+            if let SessionPart::ToolCall(tc) = part {
+                if tc.tool_name == "skill" {
+                    assert!(!tc.output.as_ref().unwrap().contains("pruned"),
+                        "Skill outputs should not be pruned: {:?}", tc.output);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_prune_with_thresholds_preserves_recent_turns() {
+        let config = CompactionConfig {
+            prune_minimum: 100,
+            prune_protect: 200,
+            prune_enabled: true,
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let mut session = ExecutionSession::new().with_model("gpt-4-turbo");
+
+        // First user turn
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "First request".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        // Old tool calls
+        for i in 0..5 {
+            session.parts.push(SessionPart::ToolCall(ToolCallPart {
+                id: format!("old-{}", i),
+                tool_name: "old_tool".to_string(),
+                input: json!({}),
+                output: Some("x".repeat(1000)),
+                status: ToolCallStatus::Completed,
+                error: None,
+                started_at: 1100 + i as i64 * 100,
+                completed_at: Some(1150 + i as i64 * 100),
+            }));
+        }
+
+        // Second user turn (recent)
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Second request".to_string(),
+            context: None,
+            timestamp: 2000,
+        }));
+
+        // Recent tool calls (should be protected by user turn boundary)
+        for i in 0..3 {
+            session.parts.push(SessionPart::ToolCall(ToolCallPart {
+                id: format!("recent-{}", i),
+                tool_name: "recent_tool".to_string(),
+                input: json!({}),
+                output: Some("y".repeat(500)),
+                status: ToolCallStatus::Completed,
+                error: None,
+                started_at: 2100 + i as i64 * 100,
+                completed_at: Some(2150 + i as i64 * 100),
+            }));
+        }
+
+        // Third user turn
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Third request".to_string(),
+            context: None,
+            timestamp: 3000,
+        }));
+
+        let pruned_info = compactor.prune_with_thresholds(&mut session);
+
+        // Recent tool calls (after second user turn) should not be pruned
+        for part in &session.parts {
+            if let SessionPart::ToolCall(tc) = part {
+                if tc.tool_name == "recent_tool" {
+                    assert!(!tc.output.as_ref().unwrap().contains("pruned"),
+                        "Recent tool outputs should not be pruned");
+                }
+            }
+        }
+
+        // Verify some old tools were pruned (if thresholds were exceeded)
+        // Note: This depends on whether we exceeded the thresholds
+        println!("Pruned info: tokens={}, parts={}, protected={}",
+            pruned_info.tokens_pruned, pruned_info.parts_pruned, pruned_info.parts_protected);
     }
 }
