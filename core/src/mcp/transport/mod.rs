@@ -10,14 +10,16 @@
 //! # Available Transports
 //!
 //! - [`StdioTransport`] - Communicates with local MCP servers via subprocess stdio
+//! - [`HttpTransport`] - Communicates with remote MCP servers via HTTP POST
 //!
 //! # Planned Transports
 //!
-//! - `HttpTransport` - Communicates with remote MCP servers via HTTP POST
 //! - `SseTransport` - Communicates with remote MCP servers via HTTP + SSE
 
+mod http;
 mod stdio;
 mod traits;
 
+pub use http::{HttpTransport, HttpTransportConfig};
 pub use stdio::StdioTransport;
 pub use traits::{McpTransport, NotificationCallback};
