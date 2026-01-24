@@ -8,19 +8,30 @@
 //!   for integration with rig-core
 //!
 //! - **External MCP Servers**: Managed by `McpClient`
-//!   - Connected via stdio transport
+//!   - Connected via transport abstraction ([`McpTransport`] trait)
 //!   - Tools discovered via JSON-RPC
+//!
+//! # Transport Layer
+//!
+//! The [`McpTransport`] trait provides an abstraction for different transport
+//! mechanisms:
+//!
+//! - [`StdioTransport`] - Local servers via subprocess stdio
+//! - `HttpTransport` - Remote servers via HTTP POST (planned)
+//! - `SseTransport` - Remote servers via HTTP + SSE (planned)
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                         Tool Sources                            │
 //! ├─────────────────────────────────────────────────────────────────┤
-//! │  Rig-Core Tools            │  External MCP Servers              │
+//! │  Aether Tools              │  External MCP Servers              │
 //! │  (see crate::rig_tools)    │  (see this mcp module)             │
-//! │  ├── SearchTool            │  ├── StdioTransport                │
-//! │  ├── WebFetchTool          │  │   └── JSON-RPC over stdio       │
-//! │  ├── YouTubeTool           │  └── Runtime Detection             │
-//! │  └── McpToolWrapper        │      (node, python, bun)           │
+//! │  ├── SearchTool            │  ├── McpTransport trait            │
+//! │  ├── WebFetchTool          │  │   ├── StdioTransport            │
+//! │  ├── YouTubeTool           │  │   ├── HttpTransport (planned)   │
+//! │  └── McpToolWrapper        │  │   └── SseTransport (planned)    │
+//! │                            │  └── Runtime Detection             │
+//! │                            │      (node, python, bun)           │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 
@@ -35,7 +46,7 @@ pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{
     IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
 };
-pub use transport::StdioTransport;
+pub use transport::{McpTransport, NotificationCallback, StdioTransport};
 pub use types::{
     McpEnvVar, McpResource, McpServerConfig, McpServerPermissions, McpServerStatus,
     McpServerStatusInfo, McpServerType, McpServiceInfo, McpSettingsConfig, McpTool, McpToolCall,
