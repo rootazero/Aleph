@@ -25,48 +25,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Aether** is a system-level AI middleware for macOS (native) and cross-platform (Tauri). It acts as an invisible "ether" connecting user intent with AI models through a frictionless interface.
 
-**Current Status**: Phase 9 Complete (Agent Loop Hardening - Doom Loop, Retry, Tool Repair, Skills Discovery, Sub-Agent Synchronization)
+**Current Status**: Phase 9 Complete (Agent Loop Hardening)
 
 ### Core Philosophy: "Ghost" Aesthetic
 
-- **Invisible First**: No dock icon, no permanent window. Only background process + menu bar/system tray
+- **Invisible First**: No dock icon, no permanent window. Only background process + menu bar
 - **De-GUI**: Ephemeral UI that appears at cursor, then dissolves
-- **Frictionless**: Brings AI intelligence directly to the cursor without context switching
-- **Native-First**: 100% native code - Rust core with platform-specific UI (Swift, C#, GTK)
+- **Frictionless**: AI intelligence directly at cursor without context switching
+- **Native-First**: 100% native code - Rust core with platform-specific UI
 
 ### ⚠️ Critical: Aether is an AI Agent
 
-**Aether 是 AI Agent，不是简单的工具路由器。**
+**Aether 是 AI Agent，不是简单的工具路由器。** 必须支持多步骤任务：
+- **任务分解**: 复杂请求分解为子任务
+- **依赖管理**: DAG 调度处理依赖
+- **上下文传递**: 任务间输出传递
+- **错误恢复**: 失败处理策略
 
-复杂多步骤任务是 Agent 的核心能力，必须支持：
-- **任务分解**: 将复杂请求分解为多个子任务（如："分析文档 → 生成prompt → 绘制图像"）
-- **依赖管理**: 子任务之间的依赖关系（DAG 调度）
-- **上下文传递**: 前一个任务的输出作为后一个任务的输入
-- **错误恢复**: 单个子任务失败时的处理策略
-
-**关键模块**:
-- `dispatcher/planner`: LLM 驱动的任务分解，生成 ExecutionPlan
-- `dispatcher/scheduler`: DAG 调度器，处理 TaskGraph 依赖
-- `dispatcher/executor`: 任务执行引擎
-- `components/TaskPlanner`: Agentic Loop 中的任务规划组件
-- `agent_loop`: 核心 observe-think-act-feedback 循环
-- `agents/sub_agents`: 子代理同步执行框架 (ExecutionCoordinator, ResultCollector, SubAgentDispatcher)
-
-**没有多步骤任务支持，Aether 就不是真正的 Agent。**
+**关键模块**: `agent_loop`, `dispatcher/planner`, `dispatcher/scheduler`, `agents/sub_agents`
 
 ---
 
 ## Technical Stack
 
-**Architecture**: Rust Core + Platform UI
-
 | Layer | Technology |
 |-------|------------|
-| **Rust Core** | Self-implemented AetherTool system, UniFFI, tokio, reqwest |
-| **macOS UI** | Swift + SwiftUI (Native), NSApplicationMain() entry |
-| **Cross-Platform** | Tauri 2.0 + React + TypeScript (Windows, Linux) |
-
-> **Note**: Windows native (C#/WinUI 3) has been archived. Use Tauri for cross-platform.
+| **Rust Core** | AetherTool system, UniFFI 0.31+, tokio, reqwest |
+| **macOS UI** | Swift + SwiftUI (Native) |
+| **Cross-Platform** | Tauri 2.0 + React + TypeScript |
 
 See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for complete technical documentation.
 
@@ -76,86 +62,21 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for complete technical docume
 
 ```
 aether/
-├── Cargo.toml                 # Workspace root
-├── VERSION                    # Single version source
-├── core/                      # Rust Core (~35 public modules)
-│   ├── src/
-│   │   ├── lib.rs             # UniFFI/C ABI exports
-│   │   ├── agent_loop/        # Core observe-think-act-feedback cycle
-│   │   ├── agents/            # Unified agent system (sub-agents + delegation)
-│   │   ├── components/        # 8 agentic loop components
-│   │   ├── dispatcher/        # Multi-layer routing & task orchestration
-│   │   ├── intent/            # Three-layer intent detection (L1-L3)
-│   │   ├── memory/            # Dual-layer memory
-│   │   ├── thinker/           # LLM decision-making layer
-│   │   ├── three_layer/       # Control architecture (Orchestrator/Skill/Tools)
-│   │   └── ...
-│   └── Cargo.toml             # Features: uniffi, cabi
+├── core/                      # Rust Core (~35 modules)
+│   └── src/
+│       ├── agent_loop/        # Core observe-think-act-feedback
+│       ├── agents/            # Agent system + sub-agents
+│       ├── components/        # 8 agentic loop components
+│       ├── dispatcher/        # Task orchestration (16 sub-modules)
+│       ├── extension/         # Plugin system (Claude Code compatible)
+│       └── ...
 ├── platforms/
-│   ├── macos/                 # Swift + SwiftUI (Native)
-│   │   ├── project.yml        # XcodeGen config
-│   │   └── Aether/Sources/
-│   ├── tauri/                 # Tauri 2.0 + React (Cross-platform)
-│   │   ├── src-tauri/         # Rust backend
-│   │   └── src/               # React frontend
-│   └── windows/               # [ARCHIVED] C# + WinUI 3
-├── scripts/                   # Build scripts
+│   ├── macos/                 # Swift + SwiftUI
+│   └── tauri/                 # Cross-platform (Windows, Linux)
 └── docs/                      # Documentation
 ```
 
-See [docs/DIRECTORY_STRUCTURE.md](./docs/DIRECTORY_STRUCTURE.md) for detailed tree.
-
----
-
-## Development Workflow
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                       开发工作流                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  1. 修改 Rust Core                                              │
-│     └─ cd core && cargo test                                    │
-│                                                                  │
-│  2. 构建平台特定库                                               │
-│     └─ macOS:   ./scripts/build-core.sh macos                   │
-│                                                                  │
-│  3. 开发 UI                                                      │
-│     ├─ macOS:   cd platforms/macos && xcodegen && open *.xcodeproj │
-│     └─ Tauri:   cd platforms/tauri && pnpm tauri dev            │
-│                                                                  │
-│  4. 提交                                                         │
-│     └─ git commit (触发对应平台的 CI)                            │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Branch Strategy
-
-**单分支开发模式**：所有开发工作直接在 main 分支进行。
-
-```
-main                    # 唯一的长期分支，所有开发直接在此进行
-└── hotfix/xxx          # 临时分支：仅在需要紧急修复时创建，完成后立即合并删除
-```
-
-**原则**：
-- 日常开发直接在 main 分支提交
-- 仅在需要隔离测试或紧急修复时临时创建分支
-- 临时分支完成后立即合并并删除
-- 避免长期存在的 feature 分支导致配置不同步
-
-### Key Decisions Summary
-
-| 决策点 | 推荐方案 |
-|--------|----------|
-| 代码组织 | Monorepo |
-| Rust 核心 | Workspace 成员，feature flags 区分平台 |
-| FFI 绑定 | macOS: UniFFI |
-| 跨平台 | Tauri 2.0 (Windows, Linux) |
-| CI/CD | 按路径触发，平台独立构建 |
-| 版本管理 | 单一 VERSION 文件 |
-| 本地化 | JSON 主文件 → 转换脚本 → 平台格式 |
+See [docs/DIRECTORY_STRUCTURE.md](./docs/DIRECTORY_STRUCTURE.md) for detailed structure.
 
 ---
 
@@ -163,24 +84,16 @@ main                    # 唯一的长期分支，所有开发直接在此进行
 
 ```bash
 # Rust Core
-cd core && cargo build           # Build
-cd core && cargo test            # Test
-cd core && cargo build --release # Release build
+cd core && cargo build && cargo test
 
-# macOS (Native)
-cd platforms/macos && xcodegen generate
-open Aether.xcodeproj
+# macOS
+cd platforms/macos && xcodegen generate && open Aether.xcodeproj
 
-# Tauri (Cross-platform)
-cd platforms/tauri && pnpm install
-cd platforms/tauri && pnpm tauri dev
-
-# Build scripts
-./scripts/build-core.sh macos    # Build core for macOS
-./scripts/build-macos.sh release # Full macOS build
+# Tauri
+cd platforms/tauri && pnpm install && pnpm tauri dev
 ```
 
-See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build reference.
+See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete reference.
 
 ---
 
@@ -188,41 +101,25 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 
 | Component | Description |
 |-----------|-------------|
-| **agent_loop** | Core observe-think-act-feedback cycle with guards, state management, doom loop detection, retry mechanism & multi-tool execution (parallel/sequential/DAG) |
-| **Agentic Loop** | 8 components: IntentAnalyzer, TaskPlanner, ToolExecutor, LoopController, SessionRecorder, SessionCompactor, SubAgentHandler, CallbackBridge |
-| **intent** | Three-layer intent detection: L1 Regex → L2 Keywords → L3 AI |
-| **dispatcher** | Multi-layer routing hub with 16 sub-modules: planner/, scheduler/, executor/, model_router/, monitor/, context/, analyzer/, risk/, callback/, agent_types/, registry, confirmation, async_confirmation, integration, types, engine |
-| **thinker** | LLM decision-making layer with model routing, prompt building, tool filtering |
-| **three_layer** | Control architecture: Orchestrator (FSM) / Skill (DAG) / Tools (Safety) |
-| **AetherTool** | Self-implemented tool system (AetherTool trait + AetherToolServer) with tool repair |
-| **AiProvider** | Self-implemented AI providers (OpenAI, Anthropic, Gemini, Ollama, etc.) |
-| **Dual-Layer Memory** | Raw history + AI-extracted facts |
-| **Cowork** | DAG task orchestration with model routing |
-| **Runtime Managers** | Auto-install uv, fnm, yt-dlp, ffmpeg |
-| **MCP** | Model Context Protocol - ✅ Full implementation with stdio/HTTP/SSE transports, OAuth 2.0 auth, resources, prompts, notifications |
-| **event** | Type-safe event bus for event-driven architecture |
-| **extension** | Claude Code compatible plugin system with async FFI (UniFFI 0.31+) - discovery/, extension/, ffi/async_extension.rs |
-| **init_unified** | Unified initialization coordinator |
-| **Smart Tool Discovery** | Intelligent tool filtering by content analysis (ffi/tool_discovery) |
-| **Skill Reader Tools** | Progressive Disclosure for skills with multi-location discovery (rig_tools/skill_reader) |
-| **tool_output** | Output truncation (2000 lines/50KB) with file storage and 7-day cleanup |
-| **InvalidTool** | Graceful unknown tool handling with suggestions (rig_tools/invalid) |
-| **Message Flow System** | Real-time Part events for UI rendering: PartAdded/Updated/Removed via EventBus → FFI callback (ffi/agent_loop_adapter, components/callback_bridge) |
-| **Sub-Agent Sync** | Synchronous sub-agent execution with result aggregation (agents/sub_agents/coordinator, result_collector) - dispatch_sync(), dispatch_parallel_sync() |
+| **agent_loop** | Core observe-think-act-feedback cycle with doom loop detection, retry, multi-tool execution |
+| **dispatcher** | Multi-layer routing: planner, scheduler, executor, model_router, etc. |
+| **extension** | Claude Code compatible plugins with async FFI (UniFFI 0.31+) |
+| **MCP** | Model Context Protocol with stdio/HTTP/SSE, OAuth 2.0 |
+| **thinker** | LLM decision-making with model routing, prompt building |
+| **three_layer** | Control architecture: Orchestrator (FSM) / Skill (DAG) / Tools |
 
-See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md), [AGENT_LOOP](./docs/AGENT_LOOP.md)
+See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/DISPATCHER.md](./docs/DISPATCHER.md), [docs/AGENT_LOOP.md](./docs/AGENT_LOOP.md) for details.
 
 ---
 
-## Key Constraints (Brief)
+## Key Constraints
 
 - **macOS Entry**: Use `main.swift` + `NSApplicationMain()` (not SwiftUI @main)
-- **Settings Window**: Use `NSPanel` (not NSWindow)
 - **Halo Window**: Never call `makeKeyAndOrderFront()` - zero focus theft
 - **Business Logic**: Rust core only, Swift is UI layer
 - **FFI**: Use UniFFI, never manual bindings
 
-See [docs/DESIGN_CONSTRAINTS.md](./docs/DESIGN_CONSTRAINTS.md) for full constraints and anti-patterns.
+See [docs/DESIGN_CONSTRAINTS.md](./docs/DESIGN_CONSTRAINTS.md) for full constraints.
 
 ---
 
@@ -231,55 +128,38 @@ See [docs/DESIGN_CONSTRAINTS.md](./docs/DESIGN_CONSTRAINTS.md) for full constrai
 | Category | Documents |
 |----------|-----------|
 | **Architecture** | [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md), [AGENT_LOOP](./docs/AGENT_LOOP.md) |
-| **Configuration** | [CONFIGURATION](./docs/CONFIGURATION.md), [PERMISSIONS](./docs/PERMISSIONS.md) |
-| **Development** | [BUILD_COMMANDS](./docs/BUILD_COMMANDS.md), [DIRECTORY_STRUCTURE](./docs/DIRECTORY_STRUCTURE.md) |
-| **Platform** | [PLATFORM_NOTES](./docs/PLATFORM_NOTES.md), [MACOS26_WINDOW_DESIGN](./docs/MACOS26_WINDOW_DESIGN.md) |
-| **Testing** | [TESTING_GUIDE](./docs/TESTING_GUIDE.md), [manual-testing-checklist](./docs/manual-testing-checklist.md) |
-| **Design** | [ui-design-guide](./docs/ui-design-guide.md), [DESIGN_CONSTRAINTS](./docs/DESIGN_CONSTRAINTS.md) |
+| **Development** | [BUILD_COMMANDS](./docs/BUILD_COMMANDS.md), [DIRECTORY_STRUCTURE](./docs/DIRECTORY_STRUCTURE.md), [DEVELOPMENT_SETUP](./docs/DEVELOPMENT_SETUP.md) |
+| **Platform** | [PLATFORM_NOTES](./docs/PLATFORM_NOTES.md), [DESIGN_CONSTRAINTS](./docs/DESIGN_CONSTRAINTS.md) |
 
 ---
 
-## Skills
+## Development
+
+### Branch Strategy
+
+**单分支开发模式**：所有开发工作直接在 main 分支进行。仅在需要隔离测试时临时创建分支。
+
+### Git Commit
+
+After completing a task, use `git add` and `git commit` with English commit messages.
+
+### Environment
+
+See [docs/DEVELOPMENT_SETUP.md](./docs/DEVELOPMENT_SETUP.md) for Python, Xcode, and other environment setup.
+
+---
+
+## Session
+
+### Memory Prompt
+
+When token is low to 10%, summarize this session to generate a "memory prompt" for next session inheritance.
+
+### Language
+
+- Reply in Chinese
+- Program comments in English
+
+### Skills
 
 Use skills from: `~/.claude/skills/build-macos-apps`
-
----
-
-## Environment
-
-```bash
-# Python (macOS)
-~/.uv/python3/bin/python
-source ~/.uv/python3/bin/activate
-cd ~/.uv/python3 && uv pip install <package>
-
-# Python (Windows)
-C:\Users\zou\.uv\python3\Scripts\python.exe
-# or in Git Bash: /c/Users/zou/.uv/python3/Scripts/python.exe
-cd C:\Users\zou\.uv\python3 && uv pip install <package>
-
-# Xcode (macOS)
-cd platforms/macos && xcodegen generate
-
-# Syntax validation (macOS)
-~/.uv/python3/bin/python Scripts/verify_swift_syntax.py <file.swift>
-```
-
----
-
-## Git Commit
-
-After completing a task or fixing an issue, use `git add` and `git commit` to submit this modification use English.
-
----
-
-## Memory Prompt
-
-When the token is low to 10% of the limit, summarize this session at the end of the session to generate a "memory prompt" that can be directly copied and used, so that the next session can be inherited.
-
----
-
-## Language
-
-- Reply language in Chinese
-- Program comments in English
