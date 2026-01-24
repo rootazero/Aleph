@@ -268,9 +268,8 @@ impl GlobalBus {
 
         // Use blocking write since this is called from sync context
         // In async context, use subscribe_async instead
-        let subscriptions = self.subscriptions.blocking_write();
-        let mut subs = subscriptions;
-        subs.insert(id.clone(), subscription);
+        let mut subscriptions = self.subscriptions.blocking_write();
+        subscriptions.insert(id.clone(), subscription);
 
         debug!(subscription_id = %id, "Added global event subscription");
         id
