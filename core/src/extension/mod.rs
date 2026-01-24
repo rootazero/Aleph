@@ -489,3 +489,48 @@ impl LoadSummary {
         self.skills_loaded + self.commands_loaded + self.agents_loaded + self.plugins_loaded
     }
 }
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
+
+/// Build skill instructions for LLM prompt injection
+///
+/// Formats a list of skills into markdown instructions that can be
+/// appended to the system prompt to inform the LLM about available skills.
+pub fn build_skill_instructions(skills: &[ExtensionSkill]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    output.push_str("\n\n## Available Plugin Skills\n\n");
+    output.push_str("You have access to the following plugin skills. ");
+    output.push_str("Use them when they match the user's intent:\n\n");
+
+    for skill in skills {
+        output.push_str(&format!(
+            "### /{}\n**Description**: {}\n\n{}\n\n---\n\n",
+            skill.qualified_name(),
+            skill.description,
+            skill.content
+        ));
+    }
+
+    output
+}
+
+/// Check if a directory is a valid plugin directory
+///
+/// A valid plugin has `.claude-plugin/plugin.json`.
+pub fn is_valid_plugin_dir(path: &std::path::Path) -> bool {
+    path.join(".claude-plugin").join("plugin.json").exists()
+}
+
+/// Get the default plugins directory
+///
+/// Returns `~/.aether/plugins/`
+pub fn default_plugins_dir() -> std::path::PathBuf {
+    crate::discovery::aether_plugins_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("~/.aether/plugins"))
+}

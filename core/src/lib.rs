@@ -311,6 +311,10 @@ pub use crate::extension::{
     hooks::{HookContext as ExtHookContext, HookExecutor as ExtHookExecutor, HookResult as ExtHookResult},
     // Config types
     config::{AgentConfigOverride, McpConfig, OAuthConfig, ProviderOverride},
+    // Utility functions
+    build_skill_instructions as ext_build_skill_instructions,
+    default_plugins_dir as ext_default_plugins_dir,
+    is_valid_plugin_dir as ext_is_valid_plugin_dir,
 };
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::utils::pii;
