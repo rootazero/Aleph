@@ -418,6 +418,91 @@ On timeout, partial results (completed tool calls) are still available via `part
 
 ---
 
+## Session Compaction
+
+The Agent Loop integrates with the SessionCompactor to manage token usage and prevent context overflow.
+
+### Compaction Integration Points
+
+The agent loop integrates with compaction at three points:
+
+1. **Before each iteration** (`LoopContinue` event): Check if tokens exceed threshold
+2. **After tool execution** (`ToolCallCompleted` event): Trigger pruning check
+3. **At session end**: Final pruning pass
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                    Agent Loop Iteration                         │
+├────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌─────────────────────────────────────────────────────────┐  │
+│   │  1. Check Token Overflow                                 │  │
+│   │     └─ If overflow: trigger SessionCompactor             │  │
+│   └─────────────────────────────────────────────────────────┘  │
+│                           │                                     │
+│                           ▼                                     │
+│   ┌─────────────────────────────────────────────────────────┐  │
+│   │  2. Observe → Think → Act                               │  │
+│   │     └─ Execute tool calls                               │  │
+│   └─────────────────────────────────────────────────────────┘  │
+│                           │                                     │
+│                           ▼                                     │
+│   ┌─────────────────────────────────────────────────────────┐  │
+│   │  3. After Tool Execution                                │  │
+│   │     └─ Check pruning if enabled                         │  │
+│   └─────────────────────────────────────────────────────────┘  │
+│                           │                                     │
+│                           ▼                                     │
+│   ┌─────────────────────────────────────────────────────────┐  │
+│   │  4. Feedback                                            │  │
+│   │     └─ Publish SessionCompacted if compaction occurred  │  │
+│   └─────────────────────────────────────────────────────────┘  │
+│                                                                 │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Compaction Trigger Logic
+
+```rust
+// Before each iteration
+let limit = token_tracker.get_model_limit(&session.model);
+if session.total_tokens >= limit.compaction_threshold() {
+    // Trigger compaction
+    if let Some(info) = compactor.check_and_compact(&mut session).await {
+        event_bus.publish(AetherEvent::SessionCompacted(info)).await;
+    }
+}
+```
+
+### Protected Context
+
+During compaction, certain content is protected:
+
+- **Recent tool outputs**: Last 2 user turns are never pruned
+- **Protected tools**: Tools in `protected_tools` list (e.g., "skill") are never pruned
+- **Token threshold**: Only prune if savings exceed `prune_minimum` (default 20K tokens)
+
+### Events
+
+| Event | When Published | Data |
+|-------|----------------|------|
+| `SessionCompacted` | After successful compaction | `CompactionInfo { session_id, tokens_before, tokens_after, timestamp }` |
+
+### Configuration
+
+```toml
+[compaction]
+auto_compact = true          # Enable automatic compaction
+prune_enabled = true         # Enable tool output pruning
+prune_minimum = 20000        # Minimum tokens before pruning
+prune_protect = 40000        # Protect recent N tokens
+protected_tools = ["skill"]  # Tools that are never pruned
+```
+
+See [SESSION_COMPACTION.md](./SESSION_COMPACTION.md) for complete compaction documentation.
+
+---
+
 ## Error Handling
 
 ### Guard Violations
