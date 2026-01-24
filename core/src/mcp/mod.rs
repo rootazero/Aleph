@@ -51,7 +51,10 @@ mod resources;
 pub mod transport;
 pub mod types;
 
-pub use auth::{ClientInfo, OAuthEntry, OAuthStorage, OAuthTokens};
+pub use auth::{
+    AuthorizationRequest, ClientInfo, OAuthEntry, OAuthProvider, OAuthServerMetadata, OAuthStorage,
+    OAuthTokens,
+};
 pub use client::{ExternalServerConfig, McpClient, McpClientBuilder, McpStartupReport};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{

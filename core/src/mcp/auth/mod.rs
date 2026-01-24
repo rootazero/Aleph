@@ -5,27 +5,36 @@
 //! # Components
 //!
 //! - **Storage** ([`OAuthStorage`]): Secure credential storage
-//! - **Provider** (coming soon): OAuth flow implementation
+//! - **Provider** ([`OAuthProvider`]): OAuth flow implementation
 //! - **Callback** (coming soon): Authorization code callback server
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use aether_core::mcp::auth::{OAuthStorage, OAuthTokens};
+//! use aether_core::mcp::auth::{OAuthStorage, OAuthTokens, OAuthProvider};
 //!
 //! // Create storage
-//! let storage = OAuthStorage::new(OAuthStorage::default_path());
+//! let storage = Arc::new(OAuthStorage::new(OAuthStorage::default_path()));
 //!
-//! // Check for existing tokens
-//! if let Some(tokens) = storage.get_tokens("my-server").await? {
-//!     if tokens.is_expired() && tokens.can_refresh() {
-//!         // Refresh the token
-//!     } else if !tokens.is_expired() {
-//!         // Use the token
-//!     }
-//! }
+//! // Create provider
+//! let provider = OAuthProvider::new(
+//!     storage.clone(),
+//!     "my-server",
+//!     "https://api.example.com",
+//!     "http://localhost:19877/callback",
+//! );
+//!
+//! // Start authorization flow
+//! let metadata = provider.discover_metadata().await?;
+//! let auth_req = provider.start_authorization(&metadata, "client_id", None).await?;
+//! println!("Open in browser: {}", auth_req.authorization_url);
+//!
+//! // After user authorizes, exchange code for tokens
+//! let tokens = provider.finish_authorization(&metadata, "client_id", &code, &state).await?;
 //! ```
 
+mod provider;
 mod storage;
 
+pub use provider::{AuthorizationRequest, OAuthProvider, OAuthServerMetadata};
 pub use storage::{ClientInfo, OAuthEntry, OAuthStorage, OAuthTokens};
