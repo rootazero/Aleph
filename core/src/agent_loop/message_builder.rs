@@ -454,6 +454,9 @@ impl MessageBuilder {
 
         // Inject token limit warnings if overflow detector is configured
         self.inject_limit_warnings(messages, session);
+
+        // Inject max steps warning if on the last iteration
+        self.inject_max_steps_warning(messages, session);
     }
 
     /// Inject token limit warning when usage is high (>=80%)
@@ -478,6 +481,27 @@ impl MessageBuilder {
                     messages.insert(idx + 1, Message::user(&warning));
                 }
             }
+        }
+    }
+
+    /// Inject warning when on the last iteration
+    ///
+    /// When the current iteration count equals max_iterations - 1,
+    /// a system reminder is inserted to warn the agent that this is their
+    /// last step and they must complete or ask for guidance.
+    fn inject_max_steps_warning(&self, messages: &mut Vec<Message>, session: &ExecutionSession) {
+        let max = self.config.max_iterations;
+        let current = session.iteration_count;
+
+        if current == max - 1 {
+            let warning = "<system-reminder>\n\
+                This is your LAST step. You must either:\n\
+                1. Complete the task and call `complete`\n\
+                2. Ask the user for guidance\n\
+                Do NOT start new tool calls that cannot finish in one step.\n\
+                </system-reminder>";
+
+            messages.push(Message::user(warning));
         }
     }
 
@@ -1177,5 +1201,119 @@ mod tests {
             .iter()
             .any(|m| m.content.contains("Context usage is at"));
         assert!(!warning_found, "Warning should NOT be injected below 80%");
+    }
+
+    #[test]
+    fn test_inject_max_steps_warning() {
+        // Test that max steps warning is injected on the last step
+        let mut config = MessageBuilderConfig::default();
+        config.max_iterations = 10;
+        config.inject_reminders = true;
+        config.reminder_threshold = 0; // Ensure reminders are injected
+        let builder = MessageBuilder::new(config);
+
+        let parts = vec![SessionPart::UserInput(UserInputPart {
+            text: "Continue".to_string(),
+            context: None,
+            timestamp: 1000,
+        })];
+
+        let mut session = ExecutionSession::new();
+        session.iteration_count = 9; // Last step (10 - 1)
+
+        let messages = builder.build_messages(&session, &parts);
+
+        // Verify "LAST step" warning is present
+        let warning_found = messages.iter().any(|m| m.content.contains("LAST step"));
+        assert!(warning_found, "Max steps warning should be injected on last step");
+
+        // Verify warning contains instructions
+        let warning_msg = messages.iter().find(|m| m.content.contains("LAST step")).unwrap();
+        assert!(warning_msg.content.contains("Complete the task"));
+        assert!(warning_msg.content.contains("Ask the user for guidance"));
+        assert!(warning_msg.content.contains("Do NOT start new tool calls"));
+    }
+
+    #[test]
+    fn test_no_max_steps_warning_before_last() {
+        // Test that no warning is injected before the last step
+        let mut config = MessageBuilderConfig::default();
+        config.max_iterations = 10;
+        config.inject_reminders = true;
+        config.reminder_threshold = 0;
+        let builder = MessageBuilder::new(config);
+
+        let parts = vec![SessionPart::UserInput(UserInputPart {
+            text: "Continue".to_string(),
+            context: None,
+            timestamp: 1000,
+        })];
+
+        let mut session = ExecutionSession::new();
+        session.iteration_count = 8; // Not the last step (10 - 1 = 9)
+
+        let messages = builder.build_messages(&session, &parts);
+
+        // Verify no "LAST step" warning
+        let warning_found = messages.iter().any(|m| m.content.contains("LAST step"));
+        assert!(
+            !warning_found,
+            "Max steps warning should NOT be injected before last step"
+        );
+    }
+
+    #[test]
+    fn test_no_max_steps_warning_after_last() {
+        // Test that no warning is injected after the last step (edge case)
+        let mut config = MessageBuilderConfig::default();
+        config.max_iterations = 10;
+        config.inject_reminders = true;
+        config.reminder_threshold = 0;
+        let builder = MessageBuilder::new(config);
+
+        let parts = vec![SessionPart::UserInput(UserInputPart {
+            text: "Continue".to_string(),
+            context: None,
+            timestamp: 1000,
+        })];
+
+        let mut session = ExecutionSession::new();
+        session.iteration_count = 10; // Beyond the last step
+
+        let messages = builder.build_messages(&session, &parts);
+
+        // Verify no "LAST step" warning when iteration_count >= max_iterations
+        let warning_found = messages.iter().any(|m| m.content.contains("LAST step"));
+        assert!(
+            !warning_found,
+            "Max steps warning should NOT be injected after max_iterations"
+        );
+    }
+
+    #[test]
+    fn test_max_steps_warning_with_default_config() {
+        // Test with default config (max_iterations = 50)
+        let config = MessageBuilderConfig::default();
+        assert_eq!(config.max_iterations, 50);
+
+        let builder = MessageBuilder::new(config);
+
+        let parts = vec![SessionPart::UserInput(UserInputPart {
+            text: "Continue".to_string(),
+            context: None,
+            timestamp: 1000,
+        })];
+
+        let mut session = ExecutionSession::new();
+        session.iteration_count = 49; // Last step (50 - 1)
+
+        let messages = builder.build_messages(&session, &parts);
+
+        // Verify "LAST step" warning is present
+        let warning_found = messages.iter().any(|m| m.content.contains("LAST step"));
+        assert!(
+            warning_found,
+            "Max steps warning should be injected at iteration 49 with default config"
+        );
     }
 }
