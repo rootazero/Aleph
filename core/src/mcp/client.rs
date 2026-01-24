@@ -13,7 +13,8 @@ use tokio::sync::RwLock;
 
 use crate::error::{AetherError, Result};
 use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
-use crate::mcp::types::{McpTool, McpToolResult};
+use crate::mcp::transport::{HttpTransport, HttpTransportConfig, McpTransport, SseTransport, SseTransportConfig};
+use crate::mcp::types::{McpRemoteServerConfig, McpTool, McpToolResult, TransportPreference};
 
 /// MCP server startup report
 ///
@@ -296,6 +297,102 @@ impl McpClient {
         Ok(())
     }
 
+    /// Start a remote MCP server connection
+    ///
+    /// Connects to a remote MCP server using HTTP or SSE transport.
+    /// The transport is selected based on the configuration's `transport` preference.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Remote server configuration
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the connection was established successfully
+    /// * `Err(AetherError)` - If connection failed
+    pub async fn start_remote_server(&self, config: McpRemoteServerConfig) -> Result<()> {
+        let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(30));
+
+        let transport: Box<dyn McpTransport> = match config.transport {
+            TransportPreference::Http => {
+                tracing::info!(
+                    server = %config.name,
+                    url = %config.url,
+                    "Connecting to remote MCP server via HTTP"
+                );
+                Box::new(HttpTransport::new(
+                    &config.name,
+                    HttpTransportConfig {
+                        url: config.url.clone(),
+                        headers: config.headers.clone(),
+                        timeout,
+                    },
+                ))
+            }
+            TransportPreference::Sse => {
+                tracing::info!(
+                    server = %config.name,
+                    url = %config.url,
+                    "Connecting to remote MCP server via SSE"
+                );
+                let transport = SseTransport::new(
+                    &config.name,
+                    SseTransportConfig {
+                        url: config.url.clone(),
+                        headers: config.headers.clone(),
+                        timeout,
+                    },
+                );
+                // Start the SSE event listener for server-initiated notifications
+                transport.start_event_listener().await?;
+                Box::new(transport)
+            }
+            TransportPreference::Auto => {
+                // Default to HTTP (most common and simpler)
+                // Could add capability detection in the future
+                tracing::info!(
+                    server = %config.name,
+                    url = %config.url,
+                    "Connecting to remote MCP server via HTTP (auto-selected)"
+                );
+                Box::new(HttpTransport::new(
+                    &config.name,
+                    HttpTransportConfig {
+                        url: config.url.clone(),
+                        headers: config.headers.clone(),
+                        timeout,
+                    },
+                ))
+            }
+        };
+
+        let connection = McpServerConnection::with_transport(&config.name, transport).await?;
+        let connection = Arc::new(connection);
+
+        // Register tools from this server
+        let tools = connection.list_tools().await;
+        {
+            let mut map = self.tool_location_map.write().await;
+            for tool in &tools {
+                map.insert(tool.name.clone(), ToolLocation::External(config.name.clone()));
+            }
+        }
+
+        tracing::info!(
+            server = %config.name,
+            tool_count = tools.len(),
+            "Remote MCP server connected"
+        );
+
+        // Store connection
+        {
+            let mut servers = self.external_servers.write().await;
+            servers.insert(config.name, connection);
+        }
+
+        Ok(())
+    }
+
     /// Stop a specific external server by name
     ///
     /// Used for incremental refresh when only one server needs to be restarted.
@@ -486,5 +583,18 @@ mod tests {
 
         assert_eq!(report.succeeded.len(), 2);
         assert_eq!(report.failed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_remote_server_config_import() {
+        // Verify remote server types are accessible
+        use crate::mcp::types::{McpRemoteServerConfig, TransportPreference};
+
+        let config = McpRemoteServerConfig::new("test-remote", "https://example.com/mcp")
+            .with_transport(TransportPreference::Http)
+            .with_timeout(30);
+
+        assert_eq!(config.name, "test-remote");
+        assert_eq!(config.url, "https://example.com/mcp");
     }
 }
