@@ -185,6 +185,23 @@ pub trait AetherEventHandler: Send + Sync {
     /// Called when sub-agent completes
     fn on_subagent_completed(&self, child_session_id: String, success: bool, summary: String);
 
+    /// Called when session is compacted (context reduced via summarization)
+    ///
+    /// This callback notifies the UI that a session's context has been compacted
+    /// to prevent token overflow. The UI may display this information to the user
+    /// or update any token usage displays.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session that was compacted
+    /// * `tokens_before` - Token count before compaction
+    /// * `tokens_after` - Token count after compaction
+    fn on_session_compacted(&self, session_id: String, tokens_before: u64, tokens_after: u64) {
+        // Default: no-op
+        // UI implementations should override to display compaction notification
+        let _ = (session_id, tokens_before, tokens_after);
+    }
+
     // ========================================================================
     // UNIFIED PLANNER CALLBACKS (Phase 10)
     // ========================================================================

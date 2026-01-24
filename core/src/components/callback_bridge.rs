@@ -31,6 +31,7 @@ impl EventHandler for CallbackBridge {
     fn subscriptions(&self) -> Vec<EventType> {
         vec![
             EventType::SessionCreated,
+            EventType::SessionCompacted,
             EventType::ToolCallStarted,
             EventType::ToolCallCompleted,
             EventType::ToolCallFailed,
@@ -55,6 +56,13 @@ impl EventHandler for CallbackBridge {
         match event {
             AetherEvent::SessionCreated(info) => {
                 self.handler.on_session_started(info.id.clone());
+            }
+            AetherEvent::SessionCompacted(info) => {
+                self.handler.on_session_compacted(
+                    info.session_id.clone(),
+                    info.tokens_before,
+                    info.tokens_after,
+                );
             }
             AetherEvent::ToolCallStarted(info) => {
                 self.handler
@@ -140,9 +148,9 @@ impl EventHandler for CallbackBridge {
 mod tests {
     use super::*;
     use crate::event::{
-        AiResponse, ErrorKind, EventBus, LoopState, PlanStep, SessionInfo, StepStatus,
-        SubAgentRequest, SubAgentResult, TaskPlan, TokenUsage, ToolCallError, ToolCallResult,
-        ToolCallStarted,
+        AiResponse, CompactionInfo, ErrorKind, EventBus, LoopState, PlanStep, SessionInfo,
+        StepStatus, SubAgentRequest, SubAgentResult, TaskPlan, TokenUsage, ToolCallError,
+        ToolCallResult, ToolCallStarted,
     };
     use crate::event_handler::McpStartupReportFFI;
     use crate::intent::ExecutableTaskFFI;
@@ -150,6 +158,7 @@ mod tests {
 
     struct MockHandler {
         session_started_count: AtomicU32,
+        session_compacted_count: AtomicU32,
         tool_started_count: AtomicU32,
         tool_completed_count: AtomicU32,
         tool_failed_count: AtomicU32,
@@ -165,6 +174,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 session_started_count: AtomicU32::new(0),
+                session_compacted_count: AtomicU32::new(0),
                 tool_started_count: AtomicU32::new(0),
                 tool_completed_count: AtomicU32::new(0),
                 tool_failed_count: AtomicU32::new(0),
@@ -194,6 +204,9 @@ mod tests {
 
         fn on_session_started(&self, _: String) {
             self.session_started_count.fetch_add(1, Ordering::SeqCst);
+        }
+        fn on_session_compacted(&self, _: String, _: u64, _: u64) {
+            self.session_compacted_count.fetch_add(1, Ordering::SeqCst);
         }
         fn on_tool_call_started(&self, _: String, _: String) {
             self.tool_started_count.fetch_add(1, Ordering::SeqCst);
@@ -252,6 +265,7 @@ mod tests {
         let subs = bridge.subscriptions();
 
         assert!(subs.contains(&EventType::SessionCreated));
+        assert!(subs.contains(&EventType::SessionCompacted));
         assert!(subs.contains(&EventType::ToolCallStarted));
         assert!(subs.contains(&EventType::ToolCallCompleted));
         assert!(subs.contains(&EventType::ToolCallFailed));
@@ -282,6 +296,51 @@ mod tests {
 
         bridge.handle(&event, &ctx).await.unwrap();
         assert_eq!(mock.session_started_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_session_compacted_callback() {
+        let (mock, handler) = create_handler_with_ref();
+        let bridge = CallbackBridge::new(handler);
+        let ctx = create_test_context();
+
+        let event = AetherEvent::SessionCompacted(CompactionInfo {
+            session_id: "test-session".into(),
+            tokens_before: 150_000,
+            tokens_after: 50_000,
+            timestamp: 12345,
+        });
+
+        bridge.handle(&event, &ctx).await.unwrap();
+        assert_eq!(mock.session_compacted_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_compaction_info_fields() {
+        // Verify CompactionInfo can be created and cloned correctly
+        let info = CompactionInfo {
+            session_id: "test".to_string(),
+            tokens_before: 150_000,
+            tokens_after: 50_000,
+            timestamp: 12345,
+        };
+
+        let event = AetherEvent::SessionCompacted(info.clone());
+
+        // Verify event can be created and matched
+        assert!(matches!(event, AetherEvent::SessionCompacted(_)));
+
+        // Verify CompactionInfo fields
+        assert_eq!(info.session_id, "test");
+        assert_eq!(info.tokens_before, 150_000);
+        assert_eq!(info.tokens_after, 50_000);
+        assert_eq!(info.timestamp, 12345);
+
+        // Verify compression ratio calculation (useful for UI display)
+        let reduction_percent = ((info.tokens_before - info.tokens_after) as f64
+            / info.tokens_before as f64)
+            * 100.0;
+        assert!((reduction_percent - 66.67).abs() < 0.01);
     }
 
     #[tokio::test]
