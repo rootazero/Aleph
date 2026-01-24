@@ -90,6 +90,7 @@ mod tests {
             started_at: chrono::Utc::now().timestamp_millis() - 100,
             completed_at: chrono::Utc::now().timestamp_millis(),
             token_usage: TokenUsage::default(),
+            session_id: None,
         }
     }
 
@@ -476,6 +477,7 @@ mod tests {
             error_kind: ErrorKind::Timeout,
             is_retryable: true,
             attempts: 3,
+            session_id: None,
         };
         let event = AetherEvent::ToolCallFailed(error);
 
@@ -716,6 +718,7 @@ mod tests {
             started_at: 1000,
             completed_at: 2000,
             token_usage: TokenUsage::default(),
+            session_id: None,
         });
 
         // Handle ToolCallCompleted -> should continue to next step or complete

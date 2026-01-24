@@ -295,6 +295,7 @@ mod tests {
             tool: "web_fetch".into(),
             input: serde_json::json!({}),
             timestamp: 0,
+            session_id: None,
         });
 
         bridge.handle(&event, &ctx).await.unwrap();
@@ -318,6 +319,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 0,
             },
+            session_id: None,
         });
 
         bridge.handle(&event, &ctx).await.unwrap();
@@ -337,6 +339,7 @@ mod tests {
             error_kind: ErrorKind::ServiceUnavailable,
             is_retryable: true,
             attempts: 1,
+            session_id: None,
         });
 
         bridge.handle(&event, &ctx).await.unwrap();
@@ -410,6 +413,9 @@ mod tests {
             summary: "Found 5 files".into(),
             success: true,
             error: None,
+            request_id: None,
+            tools_called: vec![],
+            execution_duration_ms: None,
         });
 
         bridge.handle(&event, &ctx).await.unwrap();

@@ -5,15 +5,29 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use super::traits::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult};
+use super::coordinator::{CoordinatorConfig, ExecutionCoordinator, ExecutionError, ToolCallSummary};
+use super::result_collector::ResultCollector;
+use super::traits::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult, ToolCallRecord};
 use super::{McpSubAgent, SkillSubAgent};
 use crate::dispatcher::ToolRegistry;
 use crate::error::{AetherError, Result};
+
+/// Convert ToolCallSummary to ToolCallRecord
+fn summary_to_record(summary: &ToolCallSummary) -> ToolCallRecord {
+    let success = summary.state.status == "completed";
+    ToolCallRecord {
+        name: summary.tool.clone(),
+        arguments: serde_json::Value::Null, // Arguments not preserved in summary
+        success,
+        result_summary: summary.state.title.clone().unwrap_or_default(),
+    }
+}
 
 /// Type of sub-agent
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -56,11 +70,28 @@ impl std::str::FromStr for SubAgentType {
 ///
 /// Routes requests to the appropriate sub-agent and manages
 /// the sub-agent lifecycle.
+///
+/// # Synchronous Execution
+///
+/// The dispatcher supports synchronous execution modes that block until
+/// sub-agent completion:
+///
+/// ```rust,ignore
+/// // Single synchronous dispatch
+/// let result = dispatcher.dispatch_sync(request, Duration::from_secs(60)).await?;
+///
+/// // Parallel synchronous dispatch (waits for all)
+/// let results = dispatcher.dispatch_parallel_sync(requests, Duration::from_secs(120)).await;
+/// ```
 pub struct SubAgentDispatcher {
     /// Registered sub-agents
     agents: HashMap<String, Arc<dyn SubAgent>>,
     /// Default agent for unmatched requests
     default_agent: Option<String>,
+    /// Coordinator for synchronous execution
+    coordinator: Arc<ExecutionCoordinator>,
+    /// Collector for tool call aggregation
+    collector: Arc<ResultCollector>,
 }
 
 impl SubAgentDispatcher {
@@ -69,6 +100,18 @@ impl SubAgentDispatcher {
         Self {
             agents: HashMap::new(),
             default_agent: None,
+            coordinator: Arc::new(ExecutionCoordinator::new(CoordinatorConfig::default())),
+            collector: Arc::new(ResultCollector::new()),
+        }
+    }
+
+    /// Create a new dispatcher with custom configuration
+    pub fn with_config(coordinator_config: CoordinatorConfig) -> Self {
+        Self {
+            agents: HashMap::new(),
+            default_agent: None,
+            coordinator: Arc::new(ExecutionCoordinator::new(coordinator_config)),
+            collector: Arc::new(ResultCollector::new()),
         }
     }
 
@@ -85,6 +128,16 @@ impl SubAgentDispatcher {
         dispatcher.register(Arc::new(skill_agent));
 
         dispatcher
+    }
+
+    /// Get the execution coordinator (for external event integration)
+    pub fn coordinator(&self) -> &Arc<ExecutionCoordinator> {
+        &self.coordinator
+    }
+
+    /// Get the result collector (for external event integration)
+    pub fn collector(&self) -> &Arc<ResultCollector> {
+        &self.collector
     }
 
     /// Register a sub-agent
@@ -230,6 +283,238 @@ impl SubAgentDispatcher {
         futures::future::join_all(futures).await
     }
 
+    /// Dispatch a request and wait for the result synchronously
+    ///
+    /// This method blocks until the sub-agent completes or the timeout expires.
+    /// It also collects tool call information via the ResultCollector.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The sub-agent request to execute
+    /// * `timeout` - Maximum time to wait for completion
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(SubAgentResult)` - The completed result with tool call summaries
+    /// * `Err(ExecutionError)` - On timeout or execution failure
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = dispatcher.dispatch_sync(request, Duration::from_secs(60)).await?;
+    /// println!("Result: {}", result.summary);
+    /// println!("Tools called: {:?}", result.tools_called);
+    /// ```
+    pub async fn dispatch_sync(
+        &self,
+        request: SubAgentRequest,
+        timeout: Duration,
+    ) -> std::result::Result<SubAgentResult, ExecutionError> {
+        let request_id = request.id.clone();
+        info!("Dispatching sync request: {}", request_id);
+
+        // Initialize result collection
+        self.collector.init_request(&request_id).await;
+
+        // Start execution tracking
+        let _handle = self.coordinator.start_execution(&request_id).await;
+
+        // Spawn the actual execution
+        let dispatcher_agents = self.agents.clone();
+        let default_agent = self.default_agent.clone();
+        let coordinator = self.coordinator.clone();
+        let collector = self.collector.clone();
+        let req_id_clone = request_id.clone();
+
+        tokio::spawn(async move {
+            let result = Self::execute_dispatch(
+                &dispatcher_agents,
+                &default_agent,
+                request,
+            )
+            .await;
+
+            // Get tool summaries and convert to records
+            let summaries = collector.get_summary(&req_id_clone).await;
+            let tool_records: Vec<ToolCallRecord> = summaries.iter().map(summary_to_record).collect();
+
+            // Enrich result with tool call information
+            let enriched_result = match result {
+                Ok(mut res) => {
+                    res.request_id = req_id_clone.clone();
+                    res.tools_called = tool_records;
+                    res
+                }
+                Err(e) => SubAgentResult::failure(&req_id_clone, e.to_string())
+                    .with_tools_called(tool_records),
+            };
+
+            // Signal completion
+            coordinator.on_execution_completed(enriched_result).await;
+        });
+
+        // Wait for result
+        let result = self.coordinator.wait_for_result(&request_id, timeout).await;
+
+        // Cleanup
+        self.collector.cleanup(&request_id).await;
+
+        result
+    }
+
+    /// Dispatch multiple requests in parallel and wait for all to complete
+    ///
+    /// This method blocks until all sub-agents complete or the timeout expires.
+    /// Results are returned in the same order as the input requests.
+    ///
+    /// # Arguments
+    ///
+    /// * `requests` - List of sub-agent requests with optional target agent IDs
+    /// * `timeout` - Maximum time to wait for all completions
+    ///
+    /// # Returns
+    ///
+    /// A vector of (request_id, result) pairs in the same order as input.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let requests = vec![
+    ///     (SubAgentRequest::new("task1"), Some("mcp_agent".into())),
+    ///     (SubAgentRequest::new("task2"), None),
+    /// ];
+    /// let results = dispatcher.dispatch_parallel_sync(requests, Duration::from_secs(120)).await;
+    /// for (id, result) in results {
+    ///     match result {
+    ///         Ok(res) => println!("{}: {}", id, res.summary),
+    ///         Err(e) => println!("{}: failed - {:?}", id, e),
+    ///     }
+    /// }
+    /// ```
+    pub async fn dispatch_parallel_sync(
+        &self,
+        requests: Vec<(SubAgentRequest, Option<String>)>,
+        timeout: Duration,
+    ) -> Vec<(String, std::result::Result<SubAgentResult, ExecutionError>)> {
+        if requests.is_empty() {
+            return vec![];
+        }
+
+        info!("Dispatching {} parallel sync requests", requests.len());
+
+        let mut request_ids = Vec::with_capacity(requests.len());
+
+        // Start all executions
+        for (request, agent_id) in requests {
+            let request_id = request.id.clone();
+            request_ids.push(request_id.clone());
+
+            // Initialize result collection
+            self.collector.init_request(&request_id).await;
+
+            // Start execution tracking
+            let _handle = self.coordinator.start_execution(&request_id).await;
+
+            // Spawn the execution
+            let dispatcher_agents = self.agents.clone();
+            let default_agent = self.default_agent.clone();
+            let coordinator = self.coordinator.clone();
+            let collector = self.collector.clone();
+            let req_id_clone = request_id.clone();
+
+            tokio::spawn(async move {
+                let result = if let Some(ref id) = agent_id {
+                    if let Some(agent) = dispatcher_agents.get(id) {
+                        agent.execute(request).await
+                    } else {
+                        Self::execute_dispatch(&dispatcher_agents, &default_agent, request).await
+                    }
+                } else {
+                    Self::execute_dispatch(&dispatcher_agents, &default_agent, request).await
+                };
+
+                // Get tool summaries and convert to records
+                let summaries = collector.get_summary(&req_id_clone).await;
+                let tool_records: Vec<ToolCallRecord> = summaries.iter().map(summary_to_record).collect();
+
+                // Enrich result
+                let enriched_result = match result {
+                    Ok(mut res) => {
+                        res.request_id = req_id_clone.clone();
+                        res.tools_called = tool_records;
+                        res
+                    }
+                    Err(e) => SubAgentResult::failure(&req_id_clone, e.to_string())
+                        .with_tools_called(tool_records),
+                };
+
+                coordinator.on_execution_completed(enriched_result).await;
+            });
+        }
+
+        // Wait for all results
+        let results = self.coordinator.wait_for_all(&request_ids, timeout).await;
+
+        // Cleanup
+        for id in &request_ids {
+            self.collector.cleanup(id).await;
+        }
+
+        results
+    }
+
+    /// Internal helper to execute dispatch logic (for use in spawned tasks)
+    async fn execute_dispatch(
+        agents: &HashMap<String, Arc<dyn SubAgent>>,
+        default_agent: &Option<String>,
+        request: SubAgentRequest,
+    ) -> Result<SubAgentResult> {
+        // 1. Check for explicit agent_id in context
+        if let Some(agent_id) = request.context.get("agent_id").and_then(|v| v.as_str()) {
+            if let Some(agent) = agents.get(agent_id) {
+                return agent.execute(request).await;
+            }
+        }
+
+        // 2. Try to match by agent type in context
+        if let Some(agent_type) = request.context.get("agent_type").and_then(|v| v.as_str()) {
+            if let Ok(agent_type) = agent_type.parse::<SubAgentType>() {
+                let agent_id = match agent_type {
+                    SubAgentType::Mcp => "mcp_agent",
+                    SubAgentType::Skill => "skill_agent",
+                    SubAgentType::Custom => "custom_agent",
+                };
+                if let Some(agent) = agents.get(agent_id) {
+                    return agent.execute(request).await;
+                }
+            }
+        }
+
+        // 3. Find agents that can handle this request
+        let mut capable_agents: Vec<_> = agents
+            .values()
+            .filter(|agent| agent.can_handle(&request))
+            .collect();
+
+        if !capable_agents.is_empty() {
+            capable_agents.sort_by_key(|agent| agent.capabilities().len());
+            return capable_agents[0].execute(request).await;
+        }
+
+        // 4. Try default agent
+        if let Some(ref default_id) = default_agent {
+            if let Some(agent) = agents.get(default_id) {
+                return agent.execute(request).await;
+            }
+        }
+
+        // No suitable agent found
+        Err(AetherError::NotFound(format!(
+            "No sub-agent found to handle request: {}",
+            request.prompt.chars().take(50).collect::<String>()
+        )))
+    }
+
     /// Get dispatcher info for prompt/context
     pub fn get_info(&self) -> DispatcherInfo {
         DispatcherInfo {
@@ -349,5 +634,119 @@ mod tests {
         let info = dispatcher.get_info();
         assert_eq!(info.agent_count, 2);
         assert_eq!(info.agents.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_dispatcher_with_config() {
+        let config = CoordinatorConfig {
+            execution_timeout_ms: 60_000,
+            result_ttl_ms: 300_000,
+            max_concurrent: 10,
+            progress_events_enabled: false,
+        };
+        let dispatcher = SubAgentDispatcher::with_config(config);
+        assert_eq!(dispatcher.list_agents().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_and_collector_accessors() {
+        let dispatcher = SubAgentDispatcher::new();
+
+        // Can access coordinator
+        let coordinator = dispatcher.coordinator();
+        assert!(Arc::strong_count(coordinator) >= 1);
+
+        // Can access collector
+        let collector = dispatcher.collector();
+        assert!(Arc::strong_count(collector) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_sync_success() {
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let dispatcher = SubAgentDispatcher::with_defaults(registry);
+
+        let request = SubAgentRequest::new("Execute skill task");
+        let result = dispatcher.dispatch_sync(request, Duration::from_secs(5)).await;
+
+        // Should succeed (skill agent handles it)
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_sync_no_agent() {
+        let dispatcher = SubAgentDispatcher::new(); // No agents registered
+
+        let request = SubAgentRequest::new("Do something");
+        let result = dispatcher.dispatch_sync(request, Duration::from_secs(5)).await;
+
+        // Should fail because no agents
+        assert!(result.is_ok()); // We get a result, but it indicates failure
+        let result = result.unwrap();
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_parallel_sync_empty() {
+        let dispatcher = SubAgentDispatcher::new();
+
+        let results = dispatcher.dispatch_parallel_sync(vec![], Duration::from_secs(5)).await;
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_parallel_sync_multiple() {
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let dispatcher = SubAgentDispatcher::with_defaults(registry);
+
+        let requests = vec![
+            (SubAgentRequest::new("Task 1"), None),
+            (SubAgentRequest::new("Task 2"), None),
+        ];
+
+        let results = dispatcher.dispatch_parallel_sync(requests, Duration::from_secs(5)).await;
+
+        assert_eq!(results.len(), 2);
+        for (id, result) in results {
+            assert!(!id.is_empty());
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_summary_to_record_completed() {
+        let summary = ToolCallSummary {
+            id: "call-1".to_string(),
+            tool: "web_fetch".to_string(),
+            state: super::super::coordinator::ToolCallState {
+                status: "completed".to_string(),
+                title: Some("Fetched page".to_string()),
+            },
+        };
+
+        let record = summary_to_record(&summary);
+        assert_eq!(record.name, "web_fetch");
+        assert!(record.success);
+        assert_eq!(record.result_summary, "Fetched page");
+    }
+
+    #[test]
+    fn test_summary_to_record_error() {
+        let summary = ToolCallSummary {
+            id: "call-2".to_string(),
+            tool: "search".to_string(),
+            state: super::super::coordinator::ToolCallState {
+                status: "error".to_string(),
+                title: Some("Connection timeout".to_string()),
+            },
+        };
+
+        let record = summary_to_record(&summary);
+        assert_eq!(record.name, "search");
+        assert!(!record.success);
+        assert_eq!(record.result_summary, "Connection timeout");
     }
 }

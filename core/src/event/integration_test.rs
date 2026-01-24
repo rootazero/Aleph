@@ -66,6 +66,7 @@ mod tests {
                     started_at: chrono::Utc::now().timestamp_millis(),
                     completed_at: chrono::Utc::now().timestamp_millis(),
                     token_usage: TokenUsage::default(),
+                    session_id: None,
                 })])
             } else {
                 Ok(vec![])

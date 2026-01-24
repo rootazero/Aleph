@@ -904,6 +904,7 @@ mod tests {
             error_kind: crate::event::ErrorKind::Timeout,
             is_retryable: true,
             attempts: 3,
+            session_id: None,
         };
         let event = AetherEvent::ToolCallFailed(error);
 

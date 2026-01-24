@@ -888,6 +888,7 @@ mod tests {
             started_at: 1000,
             completed_at: 2000,
             token_usage: TokenUsage::default(),
+            session_id: None,
         };
 
         let event = AetherEvent::ToolCallCompleted(result_event);

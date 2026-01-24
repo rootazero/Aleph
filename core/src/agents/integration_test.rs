@@ -58,6 +58,9 @@ async fn test_full_subagent_lifecycle() {
         summary: "Found 10 Rust files".into(),
         success: true,
         error: None,
+        request_id: None,
+        tools_called: vec![],
+        execution_duration_ms: None,
     };
 
     bus.publish(AetherEvent::SubAgentCompleted(completion.clone()))
@@ -176,6 +179,9 @@ async fn test_nested_subagent_tracking() {
         summary: "Research complete".into(),
         success: true,
         error: None,
+        request_id: None,
+        tools_called: vec![],
+        execution_duration_ms: None,
     };
     handler
         .handle(&AetherEvent::SubAgentCompleted(result2), &ctx)
@@ -192,6 +198,9 @@ async fn test_nested_subagent_tracking() {
         summary: "Exploration complete".into(),
         success: true,
         error: None,
+        request_id: None,
+        tools_called: vec![],
+        execution_duration_ms: None,
     };
     handler
         .handle(&AetherEvent::SubAgentCompleted(result1), &ctx)
@@ -224,6 +233,9 @@ async fn test_subagent_failure_tracking() {
         summary: "".into(),
         success: false,
         error: Some("Tool execution failed".into()),
+        request_id: None,
+        tools_called: vec![],
+        execution_duration_ms: None,
     };
     handler
         .handle(&AetherEvent::SubAgentCompleted(result), &ctx)
@@ -316,6 +328,9 @@ async fn test_concurrent_subagent_sessions() {
             summary: format!("Completed {}", i),
             success: true,
             error: None,
+            request_id: None,
+            tools_called: vec![],
+            execution_duration_ms: None,
         };
         handler
             .handle(&AetherEvent::SubAgentCompleted(result), &ctx)

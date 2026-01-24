@@ -278,6 +278,7 @@ impl EventHandler for ToolExecutor {
             tool: request.tool.clone(),
             input: request.parameters.clone(),
             timestamp: started_at,
+            session_id: None,
         });
         ctx.bus.publish(started_event).await;
 
@@ -297,6 +298,7 @@ impl EventHandler for ToolExecutor {
                     started_at,
                     completed_at,
                     token_usage: TokenUsage::default(),
+                    session_id: None,
                 })])
             }
             Err((error, error_kind, attempts)) => {
@@ -308,6 +310,7 @@ impl EventHandler for ToolExecutor {
                     error_kind,
                     is_retryable: self.is_retryable(error_kind),
                     attempts,
+                    session_id: None,
                 })])
             }
         }

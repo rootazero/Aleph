@@ -268,6 +268,9 @@ pub struct ToolCallStarted {
     pub tool: String,
     pub input: Value,
     pub timestamp: i64,
+    /// Session ID for sub-agent correlation (optional for backwards compatibility)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Tool call completed successfully
@@ -280,6 +283,9 @@ pub struct ToolCallResult {
     pub started_at: i64,
     pub completed_at: i64,
     pub token_usage: TokenUsage,
+    /// Session ID for sub-agent correlation (optional for backwards compatibility)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Tool call failed
@@ -291,6 +297,9 @@ pub struct ToolCallError {
     pub error_kind: ErrorKind,
     pub is_retryable: bool,
     pub attempts: u32,
+    /// Session ID for sub-agent correlation (optional for backwards compatibility)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Error classification for retry logic
@@ -407,6 +416,25 @@ pub struct SubAgentResult {
     pub summary: String,
     pub success: bool,
     pub error: Option<String>,
+    /// Request ID for result correlation (optional for backwards compatibility)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Tool call summaries from sub-agent execution
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools_called: Vec<ToolCallSummaryEvent>,
+    /// Execution duration in milliseconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_duration_ms: Option<u64>,
+}
+
+/// Tool call summary for event broadcasting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallSummaryEvent {
+    pub id: String,
+    pub tool: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 // ============================================================================
@@ -480,6 +508,7 @@ mod tests {
             started_at: 1000,
             completed_at: 2000,
             token_usage: TokenUsage::default(),
+            session_id: None,
         });
 
         let json = serde_json::to_string(&event).unwrap();

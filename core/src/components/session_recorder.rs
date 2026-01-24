@@ -777,6 +777,7 @@ mod tests {
             started_at: 1000,
             completed_at: 2000,
             token_usage: TokenUsage::default(),
+            session_id: None,
         });
 
         let part = SessionRecorder::event_to_part(&event);
@@ -802,6 +803,7 @@ mod tests {
             error_kind: ErrorKind::NotFound,
             is_retryable: false,
             attempts: 1,
+            session_id: None,
         });
 
         let part = SessionRecorder::event_to_part(&event);
