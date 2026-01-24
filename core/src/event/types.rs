@@ -66,9 +66,18 @@ pub enum EventType {
     SubAgentStarted,
     SubAgentCompleted,
 
-    // User interaction
+    // User interaction (legacy)
     UserQuestionAsked,
     UserResponseReceived,
+
+    // Permission system (new)
+    PermissionAsked,
+    PermissionReplied,
+
+    // Question system (new)
+    QuestionAsked,
+    QuestionReplied,
+    QuestionRejected,
 
     // AI response
     AiResponseGenerated,
@@ -114,9 +123,29 @@ pub enum AetherEvent {
     SubAgentStarted(SubAgentRequest),
     SubAgentCompleted(SubAgentResult),
 
-    // User interaction events
+    // User interaction events (legacy)
     UserQuestionAsked(UserQuestion),
     UserResponseReceived(UserResponse),
+
+    // Permission system events (new - OpenCode compatible)
+    PermissionAsked(crate::event::permission::PermissionRequest),
+    PermissionReplied {
+        session_id: String,
+        request_id: String,
+        reply: crate::event::permission::PermissionReply,
+    },
+
+    // Question system events (new - structured Q&A)
+    QuestionAsked(crate::event::question::QuestionRequest),
+    QuestionReplied {
+        session_id: String,
+        request_id: String,
+        answers: Vec<crate::event::question::Answer>,
+    },
+    QuestionRejected {
+        session_id: String,
+        request_id: String,
+    },
 
     // AI response events
     AiResponseGenerated(AiResponse),
@@ -149,6 +178,11 @@ impl AetherEvent {
             Self::SubAgentCompleted(_) => EventType::SubAgentCompleted,
             Self::UserQuestionAsked(_) => EventType::UserQuestionAsked,
             Self::UserResponseReceived(_) => EventType::UserResponseReceived,
+            Self::PermissionAsked(_) => EventType::PermissionAsked,
+            Self::PermissionReplied { .. } => EventType::PermissionReplied,
+            Self::QuestionAsked(_) => EventType::QuestionAsked,
+            Self::QuestionReplied { .. } => EventType::QuestionReplied,
+            Self::QuestionRejected { .. } => EventType::QuestionRejected,
             Self::AiResponseGenerated(_) => EventType::AiResponseGenerated,
             Self::PartAdded(_) => EventType::PartAdded,
             Self::PartUpdated(_) => EventType::PartUpdated,
@@ -177,6 +211,11 @@ impl AetherEvent {
             Self::SubAgentCompleted(_) => "SubAgentCompleted",
             Self::UserQuestionAsked(_) => "UserQuestionAsked",
             Self::UserResponseReceived(_) => "UserResponseReceived",
+            Self::PermissionAsked(_) => "PermissionAsked",
+            Self::PermissionReplied { .. } => "PermissionReplied",
+            Self::QuestionAsked(_) => "QuestionAsked",
+            Self::QuestionReplied { .. } => "QuestionReplied",
+            Self::QuestionRejected { .. } => "QuestionRejected",
             Self::AiResponseGenerated(_) => "AiResponseGenerated",
             Self::PartAdded(_) => "PartAdded",
             Self::PartUpdated(_) => "PartUpdated",

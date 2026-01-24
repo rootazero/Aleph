@@ -309,6 +309,13 @@ impl SessionRecorder {
             | AetherEvent::SubAgentCompleted(_)
             | AetherEvent::UserQuestionAsked(_)
             | AetherEvent::UserResponseReceived(_)
+            // Permission system events (handled separately)
+            | AetherEvent::PermissionAsked(_)
+            | AetherEvent::PermissionReplied { .. }
+            // Question system events (handled separately)
+            | AetherEvent::QuestionAsked(_)
+            | AetherEvent::QuestionReplied { .. }
+            | AetherEvent::QuestionRejected { .. }
             // Part update events are meta-events, not session parts themselves
             | AetherEvent::PartAdded(_)
             | AetherEvent::PartUpdated(_)

@@ -106,6 +106,10 @@ pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
 pub mod vision; // NEW: Vision capability (screen OCR, image understanding) // NEW: Media generation providers (image, video, audio, speech)
 
+// NEW: Permission and Question systems (OpenCode compatible)
+pub mod permission; // Rule-based permission system
+pub mod question; // Structured user interaction
+
 // Integration tests module
 #[cfg(test)]
 mod tests;
@@ -479,6 +483,17 @@ pub use crate::compressor::{
     CompressionPrompt, ContextCompressor, KeyInfo, KeyInfoExtractor, NoOpCompressor,
     RuleBasedStrategy,
 };
+
+// Permission system exports (OpenCode compatible)
+// Note: PermissionRule is not exported here to avoid conflict with extension::PermissionRule
+// Access via permission::PermissionRule if needed
+pub use crate::permission::{
+    PermissionConfig, PermissionConfigMap, PermissionError, PermissionEvaluator,
+    PermissionManager, PermissionManagerConfig, PermissionMapping, Ruleset,
+};
+
+// Question system exports (structured user interaction)
+pub use crate::question::{QuestionError, QuestionManager, QuestionManagerConfig};
 
 // Tool system exports (unified tool traits replacing rig-core)
 pub use crate::tools::{AetherTool, AetherToolDyn, AetherToolServer, AetherToolServerHandle};
