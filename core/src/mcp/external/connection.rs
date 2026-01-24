@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 
 use crate::error::{AetherError, Result};
 use crate::mcp::jsonrpc::{mcp as mcp_types, IdGenerator, JsonRpcNotification, JsonRpcRequest};
-use crate::mcp::transport::StdioTransport;
+use crate::mcp::transport::{McpTransport, StdioTransport};
 use crate::mcp::types::McpTool;
 
 /// Default timeout for the entire MCP server connection process
@@ -32,11 +32,15 @@ pub enum ConnectionState {
 }
 
 /// External MCP server connection
+///
+/// This struct manages the lifecycle and communication with an MCP server.
+/// It uses a trait object (`Box<dyn McpTransport>`) to support different
+/// transport implementations (stdio, HTTP, SSE).
 pub struct McpServerConnection {
     /// Server name
     name: String,
-    /// Transport layer
-    transport: StdioTransport,
+    /// Transport layer (trait object for flexibility)
+    transport: Box<dyn McpTransport>,
     /// Request ID generator
     id_gen: IdGenerator,
     /// Server capabilities (after initialize)
@@ -103,8 +107,30 @@ impl McpServerConnection {
             transport = transport.with_timeout(t);
         }
 
+        Self::with_transport(name, Box::new(transport)).await
+    }
+
+    /// Create a connection with a custom transport
+    ///
+    /// This constructor allows creating connections with any transport implementation,
+    /// enabling support for HTTP, SSE, or mock transports for testing.
+    ///
+    /// # Arguments
+    /// * `name` - Server name for identification
+    /// * `transport` - A boxed transport implementing `McpTransport`
+    ///
+    /// # Example
+    /// ```ignore
+    /// let http_transport = HttpTransport::new("https://mcp.example.com").await?;
+    /// let conn = McpServerConnection::with_transport("remote-server", Box::new(http_transport)).await?;
+    /// ```
+    pub async fn with_transport(
+        name: impl Into<String>,
+        transport: Box<dyn McpTransport>,
+    ) -> Result<Self> {
+        let name = name.into();
         let conn = Self {
-            name: name.to_string(),
+            name: name.clone(),
             transport,
             id_gen: IdGenerator::new(),
             capabilities: RwLock::new(None),
@@ -129,7 +155,7 @@ impl McpServerConnection {
             })?,
         );
 
-        let response = self.transport.send(&request).await?;
+        let response = self.transport.send_request(&request).await?;
         let result = response.into_result().map_err(|e| {
             AetherError::IoError(format!(
                 "MCP server '{}' initialize failed: {}",
@@ -184,7 +210,7 @@ impl McpServerConnection {
     /// Refresh the cached tools list
     pub async fn refresh_tools(&self) -> Result<()> {
         let request = JsonRpcRequest::new(self.id_gen.next(), "tools/list");
-        let response = self.transport.send(&request).await?;
+        let response = self.transport.send_request(&request).await?;
 
         let result = response.into_result().map_err(|e| {
             AetherError::IoError(format!(
@@ -275,7 +301,7 @@ impl McpServerConnection {
             "Calling tool"
         );
 
-        let response = self.transport.send(&request).await?;
+        let response = self.transport.send_request(&request).await?;
         let result = response.into_result().map_err(|e| {
             AetherError::IoError(format!(
                 "Tool call '{}' on '{}' failed: {}",
@@ -344,7 +370,7 @@ impl McpServerConnection {
 
     /// Check if server is running
     pub async fn is_running(&self) -> bool {
-        self.transport.is_running().await
+        self.transport.is_alive().await
     }
 
     /// Close the connection
