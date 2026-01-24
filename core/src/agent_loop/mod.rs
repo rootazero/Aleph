@@ -64,6 +64,7 @@ pub mod config;
 pub mod decision;
 pub mod guards;
 pub mod message_builder;
+pub mod overflow;
 pub mod session_sync;
 pub mod state;
 
@@ -79,6 +80,7 @@ pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig, ThinkRetryCo
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
 pub use guards::{GuardViolation, LoopGuard};
 pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCall};
+pub use overflow::{ModelLimit, OverflowConfig, OverflowDetector};
 pub use session_sync::SessionSync;
 pub use state::{LoopState, LoopStep, Observation, RequestContext, StepSummary, Thinking, ToolInfo};
 
