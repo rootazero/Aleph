@@ -126,6 +126,34 @@ pub struct LoopConfig {
     /// Retry configuration for think operations (LLM calls)
     #[serde(default)]
     pub think_retry: ThinkRetryConfig,
+
+    // ========================================================================
+    // Unified Session Model Feature Flags (Phase 1-3 Migration)
+    // ========================================================================
+
+    /// Use unified ExecutionSession model (Phase 1)
+    ///
+    /// When enabled, the agent loop creates and maintains an ExecutionSession
+    /// alongside LoopState, syncing state between them using SessionSync.
+    /// This is the first step toward deprecating LoopState.
+    #[serde(default)]
+    pub use_unified_session: bool,
+
+    /// Use new MessageBuilder for prompt construction (Phase 2)
+    ///
+    /// When enabled, the agent loop uses MessageBuilder to convert
+    /// SessionParts to LLM messages, including system reminder injection.
+    /// Requires use_unified_session to be true.
+    #[serde(default)]
+    pub use_message_builder: bool,
+
+    /// Enable real-time overflow detection (Phase 2)
+    ///
+    /// When enabled, the agent loop checks for context overflow before
+    /// each iteration and triggers compaction when needed.
+    /// Requires use_unified_session to be true.
+    #[serde(default)]
+    pub use_realtime_overflow: bool,
 }
 
 /// Retry configuration for think operations (LLM calls)
@@ -217,6 +245,10 @@ impl Default for LoopConfig {
             failure_threshold: default_failure_threshold(),
             doom_loop_threshold: default_doom_loop_threshold(),
             think_retry: ThinkRetryConfig::default(),
+            // Unified session model flags (all disabled by default for safe rollout)
+            use_unified_session: false,
+            use_message_builder: false,
+            use_realtime_overflow: false,
         }
     }
 }
@@ -443,6 +475,32 @@ impl LoopConfig {
         self
     }
 
+    /// Builder pattern: enable unified session model
+    pub fn with_unified_session(mut self, enabled: bool) -> Self {
+        self.use_unified_session = enabled;
+        self
+    }
+
+    /// Builder pattern: enable message builder
+    pub fn with_message_builder(mut self, enabled: bool) -> Self {
+        self.use_message_builder = enabled;
+        self
+    }
+
+    /// Builder pattern: enable realtime overflow detection
+    pub fn with_realtime_overflow(mut self, enabled: bool) -> Self {
+        self.use_realtime_overflow = enabled;
+        self
+    }
+
+    /// Enable all unified session model features
+    pub fn with_all_unified_features(mut self) -> Self {
+        self.use_unified_session = true;
+        self.use_message_builder = true;
+        self.use_realtime_overflow = true;
+        self
+    }
+
     /// Check if the current mode allows a specific tool
     ///
     /// In PlanMode, only read operations are allowed.
@@ -523,6 +581,10 @@ impl LoopConfig {
                 max_backoff_ms: 1000,
                 respect_retry_after: true,
             },
+            // Enable unified session features for testing
+            use_unified_session: true,
+            use_message_builder: true,
+            use_realtime_overflow: true,
         }
     }
 
@@ -730,5 +792,65 @@ mod tests {
         let config = LoopConfig::default().with_think_retry(retry_config.clone());
         assert_eq!(config.think_retry.max_retries, 5);
         assert_eq!(config.think_retry.initial_backoff_ms, 1000);
+    }
+
+    // ========================================================================
+    // Unified Session Model Feature Flags Tests
+    // ========================================================================
+
+    #[test]
+    fn test_unified_session_feature_flags_default() {
+        let config = LoopConfig::default();
+
+        // All flags disabled by default for safe rollout
+        assert!(!config.use_unified_session);
+        assert!(!config.use_message_builder);
+        assert!(!config.use_realtime_overflow);
+    }
+
+    #[test]
+    fn test_unified_session_feature_flags_testing() {
+        let config = LoopConfig::for_testing();
+
+        // Testing config enables all features
+        assert!(config.use_unified_session);
+        assert!(config.use_message_builder);
+        assert!(config.use_realtime_overflow);
+    }
+
+    #[test]
+    fn test_unified_session_builder_methods() {
+        let config = LoopConfig::default()
+            .with_unified_session(true)
+            .with_message_builder(true)
+            .with_realtime_overflow(true);
+
+        assert!(config.use_unified_session);
+        assert!(config.use_message_builder);
+        assert!(config.use_realtime_overflow);
+    }
+
+    #[test]
+    fn test_with_all_unified_features() {
+        let config = LoopConfig::default().with_all_unified_features();
+
+        assert!(config.use_unified_session);
+        assert!(config.use_message_builder);
+        assert!(config.use_realtime_overflow);
+    }
+
+    #[test]
+    fn test_unified_session_serialization() {
+        let config = LoopConfig::default().with_all_unified_features();
+        let json = serde_json::to_string(&config).unwrap();
+
+        assert!(json.contains("use_unified_session"));
+        assert!(json.contains("use_message_builder"));
+        assert!(json.contains("use_realtime_overflow"));
+
+        let parsed: LoopConfig = serde_json::from_str(&json).unwrap();
+        assert!(parsed.use_unified_session);
+        assert!(parsed.use_message_builder);
+        assert!(parsed.use_realtime_overflow);
     }
 }
