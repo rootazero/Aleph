@@ -9,6 +9,7 @@
 //! - `QuestionEvent`: Structured user interaction events
 
 mod bus;
+pub mod filter;
 mod handler;
 pub mod permission;
 pub mod question;
@@ -66,3 +67,6 @@ pub use permission::{
 pub use question::{
     Answer, QuestionEvent, QuestionInfo, QuestionOption, QuestionReply, QuestionRequest,
 };
+
+// Event filtering for subscription-based routing
+pub use filter::{EventFilter, GlobalEvent};
