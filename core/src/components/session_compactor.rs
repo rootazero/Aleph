@@ -94,6 +94,79 @@ impl ModelLimit {
 }
 
 // ============================================================================
+// Enhanced Token Usage
+// ============================================================================
+
+/// Enhanced token usage tracking with cache awareness
+///
+/// This struct provides detailed token tracking that matches OpenCode's approach,
+/// including support for reasoning tokens and cache-aware billing calculations.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EnhancedTokenUsage {
+    /// Input tokens consumed
+    pub input: u64,
+    /// Output tokens generated
+    pub output: u64,
+    /// Reasoning tokens (for models that support it)
+    pub reasoning: u64,
+    /// Tokens read from cache (reduces cost)
+    pub cache_read: u64,
+    /// Tokens written to cache
+    pub cache_write: u64,
+}
+
+impl EnhancedTokenUsage {
+    /// Create a new EnhancedTokenUsage with all fields set
+    pub fn new(input: u64, output: u64, reasoning: u64, cache_read: u64, cache_write: u64) -> Self {
+        Self {
+            input,
+            output,
+            reasoning,
+            cache_read,
+            cache_write,
+        }
+    }
+
+    /// Calculate total tokens for overflow detection
+    ///
+    /// OpenCode formula: input + cache.read + output
+    /// This represents the actual context window usage
+    pub fn total_for_overflow(&self) -> u64 {
+        self.input + self.cache_read + self.output
+    }
+
+    /// Calculate billable tokens (cache reads are cheaper, often excluded)
+    ///
+    /// Returns input + output + reasoning tokens (excludes cache reads)
+    pub fn total_billable(&self) -> u64 {
+        self.input + self.output + self.reasoning
+    }
+
+    /// Add another usage to this one
+    pub fn add(&mut self, other: &EnhancedTokenUsage) {
+        self.input += other.input;
+        self.output += other.output;
+        self.reasoning += other.reasoning;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+    }
+
+    /// Check if this usage is empty (all fields are zero)
+    pub fn is_empty(&self) -> bool {
+        self.input == 0
+            && self.output == 0
+            && self.reasoning == 0
+            && self.cache_read == 0
+            && self.cache_write == 0
+    }
+
+    /// Calculate total tokens (all fields combined)
+    pub fn total(&self) -> u64 {
+        self.input + self.output + self.reasoning + self.cache_read + self.cache_write
+    }
+}
+
+// ============================================================================
 // Token Tracker
 // ============================================================================
 
@@ -572,6 +645,142 @@ mod tests {
     use super::*;
     use crate::components::types::{AiResponsePart, ToolCallPart, ToolCallStatus, UserInputPart};
     use serde_json::json;
+
+    // ========================================================================
+    // EnhancedTokenUsage Tests
+    // ========================================================================
+
+    #[test]
+    fn test_enhanced_token_usage() {
+        let usage = EnhancedTokenUsage {
+            input: 1000,
+            output: 500,
+            reasoning: 200,
+            cache_read: 300,
+            cache_write: 100,
+        };
+
+        // Total for overflow check = input + cache_read + output
+        assert_eq!(usage.total_for_overflow(), 1800);
+
+        // Total billable (excluding cache reads which are cheaper)
+        assert_eq!(usage.total_billable(), 1700);
+    }
+
+    #[test]
+    fn test_enhanced_token_usage_default() {
+        let usage = EnhancedTokenUsage::default();
+
+        assert_eq!(usage.input, 0);
+        assert_eq!(usage.output, 0);
+        assert_eq!(usage.reasoning, 0);
+        assert_eq!(usage.cache_read, 0);
+        assert_eq!(usage.cache_write, 0);
+        assert!(usage.is_empty());
+    }
+
+    #[test]
+    fn test_enhanced_token_usage_new() {
+        let usage = EnhancedTokenUsage::new(100, 200, 50, 75, 25);
+
+        assert_eq!(usage.input, 100);
+        assert_eq!(usage.output, 200);
+        assert_eq!(usage.reasoning, 50);
+        assert_eq!(usage.cache_read, 75);
+        assert_eq!(usage.cache_write, 25);
+    }
+
+    #[test]
+    fn test_enhanced_token_usage_add() {
+        let mut usage1 = EnhancedTokenUsage {
+            input: 1000,
+            output: 500,
+            reasoning: 200,
+            cache_read: 300,
+            cache_write: 100,
+        };
+
+        let usage2 = EnhancedTokenUsage {
+            input: 500,
+            output: 250,
+            reasoning: 100,
+            cache_read: 150,
+            cache_write: 50,
+        };
+
+        usage1.add(&usage2);
+
+        assert_eq!(usage1.input, 1500);
+        assert_eq!(usage1.output, 750);
+        assert_eq!(usage1.reasoning, 300);
+        assert_eq!(usage1.cache_read, 450);
+        assert_eq!(usage1.cache_write, 150);
+    }
+
+    #[test]
+    fn test_enhanced_token_usage_add_to_empty() {
+        let mut usage = EnhancedTokenUsage::default();
+
+        let other = EnhancedTokenUsage {
+            input: 100,
+            output: 200,
+            reasoning: 50,
+            cache_read: 75,
+            cache_write: 25,
+        };
+
+        usage.add(&other);
+
+        assert_eq!(usage.input, 100);
+        assert_eq!(usage.output, 200);
+        assert_eq!(usage.reasoning, 50);
+        assert_eq!(usage.cache_read, 75);
+        assert_eq!(usage.cache_write, 25);
+    }
+
+    #[test]
+    fn test_enhanced_token_usage_is_empty() {
+        let empty = EnhancedTokenUsage::default();
+        assert!(empty.is_empty());
+
+        let non_empty = EnhancedTokenUsage {
+            input: 1,
+            ..Default::default()
+        };
+        assert!(!non_empty.is_empty());
+    }
+
+    #[test]
+    fn test_enhanced_token_usage_total() {
+        let usage = EnhancedTokenUsage {
+            input: 1000,
+            output: 500,
+            reasoning: 200,
+            cache_read: 300,
+            cache_write: 100,
+        };
+
+        // Total = all fields combined
+        assert_eq!(usage.total(), 2100);
+    }
+
+    #[test]
+    fn test_enhanced_token_usage_equality() {
+        let usage1 = EnhancedTokenUsage::new(100, 200, 50, 75, 25);
+        let usage2 = EnhancedTokenUsage::new(100, 200, 50, 75, 25);
+        let usage3 = EnhancedTokenUsage::new(100, 200, 50, 75, 26);
+
+        assert_eq!(usage1, usage2);
+        assert_ne!(usage1, usage3);
+    }
+
+    #[test]
+    fn test_enhanced_token_usage_clone() {
+        let usage = EnhancedTokenUsage::new(100, 200, 50, 75, 25);
+        let cloned = usage.clone();
+
+        assert_eq!(usage, cloned);
+    }
 
     // ========================================================================
     // CompactionConfig Tests
