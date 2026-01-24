@@ -26,7 +26,10 @@ mod integration_test;
 pub use callback_bridge::CallbackBridge;
 pub use intent_analyzer::IntentAnalyzer;
 pub use loop_controller::{LoopConfig, LoopController};
-pub use session_compactor::{ModelLimit, SessionCompactor, TokenTracker};
+pub use session_compactor::{
+    CompactionConfig, EnhancedTokenUsage, LlmCallback, ModelLimit, PruneInfo, SessionCompactor,
+    TokenTracker, compaction_prompt,
+};
 pub use session_recorder::{RecorderError, SessionRecord, SessionRecorder};
 pub use subagent_handler::SubAgentHandler;
 pub use task_planner::TaskPlanner;
