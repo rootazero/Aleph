@@ -105,11 +105,11 @@ This document outlines the development phases for Aether, tracking progress and 
 
 **Status**: ✅ COMPLETED
 
-**Goal**: Connect to real AI providers with rig-core framework
+**Goal**: Connect to real AI providers with self-implemented AetherTool system
 
 **Tasks:**
-- [x] Migrate to rig-core 0.28 AI agent framework
-- [x] Implement OpenAI API client via rig-core
+- [x] Implement AetherTool trait for unified tool system
+- [x] Implement OpenAI API client (self-implemented AiProvider)
 - [x] Implement Anthropic Claude API client
 - [x] Implement Google Gemini API client
 - [x] Implement local Ollama execution
@@ -120,16 +120,17 @@ This document outlines the development phases for Aether, tracking progress and 
 - [x] Integrate with memory module for context-aware AI responses
 - [x] Add comprehensive integration tests
 - [x] Add performance benchmarks
-- [x] Implement rig-sqlite for conversation persistence
+- [x] Implement SQLite for conversation persistence
 
 ### Key Files
 
 - `core/src/providers/` - AI provider implementations
+- `core/src/tools/` - AetherTool trait and server
 - `core/src/dispatcher/` - Smart routing system
 - `core/src/config/` - Configuration management (10 type modules)
 - `platforms/macos/Aether/config.example.toml` - Comprehensive configuration example
 
-**Success Criteria**: ✅ All providers implemented with rig-core, router correctly routes requests based on rules
+**Success Criteria**: ✅ All providers implemented with AetherTool system, router correctly routes requests based on rules
 
 ---
 
@@ -171,7 +172,7 @@ This document outlines the development phases for Aether, tracking progress and 
 
 **Status**: ✅ COMPLETED
 
-**Goal**: Production-ready AI agent execution with rig-core integration
+**Goal**: Production-ready AI agent execution with AetherTool integration
 
 ### Core Components (8 Modules)
 
@@ -308,9 +309,10 @@ This document outlines the development phases for Aether, tracking progress and 
 | enigo (input sim) | Swift layer |
 | SwiftUI App lifecycle | main.swift + NSApplicationMain() |
 | NSWindow for Settings | NSPanel |
-| Manual AI providers | rig-core 0.28 framework |
+| Manual AI providers | Self-implemented AetherTool + AiProvider |
 | Single-layer memory | Dual-layer (Raw + Facts) |
+| rig-core 0.28 | Removed (migrated to AetherTool system) |
 
 ---
 
-**Last Updated**: 2026-01-18
+**Last Updated**: 2026-01-24

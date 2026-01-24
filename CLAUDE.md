@@ -57,11 +57,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Technical Stack
 
-**Architecture**: Rust Core + rig-core + Platform UI
+**Architecture**: Rust Core + Platform UI
 
 | Layer | Technology |
 |-------|------------|
-| **Rust Core** | rig-core 0.28, rig-sqlite, UniFFI, tokio, reqwest |
+| **Rust Core** | Self-implemented AetherTool system, UniFFI, tokio, reqwest |
 | **macOS UI** | Swift + SwiftUI (Native), NSApplicationMain() entry |
 | **Cross-Platform** | Tauri 2.0 + React + TypeScript (Windows, Linux) |
 
@@ -81,7 +81,7 @@ aether/
 │   ├── src/
 │   │   ├── lib.rs             # UniFFI/C ABI exports
 │   │   ├── agent_loop/        # Core observe-think-act-feedback cycle
-│   │   ├── agents/            # Unified agent system (sub-agent + rig-core)
+│   │   ├── agents/            # Unified agent system (sub-agents + delegation)
 │   │   ├── components/        # 8 agentic loop components
 │   │   ├── dispatcher/        # Multi-layer routing & task orchestration
 │   │   ├── intent/            # Three-layer intent detection (L1-L3)
@@ -193,7 +193,8 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **dispatcher** | Multi-layer routing hub with 16 sub-modules: planner/, scheduler/, executor/, model_router/, monitor/, context/, analyzer/, risk/, callback/, agent_types/, registry, confirmation, async_confirmation, integration, types, engine |
 | **thinker** | LLM decision-making layer with model routing, prompt building, tool filtering |
 | **three_layer** | Control architecture: Orchestrator (FSM) / Skill (DAG) / Tools (Safety) |
-| **rig-core** | AI provider abstraction (OpenAI, Anthropic, Gemini) |
+| **AetherTool** | Self-implemented tool system (AetherTool trait + AetherToolServer) |
+| **AiProvider** | Self-implemented AI providers (OpenAI, Anthropic, Gemini, Ollama, etc.) |
 | **Dual-Layer Memory** | Raw history + AI-extracted facts |
 | **Cowork** | DAG task orchestration with model routing |
 | **Runtime Managers** | Auto-install uv, fnm, yt-dlp, ffmpeg |

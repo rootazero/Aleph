@@ -8,7 +8,7 @@ Aether acts as an invisible "ether" connecting your intent with AI models throug
 ![Platform](https://img.shields.io/badge/Platform-macOS%2013%2B-lightgrey)
 ![Swift](https://img.shields.io/badge/Swift-5.0-orange)
 ![Rust](https://img.shields.io/badge/Rust-1.70%2B-red)
-![rig-core](https://img.shields.io/badge/rig--core-0.28-blue)
+![AetherTool](https://img.shields.io/badge/AetherTool-1.0-blue)
 
 ## Core Philosophy: "Ghost" Aesthetic
 
@@ -33,7 +33,7 @@ Aether acts as an invisible "ether" connecting your intent with AI models throug
 - Focus detection and command completion
 
 **Agentic Loop**:
-- Event-driven AI execution with rig-core 0.28
+- Event-driven AI execution with self-implemented AetherTool system
 - Multi-step task planning with DAG orchestration
 - Automatic tool selection and execution
 
@@ -212,7 +212,7 @@ For detailed configuration options, see [docs/CONFIGURATION.md](docs/CONFIGURATI
 
 ## Architecture
 
-### The Architecture: Rust Core + rig-core + UniFFI + Native UI
+### The Architecture: Rust Core + UniFFI + Native UI
 
 **NO WEBVIEWS. NO TAURI. NO ELECTRON.**
 
@@ -234,7 +234,7 @@ For detailed configuration options, see [docs/CONFIGURATION.md](docs/CONFIGURATI
 │  └─────────────────────────────────────────────────────────┘ │
 │                                                               │
 │  ┌─────────────────────────────────────────────────────────┐ │
-│  │                    rig-core 0.28                         │ │
+│  │              AiProvider + AetherTool System             │ │
 │  │  OpenAI │ Claude │ Gemini │ Ollama │ Custom Providers   │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │                                                               │
@@ -261,7 +261,7 @@ For detailed configuration options, see [docs/CONFIGURATION.md](docs/CONFIGURATI
 
 ### Key Technologies
 
-- **Rust Core**: `tokio`, `reqwest`, `rig-core`, `rig-sqlite`, `rusqlite`, `sqlite-vec`
+- **Rust Core**: `tokio`, `reqwest`, `rusqlite`, `sqlite-vec` (AetherTool system)
 - **Swift UI**: SwiftUI, AppKit (NSPanel, NSWindow, NSStatusBar)
 - **FFI Bridge**: UniFFI (auto-generates Swift bindings from `.udl` file)
 - **Memory**: SQLite + sqlite-vec, fastembed (bge-small-zh-v1.5)
@@ -323,7 +323,7 @@ xcodebuild test -project Aether.xcodeproj -scheme AetherTests
 - ✅ **Phase 2**: Hotkey & Clipboard Integration
 - ✅ **Phase 3**: Halo Overlay (Transparent native window)
 - ✅ **Phase 4**: Memory Module (Dual-layer RAG)
-- ✅ **Phase 5**: AI Integration (rig-core 0.28)
+- ✅ **Phase 5**: AI Integration (AetherTool + AiProvider)
 - ✅ **Phase 6**: Settings UI (10+ tabs, NSPanel)
 - ✅ **Phase 7**: Event-Driven Agentic Loop (8 components)
 - ✅ **Phase 8**: Runtime Manager (uv, fnm, yt-dlp)
@@ -398,7 +398,6 @@ See [GitHub Issues](https://github.com/your-repo/aether/issues) for full list.
 
 ## Acknowledgments
 
-- **rig-core**: AI agent framework for Rust
 - **UniFFI**: Seamless Rust ↔ Swift FFI
 - **sqlite-vec**: Vector search extension for SQLite
 - **fastembed**: Fast embedding model inference

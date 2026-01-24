@@ -54,7 +54,7 @@ aether/
 │       │   ├── mod.rs, config.rs, decision.rs, state.rs
 │       │   ├── callback.rs, guards.rs
 │       │
-│       ├── agents/                    # Unified agent system (sub-agent + rig-core)
+│       ├── agents/                    # Unified agent system (sub-agents + delegation)
 │       │   ├── mod.rs, registry.rs, task_tool.rs, types.rs
 │       │   └── integration_test.rs
 │       │
@@ -176,7 +176,7 @@ aether/
 │       ├── providers/                 # AI provider implementations
 │       │   ├── mod.rs, rig_providers.rs
 │       │
-│       ├── rig_tools/                 # rig-core tool implementations
+│       ├── rig_tools/                 # AetherTool implementations (search, web_fetch, etc.)
 │       │   ├── mod.rs, error.rs, mcp_wrapper.rs
 │       │   ├── search.rs, web_fetch.rs, youtube.rs, file_ops.rs
 │       │   ├── skill_reader.rs        # read_skill, list_skills tools (NEW)
