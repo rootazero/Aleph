@@ -41,6 +41,7 @@
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 
+pub mod auth;
 mod client;
 pub mod external;
 pub mod jsonrpc;
@@ -50,6 +51,7 @@ mod resources;
 pub mod transport;
 pub mod types;
 
+pub use auth::{ClientInfo, OAuthEntry, OAuthStorage, OAuthTokens};
 pub use client::{ExternalServerConfig, McpClient, McpClientBuilder, McpStartupReport};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{
