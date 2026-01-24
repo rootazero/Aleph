@@ -50,9 +50,9 @@ typedef void (*UniffiRustFutureContinuationCallback)(uint64_t, int8_t
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_FREE
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_FREE
-typedef void (*UniffiForeignFutureFree)(uint64_t
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_DROPPED_CALLBACK
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_DROPPED_CALLBACK
+typedef void (*UniffiForeignFutureDroppedCallback)(uint64_t
     );
 
 #endif
@@ -62,192 +62,184 @@ typedef void (*UniffiCallbackInterfaceFree)(uint64_t
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE
-typedef struct UniffiForeignFuture {
-    uint64_t handle;
-    UniffiForeignFutureFree _Nonnull free;
-} UniffiForeignFuture;
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CLONE
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CLONE
+typedef uint64_t (*UniffiCallbackInterfaceClone)(uint64_t
+    );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U8
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U8
-typedef struct UniffiForeignFutureStructU8 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_DROPPED_CALLBACK_STRUCT
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_DROPPED_CALLBACK_STRUCT
+typedef struct UniffiForeignFutureDroppedCallbackStruct {
+    uint64_t handle;
+    UniffiForeignFutureDroppedCallback _Nonnull free;
+} UniffiForeignFutureDroppedCallbackStruct;
+
+#endif
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U8
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U8
+typedef struct UniffiForeignFutureResultU8 {
     uint8_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructU8;
+} UniffiForeignFutureResultU8;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U8
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U8
-typedef void (*UniffiForeignFutureCompleteU8)(uint64_t, UniffiForeignFutureStructU8
+typedef void (*UniffiForeignFutureCompleteU8)(uint64_t, UniffiForeignFutureResultU8
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I8
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I8
-typedef struct UniffiForeignFutureStructI8 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I8
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I8
+typedef struct UniffiForeignFutureResultI8 {
     int8_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructI8;
+} UniffiForeignFutureResultI8;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I8
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I8
-typedef void (*UniffiForeignFutureCompleteI8)(uint64_t, UniffiForeignFutureStructI8
+typedef void (*UniffiForeignFutureCompleteI8)(uint64_t, UniffiForeignFutureResultI8
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U16
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U16
-typedef struct UniffiForeignFutureStructU16 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U16
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U16
+typedef struct UniffiForeignFutureResultU16 {
     uint16_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructU16;
+} UniffiForeignFutureResultU16;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U16
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U16
-typedef void (*UniffiForeignFutureCompleteU16)(uint64_t, UniffiForeignFutureStructU16
+typedef void (*UniffiForeignFutureCompleteU16)(uint64_t, UniffiForeignFutureResultU16
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I16
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I16
-typedef struct UniffiForeignFutureStructI16 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I16
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I16
+typedef struct UniffiForeignFutureResultI16 {
     int16_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructI16;
+} UniffiForeignFutureResultI16;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I16
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I16
-typedef void (*UniffiForeignFutureCompleteI16)(uint64_t, UniffiForeignFutureStructI16
+typedef void (*UniffiForeignFutureCompleteI16)(uint64_t, UniffiForeignFutureResultI16
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U32
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U32
-typedef struct UniffiForeignFutureStructU32 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U32
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U32
+typedef struct UniffiForeignFutureResultU32 {
     uint32_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructU32;
+} UniffiForeignFutureResultU32;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U32
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U32
-typedef void (*UniffiForeignFutureCompleteU32)(uint64_t, UniffiForeignFutureStructU32
+typedef void (*UniffiForeignFutureCompleteU32)(uint64_t, UniffiForeignFutureResultU32
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I32
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I32
-typedef struct UniffiForeignFutureStructI32 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I32
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I32
+typedef struct UniffiForeignFutureResultI32 {
     int32_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructI32;
+} UniffiForeignFutureResultI32;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I32
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I32
-typedef void (*UniffiForeignFutureCompleteI32)(uint64_t, UniffiForeignFutureStructI32
+typedef void (*UniffiForeignFutureCompleteI32)(uint64_t, UniffiForeignFutureResultI32
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U64
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U64
-typedef struct UniffiForeignFutureStructU64 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U64
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U64
+typedef struct UniffiForeignFutureResultU64 {
     uint64_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructU64;
+} UniffiForeignFutureResultU64;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U64
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U64
-typedef void (*UniffiForeignFutureCompleteU64)(uint64_t, UniffiForeignFutureStructU64
+typedef void (*UniffiForeignFutureCompleteU64)(uint64_t, UniffiForeignFutureResultU64
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I64
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I64
-typedef struct UniffiForeignFutureStructI64 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I64
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I64
+typedef struct UniffiForeignFutureResultI64 {
     int64_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructI64;
+} UniffiForeignFutureResultI64;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I64
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I64
-typedef void (*UniffiForeignFutureCompleteI64)(uint64_t, UniffiForeignFutureStructI64
+typedef void (*UniffiForeignFutureCompleteI64)(uint64_t, UniffiForeignFutureResultI64
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_F32
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_F32
-typedef struct UniffiForeignFutureStructF32 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_F32
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_F32
+typedef struct UniffiForeignFutureResultF32 {
     float returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructF32;
+} UniffiForeignFutureResultF32;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_F32
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_F32
-typedef void (*UniffiForeignFutureCompleteF32)(uint64_t, UniffiForeignFutureStructF32
+typedef void (*UniffiForeignFutureCompleteF32)(uint64_t, UniffiForeignFutureResultF32
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_F64
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_F64
-typedef struct UniffiForeignFutureStructF64 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_F64
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_F64
+typedef struct UniffiForeignFutureResultF64 {
     double returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructF64;
+} UniffiForeignFutureResultF64;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_F64
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_F64
-typedef void (*UniffiForeignFutureCompleteF64)(uint64_t, UniffiForeignFutureStructF64
+typedef void (*UniffiForeignFutureCompleteF64)(uint64_t, UniffiForeignFutureResultF64
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_POINTER
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_POINTER
-typedef struct UniffiForeignFutureStructPointer {
-    void*_Nonnull returnValue;
-    RustCallStatus callStatus;
-} UniffiForeignFutureStructPointer;
-
-#endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_POINTER
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_POINTER
-typedef void (*UniffiForeignFutureCompletePointer)(uint64_t, UniffiForeignFutureStructPointer
-    );
-
-#endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_RUST_BUFFER
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_RUST_BUFFER
-typedef struct UniffiForeignFutureStructRustBuffer {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_RUST_BUFFER
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_RUST_BUFFER
+typedef struct UniffiForeignFutureResultRustBuffer {
     RustBuffer returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructRustBuffer;
+} UniffiForeignFutureResultRustBuffer;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_RUST_BUFFER
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_RUST_BUFFER
-typedef void (*UniffiForeignFutureCompleteRustBuffer)(uint64_t, UniffiForeignFutureStructRustBuffer
+typedef void (*UniffiForeignFutureCompleteRustBuffer)(uint64_t, UniffiForeignFutureResultRustBuffer
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_VOID
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_VOID
-typedef struct UniffiForeignFutureStructVoid {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_VOID
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_VOID
+typedef struct UniffiForeignFutureResultVoid {
     RustCallStatus callStatus;
-} UniffiForeignFutureStructVoid;
+} UniffiForeignFutureResultVoid;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_VOID
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_VOID
-typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureStructVoid
+typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureResultVoid
     );
 
 #endif
@@ -457,6 +449,8 @@ typedef void (*UniffiCallbackInterfaceInitProgressHandlerFfiMethod4)(uint64_t, R
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER
 #define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER
 typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+    UniffiCallbackInterfaceClone _Nonnull uniffiClone;
     UniffiCallbackInterfaceAetherEventHandlerMethod0 _Nonnull onThinking;
     UniffiCallbackInterfaceAetherEventHandlerMethod1 _Nonnull onToolStart;
     UniffiCallbackInterfaceAetherEventHandlerMethod2 _Nonnull onToolResult;
@@ -480,698 +474,699 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod20 _Nonnull onPlanConfirmationRequired;
     UniffiCallbackInterfaceAetherEventHandlerMethod21 _Nonnull onUserInputRequest;
     UniffiCallbackInterfaceAetherEventHandlerMethod22 _Nonnull onPartUpdate;
-    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
 #endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AGENT_PROGRESS_HANDLER
 #define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AGENT_PROGRESS_HANDLER
 typedef struct UniffiVTableCallbackInterfaceAgentProgressHandler {
-    UniffiCallbackInterfaceAgentProgressHandlerMethod0 _Nonnull onProgressEvent;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+    UniffiCallbackInterfaceClone _Nonnull uniffiClone;
+    UniffiCallbackInterfaceAgentProgressHandlerMethod0 _Nonnull onProgressEvent;
 } UniffiVTableCallbackInterfaceAgentProgressHandler;
 
 #endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_INIT_PROGRESS_HANDLER_FFI
 #define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_INIT_PROGRESS_HANDLER_FFI
 typedef struct UniffiVTableCallbackInterfaceInitProgressHandlerFfi {
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+    UniffiCallbackInterfaceClone _Nonnull uniffiClone;
     UniffiCallbackInterfaceInitProgressHandlerFfiMethod0 _Nonnull onPhaseStarted;
     UniffiCallbackInterfaceInitProgressHandlerFfiMethod1 _Nonnull onPhaseProgress;
     UniffiCallbackInterfaceInitProgressHandlerFfiMethod2 _Nonnull onPhaseCompleted;
     UniffiCallbackInterfaceInitProgressHandlerFfiMethod3 _Nonnull onDownloadProgress;
     UniffiCallbackInterfaceInitProgressHandlerFfiMethod4 _Nonnull onError;
-    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceInitProgressHandlerFfi;
 
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_CLONE_AETHERCORE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_CLONE_AETHERCORE
-void*_Nonnull uniffi_aethecore_fn_clone_aethercore(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_aethecore_fn_clone_aethercore(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FREE_AETHERCORE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FREE_AETHERCORE
-void uniffi_aethecore_fn_free_aethercore(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_free_aethercore(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_ADD_MCP_SERVER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_ADD_MCP_SERVER
-void uniffi_aethecore_fn_method_aethercore_add_mcp_server(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_add_mcp_server(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_CANCEL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_CANCEL
-void uniffi_aethecore_fn_method_aethercore_agent_cancel(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_cancel(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_DELETE_MODEL_PROFILE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_DELETE_MODEL_PROFILE
-void uniffi_aethecore_fn_method_aethercore_agent_delete_model_profile(void*_Nonnull ptr, RustBuffer profile_id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_delete_model_profile(uint64_t ptr, RustBuffer profile_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_DELETE_ROUTING_RULE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_DELETE_ROUTING_RULE
-void uniffi_aethecore_fn_method_aethercore_agent_delete_routing_rule(void*_Nonnull ptr, RustBuffer task_type, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_delete_routing_rule(uint64_t ptr, RustBuffer task_type, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_EXECUTE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_EXECUTE
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_execute(void*_Nonnull ptr, RustBuffer graph, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_execute(uint64_t ptr, RustBuffer graph, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_LIMIT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_LIMIT
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_budget_limit(void*_Nonnull ptr, RustBuffer limit_id, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_budget_limit(uint64_t ptr, RustBuffer limit_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_budget_status(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_budget_status(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_budget_status_for_scope(void*_Nonnull ptr, RustBuffer scope_type, RustBuffer scope_id, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_budget_status_for_scope(uint64_t ptr, RustBuffer scope_type, RustBuffer scope_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_CODE_EXEC_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_CODE_EXEC_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_code_exec_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_code_exec_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_FILE_OPS_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_FILE_OPS_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_file_ops_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_file_ops_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_HEALTH_STATISTICS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_HEALTH_STATISTICS
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_health_statistics(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_health_statistics(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_model_health(void*_Nonnull ptr, RustBuffer model_id, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_model_health(uint64_t ptr, RustBuffer model_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_model_health_summaries(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_model_health_summaries(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_PROFILES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_PROFILES
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_model_profiles(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_model_profiles(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_ROUTING_RULES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_ROUTING_RULES
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_routing_rules(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_routing_rules(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_STATE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_STATE
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_state(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_state(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_IS_CANCELLED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_IS_CANCELLED
-int8_t uniffi_aethecore_fn_method_aethercore_agent_is_cancelled(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+int8_t uniffi_aethecore_fn_method_aethercore_agent_is_cancelled(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_IS_PAUSED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_IS_PAUSED
-int8_t uniffi_aethecore_fn_method_aethercore_agent_is_paused(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+int8_t uniffi_aethecore_fn_method_aethercore_agent_is_paused(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_PAUSE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_PAUSE
-void uniffi_aethecore_fn_method_aethercore_agent_pause(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_pause(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_PLAN
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_PLAN
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_plan(void*_Nonnull ptr, RustBuffer request, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_agent_plan(uint64_t ptr, RustBuffer request, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_RESUME
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_RESUME
-void uniffi_aethecore_fn_method_aethercore_agent_resume(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_resume(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_SUBSCRIBE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_SUBSCRIBE
-void uniffi_aethecore_fn_method_aethercore_agent_subscribe(void*_Nonnull ptr, uint64_t handler, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_subscribe(uint64_t ptr, uint64_t handler, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
-void uniffi_aethecore_fn_method_aethercore_agent_update_code_exec_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_update_code_exec_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_COST_STRATEGY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_COST_STRATEGY
-void uniffi_aethecore_fn_method_aethercore_agent_update_cost_strategy(void*_Nonnull ptr, RustBuffer strategy, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_update_cost_strategy(uint64_t ptr, RustBuffer strategy, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_DEFAULT_MODEL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_DEFAULT_MODEL
-void uniffi_aethecore_fn_method_aethercore_agent_update_default_model(void*_Nonnull ptr, RustBuffer model_id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_update_default_model(uint64_t ptr, RustBuffer model_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_FILE_OPS_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_FILE_OPS_CONFIG
-void uniffi_aethecore_fn_method_aethercore_agent_update_file_ops_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_update_file_ops_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_MODEL_PROFILE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_MODEL_PROFILE
-void uniffi_aethecore_fn_method_aethercore_agent_update_model_profile(void*_Nonnull ptr, RustBuffer profile, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_update_model_profile(uint64_t ptr, RustBuffer profile, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_ROUTING_RULE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_ROUTING_RULE
-void uniffi_aethecore_fn_method_aethercore_agent_update_routing_rule(void*_Nonnull ptr, RustBuffer task_type, RustBuffer model_id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_agent_update_routing_rule(uint64_t ptr, RustBuffer task_type, RustBuffer model_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL
-void uniffi_aethecore_fn_method_aethercore_cancel(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_cancel(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_GENERATION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_GENERATION
-void uniffi_aethecore_fn_method_aethercore_cancel_generation(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_cancel_generation(uint64_t ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_SESSION
-int8_t uniffi_aethecore_fn_method_aethercore_cancel_session(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+int8_t uniffi_aethecore_fn_method_aethercore_cancel_session(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
-RustBuffer uniffi_aethecore_fn_method_aethercore_check_generation_progress(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_check_generation_progress(uint64_t ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
-RustBuffer uniffi_aethecore_fn_method_aethercore_check_runtime_updates(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_check_runtime_updates(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_FACTS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_FACTS
-uint64_t uniffi_aethecore_fn_method_aethercore_clear_facts(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_aethecore_fn_method_aethercore_clear_facts(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORIES
-uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(uint64_t ptr, RustBuffer app_bundle_id, RustBuffer window_title, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORY
-void uniffi_aethecore_fn_method_aethercore_clear_memory(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_clear_memory(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
-int8_t uniffi_aethecore_fn_method_aethercore_confirm_task_plan(void*_Nonnull ptr, RustBuffer plan_id, int8_t confirmed, RustCallStatus *_Nonnull out_status
+int8_t uniffi_aethecore_fn_method_aethercore_confirm_task_plan(uint64_t ptr, RustBuffer plan_id, int8_t confirmed, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CORRECT_TYPO
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CORRECT_TYPO
-RustBuffer uniffi_aethecore_fn_method_aethercore_correct_typo(void*_Nonnull ptr, RustBuffer text, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_correct_typo(uint64_t ptr, RustBuffer text, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_GENERATION_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_GENERATION_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_delete_generation_provider(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_delete_generation_provider(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MCP_SERVER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MCP_SERVER
-void uniffi_aethecore_fn_method_aethercore_delete_mcp_server(void*_Nonnull ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_delete_mcp_server(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORIES_BY_TOPIC_ID
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORIES_BY_TOPIC_ID
-uint64_t uniffi_aethecore_fn_method_aethercore_delete_memories_by_topic_id(void*_Nonnull ptr, RustBuffer topic_id, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_aethecore_fn_method_aethercore_delete_memories_by_topic_id(uint64_t ptr, RustBuffer topic_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORY
-void uniffi_aethecore_fn_method_aethercore_delete_memory(void*_Nonnull ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_delete_memory(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_delete_provider(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_delete_provider(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_SKILL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_SKILL
-void uniffi_aethecore_fn_method_aethercore_delete_skill(void*_Nonnull ptr, RustBuffer skill_id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_delete_skill(uint64_t ptr, RustBuffer skill_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DISABLE_PLUGIN
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DISABLE_PLUGIN
-void uniffi_aethecore_fn_method_aethercore_disable_plugin(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_disable_plugin(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EDIT_IMAGE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EDIT_IMAGE
-RustBuffer uniffi_aethecore_fn_method_aethercore_edit_image(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_edit_image(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_ENABLE_PLUGIN
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_ENABLE_PLUGIN
-void uniffi_aethecore_fn_method_aethercore_enable_plugin(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_enable_plugin(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXECUTE_PLUGIN_SKILL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXECUTE_PLUGIN_SKILL
-RustBuffer uniffi_aethecore_fn_method_aethercore_execute_plugin_skill(void*_Nonnull ptr, RustBuffer plugin_name, RustBuffer skill_name, RustBuffer arguments, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_execute_plugin_skill(uint64_t ptr, RustBuffer plugin_name, RustBuffer skill_name, RustBuffer arguments, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
-RustBuffer uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXTRACT_TEXT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXTRACT_TEXT
-RustBuffer uniffi_aethecore_fn_method_aethercore_extract_text(void*_Nonnull ptr, RustBuffer image_data, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_extract_text(uint64_t ptr, RustBuffer image_data, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer generation_type, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate(uint64_t ptr, RustBuffer provider_name, RustBuffer generation_type, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_AUDIO
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_AUDIO
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_audio(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_audio(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_IMAGE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_IMAGE
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_image(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_image(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_SPEECH
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_SPEECH
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_speech(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer text, RustBuffer params, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_speech(uint64_t ptr, RustBuffer provider_name, RustBuffer text, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_topic_title(void*_Nonnull ptr, RustBuffer user_input, RustBuffer ai_response, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_topic_title(uint64_t ptr, RustBuffer user_input, RustBuffer ai_response, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_VIDEO
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_VIDEO
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_video(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_video(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_COMPRESSION_STATS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_COMPRESSION_STATS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_compression_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_compression_stats(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_CURRENT_SESSION_ID
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_CURRENT_SESSION_ID
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_current_session_id(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_current_session_id(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_DEFAULT_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_DEFAULT_PROVIDER
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_default_provider(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_default_provider(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ENABLED_PROVIDERS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ENABLED_PROVIDERS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_enabled_providers(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_enabled_providers(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_GENERATION_PROVIDER_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_GENERATION_PROVIDER_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_generation_provider_config(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_generation_provider_config(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_LOG_DIRECTORY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_LOG_DIRECTORY
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_directory(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_directory(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_LOG_LEVEL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_LOG_LEVEL
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_level(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_level(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_server(void*_Nonnull ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_server(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER_LOGS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER_LOGS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_server_logs(void*_Nonnull ptr, RustBuffer id, uint32_t max_lines, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_server_logs(uint64_t ptr, RustBuffer id, uint32_t max_lines, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER_STATUS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER_STATUS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_server_status(void*_Nonnull ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_server_status(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_APP_LIST
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_APP_LIST
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_app_list(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_app_list(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_STATS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_STATS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NODE_PATH
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NODE_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_node_path(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_node_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NPM_PATH
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NPM_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_npm_path(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_npm_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_plugin_skill_instructions(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_plugin_skill_instructions(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PLUGINS_DIR
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PLUGINS_DIR
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_plugins_dir(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_plugins_dir(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_providers_for_type(void*_Nonnull ptr, RustBuffer generation_type, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_providers_for_type(uint64_t ptr, RustBuffer generation_type, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PYTHON_PATH
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PYTHON_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_python_path(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_python_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_SKILLS_DIR
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_SKILLS_DIR
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_skills_dir(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_skills_dir(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_YTDLP_PATH
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_YTDLP_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_ytdlp_path(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_ytdlp_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
-void uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(void*_Nonnull ptr, RustBuffer json, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(uint64_t ptr, RustBuffer json, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_PLUGIN_FROM_GIT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_PLUGIN_FROM_GIT
-RustBuffer uniffi_aethecore_fn_method_aethercore_install_plugin_from_git(void*_Nonnull ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_install_plugin_from_git(uint64_t ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_PLUGINS_FROM_ZIP
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_PLUGINS_FROM_ZIP
-RustBuffer uniffi_aethecore_fn_method_aethercore_install_plugins_from_zip(void*_Nonnull ptr, RustBuffer zip_path, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_install_plugins_from_zip(uint64_t ptr, RustBuffer zip_path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_RUNTIME
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_RUNTIME
-void uniffi_aethecore_fn_method_aethercore_install_runtime(void*_Nonnull ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_install_runtime(uint64_t ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILL
-RustBuffer uniffi_aethecore_fn_method_aethercore_install_skill(void*_Nonnull ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_install_skill(uint64_t ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
-RustBuffer uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(void*_Nonnull ptr, RustBuffer zip_path, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(uint64_t ptr, RustBuffer zip_path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_CANCELLED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_CANCELLED
-int8_t uniffi_aethecore_fn_method_aethercore_is_cancelled(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+int8_t uniffi_aethecore_fn_method_aethercore_is_cancelled(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
-int8_t uniffi_aethecore_fn_method_aethercore_is_runtime_installed(void*_Nonnull ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
+int8_t uniffi_aethecore_fn_method_aethercore_is_runtime_installed(uint64_t ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_builtin_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_builtin_tools(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_generation_providers(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_generation_providers(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_MCP_SERVERS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_MCP_SERVERS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_mcp_servers(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_mcp_servers(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PLUGIN_SKILLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PLUGIN_SKILLS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_plugin_skills(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_plugin_skills(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PLUGINS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PLUGINS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_plugins(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_plugins(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_recent_sessions(void*_Nonnull ptr, uint32_t limit, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_recent_sessions(uint64_t ptr, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RUNTIMES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RUNTIMES
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_runtimes(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_runtimes(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_SKILLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_SKILLS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_skills(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_skills(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_tools(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_load_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_load_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_PLUGIN_FROM_PATH
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_PLUGIN_FROM_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_load_plugin_from_path(void*_Nonnull ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_load_plugin_from_path(uint64_t ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS
-void uniffi_aethecore_fn_method_aethercore_process(void*_Nonnull ptr, RustBuffer input, RustBuffer options, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_process(uint64_t ptr, RustBuffer input, RustBuffer options, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
-int8_t uniffi_aethecore_fn_method_aethercore_provider_supports_image_editing(void*_Nonnull ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
+int8_t uniffi_aethecore_fn_method_aethercore_provider_supports_image_editing(uint64_t ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_PLUGINS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_PLUGINS
-uint32_t uniffi_aethecore_fn_method_aethercore_refresh_plugins(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+uint32_t uniffi_aethecore_fn_method_aethercore_refresh_plugins(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_SKILLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_SKILLS
-void uniffi_aethecore_fn_method_aethercore_refresh_skills(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_refresh_skills(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RELOAD_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RELOAD_CONFIG
-void uniffi_aethecore_fn_method_aethercore_reload_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_reload_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
-int8_t uniffi_aethecore_fn_method_aethercore_respond_to_user_input(void*_Nonnull ptr, RustBuffer request_id, RustBuffer response, RustCallStatus *_Nonnull out_status
+int8_t uniffi_aethecore_fn_method_aethercore_respond_to_user_input(uint64_t ptr, RustBuffer request_id, RustBuffer response, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESUME_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESUME_SESSION
-void uniffi_aethecore_fn_method_aethercore_resume_session(void*_Nonnull ptr, RustBuffer session_id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_resume_session(uint64_t ptr, RustBuffer session_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORIES
-RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(uint64_t ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORY
-RustBuffer uniffi_aethecore_fn_method_aethercore_search_memory(void*_Nonnull ptr, RustBuffer query, uint32_t limit, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_search_memory(uint64_t ptr, RustBuffer query, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_DEFAULT_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_DEFAULT_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_set_default_provider(void*_Nonnull ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_set_default_provider(uint64_t ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_LOG_LEVEL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_LOG_LEVEL
-void uniffi_aethecore_fn_method_aethercore_set_log_level(void*_Nonnull ptr, RustBuffer level, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_set_log_level(uint64_t ptr, RustBuffer level, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_GENERATION_PROVIDER_CONNECTION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_GENERATION_PROVIDER_CONNECTION
-RustBuffer uniffi_aethecore_fn_method_aethercore_test_generation_provider_connection(void*_Nonnull ptr, RustBuffer provider_type, RustBuffer api_key, RustBuffer base_url, RustBuffer model, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_test_generation_provider_connection(uint64_t ptr, RustBuffer provider_type, RustBuffer api_key, RustBuffer base_url, RustBuffer model, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_test_provider_connection_with_config(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer provider_config, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_test_provider_connection_with_config(uint64_t ptr, RustBuffer provider_name, RustBuffer provider_config, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TRIGGER_COMPRESSION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TRIGGER_COMPRESSION
-RustBuffer uniffi_aethecore_fn_method_aethercore_trigger_compression(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_trigger_compression(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UNINSTALL_PLUGIN
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UNINSTALL_PLUGIN
-void uniffi_aethecore_fn_method_aethercore_uninstall_plugin(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_uninstall_plugin(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_BEHAVIOR
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_BEHAVIOR
-void uniffi_aethecore_fn_method_aethercore_update_behavior(void*_Nonnull ptr, RustBuffer behavior, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_behavior(uint64_t ptr, RustBuffer behavior, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_general_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_general_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERATION_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERATION_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_update_generation_provider(void*_Nonnull ptr, RustBuffer name, RustBuffer provider, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_generation_provider(uint64_t ptr, RustBuffer name, RustBuffer provider, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MCP_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MCP_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_mcp_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_mcp_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MCP_SERVER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MCP_SERVER
-void uniffi_aethecore_fn_method_aethercore_update_mcp_server(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_mcp_server(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_memory_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_memory_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_POLICIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_POLICIES
-void uniffi_aethecore_fn_method_aethercore_update_policies(void*_Nonnull ptr, RustBuffer policies, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_policies(uint64_t ptr, RustBuffer policies, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_update_provider(void*_Nonnull ptr, RustBuffer name, RustBuffer provider, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_provider(uint64_t ptr, RustBuffer name, RustBuffer provider, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_ROUTING_RULES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_ROUTING_RULES
-void uniffi_aethecore_fn_method_aethercore_update_routing_rules(void*_Nonnull ptr, RustBuffer rules, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_routing_rules(uint64_t ptr, RustBuffer rules, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_RUNTIME
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_RUNTIME
-void uniffi_aethecore_fn_method_aethercore_update_runtime(void*_Nonnull ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_runtime(uint64_t ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_SEARCH_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_SEARCH_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_search_config(void*_Nonnull ptr, RustBuffer search, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_search_config(uint64_t ptr, RustBuffer search, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_SHORTCUTS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_SHORTCUTS
-void uniffi_aethecore_fn_method_aethercore_update_shortcuts(void*_Nonnull ptr, RustBuffer shortcuts, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_shortcuts(uint64_t ptr, RustBuffer shortcuts, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_trigger_config(void*_Nonnull ptr, RustBuffer trigger, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_trigger_config(uint64_t ptr, RustBuffer trigger, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_TYPO_CORRECTION_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_TYPO_CORRECTION_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_typo_correction_config(void*_Nonnull ptr, RustBuffer typo_correction, RustCallStatus *_Nonnull out_status
+void uniffi_aethecore_fn_method_aethercore_update_typo_correction_config(uint64_t ptr, RustBuffer typo_correction, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_VALIDATE_REGEX
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_VALIDATE_REGEX
-int8_t uniffi_aethecore_fn_method_aethercore_validate_regex(void*_Nonnull ptr, RustBuffer pattern, RustCallStatus *_Nonnull out_status
+int8_t uniffi_aethecore_fn_method_aethercore_validate_regex(uint64_t ptr, RustBuffer pattern, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AETHEREVENTHANDLER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AETHEREVENTHANDLER
-void uniffi_aethecore_fn_init_callback_vtable_aethereventhandler(UniffiVTableCallbackInterfaceAetherEventHandler* _Nonnull vtable
+void uniffi_aethecore_fn_init_callback_vtable_aethereventhandler(const UniffiVTableCallbackInterfaceAetherEventHandler* _Nonnull vtable
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AGENTPROGRESSHANDLER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AGENTPROGRESSHANDLER
-void uniffi_aethecore_fn_init_callback_vtable_agentprogresshandler(UniffiVTableCallbackInterfaceAgentProgressHandler* _Nonnull vtable
+void uniffi_aethecore_fn_init_callback_vtable_agentprogresshandler(const UniffiVTableCallbackInterfaceAgentProgressHandler* _Nonnull vtable
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_INITPROGRESSHANDLERFFI
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_INITPROGRESSHANDLERFFI
-void uniffi_aethecore_fn_init_callback_vtable_initprogresshandlerffi(UniffiVTableCallbackInterfaceInitProgressHandlerFfi* _Nonnull vtable
+void uniffi_aethecore_fn_init_callback_vtable_initprogresshandlerffi(const UniffiVTableCallbackInterfaceInitProgressHandlerFfi* _Nonnull vtable
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_GET_SKILLS_DIR_STRING
@@ -1182,7 +1177,7 @@ RustBuffer uniffi_aethecore_fn_func_get_skills_dir_string(RustCallStatus *_Nonnu
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INIT_CORE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INIT_CORE
-void*_Nonnull uniffi_aethecore_fn_func_init_core(RustBuffer config_path, uint64_t handler, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_aethecore_fn_func_init_core(RustBuffer config_path, uint64_t handler, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
@@ -1194,6 +1189,74 @@ void uniffi_aethecore_fn_func_initialize_builtin_skills_ffi(RustBuffer bundle_sk
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_LIST_INSTALLED_SKILLS
 RustBuffer uniffi_aethecore_fn_func_list_installed_skills(RustCallStatus *_Nonnull out_status
     
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_EXECUTE_COMMAND
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_EXECUTE_COMMAND
+uint64_t uniffi_aethecore_fn_func_extension_execute_command(RustBuffer name, RustBuffer arguments
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_EXECUTE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_EXECUTE_SKILL
+uint64_t uniffi_aethecore_fn_func_extension_execute_skill(RustBuffer qualified_name, RustBuffer arguments
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_AUTO_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_AUTO_SKILLS
+uint64_t uniffi_aethecore_fn_func_extension_get_auto_skills(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_DEFAULT_MODEL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_DEFAULT_MODEL
+uint64_t uniffi_aethecore_fn_func_extension_get_default_model(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_INSTRUCTIONS
+uint64_t uniffi_aethecore_fn_func_extension_get_instructions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_PLUGINS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_PLUGINS_DIR
+RustBuffer uniffi_aethecore_fn_func_extension_get_plugins_dir(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
+uint64_t uniffi_aethecore_fn_func_extension_get_skill_instructions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
+int8_t uniffi_aethecore_fn_func_extension_is_valid_plugin_dir(RustBuffer path, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LIST_PLUGINS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LIST_PLUGINS
+uint64_t uniffi_aethecore_fn_func_extension_list_plugins(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LIST_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LIST_SKILLS
+uint64_t uniffi_aethecore_fn_func_extension_list_skills(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LOAD_ALL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LOAD_ALL
+uint64_t uniffi_aethecore_fn_func_extension_load_all(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
+uint64_t uniffi_aethecore_fn_func_extension_load_plugin_from_path(RustBuffer path
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_CHECK_EMBEDDING_MODEL_EXISTS
@@ -1433,26 +1496,6 @@ void ffi_aethecore_rust_future_free_f64(uint64_t handle
 double ffi_aethecore_rust_future_complete_f64(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_POINTER
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_POINTER
-void ffi_aethecore_rust_future_poll_pointer(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
-);
-#endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_POINTER
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_POINTER
-void ffi_aethecore_rust_future_cancel_pointer(uint64_t handle
-);
-#endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_POINTER
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_POINTER
-void ffi_aethecore_rust_future_free_pointer(uint64_t handle
-);
-#endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_POINTER
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_POINTER
-void*_Nonnull ffi_aethecore_rust_future_complete_pointer(uint64_t handle, RustCallStatus *_Nonnull out_status
-);
-#endif
 #ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_RUST_BUFFER
 #define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_RUST_BUFFER
 void ffi_aethecore_rust_future_poll_rust_buffer(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
@@ -1514,6 +1557,78 @@ uint16_t uniffi_aethecore_checksum_func_initialize_builtin_skills_ffi(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_LIST_INSTALLED_SKILLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_LIST_INSTALLED_SKILLS
 uint16_t uniffi_aethecore_checksum_func_list_installed_skills(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_COMMAND
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_COMMAND
+uint16_t uniffi_aethecore_checksum_func_extension_execute_command(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_SKILL
+uint16_t uniffi_aethecore_checksum_func_extension_execute_skill(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_AUTO_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_AUTO_SKILLS
+uint16_t uniffi_aethecore_checksum_func_extension_get_auto_skills(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_DEFAULT_MODEL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_DEFAULT_MODEL
+uint16_t uniffi_aethecore_checksum_func_extension_get_default_model(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_INSTRUCTIONS
+uint16_t uniffi_aethecore_checksum_func_extension_get_instructions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_PLUGINS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_PLUGINS_DIR
+uint16_t uniffi_aethecore_checksum_func_extension_get_plugins_dir(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
+uint16_t uniffi_aethecore_checksum_func_extension_get_skill_instructions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
+uint16_t uniffi_aethecore_checksum_func_extension_is_valid_plugin_dir(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LIST_PLUGINS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LIST_PLUGINS
+uint16_t uniffi_aethecore_checksum_func_extension_list_plugins(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LIST_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LIST_SKILLS
+uint16_t uniffi_aethecore_checksum_func_extension_list_skills(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LOAD_ALL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LOAD_ALL
+uint16_t uniffi_aethecore_checksum_func_extension_load_all(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
+uint16_t uniffi_aethecore_checksum_func_extension_load_plugin_from_path(void
     
 );
 #endif

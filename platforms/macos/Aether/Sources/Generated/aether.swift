@@ -281,7 +281,7 @@ private func makeRustCall<T, E: Swift.Error>(
     _ callback: (UnsafeMutablePointer<RustCallStatus>) -> T,
     errorHandler: ((RustBuffer) throws -> E)?
 ) throws -> T {
-    uniffiEnsureInitialized()
+    uniffiEnsureAethecoreInitialized()
     var callStatus = RustCallStatus.init()
     let returnedVal = callback(&callStatus)
     try uniffiCheckCallStatus(callStatus: callStatus, errorHandler: errorHandler)
@@ -352,18 +352,29 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-fileprivate class UniffiHandleMap<T> {
-    private var map: [UInt64: T] = [:]
+// Initial value and increment amount for handles. 
+// These ensure that SWIFT handles always have the lowest bit set
+fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
+fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
+
+fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
+    // All mutation happens with this lock held, which is why we implement @unchecked Sendable.
     private let lock = NSLock()
-    private var currentHandle: UInt64 = 1
+    private var map: [UInt64: T] = [:]
+    private var currentHandle: UInt64 = UNIFFI_HANDLEMAP_INITIAL
 
     func insert(obj: T) -> UInt64 {
         lock.withLock {
-            let handle = currentHandle
-            currentHandle += 1
-            map[handle] = obj
-            return handle
+            return doInsert(obj)
         }
+    }
+
+    // Low-level insert function, this assumes `lock` is held.
+    private func doInsert(_ obj: T) -> UInt64 {
+        let handle = currentHandle
+        currentHandle += UNIFFI_HANDLEMAP_DELTA
+        map[handle] = obj
+        return handle
     }
 
      func get(handle: UInt64) throws -> T {
@@ -372,6 +383,15 @@ fileprivate class UniffiHandleMap<T> {
                 throw UniffiInternalError.unexpectedStaleHandle
             }
             return obj
+        }
+    }
+
+     func clone(handle: UInt64) throws -> UInt64 {
+        try lock.withLock {
+            guard let obj = map[handle] else {
+                throw UniffiInternalError.unexpectedStaleHandle
+            }
+            return doInsert(obj)
         }
     }
 
@@ -394,7 +414,13 @@ fileprivate class UniffiHandleMap<T> {
 
 
 // Public interface members begin here.
-
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+private let IDX_CALLBACK_FREE: Int32 = 0
+// Callback return codes
+private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
+private let UNIFFI_CALLBACK_ERROR: Int32 = 1
+private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -592,7 +618,7 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 
-public protocol AetherCoreProtocol : AnyObject {
+public protocol AetherCoreProtocol: AnyObject, Sendable {
     
     func addMcpServer(config: McpServerConfig) throws 
     
@@ -853,403 +879,453 @@ public protocol AetherCoreProtocol : AnyObject {
     func validateRegex(pattern: String) throws  -> Bool
     
 }
+open class AetherCore: AetherCoreProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
 
-open class AetherCore:
-    AetherCoreProtocol {
-    fileprivate let pointer: UnsafeMutableRawPointer!
-
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
     // TODO: We'd like this to be `private` but for Swifty reasons,
     // we can't implement `FfiConverter` without making this `required` and we can't
     // make it `required` without making it `public`.
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_aethecore_fn_clone_aethercore(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_aethecore_fn_clone_aethercore(self.handle, $0) }
     }
     // No primary constructor declared for this class.
 
     deinit {
-        guard let pointer = pointer else {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
             return
         }
 
-        try! rustCall { uniffi_aethecore_fn_free_aethercore(pointer, $0) }
+        try! rustCall { uniffi_aethecore_fn_free_aethercore(handle, $0) }
     }
 
     
 
     
-open func addMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_add_mcp_server(self.uniffiClonePointer(),
-        FfiConverterTypeMcpServerConfig.lower(config),$0
+open func addMcpServer(config: McpServerConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_add_mcp_server(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeMcpServerConfig_lower(config),$0
     )
 }
 }
     
-open func agentCancel() {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_cancel(self.uniffiClonePointer(),$0
+open func agentCancel()  {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_cancel(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func agentDeleteModelProfile(profileId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_delete_model_profile(self.uniffiClonePointer(),
+open func agentDeleteModelProfile(profileId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_delete_model_profile(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(profileId),$0
     )
 }
 }
     
-open func agentDeleteRoutingRule(taskType: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_delete_routing_rule(self.uniffiClonePointer(),
+open func agentDeleteRoutingRule(taskType: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_delete_routing_rule(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(taskType),$0
     )
 }
 }
     
-open func agentExecute(graph: AgentTaskGraphFfi)throws  -> AgentExecutionSummaryFfi {
-    return try  FfiConverterTypeAgentExecutionSummaryFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_execute(self.uniffiClonePointer(),
-        FfiConverterTypeAgentTaskGraphFFI.lower(graph),$0
+open func agentExecute(graph: AgentTaskGraphFfi)throws  -> AgentExecutionSummaryFfi  {
+    return try  FfiConverterTypeAgentExecutionSummaryFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_execute(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeAgentTaskGraphFFI_lower(graph),$0
     )
 })
 }
     
-open func agentGetBudgetLimit(limitId: String) -> BudgetLimitStatusFfi? {
+open func agentGetBudgetLimit(limitId: String) -> BudgetLimitStatusFfi?  {
     return try!  FfiConverterOptionTypeBudgetLimitStatusFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_budget_limit(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_agent_get_budget_limit(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(limitId),$0
     )
 })
 }
     
-open func agentGetBudgetStatus() -> BudgetStatusFfi {
-    return try!  FfiConverterTypeBudgetStatusFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_budget_status(self.uniffiClonePointer(),$0
+open func agentGetBudgetStatus() -> BudgetStatusFfi  {
+    return try!  FfiConverterTypeBudgetStatusFFI_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_get_budget_status(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentGetBudgetStatusForScope(scopeType: String, scopeId: String?) -> BudgetStatusFfi {
-    return try!  FfiConverterTypeBudgetStatusFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_budget_status_for_scope(self.uniffiClonePointer(),
+open func agentGetBudgetStatusForScope(scopeType: String, scopeId: String?) -> BudgetStatusFfi  {
+    return try!  FfiConverterTypeBudgetStatusFFI_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_get_budget_status_for_scope(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(scopeType),
         FfiConverterOptionString.lower(scopeId),$0
     )
 })
 }
     
-open func agentGetCodeExecConfig() -> CodeExecConfigFfi {
-    return try!  FfiConverterTypeCodeExecConfigFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_code_exec_config(self.uniffiClonePointer(),$0
+open func agentGetCodeExecConfig() -> CodeExecConfigFfi  {
+    return try!  FfiConverterTypeCodeExecConfigFFI_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_get_code_exec_config(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentGetFileOpsConfig() -> FileOpsConfigFfi {
-    return try!  FfiConverterTypeFileOpsConfigFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_file_ops_config(self.uniffiClonePointer(),$0
+open func agentGetFileOpsConfig() -> FileOpsConfigFfi  {
+    return try!  FfiConverterTypeFileOpsConfigFFI_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_get_file_ops_config(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentGetHealthStatistics() -> HealthStatisticsFfi {
-    return try!  FfiConverterTypeHealthStatisticsFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_health_statistics(self.uniffiClonePointer(),$0
+open func agentGetHealthStatistics() -> HealthStatisticsFfi  {
+    return try!  FfiConverterTypeHealthStatisticsFFI_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_get_health_statistics(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentGetModelHealth(modelId: String) -> ModelHealthSummaryFfi? {
+open func agentGetModelHealth(modelId: String) -> ModelHealthSummaryFfi?  {
     return try!  FfiConverterOptionTypeModelHealthSummaryFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_model_health(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_agent_get_model_health(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(modelId),$0
     )
 })
 }
     
-open func agentGetModelHealthSummaries() -> [ModelHealthSummaryFfi] {
+open func agentGetModelHealthSummaries() -> [ModelHealthSummaryFfi]  {
     return try!  FfiConverterSequenceTypeModelHealthSummaryFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_model_health_summaries(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_agent_get_model_health_summaries(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentGetModelProfiles() -> [ModelProfileFfi] {
+open func agentGetModelProfiles() -> [ModelProfileFfi]  {
     return try!  FfiConverterSequenceTypeModelProfileFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_model_profiles(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_agent_get_model_profiles(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentGetRoutingRules() -> ModelRoutingRulesFfi {
-    return try!  FfiConverterTypeModelRoutingRulesFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_routing_rules(self.uniffiClonePointer(),$0
+open func agentGetRoutingRules() -> ModelRoutingRulesFfi  {
+    return try!  FfiConverterTypeModelRoutingRulesFFI_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_get_routing_rules(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentGetState() -> AgentExecutionState {
-    return try!  FfiConverterTypeAgentExecutionState.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_get_state(self.uniffiClonePointer(),$0
+open func agentGetState() -> AgentExecutionState  {
+    return try!  FfiConverterTypeAgentExecutionState_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_get_state(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentIsCancelled() -> Bool {
+open func agentIsCancelled() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_is_cancelled(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_agent_is_cancelled(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentIsPaused() -> Bool {
+open func agentIsPaused() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_is_paused(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_agent_is_paused(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func agentPause() {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_pause(self.uniffiClonePointer(),$0
+open func agentPause()  {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_pause(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func agentPlan(request: String)throws  -> AgentTaskGraphFfi {
-    return try  FfiConverterTypeAgentTaskGraphFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_plan(self.uniffiClonePointer(),
+open func agentPlan(request: String)throws  -> AgentTaskGraphFfi  {
+    return try  FfiConverterTypeAgentTaskGraphFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_plan(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(request),$0
     )
 })
 }
     
-open func agentResume() {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_resume(self.uniffiClonePointer(),$0
+open func agentResume()  {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_resume(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func agentSubscribe(handler: AgentProgressHandler) {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_agent_subscribe(self.uniffiClonePointer(),
-        FfiConverterCallbackInterfaceAgentProgressHandler.lower(handler),$0
+open func agentSubscribe(handler: AgentProgressHandler)  {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_agent_subscribe(
+            self.uniffiCloneHandle(),
+        FfiConverterCallbackInterfaceAgentProgressHandler_lower(handler),$0
     )
 }
 }
     
-open func agentUpdateCodeExecConfig(config: CodeExecConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_update_code_exec_config(self.uniffiClonePointer(),
-        FfiConverterTypeCodeExecConfigFFI.lower(config),$0
+open func agentUpdateCodeExecConfig(config: CodeExecConfigFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_update_code_exec_config(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeCodeExecConfigFFI_lower(config),$0
     )
 }
 }
     
-open func agentUpdateCostStrategy(strategy: ModelCostStrategyFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_update_cost_strategy(self.uniffiClonePointer(),
-        FfiConverterTypeModelCostStrategyFFI.lower(strategy),$0
+open func agentUpdateCostStrategy(strategy: ModelCostStrategyFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_update_cost_strategy(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeModelCostStrategyFFI_lower(strategy),$0
     )
 }
 }
     
-open func agentUpdateDefaultModel(modelId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_update_default_model(self.uniffiClonePointer(),
+open func agentUpdateDefaultModel(modelId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_update_default_model(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(modelId),$0
     )
 }
 }
     
-open func agentUpdateFileOpsConfig(config: FileOpsConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_update_file_ops_config(self.uniffiClonePointer(),
-        FfiConverterTypeFileOpsConfigFFI.lower(config),$0
+open func agentUpdateFileOpsConfig(config: FileOpsConfigFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_update_file_ops_config(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFileOpsConfigFFI_lower(config),$0
     )
 }
 }
     
-open func agentUpdateModelProfile(profile: ModelProfileFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_update_model_profile(self.uniffiClonePointer(),
-        FfiConverterTypeModelProfileFFI.lower(profile),$0
+open func agentUpdateModelProfile(profile: ModelProfileFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_update_model_profile(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeModelProfileFFI_lower(profile),$0
     )
 }
 }
     
-open func agentUpdateRoutingRule(taskType: String, modelId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_agent_update_routing_rule(self.uniffiClonePointer(),
+open func agentUpdateRoutingRule(taskType: String, modelId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_agent_update_routing_rule(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(taskType),
         FfiConverterString.lower(modelId),$0
     )
 }
 }
     
-open func cancel() {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_cancel(self.uniffiClonePointer(),$0
+open func cancel()  {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cancel(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func cancelGeneration(providerName: String, jobId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_cancel_generation(self.uniffiClonePointer(),
+open func cancelGeneration(providerName: String, jobId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_cancel_generation(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(jobId),$0
     )
 }
 }
     
-open func cancelSession()throws  -> Bool {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_cancel_session(self.uniffiClonePointer(),$0
+open func cancelSession()throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_cancel_session(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func checkGenerationProgress(providerName: String, jobId: String)throws  -> GenerationProgressFfi {
-    return try  FfiConverterTypeGenerationProgressFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_check_generation_progress(self.uniffiClonePointer(),
+open func checkGenerationProgress(providerName: String, jobId: String)throws  -> GenerationProgressFfi  {
+    return try  FfiConverterTypeGenerationProgressFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_check_generation_progress(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(jobId),$0
     )
 })
 }
     
-open func checkRuntimeUpdates()throws  -> [RuntimeUpdateInfo] {
-    return try  FfiConverterSequenceTypeRuntimeUpdateInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_check_runtime_updates(self.uniffiClonePointer(),$0
+open func checkRuntimeUpdates()throws  -> [RuntimeUpdateInfo]  {
+    return try  FfiConverterSequenceTypeRuntimeUpdateInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_check_runtime_updates(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func clearFacts()throws  -> UInt64 {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_clear_facts(self.uniffiClonePointer(),$0
+open func clearFacts()throws  -> UInt64  {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_clear_facts(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func clearMemories(appBundleId: String?, windowTitle: String?)throws  -> UInt64 {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_clear_memories(self.uniffiClonePointer(),
+open func clearMemories(appBundleId: String?, windowTitle: String?)throws  -> UInt64  {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_clear_memories(
+            self.uniffiCloneHandle(),
         FfiConverterOptionString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),$0
     )
 })
 }
     
-open func clearMemory()throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_clear_memory(self.uniffiClonePointer(),$0
+open func clearMemory()throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_clear_memory(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func confirmTaskPlan(planId: String, confirmed: Bool) -> Bool {
+open func confirmTaskPlan(planId: String, confirmed: Bool) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_confirm_task_plan(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_confirm_task_plan(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(planId),
         FfiConverterBool.lower(confirmed),$0
     )
 })
 }
     
-open func correctTypo(text: String) -> TypoCorrectionResult {
-    return try!  FfiConverterTypeTypoCorrectionResult.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_correct_typo(self.uniffiClonePointer(),
+open func correctTypo(text: String) -> TypoCorrectionResult  {
+    return try!  FfiConverterTypeTypoCorrectionResult_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_correct_typo(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(text),$0
     )
 })
 }
     
-open func deleteGenerationProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_generation_provider(self.uniffiClonePointer(),
+open func deleteGenerationProvider(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_generation_provider(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
 }
 }
     
-open func deleteMcpServer(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_mcp_server(self.uniffiClonePointer(),
+open func deleteMcpServer(id: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_mcp_server(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(id),$0
     )
 }
 }
     
-open func deleteMemoriesByTopicId(topicId: String)throws  -> UInt64 {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_memories_by_topic_id(self.uniffiClonePointer(),
+open func deleteMemoriesByTopicId(topicId: String)throws  -> UInt64  {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_memories_by_topic_id(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(topicId),$0
     )
 })
 }
     
-open func deleteMemory(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_memory(self.uniffiClonePointer(),
+open func deleteMemory(id: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_memory(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(id),$0
     )
 }
 }
     
-open func deleteProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_provider(self.uniffiClonePointer(),
+open func deleteProvider(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_provider(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
 }
 }
     
-open func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_skill(self.uniffiClonePointer(),
+open func deleteSkill(skillId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_skill(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(skillId),$0
     )
 }
 }
     
-open func disablePlugin(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_disable_plugin(self.uniffiClonePointer(),
+open func disablePlugin(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_disable_plugin(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
 }
 }
     
-open func editImage(providerName: String, prompt: String, params: GenerationParamsFfi)throws  -> GenerationOutputFfi {
-    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_edit_image(self.uniffiClonePointer(),
+open func editImage(providerName: String, prompt: String, params: GenerationParamsFfi)throws  -> GenerationOutputFfi  {
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_edit_image(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(prompt),
-        FfiConverterTypeGenerationParamsFFI.lower(params),$0
+        FfiConverterTypeGenerationParamsFFI_lower(params),$0
     )
 })
 }
     
-open func enablePlugin(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_enable_plugin(self.uniffiClonePointer(),
+open func enablePlugin(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_enable_plugin(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
 }
 }
     
-open func executePluginSkill(pluginName: String, skillName: String, arguments: String)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_execute_plugin_skill(self.uniffiClonePointer(),
+open func executePluginSkill(pluginName: String, skillName: String, arguments: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_execute_plugin_skill(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(pluginName),
         FfiConverterString.lower(skillName),
         FfiConverterString.lower(arguments),$0
@@ -1257,45 +1333,39 @@ open func executePluginSkill(pluginName: String, skillName: String, arguments: S
 })
 }
     
-open func exportMcpConfigJson() -> String {
+open func exportMcpConfigJson() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func extractText(imageData: [UInt8])throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_extract_text(self.uniffiClonePointer(),
+open func extractText(imageData: [UInt8])throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_extract_text(
+            self.uniffiCloneHandle(),
         FfiConverterSequenceUInt8.lower(imageData),$0
     )
 })
 }
     
-open func generate(providerName: String, generationType: GenerationTypeFfi, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
-    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_generate(self.uniffiClonePointer(),
+open func generate(providerName: String, generationType: GenerationTypeFfi, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_generate(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
-        FfiConverterTypeGenerationTypeFFI.lower(generationType),
+        FfiConverterTypeGenerationTypeFFI_lower(generationType),
         FfiConverterString.lower(prompt),
         FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
     )
 })
 }
     
-open func generateAudio(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
-    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_generate_audio(self.uniffiClonePointer(),
-        FfiConverterString.lower(providerName),
-        FfiConverterString.lower(prompt),
-        FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
-    )
-})
-}
-    
-open func generateImage(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
-    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_generate_image(self.uniffiClonePointer(),
+open func generateAudio(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_audio(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(prompt),
         FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
@@ -1303,9 +1373,21 @@ open func generateImage(providerName: String, prompt: String, params: Generation
 })
 }
     
-open func generateSpeech(providerName: String, text: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
-    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_generate_speech(self.uniffiClonePointer(),
+open func generateImage(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_image(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(providerName),
+        FfiConverterString.lower(prompt),
+        FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
+    )
+})
+}
+    
+open func generateSpeech(providerName: String, text: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_speech(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(text),
         FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
@@ -1313,18 +1395,20 @@ open func generateSpeech(providerName: String, text: String, params: GenerationP
 })
 }
     
-open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_generate_topic_title(self.uniffiClonePointer(),
+open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_topic_title(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(userInput),
         FfiConverterString.lower(aiResponse),$0
     )
 })
 }
     
-open func generateVideo(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
-    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_generate_video(self.uniffiClonePointer(),
+open func generateVideo(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_video(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(prompt),
         FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
@@ -1332,367 +1416,417 @@ open func generateVideo(providerName: String, prompt: String, params: Generation
 })
 }
     
-open func getCompressionStats()throws  -> CompressionStats {
-    return try  FfiConverterTypeCompressionStats.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_compression_stats(self.uniffiClonePointer(),$0
+open func getCompressionStats()throws  -> CompressionStats  {
+    return try  FfiConverterTypeCompressionStats_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_get_compression_stats(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getCurrentSessionId() -> String? {
+open func getCurrentSessionId() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_current_session_id(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_current_session_id(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getDefaultProvider() -> String? {
+open func getDefaultProvider() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_default_provider(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_default_provider(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getEnabledProviders() -> [String] {
+open func getEnabledProviders() -> [String]  {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_enabled_providers(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_enabled_providers(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getGenerationProviderConfig(name: String) -> GenerationProviderConfigFfi? {
+open func getGenerationProviderConfig(name: String) -> GenerationProviderConfigFfi?  {
     return try!  FfiConverterOptionTypeGenerationProviderConfigFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_generation_provider_config(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_get_generation_provider_config(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
 })
 }
     
-open func getLogDirectory()throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_log_directory(self.uniffiClonePointer(),$0
+open func getLogDirectory()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_get_log_directory(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getLogLevel() -> LogLevel {
-    return try!  FfiConverterTypeLogLevel.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_log_level(self.uniffiClonePointer(),$0
+open func getLogLevel() -> LogLevel  {
+    return try!  FfiConverterTypeLogLevel_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_log_level(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getMcpConfig() -> McpSettingsConfig {
-    return try!  FfiConverterTypeMcpSettingsConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_mcp_config(self.uniffiClonePointer(),$0
+open func getMcpConfig() -> McpSettingsConfig  {
+    return try!  FfiConverterTypeMcpSettingsConfig_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_mcp_config(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getMcpServer(id: String) -> McpServerConfig? {
+open func getMcpServer(id: String) -> McpServerConfig?  {
     return try!  FfiConverterOptionTypeMcpServerConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_mcp_server(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_get_mcp_server(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(id),$0
     )
 })
 }
     
-open func getMcpServerLogs(id: String, maxLines: UInt32) -> [String] {
+open func getMcpServerLogs(id: String, maxLines: UInt32) -> [String]  {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_mcp_server_logs(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_get_mcp_server_logs(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(id),
         FfiConverterUInt32.lower(maxLines),$0
     )
 })
 }
     
-open func getMcpServerStatus(id: String) -> McpServerStatusInfo {
-    return try!  FfiConverterTypeMcpServerStatusInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_mcp_server_status(self.uniffiClonePointer(),
+open func getMcpServerStatus(id: String) -> McpServerStatusInfo  {
+    return try!  FfiConverterTypeMcpServerStatusInfo_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_mcp_server_status(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(id),$0
     )
 })
 }
     
-open func getMemoryAppList()throws  -> [AppMemoryInfo] {
-    return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_memory_app_list(self.uniffiClonePointer(),$0
+open func getMemoryAppList()throws  -> [AppMemoryInfo]  {
+    return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_get_memory_app_list(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getMemoryConfig() -> MemoryConfig {
-    return try!  FfiConverterTypeMemoryConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_memory_config(self.uniffiClonePointer(),$0
+open func getMemoryConfig() -> MemoryConfig  {
+    return try!  FfiConverterTypeMemoryConfig_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_memory_config(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getMemoryStats()throws  -> MemoryStats {
-    return try  FfiConverterTypeMemoryStats.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_memory_stats(self.uniffiClonePointer(),$0
+open func getMemoryStats()throws  -> MemoryStats  {
+    return try  FfiConverterTypeMemoryStats_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_get_memory_stats(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getNodePath() -> String? {
+open func getNodePath() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_node_path(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_node_path(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getNpmPath() -> String? {
+open func getNpmPath() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_npm_path(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_npm_path(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getPluginSkillInstructions()throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_plugin_skill_instructions(self.uniffiClonePointer(),$0
+open func getPluginSkillInstructions()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_get_plugin_skill_instructions(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getPluginsDir() -> String {
+open func getPluginsDir() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_plugins_dir(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_plugins_dir(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getProvidersForType(generationType: GenerationTypeFfi) -> [GenerationProviderInfoFfi] {
+open func getProvidersForType(generationType: GenerationTypeFfi) -> [GenerationProviderInfoFfi]  {
     return try!  FfiConverterSequenceTypeGenerationProviderInfoFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_providers_for_type(self.uniffiClonePointer(),
-        FfiConverterTypeGenerationTypeFFI.lower(generationType),$0
+    uniffi_aethecore_fn_method_aethercore_get_providers_for_type(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeGenerationTypeFFI_lower(generationType),$0
     )
 })
 }
     
-open func getPythonPath() -> String? {
+open func getPythonPath() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_python_path(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_python_path(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getRootCommandsFromRegistry() -> [CommandNode] {
+open func getRootCommandsFromRegistry() -> [CommandNode]  {
     return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getSkillsDir()throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_skills_dir(self.uniffiClonePointer(),$0
+open func getSkillsDir()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_get_skills_dir(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func getYtdlpPath() -> String? {
+open func getYtdlpPath() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_ytdlp_path(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_ytdlp_path(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(self.uniffiClonePointer(),
+open func importMcpConfigJson(json: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(json),$0
     )
 }
 }
     
-open func installPluginFromGit(url: String)throws  -> PluginInfoFfi {
-    return try  FfiConverterTypePluginInfoFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_install_plugin_from_git(self.uniffiClonePointer(),
+open func installPluginFromGit(url: String)throws  -> PluginInfoFfi  {
+    return try  FfiConverterTypePluginInfoFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_install_plugin_from_git(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(url),$0
     )
 })
 }
     
-open func installPluginsFromZip(zipPath: String)throws  -> [String] {
-    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_install_plugins_from_zip(self.uniffiClonePointer(),
+open func installPluginsFromZip(zipPath: String)throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_install_plugins_from_zip(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(zipPath),$0
     )
 })
 }
     
-open func installRuntime(runtimeId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_install_runtime(self.uniffiClonePointer(),
+open func installRuntime(runtimeId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_install_runtime(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(runtimeId),$0
     )
 }
 }
     
-open func installSkill(url: String)throws  -> SkillInfo {
-    return try  FfiConverterTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_install_skill(self.uniffiClonePointer(),
+open func installSkill(url: String)throws  -> SkillInfo  {
+    return try  FfiConverterTypeSkillInfo_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_install_skill(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(url),$0
     )
 })
 }
     
-open func installSkillsFromZip(zipPath: String)throws  -> [String] {
-    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(self.uniffiClonePointer(),
+open func installSkillsFromZip(zipPath: String)throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(zipPath),$0
     )
 })
 }
     
-open func isCancelled() -> Bool {
+open func isCancelled() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_is_cancelled(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_is_cancelled(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func isRuntimeInstalled(runtimeId: String) -> Bool {
+open func isRuntimeInstalled(runtimeId: String) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_is_runtime_installed(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_is_runtime_installed(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(runtimeId),$0
     )
 })
 }
     
-open func listBuiltinTools() -> [UnifiedToolInfo] {
+open func listBuiltinTools() -> [UnifiedToolInfo]  {
     return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_builtin_tools(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_list_builtin_tools(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func listGenerationProviders() -> [GenerationProviderInfoFfi] {
+open func listGenerationProviders() -> [GenerationProviderInfoFfi]  {
     return try!  FfiConverterSequenceTypeGenerationProviderInfoFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_generation_providers(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_list_generation_providers(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func listMcpServers() -> [McpServerConfig] {
+open func listMcpServers() -> [McpServerConfig]  {
     return try!  FfiConverterSequenceTypeMcpServerConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_mcp_servers(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_list_mcp_servers(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func listPluginSkills()throws  -> [PluginSkillFfi] {
-    return try  FfiConverterSequenceTypePluginSkillFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_list_plugin_skills(self.uniffiClonePointer(),$0
+open func listPluginSkills()throws  -> [PluginSkillFfi]  {
+    return try  FfiConverterSequenceTypePluginSkillFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_list_plugin_skills(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func listPlugins()throws  -> [PluginInfoFfi] {
-    return try  FfiConverterSequenceTypePluginInfoFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_list_plugins(self.uniffiClonePointer(),$0
+open func listPlugins()throws  -> [PluginInfoFfi]  {
+    return try  FfiConverterSequenceTypePluginInfoFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_list_plugins(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func listRecentSessions(limit: UInt32) -> [SessionSummary] {
+open func listRecentSessions(limit: UInt32) -> [SessionSummary]  {
     return try!  FfiConverterSequenceTypeSessionSummary.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_recent_sessions(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_list_recent_sessions(
+            self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(limit),$0
     )
 })
 }
     
-open func listRuntimes() -> [RuntimeInfo] {
+open func listRuntimes() -> [RuntimeInfo]  {
     return try!  FfiConverterSequenceTypeRuntimeInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_runtimes(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_list_runtimes(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func listSkills()throws  -> [SkillInfo] {
-    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_list_skills(self.uniffiClonePointer(),$0
+open func listSkills()throws  -> [SkillInfo]  {
+    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_list_skills(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func listTools() -> [ToolInfoFfi] {
+open func listTools() -> [ToolInfoFfi]  {
     return try!  FfiConverterSequenceTypeToolInfoFFI.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_tools(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_list_tools(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func loadConfig()throws  -> FullConfig {
-    return try  FfiConverterTypeFullConfig.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_load_config(self.uniffiClonePointer(),$0
+open func loadConfig()throws  -> FullConfig  {
+    return try  FfiConverterTypeFullConfig_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_load_config(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func loadPluginFromPath(path: String)throws  -> PluginInfoFfi {
-    return try  FfiConverterTypePluginInfoFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_load_plugin_from_path(self.uniffiClonePointer(),
+open func loadPluginFromPath(path: String)throws  -> PluginInfoFfi  {
+    return try  FfiConverterTypePluginInfoFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_load_plugin_from_path(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(path),$0
     )
 })
 }
     
-open func process(input: String, options: ProcessOptions?)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_process(self.uniffiClonePointer(),
+open func process(input: String, options: ProcessOptions?)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_process(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(input),
         FfiConverterOptionTypeProcessOptions.lower(options),$0
     )
 }
 }
     
-open func providerSupportsImageEditing(providerName: String) -> Bool {
+open func providerSupportsImageEditing(providerName: String) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_provider_supports_image_editing(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_provider_supports_image_editing(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),$0
     )
 })
 }
     
-open func refreshPlugins()throws  -> UInt32 {
-    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_refresh_plugins(self.uniffiClonePointer(),$0
+open func refreshPlugins()throws  -> UInt32  {
+    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_refresh_plugins(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func refreshSkills() {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_refresh_skills(self.uniffiClonePointer(),$0
+open func refreshSkills()  {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_refresh_skills(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func reloadConfig()throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_reload_config(self.uniffiClonePointer(),$0
+open func reloadConfig()throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_reload_config(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func respondToUserInput(requestId: String, response: String) -> Bool {
+open func respondToUserInput(requestId: String, response: String) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_respond_to_user_input(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_respond_to_user_input(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(requestId),
         FfiConverterString.lower(response),$0
     )
 })
 }
     
-open func resumeSession(sessionId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_resume_session(self.uniffiClonePointer(),
+open func resumeSession(sessionId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_resume_session(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(sessionId),$0
     )
 }
 }
     
-open func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt32)throws  -> [MemoryEntry] {
-    return try  FfiConverterSequenceTypeMemoryEntry.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_search_memories(self.uniffiClonePointer(),
+open func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt32)throws  -> [MemoryEntry]  {
+    return try  FfiConverterSequenceTypeMemoryEntry.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_search_memories(
+            self.uniffiCloneHandle(),
         FfiConverterOptionString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),
         FfiConverterUInt32.lower(limit),$0
@@ -1700,32 +1834,36 @@ open func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt
 })
 }
     
-open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItem] {
-    return try  FfiConverterSequenceTypeMemoryItem.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_search_memory(self.uniffiClonePointer(),
+open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItem]  {
+    return try  FfiConverterSequenceTypeMemoryItem.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_search_memory(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(query),
         FfiConverterUInt32.lower(limit),$0
     )
 })
 }
     
-open func setDefaultProvider(providerName: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_set_default_provider(self.uniffiClonePointer(),
+open func setDefaultProvider(providerName: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_set_default_provider(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),$0
     )
 }
 }
     
-open func setLogLevel(level: LogLevel)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_set_log_level(self.uniffiClonePointer(),
-        FfiConverterTypeLogLevel.lower(level),$0
+open func setLogLevel(level: LogLevel)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_set_log_level(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeLogLevel_lower(level),$0
     )
 }
 }
     
-open func testGenerationProviderConnection(providerType: String, apiKey: String, baseUrl: String?, model: String?) -> TestConnectionResult {
-    return try!  FfiConverterTypeTestConnectionResult.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_test_generation_provider_connection(self.uniffiClonePointer(),
+open func testGenerationProviderConnection(providerType: String, apiKey: String, baseUrl: String?, model: String?) -> TestConnectionResult  {
+    return try!  FfiConverterTypeTestConnectionResult_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_test_generation_provider_connection(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerType),
         FfiConverterString.lower(apiKey),
         FfiConverterOptionString.lower(baseUrl),
@@ -1734,201 +1872,213 @@ open func testGenerationProviderConnection(providerType: String, apiKey: String,
 })
 }
     
-open func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig) -> TestConnectionResult {
-    return try!  FfiConverterTypeTestConnectionResult.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_test_provider_connection_with_config(self.uniffiClonePointer(),
+open func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig) -> TestConnectionResult  {
+    return try!  FfiConverterTypeTestConnectionResult_lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_test_provider_connection_with_config(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
-        FfiConverterTypeProviderConfig.lower(providerConfig),$0
+        FfiConverterTypeProviderConfig_lower(providerConfig),$0
     )
 })
 }
     
-open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  -> ProviderTestResult {
-    return try  FfiConverterTypeProviderTestResult.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(self.uniffiClonePointer(),
-        FfiConverterTypeSearchProviderTestConfig.lower(config),$0
+open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  -> ProviderTestResult  {
+    return try  FfiConverterTypeProviderTestResult_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeSearchProviderTestConfig_lower(config),$0
     )
 })
 }
     
-open func triggerCompression()throws  -> CompressionResult {
-    return try  FfiConverterTypeCompressionResult.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_trigger_compression(self.uniffiClonePointer(),$0
+open func triggerCompression()throws  -> CompressionResult  {
+    return try  FfiConverterTypeCompressionResult_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_trigger_compression(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func uninstallPlugin(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_uninstall_plugin(self.uniffiClonePointer(),
+open func uninstallPlugin(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_uninstall_plugin(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
 }
 }
     
-open func updateBehavior(behavior: BehaviorConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_behavior(self.uniffiClonePointer(),
-        FfiConverterTypeBehaviorConfig.lower(behavior),$0
+open func updateBehavior(behavior: BehaviorConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_behavior(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeBehaviorConfig_lower(behavior),$0
     )
 }
 }
     
-open func updateGeneralConfig(config: GeneralConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_general_config(self.uniffiClonePointer(),
-        FfiConverterTypeGeneralConfig.lower(config),$0
+open func updateGeneralConfig(config: GeneralConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_general_config(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeGeneralConfig_lower(config),$0
     )
 }
 }
     
-open func updateGenerationProvider(name: String, provider: GenerationProviderConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_generation_provider(self.uniffiClonePointer(),
+open func updateGenerationProvider(name: String, provider: GenerationProviderConfigFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_generation_provider(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(name),
-        FfiConverterTypeGenerationProviderConfigFFI.lower(provider),$0
+        FfiConverterTypeGenerationProviderConfigFFI_lower(provider),$0
     )
 }
 }
     
-open func updateMcpConfig(config: McpSettingsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_mcp_config(self.uniffiClonePointer(),
-        FfiConverterTypeMcpSettingsConfig.lower(config),$0
+open func updateMcpConfig(config: McpSettingsConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_mcp_config(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeMcpSettingsConfig_lower(config),$0
     )
 }
 }
     
-open func updateMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_mcp_server(self.uniffiClonePointer(),
-        FfiConverterTypeMcpServerConfig.lower(config),$0
+open func updateMcpServer(config: McpServerConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_mcp_server(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeMcpServerConfig_lower(config),$0
     )
 }
 }
     
-open func updateMemoryConfig(config: MemoryConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_memory_config(self.uniffiClonePointer(),
-        FfiConverterTypeMemoryConfig.lower(config),$0
+open func updateMemoryConfig(config: MemoryConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_memory_config(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeMemoryConfig_lower(config),$0
     )
 }
 }
     
-open func updatePolicies(policies: PoliciesConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_policies(self.uniffiClonePointer(),
-        FfiConverterTypePoliciesConfig.lower(policies),$0
+open func updatePolicies(policies: PoliciesConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_policies(
+            self.uniffiCloneHandle(),
+        FfiConverterTypePoliciesConfig_lower(policies),$0
     )
 }
 }
     
-open func updateProvider(name: String, provider: ProviderConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_provider(self.uniffiClonePointer(),
+open func updateProvider(name: String, provider: ProviderConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_provider(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(name),
-        FfiConverterTypeProviderConfig.lower(provider),$0
+        FfiConverterTypeProviderConfig_lower(provider),$0
     )
 }
 }
     
-open func updateRoutingRules(rules: [RoutingRuleConfig])throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_routing_rules(self.uniffiClonePointer(),
+open func updateRoutingRules(rules: [RoutingRuleConfig])throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_routing_rules(
+            self.uniffiCloneHandle(),
         FfiConverterSequenceTypeRoutingRuleConfig.lower(rules),$0
     )
 }
 }
     
-open func updateRuntime(runtimeId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_runtime(self.uniffiClonePointer(),
+open func updateRuntime(runtimeId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_runtime(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(runtimeId),$0
     )
 }
 }
     
-open func updateSearchConfig(search: SearchConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_search_config(self.uniffiClonePointer(),
-        FfiConverterTypeSearchConfig.lower(search),$0
+open func updateSearchConfig(search: SearchConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_search_config(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeSearchConfig_lower(search),$0
     )
 }
 }
     
-open func updateShortcuts(shortcuts: ShortcutsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_shortcuts(self.uniffiClonePointer(),
-        FfiConverterTypeShortcutsConfig.lower(shortcuts),$0
+open func updateShortcuts(shortcuts: ShortcutsConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_shortcuts(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeShortcutsConfig_lower(shortcuts),$0
     )
 }
 }
     
-open func updateTriggerConfig(trigger: TriggerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_trigger_config(self.uniffiClonePointer(),
-        FfiConverterTypeTriggerConfig.lower(trigger),$0
+open func updateTriggerConfig(trigger: TriggerConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_trigger_config(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeTriggerConfig_lower(trigger),$0
     )
 }
 }
     
-open func updateTypoCorrectionConfig(typoCorrection: TypoCorrectionConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_typo_correction_config(self.uniffiClonePointer(),
-        FfiConverterTypeTypoCorrectionConfig.lower(typoCorrection),$0
+open func updateTypoCorrectionConfig(typoCorrection: TypoCorrectionConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_update_typo_correction_config(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeTypoCorrectionConfig_lower(typoCorrection),$0
     )
 }
 }
     
-open func validateRegex(pattern: String)throws  -> Bool {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
-    uniffi_aethecore_fn_method_aethercore_validate_regex(self.uniffiClonePointer(),
+open func validateRegex(pattern: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+    uniffi_aethecore_fn_method_aethercore_validate_regex(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(pattern),$0
     )
 })
 }
     
 
+    
 }
+
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeAetherCore: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = AetherCore
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherCore {
-        return AetherCore(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> AetherCore {
+        return AetherCore(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: AetherCore) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherCore {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: AetherCore, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
 
-
-
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAetherCore_lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherCore {
-    return try FfiConverterTypeAetherCore.lift(pointer)
+public func FfiConverterTypeAetherCore_lift(_ handle: UInt64) throws -> AetherCore {
+    return try FfiConverterTypeAetherCore.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UInt64 {
     return FfiConverterTypeAetherCore.lower(value)
 }
 
 
-public struct AgentExecutionSummaryFfi {
+
+
+public struct AgentExecutionSummaryFfi: Equatable, Hashable {
     public var graphId: String
     public var totalTasks: UInt32
     public var completedTasks: UInt32
@@ -1948,47 +2098,15 @@ public struct AgentExecutionSummaryFfi {
         self.totalDurationMs = totalDurationMs
         self.errors = errors
     }
+
+    
+
+    
 }
 
-
-
-extension AgentExecutionSummaryFfi: Equatable, Hashable {
-    public static func ==(lhs: AgentExecutionSummaryFfi, rhs: AgentExecutionSummaryFfi) -> Bool {
-        if lhs.graphId != rhs.graphId {
-            return false
-        }
-        if lhs.totalTasks != rhs.totalTasks {
-            return false
-        }
-        if lhs.completedTasks != rhs.completedTasks {
-            return false
-        }
-        if lhs.failedTasks != rhs.failedTasks {
-            return false
-        }
-        if lhs.cancelledTasks != rhs.cancelledTasks {
-            return false
-        }
-        if lhs.totalDurationMs != rhs.totalDurationMs {
-            return false
-        }
-        if lhs.errors != rhs.errors {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(graphId)
-        hasher.combine(totalTasks)
-        hasher.combine(completedTasks)
-        hasher.combine(failedTasks)
-        hasher.combine(cancelledTasks)
-        hasher.combine(totalDurationMs)
-        hasher.combine(errors)
-    }
-}
-
+#if compiler(>=6)
+extension AgentExecutionSummaryFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2034,7 +2152,7 @@ public func FfiConverterTypeAgentExecutionSummaryFFI_lower(_ value: AgentExecuti
 }
 
 
-public struct AgentProgressEventFfi {
+public struct AgentProgressEventFfi: Equatable, Hashable {
     public var eventType: AgentProgressEventType
     public var taskId: String?
     public var taskName: String?
@@ -2052,43 +2170,15 @@ public struct AgentProgressEventFfi {
         self.message = message
         self.error = error
     }
+
+    
+
+    
 }
 
-
-
-extension AgentProgressEventFfi: Equatable, Hashable {
-    public static func ==(lhs: AgentProgressEventFfi, rhs: AgentProgressEventFfi) -> Bool {
-        if lhs.eventType != rhs.eventType {
-            return false
-        }
-        if lhs.taskId != rhs.taskId {
-            return false
-        }
-        if lhs.taskName != rhs.taskName {
-            return false
-        }
-        if lhs.progress != rhs.progress {
-            return false
-        }
-        if lhs.message != rhs.message {
-            return false
-        }
-        if lhs.error != rhs.error {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(eventType)
-        hasher.combine(taskId)
-        hasher.combine(taskName)
-        hasher.combine(progress)
-        hasher.combine(message)
-        hasher.combine(error)
-    }
-}
-
+#if compiler(>=6)
+extension AgentProgressEventFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2132,7 +2222,7 @@ public func FfiConverterTypeAgentProgressEventFFI_lower(_ value: AgentProgressEv
 }
 
 
-public struct AgentTaskDependencyFfi {
+public struct AgentTaskDependencyFfi: Equatable, Hashable {
     public var fromTaskId: String
     public var toTaskId: String
 
@@ -2142,27 +2232,15 @@ public struct AgentTaskDependencyFfi {
         self.fromTaskId = fromTaskId
         self.toTaskId = toTaskId
     }
+
+    
+
+    
 }
 
-
-
-extension AgentTaskDependencyFfi: Equatable, Hashable {
-    public static func ==(lhs: AgentTaskDependencyFfi, rhs: AgentTaskDependencyFfi) -> Bool {
-        if lhs.fromTaskId != rhs.fromTaskId {
-            return false
-        }
-        if lhs.toTaskId != rhs.toTaskId {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(fromTaskId)
-        hasher.combine(toTaskId)
-    }
-}
-
+#if compiler(>=6)
+extension AgentTaskDependencyFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2198,7 +2276,7 @@ public func FfiConverterTypeAgentTaskDependencyFFI_lower(_ value: AgentTaskDepen
 }
 
 
-public struct AgentTaskFfi {
+public struct AgentTaskFfi: Equatable, Hashable {
     public var id: String
     public var name: String
     public var description: String?
@@ -2218,47 +2296,15 @@ public struct AgentTaskFfi {
         self.progress = progress
         self.errorMessage = errorMessage
     }
+
+    
+
+    
 }
 
-
-
-extension AgentTaskFfi: Equatable, Hashable {
-    public static func ==(lhs: AgentTaskFfi, rhs: AgentTaskFfi) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.taskType != rhs.taskType {
-            return false
-        }
-        if lhs.status != rhs.status {
-            return false
-        }
-        if lhs.progress != rhs.progress {
-            return false
-        }
-        if lhs.errorMessage != rhs.errorMessage {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(name)
-        hasher.combine(description)
-        hasher.combine(taskType)
-        hasher.combine(status)
-        hasher.combine(progress)
-        hasher.combine(errorMessage)
-    }
-}
-
+#if compiler(>=6)
+extension AgentTaskFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2304,7 +2350,7 @@ public func FfiConverterTypeAgentTaskFFI_lower(_ value: AgentTaskFfi) -> RustBuf
 }
 
 
-public struct AgentTaskGraphFfi {
+public struct AgentTaskGraphFfi: Equatable, Hashable {
     public var id: String
     public var title: String
     public var originalRequest: String?
@@ -2320,39 +2366,15 @@ public struct AgentTaskGraphFfi {
         self.tasks = tasks
         self.edges = edges
     }
+
+    
+
+    
 }
 
-
-
-extension AgentTaskGraphFfi: Equatable, Hashable {
-    public static func ==(lhs: AgentTaskGraphFfi, rhs: AgentTaskGraphFfi) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.title != rhs.title {
-            return false
-        }
-        if lhs.originalRequest != rhs.originalRequest {
-            return false
-        }
-        if lhs.tasks != rhs.tasks {
-            return false
-        }
-        if lhs.edges != rhs.edges {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(title)
-        hasher.combine(originalRequest)
-        hasher.combine(tasks)
-        hasher.combine(edges)
-    }
-}
-
+#if compiler(>=6)
+extension AgentTaskGraphFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2394,7 +2416,7 @@ public func FfiConverterTypeAgentTaskGraphFFI_lower(_ value: AgentTaskGraphFfi) 
 }
 
 
-public struct AiRetrievalPolicy {
+public struct AiRetrievalPolicy: Equatable, Hashable {
     public var timeoutMs: UInt64
     public var maxCandidates: UInt32
     public var fallbackCount: UInt32
@@ -2408,35 +2430,15 @@ public struct AiRetrievalPolicy {
         self.fallbackCount = fallbackCount
         self.contentTruncateLength = contentTruncateLength
     }
+
+    
+
+    
 }
 
-
-
-extension AiRetrievalPolicy: Equatable, Hashable {
-    public static func ==(lhs: AiRetrievalPolicy, rhs: AiRetrievalPolicy) -> Bool {
-        if lhs.timeoutMs != rhs.timeoutMs {
-            return false
-        }
-        if lhs.maxCandidates != rhs.maxCandidates {
-            return false
-        }
-        if lhs.fallbackCount != rhs.fallbackCount {
-            return false
-        }
-        if lhs.contentTruncateLength != rhs.contentTruncateLength {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(timeoutMs)
-        hasher.combine(maxCandidates)
-        hasher.combine(fallbackCount)
-        hasher.combine(contentTruncateLength)
-    }
-}
-
+#if compiler(>=6)
+extension AiRetrievalPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2476,7 +2478,7 @@ public func FfiConverterTypeAiRetrievalPolicy_lower(_ value: AiRetrievalPolicy) 
 }
 
 
-public struct AmbiguousTaskFfi {
+public struct AmbiguousTaskFfi: Equatable, Hashable {
     public var taskHint: String
     public var clarification: String
 
@@ -2486,27 +2488,15 @@ public struct AmbiguousTaskFfi {
         self.taskHint = taskHint
         self.clarification = clarification
     }
+
+    
+
+    
 }
 
-
-
-extension AmbiguousTaskFfi: Equatable, Hashable {
-    public static func ==(lhs: AmbiguousTaskFfi, rhs: AmbiguousTaskFfi) -> Bool {
-        if lhs.taskHint != rhs.taskHint {
-            return false
-        }
-        if lhs.clarification != rhs.clarification {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(taskHint)
-        hasher.combine(clarification)
-    }
-}
-
+#if compiler(>=6)
+extension AmbiguousTaskFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2542,7 +2532,7 @@ public func FfiConverterTypeAmbiguousTaskFFI_lower(_ value: AmbiguousTaskFfi) ->
 }
 
 
-public struct AppMemoryInfo {
+public struct AppMemoryInfo: Equatable, Hashable {
     public var appBundleId: String
     public var memoryCount: UInt64
 
@@ -2552,27 +2542,15 @@ public struct AppMemoryInfo {
         self.appBundleId = appBundleId
         self.memoryCount = memoryCount
     }
+
+    
+
+    
 }
 
-
-
-extension AppMemoryInfo: Equatable, Hashable {
-    public static func ==(lhs: AppMemoryInfo, rhs: AppMemoryInfo) -> Bool {
-        if lhs.appBundleId != rhs.appBundleId {
-            return false
-        }
-        if lhs.memoryCount != rhs.memoryCount {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(appBundleId)
-        hasher.combine(memoryCount)
-    }
-}
-
+#if compiler(>=6)
+extension AppMemoryInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2608,7 +2586,7 @@ public func FfiConverterTypeAppMemoryInfo_lower(_ value: AppMemoryInfo) -> RustB
 }
 
 
-public struct BehaviorConfig {
+public struct BehaviorConfig: Equatable, Hashable {
     public var outputMode: String
     public var typingSpeed: UInt32
 
@@ -2618,27 +2596,15 @@ public struct BehaviorConfig {
         self.outputMode = outputMode
         self.typingSpeed = typingSpeed
     }
+
+    
+
+    
 }
 
-
-
-extension BehaviorConfig: Equatable, Hashable {
-    public static func ==(lhs: BehaviorConfig, rhs: BehaviorConfig) -> Bool {
-        if lhs.outputMode != rhs.outputMode {
-            return false
-        }
-        if lhs.typingSpeed != rhs.typingSpeed {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(outputMode)
-        hasher.combine(typingSpeed)
-    }
-}
-
+#if compiler(>=6)
+extension BehaviorConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2674,7 +2640,7 @@ public func FfiConverterTypeBehaviorConfig_lower(_ value: BehaviorConfig) -> Rus
 }
 
 
-public struct BudgetLimitStatusFfi {
+public struct BudgetLimitStatusFfi: Equatable, Hashable {
     public var limitId: String
     public var scope: BudgetScopeFfi
     public var scopeDisplay: String
@@ -2708,75 +2674,15 @@ public struct BudgetLimitStatusFfi {
         self.nextResetTimestamp = nextResetTimestamp
         self.nextResetDisplay = nextResetDisplay
     }
+
+    
+
+    
 }
 
-
-
-extension BudgetLimitStatusFfi: Equatable, Hashable {
-    public static func ==(lhs: BudgetLimitStatusFfi, rhs: BudgetLimitStatusFfi) -> Bool {
-        if lhs.limitId != rhs.limitId {
-            return false
-        }
-        if lhs.scope != rhs.scope {
-            return false
-        }
-        if lhs.scopeDisplay != rhs.scopeDisplay {
-            return false
-        }
-        if lhs.period != rhs.period {
-            return false
-        }
-        if lhs.periodDisplay != rhs.periodDisplay {
-            return false
-        }
-        if lhs.limitUsd != rhs.limitUsd {
-            return false
-        }
-        if lhs.spentUsd != rhs.spentUsd {
-            return false
-        }
-        if lhs.remainingUsd != rhs.remainingUsd {
-            return false
-        }
-        if lhs.usedPercent != rhs.usedPercent {
-            return false
-        }
-        if lhs.enforcement != rhs.enforcement {
-            return false
-        }
-        if lhs.isExceeded != rhs.isExceeded {
-            return false
-        }
-        if lhs.isWarning != rhs.isWarning {
-            return false
-        }
-        if lhs.nextResetTimestamp != rhs.nextResetTimestamp {
-            return false
-        }
-        if lhs.nextResetDisplay != rhs.nextResetDisplay {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(limitId)
-        hasher.combine(scope)
-        hasher.combine(scopeDisplay)
-        hasher.combine(period)
-        hasher.combine(periodDisplay)
-        hasher.combine(limitUsd)
-        hasher.combine(spentUsd)
-        hasher.combine(remainingUsd)
-        hasher.combine(usedPercent)
-        hasher.combine(enforcement)
-        hasher.combine(isExceeded)
-        hasher.combine(isWarning)
-        hasher.combine(nextResetTimestamp)
-        hasher.combine(nextResetDisplay)
-    }
-}
-
+#if compiler(>=6)
+extension BudgetLimitStatusFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2836,7 +2742,7 @@ public func FfiConverterTypeBudgetLimitStatusFFI_lower(_ value: BudgetLimitStatu
 }
 
 
-public struct BudgetStatusFfi {
+public struct BudgetStatusFfi: Equatable, Hashable {
     public var enabled: Bool
     public var totalLimits: UInt32
     public var exceededCount: UInt32
@@ -2860,55 +2766,15 @@ public struct BudgetStatusFfi {
         self.statusEmoji = statusEmoji
         self.statusMessage = statusMessage
     }
+
+    
+
+    
 }
 
-
-
-extension BudgetStatusFfi: Equatable, Hashable {
-    public static func ==(lhs: BudgetStatusFfi, rhs: BudgetStatusFfi) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.totalLimits != rhs.totalLimits {
-            return false
-        }
-        if lhs.exceededCount != rhs.exceededCount {
-            return false
-        }
-        if lhs.warningCount != rhs.warningCount {
-            return false
-        }
-        if lhs.totalSpentUsd != rhs.totalSpentUsd {
-            return false
-        }
-        if lhs.minRemainingUsd != rhs.minRemainingUsd {
-            return false
-        }
-        if lhs.limits != rhs.limits {
-            return false
-        }
-        if lhs.statusEmoji != rhs.statusEmoji {
-            return false
-        }
-        if lhs.statusMessage != rhs.statusMessage {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(totalLimits)
-        hasher.combine(exceededCount)
-        hasher.combine(warningCount)
-        hasher.combine(totalSpentUsd)
-        hasher.combine(minRemainingUsd)
-        hasher.combine(limits)
-        hasher.combine(statusEmoji)
-        hasher.combine(statusMessage)
-    }
-}
-
+#if compiler(>=6)
+extension BudgetStatusFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2958,7 +2824,7 @@ public func FfiConverterTypeBudgetStatusFFI_lower(_ value: BudgetStatusFfi) -> R
 }
 
 
-public struct CapabilityMappingFfi {
+public struct CapabilityMappingFfi: Equatable, Hashable {
     public var capability: ModelCapabilityFfi
     public var modelId: String
 
@@ -2968,27 +2834,15 @@ public struct CapabilityMappingFfi {
         self.capability = capability
         self.modelId = modelId
     }
+
+    
+
+    
 }
 
-
-
-extension CapabilityMappingFfi: Equatable, Hashable {
-    public static func ==(lhs: CapabilityMappingFfi, rhs: CapabilityMappingFfi) -> Bool {
-        if lhs.capability != rhs.capability {
-            return false
-        }
-        if lhs.modelId != rhs.modelId {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(capability)
-        hasher.combine(modelId)
-    }
-}
-
+#if compiler(>=6)
+extension CapabilityMappingFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3024,7 +2878,7 @@ public func FfiConverterTypeCapabilityMappingFFI_lower(_ value: CapabilityMappin
 }
 
 
-public struct CapturedContext {
+public struct CapturedContext: Equatable, Hashable {
     public var appBundleId: String
     public var windowTitle: String?
     public var attachments: [MediaAttachment]?
@@ -3038,35 +2892,15 @@ public struct CapturedContext {
         self.attachments = attachments
         self.topicId = topicId
     }
+
+    
+
+    
 }
 
-
-
-extension CapturedContext: Equatable, Hashable {
-    public static func ==(lhs: CapturedContext, rhs: CapturedContext) -> Bool {
-        if lhs.appBundleId != rhs.appBundleId {
-            return false
-        }
-        if lhs.windowTitle != rhs.windowTitle {
-            return false
-        }
-        if lhs.attachments != rhs.attachments {
-            return false
-        }
-        if lhs.topicId != rhs.topicId {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(appBundleId)
-        hasher.combine(windowTitle)
-        hasher.combine(attachments)
-        hasher.combine(topicId)
-    }
-}
-
+#if compiler(>=6)
+extension CapturedContext: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3106,7 +2940,7 @@ public func FfiConverterTypeCapturedContext_lower(_ value: CapturedContext) -> R
 }
 
 
-public struct ClarificationOption {
+public struct ClarificationOption: Equatable, Hashable {
     public var label: String
     public var value: String
     public var description: String?
@@ -3118,31 +2952,15 @@ public struct ClarificationOption {
         self.value = value
         self.description = description
     }
+
+    
+
+    
 }
 
-
-
-extension ClarificationOption: Equatable, Hashable {
-    public static func ==(lhs: ClarificationOption, rhs: ClarificationOption) -> Bool {
-        if lhs.label != rhs.label {
-            return false
-        }
-        if lhs.value != rhs.value {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(label)
-        hasher.combine(value)
-        hasher.combine(description)
-    }
-}
-
+#if compiler(>=6)
+extension ClarificationOption: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3180,7 +2998,7 @@ public func FfiConverterTypeClarificationOption_lower(_ value: ClarificationOpti
 }
 
 
-public struct ClarificationRequest {
+public struct ClarificationRequest: Equatable, Hashable {
     public var id: String
     public var prompt: String
     public var clarificationType: ClarificationType
@@ -3200,47 +3018,15 @@ public struct ClarificationRequest {
         self.placeholder = placeholder
         self.source = source
     }
+
+    
+
+    
 }
 
-
-
-extension ClarificationRequest: Equatable, Hashable {
-    public static func ==(lhs: ClarificationRequest, rhs: ClarificationRequest) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.prompt != rhs.prompt {
-            return false
-        }
-        if lhs.clarificationType != rhs.clarificationType {
-            return false
-        }
-        if lhs.options != rhs.options {
-            return false
-        }
-        if lhs.defaultValue != rhs.defaultValue {
-            return false
-        }
-        if lhs.placeholder != rhs.placeholder {
-            return false
-        }
-        if lhs.source != rhs.source {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(prompt)
-        hasher.combine(clarificationType)
-        hasher.combine(options)
-        hasher.combine(defaultValue)
-        hasher.combine(placeholder)
-        hasher.combine(source)
-    }
-}
-
+#if compiler(>=6)
+extension ClarificationRequest: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3286,7 +3072,7 @@ public func FfiConverterTypeClarificationRequest_lower(_ value: ClarificationReq
 }
 
 
-public struct ClarificationResult {
+public struct ClarificationResult: Equatable, Hashable {
     public var resultType: ClarificationResultType
     public var selectedIndex: UInt32?
     public var value: String?
@@ -3298,31 +3084,15 @@ public struct ClarificationResult {
         self.selectedIndex = selectedIndex
         self.value = value
     }
+
+    
+
+    
 }
 
-
-
-extension ClarificationResult: Equatable, Hashable {
-    public static func ==(lhs: ClarificationResult, rhs: ClarificationResult) -> Bool {
-        if lhs.resultType != rhs.resultType {
-            return false
-        }
-        if lhs.selectedIndex != rhs.selectedIndex {
-            return false
-        }
-        if lhs.value != rhs.value {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(resultType)
-        hasher.combine(selectedIndex)
-        hasher.combine(value)
-    }
-}
-
+#if compiler(>=6)
+extension ClarificationResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3360,7 +3130,7 @@ public func FfiConverterTypeClarificationResult_lower(_ value: ClarificationResu
 }
 
 
-public struct CodeExecConfigFfi {
+public struct CodeExecConfigFfi: Equatable, Hashable {
     public var enabled: Bool
     public var defaultRuntime: String
     public var timeoutSeconds: UInt64
@@ -3384,55 +3154,15 @@ public struct CodeExecConfigFfi {
         self.passEnv = passEnv
         self.blockedCommands = blockedCommands
     }
+
+    
+
+    
 }
 
-
-
-extension CodeExecConfigFfi: Equatable, Hashable {
-    public static func ==(lhs: CodeExecConfigFfi, rhs: CodeExecConfigFfi) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.defaultRuntime != rhs.defaultRuntime {
-            return false
-        }
-        if lhs.timeoutSeconds != rhs.timeoutSeconds {
-            return false
-        }
-        if lhs.sandboxEnabled != rhs.sandboxEnabled {
-            return false
-        }
-        if lhs.allowNetwork != rhs.allowNetwork {
-            return false
-        }
-        if lhs.allowedRuntimes != rhs.allowedRuntimes {
-            return false
-        }
-        if lhs.workingDirectory != rhs.workingDirectory {
-            return false
-        }
-        if lhs.passEnv != rhs.passEnv {
-            return false
-        }
-        if lhs.blockedCommands != rhs.blockedCommands {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(defaultRuntime)
-        hasher.combine(timeoutSeconds)
-        hasher.combine(sandboxEnabled)
-        hasher.combine(allowNetwork)
-        hasher.combine(allowedRuntimes)
-        hasher.combine(workingDirectory)
-        hasher.combine(passEnv)
-        hasher.combine(blockedCommands)
-    }
-}
-
+#if compiler(>=6)
+extension CodeExecConfigFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3482,7 +3212,7 @@ public func FfiConverterTypeCodeExecConfigFFI_lower(_ value: CodeExecConfigFfi) 
 }
 
 
-public struct CommandNode {
+public struct CommandNode: Equatable, Hashable {
     public var key: String
     public var description: String
     public var icon: String
@@ -3504,51 +3234,15 @@ public struct CommandNode {
         self.sourceId = sourceId
         self.sourceType = sourceType
     }
+
+    
+
+    
 }
 
-
-
-extension CommandNode: Equatable, Hashable {
-    public static func ==(lhs: CommandNode, rhs: CommandNode) -> Bool {
-        if lhs.key != rhs.key {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.icon != rhs.icon {
-            return false
-        }
-        if lhs.hint != rhs.hint {
-            return false
-        }
-        if lhs.nodeType != rhs.nodeType {
-            return false
-        }
-        if lhs.hasChildren != rhs.hasChildren {
-            return false
-        }
-        if lhs.sourceId != rhs.sourceId {
-            return false
-        }
-        if lhs.sourceType != rhs.sourceType {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(key)
-        hasher.combine(description)
-        hasher.combine(icon)
-        hasher.combine(hint)
-        hasher.combine(nodeType)
-        hasher.combine(hasChildren)
-        hasher.combine(sourceId)
-        hasher.combine(sourceType)
-    }
-}
-
+#if compiler(>=6)
+extension CommandNode: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3596,7 +3290,7 @@ public func FfiConverterTypeCommandNode_lower(_ value: CommandNode) -> RustBuffe
 }
 
 
-public struct CompressionPolicy {
+public struct CompressionPolicy: Equatable, Hashable {
     public var idleTimeoutSeconds: UInt32
     public var turnThreshold: UInt32
     public var backgroundIntervalSeconds: UInt32
@@ -3608,31 +3302,15 @@ public struct CompressionPolicy {
         self.turnThreshold = turnThreshold
         self.backgroundIntervalSeconds = backgroundIntervalSeconds
     }
+
+    
+
+    
 }
 
-
-
-extension CompressionPolicy: Equatable, Hashable {
-    public static func ==(lhs: CompressionPolicy, rhs: CompressionPolicy) -> Bool {
-        if lhs.idleTimeoutSeconds != rhs.idleTimeoutSeconds {
-            return false
-        }
-        if lhs.turnThreshold != rhs.turnThreshold {
-            return false
-        }
-        if lhs.backgroundIntervalSeconds != rhs.backgroundIntervalSeconds {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(idleTimeoutSeconds)
-        hasher.combine(turnThreshold)
-        hasher.combine(backgroundIntervalSeconds)
-    }
-}
-
+#if compiler(>=6)
+extension CompressionPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3670,7 +3348,7 @@ public func FfiConverterTypeCompressionPolicy_lower(_ value: CompressionPolicy) 
 }
 
 
-public struct CompressionResult {
+public struct CompressionResult: Equatable, Hashable {
     public var memoriesProcessed: UInt32
     public var factsExtracted: UInt32
     public var factsInvalidated: UInt32
@@ -3684,35 +3362,15 @@ public struct CompressionResult {
         self.factsInvalidated = factsInvalidated
         self.durationMs = durationMs
     }
+
+    
+
+    
 }
 
-
-
-extension CompressionResult: Equatable, Hashable {
-    public static func ==(lhs: CompressionResult, rhs: CompressionResult) -> Bool {
-        if lhs.memoriesProcessed != rhs.memoriesProcessed {
-            return false
-        }
-        if lhs.factsExtracted != rhs.factsExtracted {
-            return false
-        }
-        if lhs.factsInvalidated != rhs.factsInvalidated {
-            return false
-        }
-        if lhs.durationMs != rhs.durationMs {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(memoriesProcessed)
-        hasher.combine(factsExtracted)
-        hasher.combine(factsInvalidated)
-        hasher.combine(durationMs)
-    }
-}
-
+#if compiler(>=6)
+extension CompressionResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3752,7 +3410,7 @@ public func FfiConverterTypeCompressionResult_lower(_ value: CompressionResult) 
 }
 
 
-public struct CompressionStats {
+public struct CompressionStats: Equatable, Hashable {
     public var totalRawMemories: UInt64
     public var totalFacts: UInt64
     public var validFacts: UInt64
@@ -3766,35 +3424,15 @@ public struct CompressionStats {
         self.validFacts = validFacts
         self.factsByType = factsByType
     }
+
+    
+
+    
 }
 
-
-
-extension CompressionStats: Equatable, Hashable {
-    public static func ==(lhs: CompressionStats, rhs: CompressionStats) -> Bool {
-        if lhs.totalRawMemories != rhs.totalRawMemories {
-            return false
-        }
-        if lhs.totalFacts != rhs.totalFacts {
-            return false
-        }
-        if lhs.validFacts != rhs.validFacts {
-            return false
-        }
-        if lhs.factsByType != rhs.factsByType {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(totalRawMemories)
-        hasher.combine(totalFacts)
-        hasher.combine(validFacts)
-        hasher.combine(factsByType)
-    }
-}
-
+#if compiler(>=6)
+extension CompressionStats: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3834,7 +3472,7 @@ public func FfiConverterTypeCompressionStats_lower(_ value: CompressionStats) ->
 }
 
 
-public struct ContextRuleConfig {
+public struct ContextRuleConfig: Equatable, Hashable {
     public var id: String
     public var conditionType: String
     public var paramName: String?
@@ -3864,67 +3502,15 @@ public struct ContextRuleConfig {
         self.provider = provider
         self.systemPrompt = systemPrompt
     }
+
+    
+
+    
 }
 
-
-
-extension ContextRuleConfig: Equatable, Hashable {
-    public static func ==(lhs: ContextRuleConfig, rhs: ContextRuleConfig) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.conditionType != rhs.conditionType {
-            return false
-        }
-        if lhs.paramName != rhs.paramName {
-            return false
-        }
-        if lhs.intent != rhs.intent {
-            return false
-        }
-        if lhs.bundleIds != rhs.bundleIds {
-            return false
-        }
-        if lhs.hours != rhs.hours {
-            return false
-        }
-        if lhs.daysOfWeek != rhs.daysOfWeek {
-            return false
-        }
-        if lhs.actionType != rhs.actionType {
-            return false
-        }
-        if lhs.useInputAsValue != rhs.useInputAsValue {
-            return false
-        }
-        if lhs.capability != rhs.capability {
-            return false
-        }
-        if lhs.provider != rhs.provider {
-            return false
-        }
-        if lhs.systemPrompt != rhs.systemPrompt {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(conditionType)
-        hasher.combine(paramName)
-        hasher.combine(intent)
-        hasher.combine(bundleIds)
-        hasher.combine(hours)
-        hasher.combine(daysOfWeek)
-        hasher.combine(actionType)
-        hasher.combine(useInputAsValue)
-        hasher.combine(capability)
-        hasher.combine(provider)
-        hasher.combine(systemPrompt)
-    }
-}
-
+#if compiler(>=6)
+extension ContextRuleConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3980,7 +3566,7 @@ public func FfiConverterTypeContextRuleConfig_lower(_ value: ContextRuleConfig) 
 }
 
 
-public struct ConversationTurn {
+public struct ConversationTurn: Equatable, Hashable {
     public var turnId: UInt32
     public var userInput: String
     public var aiResponse: String
@@ -3994,35 +3580,15 @@ public struct ConversationTurn {
         self.aiResponse = aiResponse
         self.timestamp = timestamp
     }
+
+    
+
+    
 }
 
-
-
-extension ConversationTurn: Equatable, Hashable {
-    public static func ==(lhs: ConversationTurn, rhs: ConversationTurn) -> Bool {
-        if lhs.turnId != rhs.turnId {
-            return false
-        }
-        if lhs.userInput != rhs.userInput {
-            return false
-        }
-        if lhs.aiResponse != rhs.aiResponse {
-            return false
-        }
-        if lhs.timestamp != rhs.timestamp {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(turnId)
-        hasher.combine(userInput)
-        hasher.combine(aiResponse)
-        hasher.combine(timestamp)
-    }
-}
-
+#if compiler(>=6)
+extension ConversationTurn: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4062,7 +3628,7 @@ public func FfiConverterTypeConversationTurn_lower(_ value: ConversationTurn) ->
 }
 
 
-public struct DagTaskInfo {
+public struct DagTaskInfo: Equatable, Hashable {
     public var id: String
     public var name: String
     public var status: DagTaskDisplayStatus
@@ -4078,39 +3644,15 @@ public struct DagTaskInfo {
         self.riskLevel = riskLevel
         self.dependencies = dependencies
     }
+
+    
+
+    
 }
 
-
-
-extension DagTaskInfo: Equatable, Hashable {
-    public static func ==(lhs: DagTaskInfo, rhs: DagTaskInfo) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.status != rhs.status {
-            return false
-        }
-        if lhs.riskLevel != rhs.riskLevel {
-            return false
-        }
-        if lhs.dependencies != rhs.dependencies {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(name)
-        hasher.combine(status)
-        hasher.combine(riskLevel)
-        hasher.combine(dependencies)
-    }
-}
-
+#if compiler(>=6)
+extension DagTaskInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4152,7 +3694,7 @@ public func FfiConverterTypeDagTaskInfo_lower(_ value: DagTaskInfo) -> RustBuffe
 }
 
 
-public struct DagTaskPlan {
+public struct DagTaskPlan: Equatable, Hashable {
     public var id: String
     public var title: String
     public var tasks: [DagTaskInfo]
@@ -4166,35 +3708,15 @@ public struct DagTaskPlan {
         self.tasks = tasks
         self.requiresConfirmation = requiresConfirmation
     }
+
+    
+
+    
 }
 
-
-
-extension DagTaskPlan: Equatable, Hashable {
-    public static func ==(lhs: DagTaskPlan, rhs: DagTaskPlan) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.title != rhs.title {
-            return false
-        }
-        if lhs.tasks != rhs.tasks {
-            return false
-        }
-        if lhs.requiresConfirmation != rhs.requiresConfirmation {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(title)
-        hasher.combine(tasks)
-        hasher.combine(requiresConfirmation)
-    }
-}
-
+#if compiler(>=6)
+extension DagTaskPlan: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4234,7 +3756,7 @@ public func FfiConverterTypeDagTaskPlan_lower(_ value: DagTaskPlan) -> RustBuffe
 }
 
 
-public struct ExecutableTaskFfi {
+public struct ExecutableTaskFfi: Equatable, Hashable {
     public var category: TaskCategoryFfi
     public var action: String
     public var target: String?
@@ -4248,35 +3770,15 @@ public struct ExecutableTaskFfi {
         self.target = target
         self.confidence = confidence
     }
+
+    
+
+    
 }
 
-
-
-extension ExecutableTaskFfi: Equatable, Hashable {
-    public static func ==(lhs: ExecutableTaskFfi, rhs: ExecutableTaskFfi) -> Bool {
-        if lhs.category != rhs.category {
-            return false
-        }
-        if lhs.action != rhs.action {
-            return false
-        }
-        if lhs.target != rhs.target {
-            return false
-        }
-        if lhs.confidence != rhs.confidence {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(category)
-        hasher.combine(action)
-        hasher.combine(target)
-        hasher.combine(confidence)
-    }
-}
-
+#if compiler(>=6)
+extension ExecutableTaskFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4316,7 +3818,7 @@ public func FfiConverterTypeExecutableTaskFFI_lower(_ value: ExecutableTaskFfi) 
 }
 
 
-public struct ExperimentalPolicy {
+public struct ExperimentalPolicy: Equatable, Hashable {
     public var useUnifiedIntentDecider: Bool
     public var useNewPromptSystem: Bool
     public var verboseDecisionLogging: Bool
@@ -4328,31 +3830,15 @@ public struct ExperimentalPolicy {
         self.useNewPromptSystem = useNewPromptSystem
         self.verboseDecisionLogging = verboseDecisionLogging
     }
+
+    
+
+    
 }
 
-
-
-extension ExperimentalPolicy: Equatable, Hashable {
-    public static func ==(lhs: ExperimentalPolicy, rhs: ExperimentalPolicy) -> Bool {
-        if lhs.useUnifiedIntentDecider != rhs.useUnifiedIntentDecider {
-            return false
-        }
-        if lhs.useNewPromptSystem != rhs.useNewPromptSystem {
-            return false
-        }
-        if lhs.verboseDecisionLogging != rhs.verboseDecisionLogging {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(useUnifiedIntentDecider)
-        hasher.combine(useNewPromptSystem)
-        hasher.combine(verboseDecisionLogging)
-    }
-}
-
+#if compiler(>=6)
+extension ExperimentalPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4390,7 +3876,7 @@ public func FfiConverterTypeExperimentalPolicy_lower(_ value: ExperimentalPolicy
 }
 
 
-public struct FileOpsConfigFfi {
+public struct FileOpsConfigFfi: Equatable, Hashable {
     public var enabled: Bool
     public var allowedPaths: [String]
     public var deniedPaths: [String]
@@ -4408,43 +3894,15 @@ public struct FileOpsConfigFfi {
         self.requireConfirmationForWrite = requireConfirmationForWrite
         self.requireConfirmationForDelete = requireConfirmationForDelete
     }
+
+    
+
+    
 }
 
-
-
-extension FileOpsConfigFfi: Equatable, Hashable {
-    public static func ==(lhs: FileOpsConfigFfi, rhs: FileOpsConfigFfi) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.allowedPaths != rhs.allowedPaths {
-            return false
-        }
-        if lhs.deniedPaths != rhs.deniedPaths {
-            return false
-        }
-        if lhs.maxFileSize != rhs.maxFileSize {
-            return false
-        }
-        if lhs.requireConfirmationForWrite != rhs.requireConfirmationForWrite {
-            return false
-        }
-        if lhs.requireConfirmationForDelete != rhs.requireConfirmationForDelete {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(allowedPaths)
-        hasher.combine(deniedPaths)
-        hasher.combine(maxFileSize)
-        hasher.combine(requireConfirmationForWrite)
-        hasher.combine(requireConfirmationForDelete)
-    }
-}
-
+#if compiler(>=6)
+extension FileOpsConfigFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4488,7 +3946,7 @@ public func FfiConverterTypeFileOpsConfigFFI_lower(_ value: FileOpsConfigFfi) ->
 }
 
 
-public struct FullConfig {
+public struct FullConfig: Equatable, Hashable {
     public var defaultHotkey: String
     public var general: GeneralConfig
     public var memory: MemoryConfig
@@ -4520,71 +3978,15 @@ public struct FullConfig {
         self.policies = policies
         self.typoCorrection = typoCorrection
     }
+
+    
+
+    
 }
 
-
-
-extension FullConfig: Equatable, Hashable {
-    public static func ==(lhs: FullConfig, rhs: FullConfig) -> Bool {
-        if lhs.defaultHotkey != rhs.defaultHotkey {
-            return false
-        }
-        if lhs.general != rhs.general {
-            return false
-        }
-        if lhs.memory != rhs.memory {
-            return false
-        }
-        if lhs.providers != rhs.providers {
-            return false
-        }
-        if lhs.rules != rhs.rules {
-            return false
-        }
-        if lhs.shortcuts != rhs.shortcuts {
-            return false
-        }
-        if lhs.behavior != rhs.behavior {
-            return false
-        }
-        if lhs.search != rhs.search {
-            return false
-        }
-        if lhs.trigger != rhs.trigger {
-            return false
-        }
-        if lhs.smartMatching != rhs.smartMatching {
-            return false
-        }
-        if lhs.skills != rhs.skills {
-            return false
-        }
-        if lhs.policies != rhs.policies {
-            return false
-        }
-        if lhs.typoCorrection != rhs.typoCorrection {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(defaultHotkey)
-        hasher.combine(general)
-        hasher.combine(memory)
-        hasher.combine(providers)
-        hasher.combine(rules)
-        hasher.combine(shortcuts)
-        hasher.combine(behavior)
-        hasher.combine(search)
-        hasher.combine(trigger)
-        hasher.combine(smartMatching)
-        hasher.combine(skills)
-        hasher.combine(policies)
-        hasher.combine(typoCorrection)
-    }
-}
-
+#if compiler(>=6)
+extension FullConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4642,7 +4044,7 @@ public func FfiConverterTypeFullConfig_lower(_ value: FullConfig) -> RustBuffer 
 }
 
 
-public struct GeneralConfig {
+public struct GeneralConfig: Equatable, Hashable {
     public var defaultProvider: String?
     public var language: String?
     public var outputDir: String?
@@ -4654,31 +4056,15 @@ public struct GeneralConfig {
         self.language = language
         self.outputDir = outputDir
     }
+
+    
+
+    
 }
 
-
-
-extension GeneralConfig: Equatable, Hashable {
-    public static func ==(lhs: GeneralConfig, rhs: GeneralConfig) -> Bool {
-        if lhs.defaultProvider != rhs.defaultProvider {
-            return false
-        }
-        if lhs.language != rhs.language {
-            return false
-        }
-        if lhs.outputDir != rhs.outputDir {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(defaultProvider)
-        hasher.combine(language)
-        hasher.combine(outputDir)
-    }
-}
-
+#if compiler(>=6)
+extension GeneralConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4716,7 +4102,7 @@ public func FfiConverterTypeGeneralConfig_lower(_ value: GeneralConfig) -> RustB
 }
 
 
-public struct GenerationDataFfi {
+public struct GenerationDataFfi: Equatable, Hashable {
     public var dataType: GenerationDataTypeFfi
     public var bytes: [UInt8]?
     public var url: String?
@@ -4730,35 +4116,15 @@ public struct GenerationDataFfi {
         self.url = url
         self.localPath = localPath
     }
+
+    
+
+    
 }
 
-
-
-extension GenerationDataFfi: Equatable, Hashable {
-    public static func ==(lhs: GenerationDataFfi, rhs: GenerationDataFfi) -> Bool {
-        if lhs.dataType != rhs.dataType {
-            return false
-        }
-        if lhs.bytes != rhs.bytes {
-            return false
-        }
-        if lhs.url != rhs.url {
-            return false
-        }
-        if lhs.localPath != rhs.localPath {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(dataType)
-        hasher.combine(bytes)
-        hasher.combine(url)
-        hasher.combine(localPath)
-    }
-}
-
+#if compiler(>=6)
+extension GenerationDataFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4798,7 +4164,7 @@ public func FfiConverterTypeGenerationDataFFI_lower(_ value: GenerationDataFfi) 
 }
 
 
-public struct GenerationMetadataFfi {
+public struct GenerationMetadataFfi: Equatable, Hashable {
     public var provider: String?
     public var model: String?
     public var durationMs: UInt64?
@@ -4824,59 +4190,15 @@ public struct GenerationMetadataFfi {
         self.height = height
         self.durationSeconds = durationSeconds
     }
+
+    
+
+    
 }
 
-
-
-extension GenerationMetadataFfi: Equatable, Hashable {
-    public static func ==(lhs: GenerationMetadataFfi, rhs: GenerationMetadataFfi) -> Bool {
-        if lhs.provider != rhs.provider {
-            return false
-        }
-        if lhs.model != rhs.model {
-            return false
-        }
-        if lhs.durationMs != rhs.durationMs {
-            return false
-        }
-        if lhs.seed != rhs.seed {
-            return false
-        }
-        if lhs.revisedPrompt != rhs.revisedPrompt {
-            return false
-        }
-        if lhs.contentType != rhs.contentType {
-            return false
-        }
-        if lhs.sizeBytes != rhs.sizeBytes {
-            return false
-        }
-        if lhs.width != rhs.width {
-            return false
-        }
-        if lhs.height != rhs.height {
-            return false
-        }
-        if lhs.durationSeconds != rhs.durationSeconds {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(provider)
-        hasher.combine(model)
-        hasher.combine(durationMs)
-        hasher.combine(seed)
-        hasher.combine(revisedPrompt)
-        hasher.combine(contentType)
-        hasher.combine(sizeBytes)
-        hasher.combine(width)
-        hasher.combine(height)
-        hasher.combine(durationSeconds)
-    }
-}
-
+#if compiler(>=6)
+extension GenerationMetadataFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4928,7 +4250,7 @@ public func FfiConverterTypeGenerationMetadataFFI_lower(_ value: GenerationMetad
 }
 
 
-public struct GenerationOutputFfi {
+public struct GenerationOutputFfi: Equatable, Hashable {
     public var generationType: GenerationTypeFfi
     public var data: GenerationDataFfi
     public var additionalOutputs: [GenerationDataFfi]
@@ -4944,39 +4266,15 @@ public struct GenerationOutputFfi {
         self.metadata = metadata
         self.requestId = requestId
     }
+
+    
+
+    
 }
 
-
-
-extension GenerationOutputFfi: Equatable, Hashable {
-    public static func ==(lhs: GenerationOutputFfi, rhs: GenerationOutputFfi) -> Bool {
-        if lhs.generationType != rhs.generationType {
-            return false
-        }
-        if lhs.data != rhs.data {
-            return false
-        }
-        if lhs.additionalOutputs != rhs.additionalOutputs {
-            return false
-        }
-        if lhs.metadata != rhs.metadata {
-            return false
-        }
-        if lhs.requestId != rhs.requestId {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(generationType)
-        hasher.combine(data)
-        hasher.combine(additionalOutputs)
-        hasher.combine(metadata)
-        hasher.combine(requestId)
-    }
-}
-
+#if compiler(>=6)
+extension GenerationOutputFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5018,7 +4316,7 @@ public func FfiConverterTypeGenerationOutputFFI_lower(_ value: GenerationOutputF
 }
 
 
-public struct GenerationParamsFfi {
+public struct GenerationParamsFfi: Equatable, Hashable {
     public var width: UInt32?
     public var height: UInt32?
     public var aspectRatio: String?
@@ -5064,99 +4362,15 @@ public struct GenerationParamsFfi {
         self.referenceAudio = referenceAudio
         self.mask = mask
     }
+
+    
+
+    
 }
 
-
-
-extension GenerationParamsFfi: Equatable, Hashable {
-    public static func ==(lhs: GenerationParamsFfi, rhs: GenerationParamsFfi) -> Bool {
-        if lhs.width != rhs.width {
-            return false
-        }
-        if lhs.height != rhs.height {
-            return false
-        }
-        if lhs.aspectRatio != rhs.aspectRatio {
-            return false
-        }
-        if lhs.quality != rhs.quality {
-            return false
-        }
-        if lhs.style != rhs.style {
-            return false
-        }
-        if lhs.n != rhs.n {
-            return false
-        }
-        if lhs.seed != rhs.seed {
-            return false
-        }
-        if lhs.format != rhs.format {
-            return false
-        }
-        if lhs.durationSeconds != rhs.durationSeconds {
-            return false
-        }
-        if lhs.fps != rhs.fps {
-            return false
-        }
-        if lhs.voice != rhs.voice {
-            return false
-        }
-        if lhs.speed != rhs.speed {
-            return false
-        }
-        if lhs.language != rhs.language {
-            return false
-        }
-        if lhs.model != rhs.model {
-            return false
-        }
-        if lhs.negativePrompt != rhs.negativePrompt {
-            return false
-        }
-        if lhs.guidanceScale != rhs.guidanceScale {
-            return false
-        }
-        if lhs.steps != rhs.steps {
-            return false
-        }
-        if lhs.referenceImage != rhs.referenceImage {
-            return false
-        }
-        if lhs.referenceAudio != rhs.referenceAudio {
-            return false
-        }
-        if lhs.mask != rhs.mask {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(width)
-        hasher.combine(height)
-        hasher.combine(aspectRatio)
-        hasher.combine(quality)
-        hasher.combine(style)
-        hasher.combine(n)
-        hasher.combine(seed)
-        hasher.combine(format)
-        hasher.combine(durationSeconds)
-        hasher.combine(fps)
-        hasher.combine(voice)
-        hasher.combine(speed)
-        hasher.combine(language)
-        hasher.combine(model)
-        hasher.combine(negativePrompt)
-        hasher.combine(guidanceScale)
-        hasher.combine(steps)
-        hasher.combine(referenceImage)
-        hasher.combine(referenceAudio)
-        hasher.combine(mask)
-    }
-}
-
+#if compiler(>=6)
+extension GenerationParamsFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5228,7 +4442,7 @@ public func FfiConverterTypeGenerationParamsFFI_lower(_ value: GenerationParamsF
 }
 
 
-public struct GenerationProgressFfi {
+public struct GenerationProgressFfi: Equatable, Hashable {
     public var percentage: Float
     public var step: String
     public var etaMs: UInt64?
@@ -5244,39 +4458,15 @@ public struct GenerationProgressFfi {
         self.isComplete = isComplete
         self.previewUrl = previewUrl
     }
+
+    
+
+    
 }
 
-
-
-extension GenerationProgressFfi: Equatable, Hashable {
-    public static func ==(lhs: GenerationProgressFfi, rhs: GenerationProgressFfi) -> Bool {
-        if lhs.percentage != rhs.percentage {
-            return false
-        }
-        if lhs.step != rhs.step {
-            return false
-        }
-        if lhs.etaMs != rhs.etaMs {
-            return false
-        }
-        if lhs.isComplete != rhs.isComplete {
-            return false
-        }
-        if lhs.previewUrl != rhs.previewUrl {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(percentage)
-        hasher.combine(step)
-        hasher.combine(etaMs)
-        hasher.combine(isComplete)
-        hasher.combine(previewUrl)
-    }
-}
-
+#if compiler(>=6)
+extension GenerationProgressFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5318,7 +4508,7 @@ public func FfiConverterTypeGenerationProgressFFI_lower(_ value: GenerationProgr
 }
 
 
-public struct GenerationProviderConfigFfi {
+public struct GenerationProviderConfigFfi: Equatable, Hashable {
     public var providerType: String
     public var apiKey: String?
     public var baseUrl: String?
@@ -5340,51 +4530,15 @@ public struct GenerationProviderConfigFfi {
         self.capabilities = capabilities
         self.timeoutSeconds = timeoutSeconds
     }
+
+    
+
+    
 }
 
-
-
-extension GenerationProviderConfigFfi: Equatable, Hashable {
-    public static func ==(lhs: GenerationProviderConfigFfi, rhs: GenerationProviderConfigFfi) -> Bool {
-        if lhs.providerType != rhs.providerType {
-            return false
-        }
-        if lhs.apiKey != rhs.apiKey {
-            return false
-        }
-        if lhs.baseUrl != rhs.baseUrl {
-            return false
-        }
-        if lhs.model != rhs.model {
-            return false
-        }
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.color != rhs.color {
-            return false
-        }
-        if lhs.capabilities != rhs.capabilities {
-            return false
-        }
-        if lhs.timeoutSeconds != rhs.timeoutSeconds {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(providerType)
-        hasher.combine(apiKey)
-        hasher.combine(baseUrl)
-        hasher.combine(model)
-        hasher.combine(enabled)
-        hasher.combine(color)
-        hasher.combine(capabilities)
-        hasher.combine(timeoutSeconds)
-    }
-}
-
+#if compiler(>=6)
+extension GenerationProviderConfigFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5432,7 +4586,7 @@ public func FfiConverterTypeGenerationProviderConfigFFI_lower(_ value: Generatio
 }
 
 
-public struct GenerationProviderInfoFfi {
+public struct GenerationProviderInfoFfi: Equatable, Hashable {
     public var name: String
     public var color: String
     public var supportedTypes: [GenerationTypeFfi]
@@ -5446,35 +4600,15 @@ public struct GenerationProviderInfoFfi {
         self.supportedTypes = supportedTypes
         self.defaultModel = defaultModel
     }
+
+    
+
+    
 }
 
-
-
-extension GenerationProviderInfoFfi: Equatable, Hashable {
-    public static func ==(lhs: GenerationProviderInfoFfi, rhs: GenerationProviderInfoFfi) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.color != rhs.color {
-            return false
-        }
-        if lhs.supportedTypes != rhs.supportedTypes {
-            return false
-        }
-        if lhs.defaultModel != rhs.defaultModel {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(color)
-        hasher.combine(supportedTypes)
-        hasher.combine(defaultModel)
-    }
-}
-
+#if compiler(>=6)
+extension GenerationProviderInfoFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5514,7 +4648,7 @@ public func FfiConverterTypeGenerationProviderInfoFFI_lower(_ value: GenerationP
 }
 
 
-public struct HealthStatisticsFfi {
+public struct HealthStatisticsFfi: Equatable, Hashable {
     public var total: UInt32
     public var healthy: UInt32
     public var degraded: UInt32
@@ -5536,51 +4670,15 @@ public struct HealthStatisticsFfi {
         self.unknown = unknown
         self.healthyPercent = healthyPercent
     }
+
+    
+
+    
 }
 
-
-
-extension HealthStatisticsFfi: Equatable, Hashable {
-    public static func ==(lhs: HealthStatisticsFfi, rhs: HealthStatisticsFfi) -> Bool {
-        if lhs.total != rhs.total {
-            return false
-        }
-        if lhs.healthy != rhs.healthy {
-            return false
-        }
-        if lhs.degraded != rhs.degraded {
-            return false
-        }
-        if lhs.unhealthy != rhs.unhealthy {
-            return false
-        }
-        if lhs.circuitOpen != rhs.circuitOpen {
-            return false
-        }
-        if lhs.halfOpen != rhs.halfOpen {
-            return false
-        }
-        if lhs.unknown != rhs.unknown {
-            return false
-        }
-        if lhs.healthyPercent != rhs.healthyPercent {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(total)
-        hasher.combine(healthy)
-        hasher.combine(degraded)
-        hasher.combine(unhealthy)
-        hasher.combine(circuitOpen)
-        hasher.combine(halfOpen)
-        hasher.combine(unknown)
-        hasher.combine(healthyPercent)
-    }
-}
-
+#if compiler(>=6)
+extension HealthStatisticsFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5633,7 +4731,7 @@ public func FfiConverterTypeHealthStatisticsFFI_lower(_ value: HealthStatisticsF
  *
  * This struct mirrors `InitializationResult` but uses UniFFI-compatible types.
  */
-public struct InitResultFfi {
+public struct InitResultFfi: Equatable, Hashable {
     /**
      * Whether initialization completed successfully
      */
@@ -5671,35 +4769,15 @@ public struct InitResultFfi {
         self.errorPhase = errorPhase
         self.errorMessage = errorMessage
     }
+
+    
+
+    
 }
 
-
-
-extension InitResultFfi: Equatable, Hashable {
-    public static func ==(lhs: InitResultFfi, rhs: InitResultFfi) -> Bool {
-        if lhs.success != rhs.success {
-            return false
-        }
-        if lhs.completedPhases != rhs.completedPhases {
-            return false
-        }
-        if lhs.errorPhase != rhs.errorPhase {
-            return false
-        }
-        if lhs.errorMessage != rhs.errorMessage {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(success)
-        hasher.combine(completedPhases)
-        hasher.combine(errorPhase)
-        hasher.combine(errorMessage)
-    }
-}
-
+#if compiler(>=6)
+extension InitResultFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5739,7 +4817,7 @@ public func FfiConverterTypeInitResultFFI_lower(_ value: InitResultFfi) -> RustB
 }
 
 
-public struct IntentDetectionPolicy {
+public struct IntentDetectionPolicy: Equatable, Hashable {
     public var confidenceThreshold: Double
     public var timeoutMs: UInt64
     public var minInputLength: UInt64
@@ -5753,35 +4831,15 @@ public struct IntentDetectionPolicy {
         self.minInputLength = minInputLength
         self.videoUrlPatterns = videoUrlPatterns
     }
+
+    
+
+    
 }
 
-
-
-extension IntentDetectionPolicy: Equatable, Hashable {
-    public static func ==(lhs: IntentDetectionPolicy, rhs: IntentDetectionPolicy) -> Bool {
-        if lhs.confidenceThreshold != rhs.confidenceThreshold {
-            return false
-        }
-        if lhs.timeoutMs != rhs.timeoutMs {
-            return false
-        }
-        if lhs.minInputLength != rhs.minInputLength {
-            return false
-        }
-        if lhs.videoUrlPatterns != rhs.videoUrlPatterns {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(confidenceThreshold)
-        hasher.combine(timeoutMs)
-        hasher.combine(minInputLength)
-        hasher.combine(videoUrlPatterns)
-    }
-}
-
+#if compiler(>=6)
+extension IntentDetectionPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5821,7 +4879,7 @@ public func FfiConverterTypeIntentDetectionPolicy_lower(_ value: IntentDetection
 }
 
 
-public struct KeywordPolicy {
+public struct KeywordPolicy: Equatable, Hashable {
     public var enabled: Bool
     public var globalMinScore: Float
     public var rules: [PolicyKeywordRule]
@@ -5833,31 +4891,15 @@ public struct KeywordPolicy {
         self.globalMinScore = globalMinScore
         self.rules = rules
     }
+
+    
+
+    
 }
 
-
-
-extension KeywordPolicy: Equatable, Hashable {
-    public static func ==(lhs: KeywordPolicy, rhs: KeywordPolicy) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.globalMinScore != rhs.globalMinScore {
-            return false
-        }
-        if lhs.rules != rhs.rules {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(globalMinScore)
-        hasher.combine(rules)
-    }
-}
-
+#if compiler(>=6)
+extension KeywordPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5895,7 +4937,7 @@ public func FfiConverterTypeKeywordPolicy_lower(_ value: KeywordPolicy) -> RustB
 }
 
 
-public struct KeywordRuleConfig {
+public struct KeywordRuleConfig: Equatable, Hashable {
     public var id: String
     public var name: String?
     public var keywords: [String]
@@ -5917,51 +4959,15 @@ public struct KeywordRuleConfig {
         self.capabilities = capabilities
         self.minScore = minScore
     }
+
+    
+
+    
 }
 
-
-
-extension KeywordRuleConfig: Equatable, Hashable {
-    public static func ==(lhs: KeywordRuleConfig, rhs: KeywordRuleConfig) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.keywords != rhs.keywords {
-            return false
-        }
-        if lhs.matchMode != rhs.matchMode {
-            return false
-        }
-        if lhs.intentType != rhs.intentType {
-            return false
-        }
-        if lhs.systemPrompt != rhs.systemPrompt {
-            return false
-        }
-        if lhs.capabilities != rhs.capabilities {
-            return false
-        }
-        if lhs.minScore != rhs.minScore {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(name)
-        hasher.combine(keywords)
-        hasher.combine(matchMode)
-        hasher.combine(intentType)
-        hasher.combine(systemPrompt)
-        hasher.combine(capabilities)
-        hasher.combine(minScore)
-    }
-}
-
+#if compiler(>=6)
+extension KeywordRuleConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6009,7 +5015,80 @@ public func FfiConverterTypeKeywordRuleConfig_lower(_ value: KeywordRuleConfig) 
 }
 
 
-public struct McpEnvVar {
+/**
+ * Load summary for FFI
+ */
+public struct LoadSummaryFfi: Equatable, Hashable {
+    public var skillsLoaded: UInt32
+    public var commandsLoaded: UInt32
+    public var agentsLoaded: UInt32
+    public var pluginsLoaded: UInt32
+    public var hooksLoaded: UInt32
+    public var errors: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(skillsLoaded: UInt32, commandsLoaded: UInt32, agentsLoaded: UInt32, pluginsLoaded: UInt32, hooksLoaded: UInt32, errors: [String]) {
+        self.skillsLoaded = skillsLoaded
+        self.commandsLoaded = commandsLoaded
+        self.agentsLoaded = agentsLoaded
+        self.pluginsLoaded = pluginsLoaded
+        self.hooksLoaded = hooksLoaded
+        self.errors = errors
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension LoadSummaryFfi: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLoadSummaryFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LoadSummaryFfi {
+        return
+            try LoadSummaryFfi(
+                skillsLoaded: FfiConverterUInt32.read(from: &buf), 
+                commandsLoaded: FfiConverterUInt32.read(from: &buf), 
+                agentsLoaded: FfiConverterUInt32.read(from: &buf), 
+                pluginsLoaded: FfiConverterUInt32.read(from: &buf), 
+                hooksLoaded: FfiConverterUInt32.read(from: &buf), 
+                errors: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: LoadSummaryFfi, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.skillsLoaded, into: &buf)
+        FfiConverterUInt32.write(value.commandsLoaded, into: &buf)
+        FfiConverterUInt32.write(value.agentsLoaded, into: &buf)
+        FfiConverterUInt32.write(value.pluginsLoaded, into: &buf)
+        FfiConverterUInt32.write(value.hooksLoaded, into: &buf)
+        FfiConverterSequenceString.write(value.errors, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLoadSummaryFFI_lift(_ buf: RustBuffer) throws -> LoadSummaryFfi {
+    return try FfiConverterTypeLoadSummaryFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLoadSummaryFFI_lower(_ value: LoadSummaryFfi) -> RustBuffer {
+    return FfiConverterTypeLoadSummaryFFI.lower(value)
+}
+
+
+public struct McpEnvVar: Equatable, Hashable {
     public var key: String
     public var value: String
 
@@ -6019,27 +5098,15 @@ public struct McpEnvVar {
         self.key = key
         self.value = value
     }
+
+    
+
+    
 }
 
-
-
-extension McpEnvVar: Equatable, Hashable {
-    public static func ==(lhs: McpEnvVar, rhs: McpEnvVar) -> Bool {
-        if lhs.key != rhs.key {
-            return false
-        }
-        if lhs.value != rhs.value {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(key)
-        hasher.combine(value)
-    }
-}
-
+#if compiler(>=6)
+extension McpEnvVar: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6075,7 +5142,7 @@ public func FfiConverterTypeMcpEnvVar_lower(_ value: McpEnvVar) -> RustBuffer {
 }
 
 
-public struct McpServerConfig {
+public struct McpServerConfig: Equatable, Hashable {
     public var id: String
     public var name: String
     public var serverType: McpServerType
@@ -6105,67 +5172,15 @@ public struct McpServerConfig {
         self.icon = icon
         self.color = color
     }
+
+    
+
+    
 }
 
-
-
-extension McpServerConfig: Equatable, Hashable {
-    public static func ==(lhs: McpServerConfig, rhs: McpServerConfig) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.serverType != rhs.serverType {
-            return false
-        }
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.command != rhs.command {
-            return false
-        }
-        if lhs.args != rhs.args {
-            return false
-        }
-        if lhs.env != rhs.env {
-            return false
-        }
-        if lhs.workingDirectory != rhs.workingDirectory {
-            return false
-        }
-        if lhs.triggerCommand != rhs.triggerCommand {
-            return false
-        }
-        if lhs.permissions != rhs.permissions {
-            return false
-        }
-        if lhs.icon != rhs.icon {
-            return false
-        }
-        if lhs.color != rhs.color {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(name)
-        hasher.combine(serverType)
-        hasher.combine(enabled)
-        hasher.combine(command)
-        hasher.combine(args)
-        hasher.combine(env)
-        hasher.combine(workingDirectory)
-        hasher.combine(triggerCommand)
-        hasher.combine(permissions)
-        hasher.combine(icon)
-        hasher.combine(color)
-    }
-}
-
+#if compiler(>=6)
+extension McpServerConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6221,7 +5236,7 @@ public func FfiConverterTypeMcpServerConfig_lower(_ value: McpServerConfig) -> R
 }
 
 
-public struct McpServerErrorFfi {
+public struct McpServerErrorFfi: Equatable, Hashable {
     public var serverName: String
     public var errorMessage: String
 
@@ -6231,27 +5246,15 @@ public struct McpServerErrorFfi {
         self.serverName = serverName
         self.errorMessage = errorMessage
     }
+
+    
+
+    
 }
 
-
-
-extension McpServerErrorFfi: Equatable, Hashable {
-    public static func ==(lhs: McpServerErrorFfi, rhs: McpServerErrorFfi) -> Bool {
-        if lhs.serverName != rhs.serverName {
-            return false
-        }
-        if lhs.errorMessage != rhs.errorMessage {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(serverName)
-        hasher.combine(errorMessage)
-    }
-}
-
+#if compiler(>=6)
+extension McpServerErrorFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6287,7 +5290,7 @@ public func FfiConverterTypeMcpServerErrorFFI_lower(_ value: McpServerErrorFfi) 
 }
 
 
-public struct McpServerPermissions {
+public struct McpServerPermissions: Equatable, Hashable {
     public var requiresConfirmation: Bool
     public var allowedPaths: [String]
     public var allowedCommands: [String]
@@ -6299,31 +5302,15 @@ public struct McpServerPermissions {
         self.allowedPaths = allowedPaths
         self.allowedCommands = allowedCommands
     }
+
+    
+
+    
 }
 
-
-
-extension McpServerPermissions: Equatable, Hashable {
-    public static func ==(lhs: McpServerPermissions, rhs: McpServerPermissions) -> Bool {
-        if lhs.requiresConfirmation != rhs.requiresConfirmation {
-            return false
-        }
-        if lhs.allowedPaths != rhs.allowedPaths {
-            return false
-        }
-        if lhs.allowedCommands != rhs.allowedCommands {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(requiresConfirmation)
-        hasher.combine(allowedPaths)
-        hasher.combine(allowedCommands)
-    }
-}
-
+#if compiler(>=6)
+extension McpServerPermissions: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6361,7 +5348,7 @@ public func FfiConverterTypeMcpServerPermissions_lower(_ value: McpServerPermiss
 }
 
 
-public struct McpServerStatusInfo {
+public struct McpServerStatusInfo: Equatable, Hashable {
     public var status: McpServerStatus
     public var message: String?
     public var lastError: String?
@@ -6373,31 +5360,15 @@ public struct McpServerStatusInfo {
         self.message = message
         self.lastError = lastError
     }
+
+    
+
+    
 }
 
-
-
-extension McpServerStatusInfo: Equatable, Hashable {
-    public static func ==(lhs: McpServerStatusInfo, rhs: McpServerStatusInfo) -> Bool {
-        if lhs.status != rhs.status {
-            return false
-        }
-        if lhs.message != rhs.message {
-            return false
-        }
-        if lhs.lastError != rhs.lastError {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(status)
-        hasher.combine(message)
-        hasher.combine(lastError)
-    }
-}
-
+#if compiler(>=6)
+extension McpServerStatusInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6435,7 +5406,7 @@ public func FfiConverterTypeMcpServerStatusInfo_lower(_ value: McpServerStatusIn
 }
 
 
-public struct McpServiceInfo {
+public struct McpServiceInfo: Equatable, Hashable {
     public var name: String
     public var description: String
     public var isBuiltin: Bool
@@ -6451,39 +5422,15 @@ public struct McpServiceInfo {
         self.isRunning = isRunning
         self.toolCount = toolCount
     }
+
+    
+
+    
 }
 
-
-
-extension McpServiceInfo: Equatable, Hashable {
-    public static func ==(lhs: McpServiceInfo, rhs: McpServiceInfo) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.isBuiltin != rhs.isBuiltin {
-            return false
-        }
-        if lhs.isRunning != rhs.isRunning {
-            return false
-        }
-        if lhs.toolCount != rhs.toolCount {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(description)
-        hasher.combine(isBuiltin)
-        hasher.combine(isRunning)
-        hasher.combine(toolCount)
-    }
-}
-
+#if compiler(>=6)
+extension McpServiceInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6525,7 +5472,7 @@ public func FfiConverterTypeMcpServiceInfo_lower(_ value: McpServiceInfo) -> Rus
 }
 
 
-public struct McpSettingsConfig {
+public struct McpSettingsConfig: Equatable, Hashable {
     public var enabled: Bool
     public var fsEnabled: Bool
     public var gitEnabled: Bool
@@ -6549,55 +5496,15 @@ public struct McpSettingsConfig {
         self.allowedCommands = allowedCommands
         self.shellTimeoutSeconds = shellTimeoutSeconds
     }
+
+    
+
+    
 }
 
-
-
-extension McpSettingsConfig: Equatable, Hashable {
-    public static func ==(lhs: McpSettingsConfig, rhs: McpSettingsConfig) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.fsEnabled != rhs.fsEnabled {
-            return false
-        }
-        if lhs.gitEnabled != rhs.gitEnabled {
-            return false
-        }
-        if lhs.shellEnabled != rhs.shellEnabled {
-            return false
-        }
-        if lhs.systemInfoEnabled != rhs.systemInfoEnabled {
-            return false
-        }
-        if lhs.allowedRoots != rhs.allowedRoots {
-            return false
-        }
-        if lhs.allowedRepos != rhs.allowedRepos {
-            return false
-        }
-        if lhs.allowedCommands != rhs.allowedCommands {
-            return false
-        }
-        if lhs.shellTimeoutSeconds != rhs.shellTimeoutSeconds {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(fsEnabled)
-        hasher.combine(gitEnabled)
-        hasher.combine(shellEnabled)
-        hasher.combine(systemInfoEnabled)
-        hasher.combine(allowedRoots)
-        hasher.combine(allowedRepos)
-        hasher.combine(allowedCommands)
-        hasher.combine(shellTimeoutSeconds)
-    }
-}
-
+#if compiler(>=6)
+extension McpSettingsConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6647,7 +5554,7 @@ public func FfiConverterTypeMcpSettingsConfig_lower(_ value: McpSettingsConfig) 
 }
 
 
-public struct McpStartupReportFfi {
+public struct McpStartupReportFfi: Equatable, Hashable {
     public var succeededServers: [String]
     public var failedServers: [McpServerErrorFfi]
 
@@ -6657,27 +5564,15 @@ public struct McpStartupReportFfi {
         self.succeededServers = succeededServers
         self.failedServers = failedServers
     }
+
+    
+
+    
 }
 
-
-
-extension McpStartupReportFfi: Equatable, Hashable {
-    public static func ==(lhs: McpStartupReportFfi, rhs: McpStartupReportFfi) -> Bool {
-        if lhs.succeededServers != rhs.succeededServers {
-            return false
-        }
-        if lhs.failedServers != rhs.failedServers {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(succeededServers)
-        hasher.combine(failedServers)
-    }
-}
-
+#if compiler(>=6)
+extension McpStartupReportFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6713,7 +5608,7 @@ public func FfiConverterTypeMcpStartupReportFFI_lower(_ value: McpStartupReportF
 }
 
 
-public struct McpToolInfo {
+public struct McpToolInfo: Equatable, Hashable {
     public var name: String
     public var description: String
     public var requiresConfirmation: Bool
@@ -6727,35 +5622,15 @@ public struct McpToolInfo {
         self.requiresConfirmation = requiresConfirmation
         self.serviceName = serviceName
     }
+
+    
+
+    
 }
 
-
-
-extension McpToolInfo: Equatable, Hashable {
-    public static func ==(lhs: McpToolInfo, rhs: McpToolInfo) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.requiresConfirmation != rhs.requiresConfirmation {
-            return false
-        }
-        if lhs.serviceName != rhs.serviceName {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(description)
-        hasher.combine(requiresConfirmation)
-        hasher.combine(serviceName)
-    }
-}
-
+#if compiler(>=6)
+extension McpToolInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6795,7 +5670,7 @@ public func FfiConverterTypeMcpToolInfo_lower(_ value: McpToolInfo) -> RustBuffe
 }
 
 
-public struct MediaAttachment {
+public struct MediaAttachment: Equatable, Hashable {
     public var mediaType: String
     public var mimeType: String
     public var data: String
@@ -6813,43 +5688,15 @@ public struct MediaAttachment {
         self.filename = filename
         self.sizeBytes = sizeBytes
     }
+
+    
+
+    
 }
 
-
-
-extension MediaAttachment: Equatable, Hashable {
-    public static func ==(lhs: MediaAttachment, rhs: MediaAttachment) -> Bool {
-        if lhs.mediaType != rhs.mediaType {
-            return false
-        }
-        if lhs.mimeType != rhs.mimeType {
-            return false
-        }
-        if lhs.data != rhs.data {
-            return false
-        }
-        if lhs.encoding != rhs.encoding {
-            return false
-        }
-        if lhs.filename != rhs.filename {
-            return false
-        }
-        if lhs.sizeBytes != rhs.sizeBytes {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(mediaType)
-        hasher.combine(mimeType)
-        hasher.combine(data)
-        hasher.combine(encoding)
-        hasher.combine(filename)
-        hasher.combine(sizeBytes)
-    }
-}
-
+#if compiler(>=6)
+extension MediaAttachment: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6893,7 +5740,7 @@ public func FfiConverterTypeMediaAttachment_lower(_ value: MediaAttachment) -> R
 }
 
 
-public struct MemoryConfig {
+public struct MemoryConfig: Equatable, Hashable {
     public var enabled: Bool
     public var embeddingModel: String
     public var maxContextItems: UInt32
@@ -6937,95 +5784,15 @@ public struct MemoryConfig {
         self.maxFactsInContext = maxFactsInContext
         self.rawMemoryFallbackCount = rawMemoryFallbackCount
     }
+
+    
+
+    
 }
 
-
-
-extension MemoryConfig: Equatable, Hashable {
-    public static func ==(lhs: MemoryConfig, rhs: MemoryConfig) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.embeddingModel != rhs.embeddingModel {
-            return false
-        }
-        if lhs.maxContextItems != rhs.maxContextItems {
-            return false
-        }
-        if lhs.retentionDays != rhs.retentionDays {
-            return false
-        }
-        if lhs.vectorDb != rhs.vectorDb {
-            return false
-        }
-        if lhs.similarityThreshold != rhs.similarityThreshold {
-            return false
-        }
-        if lhs.excludedApps != rhs.excludedApps {
-            return false
-        }
-        if lhs.aiRetrievalEnabled != rhs.aiRetrievalEnabled {
-            return false
-        }
-        if lhs.aiRetrievalTimeoutMs != rhs.aiRetrievalTimeoutMs {
-            return false
-        }
-        if lhs.aiRetrievalMaxCandidates != rhs.aiRetrievalMaxCandidates {
-            return false
-        }
-        if lhs.aiRetrievalFallbackCount != rhs.aiRetrievalFallbackCount {
-            return false
-        }
-        if lhs.compressionEnabled != rhs.compressionEnabled {
-            return false
-        }
-        if lhs.compressionIdleTimeoutSeconds != rhs.compressionIdleTimeoutSeconds {
-            return false
-        }
-        if lhs.compressionTurnThreshold != rhs.compressionTurnThreshold {
-            return false
-        }
-        if lhs.compressionIntervalSeconds != rhs.compressionIntervalSeconds {
-            return false
-        }
-        if lhs.compressionBatchSize != rhs.compressionBatchSize {
-            return false
-        }
-        if lhs.conflictSimilarityThreshold != rhs.conflictSimilarityThreshold {
-            return false
-        }
-        if lhs.maxFactsInContext != rhs.maxFactsInContext {
-            return false
-        }
-        if lhs.rawMemoryFallbackCount != rhs.rawMemoryFallbackCount {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(embeddingModel)
-        hasher.combine(maxContextItems)
-        hasher.combine(retentionDays)
-        hasher.combine(vectorDb)
-        hasher.combine(similarityThreshold)
-        hasher.combine(excludedApps)
-        hasher.combine(aiRetrievalEnabled)
-        hasher.combine(aiRetrievalTimeoutMs)
-        hasher.combine(aiRetrievalMaxCandidates)
-        hasher.combine(aiRetrievalFallbackCount)
-        hasher.combine(compressionEnabled)
-        hasher.combine(compressionIdleTimeoutSeconds)
-        hasher.combine(compressionTurnThreshold)
-        hasher.combine(compressionIntervalSeconds)
-        hasher.combine(compressionBatchSize)
-        hasher.combine(conflictSimilarityThreshold)
-        hasher.combine(maxFactsInContext)
-        hasher.combine(rawMemoryFallbackCount)
-    }
-}
-
+#if compiler(>=6)
+extension MemoryConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7095,7 +5862,7 @@ public func FfiConverterTypeMemoryConfig_lower(_ value: MemoryConfig) -> RustBuf
 }
 
 
-public struct MemoryEntry {
+public struct MemoryEntry: Equatable, Hashable {
     public var id: String
     public var appBundleId: String
     public var windowTitle: String
@@ -7115,47 +5882,15 @@ public struct MemoryEntry {
         self.timestamp = timestamp
         self.similarityScore = similarityScore
     }
+
+    
+
+    
 }
 
-
-
-extension MemoryEntry: Equatable, Hashable {
-    public static func ==(lhs: MemoryEntry, rhs: MemoryEntry) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.appBundleId != rhs.appBundleId {
-            return false
-        }
-        if lhs.windowTitle != rhs.windowTitle {
-            return false
-        }
-        if lhs.userInput != rhs.userInput {
-            return false
-        }
-        if lhs.aiOutput != rhs.aiOutput {
-            return false
-        }
-        if lhs.timestamp != rhs.timestamp {
-            return false
-        }
-        if lhs.similarityScore != rhs.similarityScore {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(appBundleId)
-        hasher.combine(windowTitle)
-        hasher.combine(userInput)
-        hasher.combine(aiOutput)
-        hasher.combine(timestamp)
-        hasher.combine(similarityScore)
-    }
-}
-
+#if compiler(>=6)
+extension MemoryEntry: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7201,7 +5936,7 @@ public func FfiConverterTypeMemoryEntry_lower(_ value: MemoryEntry) -> RustBuffe
 }
 
 
-public struct MemoryItem {
+public struct MemoryItem: Equatable, Hashable {
     public var id: String
     public var userInput: String
     public var assistantResponse: String
@@ -7217,39 +5952,15 @@ public struct MemoryItem {
         self.timestamp = timestamp
         self.appContext = appContext
     }
+
+    
+
+    
 }
 
-
-
-extension MemoryItem: Equatable, Hashable {
-    public static func ==(lhs: MemoryItem, rhs: MemoryItem) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.userInput != rhs.userInput {
-            return false
-        }
-        if lhs.assistantResponse != rhs.assistantResponse {
-            return false
-        }
-        if lhs.timestamp != rhs.timestamp {
-            return false
-        }
-        if lhs.appContext != rhs.appContext {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(userInput)
-        hasher.combine(assistantResponse)
-        hasher.combine(timestamp)
-        hasher.combine(appContext)
-    }
-}
-
+#if compiler(>=6)
+extension MemoryItem: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7291,7 +6002,7 @@ public func FfiConverterTypeMemoryItem_lower(_ value: MemoryItem) -> RustBuffer 
 }
 
 
-public struct MemoryPolicies {
+public struct MemoryPolicies: Equatable, Hashable {
     public var compression: CompressionPolicy
     public var aiRetrieval: AiRetrievalPolicy
 
@@ -7301,27 +6012,15 @@ public struct MemoryPolicies {
         self.compression = compression
         self.aiRetrieval = aiRetrieval
     }
+
+    
+
+    
 }
 
-
-
-extension MemoryPolicies: Equatable, Hashable {
-    public static func ==(lhs: MemoryPolicies, rhs: MemoryPolicies) -> Bool {
-        if lhs.compression != rhs.compression {
-            return false
-        }
-        if lhs.aiRetrieval != rhs.aiRetrieval {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(compression)
-        hasher.combine(aiRetrieval)
-    }
-}
-
+#if compiler(>=6)
+extension MemoryPolicies: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7357,7 +6056,7 @@ public func FfiConverterTypeMemoryPolicies_lower(_ value: MemoryPolicies) -> Rus
 }
 
 
-public struct MemoryStats {
+public struct MemoryStats: Equatable, Hashable {
     public var totalMemories: UInt64
     public var totalApps: UInt64
     public var databaseSizeMb: Double
@@ -7373,39 +6072,15 @@ public struct MemoryStats {
         self.oldestMemoryTimestamp = oldestMemoryTimestamp
         self.newestMemoryTimestamp = newestMemoryTimestamp
     }
+
+    
+
+    
 }
 
-
-
-extension MemoryStats: Equatable, Hashable {
-    public static func ==(lhs: MemoryStats, rhs: MemoryStats) -> Bool {
-        if lhs.totalMemories != rhs.totalMemories {
-            return false
-        }
-        if lhs.totalApps != rhs.totalApps {
-            return false
-        }
-        if lhs.databaseSizeMb != rhs.databaseSizeMb {
-            return false
-        }
-        if lhs.oldestMemoryTimestamp != rhs.oldestMemoryTimestamp {
-            return false
-        }
-        if lhs.newestMemoryTimestamp != rhs.newestMemoryTimestamp {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(totalMemories)
-        hasher.combine(totalApps)
-        hasher.combine(databaseSizeMb)
-        hasher.combine(oldestMemoryTimestamp)
-        hasher.combine(newestMemoryTimestamp)
-    }
-}
-
+#if compiler(>=6)
+extension MemoryStats: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7447,7 +6122,7 @@ public func FfiConverterTypeMemoryStats_lower(_ value: MemoryStats) -> RustBuffe
 }
 
 
-public struct MetricsPolicy {
+public struct MetricsPolicy: Equatable, Hashable {
     public var targetHotkeyToClipboardMs: UInt64
     public var targetClipboardToMemoryMs: UInt64
     public var targetMemoryToAiMs: UInt64
@@ -7469,51 +6144,15 @@ public struct MetricsPolicy {
         self.enableLogging = enableLogging
         self.enableWarnings = enableWarnings
     }
+
+    
+
+    
 }
 
-
-
-extension MetricsPolicy: Equatable, Hashable {
-    public static func ==(lhs: MetricsPolicy, rhs: MetricsPolicy) -> Bool {
-        if lhs.targetHotkeyToClipboardMs != rhs.targetHotkeyToClipboardMs {
-            return false
-        }
-        if lhs.targetClipboardToMemoryMs != rhs.targetClipboardToMemoryMs {
-            return false
-        }
-        if lhs.targetMemoryToAiMs != rhs.targetMemoryToAiMs {
-            return false
-        }
-        if lhs.targetAiToPasteMs != rhs.targetAiToPasteMs {
-            return false
-        }
-        if lhs.targetPasteToCompleteMs != rhs.targetPasteToCompleteMs {
-            return false
-        }
-        if lhs.warningMultiplier != rhs.warningMultiplier {
-            return false
-        }
-        if lhs.enableLogging != rhs.enableLogging {
-            return false
-        }
-        if lhs.enableWarnings != rhs.enableWarnings {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(targetHotkeyToClipboardMs)
-        hasher.combine(targetClipboardToMemoryMs)
-        hasher.combine(targetMemoryToAiMs)
-        hasher.combine(targetAiToPasteMs)
-        hasher.combine(targetPasteToCompleteMs)
-        hasher.combine(warningMultiplier)
-        hasher.combine(enableLogging)
-        hasher.combine(enableWarnings)
-    }
-}
-
+#if compiler(>=6)
+extension MetricsPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7561,7 +6200,7 @@ public func FfiConverterTypeMetricsPolicy_lower(_ value: MetricsPolicy) -> RustB
 }
 
 
-public struct ModelHealthSummaryFfi {
+public struct ModelHealthSummaryFfi: Equatable, Hashable {
     public var modelId: String
     public var status: ModelHealthStatusFfi
     public var statusText: String
@@ -7581,47 +6220,15 @@ public struct ModelHealthSummaryFfi {
         self.consecutiveSuccesses = consecutiveSuccesses
         self.consecutiveFailures = consecutiveFailures
     }
+
+    
+
+    
 }
 
-
-
-extension ModelHealthSummaryFfi: Equatable, Hashable {
-    public static func ==(lhs: ModelHealthSummaryFfi, rhs: ModelHealthSummaryFfi) -> Bool {
-        if lhs.modelId != rhs.modelId {
-            return false
-        }
-        if lhs.status != rhs.status {
-            return false
-        }
-        if lhs.statusText != rhs.statusText {
-            return false
-        }
-        if lhs.statusEmoji != rhs.statusEmoji {
-            return false
-        }
-        if lhs.reason != rhs.reason {
-            return false
-        }
-        if lhs.consecutiveSuccesses != rhs.consecutiveSuccesses {
-            return false
-        }
-        if lhs.consecutiveFailures != rhs.consecutiveFailures {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(modelId)
-        hasher.combine(status)
-        hasher.combine(statusText)
-        hasher.combine(statusEmoji)
-        hasher.combine(reason)
-        hasher.combine(consecutiveSuccesses)
-        hasher.combine(consecutiveFailures)
-    }
-}
-
+#if compiler(>=6)
+extension ModelHealthSummaryFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7667,7 +6274,7 @@ public func FfiConverterTypeModelHealthSummaryFFI_lower(_ value: ModelHealthSumm
 }
 
 
-public struct ModelProfileFfi {
+public struct ModelProfileFfi: Equatable, Hashable {
     public var id: String
     public var provider: String
     public var model: String
@@ -7689,51 +6296,15 @@ public struct ModelProfileFfi {
         self.maxContext = maxContext
         self.local = local
     }
+
+    
+
+    
 }
 
-
-
-extension ModelProfileFfi: Equatable, Hashable {
-    public static func ==(lhs: ModelProfileFfi, rhs: ModelProfileFfi) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.provider != rhs.provider {
-            return false
-        }
-        if lhs.model != rhs.model {
-            return false
-        }
-        if lhs.capabilities != rhs.capabilities {
-            return false
-        }
-        if lhs.costTier != rhs.costTier {
-            return false
-        }
-        if lhs.latencyTier != rhs.latencyTier {
-            return false
-        }
-        if lhs.maxContext != rhs.maxContext {
-            return false
-        }
-        if lhs.local != rhs.local {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(provider)
-        hasher.combine(model)
-        hasher.combine(capabilities)
-        hasher.combine(costTier)
-        hasher.combine(latencyTier)
-        hasher.combine(maxContext)
-        hasher.combine(local)
-    }
-}
-
+#if compiler(>=6)
+extension ModelProfileFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7781,7 +6352,7 @@ public func FfiConverterTypeModelProfileFFI_lower(_ value: ModelProfileFfi) -> R
 }
 
 
-public struct ModelRoutingRulesFfi {
+public struct ModelRoutingRulesFfi: Equatable, Hashable {
     public var taskTypeMappings: [TaskTypeMappingFfi]
     public var capabilityMappings: [CapabilityMappingFfi]
     public var costStrategy: ModelCostStrategyFfi
@@ -7797,39 +6368,15 @@ public struct ModelRoutingRulesFfi {
         self.defaultModel = defaultModel
         self.enablePipelines = enablePipelines
     }
+
+    
+
+    
 }
 
-
-
-extension ModelRoutingRulesFfi: Equatable, Hashable {
-    public static func ==(lhs: ModelRoutingRulesFfi, rhs: ModelRoutingRulesFfi) -> Bool {
-        if lhs.taskTypeMappings != rhs.taskTypeMappings {
-            return false
-        }
-        if lhs.capabilityMappings != rhs.capabilityMappings {
-            return false
-        }
-        if lhs.costStrategy != rhs.costStrategy {
-            return false
-        }
-        if lhs.defaultModel != rhs.defaultModel {
-            return false
-        }
-        if lhs.enablePipelines != rhs.enablePipelines {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(taskTypeMappings)
-        hasher.combine(capabilityMappings)
-        hasher.combine(costStrategy)
-        hasher.combine(defaultModel)
-        hasher.combine(enablePipelines)
-    }
-}
-
+#if compiler(>=6)
+extension ModelRoutingRulesFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7871,7 +6418,7 @@ public func FfiConverterTypeModelRoutingRulesFFI_lower(_ value: ModelRoutingRule
 }
 
 
-public struct PiiConfig {
+public struct PiiConfig: Equatable, Hashable {
     public var enabled: Bool
     public var scrubEmail: Bool
     public var scrubPhone: Bool
@@ -7887,39 +6434,15 @@ public struct PiiConfig {
         self.scrubSsn = scrubSsn
         self.scrubCreditCard = scrubCreditCard
     }
+
+    
+
+    
 }
 
-
-
-extension PiiConfig: Equatable, Hashable {
-    public static func ==(lhs: PiiConfig, rhs: PiiConfig) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.scrubEmail != rhs.scrubEmail {
-            return false
-        }
-        if lhs.scrubPhone != rhs.scrubPhone {
-            return false
-        }
-        if lhs.scrubSsn != rhs.scrubSsn {
-            return false
-        }
-        if lhs.scrubCreditCard != rhs.scrubCreditCard {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(scrubEmail)
-        hasher.combine(scrubPhone)
-        hasher.combine(scrubSsn)
-        hasher.combine(scrubCreditCard)
-    }
-}
-
+#if compiler(>=6)
+extension PiiConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7961,7 +6484,7 @@ public func FfiConverterTypePIIConfig_lower(_ value: PiiConfig) -> RustBuffer {
 }
 
 
-public struct PartUpdateEventFfi {
+public struct PartUpdateEventFfi: Equatable, Hashable {
     public var sessionId: String
     public var partId: String
     public var partType: String
@@ -7981,47 +6504,15 @@ public struct PartUpdateEventFfi {
         self.delta = delta
         self.timestamp = timestamp
     }
+
+    
+
+    
 }
 
-
-
-extension PartUpdateEventFfi: Equatable, Hashable {
-    public static func ==(lhs: PartUpdateEventFfi, rhs: PartUpdateEventFfi) -> Bool {
-        if lhs.sessionId != rhs.sessionId {
-            return false
-        }
-        if lhs.partId != rhs.partId {
-            return false
-        }
-        if lhs.partType != rhs.partType {
-            return false
-        }
-        if lhs.eventType != rhs.eventType {
-            return false
-        }
-        if lhs.partJson != rhs.partJson {
-            return false
-        }
-        if lhs.delta != rhs.delta {
-            return false
-        }
-        if lhs.timestamp != rhs.timestamp {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(sessionId)
-        hasher.combine(partId)
-        hasher.combine(partType)
-        hasher.combine(eventType)
-        hasher.combine(partJson)
-        hasher.combine(delta)
-        hasher.combine(timestamp)
-    }
-}
-
+#if compiler(>=6)
+extension PartUpdateEventFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8067,7 +6558,7 @@ public func FfiConverterTypePartUpdateEventFFI_lower(_ value: PartUpdateEventFfi
 }
 
 
-public struct PendingConfirmationInfo {
+public struct PendingConfirmationInfo: Equatable, Hashable {
     public var id: String
     public var toolId: String
     public var toolName: String
@@ -8091,55 +6582,15 @@ public struct PendingConfirmationInfo {
         self.reason = reason
         self.timeoutMs = timeoutMs
     }
+
+    
+
+    
 }
 
-
-
-extension PendingConfirmationInfo: Equatable, Hashable {
-    public static func ==(lhs: PendingConfirmationInfo, rhs: PendingConfirmationInfo) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.toolId != rhs.toolId {
-            return false
-        }
-        if lhs.toolName != rhs.toolName {
-            return false
-        }
-        if lhs.toolDisplayName != rhs.toolDisplayName {
-            return false
-        }
-        if lhs.toolDescription != rhs.toolDescription {
-            return false
-        }
-        if lhs.parametersJson != rhs.parametersJson {
-            return false
-        }
-        if lhs.confidence != rhs.confidence {
-            return false
-        }
-        if lhs.reason != rhs.reason {
-            return false
-        }
-        if lhs.timeoutMs != rhs.timeoutMs {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(toolId)
-        hasher.combine(toolName)
-        hasher.combine(toolDisplayName)
-        hasher.combine(toolDescription)
-        hasher.combine(parametersJson)
-        hasher.combine(confidence)
-        hasher.combine(reason)
-        hasher.combine(timeoutMs)
-    }
-}
-
+#if compiler(>=6)
+extension PendingConfirmationInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8189,7 +6640,7 @@ public func FfiConverterTypePendingConfirmationInfo_lower(_ value: PendingConfir
 }
 
 
-public struct PluginInfoFfi {
+public struct PluginInfoFfi: Equatable, Hashable {
     public var name: String
     public var version: String
     public var description: String
@@ -8213,55 +6664,15 @@ public struct PluginInfoFfi {
         self.hooksCount = hooksCount
         self.mcpServersCount = mcpServersCount
     }
+
+    
+
+    
 }
 
-
-
-extension PluginInfoFfi: Equatable, Hashable {
-    public static func ==(lhs: PluginInfoFfi, rhs: PluginInfoFfi) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.version != rhs.version {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.path != rhs.path {
-            return false
-        }
-        if lhs.skillsCount != rhs.skillsCount {
-            return false
-        }
-        if lhs.agentsCount != rhs.agentsCount {
-            return false
-        }
-        if lhs.hooksCount != rhs.hooksCount {
-            return false
-        }
-        if lhs.mcpServersCount != rhs.mcpServersCount {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(version)
-        hasher.combine(description)
-        hasher.combine(enabled)
-        hasher.combine(path)
-        hasher.combine(skillsCount)
-        hasher.combine(agentsCount)
-        hasher.combine(hooksCount)
-        hasher.combine(mcpServersCount)
-    }
-}
-
+#if compiler(>=6)
+extension PluginInfoFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8311,7 +6722,7 @@ public func FfiConverterTypePluginInfoFFI_lower(_ value: PluginInfoFfi) -> RustB
 }
 
 
-public struct PluginSkillFfi {
+public struct PluginSkillFfi: Equatable, Hashable {
     public var qualifiedName: String
     public var pluginName: String
     public var skillName: String
@@ -8327,39 +6738,15 @@ public struct PluginSkillFfi {
         self.description = description
         self.isCommand = isCommand
     }
+
+    
+
+    
 }
 
-
-
-extension PluginSkillFfi: Equatable, Hashable {
-    public static func ==(lhs: PluginSkillFfi, rhs: PluginSkillFfi) -> Bool {
-        if lhs.qualifiedName != rhs.qualifiedName {
-            return false
-        }
-        if lhs.pluginName != rhs.pluginName {
-            return false
-        }
-        if lhs.skillName != rhs.skillName {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.isCommand != rhs.isCommand {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(qualifiedName)
-        hasher.combine(pluginName)
-        hasher.combine(skillName)
-        hasher.combine(description)
-        hasher.combine(isCommand)
-    }
-}
-
+#if compiler(>=6)
+extension PluginSkillFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8401,7 +6788,7 @@ public func FfiConverterTypePluginSkillFFI_lower(_ value: PluginSkillFfi) -> Rus
 }
 
 
-public struct PoliciesConfig {
+public struct PoliciesConfig: Equatable, Hashable {
     public var toolSafety: ToolSafetyPolicy
     public var intent: IntentDetectionPolicy
     public var memory: MemoryPolicies
@@ -8425,55 +6812,15 @@ public struct PoliciesConfig {
         self.keyword = keyword
         self.experimental = experimental
     }
+
+    
+
+    
 }
 
-
-
-extension PoliciesConfig: Equatable, Hashable {
-    public static func ==(lhs: PoliciesConfig, rhs: PoliciesConfig) -> Bool {
-        if lhs.toolSafety != rhs.toolSafety {
-            return false
-        }
-        if lhs.intent != rhs.intent {
-            return false
-        }
-        if lhs.memory != rhs.memory {
-            return false
-        }
-        if lhs.retry != rhs.retry {
-            return false
-        }
-        if lhs.webFetch != rhs.webFetch {
-            return false
-        }
-        if lhs.text != rhs.text {
-            return false
-        }
-        if lhs.metrics != rhs.metrics {
-            return false
-        }
-        if lhs.keyword != rhs.keyword {
-            return false
-        }
-        if lhs.experimental != rhs.experimental {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(toolSafety)
-        hasher.combine(intent)
-        hasher.combine(memory)
-        hasher.combine(retry)
-        hasher.combine(webFetch)
-        hasher.combine(text)
-        hasher.combine(metrics)
-        hasher.combine(keyword)
-        hasher.combine(experimental)
-    }
-}
-
+#if compiler(>=6)
+extension PoliciesConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8523,7 +6870,7 @@ public func FfiConverterTypePoliciesConfig_lower(_ value: PoliciesConfig) -> Rus
 }
 
 
-public struct PolicyKeywordRule {
+public struct PolicyKeywordRule: Equatable, Hashable {
     public var id: String
     public var intentType: String
     public var keywords: [PolicyWeightedKeyword]
@@ -8539,39 +6886,15 @@ public struct PolicyKeywordRule {
         self.matchMode = matchMode
         self.minScore = minScore
     }
+
+    
+
+    
 }
 
-
-
-extension PolicyKeywordRule: Equatable, Hashable {
-    public static func ==(lhs: PolicyKeywordRule, rhs: PolicyKeywordRule) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.intentType != rhs.intentType {
-            return false
-        }
-        if lhs.keywords != rhs.keywords {
-            return false
-        }
-        if lhs.matchMode != rhs.matchMode {
-            return false
-        }
-        if lhs.minScore != rhs.minScore {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(intentType)
-        hasher.combine(keywords)
-        hasher.combine(matchMode)
-        hasher.combine(minScore)
-    }
-}
-
+#if compiler(>=6)
+extension PolicyKeywordRule: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8613,7 +6936,7 @@ public func FfiConverterTypePolicyKeywordRule_lower(_ value: PolicyKeywordRule) 
 }
 
 
-public struct PolicyWeightedKeyword {
+public struct PolicyWeightedKeyword: Equatable, Hashable {
     public var word: String
     public var weight: Float
 
@@ -8623,27 +6946,15 @@ public struct PolicyWeightedKeyword {
         self.word = word
         self.weight = weight
     }
+
+    
+
+    
 }
 
-
-
-extension PolicyWeightedKeyword: Equatable, Hashable {
-    public static func ==(lhs: PolicyWeightedKeyword, rhs: PolicyWeightedKeyword) -> Bool {
-        if lhs.word != rhs.word {
-            return false
-        }
-        if lhs.weight != rhs.weight {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(word)
-        hasher.combine(weight)
-    }
-}
-
+#if compiler(>=6)
+extension PolicyWeightedKeyword: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8679,7 +6990,7 @@ public func FfiConverterTypePolicyWeightedKeyword_lower(_ value: PolicyWeightedK
 }
 
 
-public struct ProcessOptions {
+public struct ProcessOptions: Equatable, Hashable {
     public var appContext: String?
     public var windowTitle: String?
     public var topicId: String?
@@ -8697,43 +7008,15 @@ public struct ProcessOptions {
         self.attachments = attachments
         self.preferredLanguage = preferredLanguage
     }
+
+    
+
+    
 }
 
-
-
-extension ProcessOptions: Equatable, Hashable {
-    public static func ==(lhs: ProcessOptions, rhs: ProcessOptions) -> Bool {
-        if lhs.appContext != rhs.appContext {
-            return false
-        }
-        if lhs.windowTitle != rhs.windowTitle {
-            return false
-        }
-        if lhs.topicId != rhs.topicId {
-            return false
-        }
-        if lhs.stream != rhs.stream {
-            return false
-        }
-        if lhs.attachments != rhs.attachments {
-            return false
-        }
-        if lhs.preferredLanguage != rhs.preferredLanguage {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(appContext)
-        hasher.combine(windowTitle)
-        hasher.combine(topicId)
-        hasher.combine(stream)
-        hasher.combine(attachments)
-        hasher.combine(preferredLanguage)
-    }
-}
-
+#if compiler(>=6)
+extension ProcessOptions: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8777,7 +7060,7 @@ public func FfiConverterTypeProcessOptions_lower(_ value: ProcessOptions) -> Rus
 }
 
 
-public struct ProviderConfig {
+public struct ProviderConfig: Equatable, Hashable {
     public var providerType: String?
     public var apiKey: String?
     public var model: String
@@ -8819,91 +7102,15 @@ public struct ProviderConfig {
         self.repeatPenalty = repeatPenalty
         self.systemPromptMode = systemPromptMode
     }
+
+    
+
+    
 }
 
-
-
-extension ProviderConfig: Equatable, Hashable {
-    public static func ==(lhs: ProviderConfig, rhs: ProviderConfig) -> Bool {
-        if lhs.providerType != rhs.providerType {
-            return false
-        }
-        if lhs.apiKey != rhs.apiKey {
-            return false
-        }
-        if lhs.model != rhs.model {
-            return false
-        }
-        if lhs.baseUrl != rhs.baseUrl {
-            return false
-        }
-        if lhs.color != rhs.color {
-            return false
-        }
-        if lhs.timeoutSeconds != rhs.timeoutSeconds {
-            return false
-        }
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.maxTokens != rhs.maxTokens {
-            return false
-        }
-        if lhs.temperature != rhs.temperature {
-            return false
-        }
-        if lhs.topP != rhs.topP {
-            return false
-        }
-        if lhs.topK != rhs.topK {
-            return false
-        }
-        if lhs.frequencyPenalty != rhs.frequencyPenalty {
-            return false
-        }
-        if lhs.presencePenalty != rhs.presencePenalty {
-            return false
-        }
-        if lhs.stopSequences != rhs.stopSequences {
-            return false
-        }
-        if lhs.thinkingLevel != rhs.thinkingLevel {
-            return false
-        }
-        if lhs.mediaResolution != rhs.mediaResolution {
-            return false
-        }
-        if lhs.repeatPenalty != rhs.repeatPenalty {
-            return false
-        }
-        if lhs.systemPromptMode != rhs.systemPromptMode {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(providerType)
-        hasher.combine(apiKey)
-        hasher.combine(model)
-        hasher.combine(baseUrl)
-        hasher.combine(color)
-        hasher.combine(timeoutSeconds)
-        hasher.combine(enabled)
-        hasher.combine(maxTokens)
-        hasher.combine(temperature)
-        hasher.combine(topP)
-        hasher.combine(topK)
-        hasher.combine(frequencyPenalty)
-        hasher.combine(presencePenalty)
-        hasher.combine(stopSequences)
-        hasher.combine(thinkingLevel)
-        hasher.combine(mediaResolution)
-        hasher.combine(repeatPenalty)
-        hasher.combine(systemPromptMode)
-    }
-}
-
+#if compiler(>=6)
+extension ProviderConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8971,7 +7178,7 @@ public func FfiConverterTypeProviderConfig_lower(_ value: ProviderConfig) -> Rus
 }
 
 
-public struct ProviderConfigEntry {
+public struct ProviderConfigEntry: Equatable, Hashable {
     public var name: String
     public var config: ProviderConfig
 
@@ -8981,27 +7188,15 @@ public struct ProviderConfigEntry {
         self.name = name
         self.config = config
     }
+
+    
+
+    
 }
 
-
-
-extension ProviderConfigEntry: Equatable, Hashable {
-    public static func ==(lhs: ProviderConfigEntry, rhs: ProviderConfigEntry) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.config != rhs.config {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(config)
-    }
-}
-
+#if compiler(>=6)
+extension ProviderConfigEntry: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9037,7 +7232,7 @@ public func FfiConverterTypeProviderConfigEntry_lower(_ value: ProviderConfigEnt
 }
 
 
-public struct ProviderTestResult {
+public struct ProviderTestResult: Equatable, Hashable {
     public var success: Bool
     public var latencyMs: UInt32
     public var errorMessage: String
@@ -9051,35 +7246,15 @@ public struct ProviderTestResult {
         self.errorMessage = errorMessage
         self.errorType = errorType
     }
+
+    
+
+    
 }
 
-
-
-extension ProviderTestResult: Equatable, Hashable {
-    public static func ==(lhs: ProviderTestResult, rhs: ProviderTestResult) -> Bool {
-        if lhs.success != rhs.success {
-            return false
-        }
-        if lhs.latencyMs != rhs.latencyMs {
-            return false
-        }
-        if lhs.errorMessage != rhs.errorMessage {
-            return false
-        }
-        if lhs.errorType != rhs.errorType {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(success)
-        hasher.combine(latencyMs)
-        hasher.combine(errorMessage)
-        hasher.combine(errorType)
-    }
-}
-
+#if compiler(>=6)
+extension ProviderTestResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9119,7 +7294,7 @@ public func FfiConverterTypeProviderTestResult_lower(_ value: ProviderTestResult
 }
 
 
-public struct RetryPolicy {
+public struct RetryPolicy: Equatable, Hashable {
     public var maxRetries: UInt32
     public var initialBackoffMs: UInt64
     public var backoffMultiplier: Double
@@ -9139,47 +7314,15 @@ public struct RetryPolicy {
         self.retryOnTimeout = retryOnTimeout
         self.retryOnNetworkError = retryOnNetworkError
     }
+
+    
+
+    
 }
 
-
-
-extension RetryPolicy: Equatable, Hashable {
-    public static func ==(lhs: RetryPolicy, rhs: RetryPolicy) -> Bool {
-        if lhs.maxRetries != rhs.maxRetries {
-            return false
-        }
-        if lhs.initialBackoffMs != rhs.initialBackoffMs {
-            return false
-        }
-        if lhs.backoffMultiplier != rhs.backoffMultiplier {
-            return false
-        }
-        if lhs.maxBackoffMs != rhs.maxBackoffMs {
-            return false
-        }
-        if lhs.retryableStatusCodes != rhs.retryableStatusCodes {
-            return false
-        }
-        if lhs.retryOnTimeout != rhs.retryOnTimeout {
-            return false
-        }
-        if lhs.retryOnNetworkError != rhs.retryOnNetworkError {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(maxRetries)
-        hasher.combine(initialBackoffMs)
-        hasher.combine(backoffMultiplier)
-        hasher.combine(maxBackoffMs)
-        hasher.combine(retryableStatusCodes)
-        hasher.combine(retryOnTimeout)
-        hasher.combine(retryOnNetworkError)
-    }
-}
-
+#if compiler(>=6)
+extension RetryPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9225,7 +7368,7 @@ public func FfiConverterTypeRetryPolicy_lower(_ value: RetryPolicy) -> RustBuffe
 }
 
 
-public struct RoutingRuleConfig {
+public struct RoutingRuleConfig: Equatable, Hashable {
     public var ruleType: String?
     public var isBuiltin: Bool
     public var regex: String
@@ -9253,63 +7396,15 @@ public struct RoutingRuleConfig {
         self.contextFormat = contextFormat
         self.icon = icon
     }
+
+    
+
+    
 }
 
-
-
-extension RoutingRuleConfig: Equatable, Hashable {
-    public static func ==(lhs: RoutingRuleConfig, rhs: RoutingRuleConfig) -> Bool {
-        if lhs.ruleType != rhs.ruleType {
-            return false
-        }
-        if lhs.isBuiltin != rhs.isBuiltin {
-            return false
-        }
-        if lhs.regex != rhs.regex {
-            return false
-        }
-        if lhs.provider != rhs.provider {
-            return false
-        }
-        if lhs.systemPrompt != rhs.systemPrompt {
-            return false
-        }
-        if lhs.stripPrefix != rhs.stripPrefix {
-            return false
-        }
-        if lhs.capabilities != rhs.capabilities {
-            return false
-        }
-        if lhs.intentType != rhs.intentType {
-            return false
-        }
-        if lhs.preferredModel != rhs.preferredModel {
-            return false
-        }
-        if lhs.contextFormat != rhs.contextFormat {
-            return false
-        }
-        if lhs.icon != rhs.icon {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(ruleType)
-        hasher.combine(isBuiltin)
-        hasher.combine(regex)
-        hasher.combine(provider)
-        hasher.combine(systemPrompt)
-        hasher.combine(stripPrefix)
-        hasher.combine(capabilities)
-        hasher.combine(intentType)
-        hasher.combine(preferredModel)
-        hasher.combine(contextFormat)
-        hasher.combine(icon)
-    }
-}
-
+#if compiler(>=6)
+extension RoutingRuleConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9363,7 +7458,7 @@ public func FfiConverterTypeRoutingRuleConfig_lower(_ value: RoutingRuleConfig) 
 }
 
 
-public struct RuntimeInfo {
+public struct RuntimeInfo: Equatable, Hashable {
     public var id: String
     public var name: String
     public var description: String
@@ -9379,39 +7474,15 @@ public struct RuntimeInfo {
         self.version = version
         self.installed = installed
     }
+
+    
+
+    
 }
 
-
-
-extension RuntimeInfo: Equatable, Hashable {
-    public static func ==(lhs: RuntimeInfo, rhs: RuntimeInfo) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.version != rhs.version {
-            return false
-        }
-        if lhs.installed != rhs.installed {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(name)
-        hasher.combine(description)
-        hasher.combine(version)
-        hasher.combine(installed)
-    }
-}
-
+#if compiler(>=6)
+extension RuntimeInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9453,7 +7524,7 @@ public func FfiConverterTypeRuntimeInfo_lower(_ value: RuntimeInfo) -> RustBuffe
 }
 
 
-public struct RuntimeUpdateInfo {
+public struct RuntimeUpdateInfo: Equatable, Hashable {
     public var runtimeId: String
     public var currentVersion: String
     public var latestVersion: String
@@ -9465,31 +7536,15 @@ public struct RuntimeUpdateInfo {
         self.currentVersion = currentVersion
         self.latestVersion = latestVersion
     }
+
+    
+
+    
 }
 
-
-
-extension RuntimeUpdateInfo: Equatable, Hashable {
-    public static func ==(lhs: RuntimeUpdateInfo, rhs: RuntimeUpdateInfo) -> Bool {
-        if lhs.runtimeId != rhs.runtimeId {
-            return false
-        }
-        if lhs.currentVersion != rhs.currentVersion {
-            return false
-        }
-        if lhs.latestVersion != rhs.latestVersion {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(runtimeId)
-        hasher.combine(currentVersion)
-        hasher.combine(latestVersion)
-    }
-}
-
+#if compiler(>=6)
+extension RuntimeUpdateInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9527,7 +7582,7 @@ public func FfiConverterTypeRuntimeUpdateInfo_lower(_ value: RuntimeUpdateInfo) 
 }
 
 
-public struct SearchBackendConfig {
+public struct SearchBackendConfig: Equatable, Hashable {
     public var providerType: String
     public var apiKey: String?
     public var baseUrl: String?
@@ -9541,35 +7596,15 @@ public struct SearchBackendConfig {
         self.baseUrl = baseUrl
         self.engineId = engineId
     }
+
+    
+
+    
 }
 
-
-
-extension SearchBackendConfig: Equatable, Hashable {
-    public static func ==(lhs: SearchBackendConfig, rhs: SearchBackendConfig) -> Bool {
-        if lhs.providerType != rhs.providerType {
-            return false
-        }
-        if lhs.apiKey != rhs.apiKey {
-            return false
-        }
-        if lhs.baseUrl != rhs.baseUrl {
-            return false
-        }
-        if lhs.engineId != rhs.engineId {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(providerType)
-        hasher.combine(apiKey)
-        hasher.combine(baseUrl)
-        hasher.combine(engineId)
-    }
-}
-
+#if compiler(>=6)
+extension SearchBackendConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9609,7 +7644,7 @@ public func FfiConverterTypeSearchBackendConfig_lower(_ value: SearchBackendConf
 }
 
 
-public struct SearchBackendEntry {
+public struct SearchBackendEntry: Equatable, Hashable {
     public var name: String
     public var config: SearchBackendConfig
 
@@ -9619,27 +7654,15 @@ public struct SearchBackendEntry {
         self.name = name
         self.config = config
     }
+
+    
+
+    
 }
 
-
-
-extension SearchBackendEntry: Equatable, Hashable {
-    public static func ==(lhs: SearchBackendEntry, rhs: SearchBackendEntry) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.config != rhs.config {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(config)
-    }
-}
-
+#if compiler(>=6)
+extension SearchBackendEntry: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9675,7 +7698,7 @@ public func FfiConverterTypeSearchBackendEntry_lower(_ value: SearchBackendEntry
 }
 
 
-public struct SearchConfig {
+public struct SearchConfig: Equatable, Hashable {
     public var enabled: Bool
     public var defaultProvider: String
     public var fallbackProviders: [String]?
@@ -9695,47 +7718,15 @@ public struct SearchConfig {
         self.backends = backends
         self.pii = pii
     }
+
+    
+
+    
 }
 
-
-
-extension SearchConfig: Equatable, Hashable {
-    public static func ==(lhs: SearchConfig, rhs: SearchConfig) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.defaultProvider != rhs.defaultProvider {
-            return false
-        }
-        if lhs.fallbackProviders != rhs.fallbackProviders {
-            return false
-        }
-        if lhs.maxResults != rhs.maxResults {
-            return false
-        }
-        if lhs.timeoutSeconds != rhs.timeoutSeconds {
-            return false
-        }
-        if lhs.backends != rhs.backends {
-            return false
-        }
-        if lhs.pii != rhs.pii {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(defaultProvider)
-        hasher.combine(fallbackProviders)
-        hasher.combine(maxResults)
-        hasher.combine(timeoutSeconds)
-        hasher.combine(backends)
-        hasher.combine(pii)
-    }
-}
-
+#if compiler(>=6)
+extension SearchConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9781,7 +7772,7 @@ public func FfiConverterTypeSearchConfig_lower(_ value: SearchConfig) -> RustBuf
 }
 
 
-public struct SearchProviderTestConfig {
+public struct SearchProviderTestConfig: Equatable, Hashable {
     public var providerType: String
     public var apiKey: String?
     public var baseUrl: String?
@@ -9795,35 +7786,15 @@ public struct SearchProviderTestConfig {
         self.baseUrl = baseUrl
         self.engineId = engineId
     }
+
+    
+
+    
 }
 
-
-
-extension SearchProviderTestConfig: Equatable, Hashable {
-    public static func ==(lhs: SearchProviderTestConfig, rhs: SearchProviderTestConfig) -> Bool {
-        if lhs.providerType != rhs.providerType {
-            return false
-        }
-        if lhs.apiKey != rhs.apiKey {
-            return false
-        }
-        if lhs.baseUrl != rhs.baseUrl {
-            return false
-        }
-        if lhs.engineId != rhs.engineId {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(providerType)
-        hasher.combine(apiKey)
-        hasher.combine(baseUrl)
-        hasher.combine(engineId)
-    }
-}
-
+#if compiler(>=6)
+extension SearchProviderTestConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9863,7 +7834,7 @@ public func FfiConverterTypeSearchProviderTestConfig_lower(_ value: SearchProvid
 }
 
 
-public struct SessionSummary {
+public struct SessionSummary: Equatable, Hashable {
     public var id: String
     public var agentId: String
     public var status: String
@@ -9881,43 +7852,15 @@ public struct SessionSummary {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    
+
+    
 }
 
-
-
-extension SessionSummary: Equatable, Hashable {
-    public static func ==(lhs: SessionSummary, rhs: SessionSummary) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.agentId != rhs.agentId {
-            return false
-        }
-        if lhs.status != rhs.status {
-            return false
-        }
-        if lhs.iterationCount != rhs.iterationCount {
-            return false
-        }
-        if lhs.createdAt != rhs.createdAt {
-            return false
-        }
-        if lhs.updatedAt != rhs.updatedAt {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(agentId)
-        hasher.combine(status)
-        hasher.combine(iterationCount)
-        hasher.combine(createdAt)
-        hasher.combine(updatedAt)
-    }
-}
-
+#if compiler(>=6)
+extension SessionSummary: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9961,7 +7904,7 @@ public func FfiConverterTypeSessionSummary_lower(_ value: SessionSummary) -> Rus
 }
 
 
-public struct ShortcutsConfig {
+public struct ShortcutsConfig: Equatable, Hashable {
     public var summon: String
     public var cancel: String?
     public var commandPrompt: String
@@ -9975,35 +7918,15 @@ public struct ShortcutsConfig {
         self.commandPrompt = commandPrompt
         self.ocrCapture = ocrCapture
     }
+
+    
+
+    
 }
 
-
-
-extension ShortcutsConfig: Equatable, Hashable {
-    public static func ==(lhs: ShortcutsConfig, rhs: ShortcutsConfig) -> Bool {
-        if lhs.summon != rhs.summon {
-            return false
-        }
-        if lhs.cancel != rhs.cancel {
-            return false
-        }
-        if lhs.commandPrompt != rhs.commandPrompt {
-            return false
-        }
-        if lhs.ocrCapture != rhs.ocrCapture {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(summon)
-        hasher.combine(cancel)
-        hasher.combine(commandPrompt)
-        hasher.combine(ocrCapture)
-    }
-}
-
+#if compiler(>=6)
+extension ShortcutsConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10043,7 +7966,7 @@ public func FfiConverterTypeShortcutsConfig_lower(_ value: ShortcutsConfig) -> R
 }
 
 
-public struct SkillInfo {
+public struct SkillInfo: Equatable, Hashable {
     public var id: String
     public var name: String
     public var description: String
@@ -10057,35 +7980,15 @@ public struct SkillInfo {
         self.description = description
         self.allowedTools = allowedTools
     }
+
+    
+
+    
 }
 
-
-
-extension SkillInfo: Equatable, Hashable {
-    public static func ==(lhs: SkillInfo, rhs: SkillInfo) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.allowedTools != rhs.allowedTools {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(name)
-        hasher.combine(description)
-        hasher.combine(allowedTools)
-    }
-}
-
+#if compiler(>=6)
+extension SkillInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10125,7 +8028,7 @@ public func FfiConverterTypeSkillInfo_lower(_ value: SkillInfo) -> RustBuffer {
 }
 
 
-public struct SkillsConfig {
+public struct SkillsConfig: Equatable, Hashable {
     public var enabled: Bool
     public var skillsDir: String
     public var autoMatchEnabled: Bool
@@ -10137,31 +8040,15 @@ public struct SkillsConfig {
         self.skillsDir = skillsDir
         self.autoMatchEnabled = autoMatchEnabled
     }
+
+    
+
+    
 }
 
-
-
-extension SkillsConfig: Equatable, Hashable {
-    public static func ==(lhs: SkillsConfig, rhs: SkillsConfig) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.skillsDir != rhs.skillsDir {
-            return false
-        }
-        if lhs.autoMatchEnabled != rhs.autoMatchEnabled {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(skillsDir)
-        hasher.combine(autoMatchEnabled)
-    }
-}
-
+#if compiler(>=6)
+extension SkillsConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10199,7 +8086,7 @@ public func FfiConverterTypeSkillsConfig_lower(_ value: SkillsConfig) -> RustBuf
 }
 
 
-public struct SmartMatchingConfig {
+public struct SmartMatchingConfig: Equatable, Hashable {
     public var enabled: Bool
     public var commandConfidence: Double
     public var regexThreshold: Double
@@ -10221,51 +8108,15 @@ public struct SmartMatchingConfig {
         self.contextRules = contextRules
         self.keywordRules = keywordRules
     }
+
+    
+
+    
 }
 
-
-
-extension SmartMatchingConfig: Equatable, Hashable {
-    public static func ==(lhs: SmartMatchingConfig, rhs: SmartMatchingConfig) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.commandConfidence != rhs.commandConfidence {
-            return false
-        }
-        if lhs.regexThreshold != rhs.regexThreshold {
-            return false
-        }
-        if lhs.keywordThreshold != rhs.keywordThreshold {
-            return false
-        }
-        if lhs.aiThreshold != rhs.aiThreshold {
-            return false
-        }
-        if lhs.enableContextInference != rhs.enableContextInference {
-            return false
-        }
-        if lhs.contextRules != rhs.contextRules {
-            return false
-        }
-        if lhs.keywordRules != rhs.keywordRules {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(commandConfidence)
-        hasher.combine(regexThreshold)
-        hasher.combine(keywordThreshold)
-        hasher.combine(aiThreshold)
-        hasher.combine(enableContextInference)
-        hasher.combine(contextRules)
-        hasher.combine(keywordRules)
-    }
-}
-
+#if compiler(>=6)
+extension SmartMatchingConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10313,7 +8164,7 @@ public func FfiConverterTypeSmartMatchingConfig_lower(_ value: SmartMatchingConf
 }
 
 
-public struct StageResultFfi {
+public struct StageResultFfi: Equatable, Hashable {
     public var stageId: String
     public var modelUsed: String
     public var provider: String
@@ -10335,51 +8186,15 @@ public struct StageResultFfi {
         self.success = success
         self.error = error
     }
+
+    
+
+    
 }
 
-
-
-extension StageResultFfi: Equatable, Hashable {
-    public static func ==(lhs: StageResultFfi, rhs: StageResultFfi) -> Bool {
-        if lhs.stageId != rhs.stageId {
-            return false
-        }
-        if lhs.modelUsed != rhs.modelUsed {
-            return false
-        }
-        if lhs.provider != rhs.provider {
-            return false
-        }
-        if lhs.outputJson != rhs.outputJson {
-            return false
-        }
-        if lhs.tokensUsed != rhs.tokensUsed {
-            return false
-        }
-        if lhs.durationMs != rhs.durationMs {
-            return false
-        }
-        if lhs.success != rhs.success {
-            return false
-        }
-        if lhs.error != rhs.error {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(stageId)
-        hasher.combine(modelUsed)
-        hasher.combine(provider)
-        hasher.combine(outputJson)
-        hasher.combine(tokensUsed)
-        hasher.combine(durationMs)
-        hasher.combine(success)
-        hasher.combine(error)
-    }
-}
-
+#if compiler(>=6)
+extension StageResultFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10427,7 +8242,7 @@ public func FfiConverterTypeStageResultFFI_lower(_ value: StageResultFfi) -> Rus
 }
 
 
-public struct TaskParametersFfi {
+public struct TaskParametersFfi: Equatable, Hashable {
     public var organizeMethod: OrganizeMethodFfi
     public var conflictResolution: ConflictResolutionFfi
     public var source: ParameterSourceFfi
@@ -10439,31 +8254,15 @@ public struct TaskParametersFfi {
         self.conflictResolution = conflictResolution
         self.source = source
     }
+
+    
+
+    
 }
 
-
-
-extension TaskParametersFfi: Equatable, Hashable {
-    public static func ==(lhs: TaskParametersFfi, rhs: TaskParametersFfi) -> Bool {
-        if lhs.organizeMethod != rhs.organizeMethod {
-            return false
-        }
-        if lhs.conflictResolution != rhs.conflictResolution {
-            return false
-        }
-        if lhs.source != rhs.source {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(organizeMethod)
-        hasher.combine(conflictResolution)
-        hasher.combine(source)
-    }
-}
-
+#if compiler(>=6)
+extension TaskParametersFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10501,7 +8300,7 @@ public func FfiConverterTypeTaskParametersFFI_lower(_ value: TaskParametersFfi) 
 }
 
 
-public struct TaskTypeMappingFfi {
+public struct TaskTypeMappingFfi: Equatable, Hashable {
     public var taskType: String
     public var modelId: String
 
@@ -10511,27 +8310,15 @@ public struct TaskTypeMappingFfi {
         self.taskType = taskType
         self.modelId = modelId
     }
+
+    
+
+    
 }
 
-
-
-extension TaskTypeMappingFfi: Equatable, Hashable {
-    public static func ==(lhs: TaskTypeMappingFfi, rhs: TaskTypeMappingFfi) -> Bool {
-        if lhs.taskType != rhs.taskType {
-            return false
-        }
-        if lhs.modelId != rhs.modelId {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(taskType)
-        hasher.combine(modelId)
-    }
-}
-
+#if compiler(>=6)
+extension TaskTypeMappingFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10567,7 +8354,7 @@ public func FfiConverterTypeTaskTypeMappingFFI_lower(_ value: TaskTypeMappingFfi
 }
 
 
-public struct TestConnectionResult {
+public struct TestConnectionResult: Equatable, Hashable {
     public var success: Bool
     public var message: String
 
@@ -10577,27 +8364,15 @@ public struct TestConnectionResult {
         self.success = success
         self.message = message
     }
+
+    
+
+    
 }
 
-
-
-extension TestConnectionResult: Equatable, Hashable {
-    public static func ==(lhs: TestConnectionResult, rhs: TestConnectionResult) -> Bool {
-        if lhs.success != rhs.success {
-            return false
-        }
-        if lhs.message != rhs.message {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(success)
-        hasher.combine(message)
-    }
-}
-
+#if compiler(>=6)
+extension TestConnectionResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10633,7 +8408,7 @@ public func FfiConverterTypeTestConnectionResult_lower(_ value: TestConnectionRe
 }
 
 
-public struct TextFormatPolicy {
+public struct TextFormatPolicy: Equatable, Hashable {
     public var defaultTruncateLength: UInt64
     public var searchSnippetLength: UInt64
     public var mcpResultLength: UInt64
@@ -10651,43 +8426,15 @@ public struct TextFormatPolicy {
         self.userMessageLength = userMessageLength
         self.truncationSuffix = truncationSuffix
     }
+
+    
+
+    
 }
 
-
-
-extension TextFormatPolicy: Equatable, Hashable {
-    public static func ==(lhs: TextFormatPolicy, rhs: TextFormatPolicy) -> Bool {
-        if lhs.defaultTruncateLength != rhs.defaultTruncateLength {
-            return false
-        }
-        if lhs.searchSnippetLength != rhs.searchSnippetLength {
-            return false
-        }
-        if lhs.mcpResultLength != rhs.mcpResultLength {
-            return false
-        }
-        if lhs.systemPromptLength != rhs.systemPromptLength {
-            return false
-        }
-        if lhs.userMessageLength != rhs.userMessageLength {
-            return false
-        }
-        if lhs.truncationSuffix != rhs.truncationSuffix {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(defaultTruncateLength)
-        hasher.combine(searchSnippetLength)
-        hasher.combine(mcpResultLength)
-        hasher.combine(systemPromptLength)
-        hasher.combine(userMessageLength)
-        hasher.combine(truncationSuffix)
-    }
-}
-
+#if compiler(>=6)
+extension TextFormatPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10731,7 +8478,7 @@ public func FfiConverterTypeTextFormatPolicy_lower(_ value: TextFormatPolicy) ->
 }
 
 
-public struct ToolInfoFfi {
+public struct ToolInfoFfi: Equatable, Hashable {
     public var name: String
     public var description: String
     public var source: String
@@ -10743,31 +8490,15 @@ public struct ToolInfoFfi {
         self.description = description
         self.source = source
     }
+
+    
+
+    
 }
 
-
-
-extension ToolInfoFfi: Equatable, Hashable {
-    public static func ==(lhs: ToolInfoFfi, rhs: ToolInfoFfi) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.source != rhs.source {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(description)
-        hasher.combine(source)
-    }
-}
-
+#if compiler(>=6)
+extension ToolInfoFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10805,7 +8536,7 @@ public func FfiConverterTypeToolInfoFFI_lower(_ value: ToolInfoFfi) -> RustBuffe
 }
 
 
-public struct ToolSafetyPolicy {
+public struct ToolSafetyPolicy: Equatable, Hashable {
     public var highRiskKeywords: [String]
     public var lowRiskKeywords: [String]
     public var reversibleKeywords: [String]
@@ -10829,55 +8560,15 @@ public struct ToolSafetyPolicy {
         self.skillFallback = skillFallback
         self.customFallback = customFallback
     }
+
+    
+
+    
 }
 
-
-
-extension ToolSafetyPolicy: Equatable, Hashable {
-    public static func ==(lhs: ToolSafetyPolicy, rhs: ToolSafetyPolicy) -> Bool {
-        if lhs.highRiskKeywords != rhs.highRiskKeywords {
-            return false
-        }
-        if lhs.lowRiskKeywords != rhs.lowRiskKeywords {
-            return false
-        }
-        if lhs.reversibleKeywords != rhs.reversibleKeywords {
-            return false
-        }
-        if lhs.readonlyKeywords != rhs.readonlyKeywords {
-            return false
-        }
-        if lhs.builtinFallback != rhs.builtinFallback {
-            return false
-        }
-        if lhs.nativeFallback != rhs.nativeFallback {
-            return false
-        }
-        if lhs.mcpFallback != rhs.mcpFallback {
-            return false
-        }
-        if lhs.skillFallback != rhs.skillFallback {
-            return false
-        }
-        if lhs.customFallback != rhs.customFallback {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(highRiskKeywords)
-        hasher.combine(lowRiskKeywords)
-        hasher.combine(reversibleKeywords)
-        hasher.combine(readonlyKeywords)
-        hasher.combine(builtinFallback)
-        hasher.combine(nativeFallback)
-        hasher.combine(mcpFallback)
-        hasher.combine(skillFallback)
-        hasher.combine(customFallback)
-    }
-}
-
+#if compiler(>=6)
+extension ToolSafetyPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10927,7 +8618,7 @@ public func FfiConverterTypeToolSafetyPolicy_lower(_ value: ToolSafetyPolicy) ->
 }
 
 
-public struct TriggerConfig {
+public struct TriggerConfig: Equatable, Hashable {
     public var replaceHotkey: String
     public var appendHotkey: String
 
@@ -10937,27 +8628,15 @@ public struct TriggerConfig {
         self.replaceHotkey = replaceHotkey
         self.appendHotkey = appendHotkey
     }
+
+    
+
+    
 }
 
-
-
-extension TriggerConfig: Equatable, Hashable {
-    public static func ==(lhs: TriggerConfig, rhs: TriggerConfig) -> Bool {
-        if lhs.replaceHotkey != rhs.replaceHotkey {
-            return false
-        }
-        if lhs.appendHotkey != rhs.appendHotkey {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(replaceHotkey)
-        hasher.combine(appendHotkey)
-    }
-}
-
+#if compiler(>=6)
+extension TriggerConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10993,7 +8672,7 @@ public func FfiConverterTypeTriggerConfig_lower(_ value: TriggerConfig) -> RustB
 }
 
 
-public struct TypoCorrectionConfig {
+public struct TypoCorrectionConfig: Equatable, Hashable {
     public var enabled: Bool
     public var provider: String?
     public var model: String?
@@ -11009,39 +8688,15 @@ public struct TypoCorrectionConfig {
         self.timeoutSeconds = timeoutSeconds
         self.maxLength = maxLength
     }
+
+    
+
+    
 }
 
-
-
-extension TypoCorrectionConfig: Equatable, Hashable {
-    public static func ==(lhs: TypoCorrectionConfig, rhs: TypoCorrectionConfig) -> Bool {
-        if lhs.enabled != rhs.enabled {
-            return false
-        }
-        if lhs.provider != rhs.provider {
-            return false
-        }
-        if lhs.model != rhs.model {
-            return false
-        }
-        if lhs.timeoutSeconds != rhs.timeoutSeconds {
-            return false
-        }
-        if lhs.maxLength != rhs.maxLength {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(enabled)
-        hasher.combine(provider)
-        hasher.combine(model)
-        hasher.combine(timeoutSeconds)
-        hasher.combine(maxLength)
-    }
-}
-
+#if compiler(>=6)
+extension TypoCorrectionConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11083,7 +8738,7 @@ public func FfiConverterTypeTypoCorrectionConfig_lower(_ value: TypoCorrectionCo
 }
 
 
-public struct UnifiedToolInfo {
+public struct UnifiedToolInfo: Equatable, Hashable {
     public var id: String
     public var name: String
     public var displayName: String
@@ -11123,87 +8778,15 @@ public struct UnifiedToolInfo {
         self.sortOrder = sortOrder
         self.hasSubtools = hasSubtools
     }
+
+    
+
+    
 }
 
-
-
-extension UnifiedToolInfo: Equatable, Hashable {
-    public static func ==(lhs: UnifiedToolInfo, rhs: UnifiedToolInfo) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.displayName != rhs.displayName {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.sourceType != rhs.sourceType {
-            return false
-        }
-        if lhs.sourceId != rhs.sourceId {
-            return false
-        }
-        if lhs.parametersSchema != rhs.parametersSchema {
-            return false
-        }
-        if lhs.isActive != rhs.isActive {
-            return false
-        }
-        if lhs.requiresConfirmation != rhs.requiresConfirmation {
-            return false
-        }
-        if lhs.safetyLevel != rhs.safetyLevel {
-            return false
-        }
-        if lhs.serviceName != rhs.serviceName {
-            return false
-        }
-        if lhs.icon != rhs.icon {
-            return false
-        }
-        if lhs.usage != rhs.usage {
-            return false
-        }
-        if lhs.localizationKey != rhs.localizationKey {
-            return false
-        }
-        if lhs.isBuiltin != rhs.isBuiltin {
-            return false
-        }
-        if lhs.sortOrder != rhs.sortOrder {
-            return false
-        }
-        if lhs.hasSubtools != rhs.hasSubtools {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(name)
-        hasher.combine(displayName)
-        hasher.combine(description)
-        hasher.combine(sourceType)
-        hasher.combine(sourceId)
-        hasher.combine(parametersSchema)
-        hasher.combine(isActive)
-        hasher.combine(requiresConfirmation)
-        hasher.combine(safetyLevel)
-        hasher.combine(serviceName)
-        hasher.combine(icon)
-        hasher.combine(usage)
-        hasher.combine(localizationKey)
-        hasher.combine(isBuiltin)
-        hasher.combine(sortOrder)
-        hasher.combine(hasSubtools)
-    }
-}
-
+#if compiler(>=6)
+extension UnifiedToolInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11269,7 +8852,7 @@ public func FfiConverterTypeUnifiedToolInfo_lower(_ value: UnifiedToolInfo) -> R
 }
 
 
-public struct VisionRequest {
+public struct VisionRequest: Equatable, Hashable {
     public var imageData: [UInt8]
     public var captureMode: CaptureMode
     public var task: VisionTask
@@ -11283,35 +8866,15 @@ public struct VisionRequest {
         self.task = task
         self.prompt = prompt
     }
+
+    
+
+    
 }
 
-
-
-extension VisionRequest: Equatable, Hashable {
-    public static func ==(lhs: VisionRequest, rhs: VisionRequest) -> Bool {
-        if lhs.imageData != rhs.imageData {
-            return false
-        }
-        if lhs.captureMode != rhs.captureMode {
-            return false
-        }
-        if lhs.task != rhs.task {
-            return false
-        }
-        if lhs.prompt != rhs.prompt {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(imageData)
-        hasher.combine(captureMode)
-        hasher.combine(task)
-        hasher.combine(prompt)
-    }
-}
-
+#if compiler(>=6)
+extension VisionRequest: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11351,7 +8914,7 @@ public func FfiConverterTypeVisionRequest_lower(_ value: VisionRequest) -> RustB
 }
 
 
-public struct VisionResult {
+public struct VisionResult: Equatable, Hashable {
     public var extractedText: String
     public var description: String?
     public var aiResponse: String?
@@ -11367,39 +8930,15 @@ public struct VisionResult {
         self.confidence = confidence
         self.processingTimeMs = processingTimeMs
     }
+
+    
+
+    
 }
 
-
-
-extension VisionResult: Equatable, Hashable {
-    public static func ==(lhs: VisionResult, rhs: VisionResult) -> Bool {
-        if lhs.extractedText != rhs.extractedText {
-            return false
-        }
-        if lhs.description != rhs.description {
-            return false
-        }
-        if lhs.aiResponse != rhs.aiResponse {
-            return false
-        }
-        if lhs.confidence != rhs.confidence {
-            return false
-        }
-        if lhs.processingTimeMs != rhs.processingTimeMs {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(extractedText)
-        hasher.combine(description)
-        hasher.combine(aiResponse)
-        hasher.combine(confidence)
-        hasher.combine(processingTimeMs)
-    }
-}
-
+#if compiler(>=6)
+extension VisionResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11441,7 +8980,7 @@ public func FfiConverterTypeVisionResult_lower(_ value: VisionResult) -> RustBuf
 }
 
 
-public struct WebFetchPolicy {
+public struct WebFetchPolicy: Equatable, Hashable {
     public var maxContentLength: UInt64
     public var minContentLength: UInt64
     public var userAgent: String
@@ -11461,47 +9000,15 @@ public struct WebFetchPolicy {
         self.maxRedirects = maxRedirects
         self.contentSelectors = contentSelectors
     }
+
+    
+
+    
 }
 
-
-
-extension WebFetchPolicy: Equatable, Hashable {
-    public static func ==(lhs: WebFetchPolicy, rhs: WebFetchPolicy) -> Bool {
-        if lhs.maxContentLength != rhs.maxContentLength {
-            return false
-        }
-        if lhs.minContentLength != rhs.minContentLength {
-            return false
-        }
-        if lhs.userAgent != rhs.userAgent {
-            return false
-        }
-        if lhs.timeoutSeconds != rhs.timeoutSeconds {
-            return false
-        }
-        if lhs.followRedirects != rhs.followRedirects {
-            return false
-        }
-        if lhs.maxRedirects != rhs.maxRedirects {
-            return false
-        }
-        if lhs.contentSelectors != rhs.contentSelectors {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(maxContentLength)
-        hasher.combine(minContentLength)
-        hasher.combine(userAgent)
-        hasher.combine(timeoutSeconds)
-        hasher.combine(followRedirects)
-        hasher.combine(maxRedirects)
-        hasher.combine(contentSelectors)
-    }
-}
-
+#if compiler(>=6)
+extension WebFetchPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11547,14 +9054,27 @@ public func FfiConverterTypeWebFetchPolicy_lower(_ value: WebFetchPolicy) -> Rus
 }
 
 
-public enum AetherException {
+public enum AetherException: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
     case Error(message: String)
     
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension AetherException: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11593,16 +9113,22 @@ public struct FfiConverterTypeAetherException: FfiConverterRustBuffer {
 }
 
 
-extension AetherException: Equatable, Hashable {}
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAetherException_lift(_ buf: RustBuffer) throws -> AetherException {
+    return try FfiConverterTypeAetherException.lift(buf)
+}
 
-extension AetherException: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAetherException_lower(_ value: AetherException) -> RustBuffer {
+    return FfiConverterTypeAetherException.lower(value)
 }
 
 
-public enum AetherFfiError {
+public enum AetherFfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -11616,8 +9142,21 @@ public enum AetherFfiError {
     
     case Cancelled(message: String)
     
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension AetherFfiError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11680,18 +9219,24 @@ public struct FfiConverterTypeAetherFfiError: FfiConverterRustBuffer {
 }
 
 
-extension AetherFfiError: Equatable, Hashable {}
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAetherFfiError_lift(_ buf: RustBuffer) throws -> AetherFfiError {
+    return try FfiConverterTypeAetherFfiError.lift(buf)
+}
 
-extension AetherFfiError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAetherFfiError_lower(_ value: AetherFfiError) -> RustBuffer {
+    return FfiConverterTypeAetherFfiError.lower(value)
 }
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum AgentExecutionState {
+public enum AgentExecutionState: Equatable, Hashable {
     
     case idle
     case planning
@@ -11700,8 +9245,16 @@ public enum AgentExecutionState {
     case paused
     case cancelled
     case completed
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension AgentExecutionState: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11782,15 +9335,10 @@ public func FfiConverterTypeAgentExecutionState_lower(_ value: AgentExecutionSta
 }
 
 
-
-extension AgentExecutionState: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum AgentProgressEventType {
+public enum AgentProgressEventType: Equatable, Hashable {
     
     case taskStarted
     case taskProgress
@@ -11799,8 +9347,16 @@ public enum AgentProgressEventType {
     case taskCancelled
     case graphProgress
     case graphCompleted
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension AgentProgressEventType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11881,23 +9437,26 @@ public func FfiConverterTypeAgentProgressEventType_lower(_ value: AgentProgressE
 }
 
 
-
-extension AgentProgressEventType: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum AgentTaskStatusState {
+public enum AgentTaskStatusState: Equatable, Hashable {
     
     case pending
     case running
     case completed
     case failed
     case cancelled
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension AgentTaskStatusState: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11966,15 +9525,10 @@ public func FfiConverterTypeAgentTaskStatusState_lower(_ value: AgentTaskStatusS
 }
 
 
-
-extension AgentTaskStatusState: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum AgentTaskTypeCategory {
+public enum AgentTaskTypeCategory: Equatable, Hashable {
     
     case fileOperation
     case codeExecution
@@ -11984,8 +9538,16 @@ public enum AgentTaskTypeCategory {
     case imageGeneration
     case videoGeneration
     case audioGeneration
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension AgentTaskTypeCategory: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12072,21 +9634,24 @@ public func FfiConverterTypeAgentTaskTypeCategory_lower(_ value: AgentTaskTypeCa
 }
 
 
-
-extension AgentTaskTypeCategory: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum BudgetEnforcementFfi {
+public enum BudgetEnforcementFfi: Equatable, Hashable {
     
     case warnOnly
     case softBlock
     case hardBlock
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension BudgetEnforcementFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12143,22 +9708,25 @@ public func FfiConverterTypeBudgetEnforcementFFI_lower(_ value: BudgetEnforcemen
 }
 
 
-
-extension BudgetEnforcementFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum BudgetPeriodFfi {
+public enum BudgetPeriodFfi: Equatable, Hashable {
     
     case lifetime
     case daily
     case weekly
     case monthly
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension BudgetPeriodFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12221,15 +9789,10 @@ public func FfiConverterTypeBudgetPeriodFFI_lower(_ value: BudgetPeriodFfi) -> R
 }
 
 
-
-extension BudgetPeriodFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum BudgetScopeFfi {
+public enum BudgetScopeFfi: Equatable, Hashable {
     
     case global
     case project(id: String
@@ -12238,8 +9801,16 @@ public enum BudgetScopeFfi {
     )
     case model(id: String
     )
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension BudgetScopeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12308,21 +9879,24 @@ public func FfiConverterTypeBudgetScopeFFI_lower(_ value: BudgetScopeFfi) -> Rus
 }
 
 
-
-extension BudgetScopeFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum CaptureMode {
+public enum CaptureMode: Equatable, Hashable {
     
     case region
     case window
     case fullScreen
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension CaptureMode: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12379,22 +9953,25 @@ public func FfiConverterTypeCaptureMode_lower(_ value: CaptureMode) -> RustBuffe
 }
 
 
-
-extension CaptureMode: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ClarificationResultType {
+public enum ClarificationResultType: Equatable, Hashable {
     
     case selected
     case textInput
     case cancelled
     case timeout
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ClarificationResultType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12457,20 +10034,23 @@ public func FfiConverterTypeClarificationResultType_lower(_ value: Clarification
 }
 
 
-
-extension ClarificationResultType: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ClarificationType {
+public enum ClarificationType: Equatable, Hashable {
     
     case select
     case text
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ClarificationType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12521,21 +10101,24 @@ public func FfiConverterTypeClarificationType_lower(_ value: ClarificationType) 
 }
 
 
-
-extension ClarificationType: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum CommandType {
+public enum CommandType: Equatable, Hashable {
     
     case action
     case prompt
     case namespace
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension CommandType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12592,21 +10175,24 @@ public func FfiConverterTypeCommandType_lower(_ value: CommandType) -> RustBuffe
 }
 
 
-
-extension CommandType: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ConflictResolutionFfi {
+public enum ConflictResolutionFfi: Equatable, Hashable {
     
     case skip
     case rename
     case overwrite
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ConflictResolutionFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12663,23 +10249,26 @@ public func FfiConverterTypeConflictResolutionFFI_lower(_ value: ConflictResolut
 }
 
 
-
-extension ConflictResolutionFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum DagTaskDisplayStatus {
+public enum DagTaskDisplayStatus: Equatable, Hashable {
     
     case pending
     case running
     case completed
     case failed
     case cancelled
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension DagTaskDisplayStatus: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12748,23 +10337,26 @@ public func FfiConverterTypeDagTaskDisplayStatus_lower(_ value: DagTaskDisplaySt
 }
 
 
-
-extension DagTaskDisplayStatus: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ErrorType {
+public enum ErrorType: Equatable, Hashable {
     
     case network
     case permission
     case quota
     case timeout
     case unknown
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ErrorType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12833,21 +10425,24 @@ public func FfiConverterTypeErrorType_lower(_ value: ErrorType) -> RustBuffer {
 }
 
 
-
-extension ErrorType: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ExecutionIntentTypeFfi {
+public enum ExecutionIntentTypeFfi: Equatable, Hashable {
     
     case executable
     case ambiguous
     case conversational
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ExecutionIntentTypeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12905,20 +10500,130 @@ public func FfiConverterTypeExecutionIntentTypeFFI_lower(_ value: ExecutionInten
 
 
 
-extension ExecutionIntentTypeFfi: Equatable, Hashable {}
+/**
+ * Async extension error type for FFI
+ */
+public enum ExtensionAsyncError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    case Init(String
+    )
+    case Load(String
+    )
+    case NotFound(String
+    )
+    case Io(String
+    )
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension ExtensionAsyncError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeExtensionAsyncError: FfiConverterRustBuffer {
+    typealias SwiftType = ExtensionAsyncError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ExtensionAsyncError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .Init(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 2: return .Load(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 3: return .NotFound(
+            try FfiConverterString.read(from: &buf)
+            )
+        case 4: return .Io(
+            try FfiConverterString.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ExtensionAsyncError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case let .Init(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Load(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .NotFound(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .Io(v1):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(v1, into: &buf)
+            
+        }
+    }
+}
 
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExtensionAsyncError_lift(_ buf: RustBuffer) throws -> ExtensionAsyncError {
+    return try FfiConverterTypeExtensionAsyncError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExtensionAsyncError_lower(_ value: ExtensionAsyncError) -> RustBuffer {
+    return FfiConverterTypeExtensionAsyncError.lower(value)
+}
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum GenerationDataTypeFfi {
+public enum GenerationDataTypeFfi: Equatable, Hashable {
     
     case bytes
     case url
     case localPath
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension GenerationDataTypeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -12975,22 +10680,25 @@ public func FfiConverterTypeGenerationDataTypeFFI_lower(_ value: GenerationDataT
 }
 
 
-
-extension GenerationDataTypeFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum GenerationTypeFfi {
+public enum GenerationTypeFfi: Equatable, Hashable {
     
     case image
     case video
     case audio
     case speech
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension GenerationTypeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13053,23 +10761,26 @@ public func FfiConverterTypeGenerationTypeFFI_lower(_ value: GenerationTypeFfi) 
 }
 
 
-
-extension GenerationTypeFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum LogLevel {
+public enum LogLevel: Equatable, Hashable {
     
     case error
     case warn
     case info
     case debug
     case trace
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension LogLevel: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13138,22 +10849,25 @@ public func FfiConverterTypeLogLevel_lower(_ value: LogLevel) -> RustBuffer {
 }
 
 
-
-extension LogLevel: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum McpServerStatus {
+public enum McpServerStatus: Equatable, Hashable {
     
     case stopped
     case starting
     case running
     case error
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension McpServerStatus: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13216,20 +10930,23 @@ public func FfiConverterTypeMcpServerStatus_lower(_ value: McpServerStatus) -> R
 }
 
 
-
-extension McpServerStatus: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum McpServerType {
+public enum McpServerType: Equatable, Hashable {
     
     case builtin
     case external
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension McpServerType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13280,15 +10997,10 @@ public func FfiConverterTypeMcpServerType_lower(_ value: McpServerType) -> RustB
 }
 
 
-
-extension McpServerType: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ModelCapabilityFfi {
+public enum ModelCapabilityFfi: Equatable, Hashable {
     
     case codeGeneration
     case codeReview
@@ -13301,8 +11013,16 @@ public enum ModelCapabilityFfi {
     case fastResponse
     case simpleTask
     case longDocument
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ModelCapabilityFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13407,21 +11127,24 @@ public func FfiConverterTypeModelCapabilityFFI_lower(_ value: ModelCapabilityFfi
 }
 
 
-
-extension ModelCapabilityFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ModelCostStrategyFfi {
+public enum ModelCostStrategyFfi: Equatable, Hashable {
     
     case cheapest
     case balanced
     case bestQuality
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ModelCostStrategyFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13478,22 +11201,25 @@ public func FfiConverterTypeModelCostStrategyFFI_lower(_ value: ModelCostStrateg
 }
 
 
-
-extension ModelCostStrategyFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ModelCostTierFfi {
+public enum ModelCostTierFfi: Equatable, Hashable {
     
     case free
     case low
     case medium
     case high
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ModelCostTierFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13556,15 +11282,10 @@ public func FfiConverterTypeModelCostTierFFI_lower(_ value: ModelCostTierFfi) ->
 }
 
 
-
-extension ModelCostTierFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ModelHealthStatusFfi {
+public enum ModelHealthStatusFfi: Equatable, Hashable {
     
     case healthy
     case degraded
@@ -13572,8 +11293,16 @@ public enum ModelHealthStatusFfi {
     case circuitOpen
     case halfOpen
     case unknown
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ModelHealthStatusFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13648,21 +11377,24 @@ public func FfiConverterTypeModelHealthStatusFFI_lower(_ value: ModelHealthStatu
 }
 
 
-
-extension ModelHealthStatusFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ModelLatencyTierFfi {
+public enum ModelLatencyTierFfi: Equatable, Hashable {
     
     case fast
     case medium
     case slow
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ModelLatencyTierFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13719,21 +11451,24 @@ public func FfiConverterTypeModelLatencyTierFFI_lower(_ value: ModelLatencyTierF
 }
 
 
-
-extension ModelLatencyTierFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum OrganizeMethodFfi {
+public enum OrganizeMethodFfi: Equatable, Hashable {
     
     case byExtension
     case byCategory
     case byDate
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension OrganizeMethodFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13790,22 +11525,25 @@ public func FfiConverterTypeOrganizeMethodFFI_lower(_ value: OrganizeMethodFfi) 
 }
 
 
-
-extension OrganizeMethodFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ParameterSourceFfi {
+public enum ParameterSourceFfi: Equatable, Hashable {
     
     case userPreference
     case preset
     case inference
     case `default`
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ParameterSourceFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13868,21 +11606,24 @@ public func FfiConverterTypeParameterSourceFFI_lower(_ value: ParameterSourceFfi
 }
 
 
-
-extension ParameterSourceFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum PartEventTypeFfi {
+public enum PartEventTypeFfi: Equatable, Hashable {
     
     case added
     case updated
     case removed
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension PartEventTypeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -13939,15 +11680,10 @@ public func FfiConverterTypePartEventTypeFFI_lower(_ value: PartEventTypeFfi) ->
 }
 
 
-
-extension PartEventTypeFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ProcessingState {
+public enum ProcessingState: Equatable, Hashable {
     
     case idle
     case listening
@@ -13957,8 +11693,16 @@ public enum ProcessingState {
     case typewriting
     case success
     case error
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ProcessingState: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -14045,15 +11789,10 @@ public func FfiConverterTypeProcessingState_lower(_ value: ProcessingState) -> R
 }
 
 
-
-extension ProcessingState: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum TaskCategoryFfi {
+public enum TaskCategoryFfi: Equatable, Hashable {
     
     case general
     case fileOrganize
@@ -14075,8 +11814,16 @@ public enum TaskCategoryFfi {
     case mediaDownload
     case textProcessing
     case dataProcess
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension TaskCategoryFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -14235,23 +11982,26 @@ public func FfiConverterTypeTaskCategoryFFI_lower(_ value: TaskCategoryFfi) -> R
 }
 
 
-
-extension TaskCategoryFfi: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum ToolSourceType {
+public enum ToolSourceType: Equatable, Hashable {
     
     case native
     case builtin
     case mcp
     case skill
     case custom
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension ToolSourceType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -14320,22 +12070,25 @@ public func FfiConverterTypeToolSourceType_lower(_ value: ToolSourceType) -> Rus
 }
 
 
-
-extension ToolSourceType: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum TypoCorrectionResult {
+public enum TypoCorrectionResult: Equatable, Hashable {
     
     case success(correctedText: String, hasChanges: Bool
     )
     case error(message: String
     )
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension TypoCorrectionResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -14391,21 +12144,24 @@ public func FfiConverterTypeTypoCorrectionResult_lower(_ value: TypoCorrectionRe
 }
 
 
-
-extension TypoCorrectionResult: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum UserConfirmationDecision {
+public enum UserConfirmationDecision: Equatable, Hashable {
     
     case execute
     case cancel
     case editParameters
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension UserConfirmationDecision: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -14462,18 +12218,13 @@ public func FfiConverterTypeUserConfirmationDecision_lower(_ value: UserConfirma
 }
 
 
-
-extension UserConfirmationDecision: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * User's decision on whether to proceed with execution
  */
 
-public enum UserDecision {
+public enum UserDecision: Equatable, Hashable {
     
     /**
      * User confirmed, proceed with execution
@@ -14483,8 +12234,16 @@ public enum UserDecision {
      * User cancelled, abort execution
      */
     case cancelled
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension UserDecision: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -14535,21 +12294,24 @@ public func FfiConverterTypeUserDecision_lower(_ value: UserDecision) -> RustBuf
 }
 
 
-
-extension UserDecision: Equatable, Hashable {}
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum VisionTask {
+public enum VisionTask: Equatable, Hashable {
     
     case ocrOnly
     case ocrWithContext
     case describe
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension VisionTask: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -14607,14 +12369,9 @@ public func FfiConverterTypeVisionTask_lower(_ value: VisionTask) -> RustBuffer 
 
 
 
-extension VisionTask: Equatable, Hashable {}
 
 
-
-
-
-
-public protocol AetherEventHandler : AnyObject {
+public protocol AetherEventHandler: AnyObject, Sendable {
     
     func onThinking() 
     
@@ -14664,20 +12421,30 @@ public protocol AetherEventHandler : AnyObject {
     
 }
 
-// Magic number for the Rust proxy to call using the same mechanism as every other method,
-// to free the callback once it's dropped by Rust.
-private let IDX_CALLBACK_FREE: Int32 = 0
-// Callback return codes
-private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
-private let UNIFFI_CALLBACK_ERROR: Int32 = 1
-private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
 fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceAetherEventHandler] = [UniffiVTableCallbackInterfaceAetherEventHandler(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceAetherEventHandler.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface AetherEventHandler: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceAetherEventHandler.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface AetherEventHandler: handle missing in uniffiClone")
+            }
+        },
         onThinking: { (
             uniffiHandle: UInt64,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -14856,7 +12623,7 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onAgentModeDetected(
-                     task: try FfiConverterTypeExecutableTaskFFI.lift(task)
+                     task: try FfiConverterTypeExecutableTaskFFI_lift(task)
                 )
             }
 
@@ -14904,7 +12671,7 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onMcpStartupComplete(
-                     report: try FfiConverterTypeMcpStartupReportFFI.lift(report)
+                     report: try FfiConverterTypeMcpStartupReportFFI_lift(report)
                 )
             }
 
@@ -15194,7 +12961,7 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 }
                 return uniffiObj.onPlanConfirmationRequired(
                      planId: try FfiConverterString.lift(planId),
-                     plan: try FfiConverterTypeDagTaskPlan.lift(plan)
+                     plan: try FfiConverterTypeDagTaskPlan_lift(plan)
                 )
             }
 
@@ -15246,7 +13013,7 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onPartUpdate(
-                     event: try FfiConverterTypePartUpdateEventFFI.lift(event)
+                     event: try FfiConverterTypePartUpdateEventFFI_lift(event)
                 )
             }
 
@@ -15257,18 +13024,12 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 makeCall: makeCall,
                 writeReturn: writeReturn
             )
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface AetherEventHandler: handle missing in uniffiFree")
-            }
         }
-    )
+    )]
 }
 
 private func uniffiCallbackInitAetherEventHandler() {
-    uniffi_aethecore_fn_init_callback_vtable_aethereventhandler(&UniffiCallbackInterfaceAetherEventHandler.vtable)
+    uniffi_aethecore_fn_init_callback_vtable_aethereventhandler(UniffiCallbackInterfaceAetherEventHandler.vtable)
 }
 
 // FfiConverter protocol for callback interfaces
@@ -15276,7 +13037,7 @@ private func uniffiCallbackInitAetherEventHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
-    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
+    fileprivate static let handleMap = UniffiHandleMap<AetherEventHandler>()
 }
 
 #if swift(>=5.8)
@@ -15317,14 +13078,28 @@ extension FfiConverterCallbackInterfaceAetherEventHandler : FfiConverter {
 }
 
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceAetherEventHandler_lift(_ handle: UInt64) throws -> AetherEventHandler {
+    return try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceAetherEventHandler_lower(_ v: AetherEventHandler) -> UInt64 {
+    return FfiConverterCallbackInterfaceAetherEventHandler.lower(v)
+}
 
 
-public protocol AgentProgressHandler : AnyObject {
+
+
+public protocol AgentProgressHandler: AnyObject, Sendable {
     
     func onProgressEvent(event: AgentProgressEventFfi) 
     
 }
-
 
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
@@ -15332,7 +13107,24 @@ fileprivate struct UniffiCallbackInterfaceAgentProgressHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAgentProgressHandler = UniffiVTableCallbackInterfaceAgentProgressHandler(
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceAgentProgressHandler] = [UniffiVTableCallbackInterfaceAgentProgressHandler(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceAgentProgressHandler.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface AgentProgressHandler: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceAgentProgressHandler.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface AgentProgressHandler: handle missing in uniffiClone")
+            }
+        },
         onProgressEvent: { (
             uniffiHandle: UInt64,
             event: RustBuffer,
@@ -15345,7 +13137,7 @@ fileprivate struct UniffiCallbackInterfaceAgentProgressHandler {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onProgressEvent(
-                     event: try FfiConverterTypeAgentProgressEventFFI.lift(event)
+                     event: try FfiConverterTypeAgentProgressEventFFI_lift(event)
                 )
             }
 
@@ -15356,18 +13148,12 @@ fileprivate struct UniffiCallbackInterfaceAgentProgressHandler {
                 makeCall: makeCall,
                 writeReturn: writeReturn
             )
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterCallbackInterfaceAgentProgressHandler.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface AgentProgressHandler: handle missing in uniffiFree")
-            }
         }
-    )
+    )]
 }
 
 private func uniffiCallbackInitAgentProgressHandler() {
-    uniffi_aethecore_fn_init_callback_vtable_agentprogresshandler(&UniffiCallbackInterfaceAgentProgressHandler.vtable)
+    uniffi_aethecore_fn_init_callback_vtable_agentprogresshandler(UniffiCallbackInterfaceAgentProgressHandler.vtable)
 }
 
 // FfiConverter protocol for callback interfaces
@@ -15375,7 +13161,7 @@ private func uniffiCallbackInitAgentProgressHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAgentProgressHandler {
-    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AgentProgressHandler>()
+    fileprivate static let handleMap = UniffiHandleMap<AgentProgressHandler>()
 }
 
 #if swift(>=5.8)
@@ -15416,6 +13202,21 @@ extension FfiConverterCallbackInterfaceAgentProgressHandler : FfiConverter {
 }
 
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceAgentProgressHandler_lift(_ handle: UInt64) throws -> AgentProgressHandler {
+    return try FfiConverterCallbackInterfaceAgentProgressHandler.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceAgentProgressHandler_lower(_ v: AgentProgressHandler) -> UInt64 {
+    return FfiConverterCallbackInterfaceAgentProgressHandler.lower(v)
+}
+
+
 
 
 /**
@@ -15424,7 +13225,7 @@ extension FfiConverterCallbackInterfaceAgentProgressHandler : FfiConverter {
  * Swift/Kotlin clients implement this trait to receive progress updates
  * during the initialization process.
  */
-public protocol InitProgressHandlerFfi : AnyObject {
+public protocol InitProgressHandlerFfi: AnyObject, Sendable {
     
     /**
      * Called when a phase starts
@@ -15477,13 +13278,29 @@ public protocol InitProgressHandlerFfi : AnyObject {
 }
 
 
-
 // Put the implementation in a struct so we don't pollute the top-level namespace
 fileprivate struct UniffiCallbackInterfaceInitProgressHandlerFFI {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceInitProgressHandlerFfi] = [UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceInitProgressHandlerFfi.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface InitProgressHandlerFFI: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceInitProgressHandlerFfi.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface InitProgressHandlerFFI: handle missing in uniffiClone")
+            }
+        },
         onPhaseStarted: { (
             uniffiHandle: UInt64,
             phase: RustBuffer,
@@ -15619,18 +13436,12 @@ fileprivate struct UniffiCallbackInterfaceInitProgressHandlerFFI {
                 makeCall: makeCall,
                 writeReturn: writeReturn
             )
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterCallbackInterfaceInitProgressHandlerFfi.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface InitProgressHandlerFFI: handle missing in uniffiFree")
-            }
         }
-    )
+    )]
 }
 
 private func uniffiCallbackInitInitProgressHandlerFFI() {
-    uniffi_aethecore_fn_init_callback_vtable_initprogresshandlerffi(&UniffiCallbackInterfaceInitProgressHandlerFFI.vtable)
+    uniffi_aethecore_fn_init_callback_vtable_initprogresshandlerffi(UniffiCallbackInterfaceInitProgressHandlerFFI.vtable)
 }
 
 // FfiConverter protocol for callback interfaces
@@ -15638,7 +13449,7 @@ private func uniffiCallbackInitInitProgressHandlerFFI() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceInitProgressHandlerFfi {
-    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
+    fileprivate static let handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
 }
 
 #if swift(>=5.8)
@@ -15676,6 +13487,21 @@ extension FfiConverterCallbackInterfaceInitProgressHandlerFfi : FfiConverter {
     public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
         writeInt(&buf, lower(v))
     }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceInitProgressHandlerFfi_lift(_ handle: UInt64) throws -> InitProgressHandlerFfi {
+    return try FfiConverterCallbackInterfaceInitProgressHandlerFfi.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceInitProgressHandlerFfi_lower(_ v: InitProgressHandlerFfi) -> UInt64 {
+    return FfiConverterCallbackInterfaceInitProgressHandlerFfi.lower(v)
 }
 
 #if swift(>=5.8)
@@ -17206,31 +15032,277 @@ fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
         return dict
     }
 }
-public func getSkillsDirString()throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
+private let UNIFFI_RUST_FUTURE_POLL_WAKE: Int8 = 1
+
+fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
+
+fileprivate func uniffiRustCallAsync<F, T>(
+    rustFutureFunc: () -> UInt64,
+    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
+    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
+    freeFunc: (UInt64) -> (),
+    liftFunc: (F) throws -> T,
+    errorHandler: ((RustBuffer) throws -> Swift.Error)?
+) async throws -> T {
+    // Make sure to call the ensure init function since future creation doesn't have a
+    // RustCallStatus param, so doesn't use makeRustCall()
+    uniffiEnsureAethecoreInitialized()
+    let rustFuture = rustFutureFunc()
+    defer {
+        freeFunc(rustFuture)
+    }
+    var pollResult: Int8;
+    repeat {
+        pollResult = await withUnsafeContinuation {
+            pollFunc(
+                rustFuture,
+                { handle, pollResult in
+                    uniffiFutureContinuationCallback(handle: handle, pollResult: pollResult)
+                },
+                uniffiContinuationHandleMap.insert(obj: $0)
+            )
+        }
+    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
+
+    return try liftFunc(makeRustCall(
+        { completeFunc(rustFuture, $0) },
+        errorHandler: errorHandler
+    ))
+}
+
+// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
+// lift the return value or error and resume the suspended function.
+fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
+    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
+        continuation.resume(returning: pollResult)
+    } else {
+        print("uniffiFutureContinuationCallback invalid handle")
+    }
+}
+public func getSkillsDirString()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException_lift) {
     uniffi_aethecore_fn_func_get_skills_dir_string($0
     )
 })
 }
-public func initCore(configPath: String, handler: AetherEventHandler)throws  -> AetherCore {
-    return try  FfiConverterTypeAetherCore.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+public func initCore(configPath: String, handler: AetherEventHandler)throws  -> AetherCore  {
+    return try  FfiConverterTypeAetherCore_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
     uniffi_aethecore_fn_func_init_core(
         FfiConverterString.lower(configPath),
-        FfiConverterCallbackInterfaceAetherEventHandler.lower(handler),$0
+        FfiConverterCallbackInterfaceAetherEventHandler_lower(handler),$0
     )
 })
 }
-public func initializeBuiltinSkillsFfi(bundleSkillsDir: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+public func initializeBuiltinSkillsFfi(bundleSkillsDir: String)throws   {try rustCallWithError(FfiConverterTypeAetherException_lift) {
     uniffi_aethecore_fn_func_initialize_builtin_skills_ffi(
         FfiConverterString.lower(bundleSkillsDir),$0
     )
 }
 }
-public func listInstalledSkills()throws  -> [SkillInfo] {
-    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+public func listInstalledSkills()throws  -> [SkillInfo]  {
+    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException_lift) {
     uniffi_aethecore_fn_func_list_installed_skills($0
     )
 })
+}
+/**
+ * Execute a command with arguments asynchronously
+ */
+public func extensionExecuteCommand(name: String, arguments: String)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_execute_command(FfiConverterString.lower(name),FfiConverterString.lower(arguments)
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
+}
+/**
+ * Execute a skill with arguments asynchronously
+ *
+ * Prepares a skill for execution by substituting $ARGUMENTS and returns
+ * the processed content for LLM processing.
+ */
+public func extensionExecuteSkill(qualifiedName: String, arguments: String)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_execute_skill(FfiConverterString.lower(qualifiedName),FfiConverterString.lower(arguments)
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
+}
+/**
+ * Get auto-invocable skills for prompt injection asynchronously
+ */
+public func extensionGetAutoSkills()async throws  -> [PluginSkillFfi]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_get_auto_skills(
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypePluginSkillFFI.lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
+}
+/**
+ * Get the default model from configuration
+ */
+public func extensionGetDefaultModel()async throws  -> String?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_get_default_model(
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionString.lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
+}
+/**
+ * Get custom instructions from configuration
+ */
+public func extensionGetInstructions()async throws  -> [String]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_get_instructions(
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceString.lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
+}
+/**
+ * Get the plugins directory path
+ */
+public func extensionGetPluginsDir() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_aethecore_fn_func_extension_get_plugins_dir($0
+    )
+})
+}
+/**
+ * Get skill instructions for prompt injection asynchronously
+ *
+ * Returns formatted markdown instructions for all auto-invocable skills
+ * from enabled plugins.
+ */
+public func extensionGetSkillInstructions()async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_get_skill_instructions(
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
+}
+/**
+ * Check if a path is a valid plugin directory
+ */
+public func extensionIsValidPluginDir(path: String) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_func_extension_is_valid_plugin_dir(
+        FfiConverterString.lower(path),$0
+    )
+})
+}
+/**
+ * List all installed plugins asynchronously
+ */
+public func extensionListPlugins()async throws  -> [PluginInfoFfi]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_list_plugins(
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypePluginInfoFFI.lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
+}
+/**
+ * List all skills from enabled plugins asynchronously
+ */
+public func extensionListSkills()async throws  -> [PluginSkillFfi]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_list_skills(
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypePluginSkillFFI.lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
+}
+/**
+ * Load all extensions asynchronously
+ *
+ * Discovers and loads all skills, commands, agents, and plugins from
+ * configured directories.
+ */
+public func extensionLoadAll()async throws  -> LoadSummaryFfi  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_load_all(
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeLoadSummaryFFI_lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
+}
+/**
+ * Load a plugin from a custom path asynchronously
+ */
+public func extensionLoadPluginFromPath(path: String)async throws  -> PluginInfoFfi  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_func_extension_load_plugin_from_path(FfiConverterString.lower(path)
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypePluginInfoFFI_lift,
+            errorHandler: FfiConverterTypeExtensionAsyncError_lift
+        )
 }
 /**
  * Check if the embedding model is installed
@@ -17241,7 +15313,7 @@ public func listInstalledSkills()throws  -> [SkillInfo] {
  * fastembed stores models in a specific structure:
  * `cache_dir/models--BAAI--bge-small-zh-v1.5/snapshots/<hash>/model.onnx`
  */
-public func checkEmbeddingModelExists() -> Bool {
+public func checkEmbeddingModelExists() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_aethecore_fn_func_check_embedding_model_exists($0
     )
@@ -17251,14 +15323,14 @@ public func checkEmbeddingModelExists() -> Bool {
  * Check if first-time initialization is needed
  *
  * Returns true if any of the following conditions are met:
- * - Config directory (~/.config/aether) doesn't exist
+ * - Config directory (~/.aether) doesn't exist
  * - config.toml doesn't exist
  * - runtimes/manifest.json doesn't exist
  *
  * This function is safe to call at any time and doesn't modify any files.
  * If an error occurs while checking, logs the error and returns true (safer default).
  */
-public func needsFirstTimeInit() -> Bool {
+public func needsFirstTimeInit() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_aethecore_fn_func_needs_first_time_init($0
     )
@@ -17288,10 +15360,10 @@ public func needsFirstTimeInit() -> Bool {
  * - `error_phase`: phase name where error occurred (if any)
  * - `error_message`: error description (if any)
  */
-public func runInitialization(handler: InitProgressHandlerFfi) -> InitResultFfi {
-    return try!  FfiConverterTypeInitResultFFI.lift(try! rustCall() {
+public func runInitialization(handler: InitProgressHandlerFfi) -> InitResultFfi  {
+    return try!  FfiConverterTypeInitResultFFI_lift(try! rustCall() {
     uniffi_aethecore_fn_func_run_initialization(
-        FfiConverterCallbackInterfaceInitProgressHandlerFfi.lower(handler),$0
+        FfiConverterCallbackInterfaceInitProgressHandlerFfi_lower(handler),$0
     )
 })
 }
@@ -17303,9 +15375,9 @@ private enum InitializationResult {
 }
 // Use a global variable to perform the versioning checks. Swift ensures that
 // the code inside is only computed once.
-nonisolated(unsafe) private var initializationResult: InitializationResult = {
+private let initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
-    let bindings_contract_version = 26
+    let bindings_contract_version = 30
     // Get the scaffolding contract version by calling the into the dylib
     let scaffolding_contract_version = ffi_aethecore_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
@@ -17323,487 +15395,523 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_func_list_installed_skills() != 7975) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_func_check_embedding_model_exists() != 353) {
+    if (uniffi_aethecore_checksum_func_extension_execute_command() != 52476) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_func_needs_first_time_init() != 57511) {
+    if (uniffi_aethecore_checksum_func_extension_execute_skill() != 4792) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_func_run_initialization() != 5873) {
+    if (uniffi_aethecore_checksum_func_extension_get_auto_skills() != 21697) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_add_mcp_server() != 57915) {
+    if (uniffi_aethecore_checksum_func_extension_get_default_model() != 47260) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_cancel() != 50933) {
+    if (uniffi_aethecore_checksum_func_extension_get_instructions() != 25172) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_delete_model_profile() != 20151) {
+    if (uniffi_aethecore_checksum_func_extension_get_plugins_dir() != 24554) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_delete_routing_rule() != 49729) {
+    if (uniffi_aethecore_checksum_func_extension_get_skill_instructions() != 22629) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_execute() != 13917) {
+    if (uniffi_aethecore_checksum_func_extension_is_valid_plugin_dir() != 17113) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_budget_limit() != 33223) {
+    if (uniffi_aethecore_checksum_func_extension_list_plugins() != 43936) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_budget_status() != 50708) {
+    if (uniffi_aethecore_checksum_func_extension_list_skills() != 51892) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_budget_status_for_scope() != 63455) {
+    if (uniffi_aethecore_checksum_func_extension_load_all() != 6747) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_code_exec_config() != 64635) {
+    if (uniffi_aethecore_checksum_func_extension_load_plugin_from_path() != 27725) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_file_ops_config() != 13150) {
+    if (uniffi_aethecore_checksum_func_check_embedding_model_exists() != 24813) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_health_statistics() != 26430) {
+    if (uniffi_aethecore_checksum_func_needs_first_time_init() != 37483) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_model_health() != 35857) {
+    if (uniffi_aethecore_checksum_func_run_initialization() != 60960) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_model_health_summaries() != 52512) {
+    if (uniffi_aethecore_checksum_method_aethercore_add_mcp_server() != 2224) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_model_profiles() != 49593) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_cancel() != 18531) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_routing_rules() != 45883) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_delete_model_profile() != 3007) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_get_state() != 25842) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_delete_routing_rule() != 25136) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_is_cancelled() != 600) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_execute() != 8143) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_is_paused() != 25421) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_budget_limit() != 34773) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_pause() != 49293) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_budget_status() != 58797) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_plan() != 27234) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_budget_status_for_scope() != 30601) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_resume() != 24471) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_code_exec_config() != 3974) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_subscribe() != 51788) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_file_ops_config() != 1621) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_update_code_exec_config() != 35309) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_health_statistics() != 21617) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_update_cost_strategy() != 23557) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_model_health() != 26594) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_update_default_model() != 22852) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_model_health_summaries() != 41426) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_update_file_ops_config() != 1287) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_model_profiles() != 1427) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_update_model_profile() != 60466) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_routing_rules() != 56708) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_agent_update_routing_rule() != 31176) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_get_state() != 14858) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_cancel() != 44564) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_is_cancelled() != 42067) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_cancel_generation() != 17817) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_is_paused() != 29768) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_cancel_session() != 42621) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_pause() != 15772) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_check_generation_progress() != 39952) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_plan() != 4762) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_check_runtime_updates() != 20961) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_resume() != 28012) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_clear_facts() != 49121) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_subscribe() != 36720) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 62532) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_update_code_exec_config() != 32458) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_clear_memory() != 33517) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_update_cost_strategy() != 51041) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_confirm_task_plan() != 29235) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_update_default_model() != 58053) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_correct_typo() != 37546) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_update_file_ops_config() != 20190) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_generation_provider() != 6436) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_update_model_profile() != 61244) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 52792) {
+    if (uniffi_aethecore_checksum_method_aethercore_agent_update_routing_rule() != 37159) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_memories_by_topic_id() != 58670) {
+    if (uniffi_aethecore_checksum_method_aethercore_cancel() != 20911) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 60831) {
+    if (uniffi_aethecore_checksum_method_aethercore_cancel_generation() != 49690) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 6346) {
+    if (uniffi_aethecore_checksum_method_aethercore_cancel_session() != 6554) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_skill() != 64856) {
+    if (uniffi_aethecore_checksum_method_aethercore_check_generation_progress() != 6370) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_disable_plugin() != 64230) {
+    if (uniffi_aethecore_checksum_method_aethercore_check_runtime_updates() != 64276) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_edit_image() != 50812) {
+    if (uniffi_aethecore_checksum_method_aethercore_clear_facts() != 27645) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_enable_plugin() != 57301) {
+    if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 34465) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_execute_plugin_skill() != 45433) {
+    if (uniffi_aethecore_checksum_method_aethercore_clear_memory() != 40490) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json() != 17811) {
+    if (uniffi_aethecore_checksum_method_aethercore_confirm_task_plan() != 10053) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_extract_text() != 36904) {
+    if (uniffi_aethecore_checksum_method_aethercore_correct_typo() != 59285) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_generate() != 17036) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_generation_provider() != 12851) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_generate_audio() != 35406) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 35149) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_generate_image() != 42720) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_memories_by_topic_id() != 40221) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_generate_speech() != 13012) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 59377) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_generate_topic_title() != 9650) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 43572) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_generate_video() != 32019) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_skill() != 48558) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_compression_stats() != 49764) {
+    if (uniffi_aethecore_checksum_method_aethercore_disable_plugin() != 34216) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_current_session_id() != 4611) {
+    if (uniffi_aethecore_checksum_method_aethercore_edit_image() != 8842) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_default_provider() != 56435) {
+    if (uniffi_aethecore_checksum_method_aethercore_enable_plugin() != 29219) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_enabled_providers() != 10573) {
+    if (uniffi_aethecore_checksum_method_aethercore_execute_plugin_skill() != 63416) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_generation_provider_config() != 51025) {
+    if (uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json() != 21505) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_log_directory() != 43485) {
+    if (uniffi_aethecore_checksum_method_aethercore_extract_text() != 48555) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_log_level() != 16546) {
+    if (uniffi_aethecore_checksum_method_aethercore_generate() != 48057) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_config() != 24168) {
+    if (uniffi_aethecore_checksum_method_aethercore_generate_audio() != 23467) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server() != 838) {
+    if (uniffi_aethecore_checksum_method_aethercore_generate_image() != 62378) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_logs() != 14498) {
+    if (uniffi_aethecore_checksum_method_aethercore_generate_speech() != 9974) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_status() != 46212) {
+    if (uniffi_aethecore_checksum_method_aethercore_generate_topic_title() != 32707) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_memory_app_list() != 55491) {
+    if (uniffi_aethecore_checksum_method_aethercore_generate_video() != 62325) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_memory_config() != 46228) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_compression_stats() != 544) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 37731) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_current_session_id() != 4039) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_node_path() != 8236) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_default_provider() != 23427) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_npm_path() != 60063) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_enabled_providers() != 62114) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_plugin_skill_instructions() != 58364) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_generation_provider_config() != 46599) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_plugins_dir() != 42652) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_log_directory() != 3872) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_providers_for_type() != 30953) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_log_level() != 29584) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_python_path() != 27989) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_config() != 42937) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry() != 64284) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server() != 55115) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_skills_dir() != 34566) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_logs() != 36956) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_ytdlp_path() != 24869) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_status() != 57934) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json() != 22743) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_app_list() != 8730) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_install_plugin_from_git() != 23877) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_config() != 17371) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_install_plugins_from_zip() != 10475) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 10292) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_install_runtime() != 21593) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_node_path() != 60830) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_install_skill() != 24959) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_npm_path() != 55245) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_install_skills_from_zip() != 58931) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_plugin_skill_instructions() != 21241) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_is_cancelled() != 61008) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_plugins_dir() != 37463) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_is_runtime_installed() != 20271) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_providers_for_type() != 59319) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_list_builtin_tools() != 62441) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_python_path() != 34458) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_list_generation_providers() != 9686) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry() != 62565) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_list_mcp_servers() != 29913) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_skills_dir() != 22359) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_list_plugin_skills() != 312) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_ytdlp_path() != 551) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_list_plugins() != 35316) {
+    if (uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json() != 12845) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_list_recent_sessions() != 13544) {
+    if (uniffi_aethecore_checksum_method_aethercore_install_plugin_from_git() != 4557) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_list_runtimes() != 3574) {
+    if (uniffi_aethecore_checksum_method_aethercore_install_plugins_from_zip() != 42073) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_list_skills() != 34455) {
+    if (uniffi_aethecore_checksum_method_aethercore_install_runtime() != 4896) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_list_tools() != 57354) {
+    if (uniffi_aethecore_checksum_method_aethercore_install_skill() != 7568) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_load_config() != 47747) {
+    if (uniffi_aethecore_checksum_method_aethercore_install_skills_from_zip() != 171) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_load_plugin_from_path() != 1059) {
+    if (uniffi_aethecore_checksum_method_aethercore_is_cancelled() != 21470) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_process() != 36139) {
+    if (uniffi_aethecore_checksum_method_aethercore_is_runtime_installed() != 57714) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_provider_supports_image_editing() != 59293) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_builtin_tools() != 57766) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_refresh_plugins() != 61282) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_generation_providers() != 26015) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_refresh_skills() != 30751) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_mcp_servers() != 6594) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_reload_config() != 43589) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_plugin_skills() != 3407) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_respond_to_user_input() != 5504) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_plugins() != 52725) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_resume_session() != 14295) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_recent_sessions() != 36474) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 43084) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_runtimes() != 13336) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_search_memory() != 34607) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_skills() != 65426) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_set_default_provider() != 215) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_tools() != 53045) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 28527) {
+    if (uniffi_aethecore_checksum_method_aethercore_load_config() != 8086) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_test_generation_provider_connection() != 23525) {
+    if (uniffi_aethecore_checksum_method_aethercore_load_plugin_from_path() != 3495) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config() != 26018) {
+    if (uniffi_aethecore_checksum_method_aethercore_process() != 52834) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider_with_config() != 58360) {
+    if (uniffi_aethecore_checksum_method_aethercore_provider_supports_image_editing() != 43351) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_trigger_compression() != 65371) {
+    if (uniffi_aethecore_checksum_method_aethercore_refresh_plugins() != 52993) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_uninstall_plugin() != 8638) {
+    if (uniffi_aethecore_checksum_method_aethercore_refresh_skills() != 65047) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_behavior() != 3903) {
+    if (uniffi_aethecore_checksum_method_aethercore_reload_config() != 57029) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_general_config() != 40313) {
+    if (uniffi_aethecore_checksum_method_aethercore_respond_to_user_input() != 36364) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_generation_provider() != 4344) {
+    if (uniffi_aethecore_checksum_method_aethercore_resume_session() != 3568) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_config() != 34477) {
+    if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 60803) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_server() != 1807) {
+    if (uniffi_aethecore_checksum_method_aethercore_search_memory() != 25662) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 19269) {
+    if (uniffi_aethecore_checksum_method_aethercore_set_default_provider() != 54604) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_policies() != 997) {
+    if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 50522) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_provider() != 19684) {
+    if (uniffi_aethecore_checksum_method_aethercore_test_generation_provider_connection() != 5400) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_routing_rules() != 6793) {
+    if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config() != 33012) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_runtime() != 58790) {
+    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider_with_config() != 61165) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_search_config() != 32911) {
+    if (uniffi_aethecore_checksum_method_aethercore_trigger_compression() != 58553) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_shortcuts() != 22863) {
+    if (uniffi_aethecore_checksum_method_aethercore_uninstall_plugin() != 39679) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_trigger_config() != 15069) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_behavior() != 40863) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_typo_correction_config() != 37766) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_general_config() != 39351) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 37438) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_generation_provider() != 64577) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_thinking() != 10784) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_config() != 16658) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_start() != 6212) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_server() != 18192) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_result() != 1784) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 6008) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_stream_chunk() != 36815) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_policies() != 64617) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_complete() != 44205) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_provider() != 7861) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error() != 24904) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_routing_rules() != 14834) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_memory_stored() != 30752) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_runtime() != 36307) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_mode_detected() != 15957) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_search_config() != 29101) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed() != 46377) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_shortcuts() != 28167) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete() != 1232) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_trigger_config() != 40092) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_runtime_updates_available() != 49394) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_typo_correction_config() != 35870) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_session_started() != 832) {
+    if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 52126) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_started() != 726) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_thinking() != 64952) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_completed() != 18157) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_start() != 40858) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_failed() != 62649) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_result() != 53145) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_loop_progress() != 13748) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_stream_chunk() != 31857) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_plan_created() != 21041) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_complete() != 27104) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_session_completed() != 32678) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error() != 17013) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_started() != 8514) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_memory_stored() != 37386) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_completed() != 6747) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_mode_detected() != 34135) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_plan_confirmation_required() != 14579) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed() != 4643) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_user_input_request() != 9067) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete() != 2538) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_part_update() != 49834) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_runtime_updates_available() != 24283) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_agentprogresshandler_on_progress_event() != 52150) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_session_started() != 21788) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_started() != 36810) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_started() != 13892) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_progress() != 40155) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_completed() != 41481) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_completed() != 33490) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_failed() != 45080) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_download_progress() != 17769) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_loop_progress() != 43381) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_error() != 2145) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_plan_created() != 39748) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_session_completed() != 34939) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_started() != 26618) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_completed() != 16015) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_plan_confirmation_required() != 41332) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_user_input_request() != 38504) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_part_update() != 474) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_agentprogresshandler_on_progress_event() != 19787) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_started() != 4592) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_progress() != 20050) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_completed() != 24357) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_download_progress() != 57148) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_error() != 53683) {
         return InitializationResult.apiChecksumMismatch
     }
 
@@ -17813,7 +15921,9 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
     return InitializationResult.ok
 }()
 
-private func uniffiEnsureInitialized() {
+// Make the ensure init function public so that other modules which have external type references to
+// our types can call it.
+public func uniffiEnsureAethecoreInitialized() {
     switch initializationResult {
     case .ok:
         break
