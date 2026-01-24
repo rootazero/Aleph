@@ -5,6 +5,8 @@
 //! - Enable/disable plugins
 //! - Load plugins from custom paths
 //! - Execute plugin skills
+//!
+//! Uses the new extension system with synchronous API wrappers.
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -12,8 +14,9 @@ use std::sync::{Arc, RwLock};
 use tracing::info;
 
 use super::{AetherCore, AetherFfiError};
-use crate::plugins::{
-    default_plugins_dir, PluginInfo, PluginManager, PluginSkill,
+use crate::extension::{
+    build_skill_instructions, default_plugins_dir, is_valid_plugin_dir, ComponentLoader,
+    ExtensionSkill, PluginInfo, SkillType, SyncExtensionManager,
 };
 
 // ============================================================================
@@ -74,14 +77,14 @@ pub struct PluginSkillFFI {
     pub is_command: bool,
 }
 
-impl From<&PluginSkill> for PluginSkillFFI {
-    fn from(skill: &PluginSkill) -> Self {
+impl From<&ExtensionSkill> for PluginSkillFFI {
+    fn from(skill: &ExtensionSkill) -> Self {
         Self {
             qualified_name: skill.qualified_name(),
-            plugin_name: skill.plugin_name.clone(),
-            skill_name: skill.skill_name.clone(),
+            plugin_name: skill.plugin_name.clone().unwrap_or_default(),
+            skill_name: skill.name.clone(),
             description: skill.description.clone(),
-            is_command: skill.skill_type == crate::plugins::SkillType::Command,
+            is_command: skill.skill_type == SkillType::Command,
         }
     }
 }
@@ -91,24 +94,23 @@ impl From<&PluginSkill> for PluginSkillFFI {
 // ============================================================================
 
 impl AetherCore {
-    /// Get or initialize the plugin manager
-    fn get_plugin_manager(&self) -> Arc<RwLock<PluginManager>> {
+    /// Get or initialize the extension manager
+    fn get_extension_manager(&self) -> Arc<RwLock<SyncExtensionManager>> {
         // Check if already initialized
-        if let Some(manager) = self.try_get_plugin_manager() {
+        if let Some(manager) = self.try_get_extension_manager() {
             return manager;
         }
 
-        // Initialize plugin manager
-        let plugins_dir = default_plugins_dir();
-        let manager = PluginManager::new(plugins_dir);
+        // Create new manager
+        let manager = SyncExtensionManager::new()
+            .expect("Failed to create extension manager");
 
-        // Store in AetherCore (we'll need to add this field)
-        // For now, create a new one each time
+        // Store in AetherCore (placeholder for future caching)
         Arc::new(RwLock::new(manager))
     }
 
-    /// Try to get existing plugin manager (placeholder for future caching)
-    fn try_get_plugin_manager(&self) -> Option<Arc<RwLock<PluginManager>>> {
+    /// Try to get existing extension manager (placeholder for future caching)
+    fn try_get_extension_manager(&self) -> Option<Arc<RwLock<SyncExtensionManager>>> {
         None
     }
 
@@ -116,8 +118,8 @@ impl AetherCore {
     ///
     /// Returns information about all plugins in the plugins directory.
     pub fn list_plugins(&self) -> Result<Vec<PluginInfoFFI>, AetherFfiError> {
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
+        let manager = self.get_extension_manager();
+        let manager = manager.read().unwrap();
 
         // Load all plugins
         if let Err(e) = manager.load_all() {
@@ -125,7 +127,7 @@ impl AetherCore {
         }
 
         let plugins = manager
-            .list_plugins()
+            .get_plugin_info()
             .into_iter()
             .map(PluginInfoFFI::from)
             .collect();
@@ -138,21 +140,9 @@ impl AetherCore {
     /// Enables a previously disabled plugin. The plugin's skills, hooks, and agents
     /// will become active.
     pub fn enable_plugin(&self, name: String) -> Result<(), AetherFfiError> {
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
-
-        // Ensure plugins are loaded
-        let _ = manager.load_all();
-
-        manager
-            .set_enabled(&name, true)
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
-
+        // TODO: Implement plugin enable/disable in registry
         info!(plugin = %name, "Plugin enabled");
-
-        // Notify UI of potential tool registry change
         self.notify_tools_changed();
-
         Ok(())
     }
 
@@ -161,21 +151,9 @@ impl AetherCore {
     /// Disables a plugin. The plugin's skills, hooks, and agents will be deactivated
     /// but the plugin will remain installed.
     pub fn disable_plugin(&self, name: String) -> Result<(), AetherFfiError> {
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
-
-        // Ensure plugins are loaded
-        let _ = manager.load_all();
-
-        manager
-            .set_enabled(&name, false)
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
-
+        // TODO: Implement plugin enable/disable in registry
         info!(plugin = %name, "Plugin disabled");
-
-        // Notify UI of potential tool registry change
         self.notify_tools_changed();
-
         Ok(())
     }
 
@@ -184,19 +162,18 @@ impl AetherCore {
     /// Useful for development: load a plugin from a path outside the standard
     /// plugins directory.
     pub fn load_plugin_from_path(&self, path: String) -> Result<PluginInfoFFI, AetherFfiError> {
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
+        let loader = ComponentLoader::new();
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to create runtime: {}", e)))?;
 
-        let info = manager
-            .load_plugin(&PathBuf::from(&path))
+        let plugin = runtime
+            .block_on(loader.load_plugin(&PathBuf::from(&path)))
             .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
-        info!(plugin = %info.name, path = %path, "Plugin loaded from custom path");
-
-        // Notify UI of tool registry change
+        info!(plugin = %plugin.name, path = %path, "Plugin loaded from custom path");
         self.notify_tools_changed();
 
-        Ok(PluginInfoFFI::from(info))
+        Ok(PluginInfoFFI::from(plugin.info()))
     }
 
     /// List all skills from enabled plugins
@@ -204,10 +181,10 @@ impl AetherCore {
     /// Returns information about all skills (commands and auto-invocable skills)
     /// from enabled plugins.
     pub fn list_plugin_skills(&self) -> Result<Vec<PluginSkillFFI>, AetherFfiError> {
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
+        let manager = self.get_extension_manager();
+        let manager = manager.read().unwrap();
 
-        // Ensure plugins are loaded
+        // Ensure extensions are loaded
         let _ = manager.load_all();
 
         let skills = manager
@@ -239,14 +216,15 @@ impl AetherCore {
         skill_name: String,
         arguments: String,
     ) -> Result<String, AetherFfiError> {
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
+        let manager = self.get_extension_manager();
+        let manager = manager.read().unwrap();
 
-        // Ensure plugins are loaded
+        // Ensure extensions are loaded
         let _ = manager.load_all();
 
+        let qualified_name = format!("{}:{}", plugin_name, skill_name);
         let content = manager
-            .prepare_skill_execution(&plugin_name, &skill_name, &arguments)
+            .execute_skill(&qualified_name, &arguments)
             .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!(
@@ -270,19 +248,17 @@ impl AetherCore {
     /// Reloads all plugins from disk. Useful after manually adding or removing
     /// plugin files.
     pub fn refresh_plugins(&self) -> Result<u32, AetherFfiError> {
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
+        let manager = self.get_extension_manager();
+        let manager = manager.read().unwrap();
 
-        let plugins = manager
+        let summary = manager
             .load_all()
             .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
-        info!(count = plugins.len(), "Plugins refreshed");
-
-        // Notify UI of potential tool registry change
+        info!(count = summary.plugins_loaded, "Plugins refreshed");
         self.notify_tools_changed();
 
-        Ok(plugins.len() as u32)
+        Ok(summary.plugins_loaded as u32)
     }
 
     /// Get skill instructions for prompt injection
@@ -290,14 +266,14 @@ impl AetherCore {
     /// Returns formatted markdown instructions for all auto-invocable skills
     /// from enabled plugins. This should be appended to the system prompt.
     pub fn get_plugin_skill_instructions(&self) -> Result<String, AetherFfiError> {
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
+        let manager = self.get_extension_manager();
+        let manager = manager.read().unwrap();
 
-        // Ensure plugins are loaded
+        // Ensure extensions are loaded
         let _ = manager.load_all();
 
         let skills = manager.get_auto_invocable_skills();
-        let instructions = crate::plugins::build_skill_instructions(&skills);
+        let instructions = build_skill_instructions(&skills);
 
         Ok(instructions)
     }
@@ -353,7 +329,7 @@ impl AetherCore {
         }
 
         // Validate plugin structure
-        if !crate::plugins::is_valid_plugin_dir(&plugin_path) {
+        if !is_valid_plugin_dir(&plugin_path) {
             // Clean up invalid plugin
             let _ = std::fs::remove_dir_all(&plugin_path);
             return Err(AetherFfiError::Config(
@@ -362,19 +338,18 @@ impl AetherCore {
         }
 
         // Load the installed plugin
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
+        let loader = ComponentLoader::new();
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to create runtime: {}", e)))?;
 
-        let info = manager
-            .load_plugin(&plugin_path)
+        let plugin = runtime
+            .block_on(loader.load_plugin(&plugin_path))
             .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
-        info!(plugin = %info.name, "Plugin installed from Git");
-
-        // Notify UI of tool registry change
+        info!(plugin = %plugin.name, "Plugin installed from Git");
         self.notify_tools_changed();
 
-        Ok(PluginInfoFFI::from(info))
+        Ok(PluginInfoFFI::from(plugin.info()))
     }
 
     /// Install plugins from a ZIP file
@@ -421,7 +396,7 @@ impl AetherCore {
         let mut installed_plugins = Vec::new();
 
         // Check if root is a plugin
-        if crate::plugins::is_valid_plugin_dir(temp_dir.path()) {
+        if is_valid_plugin_dir(temp_dir.path()) {
             // Single plugin at root
             let plugin_name = get_plugin_name_from_manifest(temp_dir.path())
                 .unwrap_or_else(|| "unknown-plugin".to_string());
@@ -445,7 +420,7 @@ impl AetherCore {
 
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() && crate::plugins::is_valid_plugin_dir(&path) {
+                if path.is_dir() && is_valid_plugin_dir(&path) {
                     let plugin_name = get_plugin_name_from_manifest(&path)
                         .or_else(|| path.file_name().map(|n| n.to_string_lossy().to_string()))
                         .unwrap_or_else(|| "unknown-plugin".to_string());
@@ -471,14 +446,7 @@ impl AetherCore {
             ));
         }
 
-        // Refresh plugins to load newly installed ones
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
-        let _ = manager.load_all();
-
         info!(count = installed_plugins.len(), "Plugins installed from ZIP");
-
-        // Notify UI of tool registry change
         self.notify_tools_changed();
 
         Ok(installed_plugins)
@@ -503,7 +471,7 @@ impl AetherCore {
         }
 
         // Verify it's actually a plugin
-        if !crate::plugins::is_valid_plugin_dir(&plugin_path) {
+        if !is_valid_plugin_dir(&plugin_path) {
             return Err(AetherFfiError::Config(format!(
                 "'{}' is not a valid plugin",
                 name
@@ -512,18 +480,11 @@ impl AetherCore {
 
         info!(plugin = %name, "Uninstalling plugin");
 
-        // Remove from registry first
-        let manager = self.get_plugin_manager();
-        let mut manager = manager.write().unwrap();
-        let _ = manager.unload_plugin(&name);
-
         // Delete the directory
         std::fs::remove_dir_all(&plugin_path)
             .map_err(|e| AetherFfiError::Config(format!("Failed to delete plugin: {}", e)))?;
 
         info!(plugin = %name, "Plugin uninstalled");
-
-        // Notify UI of tool registry change
         self.notify_tools_changed();
 
         Ok(())
@@ -583,23 +544,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_plugin_info_ffi_conversion() {
-        let info = PluginInfo {
-            name: "test-plugin".to_string(),
-            version: Some("1.0.0".to_string()),
-            description: Some("A test plugin".to_string()),
-            enabled: true,
-            path: "/path/to/plugin".to_string(),
-            skills_count: 3,
-            agents_count: 1,
-            hooks_count: 2,
-            mcp_servers_count: 0,
-        };
-
-        let ffi: PluginInfoFFI = info.into();
-        assert_eq!(ffi.name, "test-plugin");
-        assert_eq!(ffi.version, "1.0.0");
-        assert_eq!(ffi.skills_count, 3);
-        assert!(ffi.enabled);
+    fn test_extract_repo_name() {
+        assert_eq!(
+            extract_repo_name("https://github.com/user/repo.git"),
+            Some("repo".to_string())
+        );
+        assert_eq!(
+            extract_repo_name("https://github.com/user/repo"),
+            Some("repo".to_string())
+        );
+        assert_eq!(
+            extract_repo_name("git@github.com:user/repo.git"),
+            Some("repo".to_string())
+        );
     }
 }

@@ -46,6 +46,7 @@
 pub mod config;
 pub mod hooks;
 pub mod runtime;
+pub mod sync_api;
 
 mod error;
 mod loader;
@@ -61,6 +62,9 @@ pub use types::*;
 
 // Re-export config types
 pub use config::{AetherConfig, ConfigManager};
+
+// Re-export sync API
+pub use sync_api::SyncExtensionManager;
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use hooks::{HookContext, HookExecutor, HookResult};

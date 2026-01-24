@@ -83,9 +83,8 @@ pub mod intent; // NEW: Smart intent detection for conversation flow
 pub mod logging;
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod memory;
-pub mod plugins; // NEW: Claude Code compatible plugin system
 pub mod discovery; // NEW: Multi-level component discovery system (Claude Code compatible)
-pub mod extension; // NEW: Extension system v2 (replacing plugins in future)
+pub mod extension; // NEW: Extension system (Claude Code compatible)
 pub mod metrics;
 pub mod three_layer; // Three-layer control architecture (Orchestrator/Skill-DAG/Tools)
 pub mod payload; // Structured context protocol with capability support
@@ -286,35 +285,21 @@ pub use crate::metrics::StageTimer;
 pub use crate::providers::AiProvider;
 pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
-// Plugin system exports
-pub use crate::plugins::{
-    // Core types
-    default_plugins_dir, default_state_path, HookAction, HookEvent, LoadedPlugin, PluginAgent,
-    PluginError, PluginHooksConfig, PluginInfo, PluginLoader, PluginManager, PluginManifest,
-    PluginMcpConfig, PluginMcpServer, PluginRegistry, PluginResult, PluginScanner, PluginSkill,
-    PluginState, PluginStateFile, SkillType,
-    // Integration utilities
-    build_skill_instructions, build_skill_prompt, plugin_agent_to_agent_def,
-    register_plugin_agents, resolve_mcp_command, HookContext, HookExecutor, HookResult,
-    PluginHookHandler,
-};
-// Extension system v2 exports (recommended for new code)
+// Extension system exports (Claude Code compatible plugin system)
 pub use crate::extension::{
     // Core types
     AetherConfig, AgentMode as ExtAgentMode, ComponentLoader, ComponentRegistry, ConfigManager,
     ExtensionAgent, ExtensionCommand, ExtensionConfig, ExtensionError, ExtensionManager,
-    ExtensionPlugin, ExtensionResult, ExtensionSkill, HookAction as ExtHookAction, HookConfig,
-    HookEvent as ExtHookEvent, LoadSummary, McpServerConfig as ExtMcpServerConfig,
-    PermissionAction, PermissionRule, PluginInfo as ExtPluginInfo, SkillFrontmatter,
-    SkillType as ExtSkillType,
+    ExtensionPlugin, ExtensionResult, ExtensionSkill, HookAction, HookConfig,
+    HookEvent, LoadSummary, McpServerConfig as ExtMcpServerConfig,
+    PermissionAction, PermissionRule, PluginInfo, SkillFrontmatter, SkillType,
+    SyncExtensionManager,
     // Hook execution
-    hooks::{HookContext as ExtHookContext, HookExecutor as ExtHookExecutor, HookResult as ExtHookResult},
+    hooks::{HookContext, HookExecutor, HookResult},
     // Config types
     config::{AgentConfigOverride, McpConfig, OAuthConfig, ProviderOverride},
     // Utility functions
-    build_skill_instructions as ext_build_skill_instructions,
-    default_plugins_dir as ext_default_plugins_dir,
-    is_valid_plugin_dir as ext_is_valid_plugin_dir,
+    build_skill_instructions, default_plugins_dir, is_valid_plugin_dir,
 };
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::utils::pii;
