@@ -14,6 +14,37 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use crate::components::types::{ExecutionSession, SessionPart, SessionStatus, SummaryPart};
+
+// ============================================================================
+// Compaction Config
+// ============================================================================
+
+/// Configuration for session compaction behavior
+#[derive(Debug, Clone)]
+pub struct CompactionConfig {
+    /// Enable automatic compaction when overflow detected
+    pub auto_compact: bool,
+    /// Enable pruning of old tool outputs
+    pub prune_enabled: bool,
+    /// Minimum tokens to save before pruning (default: 20,000)
+    pub prune_minimum: u64,
+    /// Protect this many tokens of recent tool outputs (default: 40,000)
+    pub prune_protect: u64,
+    /// Tools that should never have their outputs pruned
+    pub protected_tools: Vec<String>,
+}
+
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            auto_compact: true,
+            prune_enabled: true,
+            prune_minimum: 20_000,
+            prune_protect: 40_000,
+            protected_tools: vec!["skill".to_string()],
+        }
+    }
+}
 use crate::event::{
     AetherEvent, CompactionInfo, EventContext, EventHandler, EventType, HandlerError,
 };
@@ -185,6 +216,8 @@ pub struct SessionCompactor {
     token_tracker: TokenTracker,
     /// Number of recent tool calls to keep with full output
     keep_recent_tools: usize,
+    /// Compaction configuration
+    config: CompactionConfig,
 }
 
 impl Default for SessionCompactor {
@@ -199,6 +232,7 @@ impl SessionCompactor {
         Self {
             token_tracker: TokenTracker::new(),
             keep_recent_tools: 10,
+            config: CompactionConfig::default(),
         }
     }
 
@@ -207,7 +241,27 @@ impl SessionCompactor {
         Self {
             token_tracker: TokenTracker::new(),
             keep_recent_tools,
+            config: CompactionConfig::default(),
         }
+    }
+
+    /// Create a SessionCompactor with custom configuration
+    pub fn with_config(config: CompactionConfig) -> Self {
+        Self {
+            token_tracker: TokenTracker::new(),
+            keep_recent_tools: 10,
+            config,
+        }
+    }
+
+    /// Get the compaction configuration
+    pub fn config(&self) -> &CompactionConfig {
+        &self.config
+    }
+
+    /// Get mutable compaction configuration
+    pub fn config_mut(&mut self) -> &mut CompactionConfig {
+        &mut self.config
     }
 
     /// Get token tracker reference
@@ -518,6 +572,72 @@ mod tests {
     use super::*;
     use crate::components::types::{AiResponsePart, ToolCallPart, ToolCallStatus, UserInputPart};
     use serde_json::json;
+
+    // ========================================================================
+    // CompactionConfig Tests
+    // ========================================================================
+
+    #[test]
+    fn test_compaction_config_default() {
+        let config = CompactionConfig::default();
+        assert!(config.auto_compact);
+        assert!(config.prune_enabled);
+        assert_eq!(config.prune_minimum, 20_000);
+        assert_eq!(config.prune_protect, 40_000);
+        assert!(config.protected_tools.contains(&"skill".to_string()));
+    }
+
+    #[test]
+    fn test_compaction_config_disabled() {
+        let config = CompactionConfig {
+            auto_compact: false,
+            prune_enabled: false,
+            ..Default::default()
+        };
+        assert!(!config.auto_compact);
+        assert!(!config.prune_enabled);
+    }
+
+    #[test]
+    fn test_compaction_config_custom_protected_tools() {
+        let config = CompactionConfig {
+            protected_tools: vec!["skill".to_string(), "read".to_string(), "write".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(config.protected_tools.len(), 3);
+        assert!(config.protected_tools.contains(&"skill".to_string()));
+        assert!(config.protected_tools.contains(&"read".to_string()));
+        assert!(config.protected_tools.contains(&"write".to_string()));
+    }
+
+    #[test]
+    fn test_session_compactor_with_config() {
+        let config = CompactionConfig {
+            auto_compact: false,
+            prune_enabled: true,
+            prune_minimum: 10_000,
+            prune_protect: 20_000,
+            protected_tools: vec!["custom_tool".to_string()],
+        };
+        let compactor = SessionCompactor::with_config(config);
+
+        assert!(!compactor.config().auto_compact);
+        assert!(compactor.config().prune_enabled);
+        assert_eq!(compactor.config().prune_minimum, 10_000);
+        assert_eq!(compactor.config().prune_protect, 20_000);
+        assert!(compactor.config().protected_tools.contains(&"custom_tool".to_string()));
+    }
+
+    #[test]
+    fn test_session_compactor_config_mut() {
+        let mut compactor = SessionCompactor::new();
+
+        compactor.config_mut().auto_compact = false;
+        compactor.config_mut().prune_minimum = 15_000;
+
+        assert!(!compactor.config().auto_compact);
+        assert_eq!(compactor.config().prune_minimum, 15_000);
+    }
 
     // ========================================================================
     // ModelLimit Tests
