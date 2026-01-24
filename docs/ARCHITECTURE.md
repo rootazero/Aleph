@@ -1092,6 +1092,8 @@ pub struct PromptConfig {
 
 ## References
 
+- **Agent Loop**: [AGENT_LOOP.md](./AGENT_LOOP.md) - Doom loop detection, retry mechanism, tool repair, output truncation
+- **Dispatcher**: [DISPATCHER.md](./DISPATCHER.md) - Tool routing and confirmation flow
 - **OpenSpec Proposal**: `openspec/changes/implement-structured-context-protocol/`
 - **Design Document**: `openspec/changes/implement-structured-context-protocol/design.md`
 - **Spec Deltas**: `openspec/changes/implement-structured-context-protocol/specs/`
@@ -1099,6 +1101,6 @@ pub struct PromptConfig {
 
 ---
 
-**Last Updated**: 2026-01-23
+**Last Updated**: 2026-01-24
 **Implemented In**: Aether v0.1.0
 **OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`, `enhance-intent-routing-pipeline`, `smart-tool-discovery`

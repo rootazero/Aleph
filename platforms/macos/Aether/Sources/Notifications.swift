@@ -156,6 +156,14 @@ extension Notification.Name {
     /// Posted when the agent loop needs user input
     /// - UserInfo: ["requestId": String, "question": String, "options": [String], "core": AetherCore]
     static let userInputRequested = Notification.Name("AetherUserInputRequested")
+
+    // MARK: - Part Updates (Message Flow Rendering)
+
+    /// Posted when a session part is added, updated, or removed
+    /// - UserInfo: ["sessionId": String, "partId": String, "partType": String,
+    ///              "eventType": PartEventTypeFfi, "partJson": String,
+    ///              "delta": String?, "timestamp": Int64]
+    static let partUpdated = Notification.Name("AetherPartUpdated")
 }
 
 // MARK: - UserInfo Keys

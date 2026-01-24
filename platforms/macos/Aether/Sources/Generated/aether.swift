@@ -7961,6 +7961,112 @@ public func FfiConverterTypePIIConfig_lower(_ value: PiiConfig) -> RustBuffer {
 }
 
 
+public struct PartUpdateEventFfi {
+    public var sessionId: String
+    public var partId: String
+    public var partType: String
+    public var eventType: PartEventTypeFfi
+    public var partJson: String
+    public var delta: String?
+    public var timestamp: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(sessionId: String, partId: String, partType: String, eventType: PartEventTypeFfi, partJson: String, delta: String?, timestamp: Int64) {
+        self.sessionId = sessionId
+        self.partId = partId
+        self.partType = partType
+        self.eventType = eventType
+        self.partJson = partJson
+        self.delta = delta
+        self.timestamp = timestamp
+    }
+}
+
+
+
+extension PartUpdateEventFfi: Equatable, Hashable {
+    public static func ==(lhs: PartUpdateEventFfi, rhs: PartUpdateEventFfi) -> Bool {
+        if lhs.sessionId != rhs.sessionId {
+            return false
+        }
+        if lhs.partId != rhs.partId {
+            return false
+        }
+        if lhs.partType != rhs.partType {
+            return false
+        }
+        if lhs.eventType != rhs.eventType {
+            return false
+        }
+        if lhs.partJson != rhs.partJson {
+            return false
+        }
+        if lhs.delta != rhs.delta {
+            return false
+        }
+        if lhs.timestamp != rhs.timestamp {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(sessionId)
+        hasher.combine(partId)
+        hasher.combine(partType)
+        hasher.combine(eventType)
+        hasher.combine(partJson)
+        hasher.combine(delta)
+        hasher.combine(timestamp)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePartUpdateEventFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PartUpdateEventFfi {
+        return
+            try PartUpdateEventFfi(
+                sessionId: FfiConverterString.read(from: &buf), 
+                partId: FfiConverterString.read(from: &buf), 
+                partType: FfiConverterString.read(from: &buf), 
+                eventType: FfiConverterTypePartEventTypeFFI.read(from: &buf), 
+                partJson: FfiConverterString.read(from: &buf), 
+                delta: FfiConverterOptionString.read(from: &buf), 
+                timestamp: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PartUpdateEventFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.sessionId, into: &buf)
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterString.write(value.partType, into: &buf)
+        FfiConverterTypePartEventTypeFFI.write(value.eventType, into: &buf)
+        FfiConverterString.write(value.partJson, into: &buf)
+        FfiConverterOptionString.write(value.delta, into: &buf)
+        FfiConverterInt64.write(value.timestamp, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePartUpdateEventFFI_lift(_ buf: RustBuffer) throws -> PartUpdateEventFfi {
+    return try FfiConverterTypePartUpdateEventFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePartUpdateEventFFI_lower(_ value: PartUpdateEventFfi) -> RustBuffer {
+    return FfiConverterTypePartUpdateEventFFI.lower(value)
+}
+
+
 public struct PendingConfirmationInfo {
     public var id: String
     public var toolId: String
@@ -13770,6 +13876,77 @@ extension ParameterSourceFfi: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum PartEventTypeFfi {
+    
+    case added
+    case updated
+    case removed
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePartEventTypeFFI: FfiConverterRustBuffer {
+    typealias SwiftType = PartEventTypeFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PartEventTypeFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .added
+        
+        case 2: return .updated
+        
+        case 3: return .removed
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: PartEventTypeFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .added:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .updated:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .removed:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePartEventTypeFFI_lift(_ buf: RustBuffer) throws -> PartEventTypeFfi {
+    return try FfiConverterTypePartEventTypeFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePartEventTypeFFI_lower(_ value: PartEventTypeFfi) -> RustBuffer {
+    return FfiConverterTypePartEventTypeFFI.lower(value)
+}
+
+
+
+extension PartEventTypeFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum ProcessingState {
     
     case idle
@@ -14483,6 +14660,8 @@ public protocol AetherEventHandler : AnyObject {
     
     func onUserInputRequest(requestId: String, question: String, options: [String]) 
     
+    func onPartUpdate(event: PartUpdateEventFfi) 
+    
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -14498,7 +14677,7 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
+    static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
         onThinking: { (
             uniffiHandle: UInt64,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -15055,6 +15234,30 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 writeReturn: writeReturn
             )
         },
+        onPartUpdate: { (
+            uniffiHandle: UInt64,
+            event: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onPartUpdate(
+                     event: try FfiConverterTypePartUpdateEventFFI.lift(event)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             let result = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.remove(handle: uniffiHandle)
             if result == nil {
@@ -15073,7 +15276,7 @@ private func uniffiCallbackInitAetherEventHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
-    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
+    fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
 }
 
 #if swift(>=5.8)
@@ -15129,7 +15332,7 @@ fileprivate struct UniffiCallbackInterfaceAgentProgressHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAgentProgressHandler = UniffiVTableCallbackInterfaceAgentProgressHandler(
+    static var vtable: UniffiVTableCallbackInterfaceAgentProgressHandler = UniffiVTableCallbackInterfaceAgentProgressHandler(
         onProgressEvent: { (
             uniffiHandle: UInt64,
             event: RustBuffer,
@@ -15172,7 +15375,7 @@ private func uniffiCallbackInitAgentProgressHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAgentProgressHandler {
-    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AgentProgressHandler>()
+    fileprivate static var handleMap = UniffiHandleMap<AgentProgressHandler>()
 }
 
 #if swift(>=5.8)
@@ -15280,7 +15483,7 @@ fileprivate struct UniffiCallbackInterfaceInitProgressHandlerFFI {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
+    static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
         onPhaseStarted: { (
             uniffiHandle: UInt64,
             phase: RustBuffer,
@@ -15435,7 +15638,7 @@ private func uniffiCallbackInitInitProgressHandlerFFI() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceInitProgressHandlerFfi {
-    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
+    fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
 }
 
 #if swift(>=5.8)
@@ -17100,7 +17303,7 @@ private enum InitializationResult {
 }
 // Use a global variable to perform the versioning checks. Swift ensures that
 // the code inside is only computed once.
-nonisolated(unsafe) private var initializationResult: InitializationResult = {
+private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
     // Get the scaffolding contract version by calling the into the dylib
@@ -17580,6 +17783,9 @@ nonisolated(unsafe) private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_user_input_request() != 9067) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_part_update() != 49834) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_agentprogresshandler_on_progress_event() != 52150) {

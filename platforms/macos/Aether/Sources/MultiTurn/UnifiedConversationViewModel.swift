@@ -62,6 +62,14 @@ final class UnifiedConversationViewModel {
     /// Whether status bar is showing a loading/thinking state
     var statusIsLoading: Bool = false
 
+    // MARK: - Message Flow Parts (Claude Code-style rendering)
+
+    /// Active tool call parts (for real-time status display)
+    var activeToolCalls: [ToolCallPart] = []
+
+    /// Streaming response parts (for delta-based updates)
+    var streamingParts: [String: StreamingResponsePart] = [:]
+
     // MARK: - DAG Plan Confirmation (inline in conversation)
 
     /// Pending plan confirmation (shown inline in conversation area)
@@ -732,6 +740,7 @@ final class UnifiedConversationViewModel {
         displayState = .empty
         resetProgress()
         clearPendingPlanConfirmation()
+        clearActiveParts()
     }
 
     func clear() {
@@ -903,6 +912,117 @@ final class UnifiedConversationViewModel {
     func clearPendingUserInputRequest() {
         pendingUserInputRequest = nil
         userInputCore = nil
+    }
+
+    // MARK: - Part Update Handling (Message Flow)
+
+    /// Handle Part update event from Rust core
+    /// Enables Claude Code-style message flow rendering
+    func handlePartUpdate(event: PartUpdateEventFfi) {
+        let partType = event.partType
+        let eventType = event.eventType
+
+        switch partType {
+        case "tool_call":
+            handleToolCallPartUpdate(event: event)
+
+        case "ai_response", "reasoning":
+            handleStreamingPartUpdate(event: event)
+
+        default:
+            print("[UnifiedViewModel] Unknown part type: \(partType)")
+        }
+    }
+
+    /// Handle tool call part updates
+    private func handleToolCallPartUpdate(event: PartUpdateEventFfi) {
+        switch event.eventType {
+        case .added:
+            // Parse and add new tool call
+            if let data = event.partJson.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let part = ToolCallPart.fromJSON(json) {
+                activeToolCalls.append(part)
+                print("[UnifiedViewModel] Tool call added: \(part.toolName) (status: \(part.status))")
+
+                // Update status bar
+                updateStatus("Running: \(part.displayDescription)", isLoading: true)
+            }
+
+        case .updated:
+            // Update existing tool call
+            if let data = event.partJson.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let updatedPart = ToolCallPart.fromJSON(json),
+               let index = activeToolCalls.firstIndex(where: { $0.id == updatedPart.id }) {
+                activeToolCalls[index] = updatedPart
+                print("[UnifiedViewModel] Tool call updated: \(updatedPart.toolName) (status: \(updatedPart.status))")
+
+                // Update status bar based on status
+                switch updatedPart.status {
+                case .completed:
+                    if let duration = updatedPart.durationMs {
+                        updateStatus("\(updatedPart.toolName) completed (\(duration)ms)", isLoading: false)
+                    } else {
+                        updateStatus("\(updatedPart.toolName) completed", isLoading: false)
+                    }
+                case .failed:
+                    updateStatus("\(updatedPart.toolName) failed", isLoading: false)
+                default:
+                    break
+                }
+            }
+
+        case .removed:
+            // Remove tool call
+            activeToolCalls.removeAll { $0.id == event.partId }
+            print("[UnifiedViewModel] Tool call removed: \(event.partId)")
+        }
+    }
+
+    /// Handle streaming response part updates
+    private func handleStreamingPartUpdate(event: PartUpdateEventFfi) {
+        let partId = event.partId
+
+        switch event.eventType {
+        case .added:
+            // Create new streaming part
+            let part = StreamingResponsePart(
+                id: partId,
+                content: "",
+                isComplete: false,
+                startedAt: event.timestamp,
+                completedAt: nil
+            )
+            streamingParts[partId] = part
+            print("[UnifiedViewModel] Streaming part added: \(partId)")
+
+        case .updated:
+            // Handle delta update
+            if let delta = event.delta, !delta.isEmpty {
+                if var part = streamingParts[partId] {
+                    part.appendDelta(delta)
+                    streamingParts[partId] = part
+
+                    // Update streaming text for display
+                    updateStreamingText(part.content)
+                }
+            }
+
+        case .removed:
+            // Mark as complete and remove
+            if var part = streamingParts[partId] {
+                part.complete()
+                streamingParts[partId] = nil
+                print("[UnifiedViewModel] Streaming part completed: \(partId)")
+            }
+        }
+    }
+
+    /// Clear all active parts (called on reset)
+    func clearActiveParts() {
+        activeToolCalls.removeAll()
+        streamingParts.removeAll()
     }
 }
 

@@ -25,7 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Aether** is a system-level AI middleware for macOS (native) and cross-platform (Tauri). It acts as an invisible "ether" connecting user intent with AI models through a frictionless interface.
 
-**Current Status**: Phase 8 Completed (Runtime Manager) | Phase 9 Planned (Production Hardening)
+**Current Status**: Phase 9 In Progress (Agent Loop Hardening - Doom Loop, Retry, Tool Repair, Skills Discovery)
 
 ### Core Philosophy: "Ghost" Aesthetic
 
@@ -187,13 +187,13 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 
 | Component | Description |
 |-----------|-------------|
-| **agent_loop** | Core observe-think-act-feedback cycle with guards & state management |
+| **agent_loop** | Core observe-think-act-feedback cycle with guards, state management, doom loop detection & retry mechanism |
 | **Agentic Loop** | 8 components: IntentAnalyzer, TaskPlanner, ToolExecutor, LoopController, SessionRecorder, SessionCompactor, SubAgentHandler, CallbackBridge |
 | **intent** | Three-layer intent detection: L1 Regex → L2 Keywords → L3 AI |
 | **dispatcher** | Multi-layer routing hub with 16 sub-modules: planner/, scheduler/, executor/, model_router/, monitor/, context/, analyzer/, risk/, callback/, agent_types/, registry, confirmation, async_confirmation, integration, types, engine |
 | **thinker** | LLM decision-making layer with model routing, prompt building, tool filtering |
 | **three_layer** | Control architecture: Orchestrator (FSM) / Skill (DAG) / Tools (Safety) |
-| **AetherTool** | Self-implemented tool system (AetherTool trait + AetherToolServer) |
+| **AetherTool** | Self-implemented tool system (AetherTool trait + AetherToolServer) with tool repair |
 | **AiProvider** | Self-implemented AI providers (OpenAI, Anthropic, Gemini, Ollama, etc.) |
 | **Dual-Layer Memory** | Raw history + AI-extracted facts |
 | **Cowork** | DAG task orchestration with model routing |
@@ -203,9 +203,11 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **plugins** | Claude Code compatible plugin system |
 | **init_unified** | Unified initialization coordinator |
 | **Smart Tool Discovery** | Intelligent tool filtering by content analysis (ffi/tool_discovery) |
-| **Skill Reader Tools** | Progressive Disclosure for skills: read_skill, list_skills (rig_tools/skill_reader) |
+| **Skill Reader Tools** | Progressive Disclosure for skills with multi-location discovery (rig_tools/skill_reader) |
+| **tool_output** | Output truncation (2000 lines/50KB) with file storage and 7-day cleanup |
+| **InvalidTool** | Graceful unknown tool handling with suggestions (rig_tools/invalid) |
 
-See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md)
+See individual docs: [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md), [AGENT_LOOP](./docs/AGENT_LOOP.md)
 
 ---
 
@@ -225,7 +227,7 @@ See [docs/DESIGN_CONSTRAINTS.md](./docs/DESIGN_CONSTRAINTS.md) for full constrai
 
 | Category | Documents |
 |----------|-----------|
-| **Architecture** | [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md) |
+| **Architecture** | [ARCHITECTURE](./docs/ARCHITECTURE.md), [DISPATCHER](./docs/DISPATCHER.md), [AGENT_LOOP](./docs/AGENT_LOOP.md) |
 | **Configuration** | [CONFIGURATION](./docs/CONFIGURATION.md), [PERMISSIONS](./docs/PERMISSIONS.md) |
 | **Development** | [BUILD_COMMANDS](./docs/BUILD_COMMANDS.md), [DIRECTORY_STRUCTURE](./docs/DIRECTORY_STRUCTURE.md) |
 | **Platform** | [PLATFORM_NOTES](./docs/PLATFORM_NOTES.md), [MACOS26_WINDOW_DESIGN](./docs/MACOS26_WINDOW_DESIGN.md) |

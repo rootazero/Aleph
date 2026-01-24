@@ -249,6 +249,54 @@ try core.refreshTools()
 
 ---
 
+## Tool Call Repair
+
+When LLMs call tools with incorrect names, the system automatically attempts to repair the call:
+
+### Repair Strategies
+
+| Strategy | Example | Priority |
+|----------|---------|----------|
+| **Exact Match** | `web_search` → `web_search` | 1 |
+| **Case-Insensitive** | `WebSearch` → `web_search` | 2 |
+| **Snake Case Conversion** | `webSearch` → `web_search` | 3 |
+| **Invalid Fallback** | `unknown` → `invalid` tool | 4 |
+
+### Repair Flow
+
+```
+Tool Call: "WebSearch"
+     │
+     ├─► Exact match? ─── No
+     │
+     ├─► Case-insensitive? ─── Found: "web_search"
+     │        │
+     │        └─► Execute with repair info logged
+     │
+     └─► (If still not found)
+              │
+              └─► Route to InvalidTool
+                       │
+                       └─► Returns: "Tool 'WebSearch' not found.
+                                    Available tools: search, web_fetch, ..."
+```
+
+### InvalidTool Response
+
+When no match is found, the `invalid` tool provides helpful feedback:
+
+```json
+{
+  "success": false,
+  "message": "Tool 'unknown_tool' not found. Error: No matching tool in registry",
+  "suggestion": "Available tools: search, web_fetch, youtube, file_ops, ... (and 10 more)"
+}
+```
+
+This allows the LLM to self-correct on the next iteration.
+
+---
+
 ## Code Locations
 
 | Component | Location |
@@ -268,13 +316,15 @@ try core.refreshTools()
 | **Intent Detection** | `intent/detection/` (classifier.rs, ai_detector.rs) |
 | **Intent Routing** | `intent/decision/router.rs` |
 | Rollback Support | `intent/support/rollback.rs` |
-| **Agent Loop** | `agent_loop/` (decision.rs, state.rs, guards.rs) |
+| **Agent Loop** | `agent_loop/` (decision.rs, state.rs, guards.rs, callback.rs, config.rs) |
 | **Executor** | `executor/` (single_step.rs, builtin_registry.rs) |
-| **Rig Tools** | `rig_tools/` (search.rs, web_fetch.rs, file_ops.rs, youtube.rs) |
+| **Rig Tools** | `rig_tools/` (search.rs, web_fetch.rs, file_ops.rs, youtube.rs, invalid.rs, skill_reader.rs) |
+| **Tool Output** | `tool_output/` (truncation.rs, cleanup.rs) |
+| **Tool Server** | `tools/server.rs` (call_with_repair, try_repair_tool_name) |
 | Swift event handler | `platforms/macos/Aether/Sources/EventHandler.swift` |
 | Swift notifications | `platforms/macos/Aether/Sources/Notifications.swift` |
 | Command completion | `platforms/macos/Aether/Sources/Utils/CommandCompletionManager.swift` |
 
 ---
 
-**Last Updated**: 2026-01-21
+**Last Updated**: 2026-01-24

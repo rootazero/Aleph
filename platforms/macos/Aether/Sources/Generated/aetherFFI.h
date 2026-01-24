@@ -405,6 +405,13 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod21)(uint64_t, Rust
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD22
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD22
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod22)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AGENT_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AGENT_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceAgentProgressHandlerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
@@ -472,6 +479,7 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod19 _Nonnull onSubagentCompleted;
     UniffiCallbackInterfaceAetherEventHandlerMethod20 _Nonnull onPlanConfirmationRequired;
     UniffiCallbackInterfaceAetherEventHandlerMethod21 _Nonnull onUserInputRequest;
+    UniffiCallbackInterfaceAetherEventHandlerMethod22 _Nonnull onPartUpdate;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -2430,6 +2438,12 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_plan_confirmatio
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_USER_INPUT_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_USER_INPUT_REQUEST
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_user_input_request(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PART_UPDATE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PART_UPDATE
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_part_update(void
     
 );
 #endif

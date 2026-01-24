@@ -986,6 +986,44 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         activeToolCalls.removeAll()
     }
 
+    // MARK: - Part Update Callback (Message Flow Rendering)
+
+    /// Called when a session part is added, updated, or removed
+    ///
+    /// This callback enables real-time message flow rendering:
+    /// - Tool calls with status transitions (Running -> Completed/Failed)
+    /// - Streaming AI responses via delta field
+    /// - Sub-agent progress display
+    ///
+    /// - Parameter event: Part update event from Rust core
+    func onPartUpdate(event: PartUpdateEventFFI) {
+        print("[EventHandler] Part update: partId=\(event.partId), type=\(event.partType), event=\(event.eventType)")
+
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+
+            // Post notification for UI components
+            NotificationCenter.default.post(
+                name: .partUpdated,
+                object: nil,
+                userInfo: [
+                    "sessionId": event.sessionId,
+                    "partId": event.partId,
+                    "partType": event.partType,
+                    "eventType": event.eventType,
+                    "partJson": event.partJson,
+                    "delta": event.delta as Any,
+                    "timestamp": event.timestamp
+                ]
+            )
+
+            // Forward to MultiTurnCoordinator in multi-turn mode
+            if self.isInMultiTurnMode {
+                MultiTurnCoordinator.shared.handlePartUpdate(event: event)
+            }
+        }
+    }
+
     // MARK: - Toast Display
 
     /// Timer for auto-dismissing toasts

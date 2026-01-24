@@ -589,4 +589,24 @@ final class MultiTurnCoordinator {
         pendingUserInput = nil
         pendingIsFirstMessage = false
     }
+
+    // MARK: - Part Update Handling (Message Flow)
+
+    /// Handle Part update event from Rust core
+    /// This enables Claude Code-style message flow rendering with real-time updates
+    func handlePartUpdate(event: PartUpdateEventFfi) {
+        guard pendingTopic != nil else {
+            print("[MultiTurnCoordinator] handlePartUpdate ignored - no pending topic")
+            return
+        }
+
+        print("[MultiTurnCoordinator] Part update: type=\(event.partType), event=\(event.eventType)")
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            // Forward to ViewModel for state management
+            self.unifiedWindow.viewModel.handlePartUpdate(event: event)
+        }
+    }
 }
