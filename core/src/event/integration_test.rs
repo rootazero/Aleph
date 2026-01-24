@@ -106,6 +106,7 @@ mod tests {
                         iteration: count as u32,
                         total_tokens: 0,
                         last_tool: Some("search".to_string()),
+                        model: "gpt-4-turbo".to_string(),
                     }),
                     AetherEvent::LoopStop(StopReason::Completed),
                 ])

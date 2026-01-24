@@ -897,6 +897,7 @@ mod tests {
             iteration: 1,
             total_tokens: 100,
             last_tool: None,
+            model: "gpt-4-turbo".to_string(),
         });
         assert!(SessionRecorder::event_to_part(&event).is_none());
     }
@@ -986,6 +987,7 @@ mod tests {
             iteration: 1,
             total_tokens: 100,
             last_tool: None,
+            model: "gpt-4-turbo".to_string(),
         });
 
         recorder.handle(&event, &ctx).await.unwrap();

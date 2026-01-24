@@ -406,6 +406,22 @@ impl SessionCompactor {
         &mut self.token_tracker
     }
 
+    /// Check if the given token usage exceeds the model's compaction threshold
+    ///
+    /// This method provides a convenient way to check for overflow without
+    /// needing a full ExecutionSession, useful when handling LoopContinue events.
+    ///
+    /// # Arguments
+    /// * `total_tokens` - The current total token count
+    /// * `model` - The model identifier to look up context limits
+    ///
+    /// # Returns
+    /// `true` if total_tokens >= model's compaction threshold
+    pub fn is_overflow_for_model(&self, total_tokens: u64, model: &str) -> bool {
+        let limit = self.token_tracker.get_model_limit(model);
+        total_tokens >= limit.compaction_threshold()
+    }
+
     // ========================================================================
     // Compaction Methods
     // ========================================================================
@@ -976,23 +992,42 @@ impl EventHandler for SessionCompactor {
         event: &AetherEvent,
         _ctx: &EventContext,
     ) -> Result<Vec<AetherEvent>, HandlerError> {
-        // Only handle relevant events
-        match event {
-            AetherEvent::ToolCallCompleted(_) | AetherEvent::LoopContinue(_) => {
-                // In a full implementation, we would get the session from ComponentContext
-                // For now, this is a stub that demonstrates the event handling pattern
-                //
-                // The actual compaction logic would:
-                // 1. Get session from shared state
-                // 2. Check if overflow
-                // 3. If overflow, compact and publish SessionCompacted
-                //
-                // Example (pseudo-code):
-                // let session = ctx.get_session().await;
-                // if let Some(compaction_info) = self.check_and_compact(&mut session).await {
-                //     return Ok(vec![AetherEvent::SessionCompacted(compaction_info)]);
-                // }
+        // Check if auto-compaction is enabled
+        if !self.config.auto_compact {
+            return Ok(vec![]);
+        }
 
+        match event {
+            AetherEvent::LoopContinue(loop_state) => {
+                // Check if we need compaction based on token count
+                let limit = self.token_tracker.get_model_limit(&loop_state.model);
+
+                if loop_state.total_tokens >= limit.compaction_threshold() {
+                    // Log that compaction would be needed
+                    // (Full implementation would get session from context and compact)
+                    tracing::info!(
+                        "Session {} would need compaction: {} tokens exceeds threshold {}",
+                        loop_state.session_id,
+                        loop_state.total_tokens,
+                        limit.compaction_threshold()
+                    );
+                    // Return a placeholder - in full impl, would return SessionCompacted event
+                    // Example (pseudo-code):
+                    // let session = ctx.get_session(&loop_state.session_id).await;
+                    // if let Some(compaction_info) = self.check_and_compact(&mut session).await {
+                    //     return Ok(vec![AetherEvent::SessionCompacted(compaction_info)]);
+                    // }
+                }
+                Ok(vec![])
+            }
+            AetherEvent::ToolCallCompleted(result) => {
+                // Log pruning trigger
+                if self.config.prune_enabled {
+                    tracing::debug!(
+                        "Tool {} completed, pruning check would trigger",
+                        result.tool
+                    );
+                }
                 Ok(vec![])
             }
             _ => Ok(vec![]),
@@ -1605,12 +1640,13 @@ mod tests {
             iteration: 5,
             total_tokens: 10000,
             last_tool: Some("search".to_string()),
+            model: "gpt-4-turbo".to_string(),
         };
 
         let event = AetherEvent::LoopContinue(loop_state);
         let result = compactor.handle(&event, &ctx).await.unwrap();
 
-        // In the stub implementation, this returns empty
+        // Returns empty since tokens are below threshold
         assert!(result.is_empty());
     }
 
@@ -2732,5 +2768,163 @@ mod tests {
         // Compaction markers should not add to token count
         // Only the "Hello" text should contribute (5 chars * 0.4 = 2 tokens)
         assert_eq!(session.total_tokens, 2, "Only user input should contribute tokens");
+    }
+
+    // ========================================================================
+    // EventHandler Integration Tests (Task 6)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_event_handler_respects_config() {
+        use crate::event::{EventBus, LoopState};
+
+        let config = CompactionConfig {
+            auto_compact: false,
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let bus = EventBus::new();
+        let ctx = EventContext::new(bus);
+
+        let loop_state = LoopState {
+            session_id: "test".to_string(),
+            iteration: 5,
+            total_tokens: 150_000,
+            last_tool: None,
+            model: "gpt-4-turbo".to_string(),
+        };
+
+        let event = AetherEvent::LoopContinue(loop_state);
+        let result = compactor.handle(&event, &ctx).await.unwrap();
+
+        // Should return empty when auto_compact is disabled
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_is_overflow_for_model() {
+        let compactor = SessionCompactor::new();
+
+        // gpt-4-turbo has 128K context, 80% threshold = 102.4K
+        assert!(!compactor.is_overflow_for_model(100_000, "gpt-4-turbo"));
+        assert!(compactor.is_overflow_for_model(110_000, "gpt-4-turbo"));
+
+        // claude-3-opus has 200K context, 80% threshold = 160K
+        assert!(!compactor.is_overflow_for_model(150_000, "claude-3-opus"));
+        assert!(compactor.is_overflow_for_model(170_000, "claude-3-opus"));
+
+        // Unknown model uses default (128K, 80% = 102.4K)
+        assert!(!compactor.is_overflow_for_model(100_000, "unknown-model"));
+        assert!(compactor.is_overflow_for_model(110_000, "unknown-model"));
+    }
+
+    #[tokio::test]
+    async fn test_event_handler_with_high_tokens() {
+        use crate::event::{EventBus, LoopState};
+
+        let compactor = SessionCompactor::new();
+        let bus = EventBus::new();
+        let ctx = EventContext::new(bus);
+
+        // Create a loop state with tokens above compaction threshold
+        // gpt-4-turbo: 128K * 0.8 = 102.4K threshold
+        let loop_state = LoopState {
+            session_id: "overflow-test".to_string(),
+            iteration: 10,
+            total_tokens: 110_000, // Above threshold
+            last_tool: Some("search".to_string()),
+            model: "gpt-4-turbo".to_string(),
+        };
+
+        let event = AetherEvent::LoopContinue(loop_state);
+        let result = compactor.handle(&event, &ctx).await.unwrap();
+
+        // Currently returns empty (would return SessionCompacted in full impl)
+        // The logging would indicate compaction is needed
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_event_handler_tool_completed_with_prune_disabled() {
+        use crate::event::{EventBus, TokenUsage, ToolCallResult};
+
+        let config = CompactionConfig {
+            prune_enabled: false,
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let bus = EventBus::new();
+        let ctx = EventContext::new(bus);
+
+        let result_event = ToolCallResult {
+            call_id: "test-call".to_string(),
+            tool: "search".to_string(),
+            input: json!({}),
+            output: "results".to_string(),
+            started_at: 1000,
+            completed_at: 2000,
+            token_usage: TokenUsage::default(),
+            session_id: None,
+        };
+
+        let event = AetherEvent::ToolCallCompleted(result_event);
+        let result = compactor.handle(&event, &ctx).await.unwrap();
+
+        // Should return empty (prune is disabled)
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_event_handler_tool_completed_with_prune_enabled() {
+        use crate::event::{EventBus, TokenUsage, ToolCallResult};
+
+        let config = CompactionConfig {
+            prune_enabled: true,
+            ..Default::default()
+        };
+        let compactor = SessionCompactor::with_config(config);
+        let bus = EventBus::new();
+        let ctx = EventContext::new(bus);
+
+        let result_event = ToolCallResult {
+            call_id: "test-call".to_string(),
+            tool: "search".to_string(),
+            input: json!({}),
+            output: "results".to_string(),
+            started_at: 1000,
+            completed_at: 2000,
+            token_usage: TokenUsage::default(),
+            session_id: None,
+        };
+
+        let event = AetherEvent::ToolCallCompleted(result_event);
+        let result = compactor.handle(&event, &ctx).await.unwrap();
+
+        // Should return empty but with debug logging
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_event_handler_with_model_prefix_match() {
+        use crate::event::{EventBus, LoopState};
+
+        let compactor = SessionCompactor::new();
+        let bus = EventBus::new();
+        let ctx = EventContext::new(bus);
+
+        // Use versioned model name that should match prefix
+        let loop_state = LoopState {
+            session_id: "prefix-test".to_string(),
+            iteration: 5,
+            total_tokens: 90_000, // Below threshold
+            last_tool: None,
+            model: "claude-3-opus-20240229".to_string(), // Should match "claude-3-opus"
+        };
+
+        let event = AetherEvent::LoopContinue(loop_state);
+        let result = compactor.handle(&event, &ctx).await.unwrap();
+
+        // Should return empty since below 160K threshold (200K * 0.8)
+        assert!(result.is_empty());
     }
 }

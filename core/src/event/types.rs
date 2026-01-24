@@ -342,6 +342,9 @@ pub struct LoopState {
     pub iteration: u32,
     pub total_tokens: u64,
     pub last_tool: Option<String>,
+    /// Model identifier for context limit lookup
+    #[serde(default)]
+    pub model: String,
 }
 
 /// Reason for stopping the loop
@@ -555,5 +558,41 @@ mod tests {
         assert_eq!(event.event_type(), EventType::PartRemoved);
         assert_eq!(event.name(), "PartRemoved");
         assert_eq!(removed_data.event_type, PartEventType::Removed);
+    }
+
+    #[test]
+    fn test_loop_state_model_field() {
+        // Test with model field
+        let state = LoopState {
+            session_id: "test-session".to_string(),
+            iteration: 5,
+            total_tokens: 100_000,
+            last_tool: Some("search".to_string()),
+            model: "gpt-4-turbo".to_string(),
+        };
+
+        assert_eq!(state.model, "gpt-4-turbo");
+
+        // Test serialization with model
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("gpt-4-turbo"));
+
+        // Test deserialization with model
+        let parsed: LoopState = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.model, "gpt-4-turbo");
+    }
+
+    #[test]
+    fn test_loop_state_model_default() {
+        // Test deserialization without model field (backwards compatibility)
+        let json = r#"{
+            "session_id": "test",
+            "iteration": 1,
+            "total_tokens": 1000,
+            "last_tool": null
+        }"#;
+
+        let parsed: LoopState = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.model, ""); // Should default to empty string
     }
 }

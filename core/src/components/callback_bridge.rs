@@ -450,6 +450,7 @@ mod tests {
             iteration: 5,
             total_tokens: 1000,
             last_tool: Some("web_fetch".into()),
+            model: "gpt-4-turbo".into(),
         });
 
         bridge.handle(&event, &ctx).await.unwrap();

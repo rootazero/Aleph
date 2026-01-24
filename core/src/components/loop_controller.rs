@@ -367,6 +367,7 @@ impl EventHandler for LoopController {
                         iteration: session.iteration_count + 1,
                         total_tokens: session.total_tokens,
                         last_tool: Some(result.tool.clone()),
+                        model: session.model.clone(),
                     };
 
                     let tool_request = self.step_to_tool_call(&step);
