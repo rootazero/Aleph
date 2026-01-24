@@ -519,10 +519,13 @@ pub use crate::uniffi_core::{
     GenerationProviderInfoFFI,
     GenerationTypeFFI,
     MemoryItem,
-    ProcessOptions,
+    // Part update event types (message flow rendering)
+    PartEventTypeFFI,
+    PartUpdateEventFFI,
     // Plugin FFI types
     PluginInfoFFI,
     PluginSkillFFI,
+    ProcessOptions,
     // Runtime FFI types
     RuntimeInfo,
     RuntimeUpdateInfo,

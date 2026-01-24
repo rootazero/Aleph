@@ -73,6 +73,11 @@ pub enum EventType {
     // AI response
     AiResponseGenerated,
 
+    // Part updates (for UI message flow rendering)
+    PartAdded,
+    PartUpdated,
+    PartRemoved,
+
     // Wildcard for components that want all events
     All,
 }
@@ -115,6 +120,11 @@ pub enum AetherEvent {
 
     // AI response events
     AiResponseGenerated(AiResponse),
+
+    // Part update events (for UI message flow rendering)
+    PartAdded(crate::components::PartUpdateData),
+    PartUpdated(crate::components::PartUpdateData),
+    PartRemoved(crate::components::PartUpdateData),
 }
 
 impl AetherEvent {
@@ -140,6 +150,9 @@ impl AetherEvent {
             Self::UserQuestionAsked(_) => EventType::UserQuestionAsked,
             Self::UserResponseReceived(_) => EventType::UserResponseReceived,
             Self::AiResponseGenerated(_) => EventType::AiResponseGenerated,
+            Self::PartAdded(_) => EventType::PartAdded,
+            Self::PartUpdated(_) => EventType::PartUpdated,
+            Self::PartRemoved(_) => EventType::PartRemoved,
         }
     }
 
@@ -165,6 +178,9 @@ impl AetherEvent {
             Self::UserQuestionAsked(_) => "UserQuestionAsked",
             Self::UserResponseReceived(_) => "UserResponseReceived",
             Self::AiResponseGenerated(_) => "AiResponseGenerated",
+            Self::PartAdded(_) => "PartAdded",
+            Self::PartUpdated(_) => "PartUpdated",
+            Self::PartRemoved(_) => "PartRemoved",
         }
     }
 }
@@ -470,5 +486,45 @@ mod tests {
         let parsed: AetherEvent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.event_type(), EventType::ToolCallCompleted);
+    }
+
+    #[test]
+    fn test_part_event_types() {
+        use crate::components::{PartEventType, PartUpdateData, SessionPart, ToolCallPart, ToolCallStatus};
+
+        // Create a tool call part
+        let tool_call = SessionPart::ToolCall(ToolCallPart {
+            id: "call-1".to_string(),
+            tool_name: "search".to_string(),
+            input: serde_json::json!({"query": "test"}),
+            status: ToolCallStatus::Running,
+            output: None,
+            error: None,
+            started_at: 1000,
+            completed_at: None,
+        });
+
+        // Test PartAdded event
+        let added_data = PartUpdateData::added("session-1", &tool_call);
+        let event = AetherEvent::PartAdded(added_data.clone());
+        assert_eq!(event.event_type(), EventType::PartAdded);
+        assert_eq!(event.name(), "PartAdded");
+        assert_eq!(added_data.event_type, PartEventType::Added);
+        assert_eq!(added_data.part_type, "tool_call");
+        assert_eq!(added_data.session_id, "session-1");
+
+        // Test PartUpdated event with delta
+        let delta_data = PartUpdateData::text_delta("session-1", "response-1", "ai_response", "Hello, ");
+        let event = AetherEvent::PartUpdated(delta_data.clone());
+        assert_eq!(event.event_type(), EventType::PartUpdated);
+        assert_eq!(event.name(), "PartUpdated");
+        assert_eq!(delta_data.delta, Some("Hello, ".to_string()));
+
+        // Test PartRemoved event
+        let removed_data = PartUpdateData::removed("session-1", "call-1", "tool_call");
+        let event = AetherEvent::PartRemoved(removed_data.clone());
+        assert_eq!(event.event_type(), EventType::PartRemoved);
+        assert_eq!(event.name(), "PartRemoved");
+        assert_eq!(removed_data.event_type, PartEventType::Removed);
     }
 }

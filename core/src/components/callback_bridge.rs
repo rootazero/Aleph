@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::event::{AetherEvent, EventContext, EventHandler, EventType, HandlerError, StopReason};
-use crate::ffi::AetherEventHandler;
+use crate::ffi::{AetherEventHandler, PartUpdateEventFFI};
 
 /// CallbackBridge forwards events to the Swift layer
 pub struct CallbackBridge {
@@ -40,6 +40,10 @@ impl EventHandler for CallbackBridge {
             EventType::SubAgentStarted,
             EventType::SubAgentCompleted,
             EventType::AiResponseGenerated,
+            // Part update events for message flow rendering
+            EventType::PartAdded,
+            EventType::PartUpdated,
+            EventType::PartRemoved,
         ]
     }
 
@@ -116,6 +120,13 @@ impl EventHandler for CallbackBridge {
                 if response.is_final {
                     self.handler.on_complete(response.content.clone());
                 }
+            }
+            // Part update events for message flow rendering
+            AetherEvent::PartAdded(data)
+            | AetherEvent::PartUpdated(data)
+            | AetherEvent::PartRemoved(data) => {
+                let ffi_event = PartUpdateEventFFI::from(data);
+                self.handler.on_part_update(ffi_event);
             }
             _ => {}
         }
@@ -210,6 +221,7 @@ mod tests {
         }
         fn on_runtime_updates_available(&self, _: Vec<crate::ffi::RuntimeUpdateInfo>) {}
         fn on_plan_confirmation_required(&self, _: String, _: crate::dispatcher::DagTaskPlan) {}
+        fn on_part_update(&self, _: crate::ffi::PartUpdateEventFFI) {}
     }
 
     fn create_test_context() -> EventContext {
@@ -248,6 +260,10 @@ mod tests {
         assert!(subs.contains(&EventType::PlanCreated));
         assert!(subs.contains(&EventType::SubAgentStarted));
         assert!(subs.contains(&EventType::SubAgentCompleted));
+        // Part update events
+        assert!(subs.contains(&EventType::PartAdded));
+        assert!(subs.contains(&EventType::PartUpdated));
+        assert!(subs.contains(&EventType::PartRemoved));
     }
 
     #[tokio::test]

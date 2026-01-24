@@ -153,6 +153,127 @@ pub struct SummaryPart {
 }
 
 // =============================================================================
+// Part ID Trait and Update Types (for UI message flow)
+// =============================================================================
+
+/// Trait for getting unique part ID
+pub trait PartId {
+    /// Get the unique identifier for this part
+    fn part_id(&self) -> String;
+}
+
+impl PartId for SessionPart {
+    fn part_id(&self) -> String {
+        match self {
+            SessionPart::UserInput(p) => format!("user_input_{}", p.timestamp),
+            SessionPart::AiResponse(p) => format!("ai_response_{}", p.timestamp),
+            SessionPart::ToolCall(p) => p.id.clone(),
+            SessionPart::Reasoning(p) => format!("reasoning_{}", p.timestamp),
+            SessionPart::PlanCreated(p) => p.plan_id.clone(),
+            SessionPart::SubAgentCall(p) => format!("subagent_{}", p.agent_id),
+            SessionPart::Summary(p) => format!("summary_{}", p.compacted_at),
+        }
+    }
+}
+
+/// Part event type for UI updates
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PartEventType {
+    /// Part was added to the session
+    Added,
+    /// Part was updated (e.g., tool call status changed)
+    Updated,
+    /// Part was removed (e.g., compaction)
+    Removed,
+}
+
+impl std::fmt::Display for PartEventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PartEventType::Added => write!(f, "added"),
+            PartEventType::Updated => write!(f, "updated"),
+            PartEventType::Removed => write!(f, "removed"),
+        }
+    }
+}
+
+/// Part update event data for UI rendering
+///
+/// This structure contains all information needed for the UI to render
+/// a part update (add, update, or remove).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartUpdateData {
+    /// Session ID this part belongs to
+    pub session_id: String,
+    /// Unique part identifier
+    pub part_id: String,
+    /// Part type name (e.g., "tool_call", "ai_response")
+    pub part_type: String,
+    /// Event type (Added, Updated, Removed)
+    pub event_type: PartEventType,
+    /// Serialized part data as JSON
+    pub part_json: String,
+    /// Delta content for streaming updates (text chunks)
+    pub delta: Option<String>,
+    /// Timestamp when the event occurred
+    pub timestamp: i64,
+}
+
+impl PartUpdateData {
+    /// Create a new PartUpdateData for an added part
+    pub fn added(session_id: &str, part: &SessionPart) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            part_id: part.part_id(),
+            part_type: part.type_name().to_string(),
+            event_type: PartEventType::Added,
+            part_json: serde_json::to_string(part).unwrap_or_default(),
+            delta: None,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+
+    /// Create a new PartUpdateData for an updated part
+    pub fn updated(session_id: &str, part: &SessionPart, delta: Option<String>) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            part_id: part.part_id(),
+            part_type: part.type_name().to_string(),
+            event_type: PartEventType::Updated,
+            part_json: serde_json::to_string(part).unwrap_or_default(),
+            delta,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+
+    /// Create a new PartUpdateData for a removed part
+    pub fn removed(session_id: &str, part_id: &str, part_type: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            part_id: part_id.to_string(),
+            part_type: part_type.to_string(),
+            event_type: PartEventType::Removed,
+            part_json: String::new(),
+            delta: None,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+
+    /// Create update for streaming text delta
+    pub fn text_delta(session_id: &str, part_id: &str, part_type: &str, delta: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            part_id: part_id.to_string(),
+            part_type: part_type.to_string(),
+            event_type: PartEventType::Updated,
+            part_json: String::new(),
+            delta: Some(delta.to_string()),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+}
+
+// =============================================================================
 // Knowledge and Entity Types (for ExecutionContext)
 // =============================================================================
 
@@ -737,5 +858,89 @@ mod tests {
         assert!(full.contains("Deploy project"));
         assert!(full.contains("Deploy to server"));
         assert!(full.contains("Decision History"));
+    }
+
+    #[test]
+    fn test_part_id_trait() {
+        // Test ToolCallPart ID extraction
+        let tool_call = SessionPart::ToolCall(ToolCallPart {
+            id: "call-123".to_string(),
+            tool_name: "search".to_string(),
+            input: serde_json::json!({}),
+            status: ToolCallStatus::Running,
+            output: None,
+            error: None,
+            started_at: 1000,
+            completed_at: None,
+        });
+        assert_eq!(tool_call.part_id(), "call-123");
+        assert_eq!(tool_call.type_name(), "tool_call");
+
+        // Test PlanPart ID extraction
+        let plan = SessionPart::PlanCreated(PlanPart {
+            plan_id: "plan-456".to_string(),
+            steps: vec!["Step 1".to_string()],
+            timestamp: 2000,
+        });
+        assert_eq!(plan.part_id(), "plan-456");
+        assert_eq!(plan.type_name(), "plan_created");
+
+        // Test UserInputPart ID (uses timestamp)
+        let input = SessionPart::UserInput(UserInputPart {
+            text: "Hello".to_string(),
+            context: None,
+            timestamp: 3000,
+        });
+        assert_eq!(input.part_id(), "user_input_3000");
+        assert_eq!(input.type_name(), "user_input");
+    }
+
+    #[test]
+    fn test_part_update_data_creation() {
+        let tool_call = SessionPart::ToolCall(ToolCallPart {
+            id: "call-789".to_string(),
+            tool_name: "web_fetch".to_string(),
+            input: serde_json::json!({"url": "https://example.com"}),
+            status: ToolCallStatus::Completed,
+            output: Some("Page content".to_string()),
+            error: None,
+            started_at: 1000,
+            completed_at: Some(2000),
+        });
+
+        // Test added event
+        let added = PartUpdateData::added("session-1", &tool_call);
+        assert_eq!(added.session_id, "session-1");
+        assert_eq!(added.part_id, "call-789");
+        assert_eq!(added.part_type, "tool_call");
+        assert_eq!(added.event_type, PartEventType::Added);
+        assert!(added.delta.is_none());
+        assert!(!added.part_json.is_empty());
+
+        // Test updated event with delta
+        let updated = PartUpdateData::updated("session-1", &tool_call, Some("output chunk".to_string()));
+        assert_eq!(updated.event_type, PartEventType::Updated);
+        assert_eq!(updated.delta, Some("output chunk".to_string()));
+
+        // Test text delta event
+        let delta = PartUpdateData::text_delta("session-1", "resp-1", "ai_response", "Hello, ");
+        assert_eq!(delta.part_id, "resp-1");
+        assert_eq!(delta.part_type, "ai_response");
+        assert_eq!(delta.event_type, PartEventType::Updated);
+        assert_eq!(delta.delta, Some("Hello, ".to_string()));
+        assert!(delta.part_json.is_empty()); // text_delta doesn't include full part
+
+        // Test removed event
+        let removed = PartUpdateData::removed("session-1", "call-789", "tool_call");
+        assert_eq!(removed.part_id, "call-789");
+        assert_eq!(removed.event_type, PartEventType::Removed);
+        assert!(removed.part_json.is_empty());
+    }
+
+    #[test]
+    fn test_part_event_type_display() {
+        assert_eq!(format!("{}", PartEventType::Added), "added");
+        assert_eq!(format!("{}", PartEventType::Updated), "updated");
+        assert_eq!(format!("{}", PartEventType::Removed), "removed");
     }
 }

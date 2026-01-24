@@ -1024,6 +1024,14 @@ callback interface AetherEventHandler {
     // Swift should display the question (and optional choices) and call
     // AetherCore.respond_to_user_input() with the user's response.
     void on_user_input_request(string request_id, string question, sequence<string> options);
+
+    // Part Update callback (message flow rendering)
+    // Called when a session part is added, updated, or removed.
+    // Swift should use this to render real-time message flow updates:
+    // - Tool calls with status (Pending → Running → Completed/Failed)
+    // - Streaming AI responses (text chunks via delta field)
+    // - Sub-agent progress (tool uses, tokens)
+    void on_part_update(PartUpdateEventFFI event);
 };
 
 interface AetherCore {
@@ -1553,6 +1561,27 @@ dictionary MemoryItem {
     string assistant_response;
     i64 timestamp;
     string? app_context;
+};
+
+// ===== PART UPDATE EVENTS (message flow rendering) =====
+
+// Part event type for UI updates
+enum PartEventTypeFFI {
+  "Added",    // Part was added to the session
+  "Updated",  // Part was updated (e.g., tool call status changed, streaming text)
+  "Removed",  // Part was removed (e.g., compaction)
+};
+
+// Part update event for UI rendering
+// Contains all information needed to render a message flow update
+dictionary PartUpdateEventFFI {
+  string session_id;    // Session ID this part belongs to
+  string part_id;       // Unique part identifier
+  string part_type;     // Part type name (e.g., "tool_call", "ai_response")
+  PartEventTypeFFI event_type;  // Event type (Added, Updated, Removed)
+  string part_json;     // Serialized part data as JSON
+  string? delta;        // Delta content for streaming updates (text chunks)
+  i64 timestamp;        // Timestamp when the event occurred
 };
 
 // ===== AGENT EXECUTION MODE (agent-execution-mode) =====

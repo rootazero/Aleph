@@ -308,7 +308,11 @@ impl SessionRecorder {
             | AetherEvent::SubAgentStarted(_)
             | AetherEvent::SubAgentCompleted(_)
             | AetherEvent::UserQuestionAsked(_)
-            | AetherEvent::UserResponseReceived(_) => None,
+            | AetherEvent::UserResponseReceived(_)
+            // Part update events are meta-events, not session parts themselves
+            | AetherEvent::PartAdded(_)
+            | AetherEvent::PartUpdated(_)
+            | AetherEvent::PartRemoved(_) => None,
         }
     }
 

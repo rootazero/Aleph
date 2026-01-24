@@ -254,6 +254,26 @@ pub trait AetherEventHandler: Send + Sync {
         // UI implementations should override to show input dialog
         let _ = (request_id, question, options);
     }
+
+    // ========================================================================
+    // MESSAGE FLOW CALLBACKS (Part Update Events)
+    // ========================================================================
+
+    /// Called when a session part is added, updated, or removed
+    ///
+    /// This callback enables real-time message flow rendering in the UI:
+    /// - Tool calls with status transitions (Pending → Running → Completed/Failed)
+    /// - Streaming AI responses via delta field
+    /// - Sub-agent progress display
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - Part update event containing all rendering information
+    fn on_part_update(&self, event: PartUpdateEventFFI) {
+        // Default: no-op
+        // UI implementations should override to render message flow
+        let _ = event;
+    }
 }
 
 /// Tool information for UI display
@@ -265,6 +285,66 @@ pub struct ToolInfoFFI {
     pub description: String,
     /// Tool source (builtin, mcp, skill, etc.)
     pub source: String,
+}
+
+// =============================================================================
+// Part Update Event Types (for message flow rendering)
+// =============================================================================
+
+/// Part event type for FFI (matches PartEventTypeFFI in aether.udl)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartEventTypeFFI {
+    /// Part was added to the session
+    Added,
+    /// Part was updated (e.g., tool call status changed, streaming text)
+    Updated,
+    /// Part was removed (e.g., compaction)
+    Removed,
+}
+
+impl From<crate::components::PartEventType> for PartEventTypeFFI {
+    fn from(event_type: crate::components::PartEventType) -> Self {
+        match event_type {
+            crate::components::PartEventType::Added => Self::Added,
+            crate::components::PartEventType::Updated => Self::Updated,
+            crate::components::PartEventType::Removed => Self::Removed,
+        }
+    }
+}
+
+/// Part update event for FFI (matches PartUpdateEventFFI in aether.udl)
+///
+/// Contains all information needed for the UI to render message flow updates.
+#[derive(Debug, Clone)]
+pub struct PartUpdateEventFFI {
+    /// Session ID this part belongs to
+    pub session_id: String,
+    /// Unique part identifier
+    pub part_id: String,
+    /// Part type name (e.g., "tool_call", "ai_response")
+    pub part_type: String,
+    /// Event type (Added, Updated, Removed)
+    pub event_type: PartEventTypeFFI,
+    /// Serialized part data as JSON
+    pub part_json: String,
+    /// Delta content for streaming updates (text chunks)
+    pub delta: Option<String>,
+    /// Timestamp when the event occurred
+    pub timestamp: i64,
+}
+
+impl From<&crate::components::PartUpdateData> for PartUpdateEventFFI {
+    fn from(data: &crate::components::PartUpdateData) -> Self {
+        Self {
+            session_id: data.session_id.clone(),
+            part_id: data.part_id.clone(),
+            part_type: data.part_type.clone(),
+            event_type: data.event_type.into(),
+            part_json: data.part_json.clone(),
+            delta: data.delta.clone(),
+            timestamp: data.timestamp,
+        }
+    }
 }
 
 impl ToolInfoFFI {

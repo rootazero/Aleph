@@ -46,6 +46,9 @@ pub use crate::ffi::{
     GenerationTypeFFI,
     // Memory types
     MemoryItem,
+    // Part update event types (message flow rendering)
+    PartEventTypeFFI,
+    PartUpdateEventFFI,
     // Plugin types
     PluginInfoFFI,
     PluginSkillFFI,

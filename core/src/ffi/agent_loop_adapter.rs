@@ -21,7 +21,8 @@ use tracing::{debug, info, warn};
 use crate::agent_loop::{
     callback::LoopCallback, guards::GuardViolation, Action, ActionResult, LoopState, Thinking,
 };
-use crate::ffi::AetherEventHandler;
+use crate::components::{PartUpdateData, SessionPart, ToolCallPart, ToolCallStatus};
+use crate::ffi::{AetherEventHandler, PartUpdateEventFFI};
 
 /// Safely truncate a string at character boundaries (UTF-8 safe)
 ///
@@ -245,6 +246,12 @@ fn truncate_path(path: &str, max_chars: usize) -> String {
 /// - **Response**: Actual content (completion summary) - accumulates
 ///
 /// This ensures the UI shows current activity without cluttering with historical steps.
+///
+/// # Part Events
+///
+/// The adapter also publishes Part events for message flow rendering:
+/// - Tool calls are published as ToolCallPart (Added → Updated on completion)
+/// - AI responses stream as PartUpdated with delta content
 pub struct FfiLoopCallback {
     /// The underlying FFI event handler
     handler: Arc<dyn AetherEventHandler>,
@@ -258,6 +265,10 @@ pub struct FfiLoopCallback {
     /// Set to true when the caller will manually call on_complete with additional data
     /// (e.g., to append [GENERATED_FILES] block)
     skip_on_complete_on_finalize: bool,
+    /// Current session ID for Part events
+    session_id: RwLock<String>,
+    /// Active tool call parts (part_id -> ToolCallPart)
+    active_tool_calls: RwLock<std::collections::HashMap<String, ToolCallPart>>,
 }
 
 impl FfiLoopCallback {
@@ -269,6 +280,8 @@ impl FfiLoopCallback {
             status_buffer: RwLock::new(String::new()),
             streaming_started: RwLock::new(false),
             skip_on_complete_on_finalize: false,
+            session_id: RwLock::new(String::new()),
+            active_tool_calls: RwLock::new(std::collections::HashMap::new()),
         }
     }
 
@@ -285,7 +298,15 @@ impl FfiLoopCallback {
             status_buffer: RwLock::new(String::new()),
             streaming_started: RwLock::new(false),
             skip_on_complete_on_finalize: true,
+            session_id: RwLock::new(String::new()),
+            active_tool_calls: RwLock::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Publish a Part event to the FFI handler
+    async fn publish_part_event(&self, data: PartUpdateData) {
+        let ffi_event = PartUpdateEventFFI::from(&data);
+        self.handler.on_part_update(ffi_event);
     }
 
     /// Get the accumulated response
@@ -355,6 +376,13 @@ impl LoopCallback for FfiLoopCallback {
             request = %state.original_request,
             "AgentLoop started"
         );
+
+        // Store session ID for Part events
+        {
+            let mut session_id = self.session_id.write().await;
+            *session_id = state.session_id.clone();
+        }
+
         self.handler.on_thinking();
     }
 
@@ -388,6 +416,18 @@ impl LoopCallback for FfiLoopCallback {
             let formatted = format!("💭 {}", content);
             self.set_status(&formatted).await;
             debug!(content_len = content.len(), "Thinking stream chunk sent to UI");
+
+            // Publish streaming text delta as Part event
+            let session_id = self.session_id.read().await.clone();
+            if !session_id.is_empty() {
+                let data = PartUpdateData::text_delta(
+                    &session_id,
+                    "thinking_stream",
+                    "reasoning",
+                    content,
+                );
+                self.publish_part_event(data).await;
+            }
         }
     }
 
@@ -405,6 +445,31 @@ impl LoopCallback for FfiLoopCallback {
                 let message = format!("⚡ {}", description);
                 self.set_status(&message).await;
                 self.handler.on_tool_start(tool_name.clone());
+
+                // Create and publish ToolCallPart (Added event)
+                let part_id = uuid::Uuid::new_v4().to_string();
+                let tool_call_part = ToolCallPart {
+                    id: part_id.clone(),
+                    tool_name: tool_name.clone(),
+                    input: arguments.clone(),
+                    status: ToolCallStatus::Running,
+                    output: None,
+                    error: None,
+                    started_at: chrono::Utc::now().timestamp_millis(),
+                    completed_at: None,
+                };
+
+                // Store for later update
+                {
+                    let mut active = self.active_tool_calls.write().await;
+                    active.insert(tool_name.clone(), tool_call_part.clone());
+                }
+
+                // Publish PartAdded event
+                let session_id = self.session_id.read().await.clone();
+                let part = SessionPart::ToolCall(tool_call_part);
+                let data = PartUpdateData::added(&session_id, &part);
+                self.publish_part_event(data).await;
             }
             Action::Completion { summary } => {
                 // Append the completion summary to response (actual content, persists)
@@ -432,6 +497,40 @@ impl LoopCallback for FfiLoopCallback {
         if let Action::ToolCall { tool_name, arguments } = action {
             // Get the action verb for completion message
             let (_description, verb) = format_tool_description(tool_name, arguments);
+
+            // Get and update the active tool call part
+            let maybe_updated_part = {
+                let mut active = self.active_tool_calls.write().await;
+                if let Some(mut part) = active.remove(tool_name) {
+                    let now = chrono::Utc::now().timestamp_millis();
+                    part.completed_at = Some(now);
+
+                    match result {
+                        ActionResult::ToolSuccess { output, .. } => {
+                            part.status = ToolCallStatus::Completed;
+                            part.output = Some(output.to_string());
+                        }
+                        ActionResult::ToolError { error, .. } => {
+                            part.status = ToolCallStatus::Failed;
+                            part.error = Some(error.clone());
+                        }
+                        _ => {
+                            part.status = ToolCallStatus::Completed;
+                        }
+                    }
+                    Some(part)
+                } else {
+                    None
+                }
+            };
+
+            // Publish PartUpdated event
+            if let Some(updated_part) = maybe_updated_part {
+                let session_id = self.session_id.read().await.clone();
+                let part = SessionPart::ToolCall(updated_part);
+                let data = PartUpdateData::updated(&session_id, &part, None);
+                self.publish_part_event(data).await;
+            }
 
             match result {
                 ActionResult::ToolSuccess { output, duration_ms } => {
@@ -657,6 +756,10 @@ mod tests {
 
         fn on_user_input_request(&self, request_id: String, question: String, _options: Vec<String>) {
             self.events.lock().unwrap().push(format!("user_input_request:{}:{}", request_id, question));
+        }
+
+        fn on_part_update(&self, event: crate::ffi::PartUpdateEventFFI) {
+            self.events.lock().unwrap().push(format!("part_update:{}:{}", event.part_id, event.part_type));
         }
     }
 
