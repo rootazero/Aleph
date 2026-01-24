@@ -63,6 +63,7 @@ pub mod callback;
 pub mod config;
 pub mod decision;
 pub mod guards;
+pub mod session_sync;
 pub mod state;
 
 use std::sync::Arc;
@@ -76,6 +77,7 @@ pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent,
 pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig, ThinkRetryConfig};
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
 pub use guards::{GuardViolation, LoopGuard};
+pub use session_sync::SessionSync;
 pub use state::{LoopState, LoopStep, Observation, RequestContext, StepSummary, Thinking, ToolInfo};
 
 // Re-export CompactionTrigger for external integration
