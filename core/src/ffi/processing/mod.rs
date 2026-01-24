@@ -18,7 +18,6 @@ mod skill;
 mod types;
 
 // Re-export public types
-pub use memory::store_memory_after_response;
 pub use types::ProcessOptions;
 
 #[cfg(test)]

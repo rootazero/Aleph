@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use serde_json::json;
 use tracing::info;
 
 use crate::error::Result;

@@ -8,6 +8,7 @@ use serde_json::json;
 use tracing::{debug, info};
 
 /// Tool categories for intelligent tool filtering
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCategory {
     FileOps,   // file_ops - read/write/organize files
@@ -24,6 +25,7 @@ pub enum ToolCategory {
 ///
 /// Analyzes the content to determine which tools are likely needed,
 /// avoiding sending unnecessary tool definitions to the LLM.
+#[allow(dead_code)]
 pub fn infer_required_tools(skill_instructions: &str, user_request: &str) -> Vec<ToolCategory> {
     let combined = format!("{} {}", skill_instructions, user_request).to_lowercase();
     let mut categories = Vec::new();
@@ -405,6 +407,7 @@ pub fn get_builtin_tool_descriptions(
 /// Filter tool descriptions based on inferred categories
 ///
 /// Only includes tools that match the inferred categories, reducing token usage.
+#[allow(dead_code)]
 pub fn filter_tools_by_categories(
     all_tools: Vec<ToolDescription>,
     categories: &[ToolCategory],

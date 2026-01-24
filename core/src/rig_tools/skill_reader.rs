@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tracing::{debug, info};
 
 use super::error::ToolError;

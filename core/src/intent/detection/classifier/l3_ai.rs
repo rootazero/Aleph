@@ -26,6 +26,7 @@ pub fn convert_ai_result(result: &AiIntentResult, input: &str) -> Option<Executa
 }
 
 /// Convert AI intent string to TaskCategory using both formats
+#[allow(dead_code)]
 pub fn ai_intent_to_category(intent: &str) -> Option<TaskCategory> {
     // Try snake_case format first (AI result format)
     match intent {

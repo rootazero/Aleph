@@ -12,8 +12,7 @@ use crate::dispatcher::agent_types::{
 };
 use crate::dispatcher::executor::ExecutionContext;
 use crate::dispatcher::model_router::{
-    FallbackProvider, ModelMatcher, ModelProfile, ModelRouter, ModelRoutingRules,
-    RoutingError, TaskContextManager,
+    FallbackProvider, ModelMatcher, ModelProfile, ModelRouter, ModelRoutingRules, TaskContextManager,
 };
 use crate::dispatcher::monitor::TaskMonitor;
 use crate::dispatcher::scheduler::TaskScheduler;

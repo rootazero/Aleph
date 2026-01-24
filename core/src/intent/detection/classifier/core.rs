@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use super::l1_regex::{contains_exclusion_verb, extract_path, match_regex};
+use super::l1_regex::match_regex;
 use super::l2_keywords::{
-    create_keyword_index_from_policy, intent_type_to_category, match_keywords,
+    create_keyword_index_from_policy, match_keywords,
     match_keywords_enhanced,
 };
 use super::l3_ai::convert_ai_result;

@@ -12,10 +12,8 @@ mod model_router;
 mod retry;
 
 // Re-export all types for backward compatibility
-pub use backoff::*;
 pub use budget::*;
 pub use core::*;
-pub use model_router::*;
 pub use retry::*;
 
 // =============================================================================

@@ -8,7 +8,7 @@ use tracing::{debug, error, info, warn};
 
 use super::config::{AgentConfig, ExecutionState};
 use super::constants::{MAX_PARALLELISM, MAX_TASK_RETRIES, REQUIRE_CONFIRMATION};
-use crate::dispatcher::agent_types::{ExecutionSummary, Task, TaskGraph, TaskResult, TaskStatus};
+use crate::dispatcher::agent_types::{ExecutionSummary, TaskGraph, TaskStatus};
 use crate::dispatcher::executor::{ExecutionContext, ExecutorRegistry, NoopExecutor};
 use crate::dispatcher::model_router::{ModelMatcher, ModelProfile, ModelRouter};
 use crate::dispatcher::monitor::{ProgressMonitor, ProgressSubscriber, TaskMonitor};

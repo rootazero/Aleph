@@ -28,7 +28,6 @@ use state::ToolState;
 use types::ToolStorage;
 
 // Re-export helpers for tests
-pub use helpers::{extract_command_name, truncate_description};
 
 /// Unified Tool Registry
 ///

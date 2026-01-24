@@ -23,7 +23,6 @@ mod types;
 // Re-export all public types for backward compatibility
 pub use provider_info::{GenerationProviderConfigFFI, GenerationProviderInfoFFI};
 // These are used by operations.rs for parse_response_for_generation
-pub(crate) use response_parsing::{ParseResultFFI, ParsedGenerationRequestFFI};
 pub use types::{
     GenerationDataFFI, GenerationDataTypeFFI, GenerationMetadataFFI, GenerationOutputFFI,
     GenerationParamsFFI, GenerationProgressFFI, GenerationTypeFFI,

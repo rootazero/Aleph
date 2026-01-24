@@ -19,7 +19,6 @@ use printpdf::*;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tracing::{debug, info, warn};
 
 use super::error::ToolError;

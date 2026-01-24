@@ -34,7 +34,7 @@ mod unified;
 pub use category::ToolCategory;
 
 // Tool Definition and Structured Types
-pub use definition::{Capability, StructuredToolMeta, ToolDefinition, ToolDiff};
+pub use definition::{StructuredToolMeta, ToolDefinition, ToolDiff};
 
 // Tool Result
 pub use result::ToolResult;
@@ -52,7 +52,7 @@ pub use unified::UnifiedTool;
 pub use routing::RoutingLayer;
 
 // Tool Index System
-pub use index::{truncate_string, ToolIndex, ToolIndexCategory, ToolIndexEntry};
+pub use index::{ToolIndex, ToolIndexCategory, ToolIndexEntry};
 
 // FFI Types
 pub use ffi::{ToolSourceType, UnifiedToolInfo};

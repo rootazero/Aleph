@@ -5,9 +5,7 @@
 use super::context::format_context;
 use super::capability::format_capability_instructions;
 use super::tools::format_available_tools;
-use crate::intent::{AgentModePrompt, ExecutionIntent, ExecutionMode, TaskCategory};
 use crate::payload::{AgentContext, AgentPayload, ContextFormat, SkillMetadata};
-use crate::prompt::{PromptBuilder, PromptConfig, ToolInfo};
 
 /// Prompt assembler that converts AgentPayload to LLM message format
 ///

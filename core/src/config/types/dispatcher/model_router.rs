@@ -4,7 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::backoff::BackoffConfigToml;
 use super::budget::BudgetConfigToml;
 use super::retry::RetryConfigToml;
 
