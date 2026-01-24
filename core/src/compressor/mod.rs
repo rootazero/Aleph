@@ -35,6 +35,7 @@
 //! ```
 
 pub mod context_stats;
+pub mod smart_compactor;
 pub mod smart_strategy;
 pub mod strategy;
 pub mod tool_truncator;
@@ -43,6 +44,7 @@ pub mod turn_protector;
 use std::sync::Arc;
 
 pub use context_stats::{CompressionFocus, ContextStats, UsageBreakdown, WarningLevel};
+pub use smart_compactor::{CompactionResult, SmartCompactor};
 pub use smart_strategy::{CompactionAction, SmartCompactionStrategy};
 pub use strategy::{CompressionPrompt, KeyInfo, KeyInfoExtractor, RuleBasedStrategy};
 pub use tool_truncator::{ToolTruncator, TruncatedOutput};
