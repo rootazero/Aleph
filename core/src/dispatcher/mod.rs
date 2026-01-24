@@ -75,6 +75,7 @@ pub mod risk;
 
 // === Tool Filtering ===
 pub mod tool_filter;
+pub mod smart_filter;
 
 // === Re-exports: Tool Management ===
 pub use async_confirmation::{
@@ -137,6 +138,7 @@ pub use risk::{RiskEvaluator, RiskLevel};
 
 // === Re-exports: Tool Filtering ===
 pub use tool_filter::{FilterResult, ToolFilter, ToolFilterConfig};
+pub use smart_filter::SmartToolFilter;
 
 #[cfg(test)]
 mod tests {

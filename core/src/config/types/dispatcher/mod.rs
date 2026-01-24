@@ -23,6 +23,8 @@ pub use retry::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::backoff::BackoffConfigToml;
+    use super::model_router::ModelRouterConfigToml;
 
     #[test]
     fn test_model_router_config_default() {

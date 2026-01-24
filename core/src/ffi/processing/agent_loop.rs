@@ -8,7 +8,9 @@ use crate::agents::RigAgentConfig;
 use crate::compressor::NoOpCompressor;
 use crate::config::GenerationConfig;
 use crate::core::MediaAttachment;
-use crate::dispatcher::{ToolSource, UnifiedTool};
+use crate::dispatcher::{
+    SmartToolFilter, ToolFilterConfig, ToolIndex, ToolIndexCategory, ToolIndexEntry, ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool,
+};
 use crate::executor::{BuiltinToolConfig, BuiltinToolRegistry, SingleStepExecutor};
 use crate::ffi::prompt_helpers::{
     build_history_summary_from_conversations, extract_attachment_text,
@@ -19,13 +21,14 @@ use crate::ffi::tool_discovery::get_builtin_tool_descriptions;
 use crate::ffi::AetherEventHandler;
 use crate::ffi::FfiLoopCallback;
 use crate::generation::GenerationProviderRegistry;
-use crate::intent::ThinkingContext;
+use crate::intent::{TaskCategory, ThinkingContext};
 use crate::rig_tools::file_ops::{clear_written_files, take_written_files};
 use crate::runtimes::{RuntimeCapability, RuntimeRegistry};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
 use crate::tools::AetherToolServerHandle;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use tokio::sync::RwLock as TokioRwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -75,7 +78,7 @@ pub fn run_agent_loop(
 
     // Get available tools for the loop
     let tool_descriptions = get_builtin_tool_descriptions(generation_config);
-    let tools: Vec<UnifiedTool> = tool_descriptions
+    let all_tools: Vec<UnifiedTool> = tool_descriptions
         .iter()
         .map(|td| {
             let mut tool = UnifiedTool::new(
@@ -90,6 +93,45 @@ pub fn run_agent_loop(
             tool
         })
         .collect();
+
+    // === Smart Tool Discovery: Two-Stage Tool Filtering ===
+    // 1. Filter tools by intent category (core + relevant get full schema)
+    // 2. Enhance with content analysis from user request
+    // 3. Generate tool index for remaining tools (name + summary only)
+    let task_category = ctx.category_hint.unwrap_or(TaskCategory::General);
+    let smart_filter = SmartToolFilter::new(ToolFilterConfig::default());
+    let filter_result = smart_filter.filter(&all_tools, task_category, input, None);
+
+    // Log filtering results
+    info!(
+        task_category = ?task_category,
+        core_tools = filter_result.core_tools.len(),
+        filtered_tools = filter_result.filtered_tools.len(),
+        indexed_tools = filter_result.indexed_tools.len(),
+        "Smart tool discovery: filtered tools by intent category"
+    );
+
+    // Generate tool index for indexed tools (lightweight prompt injection)
+    let tool_index_prompt = if !filter_result.indexed_tools.is_empty() {
+        let mut index = ToolIndex::new();
+        for tool in &filter_result.indexed_tools {
+            let category = ToolIndexCategory::from(&tool.source);
+            // Truncate description to ~50 chars for compact index
+            let summary = if tool.description.len() > 50 {
+                format!("{}...", &tool.description[..47])
+            } else {
+                tool.description.clone()
+            };
+            let entry = ToolIndexEntry::new(&tool.name, category, summary);
+            index.add(entry);
+        }
+        Some(index.to_prompt())
+    } else {
+        None
+    };
+
+    // Get tools with full schema (core + filtered)
+    let tools = filter_result.full_schema_tools();
 
     // Create the AI provider
     let provider = match create_provider_from_config(config) {
@@ -141,23 +183,35 @@ pub fn run_agent_loop(
         }
     };
 
-    // Create thinker config with runtime capabilities and generation models
+    // Create thinker config with runtime capabilities, generation models, and tool index
     let mut thinker_config = ThinkerConfig::default();
     thinker_config.prompt.runtime_capabilities = runtime_capabilities;
     thinker_config.prompt.generation_models =
         format_generation_models_for_prompt(generation_config);
+    // Enable two-stage tool discovery with tool index
+    thinker_config.prompt.tool_index = tool_index_prompt;
+
+    // Create dispatcher tool registry for meta tools (smart tool discovery)
+    let dispatcher_registry = Arc::new(TokioRwLock::new(DispatcherToolRegistry::new()));
 
     // Create components
     let provider_registry = Arc::new(SingleProviderRegistry::new(provider.clone()));
     let thinker = Arc::new(Thinker::new(provider_registry, thinker_config));
 
-    // Create executor with builtin tool registry (with generation support)
+    // Create executor with builtin tool registry (with generation and dispatcher support)
     let tool_config = BuiltinToolConfig {
         generation_registry: Some(generation_registry.clone()),
+        dispatcher_registry: Some(Arc::clone(&dispatcher_registry)),
         ..Default::default()
     };
     let tool_registry = Arc::new(BuiltinToolRegistry::with_config(tool_config));
     let executor = Arc::new(SingleStepExecutor::new(tool_registry));
+
+    // Register builtin tools in dispatcher registry for meta tools
+    runtime.block_on(async {
+        dispatcher_registry.write().await.register_builtin_tools().await;
+    });
+    info!("Registered builtin tools in dispatcher registry for smart tool discovery");
 
     // Create compressor (rule-based for now)
     let compressor = Arc::new(NoOpCompressor);

@@ -34,7 +34,7 @@ mod provider_factory;
 mod runtime;
 mod session;
 mod skills;
-mod tool_discovery;
+pub mod tool_discovery;
 mod tools;
 mod typo_correction;
 mod user_input;
