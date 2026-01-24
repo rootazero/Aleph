@@ -36,6 +36,8 @@ mod provider_factory;
 mod runtime;
 mod session;
 mod skills;
+#[cfg(feature = "uniffi")]
+mod subscription;
 pub mod tool_discovery;
 mod tools;
 mod typo_correction;
@@ -73,6 +75,8 @@ pub use self::plugins::{PluginInfoFFI, PluginSkillFFI};
 pub use self::runtime::{RuntimeInfo, RuntimeUpdateInfo};
 pub use self::session::SessionSummary;
 pub use self::typo_correction::TypoCorrectionResult;
+#[cfg(feature = "uniffi")]
+pub use self::subscription::{subscribe_events, unsubscribe_events, EventSubscriptionHandler};
 
 /// Error type for FFI boundary
 ///
