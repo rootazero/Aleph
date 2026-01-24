@@ -388,6 +388,12 @@ pub struct CompressedHistory {
 /// Optionally integrates with EventBus for compaction trigger points,
 /// emitting events that SessionCompactor can subscribe to for
 /// automatic context management.
+///
+/// # Unified Session Model Integration
+///
+/// When `config.use_realtime_overflow` is enabled, the loop uses
+/// `OverflowDetector` to check for context overflow before each iteration.
+/// This enables proactive compaction before the context window is exceeded.
 pub struct AgentLoop<T, E, C>
 where
     T: ThinkerTrait,
@@ -400,6 +406,8 @@ where
     config: LoopConfig,
     /// Optional EventBus for compaction trigger integration
     compaction_trigger: OptionalCompactionTrigger,
+    /// Optional overflow detector for real-time overflow checking
+    overflow_detector: Option<Arc<OverflowDetector>>,
 }
 
 impl<T, E, C> AgentLoop<T, E, C>
@@ -416,6 +424,7 @@ where
             compressor,
             config,
             compaction_trigger: OptionalCompactionTrigger::new(None),
+            overflow_detector: None,
         }
     }
 
@@ -438,7 +447,118 @@ where
             compressor,
             config,
             compaction_trigger: OptionalCompactionTrigger::new(Some(event_bus)),
+            overflow_detector: None,
         }
+    }
+
+    /// Create a new AgentLoop with unified session model features
+    ///
+    /// This constructor enables the unified session model integration:
+    /// - Optional EventBus for compaction trigger events
+    /// - Optional OverflowDetector for real-time overflow checking
+    ///
+    /// # Arguments
+    ///
+    /// * `thinker` - The thinking layer for LLM decisions
+    /// * `executor` - The action executor
+    /// * `compressor` - The context compressor
+    /// * `config` - Loop configuration (should have `use_realtime_overflow` enabled)
+    /// * `event_bus` - Optional EventBus for compaction triggers
+    /// * `overflow_detector` - Optional overflow detector for real-time checks
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let config = LoopConfig::default().with_realtime_overflow(true);
+    /// let detector = Arc::new(OverflowDetector::default());
+    /// let loop = AgentLoop::with_unified_session(
+    ///     thinker, executor, compressor, config,
+    ///     Some(event_bus), Some(detector),
+    /// );
+    /// ```
+    pub fn with_unified_session(
+        thinker: Arc<T>,
+        executor: Arc<E>,
+        compressor: Arc<C>,
+        config: LoopConfig,
+        event_bus: Option<Arc<EventBus>>,
+        overflow_detector: Option<Arc<OverflowDetector>>,
+    ) -> Self {
+        Self {
+            thinker,
+            executor,
+            compressor,
+            config,
+            compaction_trigger: OptionalCompactionTrigger::new(event_bus),
+            overflow_detector,
+        }
+    }
+
+    /// Check if session is approaching overflow and needs compaction
+    ///
+    /// This method uses the unified session model to check if the current
+    /// session is near the context window limit. Returns `false` if:
+    /// - `use_realtime_overflow` is disabled in config
+    /// - No overflow detector is configured
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The current loop state to check
+    /// * `threshold_percent` - Optional threshold (default: 85%)
+    ///
+    /// # Returns
+    ///
+    /// `true` if the session is at or above the threshold percentage of
+    /// usable tokens for the configured model.
+    pub fn should_compact_unified(&self, state: &LoopState) -> bool {
+        if !self.config.use_realtime_overflow {
+            return false;
+        }
+        if let Some(ref detector) = self.overflow_detector {
+            let session = SessionSync::to_execution_session(state);
+            return detector.is_near_overflow(&session, 85); // 85% threshold
+        }
+        false
+    }
+
+    /// Check if session has overflowed the context window
+    ///
+    /// Similar to `should_compact_unified`, but checks for actual overflow
+    /// rather than approaching overflow.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The current loop state to check
+    ///
+    /// # Returns
+    ///
+    /// `true` if the session has exceeded the usable token limit.
+    pub fn is_overflow(&self, state: &LoopState) -> bool {
+        if !self.config.use_realtime_overflow {
+            return false;
+        }
+        if let Some(ref detector) = self.overflow_detector {
+            let session = SessionSync::to_execution_session(state);
+            return detector.is_overflow(&session);
+        }
+        false
+    }
+
+    /// Get the current token usage percentage
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The current loop state
+    ///
+    /// # Returns
+    ///
+    /// Usage percentage (0-100+), or 0 if overflow detection is disabled.
+    pub fn usage_percent(&self, state: &LoopState) -> u8 {
+        if let Some(ref detector) = self.overflow_detector {
+            let session = SessionSync::to_execution_session(state);
+            return detector.usage_percent(&session);
+        }
+        0
     }
 
     /// Run the Agent Loop
@@ -512,6 +632,37 @@ where
                         &model,
                     )
                     .await;
+            }
+
+            // ===== UNIFIED SESSION: Overflow Check =====
+            // Check for context overflow using the unified session model.
+            // This enables proactive compaction recommendation before the
+            // context window is exceeded.
+            if self.config.use_realtime_overflow && iteration > 0 {
+                if let Some(ref detector) = self.overflow_detector {
+                    // Create a temporary ExecutionSession for overflow check
+                    let session = SessionSync::to_execution_session(&state);
+                    if detector.is_overflow(&session) {
+                        // Log overflow detection for observability
+                        tracing::info!(
+                            session_id = %state.session_id,
+                            total_tokens = state.total_tokens,
+                            iteration = iteration,
+                            "Overflow detected, compaction recommended"
+                        );
+                        // Note: Actual compaction is handled by the existing
+                        // compressor.should_compress() logic below.
+                        // This is informational for monitoring and debugging.
+                    } else if detector.is_near_overflow(&session, 85) {
+                        // Warn when approaching overflow (85% threshold)
+                        tracing::debug!(
+                            session_id = %state.session_id,
+                            total_tokens = state.total_tokens,
+                            usage_percent = detector.usage_percent(&session),
+                            "Session approaching overflow threshold"
+                        );
+                    }
+                }
             }
 
             // ===== Guard Check =====
@@ -1174,5 +1325,268 @@ mod tests {
                 .emit_loop_continue("session-1", 0, 0, None, "test-model")
                 .await;
         });
+    }
+
+    // ========================================================================
+    // Unified Session Model / Overflow Detector Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_agent_loop_with_overflow_detector() {
+        use crate::agent_loop::overflow::{OverflowConfig, OverflowDetector};
+
+        // Create an overflow detector with a small limit for testing
+        let mut config = OverflowConfig::default();
+        config.default_limit = crate::agent_loop::overflow::ModelLimit::new(
+            100_000,  // 100K context
+            4_000,    // 4K output
+            0.2,      // 20% reserve
+        );
+        let detector = Arc::new(OverflowDetector::new(config));
+
+        let thinker = Arc::new(MockThinker::new(vec![
+            Decision::UseTool {
+                tool_name: "search".to_string(),
+                arguments: json!({"query": "test"}),
+            },
+            Decision::Complete {
+                summary: "Done".to_string(),
+            },
+        ]));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        // Create loop with overflow detector using with_unified_session
+        let loop_config = LoopConfig::for_testing().with_realtime_overflow(true);
+        let agent_loop = AgentLoop::with_unified_session(
+            thinker,
+            executor,
+            compressor,
+            loop_config,
+            None, // No EventBus
+            Some(detector),
+        );
+
+        let result = agent_loop
+            .run(
+                "Test request".to_string(),
+                RequestContext::empty(),
+                vec![],
+                NoOpLoopCallback,
+                None,
+                None,
+            )
+            .await;
+
+        // Verify it doesn't crash and runs correctly
+        assert!(result.is_success());
+        if let LoopResult::Completed { steps, .. } = result {
+            assert_eq!(steps, 1); // One tool call before completion
+        }
+    }
+
+    #[test]
+    fn test_should_compact_unified() {
+        use crate::agent_loop::overflow::{ModelLimit, OverflowConfig, OverflowDetector};
+
+        // Create a detector with small limits for testing
+        let mut config = OverflowConfig::default();
+        config.default_limit = ModelLimit::new(
+            10_000,  // 10K context
+            1_000,   // 1K output
+            0.1,     // 10% reserve
+        );
+        // Usable tokens: (10000 - 1000) * 0.9 = 8100
+        let detector = Arc::new(OverflowDetector::new(config));
+
+        let thinker = Arc::new(MockThinker::new(vec![]));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        // Test with realtime overflow enabled
+        let loop_config = LoopConfig::for_testing().with_realtime_overflow(true);
+        let agent_loop = AgentLoop::with_unified_session(
+            thinker.clone(),
+            executor.clone(),
+            compressor.clone(),
+            loop_config,
+            None,
+            Some(detector.clone()),
+        );
+
+        // Create a state with moderate token usage (below 85%)
+        let mut state = LoopState::new(
+            "test-session".to_string(),
+            "Test request".to_string(),
+            RequestContext::empty(),
+        );
+        state.total_tokens = 4000; // ~49% of 8100, below 85% threshold
+        assert!(!agent_loop.should_compact_unified(&state));
+
+        // Create a state with high token usage (above 85%)
+        state.total_tokens = 7000; // ~86% of 8100, above 85% threshold
+        assert!(agent_loop.should_compact_unified(&state));
+
+        // Test with realtime overflow disabled
+        let loop_config_disabled = LoopConfig::for_testing().with_realtime_overflow(false);
+        let agent_loop_disabled = AgentLoop::with_unified_session(
+            thinker.clone(),
+            executor.clone(),
+            compressor.clone(),
+            loop_config_disabled,
+            None,
+            Some(detector.clone()),
+        );
+        // Should return false even with high tokens when disabled
+        assert!(!agent_loop_disabled.should_compact_unified(&state));
+
+        // Test without overflow detector
+        let agent_loop_no_detector = AgentLoop::with_unified_session(
+            thinker,
+            executor,
+            compressor,
+            LoopConfig::for_testing().with_realtime_overflow(true),
+            None,
+            None, // No detector
+        );
+        assert!(!agent_loop_no_detector.should_compact_unified(&state));
+    }
+
+    #[test]
+    fn test_is_overflow() {
+        use crate::agent_loop::overflow::{ModelLimit, OverflowConfig, OverflowDetector};
+
+        // Create a detector with small limits for testing
+        let mut config = OverflowConfig::default();
+        config.default_limit = ModelLimit::new(
+            10_000,  // 10K context
+            1_000,   // 1K output
+            0.1,     // 10% reserve
+        );
+        // Usable tokens: (10000 - 1000) * 0.9 = 8100
+        let detector = Arc::new(OverflowDetector::new(config));
+
+        let thinker = Arc::new(MockThinker::new(vec![]));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        let loop_config = LoopConfig::for_testing().with_realtime_overflow(true);
+        let agent_loop = AgentLoop::with_unified_session(
+            thinker,
+            executor,
+            compressor,
+            loop_config,
+            None,
+            Some(detector),
+        );
+
+        // Below limit
+        let mut state = LoopState::new(
+            "test-session".to_string(),
+            "Test request".to_string(),
+            RequestContext::empty(),
+        );
+        state.total_tokens = 5000;
+        assert!(!agent_loop.is_overflow(&state));
+
+        // Above limit
+        state.total_tokens = 9000;
+        assert!(agent_loop.is_overflow(&state));
+    }
+
+    #[test]
+    fn test_usage_percent() {
+        use crate::agent_loop::overflow::{ModelLimit, OverflowConfig, OverflowDetector};
+
+        // Create a detector with small limits for testing
+        let mut config = OverflowConfig::default();
+        config.default_limit = ModelLimit::new(
+            10_000,  // 10K context
+            1_000,   // 1K output
+            0.1,     // 10% reserve
+        );
+        // Usable tokens: (10000 - 1000) * 0.9 = 8100
+        let detector = Arc::new(OverflowDetector::new(config));
+
+        let thinker = Arc::new(MockThinker::new(vec![]));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        let loop_config = LoopConfig::for_testing().with_realtime_overflow(true);
+        let agent_loop = AgentLoop::with_unified_session(
+            thinker.clone(),
+            executor.clone(),
+            compressor.clone(),
+            loop_config,
+            None,
+            Some(detector),
+        );
+
+        let mut state = LoopState::new(
+            "test-session".to_string(),
+            "Test request".to_string(),
+            RequestContext::empty(),
+        );
+
+        // 50% usage
+        state.total_tokens = 4050; // ~50% of 8100
+        let percent = agent_loop.usage_percent(&state);
+        assert_eq!(percent, 50);
+
+        // Test without detector returns 0
+        let agent_loop_no_detector = AgentLoop::with_unified_session(
+            thinker,
+            executor,
+            compressor,
+            LoopConfig::for_testing(),
+            None,
+            None,
+        );
+        assert_eq!(agent_loop_no_detector.usage_percent(&state), 0);
+    }
+
+    #[test]
+    fn test_with_unified_session_constructor() {
+        use crate::agent_loop::overflow::{OverflowConfig, OverflowDetector};
+        use crate::event::EventBus;
+
+        let thinker = Arc::new(MockThinker::new(vec![]));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        // Test with both EventBus and OverflowDetector
+        let event_bus = Arc::new(EventBus::new());
+        let detector = Arc::new(OverflowDetector::new(OverflowConfig::default()));
+
+        let loop_config = LoopConfig::for_testing()
+            .with_unified_session(true)
+            .with_message_builder(true)
+            .with_realtime_overflow(true);
+
+        let agent_loop = AgentLoop::with_unified_session(
+            thinker.clone(),
+            executor.clone(),
+            compressor.clone(),
+            loop_config.clone(),
+            Some(event_bus),
+            Some(detector),
+        );
+
+        // Verify config is properly set
+        assert!(agent_loop.config.use_unified_session);
+        assert!(agent_loop.config.use_message_builder);
+        assert!(agent_loop.config.use_realtime_overflow);
+        assert!(agent_loop.overflow_detector.is_some());
+
+        // Test with None values
+        let agent_loop_minimal = AgentLoop::with_unified_session(
+            thinker,
+            executor,
+            compressor,
+            loop_config,
+            None,
+            None,
+        );
+        assert!(agent_loop_minimal.overflow_detector.is_none());
     }
 }
