@@ -300,6 +300,124 @@ retention_days = 7
 
 ---
 
+## Sub-Agent Synchronization
+
+The Agent Loop supports delegating tasks to specialized sub-agents with synchronous wait capability. This enables complex multi-step workflows where the parent agent can wait for sub-agent completion and collect results.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Main Agent Loop                           │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│   ┌──────────────────────────────────────────────────────┐  │
+│   │              SubAgentDispatcher                       │  │
+│   │                                                       │  │
+│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │  │
+│   │  │  McpAgent   │  │ SkillAgent  │  │ CustomAgent │   │  │
+│   │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘   │  │
+│   │         │                │                │          │  │
+│   │         └────────────────┼────────────────┘          │  │
+│   │                          ▼                           │  │
+│   │               ExecutionCoordinator                   │  │
+│   │                          │                           │  │
+│   │                  ┌───────┴───────┐                   │  │
+│   │                  ▼               ▼                   │  │
+│   │            wait_for_result  wait_for_all             │  │
+│   │                  │               │                   │  │
+│   │                  └───────┬───────┘                   │  │
+│   │                          ▼                           │  │
+│   │               ResultCollector                        │  │
+│   │              (tools_called, artifacts)               │  │
+│   └──────────────────────────────────────────────────────┘  │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Components
+
+#### ExecutionCoordinator (`sub_agents/coordinator.rs`)
+
+Manages synchronous wait for sub-agent completion using oneshot channels:
+
+```rust
+// Single request - blocks until completion or timeout
+let result = dispatcher.dispatch_sync(request, Duration::from_secs(60)).await?;
+
+// Multiple parallel requests - waits for all
+let results = dispatcher.dispatch_parallel_sync(
+    vec![(request1, None), (request2, Some("mcp_agent"))],
+    Duration::from_secs(120)
+).await;
+```
+
+**Key features**:
+- Timeout handling with partial result recovery
+- Concurrency limiting via semaphore
+- TTL-based cleanup of completed results
+- Real-time progress tracking
+
+#### ResultCollector (`sub_agents/result_collector.rs`)
+
+Aggregates tool calls and artifacts during sub-agent execution:
+
+```rust
+// Automatically collects during execution
+let summary = collector.get_summary(&request_id).await;
+// Returns Vec<ToolCallSummary> with:
+// - tool name
+// - status (pending/running/completed/error)
+// - title (completion message)
+```
+
+#### Context Propagation
+
+Sub-agents receive context from the parent agent:
+
+```rust
+let request = SubAgentRequest::from_parent_context(
+    "Search for Rust files",
+    parent_session_id,
+    Some(working_directory),
+    Some(original_request),
+    Some(history_summary),
+    recent_steps,
+);
+```
+
+**Context includes**:
+- Working directory
+- Original user request
+- History summary (what's been done)
+- Recent steps (with success/failure status)
+
+### Configuration
+
+```toml
+[subagent]
+execution_timeout_ms = 300000  # 5 minutes
+result_ttl_ms = 3600000        # 1 hour
+max_concurrent = 5
+progress_events_enabled = true
+```
+
+### Error Handling
+
+```rust
+pub enum ExecutionError {
+    Timeout { request_id, elapsed_ms, partial_summary },
+    ExecutionFailed { request_id, error, tools_completed },
+    NotFound { request_id },
+    QueueTimeout { request_id },
+    Internal(String),
+}
+```
+
+On timeout, partial results (completed tool calls) are still available via `partial_summary`.
+
+---
+
 ## Error Handling
 
 ### Guard Violations

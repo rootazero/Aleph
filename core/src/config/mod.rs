@@ -106,6 +106,9 @@ pub struct Config {
     /// Typo correction configuration (quick double-space correction)
     #[serde(default)]
     pub typo_correction: TypoCorrectionConfig,
+    /// Sub-agent synchronization configuration
+    #[serde(default)]
+    pub subagent: SubAgentConfig,
 }
 
 // =============================================================================
@@ -197,6 +200,7 @@ impl Default for Config {
             generation: GenerationConfig::default(),
             orchestrator: OrchestratorConfig::default(),
             typo_correction: TypoCorrectionConfig::default(),
+            subagent: SubAgentConfig::default(),
         }
     }
 }

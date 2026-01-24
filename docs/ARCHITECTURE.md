@@ -262,6 +262,65 @@ similarity_threshold = 0.7     # Min cosine similarity (0.0-1.0)
 
 ---
 
+### Sub-Agent Synchronization
+
+**Location**: `core/src/agents/sub_agents/`
+
+**Purpose**: Enables synchronous delegation to specialized sub-agents with result aggregation.
+
+#### Components
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| **ExecutionCoordinator** | `coordinator.rs` | Manages synchronous wait using oneshot channels |
+| **ResultCollector** | `result_collector.rs` | Aggregates tool calls and artifacts |
+| **SubAgentDispatcher** | `dispatcher.rs` | Routes requests to specialized sub-agents |
+
+#### Execution Flow
+
+```
+Main Agent
+    │
+    ▼ dispatch_sync()
+┌──────────────────────────────────────────────────────┐
+│               SubAgentDispatcher                      │
+│                                                       │
+│  1. Initialize ResultCollector for request            │
+│  2. Start ExecutionCoordinator tracking               │
+│  3. Spawn sub-agent execution                         │
+│  4. Wait for completion (with timeout)                │
+│  5. Collect tool summaries and artifacts              │
+│  6. Return enriched SubAgentResult                    │
+└──────────────────────────────────────────────────────┘
+    │
+    ▼
+SubAgentResult {
+    request_id, success, summary,
+    tools_called: Vec<ToolCallRecord>,
+    artifacts: Vec<Artifact>
+}
+```
+
+#### Key Features
+
+- **Synchronous Wait**: Block until sub-agent completes or timeout
+- **Parallel Execution**: `dispatch_parallel_sync()` for multiple sub-agents
+- **Result Aggregation**: Automatic collection of tool calls and artifacts
+- **Context Propagation**: Pass parent context to sub-agents
+- **Concurrency Control**: Semaphore-based limiting
+
+#### Configuration
+
+```toml
+[subagent]
+execution_timeout_ms = 300000  # 5 minutes
+result_ttl_ms = 3600000        # 1 hour retention
+max_concurrent = 5             # Max parallel sub-agents
+progress_events_enabled = true # Emit progress events
+```
+
+---
+
 ### Cowork Task Orchestration
 
 **Location**: `core/src/dispatcher/`

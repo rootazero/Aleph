@@ -91,6 +91,31 @@ pub struct StepContextInfo {
     pub success: bool,
 }
 
+impl StepContextInfo {
+    /// Create a new step context info
+    pub fn new(
+        action_type: impl Into<String>,
+        description: impl Into<String>,
+        success: bool,
+    ) -> Self {
+        Self {
+            action_type: action_type.into(),
+            description: description.into(),
+            success,
+        }
+    }
+
+    /// Create a successful step
+    pub fn success(action_type: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(action_type, description, true)
+    }
+
+    /// Create a failed step
+    pub fn failure(action_type: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(action_type, description, false)
+    }
+}
+
 impl ExecutionContextInfo {
     /// Create new execution context
     pub fn new() -> Self {
@@ -149,6 +174,80 @@ impl ExecutionContextInfo {
             && self.recent_steps.is_empty()
             && self.metadata.is_empty()
     }
+
+    /// Build a summary string from the context
+    ///
+    /// Creates a human-readable summary suitable for passing to sub-agents.
+    /// The summary includes the history and recent steps in a concise format.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_length` - Maximum length of the summary (default: 500 chars)
+    pub fn build_summary(&self, max_length: Option<usize>) -> String {
+        let max_len = max_length.unwrap_or(500);
+        let mut parts = Vec::new();
+
+        // Include existing history summary if present
+        if let Some(ref history) = self.history_summary {
+            parts.push(history.clone());
+        }
+
+        // Add recent steps
+        if !self.recent_steps.is_empty() {
+            let steps_summary: Vec<String> = self
+                .recent_steps
+                .iter()
+                .map(|s| {
+                    let status = if s.success { "✓" } else { "✗" };
+                    format!("{} {}: {}", status, s.action_type, s.description)
+                })
+                .collect();
+            parts.push(format!("Recent: {}", steps_summary.join("; ")));
+        }
+
+        let summary = parts.join(" | ");
+
+        // Truncate if too long
+        if summary.len() > max_len {
+            format!("{}...", &summary[..max_len - 3])
+        } else {
+            summary
+        }
+    }
+
+    /// Create a prompt-ready context string
+    ///
+    /// Formats the context information for inclusion in an LLM prompt.
+    pub fn to_prompt(&self) -> String {
+        let mut lines = Vec::new();
+
+        if let Some(ref request) = self.original_request {
+            lines.push(format!("Original Request: {}", request));
+        }
+        if let Some(ref dir) = self.working_directory {
+            lines.push(format!("Working Directory: {}", dir));
+        }
+        if let Some(ref app) = self.current_app {
+            lines.push(format!("Current App: {}", app));
+        }
+        if let Some(ref history) = self.history_summary {
+            lines.push(format!("Progress: {}", history));
+        }
+        if !self.recent_steps.is_empty() {
+            let steps: Vec<String> = self
+                .recent_steps
+                .iter()
+                .take(5) // Limit to 5 most recent
+                .map(|s| {
+                    let status = if s.success { "done" } else { "failed" };
+                    format!("- {} ({}): {}", s.action_type, status, s.description)
+                })
+                .collect();
+            lines.push(format!("Recent Steps:\n{}", steps.join("\n")));
+        }
+
+        lines.join("\n")
+    }
 }
 
 impl SubAgentRequest {
@@ -193,6 +292,63 @@ impl SubAgentRequest {
     pub fn with_execution_context(mut self, context: ExecutionContextInfo) -> Self {
         self.execution_context = Some(context);
         self
+    }
+
+    /// Create a sub-agent request from parent execution context
+    ///
+    /// This extracts relevant information from the parent's ExecutionContext
+    /// and populates the ExecutionContextInfo for the sub-agent.
+    ///
+    /// # Arguments
+    ///
+    /// * `prompt` - The task/prompt for the sub-agent
+    /// * `parent_session_id` - The parent session's ID for tracking
+    /// * `working_directory` - Current working directory (if applicable)
+    /// * `original_request` - The original user request
+    /// * `history_summary` - Summary of what has been done so far
+    /// * `recent_steps` - Recent steps for context
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let request = SubAgentRequest::from_parent_context(
+    ///     "Search for Rust files",
+    ///     "session-123",
+    ///     Some("/project"),
+    ///     Some("Help me refactor the code"),
+    ///     Some("Found 10 files, analyzed 3"),
+    ///     vec![
+    ///         StepContextInfo::new("glob", "Found *.rs files", true),
+    ///         StepContextInfo::new("read", "Read main.rs", true),
+    ///     ],
+    /// );
+    /// ```
+    pub fn from_parent_context(
+        prompt: impl Into<String>,
+        parent_session_id: impl Into<String>,
+        working_directory: Option<String>,
+        original_request: Option<String>,
+        history_summary: Option<String>,
+        recent_steps: Vec<StepContextInfo>,
+    ) -> Self {
+        let mut exec_context = ExecutionContextInfo::new();
+
+        if let Some(dir) = working_directory {
+            exec_context = exec_context.with_working_directory(dir);
+        }
+        if let Some(req) = original_request {
+            exec_context = exec_context.with_original_request(req);
+        }
+        if let Some(summary) = history_summary {
+            exec_context = exec_context.with_history_summary(summary);
+        }
+        for step in recent_steps {
+            exec_context = exec_context.with_step(step);
+        }
+
+        Self::new(prompt)
+            .with_parent_session(parent_session_id)
+            .with_execution_context(exec_context)
     }
 }
 
@@ -406,5 +562,128 @@ mod tests {
 
         let url = Artifact::url("https://example.com/image.png");
         assert_eq!(url.artifact_type, "url");
+    }
+
+    #[test]
+    fn test_step_context_info_creation() {
+        let step = StepContextInfo::new("glob", "Found 10 files", true);
+        assert_eq!(step.action_type, "glob");
+        assert_eq!(step.description, "Found 10 files");
+        assert!(step.success);
+
+        let success_step = StepContextInfo::success("read", "Read config.toml");
+        assert!(success_step.success);
+
+        let failed_step = StepContextInfo::failure("write", "Permission denied");
+        assert!(!failed_step.success);
+    }
+
+    #[test]
+    fn test_execution_context_info_builder() {
+        let ctx = ExecutionContextInfo::new()
+            .with_working_directory("/project")
+            .with_current_app("VSCode")
+            .with_original_request("Help me refactor")
+            .with_history_summary("Found 5 files")
+            .with_step(StepContextInfo::success("glob", "Listed files"))
+            .with_metadata("key1", "value1");
+
+        assert_eq!(ctx.working_directory, Some("/project".to_string()));
+        assert_eq!(ctx.current_app, Some("VSCode".to_string()));
+        assert_eq!(ctx.original_request, Some("Help me refactor".to_string()));
+        assert_eq!(ctx.history_summary, Some("Found 5 files".to_string()));
+        assert_eq!(ctx.recent_steps.len(), 1);
+        assert_eq!(ctx.metadata.get("key1"), Some(&"value1".to_string()));
+        assert!(!ctx.is_empty());
+    }
+
+    #[test]
+    fn test_execution_context_info_is_empty() {
+        let empty = ExecutionContextInfo::new();
+        assert!(empty.is_empty());
+
+        let not_empty = ExecutionContextInfo::new().with_working_directory("/tmp");
+        assert!(!not_empty.is_empty());
+    }
+
+    #[test]
+    fn test_execution_context_info_build_summary() {
+        let ctx = ExecutionContextInfo::new()
+            .with_history_summary("Initial setup complete")
+            .with_step(StepContextInfo::success("glob", "Found files"))
+            .with_step(StepContextInfo::failure("read", "File not found"));
+
+        let summary = ctx.build_summary(None);
+        assert!(summary.contains("Initial setup complete"));
+        assert!(summary.contains("✓ glob"));
+        assert!(summary.contains("✗ read"));
+    }
+
+    #[test]
+    fn test_execution_context_info_build_summary_truncation() {
+        let ctx = ExecutionContextInfo::new()
+            .with_history_summary("A very long history summary that goes on and on...");
+
+        let summary = ctx.build_summary(Some(30));
+        assert_eq!(summary.len(), 30);
+        assert!(summary.ends_with("..."));
+    }
+
+    #[test]
+    fn test_execution_context_info_to_prompt() {
+        let ctx = ExecutionContextInfo::new()
+            .with_original_request("Refactor the code")
+            .with_working_directory("/project")
+            .with_history_summary("Found 10 files")
+            .with_step(StepContextInfo::success("glob", "Listed *.rs"));
+
+        let prompt = ctx.to_prompt();
+        assert!(prompt.contains("Original Request: Refactor the code"));
+        assert!(prompt.contains("Working Directory: /project"));
+        assert!(prompt.contains("Progress: Found 10 files"));
+        assert!(prompt.contains("glob (done)"));
+    }
+
+    #[test]
+    fn test_sub_agent_request_from_parent_context() {
+        let request = SubAgentRequest::from_parent_context(
+            "Search for Rust files",
+            "parent-session-123",
+            Some("/project".to_string()),
+            Some("Help me refactor".to_string()),
+            Some("Found 5 files".to_string()),
+            vec![
+                StepContextInfo::success("glob", "Listed files"),
+                StepContextInfo::success("read", "Read main.rs"),
+            ],
+        );
+
+        assert_eq!(request.prompt, "Search for Rust files");
+        assert_eq!(request.parent_session_id, Some("parent-session-123".to_string()));
+        assert!(request.execution_context.is_some());
+
+        let ctx = request.execution_context.unwrap();
+        assert_eq!(ctx.working_directory, Some("/project".to_string()));
+        assert_eq!(ctx.original_request, Some("Help me refactor".to_string()));
+        assert_eq!(ctx.history_summary, Some("Found 5 files".to_string()));
+        assert_eq!(ctx.recent_steps.len(), 2);
+    }
+
+    #[test]
+    fn test_sub_agent_request_from_parent_context_minimal() {
+        let request = SubAgentRequest::from_parent_context(
+            "Quick task",
+            "session-1",
+            None,
+            None,
+            None,
+            vec![],
+        );
+
+        assert_eq!(request.prompt, "Quick task");
+        assert!(request.execution_context.is_some());
+
+        let ctx = request.execution_context.unwrap();
+        assert!(ctx.is_empty());
     }
 }
