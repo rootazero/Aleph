@@ -12,14 +12,15 @@ CORE_DIR="$ROOT_DIR/core"
 
 generate_macos() {
     echo "🍎 Generating macOS (UniFFI) bindings..."
-    cd "$CORE_DIR"
+    cd "$ROOT_DIR"
 
     # Ensure library is built
-    cargo build --release --features uniffi
+    cargo build --release --features uniffi -p aethecore
 
     # Generate Swift bindings
+    cd "$CORE_DIR"
     cargo run --bin uniffi-bindgen generate \
-        --library target/release/libaethecore.dylib \
+        --library ../target/release/libaethecore.dylib \
         --language swift \
         --out-dir "$ROOT_DIR/platforms/macos/Aether/Sources/Generated/"
 

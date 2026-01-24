@@ -188,7 +188,7 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 
 | Component | Description |
 |-----------|-------------|
-| **agent_loop** | Core observe-think-act-feedback cycle with guards, state management, doom loop detection & retry mechanism |
+| **agent_loop** | Core observe-think-act-feedback cycle with guards, state management, doom loop detection, retry mechanism & multi-tool execution (parallel/sequential/DAG) |
 | **Agentic Loop** | 8 components: IntentAnalyzer, TaskPlanner, ToolExecutor, LoopController, SessionRecorder, SessionCompactor, SubAgentHandler, CallbackBridge |
 | **intent** | Three-layer intent detection: L1 Regex → L2 Keywords → L3 AI |
 | **dispatcher** | Multi-layer routing hub with 16 sub-modules: planner/, scheduler/, executor/, model_router/, monitor/, context/, analyzer/, risk/, callback/, agent_types/, registry, confirmation, async_confirmation, integration, types, engine |
@@ -201,7 +201,7 @@ See [docs/BUILD_COMMANDS.md](./docs/BUILD_COMMANDS.md) for complete build refere
 | **Runtime Managers** | Auto-install uv, fnm, yt-dlp, ffmpeg |
 | **MCP** | Model Context Protocol - ✅ Full implementation with stdio/HTTP/SSE transports, OAuth 2.0 auth, resources, prompts, notifications |
 | **event** | Type-safe event bus for event-driven architecture |
-| **plugins** | Claude Code compatible plugin system |
+| **extension** | Claude Code compatible plugin system with async FFI (UniFFI 0.31+) - discovery/, extension/, ffi/async_extension.rs |
 | **init_unified** | Unified initialization coordinator |
 | **Smart Tool Discovery** | Intelligent tool filtering by content analysis (ffi/tool_discovery) |
 | **Skill Reader Tools** | Progressive Disclosure for skills with multi-location discovery (rig_tools/skill_reader) |

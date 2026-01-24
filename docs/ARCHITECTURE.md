@@ -947,24 +947,53 @@ pub struct OAuthTokens {
 }
 ```
 
-### Plugin System
+### Extension System (Plugin System v2)
 
-**Status**: ✅ Implemented
+**Status**: ✅ Implemented (2026-01-24, Migrated from plugins/)
 
-**Location**: `core/src/plugins/`
+**Location**: `core/src/discovery/`, `core/src/extension/`, `core/src/ffi/async_extension.rs`
 
 **Implementation Details**:
-- **Claude Code compatible**: Follows Claude Code plugin manifest format
-- **Plugin types**: Skills, agents, MCP servers, hooks
-- **Discovery**: Automatic scanning of plugin directories
+- **Claude Code compatible**: Follows Claude Code plugin manifest format (`.claude-plugin/plugin.json`)
+- **Multi-level discovery**: Reads from `~/.claude/`, `~/.aether/`, `.claude/` (current project)
+- **Plugin types**: Skills, commands, agents, MCP servers, hooks
+- **Configuration**: `aether.jsonc` with multi-source merging
+- **Async FFI**: Native async/await via UniFFI 0.31+ (Swift, Kotlin, Python)
 - **Hot reload**: Plugins loaded and activated at runtime
 
 **Architecture**:
-- `plugins/loader.rs` - Plugin file loading
-- `plugins/scanner.rs` - Plugin directory scanning
-- `plugins/manager.rs` - Plugin lifecycle management
-- `plugins/registry.rs` - Plugin registration and lookup
-- `plugins/hooks.rs` - Hook execution system
+```
+discovery/              # Multi-level component discovery
+├── scanner.rs         # Directory scanning (DiscoveryManager)
+├── paths.rs           # Path utilities (aether_home, git_root)
+└── types.rs           # DiscoveredComponent, DiscoverySource
+
+extension/              # Extension system
+├── loader.rs          # ComponentLoader (skills, commands, agents, plugins)
+├── registry.rs        # ComponentRegistry (state management)
+├── config/            # ConfigManager (aether.jsonc merging)
+├── hooks/             # HookExecutor (PreToolUse, PostToolUse, Stop)
+├── runtime/           # Node.js runtime (fnm, npm install)
+└── sync_api.rs        # SyncExtensionManager (legacy sync wrapper)
+
+ffi/
+├── async_extension.rs # Async FFI exports (extension_load_all, etc.)
+└── plugins.rs         # Sync FFI exports (legacy AetherCore methods)
+```
+
+**Key Types**:
+- `ExtensionManager` - Main async entry point
+- `SyncExtensionManager` - Sync wrapper for legacy FFI
+- `ExtensionSkill`, `ExtensionCommand`, `ExtensionAgent`, `ExtensionPlugin`
+- `HookExecutor` - Event-driven hook execution
+
+**Swift Async API** (UniFFI 0.31+):
+```swift
+let summary = try await extensionLoadAll()
+let plugins = try await extensionListPlugins()
+let skills = try await extensionListSkills()
+let result = try await extensionExecuteSkill(qualifiedName: "plugin:skill", arguments: "")
+```
 
 ### Skills System
 

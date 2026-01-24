@@ -163,7 +163,54 @@ MCP server commands are resolved through Aether's runtime system:
 
 ## FFI API
 
-### Swift Integration
+Aether provides both synchronous and asynchronous FFI APIs for plugin management. The async API (UniFFI 0.31+) is recommended for new code.
+
+### Swift Integration (Async - Recommended)
+
+```swift
+// Load all extensions
+let summary = try await extensionLoadAll()
+print("Loaded \(summary.pluginsLoaded) plugins")
+
+// List installed plugins
+let plugins = try await extensionListPlugins()
+
+// List skills from enabled plugins
+let skills = try await extensionListSkills()
+
+// Get auto-invocable skills (for AI prompt injection)
+let autoSkills = try await extensionGetAutoSkills()
+
+// Execute a skill
+let result = try await extensionExecuteSkill(
+    qualifiedName: "my-plugin:commit",
+    arguments: "--amend"
+)
+
+// Execute a command
+let cmdResult = try await extensionExecuteCommand(
+    name: "commit",
+    arguments: "--amend"
+)
+
+// Get skill instructions for prompt injection
+let instructions = try await extensionGetSkillInstructions()
+
+// Get default model from configuration
+let model = try await extensionGetDefaultModel()
+
+// Get custom instructions
+let customInstructions = try await extensionGetInstructions()
+
+// Load plugin from custom path (development)
+let pluginInfo = try await extensionLoadPluginFromPath(path: "/path/to/dev/plugin")
+
+// Sync functions (no await needed)
+let pluginsDir = extensionGetPluginsDir()
+let isValid = extensionIsValidPluginDir(path: "/path/to/plugin")
+```
+
+### Swift Integration (Sync - Legacy)
 
 ```swift
 // List installed plugins
@@ -196,26 +243,44 @@ let instructions = try core.get_plugin_skill_instructions()
 ### Available FFI Types
 
 ```swift
-// Plugin information
-struct PluginInfoFFI {
+// Plugin information (both sync and async APIs)
+struct PluginInfoFfi {
     let name: String
     let version: String
     let description: String
     let enabled: Bool
     let path: String
-    let skills_count: UInt32
-    let agents_count: UInt32
-    let hooks_count: UInt32
-    let mcp_servers_count: UInt32
+    let skillsCount: UInt32
+    let agentsCount: UInt32
+    let hooksCount: UInt32
+    let mcpServersCount: UInt32
 }
 
-// Skill information
-struct PluginSkillFFI {
-    let qualified_name: String  // "plugin:skill"
-    let plugin_name: String
-    let skill_name: String
+// Skill information (both sync and async APIs)
+struct PluginSkillFfi {
+    let qualifiedName: String  // "plugin:skill"
+    let pluginName: String
+    let skillName: String
     let description: String
-    let is_command: Bool
+    let isCommand: Bool
+}
+
+// Load summary (async API only)
+struct LoadSummaryFfi {
+    let skillsLoaded: UInt32
+    let commandsLoaded: UInt32
+    let agentsLoaded: UInt32
+    let pluginsLoaded: UInt32
+    let hooksLoaded: UInt32
+    let errors: [String]
+}
+
+// Async error type
+enum ExtensionAsyncError: Error {
+    case initError(String)
+    case loadError(String)
+    case notFound(String)
+    case ioError(String)
 }
 ```
 
@@ -239,30 +304,58 @@ let pluginInfo = try core.load_plugin_from_path(path: "/path/to/dev/plugin")
 
 ## Architecture
 
+The plugin system uses a layered architecture with separate discovery and extension modules:
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Plugin System                            │
+│                    Extension System                         │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ PluginScanner│→ │PluginLoader  │→ │PluginRegistry│      │
-│  │              │  │              │  │              │      │
-│  │ Discover     │  │ Parse:       │  │ Store state  │      │
-│  │ plugins in   │  │ - manifest   │  │ Enable/      │      │
-│  │ ~/.config/   │  │ - skills     │  │ disable      │      │
-│  │ aether/      │  │ - hooks      │  │ Persist to   │      │
-│  │ plugins/     │  │ - agents     │  │ plugins.json │      │
-│  └──────────────┘  │ - mcp.json   │  └──────────────┘      │
-│                    └──────────────┘                         │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │                   PluginManager                      │   │
-│  │                                                      │   │
-│  │ - load_all() - Load all plugins from directory      │   │
-│  │ - get_all_skills() - Get skills for prompt injection│   │
-│  │ - prepare_skill_execution() - Execute a skill       │   │
-│  │ - set_enabled() - Enable/disable plugins            │   │
-│  └─────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │              discovery/ module                        │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │  │
+│  │  │ scanner.rs  │  │  paths.rs   │  │  types.rs   │   │  │
+│  │  │             │  │             │  │             │   │  │
+│  │  │ Discover:   │  │ Path utils: │  │ Component   │   │  │
+│  │  │ - ~/.claude/│  │ - aether_   │  │ types and   │   │  │
+│  │  │ - ~/.aether/│  │   home()    │  │ discovery   │   │  │
+│  │  │ - .claude/  │  │ - git_root()│  │ sources     │   │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘   │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                            ↓                                │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │              extension/ module                        │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │  │
+│  │  │ loader.rs   │  │ registry.rs │  │ config/     │   │  │
+│  │  │             │  │             │  │             │   │  │
+│  │  │ Load:       │  │ Store:      │  │ aether.jsonc│   │  │
+│  │  │ - skills    │  │ - plugins   │  │ config      │   │  │
+│  │  │ - commands  │  │ - skills    │  │ merging     │   │  │
+│  │  │ - agents    │  │ - commands  │  │             │   │  │
+│  │  │ - plugins   │  │ - agents    │  │             │   │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘   │  │
+│  │                                                       │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │  │
+│  │  │ hooks/      │  │ runtime/    │  │ sync_api.rs │   │  │
+│  │  │             │  │             │  │             │   │  │
+│  │  │ Hook exec:  │  │ Node.js     │  │ Sync FFI    │   │  │
+│  │  │ - PreToolUse│  │ runtime:    │  │ wrapper     │   │  │
+│  │  │ - PostTool  │  │ - fnm       │  │ (legacy)    │   │  │
+│  │  │ - Stop      │  │ - npm       │  │             │   │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘   │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                            ↓                                │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │              ffi/ module                              │  │
+│  │  ┌────────────────────┐  ┌────────────────────┐      │  │
+│  │  │ async_extension.rs │  │ plugins.rs         │      │  │
+│  │  │                    │  │                    │      │  │
+│  │  │ Async FFI:         │  │ Sync FFI:          │      │  │
+│  │  │ extensionLoadAll() │  │ listPlugins()      │      │  │
+│  │  │ extensionListXxx() │  │ executePluginSkill │      │  │
+│  │  │ (UniFFI 0.31+)     │  │ (legacy)           │      │  │
+│  │  └────────────────────┘  └────────────────────┘      │  │
+│  └──────────────────────────────────────────────────────┘  │
 │                                                             │
 ├─────────────────────────────────────────────────────────────┤
 │                     Integration Layer                       │
@@ -270,10 +363,35 @@ let pluginInfo = try core.load_plugin_from_path(path: "/path/to/dev/plugin")
 │                                                             │
 │  Skills → Thinker (prompt injection)                       │
 │  Agents → AgentRegistry                                    │
-│  Hooks  → EventBus                                         │
-│  MCP    → MCP Client (runtime path resolution)             │
+│  Hooks  → EventBus (PreToolUse, PostToolUse, Stop, etc.)   │
+│  MCP    → MCP Client (runtime path resolution via fnm/uv)  │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
+```
+
+### Module Structure
+
+```
+core/src/
+├── discovery/           # Multi-level component discovery
+│   ├── mod.rs          # DiscoveryManager
+│   ├── scanner.rs      # Directory scanning
+│   ├── paths.rs        # Path utilities
+│   └── types.rs        # DiscoveredComponent, DiscoverySource
+│
+├── extension/          # Extension system
+│   ├── mod.rs          # ExtensionManager
+│   ├── loader.rs       # ComponentLoader
+│   ├── registry.rs     # ComponentRegistry
+│   ├── types.rs        # ExtensionSkill, ExtensionAgent, etc.
+│   ├── config/         # aether.jsonc configuration
+│   ├── hooks/          # HookExecutor
+│   ├── runtime/        # Node.js plugin runtime
+│   └── sync_api.rs     # SyncExtensionManager (legacy sync wrapper)
+│
+└── ffi/
+    ├── async_extension.rs  # Async FFI exports (UniFFI 0.31+)
+    └── plugins.rs          # Sync FFI exports (legacy)
 ```
 
 ## Compatibility

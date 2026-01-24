@@ -184,9 +184,15 @@ aether/
 │       │   ├── mod.rs, builder.rs, assembler.rs
 │       │   ├── capability.rs, context_format.rs, intent.rs
 │       │
-│       ├── plugins/                   # Claude Code compatible plugin system
-│       │   ├── mod.rs, types.rs, loader.rs, scanner.rs
-│       │   ├── manager.rs, registry.rs, hooks.rs
+│       ├── discovery/                 # Multi-level component discovery (Claude Code compatible)
+│       │   ├── mod.rs, scanner.rs, paths.rs, types.rs
+│       │
+│       ├── extension/                 # Extension system v2 (async FFI via UniFFI 0.31+)
+│       │   ├── mod.rs, loader.rs, registry.rs, types.rs
+│       │   ├── config/                # aether.jsonc configuration
+│       │   ├── hooks/                 # HookExecutor
+│       │   ├── runtime/               # Node.js plugin runtime
+│       │   └── sync_api.rs            # SyncExtensionManager (legacy)
 │       │
 │       ├── prompt/                    # Unified prompt management
 │       │   ├── mod.rs, executor.rs, conversational.rs
