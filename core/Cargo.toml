@@ -18,7 +18,7 @@ cabi = []
 
 [dependencies]
 # UniFFI (optional, enabled by default for macOS)
-uniffi = { version = "0.28", features = ["cli"], optional = true }
+uniffi = { version = "0.31", features = ["cli"], optional = true }
 
 # REMOVED: System API dependencies (rdev, arboard, enigo) - now handled by Swift layer
 # See: refactor-native-api-separation proposal
@@ -105,7 +105,7 @@ pulldown-cmark = "0.12"
 httpdate = "1.0"
 
 [build-dependencies]
-uniffi = { version = "0.28", features = ["build"] }
+uniffi = { version = "0.31", features = ["build"] }
 # csbindgen for Windows C# bindings
 csbindgen = "1.9"
 

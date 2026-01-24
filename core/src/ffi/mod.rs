@@ -16,6 +16,8 @@
 //! - `typo_correction`: Quick typo correction (correct_typo)
 
 mod agent_loop_adapter;
+#[cfg(feature = "uniffi")]
+mod async_extension;
 mod config;
 mod dag_executor;
 mod dispatcher;
