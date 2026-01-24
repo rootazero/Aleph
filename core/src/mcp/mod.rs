@@ -44,6 +44,7 @@
 mod client;
 pub mod external;
 pub mod jsonrpc;
+mod notifications;
 mod prompts;
 mod resources;
 pub mod transport;
@@ -54,6 +55,7 @@ pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{
     IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
 };
+pub use notifications::{McpEvent, McpEventHandler, McpNotificationRouter};
 pub use prompts::{McpPrompt, McpPromptArgument, McpPromptManager, PromptContent, PromptMessage, PromptResult};
 pub use resources::{McpResourceManager, ResourceContent};
 pub use transport::{
