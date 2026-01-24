@@ -10,6 +10,7 @@
 
 mod bus;
 pub mod filter;
+pub mod global_bus;
 mod handler;
 pub mod permission;
 pub mod question;
@@ -69,4 +70,5 @@ pub use question::{
 };
 
 // Event filtering for subscription-based routing
-pub use filter::{EventFilter, GlobalEvent};
+pub use filter::EventFilter;
+pub use global_bus::{GlobalBus, GlobalEvent, Subscription, SubscriptionId};

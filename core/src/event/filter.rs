@@ -27,49 +27,11 @@
 //!     .with_agent("agent-2");
 //! ```
 
-use crate::event::types::{AetherEvent, EventType};
+use crate::event::types::EventType;
 use std::collections::HashSet;
 
-// =============================================================================
-// GlobalEvent (Temporary Definition)
-// =============================================================================
-
-/// Global event wrapper for cross-session event routing.
-///
-/// TODO: This is a minimal definition for EventFilter testing.
-/// Will be replaced with the full GlobalEvent implementation in the next task
-/// (Task #2: Create GlobalEvent wrapper with source tracking).
-#[derive(Debug, Clone)]
-pub struct GlobalEvent {
-    /// The source session that emitted this event
-    pub source_session_id: String,
-    /// The source agent that emitted this event (if applicable)
-    pub source_agent_id: Option<String>,
-    /// The actual event payload
-    pub event: AetherEvent,
-    /// Timestamp when the event was emitted (epoch millis)
-    pub timestamp: i64,
-    /// Monotonic sequence number for ordering
-    pub sequence: u64,
-}
-
-impl GlobalEvent {
-    /// Create a new GlobalEvent (for testing purposes)
-    #[cfg(test)]
-    pub fn new(
-        source_session_id: impl Into<String>,
-        source_agent_id: Option<String>,
-        event: AetherEvent,
-    ) -> Self {
-        Self {
-            source_session_id: source_session_id.into(),
-            source_agent_id,
-            event,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            sequence: 0,
-        }
-    }
-}
+// Re-export GlobalEvent from global_bus module
+pub use crate::event::global_bus::GlobalEvent;
 
 // =============================================================================
 // EventFilter
@@ -192,7 +154,7 @@ impl EventFilter {
     ///
     /// Returns `true` if ALL of the following conditions are met:
     /// 1. Session filter passes (no filter OR event session is in the set)
-    /// 2. Agent filter passes (no filter OR event agent is in the set OR event has no agent)
+    /// 2. Agent filter passes (no filter OR event agent is in the set OR event has empty agent ID)
     /// 3. Event type filter passes (event_types contains EventType::All OR event type is in the list)
     ///
     /// # Arguments
@@ -208,14 +170,12 @@ impl EventFilter {
 
         // Check agent filter
         if let Some(ref agent_ids) = self.agent_ids {
-            match &event.source_agent_id {
-                Some(agent_id) => {
-                    if !agent_ids.contains(agent_id) {
-                        return false;
-                    }
-                }
-                // If event has no agent_id but filter requires specific agents, it doesn't match
-                None => return false,
+            // If event has empty agent_id but filter requires specific agents, it doesn't match
+            if event.source_agent_id.is_empty() {
+                return false;
+            }
+            if !agent_ids.contains(&event.source_agent_id) {
+                return false;
             }
         }
 
@@ -254,7 +214,7 @@ impl EventFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::types::{InputEvent, StopReason};
+    use crate::event::types::{AetherEvent, InputEvent, StopReason};
 
     fn make_input_event() -> AetherEvent {
         AetherEvent::InputReceived(InputEvent {
@@ -269,18 +229,27 @@ mod tests {
         AetherEvent::LoopStop(StopReason::Completed)
     }
 
+    // Helper to create GlobalEvent for tests (using for_test which handles Option<String>)
+    fn make_global_event(
+        session_id: impl Into<String>,
+        agent_id: Option<String>,
+        event: AetherEvent,
+    ) -> GlobalEvent {
+        GlobalEvent::for_test(session_id, agent_id, event)
+    }
+
     #[test]
     fn test_filter_no_session_agent_filter_matches_all() {
         // Filter with no session/agent restrictions should match all sessions/agents
         let filter = EventFilter::new(vec![EventType::InputReceived]);
 
-        let event = GlobalEvent::new("session-1", Some("agent-1".to_string()), make_input_event());
+        let event = make_global_event("session-1", Some("agent-1".to_string()), make_input_event());
         assert!(filter.matches(&event));
 
-        let event = GlobalEvent::new("session-2", Some("agent-2".to_string()), make_input_event());
+        let event = make_global_event("session-2", Some("agent-2".to_string()), make_input_event());
         assert!(filter.matches(&event));
 
-        let event = GlobalEvent::new("any-session", None, make_input_event());
+        let event = make_global_event("any-session", None, make_input_event());
         assert!(filter.matches(&event));
     }
 
@@ -289,11 +258,11 @@ mod tests {
         let filter = EventFilter::new(vec![EventType::InputReceived]).with_session("session-1");
 
         // Matching session
-        let event = GlobalEvent::new("session-1", None, make_input_event());
+        let event = make_global_event("session-1", None, make_input_event());
         assert!(filter.matches(&event));
 
         // Non-matching session
-        let event = GlobalEvent::new("session-2", None, make_input_event());
+        let event = make_global_event("session-2", None, make_input_event());
         assert!(!filter.matches(&event));
     }
 
@@ -305,9 +274,9 @@ mod tests {
 
         let filter = EventFilter::new(vec![EventType::InputReceived]).with_sessions(sessions);
 
-        assert!(filter.matches(&GlobalEvent::new("session-1", None, make_input_event())));
-        assert!(filter.matches(&GlobalEvent::new("session-2", None, make_input_event())));
-        assert!(!filter.matches(&GlobalEvent::new("session-3", None, make_input_event())));
+        assert!(filter.matches(&make_global_event("session-1", None, make_input_event())));
+        assert!(filter.matches(&make_global_event("session-2", None, make_input_event())));
+        assert!(!filter.matches(&make_global_event("session-3", None, make_input_event())));
     }
 
     #[test]
@@ -315,15 +284,15 @@ mod tests {
         let filter = EventFilter::new(vec![EventType::InputReceived]).with_agent("agent-1");
 
         // Matching agent
-        let event = GlobalEvent::new("session-1", Some("agent-1".to_string()), make_input_event());
+        let event = make_global_event("session-1", Some("agent-1".to_string()), make_input_event());
         assert!(filter.matches(&event));
 
         // Non-matching agent
-        let event = GlobalEvent::new("session-1", Some("agent-2".to_string()), make_input_event());
+        let event = make_global_event("session-1", Some("agent-2".to_string()), make_input_event());
         assert!(!filter.matches(&event));
 
         // No agent specified in event (filter requires specific agent)
-        let event = GlobalEvent::new("session-1", None, make_input_event());
+        let event = make_global_event("session-1", None, make_input_event());
         assert!(!filter.matches(&event));
     }
 
@@ -335,17 +304,17 @@ mod tests {
 
         let filter = EventFilter::new(vec![EventType::InputReceived]).with_agents(agents);
 
-        assert!(filter.matches(&GlobalEvent::new(
+        assert!(filter.matches(&make_global_event(
             "session-1",
             Some("agent-1".to_string()),
             make_input_event()
         )));
-        assert!(filter.matches(&GlobalEvent::new(
+        assert!(filter.matches(&make_global_event(
             "session-1",
             Some("agent-2".to_string()),
             make_input_event()
         )));
-        assert!(!filter.matches(&GlobalEvent::new(
+        assert!(!filter.matches(&make_global_event(
             "session-1",
             Some("agent-3".to_string()),
             make_input_event()
@@ -357,8 +326,8 @@ mod tests {
         let filter = EventFilter::new(vec![EventType::InputReceived, EventType::LoopStop]);
 
         // Matching event types
-        assert!(filter.matches(&GlobalEvent::new("s1", None, make_input_event())));
-        assert!(filter.matches(&GlobalEvent::new("s1", None, make_loop_stop_event())));
+        assert!(filter.matches(&make_global_event("s1", None, make_input_event())));
+        assert!(filter.matches(&make_global_event("s1", None, make_loop_stop_event())));
 
         // Non-matching event type
         let plan_event = AetherEvent::PlanRequested(crate::event::types::PlanRequest {
@@ -371,15 +340,15 @@ mod tests {
             intent_type: None,
             detected_steps: vec![],
         });
-        assert!(!filter.matches(&GlobalEvent::new("s1", None, plan_event)));
+        assert!(!filter.matches(&make_global_event("s1", None, plan_event)));
     }
 
     #[test]
     fn test_filter_event_type_all_matches_everything() {
         let filter = EventFilter::all();
 
-        assert!(filter.matches(&GlobalEvent::new("s1", None, make_input_event())));
-        assert!(filter.matches(&GlobalEvent::new("s1", None, make_loop_stop_event())));
+        assert!(filter.matches(&make_global_event("s1", None, make_input_event())));
+        assert!(filter.matches(&make_global_event("s1", None, make_loop_stop_event())));
 
         let plan_event = AetherEvent::PlanRequested(crate::event::types::PlanRequest {
             input: InputEvent {
@@ -391,15 +360,15 @@ mod tests {
             intent_type: None,
             detected_steps: vec![],
         });
-        assert!(filter.matches(&GlobalEvent::new("s1", None, plan_event)));
+        assert!(filter.matches(&make_global_event("s1", None, plan_event)));
     }
 
     #[test]
     fn test_filter_empty_event_types_matches_nothing() {
         let filter = EventFilter::new(vec![]);
 
-        assert!(!filter.matches(&GlobalEvent::new("s1", None, make_input_event())));
-        assert!(!filter.matches(&GlobalEvent::new("s1", None, make_loop_stop_event())));
+        assert!(!filter.matches(&make_global_event("s1", None, make_input_event())));
+        assert!(!filter.matches(&make_global_event("s1", None, make_loop_stop_event())));
     }
 
     #[test]
@@ -409,28 +378,28 @@ mod tests {
             .with_agent("agent-1");
 
         // Both match
-        assert!(filter.matches(&GlobalEvent::new(
+        assert!(filter.matches(&make_global_event(
             "session-1",
             Some("agent-1".to_string()),
             make_input_event()
         )));
 
         // Session matches, agent doesn't
-        assert!(!filter.matches(&GlobalEvent::new(
+        assert!(!filter.matches(&make_global_event(
             "session-1",
             Some("agent-2".to_string()),
             make_input_event()
         )));
 
         // Agent matches, session doesn't
-        assert!(!filter.matches(&GlobalEvent::new(
+        assert!(!filter.matches(&make_global_event(
             "session-2",
             Some("agent-1".to_string()),
             make_input_event()
         )));
 
         // Neither matches
-        assert!(!filter.matches(&GlobalEvent::new(
+        assert!(!filter.matches(&make_global_event(
             "session-2",
             Some("agent-2".to_string()),
             make_input_event()
@@ -490,7 +459,7 @@ mod tests {
         assert!(filter.event_types.is_empty());
 
         // Should not match anything since event_types is empty
-        assert!(!filter.matches(&GlobalEvent::new("s1", None, make_input_event())));
+        assert!(!filter.matches(&make_global_event("s1", None, make_input_event())));
     }
 
     #[test]
