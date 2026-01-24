@@ -32,10 +32,12 @@
 //! let messages = builder.build_messages(&session, &session.parts);
 //! ```
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    ExecutionSession, SessionPart, ToolCallPart, ToolCallStatus,
+    ExecutionSession, SessionCompactor, SessionPart, ToolCallPart, ToolCallStatus,
 };
 
 // ============================================================================
@@ -215,13 +217,52 @@ impl ToolCall {
 pub struct MessageBuilder {
     /// Configuration
     config: MessageBuilderConfig,
-    // Note: compactor and overflow_detector will be added in later tasks (6 & 7)
+    /// Optional session compactor for filter_compacted functionality
+    compactor: Option<Arc<SessionCompactor>>,
+    // Note: overflow_detector will be added in a later task (7)
 }
 
 impl MessageBuilder {
     /// Create a new MessageBuilder with the given config
     pub fn new(config: MessageBuilderConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            compactor: None,
+        }
+    }
+
+    /// Create a new MessageBuilder with a compactor for filter_compacted support
+    ///
+    /// When a compactor is provided, `build_from_session` will use
+    /// `filter_compacted` to exclude parts before the compaction boundary.
+    pub fn with_compactor(config: MessageBuilderConfig, compactor: Arc<SessionCompactor>) -> Self {
+        Self {
+            config,
+            compactor: Some(compactor),
+        }
+    }
+
+    /// Build messages from session, applying filter_compacted
+    ///
+    /// This method provides a convenient way to build messages from a session
+    /// while respecting compaction boundaries. If a compactor is configured,
+    /// it will use `filter_compacted` to exclude old parts that have been
+    /// compacted. Otherwise, it uses all session parts directly.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let compactor = Arc::new(SessionCompactor::new());
+    /// let builder = MessageBuilder::with_compactor(config, compactor);
+    /// let messages = builder.build_from_session(&session);
+    /// ```
+    pub fn build_from_session(&self, session: &ExecutionSession) -> Vec<Message> {
+        let filtered_parts = if let Some(ref compactor) = self.compactor {
+            compactor.filter_compacted(session)
+        } else {
+            session.parts.clone()
+        };
+        self.build_messages(session, &filtered_parts)
     }
 
     /// Convert session parts to LLM messages
@@ -413,7 +454,8 @@ impl MessageBuilder {
 mod tests {
     use super::*;
     use crate::components::{
-        AiResponsePart, SummaryPart, ToolCallPart, ToolCallStatus, UserInputPart,
+        AiResponsePart, CompactionMarker, SessionCompactor, SummaryPart, ToolCallPart,
+        ToolCallStatus, UserInputPart,
     };
     use serde_json::json;
 
@@ -768,5 +810,118 @@ mod tests {
         let parsed: Message = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.role, "user");
         assert_eq!(parsed.content, "Test message");
+    }
+
+    #[test]
+    fn test_build_messages_with_filter_compacted() {
+        // Create a session with:
+        // - Old UserInput ("Old message")
+        // - CompactionMarker
+        // - Summary (with compacted_at > 0, indicating complete)
+        // - New UserInput ("New message")
+        //
+        // The filter_compacted method should:
+        // - Exclude "Old message" (before compaction boundary)
+        // - Include the Summary (as Q&A pair)
+        // - Include "New message"
+
+        let mut session = ExecutionSession::new();
+
+        // Add old user input (before compaction)
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Old message".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        // Add compaction marker
+        session.parts.push(SessionPart::CompactionMarker(CompactionMarker {
+            timestamp: 2000,
+            auto: true,
+        }));
+
+        // Add summary (compacted_at > 0 means completed)
+        session.parts.push(SessionPart::Summary(SummaryPart {
+            content: "Previously we discussed old topics.".to_string(),
+            original_count: 5,
+            compacted_at: 2001, // > 0 means completed
+        }));
+
+        // Add new user input (after compaction)
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "New message".to_string(),
+            context: None,
+            timestamp: 3000,
+        }));
+
+        // Create builder with compactor
+        let compactor = Arc::new(SessionCompactor::new());
+        let config = MessageBuilderConfig::default().with_inject_reminders(false);
+        let builder = MessageBuilder::with_compactor(config, compactor);
+
+        // Build messages from session
+        let messages = builder.build_from_session(&session);
+
+        // Verify "Old message" is NOT in output
+        let old_msg_found = messages.iter().any(|m| m.content.contains("Old message"));
+        assert!(
+            !old_msg_found,
+            "Old message should be filtered out by filter_compacted"
+        );
+
+        // Verify summary content IS in output (as Q&A pair)
+        let summary_found = messages
+            .iter()
+            .any(|m| m.content.contains("Previously we discussed old topics."));
+        assert!(summary_found, "Summary content should be in output");
+
+        // Verify the Q&A pair structure for summary
+        let qa_question = messages
+            .iter()
+            .any(|m| m.role == "user" && m.content == "What did we do so far?");
+        assert!(qa_question, "Summary should be converted to Q&A pair");
+
+        // Verify "New message" IS in output
+        let new_msg_found = messages.iter().any(|m| m.content.contains("New message"));
+        assert!(new_msg_found, "New message should be in output");
+    }
+
+    #[test]
+    fn test_build_from_session_without_compactor() {
+        // Without a compactor, build_from_session should use all parts
+        let mut session = ExecutionSession::new();
+
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "First message".to_string(),
+            context: None,
+            timestamp: 1000,
+        }));
+
+        session.parts.push(SessionPart::UserInput(UserInputPart {
+            text: "Second message".to_string(),
+            context: None,
+            timestamp: 2000,
+        }));
+
+        // Create builder WITHOUT compactor
+        let config = MessageBuilderConfig::default().with_inject_reminders(false);
+        let builder = MessageBuilder::new(config);
+
+        let messages = builder.build_from_session(&session);
+
+        // Both messages should be present
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].content.contains("First message"));
+        assert!(messages[1].content.contains("Second message"));
+    }
+
+    #[test]
+    fn test_with_compactor_constructor() {
+        let compactor = Arc::new(SessionCompactor::new());
+        let config = MessageBuilderConfig::default();
+        let builder = MessageBuilder::with_compactor(config, compactor);
+
+        // Verify the compactor is set
+        assert!(builder.compactor.is_some());
     }
 }
