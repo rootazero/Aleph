@@ -34,6 +34,8 @@ struct UnifiedConversationView: View {
 
     // MARK: - Content with Background
 
+    // MARK: - Content with Background
+    
     private var contentWithBackground: some View {
         VStack(spacing: 0) {
             // Content area (mutually exclusive)
@@ -58,7 +60,43 @@ struct UnifiedConversationView: View {
             InputAreaView(viewModel: viewModel)
         }
         .frame(width: 800)
-        .adaptiveGlass()
+        // Optimization: Use .hudWindow material for the "deep" Control Center look
+        // as recommended for the root view.
+        .background(
+            ZStack {
+                // Layer 1: Deep Glass Material
+                // .hudWindow provides the dark, premium feel of Control Center
+                VisualEffectBackground(
+                    material: .hudWindow,
+                    blendingMode: .behindWindow,
+                    state: .active,
+                    isEmphasized: true // Enable Vibrancy
+                )
+                
+                // Layer 2: Subtle Tint/Noise (Optional for texture)
+                // Keeping it clean for now, but ready for noise texture if needed
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        // Layer 3: Specular Highlight (The "1% Rule")
+        // A subtle gradient stroke that defines the edge, fading from light to clear
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            .white.opacity(0.35), // Highlight top-left
+                            .white.opacity(0.1),  // Subtle mid
+                            .white.opacity(0.02)  // Fade to almost clear bottom-right
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        )
+        // Layer 4: Deep Shadow for "Floating" effect
+        .shadow(color: .black.opacity(0.2), radius: 15, x: 0, y: 8)
         .animation(.smooth(duration: 0.25), value: viewModel.displayState)
     }
 

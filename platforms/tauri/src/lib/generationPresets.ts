@@ -1,28 +1,34 @@
 import type { LucideIcon } from 'lucide-react';
+import { Image, Video, Music, Camera } from 'lucide-react';
+import type { ComponentType, SVGProps } from 'react';
 import {
-  Image,
-  Video,
-  Music,
-  Sparkles,
-  Zap,
-  Palette,
-  Wand2,
-  Film,
-  Mic,
-  Radio,
-  Clapperboard,
-  Camera,
-  SpeakerIcon as Speaker,
-  Layers,
-  Bot,
-} from 'lucide-react';
+  DalleIcon,
+  StabilityIcon,
+  MidjourneyIcon,
+  FluxIcon,
+  IdeogramIcon,
+  RunwayIcon,
+  PikaIcon,
+  KlingIcon,
+  LumaIcon,
+  MinimaxIcon,
+  ElevenLabsIcon,
+  OpenAIIcon,
+  SunoIcon,
+  UdioIcon,
+} from '@/components/icons/GenerationIcons';
 
 export type GenerationCategory = 'image' | 'video' | 'audio';
+
+// Icon can be either a Generation Icon or a Lucide Icon
+export type GenerationIcon =
+  | ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>
+  | LucideIcon;
 
 export interface GenerationPresetProvider {
   id: string;
   name: string;
-  icon: LucideIcon;
+  icon: GenerationIcon;
   color: string;
   type: string;
   defaultModel: string;
@@ -37,7 +43,7 @@ export const imageProviders: GenerationPresetProvider[] = [
   {
     id: 'openai-dalle',
     name: 'DALL-E',
-    icon: Sparkles,
+    icon: DalleIcon,
     color: '#10a37f',
     type: 'openai',
     defaultModel: 'dall-e-3',
@@ -47,7 +53,7 @@ export const imageProviders: GenerationPresetProvider[] = [
   {
     id: 'stability-ai',
     name: 'Stability AI',
-    icon: Palette,
+    icon: StabilityIcon,
     color: '#7c3aed',
     type: 'stability',
     defaultModel: 'stable-diffusion-xl-1024-v1-0',
@@ -58,7 +64,7 @@ export const imageProviders: GenerationPresetProvider[] = [
   {
     id: 'midjourney',
     name: 'Midjourney',
-    icon: Wand2,
+    icon: MidjourneyIcon,
     color: '#1a1a2e',
     type: 'midjourney',
     defaultModel: 'midjourney-v6',
@@ -69,7 +75,7 @@ export const imageProviders: GenerationPresetProvider[] = [
   {
     id: 'flux',
     name: 'Flux',
-    icon: Layers,
+    icon: FluxIcon,
     color: '#ff6b6b',
     type: 'replicate',
     defaultModel: 'flux-1.1-pro',
@@ -80,7 +86,7 @@ export const imageProviders: GenerationPresetProvider[] = [
   {
     id: 'ideogram',
     name: 'Ideogram',
-    icon: Image,
+    icon: IdeogramIcon,
     color: '#0ea5e9',
     type: 'ideogram',
     defaultModel: 'ideogram-v2',
@@ -106,7 +112,7 @@ export const videoProviders: GenerationPresetProvider[] = [
   {
     id: 'runway',
     name: 'Runway',
-    icon: Film,
+    icon: RunwayIcon,
     color: '#6366f1',
     type: 'runway',
     defaultModel: 'gen-3-alpha',
@@ -117,7 +123,7 @@ export const videoProviders: GenerationPresetProvider[] = [
   {
     id: 'pika',
     name: 'Pika',
-    icon: Video,
+    icon: PikaIcon,
     color: '#22c55e',
     type: 'pika',
     defaultModel: 'pika-1.0',
@@ -128,7 +134,7 @@ export const videoProviders: GenerationPresetProvider[] = [
   {
     id: 'kling',
     name: 'Kling',
-    icon: Clapperboard,
+    icon: KlingIcon,
     color: '#3b82f6',
     type: 'kling',
     defaultModel: 'kling-v1',
@@ -138,7 +144,7 @@ export const videoProviders: GenerationPresetProvider[] = [
   {
     id: 'luma',
     name: 'Luma Dream Machine',
-    icon: Zap,
+    icon: LumaIcon,
     color: '#8b5cf6',
     type: 'luma',
     defaultModel: 'dream-machine',
@@ -149,7 +155,7 @@ export const videoProviders: GenerationPresetProvider[] = [
   {
     id: 'minimax',
     name: 'MiniMax',
-    icon: Bot,
+    icon: MinimaxIcon,
     color: '#ec4899',
     type: 'minimax',
     defaultModel: 'video-01',
@@ -164,7 +170,7 @@ export const audioProviders: GenerationPresetProvider[] = [
   {
     id: 'elevenlabs',
     name: 'ElevenLabs',
-    icon: Mic,
+    icon: ElevenLabsIcon,
     color: '#f59e0b',
     type: 'elevenlabs',
     defaultModel: 'eleven_multilingual_v2',
@@ -175,7 +181,7 @@ export const audioProviders: GenerationPresetProvider[] = [
   {
     id: 'openai-tts',
     name: 'OpenAI TTS',
-    icon: Speaker,
+    icon: OpenAIIcon,
     color: '#10a37f',
     type: 'openai',
     defaultModel: 'tts-1-hd',
@@ -185,7 +191,7 @@ export const audioProviders: GenerationPresetProvider[] = [
   {
     id: 'suno',
     name: 'Suno',
-    icon: Music,
+    icon: SunoIcon,
     color: '#ef4444',
     type: 'suno',
     defaultModel: 'suno-v3.5',
@@ -196,7 +202,7 @@ export const audioProviders: GenerationPresetProvider[] = [
   {
     id: 'udio',
     name: 'Udio',
-    icon: Radio,
+    icon: UdioIcon,
     color: '#14b8a6',
     type: 'udio',
     defaultModel: 'udio-v1',

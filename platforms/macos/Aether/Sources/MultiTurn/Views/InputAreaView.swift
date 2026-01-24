@@ -42,6 +42,11 @@ private var glassButtonHoverBackground: Color {
 /// Input area with text field, inline attachments, attachment button, and send button
 struct InputAreaView: View {
     @Bindable var viewModel: UnifiedConversationViewModel
+    
+    // Track focus for visual enhancements
+    @FocusState private var isFocused: Bool
+    // Track drag-and-drop targeting for "Energy Flow" effect
+    @State private var isTargeted: Bool = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -74,6 +79,7 @@ struct InputAreaView: View {
                     onArrowDown: { viewModel.moveSelectionDown() },
                     onTab: { viewModel.handleTab() }
                 )
+                .focused($isFocused)
                 .frame(maxWidth: .infinity)
                 .frame(height: 24)
 
@@ -86,11 +92,62 @@ struct InputAreaView: View {
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 6)  // Fixed padding - always same height
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.primary.opacity(0.05))
-            )
+            .padding(.vertical, 6)
+            .background {
+                ZStack {
+                    // 1. Visual Effect Background (Glass Material)
+                    // Using .selection material for that "popped out" look, similar to detailed design
+                    // 1. Visual Effect Background (Glass Material)
+                    // Using .selection material with Vibrancy enabled
+                    VisualEffectBackground(
+                        material: .selection,
+                        blendingMode: .withinWindow,
+                        state: .active,
+                        isEmphasized: true
+                    )
+                    
+                    // 2. Dynamic Inner Shadow / Content Shield
+                    // Adds depth and protects text contrast on complex wallpapers
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isTargeted ? Color.cyan.opacity(0.05) : Color.black.opacity(isFocused ? 0.02 : 0.05))
+                    
+                    // 3. Dynamic Border (Stroke)
+                    // Implements the "1% Rule" and "Energy Flow" on drag hover
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(
+                            isTargeted ? AnyShapeStyle(Color.cyan.gradient) : 
+                                (isFocused ? AnyShapeStyle(.primary.opacity(0.2)) : AnyShapeStyle(LinearGradient(
+                                    colors: [.white.opacity(0.35), .clear, .white.opacity(0.1)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ))),
+                            lineWidth: isTargeted ? 2 : 1
+                        )
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+                // Forward drop handling to view model
+                 Task { @MainActor in
+                    var urls: [URL] = []
+                    for provider in providers {
+                        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                             if let data = await loadItemData(from: provider),
+                                let url = URL(dataRepresentation: data, relativeTo: nil) {
+                                 urls.append(url)
+                             }
+                        }
+                    }
+                    if !urls.isEmpty {
+                        viewModel.addAttachments(urls)
+                    }
+                }
+                return true
+            }
+            .scaleEffect(isTargeted ? 1.02 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+            .animation(.snappy, value: isTargeted)
+
 
             // Attachment button
             AttachmentButton(onFilesSelected: viewModel.addAttachments)
@@ -98,6 +155,7 @@ struct InputAreaView: View {
             // Submit button
             Button(action: viewModel.submit) {
                 Image(systemName: "arrow.up")
+                    .symbolEffect(.bounce, value: isTargeted) // Add bounce effect on target
             }
             .buttonStyle(GlassProminentButtonStyle())
             .disabled(
@@ -106,6 +164,15 @@ struct InputAreaView: View {
             )
         }
         .padding(16)
+    }
+
+    // Helper to load item data safely
+    private func loadItemData(from provider: NSItemProvider) async -> Data? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                continuation.resume(returning: item as? Data)
+            }
+        }
     }
 }
 
@@ -136,6 +203,8 @@ struct AttachmentButton: View {
                 isHovering = hovering
             }
         }
+        // Simplified drop handling here since main input handles it now too, 
+        // but keeping it for direct button drops if users prefer exact targeting
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
             handleDrop(providers: providers)
         }

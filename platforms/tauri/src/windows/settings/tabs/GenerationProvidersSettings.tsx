@@ -73,7 +73,7 @@ function GenerationProviderCard({
         className="w-10 h-10 rounded-lg flex items-center justify-center"
         style={{ backgroundColor: `${preset.color}20` }}
       >
-        <Icon className="h-5 w-5" style={{ color: preset.color }} />
+        <Icon size={20} />
       </div>
       <div className="text-center w-full">
         <p className="text-body font-medium text-foreground">{preset.name}</p>
@@ -135,10 +135,7 @@ function ConfiguredProviderCard({
               className="w-8 h-8 rounded-lg flex items-center justify-center"
               style={{ backgroundColor: `${matchingPreset.color}20` }}
             >
-              <matchingPreset.icon
-                className="h-4 w-4"
-                style={{ color: matchingPreset.color }}
-              />
+              <matchingPreset.icon size={16} />
             </div>
           ) : (
             <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center">

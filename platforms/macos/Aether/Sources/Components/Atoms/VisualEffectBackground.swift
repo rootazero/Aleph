@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 /// A SwiftUI wrapper for NSVisualEffectView providing native macOS blur effects
+/// A SwiftUI wrapper for NSVisualEffectView providing native macOS blur effects
 struct VisualEffectBackground: NSViewRepresentable {
     // MARK: - Properties
 
@@ -11,14 +12,24 @@ struct VisualEffectBackground: NSViewRepresentable {
     /// The blending mode for the visual effect
     var blendingMode: NSVisualEffectView.BlendingMode
 
+    /// The state of the visual effect (active/inactive/followsWindow)
+    var state: NSVisualEffectView.State
+
+    /// Whether to emphasize the background (enables vibrancy)
+    var isEmphasized: Bool
+
     // MARK: - Initialization
 
     init(
         material: NSVisualEffectView.Material = .sidebar,
-        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow,
+        state: NSVisualEffectView.State = .active,
+        isEmphasized: Bool = false
     ) {
         self.material = material
         self.blendingMode = blendingMode
+        self.state = state
+        self.isEmphasized = isEmphasized
     }
 
     // MARK: - NSViewRepresentable
@@ -27,13 +38,16 @@ struct VisualEffectBackground: NSViewRepresentable {
         let view = NSVisualEffectView()
         view.material = material
         view.blendingMode = blendingMode
-        view.state = .active
+        view.state = state
+        view.isEmphasized = isEmphasized
         return view
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = material
         nsView.blendingMode = blendingMode
+        nsView.state = state
+        nsView.isEmphasized = isEmphasized
     }
 }
 
@@ -43,10 +57,17 @@ extension View {
     /// Apply a visual effect background to the view
     func visualEffectBackground(
         material: NSVisualEffectView.Material = .sidebar,
-        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow,
+        state: NSVisualEffectView.State = .active,
+        isEmphasized: Bool = false
     ) -> some View {
         self.background(
-            VisualEffectBackground(material: material, blendingMode: blendingMode)
+            VisualEffectBackground(
+                material: material,
+                blendingMode: blendingMode,
+                state: state,
+                isEmphasized: isEmphasized
+            )
         )
     }
 }
