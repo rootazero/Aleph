@@ -2,6 +2,7 @@
 //!
 //! Communicates with MCP servers via subprocess stdin/stdout using JSON-RPC.
 
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -13,6 +14,7 @@ use tokio::time::timeout;
 
 use crate::error::{AetherError, Result};
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use crate::mcp::transport::McpTransport;
 
 /// Default timeout for RPC calls (30 seconds)
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -316,6 +318,38 @@ impl StdioTransport {
     }
 }
 
+/// Implementation of the McpTransport trait for StdioTransport
+///
+/// This adapts the existing StdioTransport methods to the unified transport interface,
+/// enabling transport-agnostic connection management in the MCP client.
+#[async_trait]
+impl McpTransport for StdioTransport {
+    async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
+        // Delegate to existing send() method
+        self.send(request).await
+    }
+
+    async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
+        // Delegate to existing send_notification() method
+        StdioTransport::send_notification(self, notification).await
+    }
+
+    async fn is_alive(&self) -> bool {
+        // Delegate to existing is_running() method
+        self.is_running().await
+    }
+
+    async fn close(&self) -> Result<()> {
+        // Delegate to existing close() method
+        StdioTransport::close(self).await
+    }
+
+    fn server_name(&self) -> &str {
+        // Delegate to existing name() method
+        self.name()
+    }
+}
+
 impl Drop for StdioTransport {
     fn drop(&mut self) {
         // The child process will be killed automatically due to kill_on_drop(true)
@@ -374,6 +408,46 @@ mod tests {
         let transport = transport.with_timeout(Duration::from_secs(5));
         assert_eq!(transport.timeout, Duration::from_secs(5));
 
+        transport.close().await.unwrap();
+    }
+
+    /// Test that StdioTransport correctly implements the McpTransport trait
+    #[tokio::test]
+    async fn test_stdio_implements_mcp_transport() {
+        use crate::mcp::transport::McpTransport;
+
+        let transport = StdioTransport::spawn("test", "cat", &[], &HashMap::new(), None)
+            .await
+            .unwrap();
+
+        // Verify trait methods work
+        assert!(transport.is_alive().await);
+        assert_eq!(transport.server_name(), "test");
+
+        // Clean up via trait method
+        transport.close().await.unwrap();
+
+        // Verify transport is no longer alive after close
+        assert!(!transport.is_alive().await);
+    }
+
+    /// Test that StdioTransport can be used as a trait object (dyn McpTransport)
+    #[tokio::test]
+    async fn test_stdio_as_trait_object() {
+        use crate::mcp::transport::McpTransport;
+        use std::sync::Arc;
+
+        let transport: Arc<dyn McpTransport> = Arc::new(
+            StdioTransport::spawn("dyn-test", "cat", &[], &HashMap::new(), None)
+                .await
+                .unwrap(),
+        );
+
+        // Verify trait object usage
+        assert!(transport.is_alive().await);
+        assert_eq!(transport.server_name(), "dyn-test");
+
+        // Clean up
         transport.close().await.unwrap();
     }
 }
