@@ -26,7 +26,7 @@ fn test_migrate_command_prompt_hotkey() {
     // Verify new value
     assert_eq!(
         config.shortcuts.as_ref().unwrap().command_prompt,
-        "Option+Space",
+        "Option+Command+Space",
         "Should migrate to new hotkey"
     );
 }
@@ -41,7 +41,7 @@ fn test_migrate_command_prompt_hotkey_noop_when_already_new() {
     config.shortcuts = Some(ShortcutsConfig {
         summon: "Command+Grave".to_string(),
         cancel: Some("Escape".to_string()),
-        command_prompt: "Option+Space".to_string(),
+        command_prompt: "Option+Command+Space".to_string(),
         ocr_capture: "Command+Option+O".to_string(),
     });
 
@@ -52,7 +52,7 @@ fn test_migrate_command_prompt_hotkey_noop_when_already_new() {
     // Verify unchanged
     assert_eq!(
         config.shortcuts.as_ref().unwrap().command_prompt,
-        "Option+Space",
+        "Option+Command+Space",
         "Should remain unchanged"
     );
 }
