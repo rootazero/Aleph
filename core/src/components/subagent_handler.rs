@@ -27,9 +27,6 @@ struct SubAgentSession {
     agent_def: AgentDef,
     parent_session_id: String,
     iteration_count: u32,
-    /// Request ID for result correlation (from SubAgentRequest context)
-    #[allow(dead_code)]
-    request_id: Option<String>,
     /// When the session started
     started_at: Instant,
 }
@@ -159,7 +156,6 @@ impl SubAgentHandler {
             agent_def,
             parent_session_id: request.parent_session_id.clone(),
             iteration_count: 0,
-            request_id: Some(request_id.clone()),
             started_at: Instant::now(),
         };
 

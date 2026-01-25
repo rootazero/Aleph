@@ -157,8 +157,6 @@ impl ToolCallStatus {
 
 /// A pending execution awaiting result
 struct PendingExecution {
-    #[allow(dead_code)]
-    request_id: String,
     created_at: Instant,
     /// Oneshot channel to signal completion
     completion_tx: Option<oneshot::Sender<SubAgentResult>>,
@@ -168,8 +166,6 @@ struct PendingExecution {
 
 /// A completed execution with result
 struct CompletedExecution {
-    #[allow(dead_code)]
-    request_id: String,
     result: SubAgentResult,
     completed_at: Instant,
     /// Aggregated tool call summary
@@ -214,7 +210,6 @@ impl ExecutionCoordinator {
         let (tx, _rx) = oneshot::channel();
 
         let pending = PendingExecution {
-            request_id: request_id.to_string(),
             created_at: Instant::now(),
             completion_tx: Some(tx),
             tool_calls: Vec::new(),
@@ -340,7 +335,6 @@ impl ExecutionCoordinator {
             completed.insert(
                 request_id.clone(),
                 CompletedExecution {
-                    request_id: request_id.clone(),
                     result: result.clone(),
                     completed_at: Instant::now(),
                     tool_summary,

@@ -454,10 +454,7 @@ impl PluginRuntime {
         // Track loaded plugin
         host.loaded_plugins.lock().await.insert(
             plugin_id.clone(),
-            LoadedPlugin {
-                id: plugin_id.clone(),
-                path: path.to_path_buf(),
-            },
+            LoadedPlugin {},
         );
 
         info!("Plugin loaded: {}", plugin_id);
@@ -602,10 +599,8 @@ impl PluginHost {
 /// Information about a loaded plugin
 #[derive(Debug, Clone)]
 struct LoadedPlugin {
-    #[allow(dead_code)]
-    id: String,
-    #[allow(dead_code)]
-    path: PathBuf,
+    // All fields are redundant with HashMap keys
+    // Kept as placeholder for future metadata
 }
 
 /// Create the plugin host script (ESM)
