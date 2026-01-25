@@ -135,8 +135,8 @@ extension McpServerErrorFfi: @unchecked Sendable {}
 // Runtime types
 extension RuntimeUpdateInfo: @unchecked Sendable {}
 
-// Core types - AetherCore wraps thread-safe Rust async runtime
-extension AetherCore: @unchecked Sendable {}
+// Note: AetherCore already has @unchecked Sendable in UniFFI generated code (aether.swift:882)
+// No need to add it again here
 
 // Generation types
 extension GenerationTypeFfi: @unchecked Sendable {}
