@@ -53,7 +53,7 @@ fn test_shortcuts_config_serialization() {
     let shortcuts = ShortcutsConfig {
         summon: "Command+Shift+A".to_string(),
         cancel: Some("Escape".to_string()),
-        command_prompt: "Command+Option+/".to_string(),
+        command_prompt: "Option+Command+Space".to_string(),
         ocr_capture: "Command+Option+O".to_string(),
     };
     let json = serde_json::to_string(&shortcuts).unwrap();
@@ -164,7 +164,7 @@ fn test_config_toml_round_trip() {
     config.shortcuts = Some(ShortcutsConfig {
         summon: "Command+Shift+A".to_string(),
         cancel: Some("Escape".to_string()),
-        command_prompt: "Command+Option+/".to_string(),
+        command_prompt: "Option+Command+Space".to_string(),
         ocr_capture: "Command+Option+O".to_string(),
     });
 
