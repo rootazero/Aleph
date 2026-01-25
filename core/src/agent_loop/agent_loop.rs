@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use tokio::sync::watch;
 
-use crate::error::Result;
 use crate::event::{EventBus, StopReason};
 
 use super::callback::LoopCallback;
@@ -14,7 +13,7 @@ use super::guards::{GuardViolation, LoopGuard};
 use super::loop_result::LoopResult;
 use super::overflow::OverflowDetector;
 use super::session_sync::SessionSync;
-use super::state::{LoopState, LoopStep, RequestContext, Thinking};
+use super::state::{LoopState, LoopStep, RequestContext};
 use super::traits::{ActionExecutor, CompressorTrait, ThinkerTrait};
 
 /// Agent Loop - Main execution controller
@@ -549,6 +548,8 @@ mod tests {
 
     use crate::agent_loop::callback::{CollectingCallback, LoopEvent, NoOpLoopCallback};
     use crate::agent_loop::config::LoopConfig;
+    use crate::agent_loop::state::Thinking;
+    use crate::error::Result;
 
     // Mock Thinker that returns predefined decisions
     struct MockThinker {

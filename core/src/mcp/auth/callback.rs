@@ -161,7 +161,7 @@ impl Default for CallbackServer {
 
 /// Handle an incoming HTTP connection
 async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<CallbackResult> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
     let mut reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
