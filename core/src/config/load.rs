@@ -108,10 +108,16 @@ impl Config {
             info!("Migrated input_mode config to new trigger config");
         }
 
+        // Migrate command_prompt hotkey from Command+Option+/ to Option+Space
+        let hotkey_migrated = config.migrate_command_prompt_hotkey();
+        if hotkey_migrated {
+            info!("Migrated command_prompt hotkey to new default");
+        }
+
         // Auto-save if any migration was performed
         // IMPORTANT: Use incremental save to preserve user's existing config
         // This only updates the migrated sections without overwriting providers, rules, etc.
-        if pii_migrated || trigger_migrated {
+        if pii_migrated || trigger_migrated || hotkey_migrated {
             let mut sections_to_save: Vec<&str> = Vec::new();
 
             if pii_migrated {
@@ -120,6 +126,9 @@ impl Config {
             }
             if trigger_migrated {
                 sections_to_save.push("trigger");
+            }
+            if hotkey_migrated {
+                sections_to_save.push("shortcuts");
             }
 
             if let Err(e) = config.save_incremental(&sections_to_save) {
