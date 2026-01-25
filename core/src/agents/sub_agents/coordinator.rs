@@ -157,6 +157,7 @@ impl ToolCallStatus {
 
 /// A pending execution awaiting result
 struct PendingExecution {
+    #[allow(dead_code)]
     request_id: String,
     created_at: Instant,
     /// Oneshot channel to signal completion
@@ -167,6 +168,7 @@ struct PendingExecution {
 
 /// A completed execution with result
 struct CompletedExecution {
+    #[allow(dead_code)]
     request_id: String,
     result: SubAgentResult,
     completed_at: Instant,

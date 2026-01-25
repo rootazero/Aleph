@@ -239,6 +239,7 @@ impl ToolRegistrar {
     /// conflict with any other tool type.
     ///
     /// Priority: Builtin > Native > Custom > MCP > Skill
+    #[allow(dead_code)]
     pub async fn register_extension_skills(
         &self,
         skills: &[ExtensionSkill],

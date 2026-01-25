@@ -33,6 +33,7 @@ pub trait ActionExecutor: Send + Sync {
 
 /// Deprecated alias for backward compatibility
 #[deprecated(since = "0.2.0", note = "Use ActionExecutor instead")]
+#[allow(dead_code)]
 pub type ExecutorTrait = dyn ActionExecutor;
 
 /// Compressor trait - abstraction for context compression

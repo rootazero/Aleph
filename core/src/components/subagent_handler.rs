@@ -28,6 +28,7 @@ struct SubAgentSession {
     parent_session_id: String,
     iteration_count: u32,
     /// Request ID for result correlation (from SubAgentRequest context)
+    #[allow(dead_code)]
     request_id: Option<String>,
     /// When the session started
     started_at: Instant,

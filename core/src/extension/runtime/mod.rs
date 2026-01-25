@@ -602,7 +602,9 @@ impl PluginHost {
 /// Information about a loaded plugin
 #[derive(Debug, Clone)]
 struct LoadedPlugin {
+    #[allow(dead_code)]
     id: String,
+    #[allow(dead_code)]
     path: PathBuf,
 }
 
