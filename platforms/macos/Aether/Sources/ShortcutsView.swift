@@ -19,9 +19,9 @@ struct ShortcutsView: View {
     @State private var appendKey: ModifierKey = .rightShift
 
     // Command completion hotkey (two modifiers + character)
-    @State private var commandModifier1: CommandModifier = .command
-    @State private var commandModifier2: CommandModifier = .option
-    @State private var commandCharKey: CommandCharKey = .slash
+    @State private var commandModifier1: CommandModifier = .option
+    @State private var commandModifier2: CommandModifier = .command
+    @State private var commandCharKey: CommandCharKey = .space
 
     // OCR capture hotkey (two modifiers + character)
     @State private var ocrModifier1: CommandModifier = .command
@@ -31,9 +31,9 @@ struct ShortcutsView: View {
     // Saved settings (for comparison)
     @State private var savedReplaceKey: ModifierKey = .leftShift
     @State private var savedAppendKey: ModifierKey = .rightShift
-    @State private var savedCommandModifier1: CommandModifier = .command
-    @State private var savedCommandModifier2: CommandModifier = .option
-    @State private var savedCommandCharKey: CommandCharKey = .slash
+    @State private var savedCommandModifier1: CommandModifier = .option
+    @State private var savedCommandModifier2: CommandModifier = .command
+    @State private var savedCommandCharKey: CommandCharKey = .space
     @State private var savedOcrModifier1: CommandModifier = .command
     @State private var savedOcrModifier2: CommandModifier = .option
     @State private var savedOcrCharKey: OcrCharKey = .o
@@ -45,9 +45,9 @@ struct ShortcutsView: View {
     // Default values
     private let defaultReplaceKey: ModifierKey = .leftShift
     private let defaultAppendKey: ModifierKey = .rightShift
-    private let defaultCommandModifier1: CommandModifier = .command
-    private let defaultCommandModifier2: CommandModifier = .option
-    private let defaultCommandCharKey: CommandCharKey = .slash
+    private let defaultCommandModifier1: CommandModifier = .option
+    private let defaultCommandModifier2: CommandModifier = .command
+    private let defaultCommandCharKey: CommandCharKey = .space
     private let defaultOcrModifier1: CommandModifier = .command
     private let defaultOcrModifier2: CommandModifier = .option
     private let defaultOcrCharKey: OcrCharKey = .o
@@ -775,6 +775,7 @@ enum CommandCharKey: String, CaseIterable {
     case comma = ","
     case period = "."
     case space = "Space"
+    case esc = "Esc"
 
     var displayName: String {
         switch self {
@@ -785,12 +786,14 @@ enum CommandCharKey: String, CaseIterable {
         case .comma: return ","
         case .period: return "."
         case .space: return "Space"
+        case .esc: return "Esc"
         }
     }
 
     var displayChar: String {
         switch self {
         case .space: return "␣"
+        case .esc: return "⎋"
         default: return rawValue
         }
     }
@@ -804,6 +807,7 @@ enum CommandCharKey: String, CaseIterable {
         case .comma: return 43
         case .period: return 47
         case .space: return 49
+        case .esc: return 53
         }
     }
 }
