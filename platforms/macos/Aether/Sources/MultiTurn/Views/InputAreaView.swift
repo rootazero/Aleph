@@ -115,7 +115,7 @@ struct InputAreaView: View {
                     // Implements the "1% Rule" and "Energy Flow" on drag hover
                     RoundedRectangle(cornerRadius: 12)
                         .stroke(
-                            isTargeted ? AnyShapeStyle(Color.cyan.gradient) : 
+                            isTargeted ? AnyShapeStyle(Color.cyan.gradient) :
                                 (isFocused ? AnyShapeStyle(.primary.opacity(0.2)) : AnyShapeStyle(LinearGradient(
                                     colors: [.white.opacity(0.35), .clear, .white.opacity(0.1)],
                                     startPoint: .topLeading,
@@ -128,7 +128,7 @@ struct InputAreaView: View {
             }
             .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
                 // Forward drop handling to view model
-                 Task { @MainActor in
+                Task { @MainActor in
                     var urls: [URL] = []
                     for provider in providers {
                         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
