@@ -281,7 +281,7 @@ Aether uses a **double-tap modifier key** system for triggering AI operations:
 
 ### Other Shortcuts
 
-- **Command Prompt**: `Command+Option+/` - Quick command completion
+- **Command Prompt**: `Option+Command+Space` - Quick command completion
 - **OCR Capture**: `Command+Option+O` - Capture screen text
 
 ---
