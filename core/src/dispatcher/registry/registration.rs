@@ -5,6 +5,7 @@
 use tracing::{debug, info, warn};
 
 use crate::config::RoutingRuleConfig;
+use crate::extension::ExtensionSkill;
 use crate::mcp::types::McpToolInfo;
 use crate::skills::SkillInfo;
 
@@ -219,6 +220,67 @@ impl ToolRegistrar {
         }
 
         debug!("Registered {} skills (flat namespace)", skills.len());
+    }
+
+    /// Register extension skills from ExtensionManager (Flat Namespace Mode)
+    ///
+    /// This method registers skills discovered by the ExtensionManager, which
+    /// includes skills from plugins and standalone skill files. Extension skills
+    /// have richer metadata including plugin context and source information.
+    ///
+    /// # Arguments
+    ///
+    /// * `skills` - List of extension skills from ExtensionManager
+    /// * `conflict_resolver` - Conflict resolver for handling name conflicts
+    ///
+    /// # Conflict Resolution
+    ///
+    /// Skills have the lowest priority, so they will be renamed if they
+    /// conflict with any other tool type.
+    ///
+    /// Priority: Builtin > Native > Custom > MCP > Skill
+    pub async fn register_extension_skills(
+        &self,
+        skills: &[ExtensionSkill],
+        conflict_resolver: &ConflictResolver,
+    ) {
+        for skill in skills {
+            let qualified_name = skill.qualified_name();
+            let id = format!("skill:{}", qualified_name);
+
+            // Build display name with plugin context if available
+            let display_name = match &skill.plugin_name {
+                Some(plugin) => format!("{} ({})", skill.name, plugin),
+                None => skill.name.clone(),
+            };
+
+            let tool = UnifiedTool::new(
+                &id,
+                &qualified_name, // Use qualified name (plugin:skill) as command name
+                &skill.description,
+                ToolSource::Skill {
+                    id: qualified_name.clone(),
+                },
+            )
+            .with_display_name(&display_name)
+            .with_icon("lightbulb.fill") // Default Skill icon
+            .with_usage(format!("/{} [input]", qualified_name))
+            // Generate routing regex for flat namespace
+            .with_routing_regex(format!(r"^/{}\s*", regex::escape(&qualified_name)))
+            .with_routing_intent_type("skills")
+            .with_routing_capabilities(vec!["skills".to_string(), "memory".to_string()])
+            .with_routing_strip_prefix(true);
+
+            // Register with automatic conflict resolution
+            conflict_resolver
+                .register_with_conflict_resolution(tool)
+                .await;
+        }
+
+        debug!(
+            "Registered {} extension skills (flat namespace)",
+            skills.len()
+        );
     }
 
     /// Register custom commands from config rules

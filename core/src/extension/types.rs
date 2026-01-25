@@ -109,6 +109,27 @@ impl ExtensionSkill {
     pub fn with_arguments(&self, arguments: &str) -> String {
         self.content.replace("$ARGUMENTS", arguments)
     }
+
+    /// Convert to SkillInfo for compatibility with ToolRegistry
+    ///
+    /// This allows ExtensionSkill to be registered with the existing
+    /// tool registration system.
+    pub fn to_skill_info(&self) -> crate::skills::SkillInfo {
+        crate::skills::SkillInfo {
+            id: self.qualified_name(),
+            name: self.name.clone(),
+            description: self.description.clone(),
+            allowed_tools: Vec::new(), // ExtensionSkill doesn't track allowed tools
+        }
+    }
+
+    /// Get the base directory for this skill (for file references)
+    pub fn base_dir(&self) -> PathBuf {
+        self.source_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
 }
 
 // =============================================================================

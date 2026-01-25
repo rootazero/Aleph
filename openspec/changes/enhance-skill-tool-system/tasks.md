@@ -39,3 +39,10 @@
 - [x] 6.2 Test with actual skill files from `.claude/skills/`
 - [x] 6.3 Verify permission checking works correctly
 - [x] 6.4 Test file reference expansion with edge cases
+
+## 7. Phase 2: Integration
+- [x] 7.1 Add `to_skill_info()` conversion to `ExtensionSkill`
+- [x] 7.2 Add `register_extension_skills()` to `ToolRegistrar`
+- [x] 7.3 Add `request_skill_permission_async()` for EventBus permission flow
+- [x] 7.4 Create `watcher.rs` for skill file hot-reload
+- [x] 7.5 Add watcher tests (7 tests passing)

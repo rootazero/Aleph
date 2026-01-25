@@ -55,12 +55,13 @@ mod registry;
 mod skill_tool;
 mod template;
 mod types;
+pub mod watcher;
 
 pub use error::*;
 pub use loader::*;
 pub use manifest::*;
 pub use registry::*;
-pub use skill_tool::{build_skill_tool_description, check_skill_permission};
+pub use skill_tool::{build_skill_tool_description, check_skill_permission, request_skill_permission_async};
 pub use template::SkillTemplate;
 pub use types::*;
 
