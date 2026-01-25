@@ -139,7 +139,7 @@ struct InputAreaView: View {
                         }
                     }
                     if !urls.isEmpty {
-                        viewModel.addAttachments(urls)
+                        viewModel.addAttachments(urls: urls)
                     }
                 }
                 return true

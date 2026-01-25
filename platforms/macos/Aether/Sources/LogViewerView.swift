@@ -474,7 +474,7 @@ struct LogViewerView_Previews: PreviewProvider {
 }
 
 /// Event handler for SwiftUI Preview
-class PreviewEventHandler: AetherEventHandler {
+final class PreviewEventHandler: AetherEventHandler, @unchecked Sendable {
     func onThinking() {}
     func onToolStart(toolName: String) {}
     func onToolResult(toolName: String, result: String) {}
