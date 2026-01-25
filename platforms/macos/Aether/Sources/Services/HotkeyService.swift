@@ -283,6 +283,7 @@ final class HotkeyService {
         case ",": keyCode = 43
         case ".": keyCode = 47
         case "Space": keyCode = 49
+        case "Esc", "Escape": keyCode = 53
         default: keyCode = 44 // Default to /
         }
 
