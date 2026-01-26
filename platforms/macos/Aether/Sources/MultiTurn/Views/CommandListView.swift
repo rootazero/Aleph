@@ -173,6 +173,12 @@ struct CommandRowView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .reportBubbleGeometry(
+            id: "command-\(command.key)",
+            isUser: false,
+            timestamp: Date().timeIntervalSince1970,
+            index: 0  // Will be overridden by ForEach index
+        )
     }
 }
 
@@ -240,5 +246,11 @@ struct TopicRowView: View {
                 Label(NSLocalizedString("topic.delete", comment: ""), systemImage: "trash")
             }
         }
+        .reportBubbleGeometry(
+            id: "topic-\(topic.id)",
+            isUser: false,
+            timestamp: topic.updatedAt.timeIntervalSince1970,
+            index: 0  // Will be overridden by ForEach index
+        )
     }
 }
