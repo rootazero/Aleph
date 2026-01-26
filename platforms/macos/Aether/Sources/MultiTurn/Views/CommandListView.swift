@@ -151,7 +151,7 @@ struct CommandRowView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("/\(command.key)")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(.white)
 
                     Text(command.description)
                         .font(.system(size: 11))
@@ -210,7 +210,7 @@ struct TopicRowView: View {
                 } else {
                     Text(topic.title)
                         .font(.system(size: 13))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(.white)
                         .lineLimit(1)
                 }
 

@@ -61,11 +61,11 @@ struct AdaptiveGlassModifier: ViewModifier {
                             material: .underWindowBackground,
                             blendingMode: .behindWindow
                         )
-                        // Subtle overlay for glass-like appearance
+                        // Black overlay for darker glass appearance
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.12),
-                                Color.white.opacity(0.06)
+                                Color.black.opacity(0.45),
+                                Color.black.opacity(0.35)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -106,7 +106,7 @@ private struct GlassProminentButtonContent: View {
             // Fallback for macOS 15-25
             configuration.label
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(.white)
                 .padding(10)
                 .background(
                     Circle()
@@ -120,9 +120,9 @@ private struct GlassProminentButtonContent: View {
 
     private var fillColor: Color {
         if !isEnabled {
-            return Color.primary.opacity(0.1)
+            return Color.white.opacity(0.12)
         }
-        return Color.primary.opacity(configuration.isPressed ? 0.20 : 0.12)
+        return Color.white.opacity(configuration.isPressed ? 0.25 : 0.15)
     }
 }
 
@@ -156,7 +156,7 @@ struct GlassButtonModifier: ViewModifier {
             .padding(6)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isHovering ? Color.primary.opacity(0.1) : Color.clear)
+                    .fill(isHovering ? Color.white.opacity(0.15) : Color.clear)
             )
             .onHover { hovering in
                 withAnimation(.easeInOut(duration: 0.15)) {
@@ -187,7 +187,7 @@ struct GlassMessageBubbleModifier: ViewModifier {
             content
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.primary.opacity(0.12))
+                        .fill(Color.white.opacity(0.15))
                 )
         }
     }
@@ -201,17 +201,17 @@ enum GlassColors {
     /// Primary text color for glass surfaces
     /// System automatically applies vibrant treatment for legibility
     static var text: Color {
-        return Color.primary
+        return Color.white
     }
 
     /// Secondary text color for glass surfaces
     static var secondaryText: Color {
-        return Color.secondary
+        return Color.white.opacity(0.8)
     }
 
     /// Icon color for glass surfaces
     static var icon: Color {
-        return Color.primary
+        return Color.white
     }
 }
 
@@ -234,10 +234,10 @@ extension View {
     @ViewBuilder
     func liquidGlassText() -> some View {
         if #available(macOS 26.0, *) {
-            // Let system handle vibrant text color automatically
-            self.foregroundStyle(.primary)
+            // Use white for high contrast on dark glass
+            self.foregroundStyle(.white)
         } else {
-            self.foregroundStyle(.primary)
+            self.foregroundStyle(.white)
         }
     }
 
@@ -245,10 +245,10 @@ extension View {
     @ViewBuilder
     func liquidGlassIcon() -> some View {
         if #available(macOS 26.0, *) {
-            // Let system handle vibrant icon color automatically
-            self.foregroundStyle(.primary)
+            // Use white for high contrast on dark glass
+            self.foregroundStyle(.white)
         } else {
-            self.foregroundStyle(.primary)
+            self.foregroundStyle(.white)
         }
     }
 
@@ -256,9 +256,9 @@ extension View {
     @ViewBuilder
     func liquidGlassSecondaryText() -> some View {
         if #available(macOS 26.0, *) {
-            self.foregroundStyle(.secondary)
+            self.foregroundStyle(.white.opacity(0.8))
         } else {
-            self.foregroundStyle(.secondary)
+            self.foregroundStyle(.white.opacity(0.8))
         }
     }
 

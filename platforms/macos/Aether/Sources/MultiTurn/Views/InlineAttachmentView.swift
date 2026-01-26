@@ -51,7 +51,7 @@ struct CompactAttachmentItem: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .overlay(
                     RoundedRectangle(cornerRadius: 4)
-                        .stroke(.primary.opacity(0.2), lineWidth: 0.5)
+                        .stroke(.white.opacity(0.3), lineWidth: 0.5)
                 )
 
             // Remove button on hover
@@ -83,9 +83,9 @@ struct CompactAttachmentItem: View {
         } else {
             Image(systemName: attachment.fileType.iconName)
                 .font(.system(size: 12))
-                .foregroundColor(.primary.opacity(0.6))
+                .foregroundColor(.white.opacity(0.8))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.primary.opacity(0.08))
+                .background(.white.opacity(0.12))
         }
     }
 }

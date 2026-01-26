@@ -13,27 +13,27 @@ import UniformTypeIdentifiers
 /// Get appropriate text color for glass effect
 /// System automatically applies vibrant treatment for legibility on macOS 26+
 private var glassTextNSColor: NSColor {
-    return .labelColor
+    return .white
 }
 
 /// Get appropriate placeholder color for glass effect
 private var glassPlaceholderNSColor: NSColor {
-    return .secondaryLabelColor
+    return NSColor.white.withAlphaComponent(0.6)
 }
 
 /// Get appropriate indicator background for glass effect
 private var glassIndicatorBackground: Color {
-    return Color.primary.opacity(0.1)
+    return Color.white.opacity(0.15)
 }
 
 /// Get appropriate button background for glass effect
 private var glassButtonBackground: Color {
-    return Color.primary.opacity(0.05)
+    return Color.white.opacity(0.08)
 }
 
 /// Get appropriate button hover background for glass effect
 private var glassButtonHoverBackground: Color {
-    return Color.primary.opacity(0.1)
+    return Color.white.opacity(0.15)
 }
 
 
@@ -93,39 +93,7 @@ struct InputAreaView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background {
-                ZStack {
-                    // 1. Visual Effect Background (Glass Material)
-                    // Using .selection material for that "popped out" look, similar to detailed design
-                    // 1. Visual Effect Background (Glass Material)
-                    // Using .selection material with Vibrancy enabled
-                    VisualEffectBackground(
-                        material: .selection,
-                        blendingMode: .withinWindow,
-                        state: .active,
-                        isEmphasized: true
-                    )
-                    
-                    // 2. Dynamic Inner Shadow / Content Shield
-                    // Adds depth and protects text contrast on complex wallpapers
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(isTargeted ? Color.cyan.opacity(0.05) : Color.black.opacity(isFocused ? 0.02 : 0.05))
-                    
-                    // 3. Dynamic Border (Stroke)
-                    // Implements the "1% Rule" and "Energy Flow" on drag hover
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(
-                            isTargeted ? AnyShapeStyle(Color.cyan.gradient) : 
-                                (isFocused ? AnyShapeStyle(.primary.opacity(0.2)) : AnyShapeStyle(LinearGradient(
-                                    colors: [.white.opacity(0.35), .clear, .white.opacity(0.1)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ))),
-                            lineWidth: isTargeted ? 2 : 1
-                        )
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
+            .modifier(LiquidGlassInputModifier(isTargeted: isTargeted, isFocused: isFocused))
             .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
                 // Forward drop handling to view model
                  Task { @MainActor in
@@ -215,11 +183,11 @@ struct AttachmentButton: View {
     /// System handles vibrant colors automatically
     private var attachmentButtonBackground: Color {
         if isTargeted {
-            return Color.primary.opacity(0.15)
+            return Color.white.opacity(0.20)
         } else if isHovering {
-            return Color.primary.opacity(0.1)
+            return Color.white.opacity(0.12)
         } else {
-            return Color.primary.opacity(0.05)
+            return Color.white.opacity(0.08)
         }
     }
 
@@ -269,6 +237,66 @@ struct AttachmentButton: View {
                     continuation.resume(returning: nil)
                 }
             }
+        }
+    }
+}
+
+// MARK: - Liquid Glass Input Modifier
+
+/// Applies Liquid Glass effect to the input area with dynamic feedback
+/// Uses .clear type for high transparency matching the window
+struct LiquidGlassInputModifier: ViewModifier {
+    let isTargeted: Bool
+    let isFocused: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            // macOS 26+: Use .clear for high transparency with darker dimming
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        // Darker dimming layer: stronger when targeted for visual feedback
+                        .fill(isTargeted ? Color.black.opacity(0.40) : Color.black.opacity(0.25))
+                )
+                .glassEffect(
+                    // Use .clear for transparency, add .interactive() when targeted
+                    isTargeted ? .clear.interactive() : .clear,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                // Scale effect for drag-and-drop visual feedback
+                .scaleEffect(isTargeted ? 1.02 : 1.0)
+                .animation(.snappy, value: isTargeted)
+        } else {
+            // macOS 15-25: Fallback using VisualEffectBackground
+            content
+                .background {
+                    ZStack {
+                        // Base glass layer
+                        VisualEffectBackground(
+                            material: .underWindowBackground,
+                            blendingMode: .withinWindow
+                        )
+
+                        // Dark overlay for visual feedback
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(
+                                isTargeted ? Color.black.opacity(0.40) :
+                                    Color.black.opacity(isFocused ? 0.25 : 0.20)
+                            )
+
+                        // Dynamic border with white color
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(
+                                isTargeted ? Color.white.opacity(0.5) :
+                                    (isFocused ? Color.white.opacity(0.3) :
+                                        Color.white.opacity(0.15)),
+                                lineWidth: isTargeted ? 1.5 : 0.5
+                            )
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .scaleEffect(isTargeted ? 1.02 : 1.0)
+                .animation(.snappy, value: isTargeted)
         }
     }
 }
