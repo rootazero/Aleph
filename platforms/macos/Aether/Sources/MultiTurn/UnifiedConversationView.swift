@@ -42,6 +42,9 @@ struct UnifiedConversationView: View {
                 dominantColors: .constant(colorSampler.dominantColors)
             )
             .ignoresSafeArea()  // Ensure Metal layer fills entire window including edges
+            .onAppear {
+                print("[UnifiedConversationView] Metal view appeared")
+            }
 
             // SwiftUI content overlay
             VStack(spacing: 0) {
@@ -53,6 +56,9 @@ struct UnifiedConversationView: View {
             }
         }
         .coordinateSpace(name: "liquidGlass")
+        .onAppear {
+            print("[UnifiedConversationView] Main view appeared")
+        }
         .background(
             GeometryReader { geometry in
                 Color.clear

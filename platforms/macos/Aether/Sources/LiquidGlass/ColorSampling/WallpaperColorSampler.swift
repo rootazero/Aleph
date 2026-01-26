@@ -37,6 +37,7 @@ final class WallpaperColorSampler: ObservableObject {
     // MARK: - Initialization
 
     init() {
+        print("[WallpaperColorSampler] Initializing...")
         setupDefaultColors()
         setupObservers()
         startPeriodicSampling()
@@ -45,6 +46,7 @@ final class WallpaperColorSampler: ObservableObject {
         Task {
             await sample()
         }
+        print("[WallpaperColorSampler] ✅ Initialized with default colors")
     }
 
     // MARK: - Cleanup

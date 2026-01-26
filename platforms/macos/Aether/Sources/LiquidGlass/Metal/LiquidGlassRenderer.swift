@@ -49,18 +49,22 @@ final class LiquidGlassRenderer: NSObject {
     // MARK: - Initialization
 
     init?(device: MTLDevice) {
+        print("[LiquidGlassRenderer] Initializing with device: \(device.name)")
         self.device = device
 
         guard let queue = device.makeCommandQueue() else {
+            print("[LiquidGlassRenderer] ❌ ERROR: Failed to create command queue")
             return nil
         }
         self.commandQueue = queue
+        print("[LiquidGlassRenderer] ✅ Command queue created")
 
         super.init()
 
         setupPipelines()
         setupBuffers()
         initializeUniforms()
+        print("[LiquidGlassRenderer] ✅ Initialization complete")
     }
 
     // MARK: - Setup
@@ -236,6 +240,7 @@ extension LiquidGlassRenderer: MTKViewDelegate {
 
         guard let drawable = view.currentDrawable,
               let commandBuffer = commandQueue.makeCommandBuffer() else {
+            print("[LiquidGlassRenderer] ❌ WARNING: Failed to get drawable or command buffer")
             semaphore.signal()
             return
         }
@@ -254,6 +259,8 @@ extension LiquidGlassRenderer: MTKViewDelegate {
                 pipeline: pipeline,
                 uniformBuffer: uniformBuffer
             )
+        } else {
+            print("[LiquidGlassRenderer] ⚠️ WARNING: Aurora texture or pipeline not available")
         }
 
         // Render metaballs to texture
@@ -267,6 +274,8 @@ extension LiquidGlassRenderer: MTKViewDelegate {
                 pipeline: pipeline,
                 uniformBuffer: uniformBuffer
             )
+        } else {
+            print("[LiquidGlassRenderer] ⚠️ WARNING: Bubble texture or pipeline not available")
         }
 
         // Final composite to screen
@@ -290,6 +299,8 @@ extension LiquidGlassRenderer: MTKViewDelegate {
             encoder.setFragmentTexture(bubbleTexture, index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
+        } else {
+            print("[LiquidGlassRenderer] ❌ WARNING: Composite pipeline or textures not available")
         }
 
         commandBuffer.present(drawable)

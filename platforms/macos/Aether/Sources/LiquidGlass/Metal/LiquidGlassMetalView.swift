@@ -29,9 +29,14 @@ struct LiquidGlassMetalView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> MTKView {
+        print("[LiquidGlassMetalView] makeNSView called - initializing Metal renderer")
+
         guard let device = MTLCreateSystemDefaultDevice() else {
+            print("[LiquidGlassMetalView] ❌ ERROR: Metal is not supported on this device")
             fatalError("Metal is not supported on this device")
         }
+
+        print("[LiquidGlassMetalView] ✅ Metal device created: \(device.name)")
 
         let mtkView = MTKView(frame: .zero, device: device)
         mtkView.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
@@ -41,10 +46,15 @@ struct LiquidGlassMetalView: NSViewRepresentable {
         mtkView.enableSetNeedsDisplay = false
         mtkView.isPaused = false
 
+        print("[LiquidGlassMetalView] MTKView configured - frame: \(mtkView.frame), pixelFormat: \(mtkView.colorPixelFormat.rawValue)")
+
         // Create renderer
         if let renderer = LiquidGlassRenderer(device: device) {
             context.coordinator.renderer = renderer
             mtkView.delegate = renderer
+            print("[LiquidGlassMetalView] ✅ Renderer created and set as delegate")
+        } else {
+            print("[LiquidGlassMetalView] ❌ ERROR: Failed to create LiquidGlassRenderer")
         }
 
         return mtkView
