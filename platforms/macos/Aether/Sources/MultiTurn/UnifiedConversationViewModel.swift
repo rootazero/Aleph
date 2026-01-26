@@ -920,6 +920,7 @@ final class UnifiedConversationViewModel {
     /// Enables Claude Code-style message flow rendering
     func handlePartUpdate(event: PartUpdateEventFfi) {
         let partType = event.partType
+        let eventType = event.eventType
 
         switch partType {
         case "tool_call":
@@ -1037,3 +1038,4 @@ struct PendingUserInputRequest: Sendable {
         !options.isEmpty
     }
 }
+
