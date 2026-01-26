@@ -46,6 +46,9 @@ final class LiquidGlassRenderer: NSObject {
     // Semaphore for triple buffering
     private let semaphore = DispatchSemaphore(value: 3)
 
+    // Frame counter for logging
+    private var frameCount: Int = 0
+
     // MARK: - Initialization
 
     init?(device: MTLDevice) {
@@ -245,6 +248,12 @@ extension LiquidGlassRenderer: MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        // Log every 60 frames (once per second at 60fps)
+        frameCount += 1
+        if frameCount.isMultiple(of: 60) {
+            print("[LiquidGlassRenderer] draw() called - frame \(frameCount), bubbleCount: \(uniforms.bubbleCount)")
+        }
+
         // Wait for buffer availability
         _ = semaphore.wait(timeout: .distantFuture)
 

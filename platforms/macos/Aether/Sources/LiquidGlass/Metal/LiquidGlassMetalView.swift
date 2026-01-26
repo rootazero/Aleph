@@ -42,17 +42,22 @@ struct LiquidGlassMetalView: NSViewRepresentable {
         mtkView.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         mtkView.colorPixelFormat = .bgra8Unorm
         mtkView.layer?.isOpaque = false
+        mtkView.enableSetNeedsDisplay = false  // Use automatic rendering
+        mtkView.isPaused = false                // Start rendering immediately
         mtkView.preferredFramesPerSecond = 60
-        mtkView.enableSetNeedsDisplay = false
-        mtkView.isPaused = false
 
         print("[LiquidGlassMetalView] MTKView configured - frame: \(mtkView.frame), pixelFormat: \(mtkView.colorPixelFormat.rawValue)")
 
-        // Create renderer
+        // Create and set renderer BEFORE returning the view
+        // This ensures delegate is set when MTKView's displayLink starts
         if let renderer = LiquidGlassRenderer(device: device) {
             context.coordinator.renderer = renderer
             mtkView.delegate = renderer
             print("[LiquidGlassMetalView] ✅ Renderer created and set as delegate")
+
+            // Force initial draw to verify rendering works
+            mtkView.draw()
+            print("[LiquidGlassMetalView] ✅ Initial draw() called")
         } else {
             print("[LiquidGlassMetalView] ❌ ERROR: Failed to create LiquidGlassRenderer")
         }
@@ -68,12 +73,15 @@ struct LiquidGlassMetalView: NSViewRepresentable {
         if mtkView.frame.size.width == 0 || mtkView.frame.size.height == 0 {
             // Frame will be set by SwiftUI layout, but we need to ensure drawable size updates
             print("[LiquidGlassMetalView] ⚠️ WARNING: MTKView has zero size, waiting for layout...")
-        } else {
-            print("[LiquidGlassMetalView] updateNSView - frame: \(mtkView.frame.size)")
         }
 
-        // Update viewport size in renderer
-        renderer.updateViewportSize(mtkView.drawableSize)
+        // Update viewport size in renderer (only log if size changed)
+        let newDrawableSize = mtkView.drawableSize
+        if context.coordinator.lastDrawableSize != newDrawableSize {
+            print("[LiquidGlassMetalView] updateNSView - frame: \(mtkView.frame.size), drawable: \(newDrawableSize)")
+            context.coordinator.lastDrawableSize = newDrawableSize
+            renderer.updateViewportSize(newDrawableSize)
+        }
 
         // Update bubble data
         renderer.updateBubbles(bubbles)
@@ -95,6 +103,7 @@ struct LiquidGlassMetalView: NSViewRepresentable {
 
     class Coordinator {
         var renderer: LiquidGlassRenderer?
+        var lastDrawableSize: CGSize = .zero
     }
 }
 
