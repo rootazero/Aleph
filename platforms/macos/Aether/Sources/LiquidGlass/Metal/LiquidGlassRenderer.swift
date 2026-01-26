@@ -70,15 +70,21 @@ final class LiquidGlassRenderer: NSObject {
     // MARK: - Setup
 
     private func setupPipelines() {
+        print("[LiquidGlassRenderer] Setting up render pipelines...")
+
         guard let library = device.makeDefaultLibrary() else {
-            print("[LiquidGlassRenderer] Failed to create default library")
+            print("[LiquidGlassRenderer] ❌ ERROR: Failed to create default library")
             return
         }
+
+        print("[LiquidGlassRenderer] ✅ Default library created")
 
         let vertexFunction = library.makeFunction(name: "liquidGlassVertex")
         let auroraFragment = library.makeFunction(name: "auroraBackgroundFragment")
         let metaballFragment = library.makeFunction(name: "metaballFusionFragment")
         let compositeFragment = library.makeFunction(name: "liquidGlassCompositeFragment")
+
+        print("[LiquidGlassRenderer] Shader functions - vertex: \(vertexFunction != nil), aurora: \(auroraFragment != nil), metaball: \(metaballFragment != nil), composite: \(compositeFragment != nil)")
 
         // Common pipeline descriptor setup
         let pipelineDescriptor = MTLRenderPipelineDescriptor()
@@ -94,16 +100,19 @@ final class LiquidGlassRenderer: NSObject {
             // Aurora pipeline
             pipelineDescriptor.fragmentFunction = auroraFragment
             auroraPipeline = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            print("[LiquidGlassRenderer] ✅ Aurora pipeline created")
 
             // Metaball pipeline
             pipelineDescriptor.fragmentFunction = metaballFragment
             metaballPipeline = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            print("[LiquidGlassRenderer] ✅ Metaball pipeline created")
 
             // Composite pipeline
             pipelineDescriptor.fragmentFunction = compositeFragment
             compositePipeline = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            print("[LiquidGlassRenderer] ✅ Composite pipeline created")
         } catch {
-            print("[LiquidGlassRenderer] Pipeline creation failed: \(error)")
+            print("[LiquidGlassRenderer] ❌ ERROR: Pipeline creation failed: \(error)")
         }
     }
 
@@ -152,13 +161,18 @@ final class LiquidGlassRenderer: NSObject {
     // MARK: - Texture Management
 
     private func ensureTextures(width: Int, height: Int) {
-        guard width > 0 && height > 0 else { return }
+        guard width > 0 && height > 0 else {
+            print("[LiquidGlassRenderer] ⚠️ WARNING: Cannot create textures with size \(width)x\(height)")
+            return
+        }
 
         // Check if textures need recreation
         if let aurora = auroraTexture,
            aurora.width == width && aurora.height == height {
             return
         }
+
+        print("[LiquidGlassRenderer] Creating textures with size \(width)x\(height)")
 
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
@@ -171,11 +185,18 @@ final class LiquidGlassRenderer: NSObject {
 
         auroraTexture = device.makeTexture(descriptor: textureDescriptor)
         bubbleTexture = device.makeTexture(descriptor: textureDescriptor)
+
+        if auroraTexture != nil && bubbleTexture != nil {
+            print("[LiquidGlassRenderer] ✅ Textures created successfully")
+        } else {
+            print("[LiquidGlassRenderer] ❌ ERROR: Failed to create textures")
+        }
     }
 
     // MARK: - Update Methods
 
     func updateViewportSize(_ size: CGSize) {
+        print("[LiquidGlassRenderer] updateViewportSize called: \(size)")
         viewportSize = SIMD2<Float>(Float(size.width), Float(size.height))
         uniforms.viewportSize = viewportSize
         ensureTextures(width: Int(size.width), height: Int(size.height))
@@ -219,6 +240,7 @@ final class LiquidGlassRenderer: NSObject {
 extension LiquidGlassRenderer: MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        print("[LiquidGlassRenderer] drawableSizeWillChange: \(size)")
         updateViewportSize(size)
     }
 

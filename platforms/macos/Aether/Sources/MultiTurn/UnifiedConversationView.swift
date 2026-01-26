@@ -41,6 +41,7 @@ struct UnifiedConversationView: View {
                 accentColor: .constant(colorSampler.accentColor),
                 dominantColors: .constant(colorSampler.dominantColors)
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)  // Explicit size constraints
             .ignoresSafeArea()  // Ensure Metal layer fills entire window including edges
             .onAppear {
                 print("[UnifiedConversationView] Metal view appeared")
