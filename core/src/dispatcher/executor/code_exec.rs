@@ -342,6 +342,10 @@ pub struct CodeExecutor {
     /// Environment variables to pass
     pass_env: Vec<String>,
 
+    /// Aether-prioritized PATH (Aether runtimes + system PATH)
+    /// If None, uses system PATH only
+    aether_path: Option<String>,
+
     /// Runtime info cache to avoid repeated detection
     runtime_cache:
         std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, RuntimeInfo>>>,
@@ -361,6 +365,7 @@ impl CodeExecutor {
         permission_checker: PathPermissionChecker,
         working_directory: Option<PathBuf>,
         pass_env: Vec<String>,
+        aether_path: Option<String>,
     ) -> Self {
         let sandbox_config = SandboxConfig {
             enabled: sandbox_enabled,
@@ -378,6 +383,7 @@ impl CodeExecutor {
             permission_checker,
             working_directory,
             pass_env,
+            aether_path,
             runtime_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
@@ -569,9 +575,20 @@ impl CodeExecutor {
 
         // Set environment variables
         cmd.env_clear();
+
+        // Special handling for PATH: use Aether PATH if available
+        if let Some(ref aether_path) = self.aether_path {
+            cmd.env("PATH", aether_path);
+        } else if let Ok(system_path) = std::env::var("PATH") {
+            cmd.env("PATH", system_path);
+        }
+
+        // Pass other environment variables (excluding PATH since we handled it above)
         for var in &self.pass_env {
-            if let Ok(value) = std::env::var(var) {
-                cmd.env(var, value);
+            if var != "PATH" {
+                if let Ok(value) = std::env::var(var) {
+                    cmd.env(var, value);
+                }
             }
         }
 
@@ -822,6 +839,7 @@ mod tests {
             permission_checker.clone(),
             None,
             vec!["PATH".to_string()],
+            None, // No aether_path in tests
         );
         assert!(executor.is_runtime_allowed("python3"));
         assert!(executor.is_runtime_allowed("node"));
@@ -838,6 +856,7 @@ mod tests {
             permission_checker,
             None,
             vec!["PATH".to_string()],
+            None, // No aether_path in tests
         );
         assert!(executor2.is_runtime_allowed("bash"));
         assert!(executor2.is_runtime_allowed("python3"));
@@ -858,6 +877,7 @@ mod tests {
             permission_checker,
             None,
             vec!["PATH".to_string()],
+            None, // No aether_path in tests
         );
 
         let task = Task::new(
@@ -985,6 +1005,7 @@ mod tests {
             permission_checker,
             None,
             vec!["PATH".to_string()],
+            None, // No aether_path in tests
         );
 
         // Verify sandbox config is set correctly

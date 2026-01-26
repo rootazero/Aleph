@@ -271,6 +271,19 @@ impl RuntimeManager for UvRuntime {
             None
         }
     }
+
+    fn bin_dir(&self) -> PathBuf {
+        // Return the bin directory of the default venv
+        // This is where python, pip, and other tools are located
+        #[cfg(unix)]
+        {
+            self.default_venv().join("bin")
+        }
+        #[cfg(windows)]
+        {
+            self.default_venv().join("Scripts")
+        }
+    }
 }
 
 #[cfg(test)]
