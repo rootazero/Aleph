@@ -111,6 +111,7 @@ targets:
         HEADER_SEARCH_PATHS:
           - $(inherited)
           - $(PROJECT_DIR)/Aether/Sources/Generated
+          - $(PROJECT_DIR)/Aether/Sources/LiquidGlass/Metal/Shaders
         SWIFT_INCLUDE_PATHS:
           - $(inherited)
           - $(PROJECT_DIR)/Aether/Sources/Generated
