@@ -193,15 +193,15 @@ capabilities = ["memory"]          # Enable memory for all requests
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `cancel` | String | `"Escape"` | Hotkey to cancel operation |
-| `command_prompt` | String | `"Option+Command+Space"` | Command completion hotkey (BREAKING: old configs auto-migrated) |
+| `command_prompt` | String | `"Option+Space"` | Command completion hotkey (BREAKING: old configs auto-migrated) |
 | `ocr_capture` | String | `"Command+Option+O"` | OCR capture hotkey |
 
 #### Breaking Change Notice
 
-As of version X.X, the default `command_prompt` hotkey has changed from `Command+Option+/` to `Option+Command+Space`.
+As of version X.X, the default `command_prompt` hotkey has changed from `Command+Option+/` to `Option+Space`.
 
-- **Automatic Migration**: Old configs with `Command+Option+/` are automatically updated to `Option+Command+Space` on first load
-- **Custom Hotkeys**: If you've set a custom hotkey (not the old default), it will be preserved
+- **Automatic Migration**: Old configs with `Command+Option+/` or `Option+Command+Space` are automatically updated to `Option+Space` on first load
+- **Custom Hotkeys**: If you've set a custom hotkey (not the old defaults), it will be preserved
 - **New Options**: The UI now supports Esc key as a character key option
 
 ### [behavior]
