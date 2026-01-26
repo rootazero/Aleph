@@ -8,6 +8,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import simd
 
 // MARK: - UnifiedConversationView
 
@@ -18,14 +19,40 @@ struct UnifiedConversationView: View {
     /// Maximum height for content area (conversation or command list)
     private let maxContentHeight: CGFloat = 600
 
+    // MARK: - Liquid Glass State
+    @StateObject private var colorSampler = WallpaperColorSampler()
+    @StateObject private var bubbleCollector = BubbleDataCollector()
+    @State private var scrollOffset: CGFloat = 0
+    @State private var scrollVelocity: CGFloat = 0
+    @State private var mousePosition: CGPoint = .zero
+    @State private var inputFocused: Bool = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Spacer pushes content to bottom
-            Spacer(minLength: 0)
+        ZStack {
+            // Metal background layer for Liquid Glass effect
+            LiquidGlassMetalView(
+                bubbles: $bubbleCollector.bubbles,
+                scrollOffset: $scrollOffset,
+                mousePosition: $mousePosition,
+                hoveredBubbleIndex: $bubbleCollector.hoveredIndex,
+                inputFocused: $inputFocused,
+                scrollVelocity: $scrollVelocity,
+                accentColor: .constant(colorSampler.accentColor),
+                dominantColors: .constant(colorSampler.dominantColors)
+            )
 
-            // Main content with glass background
-            contentWithBackground
+            // SwiftUI content overlay
+            VStack(spacing: 0) {
+                // Spacer pushes content to bottom
+                Spacer(minLength: 0)
+
+                // Main content with glass background
+                contentWithBackground
+            }
+        }
+        .coordinateSpace(name: "liquidGlass")
+        .onPreferenceChange(BubbleGeometryPreferenceKey.self) { geometries in
+            bubbleCollector.updateGeometries(geometries, viewportSize: CGSize(width: 800, height: 600))
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers: providers)
@@ -60,23 +87,8 @@ struct UnifiedConversationView: View {
             InputAreaView(viewModel: viewModel)
         }
         .frame(width: 800)
-        // Optimization: Use .hudWindow material for the "deep" Control Center look
-        // as recommended for the root view.
-        .background(
-            ZStack {
-                // Layer 1: Deep Glass Material
-                // .hudWindow provides the dark, premium feel of Control Center
-                VisualEffectBackground(
-                    material: .hudWindow,
-                    blendingMode: .behindWindow,
-                    state: .active,
-                    isEmphasized: true // Enable Vibrancy
-                )
-                
-                // Layer 2: Subtle Tint/Noise (Optional for texture)
-                // Keeping it clean for now, but ready for noise texture if needed
-            }
-        )
+        // Metal layer provides the glass background, so we use transparent background here
+        .background(Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         // Layer 3: Specular Highlight (The "1% Rule")
         // A subtle gradient stroke that defines the edge, fading from light to clear
