@@ -535,7 +535,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Initialize unified HotkeyService (manages all hotkey systems)
         // - Replace/Append hotkeys (double-tap modifier keys)
         // - Vision/OCR hotkey (Cmd+Option+O)
-        // - Multi-turn conversation hotkey (Cmd+Option+/)
+        // - Multi-turn conversation hotkey (Option+Space)
         print("[Aether] Initializing HotkeyService...")
 
         hotkeyService = HotkeyService()
@@ -576,8 +576,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        // Config path for v2 interface
-        let configPath = NSHomeDirectory() + "/.config/aether/config.toml"
+        // Config path for v2 interface (unified path: ~/.aether/)
+        let configPath = NSHomeDirectory() + "/.aether/config.toml"
 
         // Check if config file exists
         if !FileManager.default.fileExists(atPath: configPath) {
@@ -928,13 +928,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Multi-Turn Hotkey Configuration
 
-    /// Multi-turn hotkey modifiers (default: Cmd+Opt)
-    private var multiTurnHotkeyModifiers: NSEvent.ModifierFlags = [.command, .option]
+    /// Multi-turn hotkey modifiers (default: Option)
+    private var multiTurnHotkeyModifiers: NSEvent.ModifierFlags = [.option]
 
-    /// Multi-turn hotkey key code (default: / = 44)
-    private var multiTurnHotkeyKeyCode: UInt16 = 44
+    /// Multi-turn hotkey key code (default: Space = 49)
+    private var multiTurnHotkeyKeyCode: UInt16 = 49
 
-    /// Setup global hotkey for multi-turn conversation (configurable, default: Cmd+Opt+/)
+    /// Setup global hotkey for multi-turn conversation (configurable, default: Option+Space)
     private func setupMultiTurnHotkey() {
         // Load hotkey configuration from config
         loadMultiTurnHotkeyConfig()
@@ -992,7 +992,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
-    /// Parse multi-turn hotkey config string (e.g., "Command+Option+/") and apply it
+    /// Parse multi-turn hotkey config string (e.g., "Option+Space") and apply it
     private func parseAndApplyMultiTurnHotkey(_ configString: String) {
         let parts = configString.split(separator: "+").map { String($0) }
         guard parts.count >= 2 else {
