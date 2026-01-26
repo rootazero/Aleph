@@ -159,6 +159,7 @@ impl CodeExecConfigToml {
             permission_checker,
             working_dir,
             self.pass_env.clone(),
+            None, // aether_path will be set later when RuntimeRegistry is available
         )
     }
 }

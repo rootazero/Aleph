@@ -105,6 +105,21 @@ pub trait RuntimeManager: Send + Sync {
         None
     }
 
+    /// Get the bin directory containing executables
+    ///
+    /// Returns the directory that should be added to PATH to access
+    /// this runtime's executables. For environment managers (uv, fnm),
+    /// this is the bin directory within the environment.
+    ///
+    /// Default implementation returns the parent directory of the
+    /// main executable, which works for most runtimes.
+    fn bin_dir(&self) -> PathBuf {
+        self.executable_path()
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
     /// Migrate from old location if needed
     ///
     /// Called during registry initialization to handle upgrades

@@ -389,6 +389,20 @@ impl RuntimeManager for FnmRuntime {
             None
         }
     }
+
+    fn bin_dir(&self) -> PathBuf {
+        // Return the bin directory of the default Node installation
+        // This is where node, npm, npx, and other tools are located
+        #[cfg(unix)]
+        {
+            self.default_node_dir().join("bin")
+        }
+        #[cfg(windows)]
+        {
+            // On Windows, node.exe and npm.cmd are in the root of the installation
+            self.default_node_dir()
+        }
+    }
 }
 
 #[cfg(test)]
