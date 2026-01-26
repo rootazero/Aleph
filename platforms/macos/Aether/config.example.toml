@@ -57,7 +57,7 @@ summon = "Command+Grave"
 cancel = "Escape"
 
 # Command completion hotkey
-command_prompt = "Option+Command+Space"
+command_prompt = "Option+Space"
 
 # OCR capture hotkey
 ocr_capture = "Command+Option+O"
