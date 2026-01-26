@@ -47,13 +47,21 @@ final class WallpaperColorSampler: ObservableObject {
         }
     }
 
-    deinit {
+    // MARK: - Cleanup
+    // Note: Observer cleanup is handled automatically by ARC.
+    // Timer and notification observers are released when this object is deallocated.
+
+    /// Call this method when the sampler is no longer needed
+    func stopSampling() {
         sampleTimer?.invalidate()
+        sampleTimer = nil
         if let observer = windowObserver {
             NotificationCenter.default.removeObserver(observer)
+            windowObserver = nil
         }
         if let observer = wallpaperObserver {
             DistributedNotificationCenter.default().removeObserver(observer)
+            wallpaperObserver = nil
         }
     }
 
@@ -154,24 +162,16 @@ final class WallpaperColorSampler: ObservableObject {
     }
 
     private func sampleWallpaperColors() async -> [SIMD4<Float>] {
-        // Capture screen behind window
-        guard let screen = NSScreen.main else {
+        // Get wallpaper image URL from workspace (avoids deprecated CGWindowListCreateImage)
+        guard let screen = NSScreen.main,
+              let wallpaperURL = NSWorkspace.shared.desktopImageURL(for: screen) else {
             return dominantColors
         }
 
-        let screenRect = screen.frame
-
-        // Create screenshot of desktop
-        guard let screenshot = CGWindowListCreateImage(
-            screenRect,
-            .optionOnScreenBelowWindow,
-            kCGNullWindowID,
-            .bestResolution
-        ) else {
+        // Load wallpaper image directly from file
+        guard let nsImage = NSImage(contentsOf: wallpaperURL) else {
             return dominantColors
         }
-
-        let nsImage = NSImage(cgImage: screenshot, size: screenRect.size)
 
         // Extract dominant colors
         return DominantColorExtractor.extract(from: nsImage, count: 5)

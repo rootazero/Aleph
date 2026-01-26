@@ -60,7 +60,7 @@ struct MessageBubbleView: View {
         .reportBubbleGeometry(
             id: message.id,
             isUser: isUser,
-            timestamp: message.timestamp?.timeIntervalSince1970 ?? Date().timeIntervalSince1970,
+            timestamp: message.createdAt.timeIntervalSince1970,
             index: index
         )
         .onHover { hovering in

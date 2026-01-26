@@ -214,7 +214,7 @@ final class LiquidGlassRenderer: NSObject {
 
 extension LiquidGlassRenderer: MTKViewDelegate {
 
-    func mtkView(_ view: MTKView, drawableSizeDidChange size: CGSize) {
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         updateViewportSize(size)
     }
 

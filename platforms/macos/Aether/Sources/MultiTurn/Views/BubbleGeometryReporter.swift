@@ -7,12 +7,13 @@
 //
 
 import SwiftUI
+import Combine
 import simd
 
 // MARK: - BubbleGeometryPreferenceKey
 
 struct BubbleGeometryPreferenceKey: PreferenceKey {
-    static var defaultValue: [BubbleGeometry] = []
+    nonisolated(unsafe) static var defaultValue: [BubbleGeometry] = []
 
     static func reduce(value: inout [BubbleGeometry], nextValue: () -> [BubbleGeometry]) {
         value.append(contentsOf: nextValue())
@@ -21,7 +22,7 @@ struct BubbleGeometryPreferenceKey: PreferenceKey {
 
 // MARK: - BubbleGeometry
 
-struct BubbleGeometry: Equatable {
+struct BubbleGeometry: Equatable, Sendable {
     let id: String
     let frame: CGRect
     let isUser: Bool
@@ -101,8 +102,8 @@ extension BubbleGeometry {
         return BubbleData(
             center: center,
             size: size,
-            cornerRadius: 12,  // Default corner radius
-            fusionWeight: 1.0,  // Will be calculated by BubbleFusionCalculator
+            cornerRadius: 12,
+            fusionWeight: 1.0,
             timestamp: Float(timestamp - startTime),
             isUser: isUser,
             isHovered: false,

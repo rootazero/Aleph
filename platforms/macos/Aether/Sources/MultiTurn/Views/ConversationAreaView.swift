@@ -83,12 +83,13 @@ struct ConversationAreaView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     // Display completed messages only (skip streaming message - shown in bottom status area)
-                    ForEach(viewModel.messages) { message in
+                    ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
                         // Skip the streaming message - it will be displayed in the bottom status area
                         if message.id != viewModel.streamingMessageId {
                             MessageBubbleView(
                                 message: message,
-                                onCopy: { viewModel.copyMessage(message) }
+                                onCopy: { viewModel.copyMessage(message) },
+                                index: index
                             )
                             .id(message.id)
                         }
