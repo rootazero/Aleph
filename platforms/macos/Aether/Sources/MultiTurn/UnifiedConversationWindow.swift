@@ -46,8 +46,10 @@ final class UnifiedConversationWindow: NSWindow {
     // MARK: - Initialization
 
     init() {
-        // Start with minimal height (just input area)
-        let initialHeight = Layout.inputAreaHeight + 32  // padding
+        // TEMPORARY: Use larger initial height to test Metal rendering
+        // Normal: Layout.inputAreaHeight + 32 = 92pt
+        // Test: 400pt to see full Aurora effect
+        let initialHeight: CGFloat = 400  // TESTING: increased from 92
 
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: Layout.width, height: initialHeight),
