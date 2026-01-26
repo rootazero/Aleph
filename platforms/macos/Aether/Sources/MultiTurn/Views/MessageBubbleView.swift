@@ -16,6 +16,7 @@ import UniformTypeIdentifiers
 struct MessageBubbleView: View {
     let message: ConversationMessage
     let onCopy: () -> Void
+    let index: Int  // Index for geometry reporting
 
     @State private var isHovering = false
     @State private var storedAttachments: [StoredAttachment] = []
@@ -56,6 +57,12 @@ struct MessageBubbleView: View {
 
             if !isUser { Spacer(minLength: 40) }
         }
+        .reportBubbleGeometry(
+            id: message.id,
+            isUser: isUser,
+            timestamp: message.timestamp?.timeIntervalSince1970 ?? Date().timeIntervalSince1970,
+            index: index
+        )
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
@@ -107,7 +114,8 @@ struct RichMessageContentView: View {
                 .liquidGlassText()
                 .textSelection(.enabled)
                 .padding(12)
-                .glassBubble(isUser: isUser)
+                // Metal layer renders glass effect, use transparent background here
+                .background(Color.clear)
         }
     }
 }
