@@ -26,10 +26,11 @@ struct UnifiedConversationView: View {
     @State private var scrollVelocity: CGFloat = 0
     @State private var mousePosition: CGPoint = .zero
     @State private var inputFocused: Bool = false
+    @State private var viewportSize = CGSize(width: 800, height: 600)  // Dynamic viewport size
 
     var body: some View {
         ZStack {
-            // Metal background layer for Liquid Glass effect
+            // Metal background layer for Liquid Glass effect - fills entire window
             LiquidGlassMetalView(
                 bubbles: $bubbleCollector.bubbles,
                 scrollOffset: $scrollOffset,
@@ -40,6 +41,7 @@ struct UnifiedConversationView: View {
                 accentColor: .constant(colorSampler.accentColor),
                 dominantColors: .constant(colorSampler.dominantColors)
             )
+            .ignoresSafeArea()  // Ensure Metal layer fills entire window including edges
 
             // SwiftUI content overlay
             VStack(spacing: 0) {
@@ -51,8 +53,19 @@ struct UnifiedConversationView: View {
             }
         }
         .coordinateSpace(name: "liquidGlass")
+        .background(
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear {
+                        viewportSize = geometry.size
+                    }
+                    .onChange(of: geometry.size) { _, newSize in
+                        viewportSize = newSize
+                    }
+            }
+        )
         .onPreferenceChange(BubbleGeometryPreferenceKey.self) { geometries in
-            bubbleCollector.updateGeometries(geometries, viewportSize: CGSize(width: 800, height: 600))
+            bubbleCollector.updateGeometries(geometries, viewportSize: viewportSize)
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers: providers)

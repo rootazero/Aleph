@@ -446,6 +446,13 @@ typedef void (*UniffiCallbackInterfaceInitProgressHandlerFfiMethod4)(uint64_t, R
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_EVENT_SUBSCRIPTION_HANDLER_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_EVENT_SUBSCRIPTION_HANDLER_METHOD0
+typedef void (*UniffiCallbackInterfaceEventSubscriptionHandlerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER
 #define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER
 typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
@@ -497,6 +504,15 @@ typedef struct UniffiVTableCallbackInterfaceInitProgressHandlerFfi {
     UniffiCallbackInterfaceInitProgressHandlerFfiMethod3 _Nonnull onDownloadProgress;
     UniffiCallbackInterfaceInitProgressHandlerFfiMethod4 _Nonnull onError;
 } UniffiVTableCallbackInterfaceInitProgressHandlerFfi;
+
+#endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_EVENT_SUBSCRIPTION_HANDLER
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_EVENT_SUBSCRIPTION_HANDLER
+typedef struct UniffiVTableCallbackInterfaceEventSubscriptionHandler {
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+    UniffiCallbackInterfaceClone _Nonnull uniffiClone;
+    UniffiCallbackInterfaceEventSubscriptionHandlerMethod0 _Nonnull onEvent;
+} UniffiVTableCallbackInterfaceEventSubscriptionHandler;
 
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_CLONE_AETHERCORE
@@ -1169,6 +1185,11 @@ void uniffi_aethecore_fn_init_callback_vtable_agentprogresshandler(const UniffiV
 void uniffi_aethecore_fn_init_callback_vtable_initprogresshandlerffi(const UniffiVTableCallbackInterfaceInitProgressHandlerFfi* _Nonnull vtable
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_EVENTSUBSCRIPTIONHANDLER
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_EVENTSUBSCRIPTIONHANDLER
+void uniffi_aethecore_fn_init_callback_vtable_eventsubscriptionhandler(const UniffiVTableCallbackInterfaceEventSubscriptionHandler* _Nonnull vtable
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_GET_SKILLS_DIR_STRING
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_GET_SKILLS_DIR_STRING
 RustBuffer uniffi_aethecore_fn_func_get_skills_dir_string(RustCallStatus *_Nonnull out_status
@@ -1274,6 +1295,16 @@ int8_t uniffi_aethecore_fn_func_needs_first_time_init(RustCallStatus *_Nonnull o
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_RUN_INITIALIZATION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_RUN_INITIALIZATION
 RustBuffer uniffi_aethecore_fn_func_run_initialization(uint64_t handler, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_SUBSCRIBE_EVENTS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_SUBSCRIBE_EVENTS
+RustBuffer uniffi_aethecore_fn_func_subscribe_events(RustBuffer session_id, RustBuffer event_types, uint64_t handler, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_UNSUBSCRIBE_EVENTS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_UNSUBSCRIBE_EVENTS
+void uniffi_aethecore_fn_func_unsubscribe_events(RustBuffer subscription_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUSTBUFFER_ALLOC
@@ -1647,6 +1678,18 @@ uint16_t uniffi_aethecore_checksum_func_needs_first_time_init(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_RUN_INITIALIZATION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_RUN_INITIALIZATION
 uint16_t uniffi_aethecore_checksum_func_run_initialization(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_SUBSCRIBE_EVENTS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_SUBSCRIBE_EVENTS
+uint16_t uniffi_aethecore_checksum_func_subscribe_events(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_UNSUBSCRIBE_EVENTS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_UNSUBSCRIBE_EVENTS
+uint16_t uniffi_aethecore_checksum_func_unsubscribe_events(void
     
 );
 #endif
@@ -2595,6 +2638,12 @@ uint16_t uniffi_aethecore_checksum_method_initprogresshandlerffi_on_download_pro
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_ERROR
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_ERROR
 uint16_t uniffi_aethecore_checksum_method_initprogresshandlerffi_on_error(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_EVENTSUBSCRIPTIONHANDLER_ON_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_EVENTSUBSCRIPTIONHANDLER_ON_EVENT
+uint16_t uniffi_aethecore_checksum_method_eventsubscriptionhandler_on_event(void
     
 );
 #endif

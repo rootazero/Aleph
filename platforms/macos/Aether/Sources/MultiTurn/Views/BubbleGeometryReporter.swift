@@ -131,9 +131,39 @@ class BubbleDataCollector: ObservableObject {
     private var geometries: [BubbleGeometry] = []
     private let startTime: TimeInterval = Date().timeIntervalSince1970
 
+    // Debounce mechanism to prevent multiple updates per frame
+    private var updateTask: Task<Void, Never>?
+    private var pendingGeometries: [BubbleGeometry]?
+    private var pendingViewportSize: CGSize?
+
     func updateGeometries(_ newGeometries: [BubbleGeometry], viewportSize: CGSize) {
-        geometries = newGeometries.sorted { $0.index < $1.index }
-        recalculateBubbles(viewportSize: viewportSize)
+        // Store pending update
+        pendingGeometries = newGeometries
+        pendingViewportSize = viewportSize
+
+        // Cancel previous pending update
+        updateTask?.cancel()
+
+        // Debounce: wait one frame before applying
+        updateTask = Task { @MainActor in
+            // Wait for next frame
+            try? await Task.sleep(nanoseconds: 16_000_000)  // ~1 frame at 60fps
+
+            // Check if cancelled
+            guard !Task.isCancelled,
+                  let geometries = pendingGeometries,
+                  let viewport = pendingViewportSize else {
+                return
+            }
+
+            // Apply update
+            self.geometries = geometries.sorted { $0.index < $1.index }
+            recalculateBubbles(viewportSize: viewport)
+
+            // Clear pending
+            pendingGeometries = nil
+            pendingViewportSize = nil
+        }
     }
 
     func setHoveredBubble(id: String?) {
