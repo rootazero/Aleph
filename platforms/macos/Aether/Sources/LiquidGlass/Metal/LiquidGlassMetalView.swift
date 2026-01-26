@@ -63,6 +63,18 @@ struct LiquidGlassMetalView: NSViewRepresentable {
     func updateNSView(_ mtkView: MTKView, context: Context) {
         guard let renderer = context.coordinator.renderer else { return }
 
+        // CRITICAL: Update MTKView frame to match container size
+        // SwiftUI may initially create view with zero frame
+        if mtkView.frame.size.width == 0 || mtkView.frame.size.height == 0 {
+            // Frame will be set by SwiftUI layout, but we need to ensure drawable size updates
+            print("[LiquidGlassMetalView] ⚠️ WARNING: MTKView has zero size, waiting for layout...")
+        } else {
+            print("[LiquidGlassMetalView] updateNSView - frame: \(mtkView.frame.size)")
+        }
+
+        // Update viewport size in renderer
+        renderer.updateViewportSize(mtkView.drawableSize)
+
         // Update bubble data
         renderer.updateBubbles(bubbles)
 
