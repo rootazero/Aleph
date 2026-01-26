@@ -142,7 +142,7 @@ final class LocalizationManager: @unchecked Sendable {
 
     /// Load language preference from config file
     private func loadLanguageFromConfig() -> String? {
-        let configPath = NSHomeDirectory() + "/.config/aether/config.toml"
+        let configPath = NSHomeDirectory() + "/.aether/config.toml"
 
         guard FileManager.default.fileExists(atPath: configPath),
               let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {

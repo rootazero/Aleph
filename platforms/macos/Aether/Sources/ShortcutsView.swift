@@ -18,9 +18,9 @@ struct ShortcutsView: View {
     @State private var replaceKey: ModifierKey = .leftShift
     @State private var appendKey: ModifierKey = .rightShift
 
-    // Command completion hotkey (two modifiers + character)
+    // Command completion hotkey (one modifier + character, configurable to two)
     @State private var commandModifier1: CommandModifier = .option
-    @State private var commandModifier2: CommandModifier = .command
+    @State private var commandModifier2: CommandModifier? = nil  // Optional second modifier
     @State private var commandCharKey: CommandCharKey = .space
 
     // OCR capture hotkey (two modifiers + character)
@@ -32,7 +32,7 @@ struct ShortcutsView: View {
     @State private var savedReplaceKey: ModifierKey = .leftShift
     @State private var savedAppendKey: ModifierKey = .rightShift
     @State private var savedCommandModifier1: CommandModifier = .option
-    @State private var savedCommandModifier2: CommandModifier = .command
+    @State private var savedCommandModifier2: CommandModifier? = nil
     @State private var savedCommandCharKey: CommandCharKey = .space
     @State private var savedOcrModifier1: CommandModifier = .command
     @State private var savedOcrModifier2: CommandModifier = .option
@@ -46,7 +46,7 @@ struct ShortcutsView: View {
     private let defaultReplaceKey: ModifierKey = .leftShift
     private let defaultAppendKey: ModifierKey = .rightShift
     private let defaultCommandModifier1: CommandModifier = .option
-    private let defaultCommandModifier2: CommandModifier = .command
+    private let defaultCommandModifier2: CommandModifier? = nil
     private let defaultCommandCharKey: CommandCharKey = .space
     private let defaultOcrModifier1: CommandModifier = .command
     private let defaultOcrModifier2: CommandModifier = .option
@@ -88,20 +88,7 @@ struct ShortcutsView: View {
         }
         .onChange(of: replaceKey) { _, _ in syncUnsavedChanges() }
         .onChange(of: appendKey) { _, _ in syncUnsavedChanges() }
-        .onChange(of: commandModifier1) { _, newValue in
-            // Ensure modifier2 is different from modifier1
-            if commandModifier2 == newValue {
-                commandModifier2 = CommandModifier.allCases.first { $0 != newValue } ?? .option
-            }
-            syncUnsavedChanges()
-        }
-        .onChange(of: commandModifier2) { _, newValue in
-            // Ensure modifier1 is different from modifier2
-            if commandModifier1 == newValue {
-                commandModifier1 = CommandModifier.allCases.first { $0 != newValue } ?? .command
-            }
-            syncUnsavedChanges()
-        }
+        .onChange(of: commandModifier1) { _, _ in syncUnsavedChanges() }
         .onChange(of: commandCharKey) { _, _ in syncUnsavedChanges() }
         .onChange(of: ocrModifier1) { _, newValue in
             // Ensure modifier2 is different from modifier1
@@ -283,24 +270,11 @@ struct ShortcutsView: View {
                             .cornerRadius(DesignTokens.CornerRadius.small)
                     }
 
-                    // Hotkey pickers
+                    // Hotkey pickers (single modifier + character)
                     HStack(spacing: DesignTokens.Spacing.sm) {
-                        // First modifier
+                        // Modifier key
                         Picker("", selection: $commandModifier1) {
                             ForEach(CommandModifier.allCases, id: \.self) { modifier in
-                                Text(modifier.displayName).tag(modifier)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
-                        .frame(width: 100)
-
-                        Text("+")
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                        // Second modifier (filtered to exclude first)
-                        Picker("", selection: $commandModifier2) {
-                            ForEach(CommandModifier.allCases.filter { $0 != commandModifier1 }, id: \.self) { modifier in
                                 Text(modifier.displayName).tag(modifier)
                             }
                         }
@@ -500,14 +474,22 @@ struct ShortcutsView: View {
 
     // MARK: - Computed Properties
 
-    /// Display string for command prompt hotkey (e.g., "⌘ ⌥ /")
+    /// Display string for command prompt hotkey (e.g., "⌥ ␣" or "⌥ ⌘ ␣")
     private var commandPromptDisplayString: String {
-        "\(commandModifier1.symbol) \(commandModifier2.symbol) \(commandCharKey.displayChar)"
+        if let mod2 = commandModifier2 {
+            return "\(commandModifier1.symbol) \(mod2.symbol) \(commandCharKey.displayChar)"
+        } else {
+            return "\(commandModifier1.symbol) \(commandCharKey.displayChar)"
+        }
     }
 
-    /// Config string for command prompt (e.g., "Command+Option+/")
+    /// Config string for command prompt (e.g., "Option+Space" or "Option+Command+Space")
     private var commandPromptConfigString: String {
-        "\(commandModifier1.rawValue)+\(commandModifier2.rawValue)+\(commandCharKey.rawValue)"
+        if let mod2 = commandModifier2 {
+            return "\(commandModifier1.rawValue)+\(mod2.rawValue)+\(commandCharKey.rawValue)"
+        } else {
+            return "\(commandModifier1.rawValue)+\(commandCharKey.rawValue)"
+        }
     }
 
     /// Check if command prompt is at default value
@@ -598,19 +580,30 @@ struct ShortcutsView: View {
         }
     }
 
-    /// Parse command prompt string (e.g., "Command+Option+/") into components
+    /// Parse command prompt string (e.g., "Option+Space" or "Option+Command+Space") into components
     private func parseCommandPrompt(_ configString: String) {
         let parts = configString.split(separator: "+").map { String($0) }
-        guard parts.count == 3 else { return }
 
-        if let mod1 = CommandModifier(rawValue: parts[0]) {
-            commandModifier1 = mod1
-        }
-        if let mod2 = CommandModifier(rawValue: parts[1]) {
-            commandModifier2 = mod2
-        }
-        if let key = CommandCharKey(rawValue: parts[2]) {
-            commandCharKey = key
+        if parts.count == 2 {
+            // Single modifier + key (e.g., "Option+Space")
+            if let mod1 = CommandModifier(rawValue: parts[0]) {
+                commandModifier1 = mod1
+            }
+            commandModifier2 = nil
+            if let key = CommandCharKey(rawValue: parts[1]) {
+                commandCharKey = key
+            }
+        } else if parts.count == 3 {
+            // Two modifiers + key (e.g., "Option+Command+Space")
+            if let mod1 = CommandModifier(rawValue: parts[0]) {
+                commandModifier1 = mod1
+            }
+            if let mod2 = CommandModifier(rawValue: parts[1]) {
+                commandModifier2 = mod2
+            }
+            if let key = CommandCharKey(rawValue: parts[2]) {
+                commandCharKey = key
+            }
         }
     }
 

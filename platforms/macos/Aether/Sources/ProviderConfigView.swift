@@ -142,7 +142,7 @@ struct ProviderConfigView: View {
                         FormField(title: "API Key") {
                             SecureField("Enter your API key", text: $apiKey)
                                 .textFieldStyle(.roundedBorder)
-                            Text("Stored in ~/.config/aether/config.toml")
+                            Text("Stored in ~/.aether/config.toml")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }

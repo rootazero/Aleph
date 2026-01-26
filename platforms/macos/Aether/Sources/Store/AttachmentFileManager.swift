@@ -15,7 +15,7 @@ import AppKit
 ///
 /// Directory structure:
 /// ```
-/// ~/.config/aether/
+/// ~/.aether/
 /// ├── conversations.db
 /// └── attachments/
 ///     ├── user/{messageId}/         # User uploaded files
@@ -39,7 +39,7 @@ final class AttachmentFileManager: @unchecked Sendable {
     /// Base attachments directory
     static var attachmentsDirectory: URL {
         let configDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/aether/attachments")
+            .appendingPathComponent(".aether/attachments")
         return configDir
     }
 

@@ -82,7 +82,9 @@ final class UnifiedConversationWindow: NSWindow {
         hasShadow = true
         alphaValue = 0  // Start hidden
 
-        collectionBehavior = [.stationary]
+        // Use .moveToActiveSpace to ensure window appears on current desktop
+        // instead of remembering last desktop (.stationary would remember)
+        collectionBehavior = [.moveToActiveSpace]
         hidesOnDeactivate = false
         isMovableByWindowBackground = true
 

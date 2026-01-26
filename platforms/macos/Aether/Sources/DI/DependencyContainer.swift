@@ -275,7 +275,7 @@ final class DependencyContainer: ObservableObject {
     /// Get the path to the configuration file
     private func getConfigPath() -> String {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        let configDir = homeDir.appendingPathComponent(".config/aether")
+        let configDir = homeDir.appendingPathComponent(".aether")
 
         // Create config directory if it doesn't exist
         try? FileManager.default.createDirectory(
