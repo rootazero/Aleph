@@ -251,9 +251,9 @@
 "settings.shortcuts.start_recording" = "开始录制";
 "settings.shortcuts.apply_hotkey" = "应用此热键";
 "settings.shortcuts.error_requires_modifier" = "必须包含至少一个修饰键（⌘⌥⇧⌃）";
-"settings.shortcuts.command_completion_description" = "按 Option+Command+空格 打开会话窗口，支持多轮对话和命令补全。";
+"settings.shortcuts.command_completion_description" = "按 Option+空格 打开会话窗口，支持多轮对话和命令补全。";
 "settings.shortcuts.command_completion_title" = "会话窗口";
-"settings.shortcuts.command_completion_hint" = "打开多轮对话窗口（默认：Option+Command+空格）";
+"settings.shortcuts.command_completion_hint" = "打开会话窗口（默认：Option+空格）";
 "settings.shortcuts.ocr_capture" = "屏幕OCR";
 "settings.shortcuts.ocr_capture_description" = "按下热键截取屏幕区域并使用OCR提取文字。";
 "settings.shortcuts.ocr_capture_title" = "区域截图OCR";
