@@ -46,7 +46,7 @@ impl Config {
 
     /// Migrate old command_prompt hotkey to new default
     ///
-    /// Replaces "Command+Option+/" with "Option+Command+Space" to force new hotkey.
+    /// Replaces old hotkeys with "Option+Space" to force new hotkey.
     /// This is a breaking change - old configs are automatically updated.
     ///
     /// Returns true if migration was performed
@@ -56,8 +56,13 @@ impl Config {
         // Check if shortcuts config exists and has old hotkey
         if let Some(ref mut shortcuts) = self.shortcuts {
             if shortcuts.command_prompt == "Command+Option+/" {
-                info!("Migrating command_prompt hotkey: Command+Option+/ -> Option+Command+Space");
-                shortcuts.command_prompt = "Option+Command+Space".to_string();
+                info!("Migrating command_prompt hotkey: Command+Option+/ -> Option+Space");
+                shortcuts.command_prompt = "Option+Space".to_string();
+                return true;
+            } else if shortcuts.command_prompt == "Option+Command+Space" {
+                // Also migrate the intermediate default
+                info!("Migrating command_prompt hotkey: Option+Command+Space -> Option+Space");
+                shortcuts.command_prompt = "Option+Space".to_string();
                 return true;
             }
         }

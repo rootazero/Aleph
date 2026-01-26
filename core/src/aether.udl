@@ -315,7 +315,7 @@ dictionary RoutingRuleConfig {
 dictionary ShortcutsConfig {
   string summon;           // Legacy - not used in new trigger system
   string? cancel;
-  string command_prompt;   // Command completion hotkey (e.g., "Command+Option+/")
+  string command_prompt;   // Command completion hotkey (e.g., "Option+Space")
   string ocr_capture;      // OCR capture hotkey (e.g., "Command+Shift+Control+4")
 };
 

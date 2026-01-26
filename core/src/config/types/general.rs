@@ -69,7 +69,7 @@ pub fn default_summon_hotkey() -> String {
 }
 
 pub fn default_command_prompt_hotkey() -> String {
-    "Option+Command+Space".to_string()
+    "Option+Space".to_string()
 }
 
 pub fn default_ocr_capture_hotkey() -> String {
