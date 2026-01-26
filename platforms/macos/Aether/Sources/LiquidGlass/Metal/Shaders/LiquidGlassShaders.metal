@@ -15,7 +15,6 @@ using namespace metal;
 
 // MARK: - Constants
 
-constant float PI = 3.14159265359;
 constant float FUSION_THRESHOLD = 1.0;
 constant float FUSION_SOFTNESS = 0.1;
 

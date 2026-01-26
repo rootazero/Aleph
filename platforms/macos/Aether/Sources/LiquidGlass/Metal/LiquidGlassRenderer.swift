@@ -240,8 +240,9 @@ extension LiquidGlassRenderer: MTKViewDelegate {
             return
         }
 
-        commandBuffer.addCompletedHandler { [weak self] _ in
-            self?.semaphore.signal()
+        let semaphore = self.semaphore
+        commandBuffer.addCompletedHandler { _ in
+            semaphore.signal()
         }
 
         // Render aurora to texture

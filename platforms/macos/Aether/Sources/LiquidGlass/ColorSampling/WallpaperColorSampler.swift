@@ -17,7 +17,7 @@ final class WallpaperColorSampler: ObservableObject {
 
     // MARK: - Published Properties
 
-    @Published private(set) var accentColor: SIMD4<Float> = SIMD4<Float>(0.0, 0.478, 1.0, 1.0)
+    @Published private(set) var accentColor = SIMD4<Float>(0.0, 0.478, 1.0, 1.0)
     @Published private(set) var dominantColors: [SIMD4<Float>] = []
 
     // MARK: - Private Properties
