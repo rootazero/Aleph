@@ -172,11 +172,13 @@ final class MultiTurnCoordinator {
         typewriterTask?.cancel()
         typewriterTask = nil
 
-        // Clean up empty topics (topics with no messages)
+        // Clean up incomplete topics (no messages OR only user messages without AI reply)
         if let topic = currentTopic {
-            let messageCount = ConversationStore.shared.getMessageCount(topicId: topic.id)
-            if messageCount == 0 {
-                print("[MultiTurnCoordinator] Deleting empty topic: \(topic.id)")
+            let messages = ConversationStore.shared.getMessages(topicId: topic.id)
+            let hasAIReply = messages.contains { $0.role == .assistant }
+
+            if messages.isEmpty || !hasAIReply {
+                print("[MultiTurnCoordinator] Deleting incomplete topic: \(topic.id) (messages: \(messages.count), hasAIReply: \(hasAIReply))")
                 ConversationStore.shared.deleteTopic(id: topic.id)
             }
         }
