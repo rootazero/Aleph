@@ -95,10 +95,23 @@ struct InputAreaView: View {
             .padding(.vertical, 6)
             .background {
                 ZStack {
-                    // Metal layer provides glass background, use transparent here
-                    Color.clear
-
-                    // Dynamic Border (Stroke)
+                    // 1. Visual Effect Background (Glass Material)
+                    // Using .selection material for that "popped out" look, similar to detailed design
+                    // 1. Visual Effect Background (Glass Material)
+                    // Using .selection material with Vibrancy enabled
+                    VisualEffectBackground(
+                        material: .selection,
+                        blendingMode: .withinWindow,
+                        state: .active,
+                        isEmphasized: true
+                    )
+                    
+                    // 2. Dynamic Inner Shadow / Content Shield
+                    // Adds depth and protects text contrast on complex wallpapers
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isTargeted ? Color.cyan.opacity(0.05) : Color.black.opacity(isFocused ? 0.02 : 0.05))
+                    
+                    // 3. Dynamic Border (Stroke)
                     // Implements the "1% Rule" and "Energy Flow" on drag hover
                     RoundedRectangle(cornerRadius: 12)
                         .stroke(
@@ -151,12 +164,6 @@ struct InputAreaView: View {
             )
         }
         .padding(16)
-        .reportBubbleGeometry(
-            id: "input-area",
-            isUser: true,
-            timestamp: Date().timeIntervalSince1970,
-            index: -1  // Special index for input area
-        )
     }
 
     // Helper to load item data safely

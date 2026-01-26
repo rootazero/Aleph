@@ -8,7 +8,6 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
-import simd
 
 // MARK: - UnifiedConversationView
 
@@ -19,60 +18,14 @@ struct UnifiedConversationView: View {
     /// Maximum height for content area (conversation or command list)
     private let maxContentHeight: CGFloat = 600
 
-    // MARK: - Liquid Glass State
-    @StateObject private var colorSampler = WallpaperColorSampler()
-    @StateObject private var bubbleCollector = BubbleDataCollector()
-    @State private var scrollOffset: CGFloat = 0
-    @State private var scrollVelocity: CGFloat = 0
-    @State private var mousePosition: CGPoint = .zero
-    @State private var inputFocused: Bool = false
-    @State private var viewportSize = CGSize(width: 800, height: 600)  // Dynamic viewport size
 
     var body: some View {
-        ZStack {
-            // Metal background layer for Liquid Glass effect - fills entire window
-            LiquidGlassMetalView(
-                bubbles: $bubbleCollector.bubbles,
-                scrollOffset: $scrollOffset,
-                mousePosition: $mousePosition,
-                hoveredBubbleIndex: $bubbleCollector.hoveredIndex,
-                inputFocused: $inputFocused,
-                scrollVelocity: $scrollVelocity,
-                accentColor: .constant(colorSampler.accentColor),
-                dominantColors: .constant(colorSampler.dominantColors)
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)  // Explicit size constraints
-            .ignoresSafeArea()  // Ensure Metal layer fills entire window including edges
-            .onAppear {
-                print("[UnifiedConversationView] Metal view appeared")
-            }
+        VStack(spacing: 0) {
+            // Spacer pushes content to bottom
+            Spacer(minLength: 0)
 
-            // SwiftUI content overlay
-            VStack(spacing: 0) {
-                // Spacer pushes content to bottom
-                Spacer(minLength: 0)
-
-                // Main content with glass background
-                contentWithBackground
-            }
-        }
-        .coordinateSpace(name: "liquidGlass")
-        .onAppear {
-            print("[UnifiedConversationView] Main view appeared")
-        }
-        .background(
-            GeometryReader { geometry in
-                Color.clear
-                    .onAppear {
-                        viewportSize = geometry.size
-                    }
-                    .onChange(of: geometry.size) { _, newSize in
-                        viewportSize = newSize
-                    }
-            }
-        )
-        .onPreferenceChange(BubbleGeometryPreferenceKey.self) { geometries in
-            bubbleCollector.updateGeometries(geometries, viewportSize: viewportSize)
+            // Main content with glass background
+            contentWithBackground
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers: providers)
@@ -107,8 +60,23 @@ struct UnifiedConversationView: View {
             InputAreaView(viewModel: viewModel)
         }
         .frame(width: 800)
-        // Metal layer provides the glass background, so we use transparent background here
-        .background(Color.clear)
+        // Optimization: Use .hudWindow material for the "deep" Control Center look
+        // as recommended for the root view.
+        .background(
+            ZStack {
+                // Layer 1: Deep Glass Material
+                // .hudWindow provides the dark, premium feel of Control Center
+                VisualEffectBackground(
+                    material: .hudWindow,
+                    blendingMode: .behindWindow,
+                    state: .active,
+                    isEmphasized: true // Enable Vibrancy
+                )
+                
+                // Layer 2: Subtle Tint/Noise (Optional for texture)
+                // Keeping it clean for now, but ready for noise texture if needed
+            }
+        )
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         // Layer 3: Specular Highlight (The "1% Rule")
         // A subtle gradient stroke that defines the edge, fading from light to clear
