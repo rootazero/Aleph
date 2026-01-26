@@ -5,7 +5,7 @@
 //  Unified hotkey management service that coordinates all hotkey systems:
 //  - GlobalHotkeyMonitor: Double-tap modifier keys (Replace/Append)
 //  - VisionHotkeyManager: OCR capture hotkey
-//  - Multi-turn hotkey: Command prompt hotkey (Cmd+Opt+/)
+//  - Multi-turn hotkey: Command prompt hotkey (Option+Cmd+Space)
 //
 //  Extracted from AppDelegate to improve separation of concerns.
 //
@@ -37,8 +37,8 @@ final class HotkeyService {
     private var multiTurnLocalMonitor: Any?
 
     /// Multi-turn hotkey configuration
-    private var multiTurnModifiers: NSEvent.ModifierFlags = [.command, .option]
-    private var multiTurnKeyCode: UInt16 = 44 // "/" key
+    private var multiTurnModifiers: NSEvent.ModifierFlags = [.option]
+    private var multiTurnKeyCode: UInt16 = 49 // Space key
 
     /// Callbacks for hotkey events
     private var onReplaceTriggered: (() -> Void)?
@@ -67,6 +67,8 @@ final class HotkeyService {
         self.core = core
         self.onReplaceTriggered = onReplace
         self.onAppendTriggered = onAppend
+
+        print("[HotkeyService] Configured with core: \(core != nil ? "available" : "nil")")
     }
 
     // MARK: - Start/Stop All Hotkeys
@@ -240,19 +242,26 @@ final class HotkeyService {
 
     /// Load multi-turn hotkey configuration from core
     private func loadMultiTurnConfig() {
-        guard let core = core else { return }
+        guard let core = core else {
+            print("[HotkeyService] WARNING: Core is nil, cannot load multi-turn hotkey config")
+            print("[HotkeyService] Using default: Option+Space")
+            return
+        }
 
         do {
             let config = try core.loadConfig()
             if let shortcuts = config.shortcuts {
+                print("[HotkeyService] Loading multi-turn hotkey from config: \(shortcuts.commandPrompt)")
                 parseMultiTurnHotkey(shortcuts.commandPrompt)
+            } else {
+                print("[HotkeyService] No shortcuts section in config, using default")
             }
         } catch {
             print("[HotkeyService] Failed to load multi-turn hotkey config: \(error)")
         }
     }
 
-    /// Parse multi-turn hotkey config string (e.g., "Command+Option+/")
+    /// Parse multi-turn hotkey config string (e.g., "Option+Space")
     private func parseMultiTurnHotkey(_ configString: String) {
         let parts = configString.split(separator: "+").map { String($0) }
         guard parts.count >= 2 else {
