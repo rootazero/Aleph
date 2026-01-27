@@ -97,22 +97,40 @@ pub struct SingleStepExecutor<R: ToolRegistry> {
     tool_registry: Arc<R>,
     /// Configuration
     config: SingleStepConfig,
+    /// Tool result cache
+    result_cache: Arc<super::cache_store::ToolResultCache>,
 }
 
 impl<R: ToolRegistry> SingleStepExecutor<R> {
     /// Create a new single-step executor
     pub fn new(tool_registry: Arc<R>) -> Self {
+        let cache_config = super::cache_config::ToolCacheConfig::default();
         Self {
             tool_registry,
             config: SingleStepConfig::default(),
+            result_cache: Arc::new(super::cache_store::ToolResultCache::new(cache_config)),
         }
     }
 
     /// Create with custom configuration
     pub fn with_config(tool_registry: Arc<R>, config: SingleStepConfig) -> Self {
+        let cache_config = super::cache_config::ToolCacheConfig::default();
         Self {
             tool_registry,
             config,
+            result_cache: Arc::new(super::cache_store::ToolResultCache::new(cache_config)),
+        }
+    }
+
+    /// Create with custom cache configuration
+    pub fn with_cache_config(
+        tool_registry: Arc<R>,
+        cache_config: super::cache_config::ToolCacheConfig,
+    ) -> Self {
+        Self {
+            tool_registry,
+            config: SingleStepConfig::default(),
+            result_cache: Arc::new(super::cache_store::ToolResultCache::new(cache_config)),
         }
     }
 
@@ -129,6 +147,21 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
             "Executing tool call"
         );
 
+        // Try to lookup result from cache
+        if let Some(cached_result) = self
+            .result_cache
+            .lookup(&normalized_tool_name, &arguments)
+            .await
+        {
+            let duration_ms = start.elapsed().as_millis() as u64;
+            info!(
+                tool = tool_name,
+                duration_ms,
+                "Tool result returned from cache"
+            );
+            return cached_result;
+        }
+
         // Check if tool exists using normalized name
         if self.tool_registry.get_tool(&normalized_tool_name).is_none() {
             return ActionResult::ToolError {
@@ -141,13 +174,14 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
         let timeout = tokio::time::Duration::from_secs(self.config.timeout_seconds);
         let result = tokio::time::timeout(
             timeout,
-            self.tool_registry.execute_tool(&normalized_tool_name, arguments),
+            self.tool_registry
+                .execute_tool(&normalized_tool_name, arguments.clone()),
         )
         .await;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        match result {
+        let action_result = match result {
             Ok(Ok(output)) => {
                 info!(tool = tool_name, duration_ms, "Tool executed successfully");
                 ActionResult::ToolSuccess { output, duration_ms }
@@ -166,11 +200,21 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
             Err(_) => {
                 error!(tool = tool_name, "Tool execution timed out");
                 ActionResult::ToolError {
-                    error: format!("Tool execution timed out after {}s", self.config.timeout_seconds),
+                    error: format!(
+                        "Tool execution timed out after {}s",
+                        self.config.timeout_seconds
+                    ),
                     retryable: true,
                 }
             }
-        }
+        };
+
+        // Store result in cache
+        self.result_cache
+            .store(&normalized_tool_name, &arguments, &action_result)
+            .await;
+
+        action_result
     }
 }
 

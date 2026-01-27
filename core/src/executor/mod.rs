@@ -29,6 +29,8 @@
 //! ```
 
 mod builtin_registry;
+mod cache_config;
+mod cache_store;
 mod single_step;
 mod types;
 
@@ -36,6 +38,8 @@ pub use builtin_registry::{
     create_tool_boxed, get_builtin_tool_names, is_builtin_tool, BuiltinToolConfig,
     BuiltinToolDefinition, BuiltinToolRegistry, BUILTIN_TOOL_DEFINITIONS,
 };
+pub use cache_config::ToolCacheConfig;
+pub use cache_store::{CacheStats, ToolResultCache};
 pub use single_step::{SingleStepConfig, SingleStepExecutor, ToolRegistry};
 pub use types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
