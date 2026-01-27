@@ -51,19 +51,49 @@ pub fn get_denied_paths() -> Vec<String> {
 /// Check if path is allowed and resolve it
 ///
 /// Path resolution rules:
-/// 1. Absolute paths (starting with `/`) - used as-is
-/// 2. Home paths (starting with `~`) - expanded to home directory
-/// 3. Relative paths - resolved relative to output directory (~/.aether/output/)
+/// 1. Environment variables ($HOME, $USER, etc.) - expanded first
+/// 2. Absolute paths (starting with `/`) - used as-is
+/// 3. Home paths (starting with `~`) - expanded to home directory
+/// 4. Relative paths - resolved relative to output directory (~/.aether/output/)
 pub fn check_and_resolve_path(path: &Path, denied_paths: &[String]) -> Result<PathBuf, ToolError> {
     info!(path = %path.display(), "check_path: input path");
 
+    // First, expand environment variables in the path string
+    let path_str = path.to_string_lossy();
+    let expanded_str = if path_str.contains('$') {
+        let mut result = path_str.to_string();
+
+        // Expand $HOME
+        if let Some(home) = dirs::home_dir() {
+            result = result.replace("$HOME", &home.to_string_lossy());
+        }
+
+        // Expand $USER
+        if let Ok(user) = std::env::var("USER") {
+            result = result.replace("$USER", &user);
+        }
+
+        // Expand other common environment variables
+        for (key, value) in std::env::vars() {
+            let pattern = format!("${}", key);
+            if result.contains(&pattern) {
+                result = result.replace(&pattern, &value);
+            }
+        }
+
+        info!(original = %path_str, expanded = %result, "check_path: expanded environment variables");
+        PathBuf::from(result)
+    } else {
+        path.to_path_buf()
+    };
+
     // Expand ~ to home directory
-    let expanded = if path.starts_with("~") {
+    let expanded = if expanded_str.starts_with("~") {
         let home = dirs::home_dir().ok_or_else(|| {
             ToolError::InvalidArgs("Cannot determine home directory".to_string())
         })?;
-        home.join(path.strip_prefix("~").unwrap())
-    } else if path.is_relative() {
+        home.join(expanded_str.strip_prefix("~").unwrap())
+    } else if expanded_str.is_relative() {
         // Relative paths are resolved to:
         // 1. Current working directory (if set by session/topic)
         // 2. Default output directory (~/.aether/output/)
@@ -77,9 +107,9 @@ pub fn check_and_resolve_path(path: &Path, denied_paths: &[String]) -> Result<Pa
             info!(output_dir = %output_dir.display(), "check_path: using default output directory");
             output_dir
         };
-        base_dir.join(path)
+        base_dir.join(expanded_str)
     } else {
-        path.to_path_buf()
+        expanded_str
     };
 
     info!(expanded = %expanded.display(), exists = expanded.exists(), "check_path: expanded path");

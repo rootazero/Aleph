@@ -14,7 +14,7 @@ use crate::generation::GenerationProviderRegistry;
 use crate::intent::{IntentRouter, RouteResult};
 use crate::skills::SkillsRegistry;
 use crate::tools::AetherToolServerHandle;
-use crate::utils::paths::get_skills_dir;
+use crate::utils::paths::get_all_skills_dirs;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -91,9 +91,9 @@ pub fn process_with_agent_loop(
     // ================================================================
     let mut command_parser = CommandParser::new();
 
-    // Load skills registry
-    if let Ok(skills_dir) = get_skills_dir() {
-        let registry = SkillsRegistry::new(skills_dir);
+    // Load skills registry from all skill directories (including ~/.claude/skills)
+    if let Ok(skills_dirs) = get_all_skills_dirs(None) {
+        let registry = SkillsRegistry::with_directories(skills_dirs);
         if registry.load_all().is_ok() {
             command_parser = command_parser.with_skills_registry(Arc::new(registry));
         }

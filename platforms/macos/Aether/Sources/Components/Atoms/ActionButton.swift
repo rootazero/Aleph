@@ -9,6 +9,8 @@ struct ActionButton: View {
         case primary
         case secondary
         case danger
+        case glass           // Liquid Glass style for glass windows
+        case glassProminent  // Prominent glass button (like send button)
 
         /// Background color for each style
         var backgroundColor: Color {
@@ -19,6 +21,10 @@ struct ActionButton: View {
                 return Color.clear
             case .danger:
                 return DesignTokens.Colors.error
+            case .glass:
+                return Color.white.opacity(0.10)
+            case .glassProminent:
+                return Color.white.opacity(0.15)
             }
         }
 
@@ -29,6 +35,8 @@ struct ActionButton: View {
                 return .white
             case .secondary:
                 return DesignTokens.Colors.textPrimary
+            case .glass, .glassProminent:
+                return .white  // System applies vibrant treatment on macOS 26+
             }
         }
 
@@ -39,6 +47,20 @@ struct ActionButton: View {
                 return Color.clear
             case .secondary:
                 return DesignTokens.Colors.border
+            case .glass:
+                return Color.white.opacity(0.15)
+            case .glassProminent:
+                return Color.white.opacity(0.20)
+            }
+        }
+
+        /// Whether this is a glass style (requires special rendering)
+        var isGlassStyle: Bool {
+            switch self {
+            case .glass, .glassProminent:
+                return true
+            default:
+                return false
             }
         }
     }
@@ -135,14 +157,14 @@ struct ActionButton: View {
             }
             .padding(.horizontal, size.horizontalPadding)
             .padding(.vertical, size.verticalPadding)
-            .foregroundColor(isDisabled ? DesignTokens.Colors.textDisabled : style.foregroundColor)
+            .foregroundColor(isDisabled ? disabledTextColor : style.foregroundColor)
             .background(
-                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small)
-                    .fill(isDisabled ? DesignTokens.Colors.border : style.backgroundColor)
+                // Render background based on style
+                buttonBackground
             )
             .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small)
-                    .stroke(style.borderColor, lineWidth: 1)
+                RoundedRectangle(cornerRadius: buttonCornerRadius)
+                    .stroke(style.borderColor, lineWidth: style.isGlassStyle ? 0.5 : 1)
             )
             .scaleEffect(isPressed ? 0.95 : 1.0)
             .animation(DesignTokens.Animation.quick, value: isPressed)
@@ -160,6 +182,49 @@ struct ActionButton: View {
                     isPressed = false
                 }
         )
+    }
+
+    // MARK: - Helper Views
+
+    /// Button background with glass effect support
+    @ViewBuilder
+    private var buttonBackground: some View {
+        if style.isGlassStyle {
+            if #available(macOS 26.0, *) {
+                // macOS 26+: Use native glass effect
+                RoundedRectangle(cornerRadius: buttonCornerRadius)
+                    .fill(style.backgroundColor)
+                    .glassEffect(
+                        style == .glassProminent ? .regular.interactive() : .regular,
+                        in: RoundedRectangle(cornerRadius: buttonCornerRadius)
+                    )
+            } else {
+                // Fallback: Semi-transparent background
+                RoundedRectangle(cornerRadius: buttonCornerRadius)
+                    .fill(style.backgroundColor)
+            }
+        } else {
+            // Non-glass styles: regular fill
+            RoundedRectangle(cornerRadius: buttonCornerRadius)
+                .fill(isDisabled ? DesignTokens.Colors.border : style.backgroundColor)
+        }
+    }
+
+    /// Corner radius based on size
+    private var buttonCornerRadius: CGFloat {
+        switch size {
+        case .small:
+            return 6
+        case .medium:
+            return 8
+        case .large:
+            return 10
+        }
+    }
+
+    /// Disabled text color based on style
+    private var disabledTextColor: Color {
+        style.isGlassStyle ? Color.white.opacity(0.4) : DesignTokens.Colors.textDisabled
     }
 
     // MARK: - Actions
@@ -186,6 +251,19 @@ struct ActionButton: View {
         ActionButton("Danger Button", style: .danger) {
             print("Danger tapped")
         }
+
+        // Glass styles (shown on glass background)
+        VStack(spacing: 12) {
+            ActionButton("Glass Button", icon: "sparkles", style: .glass) {
+                print("Glass tapped")
+            }
+
+            ActionButton("Glass Prominent", icon: "arrow.up", style: .glassProminent) {
+                print("Glass Prominent tapped")
+            }
+        }
+        .padding()
+        .adaptiveGlass()
     }
     .padding()
 }
@@ -205,6 +283,35 @@ struct ActionButton: View {
         }
     }
     .padding()
+}
+
+#Preview("Glass Buttons on Glass Surface") {
+    ZStack {
+        // Simulated glass background
+        LinearGradient(
+            colors: [.blue.opacity(0.6), .purple.opacity(0.6)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+
+        VStack(spacing: 16) {
+            Text("Glass Button Styles")
+                .font(.headline)
+                .liquidGlassText()
+
+            ActionButton("Confirm", icon: "checkmark", style: .glass) {}
+            ActionButton("Cancel", icon: "xmark", style: .glass) {}
+            ActionButton("Send", icon: "arrow.up", style: .glassProminent) {}
+
+            HStack(spacing: 12) {
+                ActionButton("Retry", icon: "arrow.clockwise", style: .glass, size: .small) {}
+                ActionButton("Skip", icon: "arrow.forward", style: .glass, size: .small) {}
+            }
+        }
+        .padding(20)
+        .adaptiveGlass()
+    }
+    .frame(width: 320, height: 360)
 }
 
 #Preview("Disabled States") {

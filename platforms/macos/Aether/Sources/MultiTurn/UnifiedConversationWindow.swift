@@ -86,6 +86,8 @@ final class UnifiedConversationWindow: NSWindow {
         // instead of remembering last desktop (.stationary would remember)
         collectionBehavior = [.moveToActiveSpace]
         hidesOnDeactivate = false
+        // Enable window dragging by background in blank areas
+        // Interactive elements (text fields, buttons) will automatically block dragging
         isMovableByWindowBackground = true
 
         titlebarAppearsTransparent = true

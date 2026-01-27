@@ -109,7 +109,7 @@ struct InputAreaView: View {
                     if !urls.isEmpty {
                         viewModel.addAttachments(urls: urls)
                     }
-                }
+                 }
                 return true
             }
             .scaleEffect(isTargeted ? 1.02 : 1.0)
@@ -132,6 +132,8 @@ struct InputAreaView: View {
             )
         }
         .padding(16)
+        // Blank areas around interactive elements allow window dragging
+        // (enabled by isMovableByWindowBackground=true in window setup)
     }
 
     // Helper to load item data safely
@@ -146,49 +148,84 @@ struct InputAreaView: View {
 
 // MARK: - AttachmentButton
 
-/// Button to add attachments via file picker or drag-drop
+/// Button to add attachments via file picker or drag-drop with glass effect
 struct AttachmentButton: View {
     let onFilesSelected: ([URL]) -> Void
 
     @State private var isHovering = false
     @State private var isTargeted = false
+    @State private var isPressed = false
 
     var body: some View {
         Button(action: openFilePicker) {
-            Image(systemName: "plus")
+            Image(systemName: "paperclip")
                 .font(.system(size: 14, weight: .medium))
                 .liquidGlassIcon()
-                .opacity(isHovering ? 1.0 : 0.7)
+                .opacity(buttonOpacity)
+                .symbolEffect(.bounce, value: isTargeted)
         }
         .buttonStyle(.plain)
-        .frame(width: 28, height: 28)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(attachmentButtonBackground)
+        .frame(width: 32, height: 32)
+        .background(buttonBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(strokeOpacity), lineWidth: 0.5)
         )
+        .scaleEffect(isPressed ? 0.92 : (isTargeted ? 1.05 : 1.0))
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.1)) {
+            withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
             }
         }
-        // Simplified drop handling here since main input handles it now too, 
-        // but keeping it for direct button drops if users prefer exact targeting
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
             handleDrop(providers: providers)
         }
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isTargeted)
+        .animation(.easeInOut(duration: 0.1), value: isPressed)
         .help(NSLocalizedString("multiturn.attachment.add", comment: ""))
     }
 
-    /// Adaptive background color for glass effect
-    /// System handles vibrant colors automatically
-    private var attachmentButtonBackground: Color {
+    /// Adaptive background with glass effect
+    @ViewBuilder
+    private var buttonBackground: some View {
+        if #available(macOS 26.0, *) {
+            // macOS 26+: Use glass effect
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(baseFillColor)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else {
+            // Fallback: Semi-transparent background
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(baseFillColor)
+        }
+    }
+
+    /// Base fill color adapts to state
+    private var baseFillColor: Color {
         if isTargeted {
-            return Color.white.opacity(0.20)
+            return Color.white.opacity(0.22)
+        } else if isPressed {
+            return Color.white.opacity(0.15)
         } else if isHovering {
             return Color.white.opacity(0.12)
         } else {
             return Color.white.opacity(0.08)
         }
+    }
+
+    /// Icon opacity adapts to state
+    private var buttonOpacity: Double {
+        isTargeted || isHovering ? 1.0 : 0.7
+    }
+
+    /// Stroke opacity for border
+    private var strokeOpacity: Double {
+        isTargeted ? 0.35 : (isHovering ? 0.20 : 0.10)
     }
 
     private func openFilePicker() {

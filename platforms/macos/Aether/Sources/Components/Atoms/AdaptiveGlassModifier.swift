@@ -34,9 +34,11 @@ extension EnvironmentValues {
 struct AdaptiveGlassModifier: ViewModifier {
 
     let cornerRadius: CGFloat
+    let overlayOpacity: Double
 
-    init(cornerRadius: CGFloat = 12) {
+    init(cornerRadius: CGFloat = 12, overlayOpacity: Double = 0.40) {
         self.cornerRadius = cornerRadius
+        self.overlayOpacity = overlayOpacity
     }
 
     func body(content: Content) -> some View {
@@ -52,7 +54,8 @@ struct AdaptiveGlassModifier: ViewModifier {
                 // Additional clip to remove any glassEffect edge artifacts
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         } else {
-            // Fallback for macOS 15-25: NSVisualEffectView
+            // Fallback for macOS 15-25: NSVisualEffectView with fixed overlay
+            // For smaller UI elements (Halo, toasts), fixed opacity is sufficient
             content
                 .environment(\.isInGlass, true)
                 .background(
@@ -62,14 +65,7 @@ struct AdaptiveGlassModifier: ViewModifier {
                             blendingMode: .behindWindow
                         )
                         // Black overlay for darker glass appearance
-                        LinearGradient(
-                            colors: [
-                                Color.black.opacity(0.45),
-                                Color.black.opacity(0.35)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+                        Color.black.opacity(overlayOpacity)
                     }
                 )
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -220,9 +216,11 @@ enum GlassColors {
 extension View {
 
     /// Apply adaptive glass effect (Liquid Glass on macOS 26+, VisualEffect fallback on earlier)
-    /// - Parameter cornerRadius: Corner radius for the glass shape (default: 12)
-    func adaptiveGlass(cornerRadius: CGFloat = 12) -> some View {
-        modifier(AdaptiveGlassModifier(cornerRadius: cornerRadius))
+    /// - Parameters:
+    ///   - cornerRadius: Corner radius for the glass shape (default: 12)
+    ///   - overlayOpacity: Fixed overlay opacity for fallback mode (default: 0.40)
+    func adaptiveGlass(cornerRadius: CGFloat = 12, overlayOpacity: Double = 0.40) -> some View {
+        modifier(AdaptiveGlassModifier(cornerRadius: cornerRadius, overlayOpacity: overlayOpacity))
     }
 
     /// Apply secondary glass button style with hover effect

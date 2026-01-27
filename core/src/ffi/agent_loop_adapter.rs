@@ -305,6 +305,25 @@ impl FfiLoopCallback {
 
     /// Publish a Part event to the FFI handler
     async fn publish_part_event(&self, data: PartUpdateData) {
+        use tracing::warn;
+
+        // Log Part event publication with session_id check
+        if data.session_id.is_empty() {
+            warn!(
+                part_type = %data.part_type,
+                event_type = ?data.event_type,
+                "Publishing Part event with EMPTY session_id - this may indicate session not started"
+            );
+        } else {
+            debug!(
+                session_id = %data.session_id,
+                part_id = %data.part_id,
+                part_type = %data.part_type,
+                event_type = ?data.event_type,
+                "Publishing Part event to FFI handler"
+            );
+        }
+
         let ffi_event = PartUpdateEventFFI::from(&data);
         self.handler.on_part_update(ffi_event);
     }

@@ -160,6 +160,15 @@ final class UnifiedConversationViewModel {
         displayState == .conversation && hasMessages
     }
 
+    /// Whether to show status bar (when processing even without messages)
+    var shouldShowStatus: Bool {
+        // Show status when:
+        // 1. There's active loading/processing
+        // 2. There's status text to display
+        // 3. There are active tool calls
+        statusIsLoading || !statusText.isEmpty || !activeToolCalls.isEmpty
+    }
+
     /// Whether to show command list
     var shouldShowCommandList: Bool {
         displayState.isShowingCommands
@@ -920,7 +929,11 @@ final class UnifiedConversationViewModel {
     /// Enables Claude Code-style message flow rendering
     func handlePartUpdate(event: PartUpdateEventFfi) {
         let partType = event.partType
-        _ = event.eventType
+        let eventType = event.eventType
+
+        print("[UnifiedViewModel] 🔔 Part Update received: type=\(partType), event=\(eventType), sessionId=\(event.sessionId)")
+        print("[UnifiedViewModel] 🔔 Part Update JSON: \(event.partJson.prefix(200))...")
+        print("[UnifiedViewModel] 🔔 Current state: statusText=\"\(statusText)\", statusIsLoading=\(statusIsLoading), activeToolCalls=\(activeToolCalls.count)")
 
         switch partType {
         case "tool_call":
@@ -930,8 +943,10 @@ final class UnifiedConversationViewModel {
             handleStreamingPartUpdate(event: event)
 
         default:
-            print("[UnifiedViewModel] Unknown part type: \(partType)")
+            print("[UnifiedViewModel] ⚠️ Unknown part type: \(partType)")
         }
+
+        print("[UnifiedViewModel] 🔔 After update: statusText=\"\(statusText)\", statusIsLoading=\(statusIsLoading), activeToolCalls=\(activeToolCalls.count)")
     }
 
     /// Handle tool call part updates
