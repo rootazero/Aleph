@@ -161,6 +161,23 @@ impl PromptBuilder {
         prompt.push_str("  }\n");
         prompt.push_str("}\n");
         prompt.push_str("```\n\n");
+        prompt.push_str("### ask_user Format Details\n");
+        prompt.push_str("When using `ask_user`, the `options` field MUST be an array of SEPARATE choices:\n");
+        prompt.push_str("- ✅ CORRECT: [\"Option 1\", \"Option 2\", \"Option 3\"]\n");
+        prompt.push_str("- ❌ WRONG: [\"Option 1 / Option 2 / Option 3\"] (single merged string)\n");
+        prompt.push_str("- Each option should be a standalone, selectable choice\n");
+        prompt.push_str("- If no options (free-form text input), omit the field or use empty array\n\n");
+        prompt.push_str("Example:\n");
+        prompt.push_str("```json\n");
+        prompt.push_str("{\n");
+        prompt.push_str("  \"reasoning\": \"Need user to select image format\",\n");
+        prompt.push_str("  \"action\": {\n");
+        prompt.push_str("    \"type\": \"ask_user\",\n");
+        prompt.push_str("    \"question\": \"Which output format do you prefer?\",\n");
+        prompt.push_str("    \"options\": [\"PNG\", \"JPEG\", \"WebP\"]\n");
+        prompt.push_str("  }\n");
+        prompt.push_str("}\n");
+        prompt.push_str("```\n\n");
         prompt.push_str("### Completion Summary Format\n");
         prompt.push_str("When `type=complete`, the `summary` should be a well-formatted report:\n");
         prompt.push_str("```\n");
@@ -384,6 +401,23 @@ impl PromptBuilder {
         prompt.push_str("  }\n");
         prompt.push_str("}\n");
         prompt.push_str("```\n\n");
+        prompt.push_str("### ask_user Format Details\n");
+        prompt.push_str("When using `ask_user`, the `options` field MUST be an array of SEPARATE choices:\n");
+        prompt.push_str("- ✅ CORRECT: [\"Option 1\", \"Option 2\", \"Option 3\"]\n");
+        prompt.push_str("- ❌ WRONG: [\"Option 1 / Option 2 / Option 3\"] (single merged string)\n");
+        prompt.push_str("- Each option should be a standalone, selectable choice\n");
+        prompt.push_str("- If no options (free-form text input), omit the field or use empty array\n\n");
+        prompt.push_str("Example:\n");
+        prompt.push_str("```json\n");
+        prompt.push_str("{\n");
+        prompt.push_str("  \"reasoning\": \"Need user to select image format\",\n");
+        prompt.push_str("  \"action\": {\n");
+        prompt.push_str("    \"type\": \"ask_user\",\n");
+        prompt.push_str("    \"question\": \"Which output format do you prefer?\",\n");
+        prompt.push_str("    \"options\": [\"PNG\", \"JPEG\", \"WebP\"]\n");
+        prompt.push_str("  }\n");
+        prompt.push_str("}\n");
+        prompt.push_str("```\n\n");
         prompt.push_str("### Completion Summary Format\n");
         prompt.push_str("When `type=complete`, the `summary` should be a well-formatted report:\n");
         prompt.push_str("```\n");
@@ -508,9 +542,17 @@ impl PromptBuilder {
                 step.reasoning, step.action_type, step.action_args
             )));
 
-            // Tool result - use full output to ensure LLM sees complete data
-            // (e.g., full file paths, complete JSON output)
-            messages.push(Message::tool_result(&step.action_type, &step.result_output));
+            // CRITICAL FIX: User responses must use User role, not Tool role
+            // This ensures the LLM understands the user has answered the question
+            // and doesn't ask the same question again
+            if step.action_type == "ask_user" {
+                // User's response to a question - use User role
+                messages.push(Message::user(step.result_output.clone()));
+            } else {
+                // Tool result - use full output to ensure LLM sees complete data
+                // (e.g., full file paths, complete JSON output)
+                messages.push(Message::tool_result(&step.action_type, &step.result_output));
+            }
         }
 
         // 4. Current context and request for next action
