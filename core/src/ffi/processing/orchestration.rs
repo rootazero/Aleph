@@ -73,6 +73,7 @@ pub fn process_with_agent_loop(
     // If topic_id is provided, create and use a topic-specific output directory
     // This organizes outputs by conversation/session for better file management
     if let Some(tid) = topic_id {
+        // ✅ MULTI-TURN: Topic-specific working directory
         if let Ok(output_dir) = crate::utils::paths::get_output_dir() {
             let topic_dir = output_dir.join(tid);
             // Create topic directory if it doesn't exist
@@ -82,6 +83,7 @@ pub fn process_with_agent_loop(
             }
         }
     } else {
+        // 🔒 FROZEN: Single-turn mode - no persistent working directory
         // Clear any previous working directory for single-turn mode
         crate::rig_tools::file_ops::set_working_dir(None);
     }

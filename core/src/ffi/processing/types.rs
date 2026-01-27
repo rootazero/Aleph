@@ -9,8 +9,22 @@ pub struct ProcessOptions {
     pub app_context: Option<String>,
     /// Window title of the active application
     pub window_title: Option<String>,
-    /// Topic ID for multi-turn conversations (None = "single-turn")
+
+    /// Topic ID for conversation mode identification
+    ///
+    /// - `None` = Single-turn mode (🔒 FROZEN)
+    ///   - No persistence, no history injection
+    ///   - Fast, stateless responses
+    ///   - Stored in-memory with constant key "single-turn"
+    ///
+    /// - `Some(uuid)` = Multi-turn mode (✅ ACTIVE)
+    ///   - Persistent session with SQLite storage
+    ///   - Full context injection from conversation history
+    ///   - Topic-specific working directory
+    ///
+    /// See CLAUDE.md § Conversation Modes for details
     pub topic_id: Option<String>,
+
     /// Enable streaming mode
     pub stream: bool,
     /// Media attachments for multimodal content (images, etc.)
@@ -26,7 +40,7 @@ impl Default for ProcessOptions {
         Self {
             app_context: None,
             window_title: None,
-            topic_id: None,         // None means "single-turn"
+            topic_id: None,         // 🔒 FROZEN: None means single-turn mode
             stream: true,           // Streaming enabled by default
             attachments: None,
             preferred_language: None, // System default

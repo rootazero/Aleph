@@ -112,6 +112,76 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/DISPATCHER.md](./docs/
 
 ---
 
+## Conversation Modes
+
+Aether supports two conversation modes with different lifecycle and scope:
+
+### 🔒 Single-Turn (单轮对话) - FROZEN
+
+**定位**: Fast, stateless responses for ephemeral tasks.
+
+**Use Cases**:
+- Input method spell checking / correction
+- Quick queries without context
+- Temporary lookups or translations
+
+**Implementation**:
+- Location: `core/src/ffi/processing/orchestration.rs` (single-turn branch)
+- Identifier: `ProcessOptions.topic_id = None`
+- Memory: In-memory only, no persistence
+- History: No context injection
+
+**Development Constraints**:
+- ⚠️ **FROZEN**: Feature-locked as of Phase 9
+- ❌ No new features or capabilities
+- ❌ No modifications to execution logic (except critical bug fixes)
+- ✅ Performance optimizations allowed (without changing behavior)
+
+**Rationale**: Single-turn functionality is stable and sufficient. Future efforts focus on multi-turn AI agent capabilities.
+
+---
+
+### ✅ Multi-Turn (多轮对话) - ACTIVE DEVELOPMENT
+
+**定位**: AI Agent with persistent sessions for complex, multi-step tasks.
+
+**Use Cases**:
+- Complex task decomposition (DAG scheduling)
+- Multi-step workflows with dependency management
+- Context-aware conversations with history
+- Agent Loop with doom loop detection
+
+**Implementation**:
+- Location: `core/src/ffi/processing/` (agent_loop.rs, dag_executor.rs)
+- Identifier: `ProcessOptions.topic_id = Some(uuid)`
+- Persistence: SQLite (`ConversationStore`) + in-memory cache
+- History: Full context injection from previous turns
+
+**Development Focus** (Active):
+- ✅ Agent Loop enhancements (retry strategies, tool orchestration)
+- ✅ DAG scheduler optimization (parallel execution, dependency resolution)
+- ✅ Session management (compression, cross-device sync)
+- ✅ Advanced AI capabilities (multi-model routing, adaptive planning)
+
+**Key Modules**: `agent_loop`, `dispatcher/planner`, `dispatcher/scheduler`, `agents/sub_agents`
+
+---
+
+### Mode Distinction in Code
+
+| Aspect | Single-Turn | Multi-Turn |
+|--------|-------------|------------|
+| **topic_id** | `None` (constant "single-turn" in memory) | `Some(uuid)` |
+| **Working Directory** | System default (cleared) | `output_dir/<topic_id>/` |
+| **History Injection** | ❌ None | ✅ From `conversation_histories` |
+| **Persistence** | ❌ None | ✅ SQLite + memory |
+| **Agent Loop** | Lightweight (skipped if possible) | Full cycle (observe-think-act-feedback) |
+| **DAG Scheduling** | N/A | ✅ For multi-step tasks |
+
+**Critical**: All future feature development should target **multi-turn mode**. Single-turn is intentionally kept minimal and stable.
+
+---
+
 ## Key Constraints
 
 - **macOS Entry**: Use `main.swift` + `NSApplicationMain()` (not SwiftUI @main)

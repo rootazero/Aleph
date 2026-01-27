@@ -82,6 +82,10 @@ pub fn format_generation_models_for_prompt(
 ///
 /// This extracts recent messages from the conversation history for a given topic
 /// and formats them as a summary for the agent loop's initial context.
+///
+/// # Mode Behavior
+/// - Single-turn (topic_id = None): 🔒 FROZEN - Returns empty string (no context)
+/// - Multi-turn (topic_id = Some(uuid)): ✅ ACTIVE - Returns formatted history
 pub fn build_history_summary_from_conversations(
     histories: &Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<ChatMessage>>>>,
     topic_id: &Option<String>,
@@ -89,7 +93,7 @@ pub fn build_history_summary_from_conversations(
 ) -> String {
     let tid = match topic_id {
         Some(t) => t,
-        None => return String::new(),
+        None => return String::new(), // 🔒 FROZEN: Single-turn returns empty
     };
 
     let histories_guard = match histories.read() {
