@@ -80,21 +80,21 @@ struct ErrorActionView: View {
         HStack(spacing: 12) {
             // Retry button for network and timeout errors
             if errorType == .network || errorType == .timeout, let onRetry = onRetry {
-                ActionButton("Retry", icon: "arrow.clockwise", style: .secondary) {
+                ActionButton("Retry", icon: "arrow.clockwise", style: .glass) {
                     onRetry()
                 }
             }
 
             // Open Settings button for permission errors
             if errorType == .permission, let onOpenSettings = onOpenSettings {
-                ActionButton("Settings", icon: "gear", style: .secondary) {
+                ActionButton("Settings", icon: "gear", style: .glass) {
                     onOpenSettings()
                 }
             }
 
             // Dismiss button (always available)
             if let onDismiss = onDismiss {
-                ActionButton("Dismiss", icon: "xmark", style: .secondary) {
+                ActionButton("Dismiss", icon: "xmark", style: .glass) {
                     onDismiss()
                 }
             }

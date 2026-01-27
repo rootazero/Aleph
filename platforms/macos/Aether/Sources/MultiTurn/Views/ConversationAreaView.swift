@@ -74,6 +74,7 @@ struct ConversationAreaView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .background(WindowDragArea())  // Make title bar draggable
     }
 
     // MARK: - Messages List
@@ -138,6 +139,8 @@ struct ConversationAreaView: View {
                     }
                 )
             }
+            // Prevent window dragging in scroll view to allow text selection
+            .background(NonDraggableArea())
             .onChange(of: viewModel.messages.count) {
                 if let lastId = viewModel.messages.last?.id {
                     withAnimation {
@@ -360,5 +363,23 @@ struct ConversationAreaView: View {
                 viewModel.reportHeightChange(total)
             }
         }
+    }
+}
+
+// MARK: - WindowDragArea
+
+/// A transparent view that enables window dragging in its area
+struct WindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = DraggableView()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private class DraggableView: NSView {
+    override var mouseDownCanMoveWindow: Bool {
+        return true
     }
 }

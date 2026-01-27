@@ -41,9 +41,9 @@ struct UnifiedConversationView: View {
             // Content area (mutually exclusive)
             contentArea
 
-            // Status bar: appears together with conversation area as a unit
-            // Always visible when conversation is shown, prevents height jitter
-            if viewModel.shouldShowConversation {
+            // Status bar: appears when conversation is shown OR when processing
+            // This ensures users see status updates even before first message appears
+            if viewModel.shouldShowConversation || viewModel.shouldShowStatus {
                 Divider()
                     .opacity(0.3)
                     .padding(.horizontal, 12)
@@ -162,21 +162,32 @@ struct UnifiedConversationView: View {
 
 // MARK: - Liquid Glass Window Modifier
 
-/// Applies Liquid Glass effect to the conversation window
-/// Uses native glassEffect with .clear type for maximum transparency
+/// Applies Liquid Glass effect to the conversation window with adaptive background
+/// Uses native glassEffect on macOS 26+ with adaptive overlay for text legibility
+/// Falls back to NSVisualEffectView on earlier versions
 struct LiquidGlassWindowModifier: ViewModifier {
+
+    @StateObject private var backgroundSampler = BackgroundSampler()
+
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
             // macOS 26+: Use .clear for high transparency (true glass effect)
-            // Add darker dimming layer for text legibility and dark appearance
+            // Add adaptive dimming layer for text legibility
             content
                 .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Color.black.opacity(0.35))
+                    GeometryReader { _ in
+                        // Adaptive overlay using WindowAwareAdaptiveOverlay for direct window access
+                        WindowAwareAdaptiveOverlay(
+                            sampler: backgroundSampler,
+                            baseColor: .black
+                        )
+                    }
                 )
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         } else {
             // macOS 15-25: Use underWindowBackground for maximum transparency
+            // with adaptive overlay
             content
                 .background(
                     ZStack {
@@ -184,15 +195,14 @@ struct LiquidGlassWindowModifier: ViewModifier {
                             material: .underWindowBackground,
                             blendingMode: .behindWindow
                         )
-                        // Black gradient for darker glass appearance
-                        LinearGradient(
-                            colors: [
-                                Color.black.opacity(0.45),
-                                Color.black.opacity(0.35)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+
+                        // Adaptive overlay that responds to background brightness
+                        GeometryReader { _ in
+                            WindowAwareAdaptiveOverlay(
+                                sampler: backgroundSampler,
+                                baseColor: .black
+                            )
+                        }
                     }
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))

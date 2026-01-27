@@ -233,6 +233,8 @@ pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
 /// }
 /// ```
 pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
+    use tracing::info;
+
     let mut dirs = Vec::new();
 
     // Determine start directory
@@ -240,6 +242,11 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
         Some(p) => p.to_path_buf(),
         None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     };
+
+    info!(
+        start_dir = %start_dir.display(),
+        "get_all_skills_dirs: Starting discovery"
+    );
 
     // Find git root to limit traversal
     let git_root = find_git_root(&start_dir);
@@ -251,12 +258,14 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
         // Check .aether/skills/
         let aether_skills = current.join(".aether").join("skills");
         if aether_skills.is_dir() && !dirs.contains(&aether_skills) {
+            info!(path = %aether_skills.display(), "Found project-level .aether/skills");
             dirs.push(aether_skills);
         }
 
         // Check .claude/skills/ (Claude Code compatibility)
         let claude_skills = current.join(".claude").join("skills");
         if claude_skills.is_dir() && !dirs.contains(&claude_skills) {
+            info!(path = %claude_skills.display(), "Found project-level .claude/skills");
             dirs.push(claude_skills);
         }
 
@@ -274,18 +283,35 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
 
     // 2. User level: global directories
     if let Ok(home) = get_home_dir() {
+        info!(home = %home.display(), "Checking global directories");
+
         // ~/.aether/skills
         let global_aether = home.join(".aether").join("skills");
         if global_aether.is_dir() && !dirs.contains(&global_aether) {
+            info!(path = %global_aether.display(), "Found global ~/.aether/skills");
             dirs.push(global_aether);
         }
 
         // ~/.claude/skills (Claude Code compatibility)
         let global_claude = home.join(".claude").join("skills");
         if global_claude.is_dir() && !dirs.contains(&global_claude) {
+            info!(path = %global_claude.display(), "Found global ~/.claude/skills");
             dirs.push(global_claude);
+        } else {
+            info!(
+                path = %global_claude.display(),
+                exists = global_claude.exists(),
+                is_dir = global_claude.is_dir(),
+                "~/.claude/skills not found or not a directory"
+            );
         }
     }
+
+    info!(
+        total_dirs = dirs.len(),
+        dirs = ?dirs,
+        "get_all_skills_dirs: Discovery complete"
+    );
 
     Ok(dirs)
 }

@@ -12806,6 +12806,143 @@ public func FfiConverterCallbackInterfaceAgentProgressHandler_lower(_ v: AgentPr
 
 
 /**
+ * Subscription callback trait for Swift event handling.
+ *
+ * Swift clients implement this trait to receive GlobalBus events.
+ * Events are serialized to JSON for FFI boundary crossing.
+ */
+public protocol EventSubscriptionHandler: AnyObject, Sendable {
+    
+    /**
+     * Called when a matching event is received.
+     *
+     * # Arguments
+     *
+     * * `event_json` - JSON serialized GlobalEvent
+     */
+    func onEvent(eventJson: String) 
+    
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceEventSubscriptionHandler {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceEventSubscriptionHandler] = [UniffiVTableCallbackInterfaceEventSubscriptionHandler(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceEventSubscriptionHandler.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface EventSubscriptionHandler: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceEventSubscriptionHandler.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface EventSubscriptionHandler: handle missing in uniffiClone")
+            }
+        },
+        onEvent: { (
+            uniffiHandle: UInt64,
+            eventJson: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceEventSubscriptionHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onEvent(
+                     eventJson: try FfiConverterString.lift(eventJson)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )]
+}
+
+private func uniffiCallbackInitEventSubscriptionHandler() {
+    uniffi_aethecore_fn_init_callback_vtable_eventsubscriptionhandler(UniffiCallbackInterfaceEventSubscriptionHandler.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceEventSubscriptionHandler {
+    fileprivate static let handleMap = UniffiHandleMap<EventSubscriptionHandler>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceEventSubscriptionHandler : FfiConverter {
+    typealias SwiftType = EventSubscriptionHandler
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceEventSubscriptionHandler_lift(_ handle: UInt64) throws -> EventSubscriptionHandler {
+    return try FfiConverterCallbackInterfaceEventSubscriptionHandler.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceEventSubscriptionHandler_lower(_ v: EventSubscriptionHandler) -> UInt64 {
+    return FfiConverterCallbackInterfaceEventSubscriptionHandler.lower(v)
+}
+
+
+
+
+/**
  * FFI callback interface for initialization progress
  *
  * Swift/Kotlin clients implement this trait to receive progress updates
@@ -14953,6 +15090,59 @@ public func runInitialization(handler: InitProgressHandlerFfi) -> InitResultFfi 
     )
 })
 }
+/**
+ * Create a subscription to GlobalBus events.
+ *
+ * Subscribes to events matching the specified filters and invokes the handler
+ * callback when events are received.
+ *
+ * # Arguments
+ *
+ * * `session_id` - Optional session ID to filter events (None = all sessions)
+ * * `event_types` - List of event type names to subscribe to (e.g., ["ToolCallStarted", "LoopStop"])
+ * * `handler` - Callback handler implementing EventSubscriptionHandler
+ *
+ * # Returns
+ *
+ * A unique subscription ID that can be used to unsubscribe later.
+ *
+ * # Event Type Names
+ *
+ * Valid event type names:
+ * - "InputReceived", "PlanRequested", "PlanCreated"
+ * - "ToolCallRequested", "ToolCallStarted", "ToolCallCompleted", "ToolCallFailed", "ToolCallRetrying"
+ * - "LoopContinue", "LoopStop"
+ * - "SessionCreated", "SessionUpdated", "SessionResumed", "SessionCompacted"
+ * - "SubAgentStarted", "SubAgentCompleted"
+ * - "UserQuestionAsked", "UserResponseReceived"
+ * - "PermissionAsked", "PermissionReplied"
+ * - "QuestionAsked", "QuestionReplied", "QuestionRejected"
+ * - "AiResponseGenerated"
+ * - "PartAdded", "PartUpdated", "PartRemoved"
+ * - "All" (matches all event types)
+ */
+public func subscribeEvents(sessionId: String?, eventTypes: [String], handler: EventSubscriptionHandler) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_aethecore_fn_func_subscribe_events(
+        FfiConverterOptionString.lower(sessionId),
+        FfiConverterSequenceString.lower(eventTypes),
+        FfiConverterCallbackInterfaceEventSubscriptionHandler_lower(handler),$0
+    )
+})
+}
+/**
+ * Cancel a subscription to GlobalBus events.
+ *
+ * # Arguments
+ *
+ * * `subscription_id` - The subscription ID returned from `subscribe_events`
+ */
+public func unsubscribeEvents(subscriptionId: String)  {try! rustCall() {
+    uniffi_aethecore_fn_func_unsubscribe_events(
+        FfiConverterString.lower(subscriptionId),$0
+    )
+}
+}
 
 private enum InitializationResult {
     case ok
@@ -15024,6 +15214,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_func_run_initialization() != 60960) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_subscribe_events() != 49839) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_unsubscribe_events() != 22015) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_add_mcp_server() != 2224) {
@@ -15500,9 +15696,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_error() != 53683) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_eventsubscriptionhandler_on_event() != 5778) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
     uniffiCallbackInitAetherEventHandler()
     uniffiCallbackInitAgentProgressHandler()
+    uniffiCallbackInitEventSubscriptionHandler()
     uniffiCallbackInitInitProgressHandlerFFI()
     return InitializationResult.ok
 }()

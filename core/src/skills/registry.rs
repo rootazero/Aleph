@@ -142,6 +142,13 @@ impl SkillsRegistry {
     /// Invalid skills are logged and skipped.
     /// Earlier directories take priority (first occurrence wins).
     pub fn load_all(&self) -> Result<()> {
+        // Debug: Log all directories to be scanned
+        info!(
+            dirs = ?self.skills_dirs,
+            count = self.skills_dirs.len(),
+            "Loading skills from multiple directories"
+        );
+
         let mut skills = self
             .skills
             .write()

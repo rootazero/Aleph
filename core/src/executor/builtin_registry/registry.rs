@@ -11,7 +11,7 @@ use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AetherError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::rig_tools::{CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
+use crate::rig_tools::{BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
 use crate::rig_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::rig_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 use crate::three_layer::{Capability, CapabilityGate};
@@ -33,6 +33,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) youtube_tool: YouTubeTool,
     /// File operations tool instance
     pub(crate) file_ops_tool: FileOpsTool,
+    /// Bash execution tool instance (wraps CodeExecTool for shell commands)
+    pub(crate) bash_tool: BashExecTool,
     /// Code execution tool instance
     pub(crate) code_exec_tool: CodeExecTool,
     /// PDF generation tool instance
@@ -111,6 +113,7 @@ impl BuiltinToolRegistry {
         let web_fetch_tool = WebFetchTool::new();
         let youtube_tool = YouTubeTool::new();
         let file_ops_tool = FileOpsTool::new();
+        let bash_tool = BashExecTool::new();
         let code_exec_tool = CodeExecTool::new();
         let pdf_generate_tool = PdfGenerateTool::new();
 
@@ -163,6 +166,16 @@ impl BuiltinToolRegistry {
                 "builtin:file_ops",
                 "file_ops",
                 "File system operations - list, read, write, move, copy, delete, etc.",
+                ToolSource::Builtin,
+            ),
+        );
+
+        tools.insert(
+            "bash".to_string(),
+            UnifiedTool::new(
+                "builtin:bash",
+                "bash",
+                "Execute bash/shell commands (convenience wrapper for code_exec with shell)",
                 ToolSource::Builtin,
             ),
         );
@@ -307,6 +320,7 @@ impl BuiltinToolRegistry {
             web_fetch_tool,
             youtube_tool,
             file_ops_tool,
+            bash_tool,
             code_exec_tool,
             pdf_generate_tool,
             image_generate_tool,
@@ -342,6 +356,7 @@ impl BuiltinToolRegistry {
                     Some(Capability::FileRead)
                 }
             }
+            "bash" => Some(Capability::ShellExec), // Bash execution requires shell capability
             "code_exec" => Some(Capability::ShellExec), // Code execution requires shell capability
             "pdf_generate" => Some(Capability::FileWrite), // PDF generation writes files
             "generate_image" => Some(Capability::LlmCall), // Image generation uses LLM-like API
@@ -408,6 +423,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             "web_fetch" => Box::pin(async move { self.web_fetch_tool.call_json(arguments).await }),
             "youtube" => Box::pin(async move { self.youtube_tool.call_json(arguments).await }),
             "file_ops" => Box::pin(async move { self.file_ops_tool.call_json(arguments).await }),
+            "bash" => Box::pin(async move { self.bash_tool.call_json(arguments).await }),
             "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),
             "pdf_generate" => Box::pin(async move { self.pdf_generate_tool.call_json(arguments).await }),
 

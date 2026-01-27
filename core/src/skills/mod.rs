@@ -279,16 +279,14 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 
 /// List all installed skills
 ///
-/// Scans the skills directory and returns info for each valid skill.
+/// Scans multiple skills directories and returns info for each valid skill.
+/// Uses multi-location discovery to support both ~/.aether/skills and ~/.claude/skills.
 pub fn list_installed_skills() -> Result<Vec<SkillInfo>> {
-    let skills_dir = get_skills_dir()?;
-
-    // Ensure skills directory exists
-    if !skills_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let registry = SkillsRegistry::new(skills_dir);
+    // Use multi-location discovery to support both ~/.aether/skills and ~/.claude/skills
+    // This enables Claude Code compatibility by scanning:
+    // - Project level: .aether/skills/, .claude/skills/
+    // - Global level: ~/.aether/skills, ~/.claude/skills
+    let registry = SkillsRegistry::with_auto_discover(None)?;
     registry.load_all()?;
 
     let skills = registry.list_skills();

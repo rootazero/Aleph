@@ -221,6 +221,55 @@ pub fn get_builtin_tool_descriptions(
                 "required": ["url"]
             })
         ),
+        ToolDescription::with_schema(
+            "bash",
+            "Bash命令执行 - 执行bash/shell命令。安全限制：阻止危险命令(sudo, rm -rf /, 等)。默认超时60秒。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "cmd": {
+                        "type": "string",
+                        "description": "Bash command to execute"
+                    },
+                    "working_dir": {
+                        "type": "string",
+                        "description": "Working directory (optional)"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (optional, default 60)"
+                    }
+                },
+                "required": ["cmd"]
+            })
+        ),
+        ToolDescription::with_schema(
+            "code_exec",
+            "代码执行 - 执行Python/JavaScript/Shell代码。支持语言: python, javascript, shell。安全限制：阻止危险命令。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "language": {
+                        "type": "string",
+                        "enum": ["python", "javascript", "shell"],
+                        "description": "Programming language"
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": "Code to execute"
+                    },
+                    "working_dir": {
+                        "type": "string",
+                        "description": "Working directory (optional)"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (optional, default 60)"
+                    }
+                },
+                "required": ["language", "code"]
+            })
+        ),
     ];
 
     // Add image generation tool if providers are configured

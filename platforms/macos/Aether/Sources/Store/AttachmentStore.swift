@@ -254,6 +254,5 @@ final class AttachmentStore: @unchecked Sendable {
 
 extension StoredAttachment {
     /// Association to the parent message
-    /// nonisolated(unsafe) to satisfy Sendable requirements for GRDB association
-    nonisolated(unsafe) static let message = belongsTo(ConversationMessage.self, using: ForeignKey(["messageId"]))
+    static let message = belongsTo(ConversationMessage.self, using: ForeignKey(["messageId"]))
 }

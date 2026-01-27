@@ -2,7 +2,8 @@
 
 use crate::generation::GenerationProviderRegistry;
 use crate::rig_tools::{
-    FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool,
+    BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool,
+    WebFetchTool, YouTubeTool,
 };
 use crate::tools::{AetherToolServer, AetherToolServerHandle};
 use std::sync::{Arc, RwLock};
@@ -14,6 +15,8 @@ pub const BUILTIN_TOOLS: &[&str] = &[
     "web_fetch",
     "youtube",
     "file_ops",
+    "bash",
+    "code_exec",
     "generate_image",
     "pdf_generate",
 ];
@@ -61,6 +64,8 @@ pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AetherT
         .tool(WebFetchTool::new())
         .tool(YouTubeTool::new())
         .tool(FileOpsTool::new())
+        .tool(BashExecTool::new())
+        .tool(CodeExecTool::new())
         .tool(PdfGenerateTool::new());
 
     // Add image generation tool if generation registry is available

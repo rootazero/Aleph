@@ -25,8 +25,13 @@ struct MessageBubbleView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .bottom, spacing: 8) {
             if isUser { Spacer(minLength: 40) }
+
+            // Copy button for user messages (left side, bottom aligned)
+            if isUser && isHovering {
+                copyButton
+            }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
                 // Rich message content (text + images from content)
@@ -39,19 +44,11 @@ struct MessageBubbleView: View {
                 if !storedAttachments.isEmpty {
                     AttachmentGridView(attachments: storedAttachments, isUser: isUser)
                 }
+            }
 
-                // Copy button (on hover)
-                if isHovering {
-                    Button(action: onCopy) {
-                        HStack(spacing: 2) {
-                            Image(systemName: "doc.on.doc")
-                            Text("Copy")
-                        }
-                        .font(.caption2)
-                        .liquidGlassSecondaryText()
-                    }
-                    .buttonStyle(.plain)
-                }
+            // Copy button for AI messages (right side, bottom aligned)
+            if !isUser && isHovering {
+                copyButton
             }
 
             if !isUser { Spacer(minLength: 40) }
@@ -64,6 +61,20 @@ struct MessageBubbleView: View {
         .onAppear {
             loadStoredAttachments()
         }
+    }
+
+    // MARK: - Copy Button
+
+    private var copyButton: some View {
+        Button(action: onCopy) {
+            HStack(spacing: 2) {
+                Image(systemName: "doc.on.doc")
+                Text("Copy")
+            }
+            .font(.caption2)
+            .liquidGlassSecondaryText()
+        }
+        .buttonStyle(.plain)
     }
 
     /// Load stored attachments for this message

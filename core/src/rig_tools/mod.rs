@@ -31,6 +31,7 @@ use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
 use tracing::debug;
 
+pub mod bash_exec;
 pub mod code_exec;
 pub mod error;
 pub mod file_ops;
@@ -44,6 +45,7 @@ pub mod skill_reader;
 pub mod web_fetch;
 pub mod youtube;
 
+pub use bash_exec::{BashExecArgs, BashExecTool};
 pub use code_exec::{CodeExecArgs, CodeExecTool};
 pub use error::ToolError;
 pub use file_ops::{FileOpsArgs, FileOpsTool};
