@@ -98,7 +98,8 @@ impl PromptBuilder {
             prompt.push_str("- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n");
             prompt.push_str("\n**CRITICAL - Use Aether Runtimes**:\n");
             prompt.push_str("When executing Python/Node.js scripts, ALWAYS use the full executable path from the runtimes above:\n");
-            prompt.push_str("- ✅ CORRECT: `/Users/zouguojun/.aether/runtimes/uv/envs/default/bin/python script.py`\n");
+            prompt.push_str("- ✅ CORRECT: Use the exact \"Executable\" path shown in the runtime info\n");
+            prompt.push_str("- ✅ Example: If runtime shows \"Executable: /path/to/python\", use \"/path/to/python script.py\"\n");
             prompt.push_str("- ❌ WRONG: `python3 script.py` (system default may be incompatible)\n");
             prompt.push_str("- ❌ WRONG: `python script.py` (may not exist)\n");
             prompt.push_str("Aether provides managed runtimes to ensure correct versions and dependencies.\n\n");
@@ -340,7 +341,8 @@ impl PromptBuilder {
             prompt.push_str("- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n");
             prompt.push_str("\n**CRITICAL - Use Aether Runtimes**:\n");
             prompt.push_str("When executing Python/Node.js scripts, ALWAYS use the full executable path from the runtimes above:\n");
-            prompt.push_str("- ✅ CORRECT: `/Users/zouguojun/.aether/runtimes/uv/envs/default/bin/python script.py`\n");
+            prompt.push_str("- ✅ CORRECT: Use the exact \"Executable\" path shown in the runtime info\n");
+            prompt.push_str("- ✅ Example: If runtime shows \"Executable: /path/to/python\", use \"/path/to/python script.py\"\n");
             prompt.push_str("- ❌ WRONG: `python3 script.py` (system default may be incompatible)\n");
             prompt.push_str("- ❌ WRONG: `python script.py` (may not exist)\n");
             prompt.push_str("Aether provides managed runtimes to ensure correct versions and dependencies.\n\n");
