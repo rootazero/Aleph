@@ -36,13 +36,13 @@ pub fn handle_direct_route(
     generation_config: &GenerationConfig,
     generation_registry: &Arc<RwLock<GenerationProviderRegistry>>,
     attachments: Option<&[MediaAttachment]>,
+    conversation_histories: &Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
+    topic_id: &Option<String>,
     preferred_language: &Option<String>,
 ) {
     // Extract attachment text if present
     let attachment_text = extract_attachment_text(attachments);
     let tool_descriptions = get_builtin_tool_descriptions(generation_config);
-    let conversation_histories = Arc::new(RwLock::new(HashMap::<String, Vec<ChatMessage>>::new()));
-    let topic_id = None;
 
     match mode {
         DirectMode::Tool(tool) => {
@@ -81,8 +81,8 @@ pub fn handle_direct_route(
                 &None,
                 generation_config,
                 attachments,
-                &conversation_histories,
-                &topic_id,
+                conversation_histories,
+                topic_id,
                 generation_registry,
                 preferred_language,
             );
@@ -107,6 +107,8 @@ pub fn handle_direct_route(
                 generation_registry,
                 attachments,
                 attachment_text.as_deref(),
+                conversation_histories,
+                topic_id,
                 preferred_language,
             );
         }
@@ -156,8 +158,8 @@ pub fn handle_direct_route(
                 &None,
                 generation_config,
                 attachments,
-                &conversation_histories,
-                &topic_id,
+                conversation_histories,
+                topic_id,
                 generation_registry,
                 preferred_language,
             );
@@ -198,8 +200,8 @@ pub fn handle_direct_route(
                 &None,
                 generation_config,
                 attachments,
-                &conversation_histories,
-                &topic_id,
+                conversation_histories,
+                topic_id,
                 generation_registry,
                 preferred_language,
             );
