@@ -2961,17 +2961,19 @@ public struct ClarificationRequest: Equatable, Hashable {
     public var prompt: String
     public var clarificationType: ClarificationType
     public var options: [ClarificationOption]?
+    public var groups: [QuestionGroup]?
     public var defaultValue: String?
     public var placeholder: String?
     public var source: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, prompt: String, clarificationType: ClarificationType, options: [ClarificationOption]?, defaultValue: String?, placeholder: String?, source: String?) {
+    public init(id: String, prompt: String, clarificationType: ClarificationType, options: [ClarificationOption]?, groups: [QuestionGroup]?, defaultValue: String?, placeholder: String?, source: String?) {
         self.id = id
         self.prompt = prompt
         self.clarificationType = clarificationType
         self.options = options
+        self.groups = groups
         self.defaultValue = defaultValue
         self.placeholder = placeholder
         self.source = source
@@ -2994,6 +2996,7 @@ public struct FfiConverterTypeClarificationRequest: FfiConverterRustBuffer {
                 prompt: FfiConverterString.read(from: &buf), 
                 clarificationType: FfiConverterTypeClarificationType.read(from: &buf), 
                 options: FfiConverterOptionSequenceTypeClarificationOption.read(from: &buf), 
+                groups: FfiConverterOptionSequenceTypeQuestionGroup.read(from: &buf), 
                 defaultValue: FfiConverterOptionString.read(from: &buf), 
                 placeholder: FfiConverterOptionString.read(from: &buf), 
                 source: FfiConverterOptionString.read(from: &buf)
@@ -3005,6 +3008,7 @@ public struct FfiConverterTypeClarificationRequest: FfiConverterRustBuffer {
         FfiConverterString.write(value.prompt, into: &buf)
         FfiConverterTypeClarificationType.write(value.clarificationType, into: &buf)
         FfiConverterOptionSequenceTypeClarificationOption.write(value.options, into: &buf)
+        FfiConverterOptionSequenceTypeQuestionGroup.write(value.groups, into: &buf)
         FfiConverterOptionString.write(value.defaultValue, into: &buf)
         FfiConverterOptionString.write(value.placeholder, into: &buf)
         FfiConverterOptionString.write(value.source, into: &buf)
@@ -3031,13 +3035,15 @@ public struct ClarificationResult: Equatable, Hashable {
     public var resultType: ClarificationResultType
     public var selectedIndex: UInt32?
     public var value: String?
+    public var groupAnswers: [String: String]?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(resultType: ClarificationResultType, selectedIndex: UInt32?, value: String?) {
+    public init(resultType: ClarificationResultType, selectedIndex: UInt32?, value: String?, groupAnswers: [String: String]?) {
         self.resultType = resultType
         self.selectedIndex = selectedIndex
         self.value = value
+        self.groupAnswers = groupAnswers
     }
 
     
@@ -3055,7 +3061,8 @@ public struct FfiConverterTypeClarificationResult: FfiConverterRustBuffer {
             try ClarificationResult(
                 resultType: FfiConverterTypeClarificationResultType.read(from: &buf), 
                 selectedIndex: FfiConverterOptionUInt32.read(from: &buf), 
-                value: FfiConverterOptionString.read(from: &buf)
+                value: FfiConverterOptionString.read(from: &buf), 
+                groupAnswers: FfiConverterOptionDictionaryStringString.read(from: &buf)
         )
     }
 
@@ -3063,6 +3070,7 @@ public struct FfiConverterTypeClarificationResult: FfiConverterRustBuffer {
         FfiConverterTypeClarificationResultType.write(value.resultType, into: &buf)
         FfiConverterOptionUInt32.write(value.selectedIndex, into: &buf)
         FfiConverterOptionString.write(value.value, into: &buf)
+        FfiConverterOptionDictionaryStringString.write(value.groupAnswers, into: &buf)
     }
 }
 
@@ -7072,6 +7080,65 @@ public func FfiConverterTypeProviderTestResult_lower(_ value: ProviderTestResult
 }
 
 
+public struct QuestionGroup: Equatable, Hashable {
+    public var id: String
+    public var prompt: String
+    public var options: [ClarificationOption]
+    public var defaultIndex: UInt32?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, prompt: String, options: [ClarificationOption], defaultIndex: UInt32?) {
+        self.id = id
+        self.prompt = prompt
+        self.options = options
+        self.defaultIndex = defaultIndex
+    }
+
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeQuestionGroup: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> QuestionGroup {
+        return
+            try QuestionGroup(
+                id: FfiConverterString.read(from: &buf), 
+                prompt: FfiConverterString.read(from: &buf), 
+                options: FfiConverterSequenceTypeClarificationOption.read(from: &buf), 
+                defaultIndex: FfiConverterOptionUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: QuestionGroup, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.prompt, into: &buf)
+        FfiConverterSequenceTypeClarificationOption.write(value.options, into: &buf)
+        FfiConverterOptionUInt32.write(value.defaultIndex, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeQuestionGroup_lift(_ buf: RustBuffer) throws -> QuestionGroup {
+    return try FfiConverterTypeQuestionGroup.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeQuestionGroup_lower(_ value: QuestionGroup) -> RustBuffer {
+    return FfiConverterTypeQuestionGroup.lower(value)
+}
+
+
 public struct RetryPolicy: Equatable, Hashable {
     public var maxRetries: UInt32
     public var initialBackoffMs: UInt64
@@ -9708,6 +9775,7 @@ public enum ClarificationType: Equatable, Hashable {
     
     case select
     case text
+    case multiGroup
 
 
 
@@ -9730,6 +9798,8 @@ public struct FfiConverterTypeClarificationType: FfiConverterRustBuffer {
         
         case 2: return .text
         
+        case 3: return .multiGroup
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -9744,6 +9814,10 @@ public struct FfiConverterTypeClarificationType: FfiConverterRustBuffer {
         
         case .text:
             writeInt(&buf, Int32(2))
+        
+        
+        case .multiGroup:
+            writeInt(&buf, Int32(3))
         
         }
     }
@@ -13758,6 +13832,54 @@ fileprivate struct FfiConverterOptionSequenceTypeMediaAttachment: FfiConverterRu
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionSequenceTypeQuestionGroup: FfiConverterRustBuffer {
+    typealias SwiftType = [QuestionGroup]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceTypeQuestionGroup.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceTypeQuestionGroup.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionDictionaryStringString: FfiConverterRustBuffer {
+    typealias SwiftType = [String: String]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterDictionaryStringString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterDictionaryStringString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceUInt8: FfiConverterRustBuffer {
     typealias SwiftType = [UInt8]
 
@@ -14458,6 +14580,31 @@ fileprivate struct FfiConverterSequenceTypeProviderConfigEntry: FfiConverterRust
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeQuestionGroup: FfiConverterRustBuffer {
+    typealias SwiftType = [QuestionGroup]
+
+    public static func write(_ value: [QuestionGroup], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeQuestionGroup.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [QuestionGroup] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [QuestionGroup]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeQuestionGroup.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeRoutingRuleConfig: FfiConverterRustBuffer {
     typealias SwiftType = [RoutingRuleConfig]
 
@@ -14750,6 +14897,32 @@ fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
         for _ in 0..<len {
             let key = try FfiConverterString.read(from: &buf)
             let value = try FfiConverterUInt64.read(from: &buf)
+            dict[key] = value
+        }
+        return dict
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
+    public static func write(_ value: [String: String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for (key, value) in value {
+            FfiConverterString.write(key, into: &buf)
+            FfiConverterString.write(value, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String: String] {
+        let len: Int32 = try readInt(&buf)
+        var dict = [String: String]()
+        dict.reserveCapacity(Int(len))
+        for _ in 0..<len {
+            let key = try FfiConverterString.read(from: &buf)
+            let value = try FfiConverterString.read(from: &buf)
             dict[key] = value
         }
         return dict

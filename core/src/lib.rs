@@ -190,7 +190,7 @@ pub use crate::initialization::{
 // Use AetherCore.delete_skill(), AetherCore.install_skill(), etc.
 pub use crate::clarification::{
     ClarificationOption, ClarificationRequest, ClarificationResult, ClarificationResultType,
-    ClarificationType,
+    ClarificationType, QuestionGroup,
 };
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 pub use crate::dispatcher::{

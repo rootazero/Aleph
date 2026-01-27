@@ -100,8 +100,9 @@ enum CommandType {
 
 // Clarification request type
 enum ClarificationType {
-  "Select",   // Option list (menu-driven selection)
-  "Text"      // Free-form text input
+  "Select",      // Option list (menu-driven selection)
+  "Text",        // Free-form text input
+  "MultiGroup"   // Multiple question groups (each group is a single-select question)
 };
 
 // A single option in a select-type clarification
@@ -111,12 +112,21 @@ dictionary ClarificationOption {
   string? description;   // Optional description for additional context
 };
 
+// A single question group for multi-group clarifications
+dictionary QuestionGroup {
+  string id;                              // Unique ID for this group (e.g., "yunsh", "font", "cipu")
+  string prompt;                          // Question prompt (e.g., "请选择韵书（用于押韵与验证）")
+  sequence<ClarificationOption> options;  // Options for this group
+  u32? default_index;                     // Default selected index (0-based)
+};
+
 // Request for user clarification through Halo overlay
 dictionary ClarificationRequest {
   string id;                              // Unique request ID (for tracking/logging)
-  string prompt;                          // Prompt text to display
+  string prompt;                          // Prompt text to display (overall instruction for multi-group)
   ClarificationType clarification_type;   // Type of clarification
-  sequence<ClarificationOption>? options; // Options for select-type (None for text-type)
+  sequence<ClarificationOption>? options; // Options for select-type (None for text-type or multi-group)
+  sequence<QuestionGroup>? groups;        // Question groups for multi-group type (None for select/text)
   string? default_value;                  // Default value (index as string for select, text for text-type)
   string? placeholder;                    // Placeholder text for text-type input
   string? source;                         // Source identifier (e.g., "skill:refine-text", "mcp:git")
@@ -132,9 +142,10 @@ enum ClarificationResultType {
 
 // Result of a clarification request
 dictionary ClarificationResult {
-  ClarificationResultType result_type;  // Type of result
-  u32? selected_index;                   // Selected option index (for Select type)
-  string? value;                         // Value (selected option value or text input)
+  ClarificationResultType result_type;    // Type of result
+  u32? selected_index;                     // Selected option index (for Select type)
+  string? value;                           // Value (selected option value or text input)
+  record<string, string>? group_answers;  // Group answers for multi-group type (group_id -> selected_value)
 };
 
 // ===== END PHANTOM FLOW INTERACTION =====
