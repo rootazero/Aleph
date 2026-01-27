@@ -1,13 +1,15 @@
 //! Built-in tools configuration and creation
+//!
+//! This module creates tool server instances using the unified builtin registry.
+//! All tool definitions come from rig_tools::builtin_registry for consistency.
 
 use crate::generation::GenerationProviderRegistry;
-use crate::rig_tools::{
-    BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool,
-    WebFetchTool, YouTubeTool,
+use crate::rig_tools::builtin_registry::{
+    create_tool_boxed, get_builtin_tool_names, BuiltinToolsConfig,
 };
 use crate::tools::{AetherToolServer, AetherToolServerHandle};
 use std::sync::{Arc, RwLock};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Built-in tool names
 pub const BUILTIN_TOOLS: &[&str] = &[
@@ -22,6 +24,9 @@ pub const BUILTIN_TOOLS: &[&str] = &[
 ];
 
 /// Configuration for built-in tools
+///
+/// DEPRECATED: Use rig_tools::builtin_registry::BuiltinToolsConfig instead.
+/// This type is kept for backward compatibility.
 #[derive(Clone, Default)]
 pub struct BuiltinToolConfig {
     /// Tavily API key for search tool
@@ -51,44 +56,39 @@ impl std::fmt::Debug for BuiltinToolConfig {
 
 /// Create a tool server handle with built-in tools
 ///
+/// This function uses the unified builtin registry to ensure consistency
+/// with BuiltinToolRegistry used by Agent Loop.
+///
 /// Returns an `AetherToolServerHandle` that can be shared across threads.
 pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AetherToolServerHandle {
-    let search_tool = if let Some(cfg) = config {
-        SearchTool::with_api_key(cfg.tavily_api_key.clone())
-    } else {
-        SearchTool::new()
-    };
+    // Convert to unified config
+    let unified_config = config.map(|cfg| BuiltinToolsConfig {
+        tavily_api_key: cfg.tavily_api_key.clone(),
+        generation_registry: cfg.generation_registry.clone(),
+    });
 
-    let mut server = AetherToolServer::new()
-        .tool(search_tool)
-        .tool(WebFetchTool::new())
-        .tool(YouTubeTool::new())
-        .tool(FileOpsTool::new())
-        .tool(BashExecTool::new())
-        .tool(CodeExecTool::new())
-        .tool(PdfGenerateTool::new());
+    let mut server = AetherToolServer::new();
 
-    // Add image generation tool if generation registry is available
-    if let Some(cfg) = config {
-        if let Some(ref registry) = cfg.generation_registry {
-            // Log the number of providers in the registry
-            let provider_count = registry.read().map(|r| r.len()).unwrap_or(0);
-            info!(
-                provider_count = provider_count,
-                "ImageGenerateTool registered with generation provider registry"
-            );
-            server = server.tool(ImageGenerateTool::new(Arc::clone(registry)));
+    // Register all builtin tools from unified registry
+    for name in get_builtin_tool_names() {
+        if let Some(tool) = create_tool_boxed(&name, unified_config.as_ref()) {
+            server = server.tool_boxed(tool);
+            info!(tool = name, "Registered builtin tool in AetherToolServer");
         } else {
-            info!("No generation_registry provided, ImageGenerateTool not registered");
+            // Tool requires config that wasn't provided (e.g., generate_image needs registry)
+            warn!(
+                tool = name,
+                "Skipped builtin tool registration (missing required config)"
+            );
         }
-    } else {
-        info!("No builtin tool config provided, using default tools only");
     }
 
     server.handle()
 }
 
 /// Create initial registered tools list
+///
+/// This function uses the unified builtin registry.
 pub fn create_builtin_tools_list() -> Vec<String> {
-    BUILTIN_TOOLS.iter().map(|s| s.to_string()).collect()
+    get_builtin_tool_names()
 }
