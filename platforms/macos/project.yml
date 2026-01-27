@@ -144,19 +144,21 @@ targets:
           # Build Rust core library if needed
           CARGO_PATH="${HOME}/.cargo/bin/cargo"
           CORE_DIR="${PROJECT_DIR}/../../core"
+          # Workspace target directory is at root level
+          WORKSPACE_TARGET="${PROJECT_DIR}/../../target"
 
           if [ "${CONFIGURATION}" = "Debug" ]; then
               cd "${CORE_DIR}"
               "${CARGO_PATH}" build
-              # Copy debug library
-              cp target/debug/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
+              # Copy debug library from workspace target
+              cp "${WORKSPACE_TARGET}/debug/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/"
               # Fix install_name to use @rpath for portability across machines
               install_name_tool -id "@rpath/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/libaethecore.dylib"
           else
               cd "${CORE_DIR}"
               "${CARGO_PATH}" build --release
-              # Copy release library
-              cp target/release/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
+              # Copy release library from workspace target
+              cp "${WORKSPACE_TARGET}/release/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/"
               # Fix install_name to use @rpath for portability across machines
               install_name_tool -id "@rpath/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/libaethecore.dylib"
           fi
@@ -166,13 +168,15 @@ targets:
           # Generate Swift bindings from Rust using Cargo uniffi-bindgen
           CARGO_PATH="${HOME}/.cargo/bin/cargo"
           CORE_DIR="${PROJECT_DIR}/../../core"
+          # Workspace target directory is at root level
+          WORKSPACE_TARGET="${PROJECT_DIR}/../../target"
           cd "${CORE_DIR}"
 
           # Determine which library to use based on configuration
           if [ "${CONFIGURATION}" = "Debug" ]; then
-              LIBRARY_PATH="target/debug/libaethecore.dylib"
+              LIBRARY_PATH="${WORKSPACE_TARGET}/debug/libaethecore.dylib"
           else
-              LIBRARY_PATH="target/release/libaethecore.dylib"
+              LIBRARY_PATH="${WORKSPACE_TARGET}/release/libaethecore.dylib"
           fi
 
           # Use Cargo to run uniffi-bindgen (more reliable than Python version)
@@ -194,6 +198,35 @@ targets:
               else
                   echo "aether.swift already patched, skipping"
               fi
+
+              # Remove redundant Sendable conformances to fix Swift 6 warnings
+              # These are auto-synthesized for structs with all Sendable members
+              perl -i -pe '
+                BEGIN { $block = 0; }
+                if (/^#if compiler\(>=6\)$/) {
+                  $block = 1;
+                  $line1 = $_;
+                  $_ = "";
+                  next;
+                }
+                if ($block == 1 && /^extension \w+: Sendable \{\}$/) {
+                  $line2 = $_;
+                  $_ = "";
+                  $block = 2;
+                  next;
+                }
+                if ($block == 2 && /^#endif$/) {
+                  $_ = "";
+                  $block = 0;
+                  next;
+                }
+                if ($block > 0) {
+                  # Found non-matching line, restore buffered lines
+                  $_ = $line1 . $line2 . $_;
+                  $block = 0;
+                }
+              ' "${GENERATED_FILE}"
+              echo "Redundant Sendable conformances removed from aether.swift"
           fi
 
           echo "UniFFI bindings generated successfully"
