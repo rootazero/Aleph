@@ -7,6 +7,7 @@ This document describes the internal architecture of Aether's Rust core, particu
 - [Overview](#overview)
 - [Structured Context Protocol](#structured-context-protocol)
 - [Request Processing Flow](#request-processing-flow)
+- [Conversation Modes](#conversation-modes)
 - [Core Components](#core-components)
 - [Data Structures](#data-structures)
 - [Configuration Reference](#configuration-reference)
@@ -140,6 +141,156 @@ let response = provider.chat(
     max_tokens
 ).await?;
 ```
+
+---
+
+## Conversation Modes
+
+Aether supports two distinct conversation modes with different lifecycle management, state persistence, and execution characteristics.
+
+### Single-Turn Mode (🔒 FROZEN)
+
+**Status**: Feature-locked as of Phase 9. No new capabilities will be added.
+
+**Characteristics**:
+- **Stateless**: No session persistence, no conversation history
+- **Ephemeral**: Results disappear after use (clipboard or temporary display)
+- **Fast**: Minimal overhead, optimized for quick responses
+- **Use Cases**: Input method correction, quick translations, simple queries
+
+**Implementation**:
+```rust
+// ProcessOptions with topic_id = None
+ProcessOptions {
+    app_context: Some("com.apple.Safari"),
+    window_title: Some("Search Results"),
+    topic_id: None,  // 🔒 Single-turn marker
+    stream: true,
+    attachments: None,
+    preferred_language: Some("zh-Hans"),
+}
+```
+
+**Data Flow**:
+```
+User Input (topic_id = None)
+    ↓
+IntentRouter (L0-L2 routing)
+    ↓
+Agent Loop (lightweight, no history injection)
+    ↓
+Memory Storage (in-memory only, constant key "single-turn")
+    ↓
+Working Directory (cleared, no persistent files)
+    ↓
+Response (ephemeral)
+```
+
+**Key Files**:
+- `core/src/ffi/processing/orchestration.rs` - Single-turn routing logic
+- `core/src/ffi/processing/agent_loop.rs` - Skips history injection when `topic_id = None`
+- `core/src/memory/context.rs` - Uses constant `SINGLE_TURN_TOPIC_ID`
+
+**Development Constraints**:
+- ❌ No new features or capabilities
+- ❌ No modifications to execution logic (except critical bug fixes)
+- ✅ Performance optimizations allowed (without changing behavior)
+
+---
+
+### Multi-Turn Mode (✅ ACTIVE)
+
+**Status**: Active development focus. All new AI agent capabilities target this mode.
+
+**Characteristics**:
+- **Stateful**: Persistent sessions with conversation history
+- **Context-Aware**: Full context injection from previous turns
+- **Agent-Capable**: Supports complex multi-step tasks, DAG scheduling
+- **Persistent**: SQLite storage (`ConversationStore`) + in-memory cache
+
+**Implementation**:
+```rust
+// ProcessOptions with topic_id = Some(uuid)
+ProcessOptions {
+    app_context: Some("com.aether.multi-turn"),
+    window_title: None,
+    topic_id: Some("550e8400-e29b-41d4-a716-446655440000"),  // ✅ Multi-turn marker
+    stream: true,
+    attachments: Some(vec![...]),
+    preferred_language: Some("en"),
+}
+```
+
+**Data Flow**:
+```
+User Input (topic_id = Some(uuid))
+    ↓
+IntentRouter (L0-L2 routing)
+    ↓
+TaskAnalyzer (SingleStep vs MultiStep)
+    ├─→ Agent Loop (full cycle with history injection)
+    └─→ DAG Scheduler (for multi-step tasks)
+    ↓
+Conversation History (HashMap<topic_id, Vec<ChatMessage>>)
+    ├─→ In-Memory: conversation_histories (fast access)
+    └─→ Persistent: ConversationStore (SQLite)
+    ↓
+Memory Storage (topic-specific retrieval)
+    ↓
+Working Directory (output_dir/<topic_id>/)
+    ↓
+Response (persistent, linked to session)
+```
+
+**Key Components**:
+- **Agent Loop**: `core/src/agent_loop/` - Observe-Think-Act-Feedback cycle
+- **DAG Scheduler**: `core/src/dispatcher/scheduler/` - Multi-step task orchestration
+- **Session Manager**: `platforms/macos/Aether/Sources/Store/ConversationStore.swift`
+- **History Injection**: `core/src/ffi/prompt_helpers.rs::build_history_summary_from_conversations`
+
+**History Management**:
+```rust
+// After Agent Loop completes (agent_loop.rs:319-352)
+if let Some(tid) = topic_id {
+    if let Ok(mut histories) = conversation_histories.write() {
+        let messages = histories.entry(tid.clone()).or_insert_with(Vec::new);
+
+        // Save user input and AI response
+        messages.push(ChatMessage::user(input));
+        messages.push(ChatMessage::assistant(&summary));
+
+        // Automatic trimming (prevent memory bloat)
+        const MAX_HISTORY_MESSAGES: usize = 50;  // 25 turns
+        if messages.len() > MAX_HISTORY_MESSAGES {
+            messages.drain(0..messages.len() - MAX_HISTORY_MESSAGES);
+        }
+    }
+}
+```
+
+**Development Focus**:
+- ✅ Agent Loop enhancements (retry strategies, doom loop detection)
+- ✅ DAG scheduler optimization (parallel execution, dependency resolution)
+- ✅ Session management (compression, cross-device sync)
+- ✅ Advanced AI capabilities (multi-model routing, tool orchestration)
+
+---
+
+### Mode Comparison
+
+| Aspect | Single-Turn | Multi-Turn |
+|--------|-------------|------------|
+| **Identifier** | `topic_id = None` | `topic_id = Some(uuid)` |
+| **Persistence** | ❌ None | ✅ SQLite + In-Memory |
+| **History Injection** | ❌ Empty string | ✅ From `conversation_histories` |
+| **Working Directory** | System default (cleared) | `output_dir/<topic_id>/` |
+| **Agent Loop** | Lightweight (skipped if possible) | Full cycle (observe-think-act-feedback) |
+| **DAG Scheduling** | N/A | ✅ For multi-step tasks |
+| **Memory Storage** | In-memory only (`"single-turn"` key) | Topic-specific retrieval |
+| **Development Status** | 🔒 FROZEN | ✅ ACTIVE |
+| **UI** | Halo window (ephemeral) | Multi-turn window (persistent) |
+
+**Architecture Decision**: The separation allows single-turn mode to remain fast and simple while multi-turn mode evolves with advanced AI agent capabilities without compromising the user experience of quick queries.
 
 ---
 
