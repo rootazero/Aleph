@@ -171,6 +171,8 @@ pub fn run_agent_loop(
         .with_max_tokens(100_000);
 
     // Build initial history from conversation histories (for cross-session context)
+    // - Single-turn (topic_id = None): 🔒 FROZEN - No history injection, returns empty string
+    // - Multi-turn (topic_id = Some(uuid)): ✅ ACTIVE - Full context from previous turns
     let initial_history = build_history_summary_from_conversations(
         conversation_histories,
         topic_id,
@@ -313,6 +315,41 @@ pub fn run_agent_loop(
                     }
                 }
             }
+
+            // ✅ MULTI-TURN: Save conversation history for context injection
+            // This fixes the missing conversation_histories.write() logic
+            if let Some(tid) = topic_id {
+                if let Ok(mut histories) = conversation_histories.write() {
+                    // Get or create the message list for this topic
+                    let messages = histories.entry(tid.clone()).or_insert_with(Vec::new);
+
+                    // Append user message and assistant response
+                    messages.push(ChatMessage::user(input));
+                    messages.push(ChatMessage::assistant(&summary));
+
+                    // Limit history length to prevent memory bloat (keep last 50 messages = 25 turns)
+                    const MAX_HISTORY_MESSAGES: usize = 50;
+                    if messages.len() > MAX_HISTORY_MESSAGES {
+                        let drain_count = messages.len() - MAX_HISTORY_MESSAGES;
+                        messages.drain(0..drain_count);
+                        debug!(
+                            topic_id = %tid,
+                            drained = drain_count,
+                            remaining = messages.len(),
+                            "Trimmed conversation history"
+                        );
+                    }
+
+                    debug!(
+                        topic_id = %tid,
+                        message_count = messages.len(),
+                        "Saved conversation history"
+                    );
+                } else {
+                    warn!("Failed to acquire write lock on conversation_histories");
+                }
+            }
+            // Note: Single-turn (topic_id = None) does not save history (🔒 FROZEN behavior)
 
             handler.on_complete(final_summary);
         }
