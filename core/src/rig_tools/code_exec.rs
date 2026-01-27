@@ -112,6 +112,32 @@ fn is_code_blocked(code: &str) -> Option<String> {
     None
 }
 
+/// Expand environment variables in shell code
+///
+/// This function performs basic environment variable expansion:
+/// - $VAR and ${VAR} patterns are replaced with their values
+/// - Unknown variables are left as-is
+/// - Handles common cases but not all shell expansion edge cases
+///
+/// This ensures that when LLM generates commands like:
+///   python3 $HOME/.claude/skills/xxx.py
+/// The $HOME variable is properly expanded even if the LLM mistakenly
+/// puts it in single quotes or other contexts where bash wouldn't expand it.
+fn expand_env_vars(code: &str) -> String {
+    let var_pattern = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)").unwrap();
+
+    var_pattern.replace_all(code, |caps: &regex::Captures| {
+        // Try ${VAR} format first, then $VAR format
+        let var_name = caps.get(1).or_else(|| caps.get(2)).unwrap().as_str();
+
+        // Get environment variable value, or keep original if not found
+        match std::env::var(var_name) {
+            Ok(value) => value,
+            Err(_) => caps.get(0).unwrap().as_str().to_string(),
+        }
+    }).to_string()
+}
+
 /// Code execution tool
 #[derive(Clone)]
 pub struct CodeExecTool {
@@ -214,9 +240,17 @@ Examples:
 
         let start = Instant::now();
 
+        // CRITICAL FIX: Expand environment variables in shell commands
+        // This ensures $HOME, $USER, etc. are properly expanded even if LLM puts them in quotes
+        let expanded_code = if matches!(args.language, Language::Shell) {
+            expand_env_vars(&args.code)
+        } else {
+            args.code.clone()
+        };
+
         // Build command
         let mut cmd = Command::new(runtime);
-        cmd.arg(code_flag).arg(&args.code);
+        cmd.arg(code_flag).arg(&expanded_code);
 
         // Set working directory
         if let Some(ref dir) = args.working_dir {

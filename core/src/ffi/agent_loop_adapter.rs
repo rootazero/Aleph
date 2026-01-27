@@ -460,9 +460,10 @@ impl LoopCallback for FfiLoopCallback {
                 // Format tool call with human-readable description
                 let (description, _verb) = format_tool_description(tool_name, arguments);
 
-                // Show as status (replaces previous status, not accumulated)
-                let message = format!("⚡ {}", description);
-                self.set_status(&message).await;
+                // CRITICAL FIX: Append to response instead of using temporary status
+                // This ensures users can see what the agent is doing without it disappearing
+                let message = format!("⚡ {}\n", description);
+                self.append_response(&message).await;
                 self.handler.on_tool_start(tool_name.clone());
 
                 // Create and publish ToolCallPart (Added event)
@@ -563,9 +564,10 @@ impl LoopCallback for FfiLoopCallback {
                     let output_str = output.to_string();
                     let display_output = truncate_str(&output_str, 100);
 
-                    // Show success as status (replaces tool call status)
-                    let message = format!("✓ {}完成 ({}ms)", verb, duration_ms);
-                    self.set_status(&message).await;
+                    // CRITICAL FIX: Append success message to response
+                    // This ensures users can see the completion status
+                    let message = format!("  ✓ {}完成 ({}ms)\n", verb, duration_ms);
+                    self.append_response(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), display_output);
                 }
                 ActionResult::ToolError { error, .. } => {
@@ -574,9 +576,9 @@ impl LoopCallback for FfiLoopCallback {
                         error = %error,
                         "Tool execution failed"
                     );
-                    // Show error as status (replaces tool call status)
-                    let message = format!("✗ {}失败: {}", verb, error);
-                    self.set_status(&message).await;
+                    // CRITICAL FIX: Append error message to response
+                    let message = format!("  ✗ {}失败: {}\n", verb, error);
+                    self.append_response(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), format!("Error: {}", error));
                 }
                 _ => {}
@@ -614,8 +616,11 @@ impl LoopCallback for FfiLoopCallback {
                 question_display.push_str(&format!("\n  {}. {}", i + 1, opt));
             }
         }
-        // Show question as status (temporary)
-        self.set_status(&question_display).await;
+        question_display.push_str("\n\n");
+
+        // CRITICAL FIX: Append question to response instead of using temporary status
+        // This ensures the question remains visible during and after user input
+        self.append_response(&question_display).await;
 
         // Create pending input request and notify Swift UI
         let options_vec = options.map(|opts| opts.to_vec()).unwrap_or_default();
