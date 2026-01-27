@@ -95,7 +95,13 @@ impl PromptBuilder {
             prompt.push_str("\n**IMPORTANT**: Runtimes are NOT tools. They describe execution environments.\n");
             prompt.push_str("- To execute Python code, use the `file_ops` tool to write a .py script, then use `bash` tool to run it\n");
             prompt.push_str("- To execute Node.js code, use the `file_ops` tool to write a .js script, then use `bash` tool to run it\n");
-            prompt.push_str("- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n\n");
+            prompt.push_str("- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n");
+            prompt.push_str("\n**CRITICAL - Use Aether Runtimes**:\n");
+            prompt.push_str("When executing Python/Node.js scripts, ALWAYS use the full executable path from the runtimes above:\n");
+            prompt.push_str("- ✅ CORRECT: `/Users/zouguojun/.aether/runtimes/uv/envs/default/bin/python script.py`\n");
+            prompt.push_str("- ❌ WRONG: `python3 script.py` (system default may be incompatible)\n");
+            prompt.push_str("- ❌ WRONG: `python script.py` (may not exist)\n");
+            prompt.push_str("Aether provides managed runtimes to ensure correct versions and dependencies.\n\n");
         }
 
         // Available tools (with full schema)
@@ -331,7 +337,13 @@ impl PromptBuilder {
             prompt.push_str("\n**IMPORTANT**: Runtimes are NOT tools. They describe execution environments.\n");
             prompt.push_str("- To execute Python code, use the `file_ops` tool to write a .py script, then use `bash` tool to run it\n");
             prompt.push_str("- To execute Node.js code, use the `file_ops` tool to write a .js script, then use `bash` tool to run it\n");
-            prompt.push_str("- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n\n");
+            prompt.push_str("- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n");
+            prompt.push_str("\n**CRITICAL - Use Aether Runtimes**:\n");
+            prompt.push_str("When executing Python/Node.js scripts, ALWAYS use the full executable path from the runtimes above:\n");
+            prompt.push_str("- ✅ CORRECT: `/Users/zouguojun/.aether/runtimes/uv/envs/default/bin/python script.py`\n");
+            prompt.push_str("- ❌ WRONG: `python3 script.py` (system default may be incompatible)\n");
+            prompt.push_str("- ❌ WRONG: `python script.py` (may not exist)\n");
+            prompt.push_str("Aether provides managed runtimes to ensure correct versions and dependencies.\n\n");
         }
 
         // Available tools (with full schema)
