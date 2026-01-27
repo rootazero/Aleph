@@ -45,7 +45,7 @@ The system SHALL maintain a registry of available Skills loaded from the skills 
 #### Scenario: Scan skills directory on startup
 
 - **GIVEN** the Aether application starts
-- **WHEN** the skills directory `~/.config/aether/skills/` exists
+- **WHEN** the skills directory `~/.aether/skills/` exists
 - **THEN** the system SHALL scan all subdirectories for SKILL.md files
 - **AND** load valid skills into the registry
 
@@ -213,7 +213,7 @@ The system SHALL support Skills configuration in config.toml.
 - **GIVEN** no `[skills]` section in config.toml
 - **WHEN** Config is loaded
 - **THEN** `skills.enabled = true`
-- **AND** `skills.skills_dir = "~/.config/aether/skills"`
+- **AND** `skills.skills_dir = "~/.aether/skills"`
 - **AND** `skills.auto_match_enabled = false`
 
 #### Scenario: Custom skills directory
@@ -263,7 +263,7 @@ The system SHALL provide built-in Skills bundled with the application.
 
 #### Scenario: First-launch initialization
 
-- **GIVEN** `~/.config/aether/skills/` does not exist or is empty
+- **GIVEN** `~/.aether/skills/` does not exist or is empty
 - **WHEN** AetherCore initializes
 - **THEN** directory SHALL be created
 - **AND** built-in skills SHALL be copied (refine-text, translate, summarize)

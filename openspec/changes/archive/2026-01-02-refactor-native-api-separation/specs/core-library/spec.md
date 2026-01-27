@@ -85,7 +85,7 @@ The Rust core SHALL implement ONLY business logic: AI routing, memory operations
 
 #### Scenario: Configuration management
 - **WHEN** loading configuration
-- **THEN** Rust reads `~/.config/aether/config.toml`
+- **THEN** Rust reads `~/.aether/config.toml`
 - **AND** parses TOML using serde
 - **AND** validates provider configs
 - **AND** does NOT interact with Keychain (handled by Swift via callback)

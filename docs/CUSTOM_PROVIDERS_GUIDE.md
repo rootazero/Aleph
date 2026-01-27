@@ -9,12 +9,12 @@ Aether 现在支持多个自定义 OpenAI 兼容的 AI 服务！你可以使用 
 ### 1. 复制示例配置
 
 ```bash
-cp Aether/config.example.toml ~/.config/aether/config.toml
+cp Aether/config.example.toml ~/.aether/config.toml
 ```
 
 ### 2. 添加自定义 Provider
 
-在 `~/.config/aether/config.toml` 中添加：
+在 `~/.aether/config.toml` 中添加：
 
 ```toml
 [providers.deepseek]

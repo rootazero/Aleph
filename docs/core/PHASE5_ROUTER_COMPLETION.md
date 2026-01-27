@@ -265,7 +265,7 @@ if let Some((provider, sys_prompt)) = router.route("/code write a function") {
 - 添加 UniFFI 回调事件
 
 ### Phase 8: Configuration Management
-- 实现配置文件加载（`~/.config/aether/config.toml`）
+- 实现配置文件加载（`~/.aether/config.toml`）
 - 添加配置验证和错误报告
 - 支持环境变量扩展
 

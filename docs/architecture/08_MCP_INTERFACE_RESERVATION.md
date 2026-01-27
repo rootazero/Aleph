@@ -942,7 +942,7 @@ impl Drop for McpServerConnection {
 
 ### 4.1 MCP Server 配置
 
-**文件**: `~/.config/aether/config.toml`
+**文件**: `~/.aether/config.toml`
 
 ```toml
 [mcp]

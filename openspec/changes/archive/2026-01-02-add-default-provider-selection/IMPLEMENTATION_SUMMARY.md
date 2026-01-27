@@ -74,7 +74,7 @@ Successfully implemented a complete default provider management system for Aethe
 └─────────────────┬───────────────────┘
                   │ File I/O
 ┌─────────────────▼───────────────────┐
-│  Config File (~/.config/aether/     │
+│  Config File (~/.aether/     │
 │              config.toml)           │
 │  [general]                          │
 │  default_provider = "openai"        │
@@ -172,7 +172,7 @@ All 6 success criteria **ACHIEVED** ✅:
 1. ✅ **Users can set default provider in Settings UI** - "Set as Default" button in ProviderEditPanel
 2. ✅ **Users can switch default provider from menu bar** - Dynamic provider list with checkmarks
 3. ✅ **Visual indicator shows current default** - Blue "Default" badge in provider cards
-4. ✅ **Config persists across restarts** - Saved to `~/.config/aether/config.toml`
+4. ✅ **Config persists across restarts** - Saved to `~/.aether/config.toml`
 5. ✅ **Disabled providers cannot be set as default** - Validation in Rust Core
 6. ✅ **Graceful fallback when default is unavailable** - Router falls back to first enabled provider
 

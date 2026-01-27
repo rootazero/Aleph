@@ -29,7 +29,7 @@ The system SHALL display all installed Skills in a list format.
 
 #### Scenario: Display installed skills
 
-- **GIVEN** skills exist in `~/.config/aether/skills/`
+- **GIVEN** skills exist in `~/.aether/skills/`
 - **WHEN** the Skills tab is viewed
 - **THEN** each skill SHALL be displayed as a SkillCard
 - **AND** show the skill name and description

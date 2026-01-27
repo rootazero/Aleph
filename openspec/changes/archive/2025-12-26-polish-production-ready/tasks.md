@@ -557,7 +557,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 3. Store `_guard` in static to prevent premature drop
 
 **Validation**:
-- [ ] Logs appear in `~/.config/aether/logs/aether-YYYY-MM-DD.log`
+- [ ] Logs appear in `~/.aether/logs/aether-YYYY-MM-DD.log`
 - [ ] Daily rotation works (new file at midnight)
 - [ ] Console and file both receive log messages
 
@@ -722,7 +722,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 **Validation**:
 - [ ] `core.getLogLevel()` returns current level
 - [ ] `core.setLogLevel("debug")` → Debug logs appear immediately
-- [ ] `core.getLogDirectory()` → Returns `~/.config/aether/logs`
+- [ ] `core.getLogDirectory()` → Returns `~/.aether/logs`
 
 **Files Changed**:
 - `Aether/core/src/aether.udl`
@@ -1254,7 +1254,7 @@ The following tasks can be worked on in parallel once their dependencies are met
 - [ ] Halo shows typing progress bar (0% → 100%)
 
 ### Structured Logging
-- [ ] Logs written to `~/.config/aether/logs/aether-YYYY-MM-DD.log`
+- [ ] Logs written to `~/.aether/logs/aether-YYYY-MM-DD.log`
 - [ ] PII scrubbed (email, phone, API keys → placeholders)
 - [ ] Old logs auto-deleted after retention period (default 7 days)
 - [ ] Settings UI allows viewing, exporting, clearing logs

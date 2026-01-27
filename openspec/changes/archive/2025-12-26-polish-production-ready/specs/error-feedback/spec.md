@@ -82,7 +82,7 @@ The system SHALL provide suggestions for configuration-related errors.
 
 - **WHEN** TOML parser fails on malformed config.toml
 - **THEN** error message: "Failed to parse config: unexpected character at line 42"
-- **AND** suggestion: "Restore default config or fix syntax error in ~/.config/aether/config.toml"
+- **AND** suggestion: "Restore default config or fix syntax error in ~/.aether/config.toml"
 
 ### Requirement: Memory Module Error Suggestions
 

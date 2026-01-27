@@ -274,7 +274,7 @@ Prevents large outputs from overflowing context:
 **Cleanup scheduler**:
 - Retention: 7 days
 - Cleanup interval: 1 hour
-- Location: `~/.config/aether/tool_output/`
+- Location: `~/.aether/tool_output/`
 
 ---
 
@@ -288,7 +288,7 @@ Skills are discovered from multiple locations in priority order:
 Priority Order:
 1. .aether/skills/     (project level, traverse up to git root)
 2. .claude/skills/     (project level, Claude Code compatible)
-3. ~/.config/aether/skills (global)
+3. ~/.aether/skills (global)
 4. ~/.claude/skills    (global, Claude Code compatible)
 ```
 

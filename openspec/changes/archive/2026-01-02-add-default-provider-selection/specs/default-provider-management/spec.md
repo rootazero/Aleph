@@ -150,7 +150,7 @@ Changes to the default provider SHALL be persisted to config.toml atomically.
 - **WHEN** the selection is confirmed
 - **THEN** the system SHALL:
   - Update `general.default_provider = "gemini"` in the Config struct
-  - Call `config.save()` to write to ~/.config/aether/config.toml
+  - Call `config.save()` to write to ~/.aether/config.toml
   - Use atomic write (temp file + rename) to prevent corruption
   - Set file permissions to 600 (owner read/write only)
 
@@ -158,7 +158,7 @@ Changes to the default provider SHALL be persisted to config.toml atomically.
 - **GIVEN** the user set "claude" as default and quit the app
 - **WHEN** the app is relaunched
 - **THEN** the system SHALL:
-  - Load config from ~/.config/aether/config.toml
+  - Load config from ~/.aether/config.toml
   - Read `general.default_provider = "claude"`
   - Validate that "claude" is enabled
   - Display "Default" badge on "claude" in Settings UI

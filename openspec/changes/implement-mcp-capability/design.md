@@ -1556,7 +1556,7 @@ impl McpClient {
 ### 6. 配置格式
 
 ```toml
-# ~/.config/aether/config.toml
+# ~/.aether/config.toml
 
 [mcp]
 enabled = true

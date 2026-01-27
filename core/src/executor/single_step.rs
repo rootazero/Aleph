@@ -71,7 +71,7 @@ pub struct SingleStepConfig {
 impl Default for SingleStepConfig {
     fn default() -> Self {
         Self {
-            timeout_seconds: 30,
+            timeout_seconds: 300,
             max_output_size: 1024 * 1024, // 1MB
         }
     }

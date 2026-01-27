@@ -56,7 +56,7 @@
 - [x] 7.5 Update UniFFI bindings (aether.udl)
 
 ## 8. Configuration (Phase 8) ✅
-- [x] 8.1 Plugin directory at ~/.config/aether/plugins/
+- [x] 8.1 Plugin directory at ~/.aether/plugins/
 - [x] 8.2 Implement plugins.json for plugin state persistence
 - [x] 8.3 Add plugin directory configuration (default_plugins_dir)
 - [x] 8.4 Add dev_paths for development plugin loading

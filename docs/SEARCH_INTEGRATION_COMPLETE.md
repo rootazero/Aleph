@@ -286,7 +286,7 @@ pub struct SearchBackendConfig {
 
 ### 5.2 配置示例
 
-**文件**: `~/.config/aether/config.toml`
+**文件**: `~/.aether/config.toml`
 
 ```toml
 [search]

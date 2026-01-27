@@ -56,6 +56,10 @@ pub struct ReadSkillOutput {
     /// Size of the file in bytes
     pub size: u64,
 
+    /// Absolute path to the skill directory
+    /// This allows the agent to locate scripts and resources within the skill
+    pub location: String,
+
     /// List of other files available in this skill directory
     /// Useful for discovering Level 3 resources
     pub available_files: Vec<String>,
@@ -304,6 +308,7 @@ You can also read additional resources within a skill by specifying file_name:
             file_name: file_name.to_string(),
             content,
             size: metadata.len(),
+            location: skill_dir.to_string_lossy().to_string(),
             available_files,
         })
     }
@@ -368,6 +373,10 @@ pub struct SkillSummary {
     /// Brief description
     pub description: String,
 
+    /// Absolute path to the skill directory
+    /// This allows the agent to locate scripts and resources within the skill
+    pub location: String,
+
     /// Trigger keywords (if any)
     pub triggers: Vec<String>,
 
@@ -377,10 +386,6 @@ pub struct SkillSummary {
     /// Source location type (project or global)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-
-    /// Full path to the skill directory
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location: Option<PathBuf>,
 }
 
 /// Output from list_skills tool
@@ -488,10 +493,10 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
             id,
             name: skill.frontmatter.name,
             description: skill.frontmatter.description,
+            location: skill_dir.to_string_lossy().to_string(),
             triggers: skill.frontmatter.triggers,
             files,
             source: Some(source),
-            location: Some(skill_dir.to_path_buf()),
         })
     }
 

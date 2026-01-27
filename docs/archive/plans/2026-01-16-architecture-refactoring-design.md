@@ -572,7 +572,7 @@ dispatcher         ●●      ●●        -         -         -       ●● 
 | AI Provider | providers/ | 实现 AiProvider trait | 简单 |
 | 搜索引擎 | search/providers/ | 实现 SearchProvider | 简单 |
 | MCP Server | config.toml | 配置 [mcp.servers.x] | 简单 |
-| Skills | ~/.config/aether/skills | 创建 SKILL.md | 简单 |
+| Skills | ~/.aether/skills | 创建 SKILL.md | 简单 |
 | Cowork Executor | cowork/executor/ | 实现 TaskExecutor | 中等 |
 | Capability | capability/strategies/ | 实现 CapabilityStrategy | 中等 |
 | 新工具类型 | tools/ + dispatcher/ | 修改多处 | 困难 |

@@ -11,7 +11,7 @@
 ///
 /// Optional fields:
 /// - `base_url`: Custom API endpoint (defaults to "https://api.openai.com/v1")
-/// - `timeout_seconds`: Request timeout (defaults to 30)
+/// - `timeout_seconds`: Request timeout (defaults to 300)
 /// - `max_tokens`: Maximum response tokens
 /// - `temperature`: Response randomness (0.0-2.0)
 ///
@@ -28,7 +28,7 @@
 ///     model: "gpt-4o".to_string(),
 ///     base_url: None,
 ///     color: "#10a37f".to_string(),
-///     timeout_seconds: 30,
+///     timeout_seconds: 300,
 ///     max_tokens: Some(4096),
 ///     temperature: Some(0.7),
 /// };

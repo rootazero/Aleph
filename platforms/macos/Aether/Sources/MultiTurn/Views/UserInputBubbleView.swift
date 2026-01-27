@@ -23,6 +23,8 @@ struct UserInputBubbleView: View {
         HStack(alignment: .top, spacing: 0) {
             // Content aligned to left (assistant side)
             inputCard
+                // Prevent window dragging in user input area to allow text selection and interaction
+                .background(NonDraggableArea())
             Spacer(minLength: 40)
         }
     }

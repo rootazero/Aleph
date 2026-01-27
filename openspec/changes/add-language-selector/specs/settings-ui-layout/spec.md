@@ -38,7 +38,7 @@ The General Settings tab SHALL provide a language selector to allow users to ove
 - **WHEN** the user restarts Aether
 - **THEN** the app SHALL launch with the selected language applied to all UI elements
 - **AND** the Settings dropdown SHALL show the selected language as active
-- **AND** the `~/.config/aether/config.toml` file SHALL contain the language setting in the `[general]` section
+- **AND** the `~/.aether/config.toml` file SHALL contain the language setting in the `[general]` section
 
 #### Scenario: Selecting "System Default" removes language override
 - **GIVEN** the user has previously selected a specific language

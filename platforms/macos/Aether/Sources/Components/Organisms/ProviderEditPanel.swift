@@ -29,7 +29,7 @@ struct ProviderEditPanel: View {
     @State private var apiKey: String = ""
     @State private var model: String = ""
     @State private var baseURL: String = ""
-    @State private var timeoutSeconds: String = "30"
+    @State private var timeoutSeconds: String = "300"
 
     // Form fields - Common generation parameters
     @State private var maxTokens: String = ""
@@ -545,7 +545,7 @@ struct ProviderEditPanel: View {
 
                     Divider()
                     FormField(title: "Timeout (seconds)") {
-                        TextField("30", text: $timeoutSeconds)
+                        TextField("300", text: $timeoutSeconds)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 100)
                         Text("Request timeout in seconds")
@@ -817,7 +817,7 @@ struct ProviderEditPanel: View {
             model = preset.defaultModel
             baseURL = preset.baseUrl ?? ""
         }
-        timeoutSeconds = "30"
+        timeoutSeconds = "300"
         maxTokens = ""
         temperature = ""
         isProviderActive = false  // New providers are disabled by default
@@ -853,7 +853,7 @@ struct ProviderEditPanel: View {
         apiKey = ""
         model = ""
         baseURL = ""
-        timeoutSeconds = "30"
+        timeoutSeconds = "300"
 
         // Common generation parameters
         maxTokens = ""
@@ -912,7 +912,7 @@ struct ProviderEditPanel: View {
                 model: model,
                 baseUrl: baseURL.isEmpty ? nil : baseURL,
                 color: "#5E5CE6",  // Fixed default color (not used in UI)
-                timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+                timeoutSeconds: UInt64(timeoutSeconds) ?? 300,
                 enabled: isProviderActive,
                 maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
                 temperature: temperature.isEmpty ? nil : Float(temperature),
@@ -1055,7 +1055,7 @@ struct ProviderEditPanel: View {
             model: model,
             baseUrl: baseURL.isEmpty ? nil : baseURL,
             color: "#5E5CE6",  // Fixed default color (not used in UI)
-            timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+            timeoutSeconds: UInt64(timeoutSeconds) ?? 300,
             enabled: isProviderActive,
             maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
             temperature: temperature.isEmpty ? nil : Float(temperature),

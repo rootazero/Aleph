@@ -13,8 +13,8 @@ The system SHALL load a pre-trained sentence embedding model (`all-MiniLM-L6-v2`
 - **GIVEN** memory feature is enabled
 - **AND** no embedding model is currently loaded in memory
 - **WHEN** the first text embedding is requested
-- **THEN** the system loads the tokenizer from `~/.config/aether/models/all-MiniLM-L6-v2/tokenizer.json`
-- **AND** loads the ONNX model from `~/.config/aether/models/all-MiniLM-L6-v2/model.onnx`
+- **THEN** the system loads the tokenizer from `~/.aether/models/all-MiniLM-L6-v2/tokenizer.json`
+- **AND** loads the ONNX model from `~/.aether/models/all-MiniLM-L6-v2/model.onnx`
 - **AND** initializes an ONNX Runtime session
 - **AND** caches the session in memory for subsequent requests
 - **AND** completes model loading within 2 seconds
@@ -92,7 +92,7 @@ The system SHALL support configurable embedding model selection (future-proofing
 #### Scenario: Use custom model path
 - **GIVEN** config specifies: `embedding_model = "custom-model"`
 - **WHEN** EmbeddingModel is initialized
-- **THEN** the system looks for model at `~/.config/aether/models/custom-model/`
+- **THEN** the system looks for model at `~/.aether/models/custom-model/`
 - **AND** loads `model.onnx` and `tokenizer.json` from that directory
 - **AND** verifies output dimensions match expected (384)
 

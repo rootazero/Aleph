@@ -28,7 +28,7 @@ Aether 作为 AI Agent 中间件，需要支持 JS/TS 和 Python 运行时来执
 ## 2. 目录结构
 
 ```
-~/.config/aether/
+~/.aether/
 ├── config.toml
 ├── memory.db
 ├── models/

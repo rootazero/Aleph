@@ -311,7 +311,7 @@ impl McpClient {
     /// * `Ok(())` - If the connection was established successfully
     /// * `Err(AetherError)` - If connection failed
     pub async fn start_remote_server(&self, config: McpRemoteServerConfig) -> Result<()> {
-        let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(30));
+        let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(300));
 
         let transport: Box<dyn McpTransport> = match config.transport {
             TransportPreference::Http => {
@@ -592,7 +592,7 @@ mod tests {
 
         let config = McpRemoteServerConfig::new("test-remote", "https://example.com/mcp")
             .with_transport(TransportPreference::Http)
-            .with_timeout(30);
+            .with_timeout(300);
 
         assert_eq!(config.name, "test-remote");
         assert_eq!(config.url, "https://example.com/mcp");

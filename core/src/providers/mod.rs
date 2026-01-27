@@ -106,7 +106,7 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 ///     model: "gpt-4o".to_string(),
 ///     base_url: None,
 ///     color: "#10a37f".to_string(),
-///     timeout_seconds: 30,
+///     timeout_seconds: 300,
 ///     max_tokens: Some(4096),
 ///     temperature: Some(0.7),
 /// };
@@ -119,7 +119,7 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 ///     model: "deepseek-chat".to_string(),
 ///     base_url: Some("https://api.deepseek.com".to_string()),
 ///     color: "#0066cc".to_string(),
-///     timeout_seconds: 30,
+///     timeout_seconds: 300,
 ///     max_tokens: Some(4096),
 ///     temperature: Some(0.7),
 /// };

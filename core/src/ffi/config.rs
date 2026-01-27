@@ -68,7 +68,7 @@ impl AetherCore {
                         None,
                         None,
                         None,
-                        30u64, // Default timeout
+                        300u64, // Default timeout
                     )
                 }
             } else {
@@ -82,7 +82,7 @@ impl AetherCore {
                     None,
                     None,
                     None,
-                    30u64, // Default timeout
+                    300u64, // Default timeout
                 )
             }
         };

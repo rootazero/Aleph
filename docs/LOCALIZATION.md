@@ -351,7 +351,7 @@ Aether uses a three-tier approach to determine the UI language:
    - "简体中文" - Forces Simplified Chinese UI
 
 3. **Behavior**:
-   - Language preference is saved to `~/.config/aether/config.toml` under `[general]` section
+   - Language preference is saved to `~/.aether/config.toml` under `[general]` section
    - Format: `language = "en"` or `language = "zh-Hans"`
    - If "System Default" is selected, the language field is omitted from config
    - Language changes require app restart to take effect (macOS localization caching)
@@ -382,7 +382,7 @@ On first installation:
 ### Testing Language Changes
 
 1. **Via UI**: Settings → General → Language → Select language → Restart
-2. **Via Config**: Edit `~/.config/aether/config.toml`:
+2. **Via Config**: Edit `~/.aether/config.toml`:
    ```toml
    [general]
    language = "zh-Hans"  # or "en"

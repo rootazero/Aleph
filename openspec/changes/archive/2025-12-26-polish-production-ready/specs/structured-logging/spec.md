@@ -219,7 +219,7 @@ The system SHALL expose logging controls to Swift via UniFFI for Settings UI int
 
 - **WHEN** Swift calls `core.get_log_directory()`
 - **THEN** absolute path to log directory is returned
-- **AND** path is `~/.config/aether/logs/`
+- **AND** path is `~/.aether/logs/`
 - **AND** Swift can open directory in Finder
 
 ## MODIFIED Requirements

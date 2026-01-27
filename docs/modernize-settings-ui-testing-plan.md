@@ -126,7 +126,7 @@ This document outlines the comprehensive testing strategy for the Modernize Sett
 - [ ] Quit and restart Aether
 - [ ] Reopen settings window
 - [ ] Verify all changes persisted
-- [ ] Check `~/.config/aether/config.toml` content matches
+- [ ] Check `~/.aether/config.toml` content matches
 
 ### 6.1.3 Test Import/Export
 
@@ -322,7 +322,7 @@ This document outlines the comprehensive testing strategy for the Modernize Sett
       echo "api_key = \"sk-test-$i\""
       echo "model = \"gpt-4\""
       echo ""
-    done >> ~/.config/aether/config.toml
+    done >> ~/.aether/config.toml
     ```
 - [ ] Open Providers tab
 - [ ] Measure scroll performance:

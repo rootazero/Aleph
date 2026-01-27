@@ -206,7 +206,7 @@ Verify UI remains responsive with 50+ providers.
 ### Setup: Generate Test Data
 1. Create test configuration:
    ```bash
-   cd ~/.config/aether
+   cd ~/.aether
    cp config.toml config.toml.backup
    ```
 
@@ -214,7 +214,7 @@ Verify UI remains responsive with 50+ providers.
    ```bash
    cat > test_providers.sh << 'EOF'
    #!/bin/bash
-   CONFIG=~/.config/aether/config.toml
+   CONFIG=~/.aether/config.toml
 
    # Backup existing
    cp $CONFIG ${CONFIG}.backup
@@ -289,7 +289,7 @@ Verify UI remains responsive with 50+ providers.
 
 ### Cleanup
 ```bash
-cd ~/.config/aether
+cd ~/.aether
 mv config.toml.backup config.toml
 ```
 

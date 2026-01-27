@@ -160,7 +160,7 @@ mod tests {
             enabled: true,
             provider: Some("test".to_string()),
             model: None,
-            timeout_seconds: 30,
+            timeout_seconds: 300,
             max_length: 2000,
         }
     }

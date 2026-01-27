@@ -7,7 +7,7 @@ The Rust core **SHALL** monitor config.toml for external modifications and trigg
 
 #### Scenario: Detect config file change
 - **GIVEN** Aether is running with config watcher initialized
-- **WHEN** user edits `~/.config/aether/config.toml` in external editor
+- **WHEN** user edits `~/.aether/config.toml` in external editor
 - **AND** saves file
 - **THEN** FSEvents notifies Rust watcher within 500ms
 - **AND** watcher debounces rapid changes (waits 500ms for more events)
@@ -35,7 +35,7 @@ The Rust core **SHALL** write config.toml atomically to prevent corruption durin
 #### Scenario: Atomic write with temp file
 - **WHEN** Swift calls `core.updateProvider(provider)` to save new provider config
 - **THEN** Rust serializes full config to TOML string
-- **AND** creates temp file: `~/.config/aether/config.toml.tmp`
+- **AND** creates temp file: `~/.aether/config.toml.tmp`
 - **AND** writes TOML content to temp file
 - **AND** calls `fsync()` to flush to disk
 - **AND** renames temp file to `config.toml` (atomic operation)
@@ -80,9 +80,9 @@ The Rust core **SHALL** validate all config modifications before persisting to f
 The Rust core **SHALL** support backup and restore of configuration files.
 
 #### Scenario: Automatic backup before write
-- **GIVEN** valid config.toml exists at `~/.config/aether/config.toml`
+- **GIVEN** valid config.toml exists at `~/.aether/config.toml`
 - **WHEN** user saves new provider configuration
-- **THEN** Rust copies current config.toml to `~/.config/aether/backups/config.toml.{timestamp}`
+- **THEN** Rust copies current config.toml to `~/.aether/backups/config.toml.{timestamp}`
 - **AND** keeps last 5 backups (deletes older backups)
 - **AND** proceeds with atomic write of new config
 
@@ -162,7 +162,7 @@ The Rust core **SHALL** provide sensible defaults for all config options when no
 
 #### Scenario: Initialize config with defaults on first launch
 - **GIVEN** user launches Aether for first time
-- **AND** no config.toml exists at `~/.config/aether/config.toml`
+- **AND** no config.toml exists at `~/.aether/config.toml`
 - **WHEN** Rust initializes config system
 - **THEN** Rust creates default config:
   ```toml

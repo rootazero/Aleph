@@ -31,7 +31,7 @@
 - ✅ "Set as Default" button is disabled for inactive providers
 - ✅ After clicking, indicator changes to "This is the default provider"
 - ✅ "Default" badge appears in provider card list
-- ✅ Config file `~/.config/aether/config.toml` updates `general.default_provider`
+- ✅ Config file `~/.aether/config.toml` updates `general.default_provider`
 
 **Automated Checks**:
 - ✅ Code logic verified: `setAsDefaultProvider()` calls `core.setDefaultProvider(providerName:)`
@@ -75,7 +75,7 @@
 
 **Steps**:
 1. Set default provider to "Claude"
-2. Verify config file: `cat ~/.config/aether/config.toml | grep default_provider`
+2. Verify config file: `cat ~/.aether/config.toml | grep default_provider`
 3. Quit and restart Aether
 4. Open Settings → Providers
 5. Verify "Claude" shows "Default" badge

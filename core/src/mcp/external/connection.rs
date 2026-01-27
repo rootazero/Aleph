@@ -16,7 +16,7 @@ use crate::mcp::types::McpTool;
 
 /// Default timeout for the entire MCP server connection process
 /// This includes: process spawn + initialize handshake + tools/list
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Connection state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

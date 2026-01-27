@@ -11,7 +11,7 @@ This document provides test cases for the Config Hot-Reload feature implemented 
 1. **Rust Core (AetherCore)**
    - File: `Aether/core/src/core.rs`
    - Added `ConfigWatcher` integration
-   - Watches `~/.config/aether/config.toml` for changes
+   - Watches `~/.aether/config.toml` for changes
    - Debounces file events (500ms delay)
    - Automatically reloads config on external modification
 
@@ -40,7 +40,7 @@ This document provides test cases for the Config Hot-Reload feature implemented 
 - Settings window is open
 
 **Steps:**
-1. Open `~/.config/aether/config.toml` in a text editor
+1. Open `~/.aether/config.toml` in a text editor
 2. Modify a simple field (e.g., change `default_hotkey = "Command+Grave"` to `default_hotkey = "Command+Shift+A"`)
 3. Save the file
 
@@ -110,7 +110,7 @@ system_prompt = "You are a test assistant."
 1. Use a script to rapidly modify `config.toml` multiple times:
 ```bash
 for i in {1..10}; do
-  echo "# Modified at $(date)" >> ~/.config/aether/config.toml
+  echo "# Modified at $(date)" >> ~/.aether/config.toml
   sleep 0.1
 done
 ```
@@ -146,7 +146,7 @@ api_key = "sk-test  # Missing closing quote
 - Aether app running
 
 **Steps:**
-1. Delete `~/.config/aether/config.toml`
+1. Delete `~/.aether/config.toml`
 2. Wait 1 second
 3. Restore the file (copy from `config.example.toml`)
 
@@ -215,7 +215,7 @@ log stream --predicate 'process == "Aether"' --level debug
 
 **Solution:**
 - Check if watcher started successfully: `Config watcher started successfully` in logs
-- Verify config path: `~/.config/aether/config.toml`
+- Verify config path: `~/.aether/config.toml`
 - Ensure file permissions allow reading
 
 ### Issue: UI not updating
@@ -253,7 +253,7 @@ All test cases pass with the following outcomes:
 - `notify-debouncer-full` (Rust) - Debouncing wrapper
 
 ### Configuration
-- Watch path: `~/.config/aether/config.toml`
+- Watch path: `~/.aether/config.toml`
 - Debounce delay: 500ms
 - Notification name: `"AetherConfigDidChange"`
 

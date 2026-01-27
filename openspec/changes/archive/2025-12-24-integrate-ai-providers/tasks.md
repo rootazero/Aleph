@@ -338,7 +338,7 @@
 **Validation**: ✅ Example config is well-documented (262 lines with comprehensive comments)
 
 ### Task 8.2: Add Config Loading ✅
-- [x] Implement config file loading from `~/.config/aether/config.toml`
+- [x] Implement config file loading from `~/.aether/config.toml`
 - [x] Fall back to default config if file doesn't exist
 - [x] Add config validation on load
 - [x] Log config errors clearly

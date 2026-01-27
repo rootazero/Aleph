@@ -35,7 +35,7 @@ impl Default for SseTransportConfig {
         Self {
             url: String::new(),
             headers: HashMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300),
         }
     }
 }
@@ -65,7 +65,7 @@ impl Default for SseTransportConfig {
 /// let config = SseTransportConfig {
 ///     url: "https://api.example.com/mcp".to_string(),
 ///     headers: [("Authorization".into(), "Bearer token".into())].into(),
-///     timeout: Duration::from_secs(30),
+///     timeout: Duration::from_secs(300),
 /// };
 ///
 /// let transport = SseTransport::new("my-sse-server", config);
@@ -347,11 +347,11 @@ mod tests {
         let config = SseTransportConfig {
             url: "https://example.com/mcp/sse".to_string(),
             headers: HashMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300),
         };
 
         assert_eq!(config.url, "https://example.com/mcp/sse");
-        assert_eq!(config.timeout, Duration::from_secs(30));
+        assert_eq!(config.timeout, Duration::from_secs(300));
     }
 
     #[test]
@@ -360,7 +360,7 @@ mod tests {
 
         assert!(config.url.is_empty());
         assert!(config.headers.is_empty());
-        assert_eq!(config.timeout, Duration::from_secs(30));
+        assert_eq!(config.timeout, Duration::from_secs(300));
     }
 
     #[tokio::test]
@@ -368,7 +368,7 @@ mod tests {
         let config = SseTransportConfig {
             url: "https://example.com/mcp".to_string(),
             headers: HashMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300),
         };
 
         let transport = SseTransport::new("test-sse", config);
@@ -408,7 +408,7 @@ mod tests {
         let config = SseTransportConfig {
             url: "https://example.com/mcp".to_string(),
             headers: HashMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300),
         };
 
         // Verify it can be used as a trait object
@@ -425,7 +425,7 @@ mod tests {
         let config = SseTransportConfig {
             url: "https://example.com/mcp".to_string(),
             headers: HashMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300),
         };
 
         let transport = SseTransport::new("test-sse", config);

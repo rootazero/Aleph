@@ -108,7 +108,7 @@ The system SHALL allow users to configure file operation permissions via config.
 
 #### Scenario: Default denied paths
 - **WHEN** no denied_paths are configured
-- **THEN** sensitive paths (~/.ssh, ~/.gnupg, ~/.config/aether) are denied by default
+- **THEN** sensitive paths (~/.ssh, ~/.gnupg, ~/.aether) are denied by default
 
 #### Scenario: Denied paths override allowed
 - **WHEN** a path matches both allowed_paths and denied_paths

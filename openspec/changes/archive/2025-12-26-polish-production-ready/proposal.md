@@ -136,7 +136,7 @@ However, several production-critical features remain unimplemented:
 - Log levels: ERROR, WARN, INFO, DEBUG (controlled by `RUST_LOG` env var)
 - Privacy protection: Scrub PII before logging (reuse `scrub_pii()` from memory module)
 - Log rotation: Daily rotation, keep 7 days, 50MB max per file
-- Log location: `~/.config/aether/logs/aether-YYYY-MM-DD.log`
+- Log location: `~/.aether/logs/aether-YYYY-MM-DD.log`
 
 **Logged Events:**
 - Hotkey trigger (timestamp only, no clipboard content)

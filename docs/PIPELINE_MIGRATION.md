@@ -16,7 +16,7 @@ The Intent Routing Pipeline is an optional enhancement to the existing Dispatche
 
 ### Quick Start
 
-Add to your `~/.config/aether/config.toml`:
+Add to your `~/.aether/config.toml`:
 
 ```toml
 [routing.pipeline]

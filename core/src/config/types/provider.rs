@@ -112,7 +112,7 @@ pub fn default_provider_color() -> String {
 }
 
 pub fn default_timeout_seconds() -> u64 {
-    30 // 30 seconds default timeout
+    300 // 300 seconds default timeout
 }
 
 pub fn default_provider_enabled() -> bool {

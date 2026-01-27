@@ -11,7 +11,7 @@
 /// - `model`: Model endpoint ID (e.g., "doubao-1-5-pro-32k", not the display name)
 ///
 /// Optional fields are inherited from OpenAiProvider:
-/// - `timeout_seconds`: Request timeout (defaults to 30)
+/// - `timeout_seconds`: Request timeout (defaults to 300)
 /// - `max_tokens`: Maximum response tokens
 /// - `temperature`: Response randomness (0.0-2.0)
 ///

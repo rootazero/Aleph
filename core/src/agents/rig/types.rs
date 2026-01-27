@@ -33,7 +33,7 @@ impl Default for AgentConfig {
         Self {
             system_prompt: None,
             max_turns: 50, // Allows complex multi-step tasks
-            turn_timeout_ms: 30_000,
+            turn_timeout_ms: 300_000,
             stop_on_error: false,
             include_tool_results: true,
         }

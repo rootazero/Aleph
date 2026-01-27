@@ -48,6 +48,8 @@ struct MessageBubbleView: View {
                         .transition(.opacity)
                 }
             }
+            // Prevent window dragging in message bubble area to allow text selection
+            .background(NonDraggableArea())
 
             if !isUser { Spacer(minLength: 40) }
         }

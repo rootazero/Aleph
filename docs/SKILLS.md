@@ -288,7 +288,7 @@ my-skills.zip
 Copy skill folders directly to the skills directory:
 
 ```bash
-~/.config/aether/skills/
+~/.aether/skills/
 ├── skill-name-1/
 │   └── SKILL.md
 ├── skill-name-2/
@@ -311,10 +311,10 @@ Navigate to **Settings > Skills** to:
 
 ### File System
 
-Skills are stored in `~/.config/aether/skills/`. Each skill has its own directory:
+Skills are stored in `~/.aether/skills/`. Each skill has its own directory:
 
 ```
-~/.config/aether/skills/
+~/.aether/skills/
 ├── refine-text/
 │   └── SKILL.md
 ├── translate/
@@ -357,7 +357,7 @@ To edit a skill, modify the `SKILL.md` file directly. Changes take effect immedi
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Skills Directory                             │
-│  ~/.config/aether/skills/                                        │
+│  ~/.aether/skills/                                        │
 │  ├── refine-text/                                                │
 │  │   ├── SKILL.md           # Level 2: Instructions             │
 │  │   └── EXAMPLES.md        # Level 3: Resources                │
@@ -396,7 +396,7 @@ To edit a skill, modify the `SKILL.md` file directly. Changes take effect immedi
    └─ Issues tool call
 
 4. ReadSkillTool executes
-   ├─ Read ~/.config/aether/skills/refine-text/SKILL.md
+   ├─ Read ~/.aether/skills/refine-text/SKILL.md
    ├─ Return full content
    └─ ActionResult::ToolSuccess { output: { content: "..." } }
 
@@ -451,7 +451,7 @@ auto_match_enabled = false  # Enable automatic skill matching (default: false)
 ### Directory Structure
 
 ```
-~/.config/aether/
+~/.aether/
 ├── config.toml
 ├── skills/
 │   ├── refine-text/
@@ -512,13 +512,13 @@ Aether includes three built-in skills that are installed on first launch:
 ### Step 1: Create Directory
 
 ```bash
-mkdir -p ~/.config/aether/skills/my-skill
+mkdir -p ~/.aether/skills/my-skill
 ```
 
 ### Step 2: Create SKILL.md
 
 ```bash
-cat > ~/.config/aether/skills/my-skill/SKILL.md << 'EOF'
+cat > ~/.aether/skills/my-skill/SKILL.md << 'EOF'
 ---
 name: my-skill
 description: Description of what this skill does.
@@ -564,7 +564,7 @@ The skill appears immediately in Settings > Skills and can be used with:
 **Symptoms**: `/skill <name>` returns "Skill not found"
 
 **Solutions**:
-1. Check skill exists in `~/.config/aether/skills/<name>/SKILL.md`
+1. Check skill exists in `~/.aether/skills/<name>/SKILL.md`
 2. Verify SKILL.md has valid YAML frontmatter
 3. Refresh skills list in Settings > Skills
 4. Check logs for parsing errors

@@ -400,7 +400,7 @@ pub struct CapabilityExecutor {
 
 ### 4.1 完整的 Skills 配置
 
-**文件**: `~/.config/aether/config.toml`
+**文件**: `~/.aether/config.toml`
 
 ```toml
 # 🔮 Skills 配置示例 1: 构建 macOS 应用

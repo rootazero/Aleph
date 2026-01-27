@@ -64,7 +64,7 @@
 
 **辅助方法**：
 添加了 `get_embedding_model_dir()` 方法：
-- 返回嵌入模型目录路径：`~/.config/aether/models/all-MiniLM-L6-v2`
+- 返回嵌入模型目录路径：`~/.aether/models/all-MiniLM-L6-v2`
 - 自动创建目录（如果不存在）
 
 **依赖更新**：

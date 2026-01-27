@@ -121,7 +121,7 @@ Delete: memory/       (~3,000 lines) → replaced by store/
 ### New `config.toml` Structure
 
 ```toml
-# ~/.config/aether/config.toml
+# ~/.aether/config.toml
 
 [agent]
 provider = "openai"              # openai | anthropic | ollama | groq
@@ -145,7 +145,7 @@ model = "llama3"
 
 [memory]
 enabled = true
-db_path = "~/.config/aether/memory.db"
+db_path = "~/.aether/memory.db"
 embedding_model = "fastembed"
 top_k = 5
 similarity_threshold = 0.7

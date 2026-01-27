@@ -125,7 +125,7 @@ provider_type = "openai"  # Optional, inferred from name
 api_key = "sk-..."        # Get from https://platform.openai.com
 model = "gpt-4o"          # Options: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
 color = "#10a37f"         # Brand color for UI
-timeout_seconds = 30
+timeout_seconds = 300
 
 # Common generation parameters (optional)
 max_tokens = 4096         # Maximum response length
@@ -144,7 +144,7 @@ provider_type = "claude"  # Optional, inferred from name
 api_key = "sk-ant-..."    # Get from https://console.anthropic.com
 model = "claude-3-5-sonnet-20241022"  # Options: claude-3-5-sonnet, claude-3-opus, etc.
 color = "#d97757"
-timeout_seconds = 30
+timeout_seconds = 300
 
 # Common generation parameters (optional)
 max_tokens = 4096         # Maximum response length
@@ -164,7 +164,7 @@ api_key = "..."           # Get from https://makersuite.google.com/app/apikey
 model = "gemini-3-flash"  # Options: gemini-3-flash, gemini-3-pro
 base_url = "https://generativelanguage.googleapis.com/v1beta"
 color = "#4285F4"         # Google Blue
-timeout_seconds = 30
+timeout_seconds = 300
 
 # Common generation parameters (optional)
 max_tokens = 2048         # Maximum response length (maxOutputTokens)
@@ -210,7 +210,7 @@ api_key = "sk-..."                 # Get from https://platform.deepseek.com
 model = "deepseek-chat"
 base_url = "https://api.deepseek.com"  # Custom API endpoint
 color = "#0066cc"
-timeout_seconds = 30
+timeout_seconds = 300
 max_tokens = 4096
 temperature = 0.7
 
@@ -223,7 +223,7 @@ api_key = "sk-..."                 # Get from https://platform.moonshot.cn
 model = "moonshot-v1-8k"          # Options: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k
 base_url = "https://api.moonshot.cn/v1"
 color = "#ff6b6b"
-timeout_seconds = 30
+timeout_seconds = 300
 max_tokens = 8192
 temperature = 0.7
 
@@ -236,7 +236,7 @@ api_key = "your-azure-key"
 model = "gpt-4o"                   # Your deployment name
 base_url = "https://your-resource.openai.azure.com"
 color = "#0078d4"
-timeout_seconds = 30
+timeout_seconds = 300
 max_tokens = 4096
 temperature = 0.7
 

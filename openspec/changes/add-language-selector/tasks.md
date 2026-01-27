@@ -51,7 +51,7 @@
 - Build and run app
 - Verify dropdown appears in General Settings
 - Verify selecting a language shows restart alert
-- Verify selection persists to `~/.config/aether/config.toml`
+- Verify selection persists to `~/.aether/config.toml`
 
 ---
 
@@ -128,7 +128,7 @@
   2. Select 简体中文 → Restart → Verify UI is in Chinese
   3. Select "System Default" → Restart → Verify UI follows system language
 - [ ] Test config persistence:
-  1. Check `~/.config/aether/config.toml` after each selection
+  1. Check `~/.aether/config.toml` after each selection
   2. Verify `[general]` section contains `language = "en"` or `language = "zh-Hans"` or omits the field for system default
 
 ### Task 5.2: Edge case testing

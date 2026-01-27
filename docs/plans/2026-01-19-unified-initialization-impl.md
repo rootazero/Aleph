@@ -1477,15 +1477,15 @@ cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodebuild -scheme Aethe
 
 ```bash
 # Backup existing config
-mv ~/.config/aether ~/.config/aether.backup
+mv ~/.aether ~/.aether.backup
 
 # Run app and verify initialization window appears
 # Verify all 6 phases complete
 # Verify app starts normally after init
 
 # Restore config
-rm -rf ~/.config/aether
-mv ~/.config/aether.backup ~/.config/aether
+rm -rf ~/.aether
+mv ~/.aether.backup ~/.aether
 ```
 
 **Step 5: Verify existing install skips initialization**

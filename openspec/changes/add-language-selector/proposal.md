@@ -64,7 +64,7 @@ This change provides a foundation for better internationalization support while 
 
 ## Success Criteria
 - [ ] Language dropdown appears in General Settings tab
-- [ ] Selecting a language persists to `~/.config/aether/config.toml`
+- [ ] Selecting a language persists to `~/.aether/config.toml`
 - [ ] App restart applies the selected language to all UI elements
 - [ ] Selecting "System Default" restores macOS system language behavior
 - [ ] Alert notifies user about restart requirement

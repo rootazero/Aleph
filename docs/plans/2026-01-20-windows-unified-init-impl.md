@@ -851,7 +851,7 @@ Change `GetConfigPath()` (around line 406-416):
 ```csharp
 private static string GetConfigPath()
 {
-    // Use ~/.config/aether/ for cross-platform consistency
+    // Use ~/.aether/ for cross-platform consistency
     // Directory creation is handled by first-time initialization
     var configDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),

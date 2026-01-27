@@ -26,7 +26,7 @@ struct PresetProvider: Equatable {
             model: defaultModel,
             baseUrl: baseUrl,
             color: color,
-            timeoutSeconds: 30,
+            timeoutSeconds: 300,
             enabled: false,  // Providers are disabled by default, user must explicitly enable
             maxTokens: 4096,
             temperature: 0.7,

@@ -116,7 +116,7 @@ let db = match self.memory_db.as_ref() {
 
 ```text
 [Memory] Initialization time: 14.375µs
-✓ Embedding model files verified at "/Users/.../.config/aether/models/all-MiniLM-L6-v2"
+✓ Embedding model files verified at "/Users/.../.aether/models/all-MiniLM-L6-v2"
 [Memory] Retrieved 2 memories in 486.792µs (app: com.apple.Notes, window: Rust Learning.txt)
 [Memory] Augmentation time: 1.875µs, Total time: 532.375µs
 ```

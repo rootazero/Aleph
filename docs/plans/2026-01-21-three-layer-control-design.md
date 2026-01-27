@@ -242,7 +242,7 @@ pub enum SkillNodeType {
 ### YAML Definition Format (User Custom Skills)
 
 ```yaml
-# ~/.config/aether/skills/my_research.yaml
+# ~/.aether/skills/my_research.yaml
 id: my_research
 name: "My Research Skill"
 description: "Custom research workflow"

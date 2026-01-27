@@ -542,7 +542,7 @@ mod tests {
             [retry]
             enabled = true
             max_attempts = 3
-            attempt_timeout_ms = 30000
+            attempt_timeout_ms = 300000
             total_timeout_ms = 120000
             failover_on_non_retryable = true
             retryable_errors = ["rate_limit", "timeout", "server_error"]

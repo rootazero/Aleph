@@ -11,7 +11,7 @@
 ///
 /// Optional fields:
 /// - `base_url`: Custom API endpoint (defaults to "https://generativelanguage.googleapis.com")
-/// - `timeout_seconds`: Request timeout (defaults to 30)
+/// - `timeout_seconds`: Request timeout (defaults to 300)
 /// - `max_tokens`: Maximum response tokens
 /// - `temperature`: Response randomness (0.0-2.0)
 use crate::config::ProviderConfig;
