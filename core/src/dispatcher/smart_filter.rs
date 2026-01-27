@@ -179,6 +179,12 @@ impl SmartToolFilter {
             ToolCategory::YouTube => {
                 name == "youtube" || desc_lower.contains("youtube") || desc_lower.contains("video")
             }
+            ToolCategory::Bash => {
+                name == "bash" || desc_lower.contains("bash") || desc_lower.contains("shell") || desc_lower.contains("command")
+            }
+            ToolCategory::CodeExec => {
+                name == "code_exec" || desc_lower.contains("code") || desc_lower.contains("execute")
+            }
             ToolCategory::ImageGen => {
                 name == "generate_image" || name.contains("image") || desc_lower.contains("image generation")
             }

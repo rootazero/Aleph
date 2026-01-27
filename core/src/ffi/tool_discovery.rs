@@ -14,6 +14,8 @@ pub enum ToolCategory {
     Search,    // search - web search
     WebFetch,  // web_fetch - fetch web pages
     YouTube,   // youtube - video transcripts
+    Bash,      // bash - shell command execution
+    CodeExec,  // code_exec - execute Python/JS/Shell code
     ImageGen,  // generate_image
     VideoGen,  // generate_video
     AudioGen,  // generate_audio
@@ -123,6 +125,41 @@ pub fn infer_required_tools(skill_instructions: &str, user_request: &str) -> Vec
         || combined.contains("朗读");
     if needs_speech {
         categories.push(ToolCategory::SpeechGen);
+    }
+
+    // Bash/shell execution - detect script execution patterns
+    let needs_bash = combined.contains("bash")
+        || combined.contains("shell")
+        || combined.contains("python3")
+        || combined.contains("node ")
+        || combined.contains("npm ")
+        || combined.contains("scripts/")
+        || combined.contains(".py")
+        || combined.contains(".sh")
+        || combined.contains(".js")
+        || combined.contains("$skill_root")
+        || combined.contains("command")
+        || combined.contains("执行命令")
+        || combined.contains("运行脚本")
+        || combined.contains("shell命令")
+        || combined.contains("格律验证")  // classical-poetry specific
+        || combined.contains("格律检查")  // classical-poetry specific
+        || combined.contains("poetry_checker")
+        || combined.contains("reference_builder");
+    if needs_bash {
+        categories.push(ToolCategory::Bash);
+    }
+
+    // Code execution - detect inline code execution needs
+    let needs_code_exec = combined.contains("code_exec")
+        || combined.contains("execute code")
+        || combined.contains("run code")
+        || combined.contains("inline code")
+        || combined.contains("代码执行")
+        || combined.contains("运行代码")
+        || (combined.contains("execute") && (combined.contains("python") || combined.contains("javascript")));
+    if needs_code_exec {
+        categories.push(ToolCategory::CodeExec);
     }
 
     // If nothing detected, include essential tools (file_ops is almost always needed)
@@ -467,6 +504,8 @@ pub fn filter_tools_by_categories(
                 ToolCategory::Search => name == "search",
                 ToolCategory::WebFetch => name == "web_fetch",
                 ToolCategory::YouTube => name == "youtube",
+                ToolCategory::Bash => name == "bash",
+                ToolCategory::CodeExec => name == "code_exec",
                 ToolCategory::ImageGen => name == "generate_image",
                 ToolCategory::VideoGen => name == "generate_video",
                 ToolCategory::AudioGen => name == "generate_audio",
@@ -474,4 +513,88 @@ pub fn filter_tools_by_categories(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_infer_bash_from_script_patterns() {
+        // Test classical-poetry skill pattern
+        let skill = "python3 $SKILL_ROOT/scripts/poetry_checker.py --mode ci";
+        let categories = infer_required_tools(skill, "");
+        
+        assert!(
+            categories.contains(&ToolCategory::Bash),
+            "Should detect Bash need from python3 script call"
+        );
+    }
+
+    #[test]
+    fn test_infer_bash_from_poetry_keywords() {
+        let skill = "格律验证工具检查平仄";
+        let categories = infer_required_tools(skill, "");
+        
+        assert!(
+            categories.contains(&ToolCategory::Bash),
+            "Should detect Bash need from poetry validation keywords"
+        );
+    }
+
+    #[test]
+    fn test_infer_bash_from_shell_patterns() {
+        let cases = vec![
+            "bash scripts/build.sh",
+            "执行命令检查格式",
+            "运行脚本验证",
+            "node scripts/test.js",
+        ];
+
+        for case in cases {
+            let categories = infer_required_tools(case, "");
+            assert!(
+                categories.contains(&ToolCategory::Bash),
+                "Should detect Bash need from: {}",
+                case
+            );
+        }
+    }
+
+    #[test]
+    fn test_infer_code_exec() {
+        let skill = "execute python code to analyze data";
+        let categories = infer_required_tools(skill, "");
+        
+        assert!(
+            categories.contains(&ToolCategory::CodeExec),
+            "Should detect CodeExec need from inline execution pattern"
+        );
+    }
+
+    #[test]
+    fn test_filter_tools_includes_bash() {
+        use crate::intent::ToolDescription;
+        use serde_json::json;
+
+        let tools = vec![
+            ToolDescription::with_schema(
+                "bash",
+                "Execute shell commands",
+                json!({"type": "object"})
+            ),
+            ToolDescription::with_schema(
+                "file_ops",
+                "File operations",
+                json!({"type": "object"})
+            ),
+        ];
+
+        let categories = vec![ToolCategory::Bash, ToolCategory::FileOps];
+        let filtered = filter_tools_by_categories(tools, &categories);
+
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().any(|t| t.name == "bash"));
+        assert!(filtered.iter().any(|t| t.name == "file_ops"));
+    }
 }
