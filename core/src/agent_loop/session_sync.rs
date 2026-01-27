@@ -169,6 +169,9 @@ impl SessionSync {
                 Action::UserInteraction { .. } => {
                     // User interactions are handled separately
                 }
+                Action::UserInteractionMultigroup { .. } => {
+                    // Multi-group user interactions are handled separately
+                }
             }
         }
 

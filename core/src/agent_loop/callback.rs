@@ -51,6 +51,14 @@ pub trait LoopCallback: Send + Sync {
         options: Option<&[String]>,
     ) -> String;
 
+    /// Called when LLM asks for multi-group user input
+    /// Returns the user's response in JSON format (e.g., "{\"group1\":\"value1\",\"group2\":\"value2\"}")
+    async fn on_user_multigroup_required(
+        &self,
+        question: &str,
+        groups: &[super::decision::QuestionGroup],
+    ) -> String;
+
     /// Called when a guard is triggered
     async fn on_guard_triggered(&self, violation: &GuardViolation);
 
@@ -130,6 +138,15 @@ impl<T: LoopCallback + ?Sized> LoopCallback for &T {
     ) -> String {
         (*self).on_user_input_required(question, options).await
     }
+    async fn on_user_multigroup_required(
+        &self,
+        question: &str,
+        groups: &[super::decision::QuestionGroup],
+    ) -> String {
+        (*self)
+            .on_user_multigroup_required(question, groups)
+            .await
+    }
     async fn on_guard_triggered(&self, violation: &GuardViolation) {
         (*self).on_guard_triggered(violation).await
     }
@@ -187,6 +204,15 @@ impl LoopCallback for NoOpLoopCallback {
         _options: Option<&[String]>,
     ) -> String {
         "ok".to_string() // Auto-respond in tests
+    }
+
+    async fn on_user_multigroup_required(
+        &self,
+        _question: &str,
+        _groups: &[super::decision::QuestionGroup],
+    ) -> String {
+        // Auto-respond with first option for each group in JSON format
+        "{\"default\":\"ok\"}".to_string()
     }
 
     async fn on_guard_triggered(&self, _violation: &GuardViolation) {}
@@ -269,6 +295,20 @@ impl LoopCallback for LoggingCallback {
         "continue".to_string()
     }
 
+    async fn on_user_multigroup_required(
+        &self,
+        question: &str,
+        groups: &[super::decision::QuestionGroup],
+    ) -> String {
+        tracing::warn!(
+            "{} Multi-group input required: {} (groups: {}) (auto-responding)",
+            self.prefix,
+            question,
+            groups.len()
+        );
+        "{\"default\":\"ok\"}".to_string()
+    }
+
     async fn on_guard_triggered(&self, violation: &GuardViolation) {
         tracing::error!("{} Guard triggered: {}", self.prefix, violation.description());
     }
@@ -334,6 +374,7 @@ pub enum LoopEvent {
     ActionDone { action_type: String, success: bool },
     ConfirmationRequired { tool_name: String },
     UserInputRequired { question: String },
+    UserMultigroupRequired { question: String, group_count: usize },
     GuardTriggered { description: String },
     Complete { summary: String },
     Failed { reason: String },
@@ -407,6 +448,18 @@ impl LoopCallback for CollectingCallback {
             question: question.to_string(),
         });
         "test_response".to_string()
+    }
+
+    async fn on_user_multigroup_required(
+        &self,
+        question: &str,
+        groups: &[super::decision::QuestionGroup],
+    ) -> String {
+        self.push(LoopEvent::UserMultigroupRequired {
+            question: question.to_string(),
+            group_count: groups.len(),
+        });
+        "{\"default\":\"ok\"}".to_string()
     }
 
     async fn on_guard_triggered(&self, violation: &GuardViolation) {

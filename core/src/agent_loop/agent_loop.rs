@@ -398,6 +398,28 @@ where
                     guard.record_action("ask_user");
                     continue;
                 }
+                Decision::AskUserMultigroup { question, groups } => {
+                    let response = callback
+                        .on_user_multigroup_required(question, &groups)
+                        .await;
+
+                    // Record user interaction as a step
+                    let step = LoopStep {
+                        step_id: state.step_count,
+                        observation_summary: String::new(),
+                        thinking: thinking.clone(),
+                        action: Action::UserInteractionMultigroup {
+                            question: question.clone(),
+                            groups: groups.clone(),
+                        },
+                        result: ActionResult::UserResponse { response },
+                        tokens_used: 0,
+                        duration_ms: 0,
+                    };
+                    state.record_step(step);
+                    guard.record_action("ask_user_multigroup");
+                    continue;
+                }
                 Decision::UseTool {
                     tool_name,
                     arguments,

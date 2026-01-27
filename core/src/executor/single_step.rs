@@ -193,6 +193,14 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
                 }
             }
 
+            Action::UserInteractionMultigroup { question, .. } => {
+                // Multi-group user interaction is handled by the callback system
+                // Similar to UserInteraction, this should be intercepted by AgentLoop
+                ActionResult::UserResponse {
+                    response: format!("Awaiting multi-group user response for: {}", question),
+                }
+            }
+
             Action::Completion { .. } => {
                 // Completion is a terminal action
                 ActionResult::Completed

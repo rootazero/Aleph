@@ -499,6 +499,10 @@ impl LoopCallback for FfiLoopCallback {
                 // This will be handled by on_user_input_required
                 debug!(question = %question, "User interaction requested");
             }
+            Action::UserInteractionMultigroup { question, groups } => {
+                // This will be handled by on_user_multigroup_required
+                debug!(question = %question, groups_count = groups.len(), "Multi-group user interaction requested");
+            }
             Action::Failure { reason } => {
                 // Append failure reason to response (persists)
                 self.append_response(&format!("❌ 错误: {}\n", reason)).await;
@@ -660,6 +664,55 @@ impl LoopCallback for FfiLoopCallback {
                 String::new()
             }
         }
+    }
+
+    async fn on_user_multigroup_required(
+        &self,
+        question: &str,
+        groups: &[crate::agent_loop::decision::QuestionGroup],
+    ) -> String {
+        info!(
+            question = %question,
+            groups_count = groups.len(),
+            "Multi-group user input required"
+        );
+
+        // TODO: Integrate with Swift ClarificationManager for proper multi-group UI
+        // For now, return JSON with first option from each group as a fallback
+
+        // Build question display with all groups
+        let mut question_display = format!("❓ {}\n", question);
+        for (idx, group) in groups.iter().enumerate() {
+            question_display.push_str(&format!("\n{}. {} ({})\n", idx + 1, group.prompt, group.id));
+            for (opt_idx, opt) in group.options.iter().enumerate() {
+                question_display.push_str(&format!("   {}. {}\n", opt_idx + 1, opt));
+            }
+        }
+        question_display.push_str("\n");
+
+        // Append question to response
+        self.append_response(&question_display).await;
+
+        // Auto-respond with first option for each group (temporary solution)
+        let mut result = serde_json::Map::new();
+        for group in groups {
+            if let Some(first_option) = group.options.first() {
+                result.insert(group.id.clone(), serde_json::Value::String(first_option.clone()));
+            }
+        }
+
+        let response = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+
+        // Log auto-response
+        warn!(
+            response = %response,
+            "Auto-responding to multi-group question (UI integration pending)"
+        );
+
+        // Append auto-response notice to response buffer
+        self.append_response(&format!("📝 自动选择: {}\n\n", response)).await;
+
+        response
     }
 
     async fn on_guard_triggered(&self, violation: &GuardViolation) {
