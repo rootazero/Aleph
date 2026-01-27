@@ -11,9 +11,10 @@ import AppKit
 
 /// View for displaying Phantom Flow clarification requests
 ///
-/// Supports two interaction modes:
+/// Supports three interaction modes:
 /// - Select: Display a list of options for the user to choose from (with "Other" option for custom input)
 /// - Text: Display a text input field for free-form input
+/// - MultiGroup: Display multiple question groups, each with its own set of options
 ///
 /// Design Philosophy:
 /// - Ephemeral: Appears quickly, responds to input, dissolves
@@ -25,6 +26,9 @@ struct ClarificationView: View {
 
     /// Track if user selected "Other" to show custom input
     @State private var isCustomInputMode = false
+
+    /// Track selections for each group in multi-group mode
+    @State private var groupSelections: [String: Int] = [:]
 
     /// Accent color from system
     private let accentColor = Color.accentColor
@@ -55,6 +59,8 @@ struct ClarificationView: View {
                     selectContent
                 case .text:
                     textContent
+                case .multiGroup:
+                    multiGroupContent
                 }
             }
 
@@ -64,10 +70,13 @@ struct ClarificationView: View {
             }
         }
         .padding(16)
-        .frame(minWidth: 200, maxWidth: 320)
+        .frame(minWidth: 200, maxWidth: 400)  // Wider for multi-group
         .background(backgroundColor.opacity(0.95))
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+        .onAppear {
+            initializeGroupSelections()
+        }
     }
 
     // MARK: - Select Content
@@ -298,6 +307,133 @@ struct ClarificationView: View {
     private func confirmCustomInput() {
         guard !manager.textInput.isEmpty else { return }
         manager.completeWithText(manager.textInput)
+    }
+
+    // MARK: - Multi-Group Content
+
+    private var multiGroupContent: some View {
+        VStack(spacing: 16) {
+            if let groups = request.groups {
+                ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                    groupView(for: group)
+                }
+
+                // Confirm button
+                Button(action: confirmMultiGroup) {
+                    Text(L("clarification.confirm", default: "确认"))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(accentColor)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .disabled(!allGroupsSelected)
+            }
+        }
+    }
+
+    /// Single group view
+    private func groupView(for group: QuestionGroup) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Group prompt
+            Text(group.prompt)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(textColor.opacity(0.8))
+
+            // Options for this group
+            ForEach(Array(group.options.enumerated()), id: \.offset) { index, option in
+                groupOptionRow(
+                    option: option,
+                    index: index,
+                    groupId: group.id,
+                    isSelected: groupSelections[group.id] == index
+                )
+                .onTapGesture {
+                    selectGroupOption(groupId: group.id, index: index)
+                }
+            }
+        }
+        .padding(10)
+        .background(textColor.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Option row for a group
+    private func groupOptionRow(option: ClarificationOption, index: Int, groupId: String, isSelected: Bool) -> some View {
+        HStack(spacing: 8) {
+            // Selection indicator
+            Circle()
+                .fill(isSelected ? accentColor : Color.clear)
+                .frame(width: 8, height: 8)
+                .overlay(
+                    Circle()
+                        .stroke(isSelected ? accentColor : textColor.opacity(0.3), lineWidth: 1)
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(option.label)
+                    .font(.system(size: 12, weight: isSelected ? .medium : .regular))
+                    .foregroundColor(isSelected ? accentColor : textColor)
+
+                if let description = option.description {
+                    Text(description)
+                        .font(.system(size: 10))
+                        .foregroundColor(textColor.opacity(0.5))
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(isSelected ? accentColor.opacity(0.1) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+    }
+
+    /// Initialize group selections with default values
+    private func initializeGroupSelections() {
+        guard request.clarificationType == .multiGroup, let groups = request.groups else {
+            return
+        }
+
+        for group in groups {
+            if groupSelections[group.id] == nil {
+                // Use default index if provided, otherwise 0
+                groupSelections[group.id] = Int(group.defaultIndex ?? 0)
+            }
+        }
+    }
+
+    /// Select an option in a group
+    private func selectGroupOption(groupId: String, index: Int) {
+        groupSelections[groupId] = index
+    }
+
+    /// Check if all groups have a selection
+    private var allGroupsSelected: Bool {
+        guard let groups = request.groups else { return false }
+        return groups.allSatisfy { group in
+            groupSelections[group.id] != nil
+        }
+    }
+
+    /// Confirm multi-group selection
+    private func confirmMultiGroup() {
+        guard let groups = request.groups else { return }
+
+        var answers: [String: String] = [:]
+        for group in groups {
+            if let selectedIndex = groupSelections[group.id],
+               selectedIndex < group.options.count {
+                let selectedOption = group.options[selectedIndex]
+                answers[group.id] = selectedOption.value
+            }
+        }
+
+        manager.completeWithMultiGroup(answers)
     }
 
     // MARK: - Source Indicator

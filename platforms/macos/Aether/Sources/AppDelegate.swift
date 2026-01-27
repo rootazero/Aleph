@@ -1183,6 +1183,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 ClarificationOption(label: "Casual", value: "casual", description: "Friendly and relaxed"),
                 ClarificationOption(label: "Humorous", value: "humorous", description: "Light and playful"),
             ],
+            groups: nil,
             defaultValue: "0",
             placeholder: nil,
             source: "skill:refine-text"
@@ -1204,6 +1205,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             prompt: "Enter target language:",
             clarificationType: .text,
             options: nil,
+            groups: nil,
             defaultValue: nil,
             placeholder: "e.g., Spanish, French...",
             source: "skill:translate"

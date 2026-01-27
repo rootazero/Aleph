@@ -169,12 +169,58 @@ impl PromptBuilder {
         prompt.push_str("}\n");
         prompt.push_str("```\n\n");
         prompt.push_str("### ask_user Format Details\n");
-        prompt.push_str("When using `ask_user`, the `options` field MUST be an array of SEPARATE choices:\n");
-        prompt.push_str("- ✅ CORRECT: [\"Option 1\", \"Option 2\", \"Option 3\"]\n");
-        prompt.push_str("- ❌ WRONG: [\"Option 1 / Option 2 / Option 3\"] (single merged string)\n");
+        prompt.push_str("When using `ask_user`, you have TWO modes:\n\n");
+
+        prompt.push_str("**Mode 1: Single Question** (simple selection or text input)\n");
+        prompt.push_str("- Use `options` field as an array of SEPARATE choices:\n");
+        prompt.push_str("  - ✅ CORRECT: [\"Option 1\", \"Option 2\", \"Option 3\"]\n");
+        prompt.push_str("  - ❌ WRONG: [\"Option 1 / Option 2 / Option 3\"] (single merged string)\n");
         prompt.push_str("- Each option should be a standalone, selectable choice\n");
         prompt.push_str("- If no options (free-form text input), omit the field or use empty array\n\n");
-        prompt.push_str("Example:\n");
+
+        prompt.push_str("**Mode 2: Multi-Group Questions** (multiple related questions)\n");
+        prompt.push_str("Use this when you need answers to MULTIPLE independent questions simultaneously.\n");
+        prompt.push_str("Instead of asking one by one, group them together for better UX.\n\n");
+
+        prompt.push_str("```json\n");
+        prompt.push_str("{\n");
+        prompt.push_str("  \"reasoning\": \"Need multiple image generation parameters\",\n");
+        prompt.push_str("  \"action\": {\n");
+        prompt.push_str("    \"type\": \"ask_user_multigroup\",\n");
+        prompt.push_str("    \"question\": \"Please configure the image generation settings\",  // Overall prompt\n");
+        prompt.push_str("    \"groups\": [\n");
+        prompt.push_str("      {\n");
+        prompt.push_str("        \"id\": \"format\",  // Unique group ID (alphanumeric)\n");
+        prompt.push_str("        \"prompt\": \"Output format\",\n");
+        prompt.push_str("        \"options\": [\"PNG\", \"JPEG\", \"WebP\"]\n");
+        prompt.push_str("      },\n");
+        prompt.push_str("      {\n");
+        prompt.push_str("        \"id\": \"quality\",\n");
+        prompt.push_str("        \"prompt\": \"Quality level\",\n");
+        prompt.push_str("        \"options\": [\"Low\", \"Medium\", \"High\", \"Best\"]\n");
+        prompt.push_str("      },\n");
+        prompt.push_str("      {\n");
+        prompt.push_str("        \"id\": \"size\",\n");
+        prompt.push_str("        \"prompt\": \"Image size\",\n");
+        prompt.push_str("        \"options\": [\"512x512\", \"1024x1024\", \"2048x2048\"]\n");
+        prompt.push_str("      }\n");
+        prompt.push_str("    ]\n");
+        prompt.push_str("  }\n");
+        prompt.push_str("}\n");
+        prompt.push_str("```\n\n");
+
+        prompt.push_str("**When to use Multi-Group**:\n");
+        prompt.push_str("- Multiple configuration options needed (3+ choices)\n");
+        prompt.push_str("- Questions are independent but related\n");
+        prompt.push_str("- Better UX than asking one-by-one\n");
+        prompt.push_str("- Example: \"Choose format (PNG/JPEG), quality (Low/Medium/High), size (Small/Large)\"\n\n");
+
+        prompt.push_str("**When NOT to use Multi-Group**:\n");
+        prompt.push_str("- Single question with multiple options → Use simple `ask_user`\n");
+        prompt.push_str("- Questions depend on previous answers → Ask sequentially\n");
+        prompt.push_str("- Free-form text input → Use `ask_user` with no options\n\n");
+
+        prompt.push_str("**Simple ask_user Example**:\n");
         prompt.push_str("```json\n");
         prompt.push_str("{\n");
         prompt.push_str("  \"reasoning\": \"Need user to select image format\",\n");
@@ -416,12 +462,58 @@ impl PromptBuilder {
         prompt.push_str("}\n");
         prompt.push_str("```\n\n");
         prompt.push_str("### ask_user Format Details\n");
-        prompt.push_str("When using `ask_user`, the `options` field MUST be an array of SEPARATE choices:\n");
-        prompt.push_str("- ✅ CORRECT: [\"Option 1\", \"Option 2\", \"Option 3\"]\n");
-        prompt.push_str("- ❌ WRONG: [\"Option 1 / Option 2 / Option 3\"] (single merged string)\n");
+        prompt.push_str("When using `ask_user`, you have TWO modes:\n\n");
+
+        prompt.push_str("**Mode 1: Single Question** (simple selection or text input)\n");
+        prompt.push_str("- Use `options` field as an array of SEPARATE choices:\n");
+        prompt.push_str("  - ✅ CORRECT: [\"Option 1\", \"Option 2\", \"Option 3\"]\n");
+        prompt.push_str("  - ❌ WRONG: [\"Option 1 / Option 2 / Option 3\"] (single merged string)\n");
         prompt.push_str("- Each option should be a standalone, selectable choice\n");
         prompt.push_str("- If no options (free-form text input), omit the field or use empty array\n\n");
-        prompt.push_str("Example:\n");
+
+        prompt.push_str("**Mode 2: Multi-Group Questions** (multiple related questions)\n");
+        prompt.push_str("Use this when you need answers to MULTIPLE independent questions simultaneously.\n");
+        prompt.push_str("Instead of asking one by one, group them together for better UX.\n\n");
+
+        prompt.push_str("```json\n");
+        prompt.push_str("{\n");
+        prompt.push_str("  \"reasoning\": \"Need multiple image generation parameters\",\n");
+        prompt.push_str("  \"action\": {\n");
+        prompt.push_str("    \"type\": \"ask_user_multigroup\",\n");
+        prompt.push_str("    \"question\": \"Please configure the image generation settings\",  // Overall prompt\n");
+        prompt.push_str("    \"groups\": [\n");
+        prompt.push_str("      {\n");
+        prompt.push_str("        \"id\": \"format\",  // Unique group ID (alphanumeric)\n");
+        prompt.push_str("        \"prompt\": \"Output format\",\n");
+        prompt.push_str("        \"options\": [\"PNG\", \"JPEG\", \"WebP\"]\n");
+        prompt.push_str("      },\n");
+        prompt.push_str("      {\n");
+        prompt.push_str("        \"id\": \"quality\",\n");
+        prompt.push_str("        \"prompt\": \"Quality level\",\n");
+        prompt.push_str("        \"options\": [\"Low\", \"Medium\", \"High\", \"Best\"]\n");
+        prompt.push_str("      },\n");
+        prompt.push_str("      {\n");
+        prompt.push_str("        \"id\": \"size\",\n");
+        prompt.push_str("        \"prompt\": \"Image size\",\n");
+        prompt.push_str("        \"options\": [\"512x512\", \"1024x1024\", \"2048x2048\"]\n");
+        prompt.push_str("      }\n");
+        prompt.push_str("    ]\n");
+        prompt.push_str("  }\n");
+        prompt.push_str("}\n");
+        prompt.push_str("```\n\n");
+
+        prompt.push_str("**When to use Multi-Group**:\n");
+        prompt.push_str("- Multiple configuration options needed (3+ choices)\n");
+        prompt.push_str("- Questions are independent but related\n");
+        prompt.push_str("- Better UX than asking one-by-one\n");
+        prompt.push_str("- Example: \"Choose format (PNG/JPEG), quality (Low/Medium/High), size (Small/Large)\"\n\n");
+
+        prompt.push_str("**When NOT to use Multi-Group**:\n");
+        prompt.push_str("- Single question with multiple options → Use simple `ask_user`\n");
+        prompt.push_str("- Questions depend on previous answers → Ask sequentially\n");
+        prompt.push_str("- Free-form text input → Use `ask_user` with no options\n\n");
+
+        prompt.push_str("**Simple ask_user Example**:\n");
         prompt.push_str("```json\n");
         prompt.push_str("{\n");
         prompt.push_str("  \"reasoning\": \"Need user to select image format\",\n");

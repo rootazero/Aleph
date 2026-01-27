@@ -117,7 +117,8 @@ final class ClarificationManager: ObservableObject, @unchecked Sendable {
             response = ClarificationResult(
                 resultType: .timeout,
                 selectedIndex: nil,
-                value: nil
+                value: nil,
+                groupAnswers: nil
             )
         } else if let result = pendingResult {
             response = result
@@ -125,7 +126,8 @@ final class ClarificationManager: ObservableObject, @unchecked Sendable {
             response = ClarificationResult(
                 resultType: .cancelled,
                 selectedIndex: nil,
-                value: nil
+                value: nil,
+                groupAnswers: nil
             )
         }
         pendingResult = nil
@@ -157,7 +159,8 @@ final class ClarificationManager: ObservableObject, @unchecked Sendable {
         pendingResult = ClarificationResult(
             resultType: .selected,
             selectedIndex: UInt32(index),
-            value: value
+            value: value,
+            groupAnswers: nil
         )
         completionSemaphore?.signal()
         lock.unlock()
@@ -176,7 +179,28 @@ final class ClarificationManager: ObservableObject, @unchecked Sendable {
         pendingResult = ClarificationResult(
             resultType: .textInput,
             selectedIndex: nil,
-            value: text
+            value: text,
+            groupAnswers: nil
+        )
+        completionSemaphore?.signal()
+        lock.unlock()
+    }
+
+    /// Complete the current clarification with multi-group answers
+    ///
+    /// Must be called from main thread.
+    ///
+    /// - Parameter answers: Dictionary mapping group IDs to selected values
+    @MainActor
+    func completeWithMultiGroup(_ answers: [String: String]) {
+        print("[ClarificationManager] Completed with multi-group: \(answers)")
+
+        lock.lock()
+        pendingResult = ClarificationResult(
+            resultType: .selected,
+            selectedIndex: nil,
+            value: nil,
+            groupAnswers: answers
         )
         completionSemaphore?.signal()
         lock.unlock()
@@ -193,7 +217,8 @@ final class ClarificationManager: ObservableObject, @unchecked Sendable {
         pendingResult = ClarificationResult(
             resultType: .cancelled,
             selectedIndex: nil,
-            value: nil
+            value: nil,
+            groupAnswers: nil
         )
         completionSemaphore?.signal()
         lock.unlock()
@@ -223,6 +248,7 @@ extension ClarificationManager {
                 ClarificationOption(label: "Casual", value: "casual", description: "Friendly and relaxed"),
                 ClarificationOption(label: "Humorous", value: "humorous", description: "Light and playful"),
             ],
+            groups: nil,
             defaultValue: "0",
             placeholder: nil,
             source: "skill:refine-text"
@@ -236,9 +262,53 @@ extension ClarificationManager {
             prompt: "Enter target language:",
             clarificationType: .text,
             options: nil,
+            groups: nil,
             defaultValue: nil,
             placeholder: "e.g., Spanish, French...",
             source: "skill:translate"
+        )
+    }
+
+    /// Create a test multi-group request for previews
+    static func testMultiGroupRequest() -> ClarificationRequest {
+        ClarificationRequest(
+            id: "test-poetry-config",
+            prompt: "需要确认3项信息",
+            clarificationType: .multiGroup,
+            options: nil,
+            groups: [
+                QuestionGroup(
+                    id: "yunsh",
+                    prompt: "请选择韵书（用于押韵与验证）",
+                    options: [
+                        ClarificationOption(label: "平水韵（传统韵书）", value: "pingshui", description: nil),
+                        ClarificationOption(label: "词林正韵（专门用于词的韵书）", value: "cilin", description: nil),
+                        ClarificationOption(label: "中华新韵（现代韵书）", value: "xingyun", description: nil),
+                    ],
+                    defaultIndex: 0
+                ),
+                QuestionGroup(
+                    id: "font",
+                    prompt: "用字：简体字还是繁体字？",
+                    options: [
+                        ClarificationOption(label: "简体", value: "simplified", description: nil),
+                        ClarificationOption(label: "繁体", value: "traditional", description: nil),
+                    ],
+                    defaultIndex: 0
+                ),
+                QuestionGroup(
+                    id: "cipu",
+                    prompt: "词谱版本（用于格律模板）",
+                    options: [
+                        ClarificationOption(label: "钦定词谱（默认）", value: "qinding", description: nil),
+                        ClarificationOption(label: "龙榆生词谱", value: "longyusheng", description: nil),
+                    ],
+                    defaultIndex: 0
+                ),
+            ],
+            defaultValue: nil,
+            placeholder: nil,
+            source: "skill:classical-poetry"
         )
     }
 }
