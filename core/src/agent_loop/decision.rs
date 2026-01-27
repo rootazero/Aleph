@@ -34,6 +34,11 @@ pub enum Decision {
         #[serde(default)]
         options: Option<Vec<String>>,
     },
+    /// Request multi-group user input
+    AskUserMultigroup {
+        question: String,
+        groups: Vec<QuestionGroup>,
+    },
     /// Task completed successfully
     Complete {
         summary: String,
@@ -42,6 +47,14 @@ pub enum Decision {
     Fail {
         reason: String,
     },
+}
+
+/// Question group for multi-group clarifications
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QuestionGroup {
+    pub id: String,
+    pub prompt: String,
+    pub options: Vec<String>,
 }
 
 impl Decision {
@@ -55,6 +68,7 @@ impl Decision {
         match self {
             Decision::UseTool { .. } => "tool",
             Decision::AskUser { .. } => "ask_user",
+            Decision::AskUserMultigroup { .. } => "ask_user_multigroup",
             Decision::Complete { .. } => "complete",
             Decision::Fail { .. } => "fail",
         }
@@ -75,6 +89,11 @@ pub enum Action {
         question: String,
         #[serde(default)]
         options: Option<Vec<String>>,
+    },
+    /// Multi-group user interaction request
+    UserInteractionMultigroup {
+        question: String,
+        groups: Vec<QuestionGroup>,
     },
     /// Task completion
     Completion {
@@ -117,6 +136,7 @@ impl Action {
                 format!("tool:{}", tool_name)
             }
             Action::UserInteraction { .. } => "ask_user".to_string(),
+            Action::UserInteractionMultigroup { .. } => "ask_user_multigroup".to_string(),
             Action::Completion { .. } => "complete".to_string(),
             Action::Failure { .. } => "fail".to_string(),
         }
@@ -131,6 +151,9 @@ impl Action {
                 truncate_str(&s, 100)
             }
             Action::UserInteraction { question, .. } => question.clone(),
+            Action::UserInteractionMultigroup { question, groups } => {
+                format!("{} ({} groups)", question, groups.len())
+            }
             Action::Completion { summary } => summary.clone(),
             Action::Failure { reason } => reason.clone(),
         }
@@ -153,6 +176,9 @@ impl From<Decision> for Action {
                 arguments,
             },
             Decision::AskUser { question, options } => Action::UserInteraction { question, options },
+            Decision::AskUserMultigroup { question, groups } => {
+                Action::UserInteractionMultigroup { question, groups }
+            }
             Decision::Complete { summary } => Action::Completion { summary },
             Decision::Fail { reason } => Action::Failure { reason },
         }
@@ -265,6 +291,10 @@ pub enum LlmAction {
         #[serde(default)]
         options: Option<Vec<String>>,
     },
+    AskUserMultigroup {
+        question: String,
+        groups: Vec<QuestionGroup>,
+    },
     Complete {
         summary: String,
     },
@@ -284,6 +314,9 @@ impl From<LlmAction> for Decision {
                 arguments,
             },
             LlmAction::AskUser { question, options } => Decision::AskUser { question, options },
+            LlmAction::AskUserMultigroup { question, groups } => {
+                Decision::AskUserMultigroup { question, groups }
+            }
             LlmAction::Complete { summary } => Decision::Complete { summary },
             LlmAction::Fail { reason } => Decision::Fail { reason },
         }

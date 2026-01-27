@@ -529,6 +529,21 @@ impl DecisionParser {
                 }
                 Ok(())
             }
+            Decision::AskUserMultigroup { question, groups } => {
+                if question.is_empty() {
+                    return Err(AetherError::Other {
+                        message: "Question cannot be empty".to_string(),
+                        suggestion: Some("Provide a question for the user".to_string()),
+                    });
+                }
+                if groups.is_empty() {
+                    return Err(AetherError::Other {
+                        message: "Groups cannot be empty for multi-group question".to_string(),
+                        suggestion: Some("Provide at least one question group".to_string()),
+                    });
+                }
+                Ok(())
+            }
             Decision::Complete { summary } => {
                 if summary.is_empty() {
                     return Err(AetherError::Other {
