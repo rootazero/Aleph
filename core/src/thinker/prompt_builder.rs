@@ -662,8 +662,11 @@ impl PromptBuilder {
         }
 
         // 4. Current context and request for next action
+        // IMPORTANT: Use clear system-level language to avoid confusing agent
+        // with user instructions (e.g., "Current step: X" was misinterpreted
+        // as user requesting to restart at step X, causing infinite loops)
         let context_msg = format!(
-            "Current step: {}\nTokens used: {}\n\nBased on the above, what is your next action?",
+            "[System] Loop iteration: {} | Tokens: {} | Continue with your next action.",
             observation.current_step, observation.total_tokens
         );
         messages.push(Message::user(context_msg));
