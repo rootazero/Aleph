@@ -339,7 +339,7 @@ fn default_compress_after() -> usize {
 }
 
 fn default_window_size() -> usize {
-    3
+    10 // 增加到10步，确保短期记忆不丢失关键信息
 }
 
 fn default_summary_tokens() -> usize {
@@ -558,8 +558,8 @@ impl LoopConfig {
         Self {
             max_steps: 10,
             max_tokens: 10_000,
-            timeout_secs: 30,
-            timeout: Duration::from_secs(30),
+            timeout_secs: 300,
+            timeout: Duration::from_secs(300),
             require_confirmation: vec![],
             permission_mode: PermissionMode::Normal,
             compression: CompressionConfig {
