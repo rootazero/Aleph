@@ -25,13 +25,8 @@ struct MessageBubbleView: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 4) {
-            if isUser { Spacer(minLength: 24) }
-
-            // Copy button for user messages (left side, bottom aligned)
-            if isUser && isHovering {
-                copyButton
-            }
+        HStack(alignment: .bottom, spacing: 0) {
+            if isUser { Spacer(minLength: 40) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
                 // Rich message content (text + images from content)
@@ -45,13 +40,16 @@ struct MessageBubbleView: View {
                     AttachmentGridView(attachments: storedAttachments, isUser: isUser)
                 }
             }
-
-            // Copy button for AI messages (right side, bottom aligned)
-            if !isUser && isHovering {
-                copyButton
+            .overlay(alignment: isUser ? .leadingLastTextBaseline : .trailingLastTextBaseline) {
+                // Copy button floated over bubble (doesn't affect layout)
+                if isHovering {
+                    copyButton
+                        .padding(isUser ? .trailing : .leading, 4)
+                        .transition(.opacity)
+                }
             }
 
-            if !isUser { Spacer(minLength: 24) }
+            if !isUser { Spacer(minLength: 40) }
         }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
@@ -114,7 +112,7 @@ struct RichMessageContentView: View {
                 .font(.system(size: 13))
                 .liquidGlassText()
                 .textSelection(.enabled)
-                .padding(12)
+                .padding(10)
                 .glassBubble(isUser: isUser)
         }
     }
