@@ -267,6 +267,9 @@ pub struct FfiLoopCallback {
     skip_on_complete_on_finalize: bool,
     /// Current session ID for Part events
     session_id: RwLock<String>,
+    /// Last streamed buffer length (for incremental streaming)
+    /// Tracks how much of response_buffer has been sent to avoid resending entire content
+    last_streamed_len: RwLock<usize>,
     /// Active tool call parts (part_id -> ToolCallPart)
     active_tool_calls: RwLock<std::collections::HashMap<String, ToolCallPart>>,
 }
@@ -281,6 +284,7 @@ impl FfiLoopCallback {
             streaming_started: RwLock::new(false),
             skip_on_complete_on_finalize: false,
             session_id: RwLock::new(String::new()),
+            last_streamed_len: RwLock::new(0),
             active_tool_calls: RwLock::new(std::collections::HashMap::new()),
         }
     }
@@ -299,6 +303,7 @@ impl FfiLoopCallback {
             streaming_started: RwLock::new(false),
             skip_on_complete_on_finalize: true,
             session_id: RwLock::new(String::new()),
+            last_streamed_len: RwLock::new(0),
             active_tool_calls: RwLock::new(std::collections::HashMap::new()),
         }
     }
@@ -370,8 +375,15 @@ impl FfiLoopCallback {
         let mut buffer = self.response_buffer.write().await;
         buffer.push_str(text);
 
-        // Stream the response content
-        self.handler.on_stream_chunk(buffer.clone());
+        // CRITICAL FIX: Only stream the NEW content, not the entire buffer
+        // This prevents resending the same content multiple times
+        let mut last_len = self.last_streamed_len.write().await;
+        let new_content = &buffer[*last_len..];
+
+        if !new_content.is_empty() {
+            self.handler.on_stream_chunk(new_content.to_string());
+            *last_len = buffer.len();
+        }
     }
 
     /// Finalize the response

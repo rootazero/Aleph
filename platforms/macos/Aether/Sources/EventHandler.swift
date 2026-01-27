@@ -162,15 +162,17 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     }
 
     /// Called for each streaming response chunk
-    /// - Parameter text: The accumulated response text so far
+    /// - Parameter text: The incremental response text (delta from last chunk)
+    /// IMPORTANT: After Rust-side fix, this now receives INCREMENTAL content, not accumulated
     func onStreamChunk(text: String) {
-        // Always log in multi-turn mode for debugging
-        let isFirstOrLargeChange = accumulatedText.isEmpty || text.count - accumulatedText.count > 50
-        if isFirstOrLargeChange || isInMultiTurnMode {
-            print("[EventHandler] Stream chunk: \(text.prefix(80))... (total: \(text.count) chars, multiTurn: \(isInMultiTurnMode))")
-        }
+        // Accumulate the incremental text
+        accumulatedText += text
 
-        accumulatedText = text
+        // Log in multi-turn mode for debugging
+        let isFirstOrLargeChange = text.count > 50
+        if isFirstOrLargeChange || isInMultiTurnMode {
+            print("[EventHandler] Stream chunk (delta): \(text.prefix(80))... (delta: \(text.count) chars, total: \(accumulatedText.count) chars, multiTurn: \(isInMultiTurnMode))")
+        }
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
@@ -178,14 +180,13 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
             // Forward to MultiTurnCoordinator in multi-turn mode
             if self.isInMultiTurnMode {
                 let isPending = MultiTurnCoordinator.shared.isProcessingPending
-                print("[EventHandler] Forwarding stream chunk, isProcessingPending: \(isPending)")
                 if isPending {
-                    MultiTurnCoordinator.shared.handleStreamChunk(text: text)
+                    MultiTurnCoordinator.shared.handleStreamChunk(text: self.accumulatedText)
                 }
                 return
             }
 
-            self.haloWindow?.updateState(.processing(streamingText: text))
+            self.haloWindow?.updateState(.processing(streamingText: self.accumulatedText))
         }
     }
 
