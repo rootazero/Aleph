@@ -3,13 +3,16 @@
 use crate::agent_loop::{
     AgentLoop, LoopConfig, LoopResult, RequestContext as AgentRequestContext,
 };
+use crate::agents::rig::ChatMessage;
 use crate::agents::RigAgentConfig;
 use crate::compressor::NoOpCompressor;
 use crate::config::GenerationConfig;
 use crate::core::MediaAttachment;
 use crate::dispatcher::{ToolSource, UnifiedTool};
 use crate::executor::{BuiltinToolConfig, BuiltinToolRegistry, SingleStepExecutor};
-use crate::ffi::prompt_helpers::format_generation_models_for_prompt;
+use crate::ffi::prompt_helpers::{
+    build_history_summary_from_conversations, format_generation_models_for_prompt,
+};
 use crate::ffi::provider_factory::create_provider_from_config;
 use crate::ffi::tool_discovery::get_builtin_tool_descriptions;
 use crate::ffi::FfiLoopCallback;
@@ -20,6 +23,7 @@ use crate::rig_tools::file_ops::{clear_written_files, take_written_files};
 use crate::rig_tools::set_tool_progress_handler;
 use crate::runtimes::{RuntimeCapability, RuntimeRegistry};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -48,6 +52,8 @@ pub fn run_skill_with_agent_loop(
     generation_registry: &Arc<RwLock<GenerationProviderRegistry>>,
     _attachments: Option<&[MediaAttachment]>,
     attachment_text: Option<&str>,
+    conversation_histories: &Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
+    topic_id: &Option<String>,
     preferred_language: &Option<String>,
 ) {
     // Check if already cancelled
@@ -184,6 +190,15 @@ pub fn run_skill_with_agent_loop(
         "Starting skill execution via AgentLoop"
     );
 
+    // Build initial history from conversation histories (for cross-session context)
+    // - Single-turn (topic_id = None): 🔒 FROZEN - No history injection, returns empty string
+    // - Multi-turn (topic_id = Some(uuid)): ✅ ACTIVE - Full context from previous turns
+    let initial_history = build_history_summary_from_conversations(
+        conversation_histories,
+        topic_id,
+        2000, // Max 2000 characters for history summary
+    );
+
     // Run the Agent Loop
     let result = runtime.block_on(async {
         let agent_loop = AgentLoop::new(thinker, executor, compressor, loop_config);
@@ -195,7 +210,11 @@ pub fn run_skill_with_agent_loop(
                 tools,
                 &callback,
                 Some(abort_rx),
-                None, // Skills don't use cross-session history
+                if initial_history.is_empty() {
+                    None
+                } else {
+                    Some(initial_history)
+                },
             )
             .await
     });

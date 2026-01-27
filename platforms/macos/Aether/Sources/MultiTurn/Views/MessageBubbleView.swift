@@ -25,8 +25,8 @@ struct MessageBubbleView: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            if isUser { Spacer(minLength: 40) }
+        HStack(alignment: .bottom, spacing: 4) {
+            if isUser { Spacer(minLength: 24) }
 
             // Copy button for user messages (left side, bottom aligned)
             if isUser && isHovering {
@@ -51,7 +51,7 @@ struct MessageBubbleView: View {
                 copyButton
             }
 
-            if !isUser { Spacer(minLength: 40) }
+            if !isUser { Spacer(minLength: 24) }
         }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
@@ -67,12 +67,9 @@ struct MessageBubbleView: View {
 
     private var copyButton: some View {
         Button(action: onCopy) {
-            HStack(spacing: 2) {
-                Image(systemName: "doc.on.doc")
-                Text("Copy")
-            }
-            .font(.caption2)
-            .liquidGlassSecondaryText()
+            Image(systemName: "doc.on.doc")
+                .font(.caption2)
+                .liquidGlassSecondaryText()
         }
         .buttonStyle(.plain)
     }

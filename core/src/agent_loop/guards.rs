@@ -373,6 +373,17 @@ impl LoopGuard {
     }
 
     /// Check if stuck in a loop (identical actions)
+    ///
+    /// CRITICAL FIX: This check now considers execution progress.
+    /// If the agent is making the same type of action repeatedly BUT:
+    /// - Some succeed and some fail (debugging/iterating)
+    /// - At least one succeeds (making progress)
+    /// Then it's NOT stuck, it's making progress through iteration.
+    ///
+    /// Only triggers if:
+    /// - Same action pattern repeated N times
+    /// - AND all attempts have the same result (all succeed or all fail)
+    /// - This indicates true stuckness with no progress
     fn check_stuck(&self) -> Option<GuardViolation> {
         if self.recent_actions.len() < self.stuck_threshold {
             return None;
@@ -383,14 +394,36 @@ impl LoopGuard {
         let first_pattern = &last_n[0].pattern;
 
         // Check if all last N actions have identical patterns
-        if last_n.iter().all(|a| &a.pattern == first_pattern) {
-            return Some(GuardViolation::StuckLoop {
-                action: first_pattern.clone(),
-                repeat_count: self.stuck_threshold,
-            });
+        if !last_n.iter().all(|a| &a.pattern == first_pattern) {
+            return None;
         }
 
-        None
+        // CRITICAL FIX: Check if there's execution progress
+        // If results vary (some succeed, some fail), the agent is making progress
+        let has_success = last_n.iter().any(|a| a.succeeded);
+        let has_failure = last_n.iter().any(|a| !a.succeeded);
+
+        // If there's variation in results, agent is iterating/debugging (not stuck)
+        if has_success && has_failure {
+            return None;
+        }
+
+        // If all succeeded, it might still be making progress
+        // (e.g., writing multiple files in sequence)
+        // Only flag if all failed (indicating a real problem)
+        if has_success && !has_failure {
+            // All succeeded - check if it's a bash/code_exec tool
+            // These tools often need multiple iterations for debugging
+            if first_pattern.contains("bash") || first_pattern.contains("code_exec") {
+                return None; // Allow bash/code_exec iteration for debugging
+            }
+        }
+
+        // All attempts with same pattern and same result = truly stuck
+        Some(GuardViolation::StuckLoop {
+            action: first_pattern.clone(),
+            repeat_count: self.stuck_threshold,
+        })
     }
 
     /// Check for repeated failures on similar action patterns

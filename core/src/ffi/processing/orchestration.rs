@@ -136,6 +136,8 @@ pub fn process_with_agent_loop(
                 generation_config,
                 generation_registry,
                 attachments,
+                conversation_histories,
+                topic_id,
                 preferred_language,
             );
         }
