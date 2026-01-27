@@ -8,7 +8,7 @@ The system SHALL initialize an embedded vector database (SQLite + sqlite-vec ext
 
 #### Scenario: Initialize database on first use
 - **WHEN** AetherCore starts and memory is enabled
-- **THEN** the system creates `~/.config/aether/memory.db` if not exists
+- **THEN** the system creates `~/.aether/memory.db` if not exists
 - **AND** loads the sqlite-vec extension
 - **AND** creates the `memories` table with schema:
   - `id` (TEXT, primary key, UUID)

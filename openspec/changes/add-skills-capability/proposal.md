@@ -46,7 +46,7 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
    - 从 `SkillsRegistry` 加载匹配的 Skill
 
 3. **SkillsRegistry (skills/registry.rs)**
-   - 管理 Skills 目录 (`~/.config/aether/skills/`)
+   - 管理 Skills 目录 (`~/.aether/skills/`)
    - 解析 SKILL.md 文件（YAML frontmatter + Markdown body）
    - 支持热重载
 
@@ -105,7 +105,7 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
 2. **官方 Skills 一键安装**
    - 按钮触发从 `anthropics/skills` 仓库下载
    - 显示下载进度
-   - 自动解析并安装到 `~/.config/aether/skills/`
+   - 自动解析并安装到 `~/.aether/skills/`
 
 3. **第三方 Skills 安装（URL）**
    - URL 输入框（支持 GitHub 仓库地址）
@@ -273,7 +273,7 @@ When refining text, follow these principles:
 
 **理由**：
 - 减少 UI 复杂度
-- Skills 创建/编辑是高级操作，可直接编辑 `~/.config/aether/skills/<name>/SKILL.md`
+- Skills 创建/编辑是高级操作，可直接编辑 `~/.aether/skills/<name>/SKILL.md`
 - 保持设置界面轻量化
 
 ---

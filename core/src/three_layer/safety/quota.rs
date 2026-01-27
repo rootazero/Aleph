@@ -27,7 +27,7 @@ impl Default for ResourceQuota {
             max_total_read: 100 * 1024 * 1024, // 100 MB
             max_total_write: 50 * 1024 * 1024, // 50 MB
             max_file_count: 1000,
-            operation_timeout: Duration::from_secs(30),
+            operation_timeout: Duration::from_secs(300),
         }
     }
 }

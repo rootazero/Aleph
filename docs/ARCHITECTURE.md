@@ -406,7 +406,7 @@ similarity_threshold = 0.7     # Min cosine similarity (0.0-1.0)
 ```
 
 **Privacy**:
-- All data stored locally in `~/.config/aether/memory.db`
+- All data stored locally in `~/.aether/memory.db`
 - No raw memory data sent to cloud LLMs
 - Only formatted context snippets injected into prompts
 

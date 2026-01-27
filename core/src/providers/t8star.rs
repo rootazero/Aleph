@@ -10,7 +10,7 @@
 /// - `model`: Model name (e.g., "gpt-4o", "gpt-5.2", "gpt-5-mini")
 ///
 /// Optional fields are inherited from OpenAiProvider:
-/// - `timeout_seconds`: Request timeout (defaults to 30)
+/// - `timeout_seconds`: Request timeout (defaults to 300)
 /// - `max_tokens`: Maximum response tokens
 /// - `temperature`: Response randomness (0.0-2.0)
 ///

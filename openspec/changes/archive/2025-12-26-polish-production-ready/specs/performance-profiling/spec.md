@@ -155,7 +155,7 @@ The system SHALL allow exporting profiling data for offline analysis (developer 
 #### Scenario: Export profiling data
 
 - **WHEN** user enables `export_profiling_data` in config (hidden option)
-- **THEN** profiling data is written to `~/.config/aether/profiling.jsonl`
+- **THEN** profiling data is written to `~/.aether/profiling.jsonl`
 - **AND** each line is JSON object: `{"stage": "ai_request", "latency_ms": 450, "provider": "OpenAI", "timestamp": "..."}`
 - **AND** file is rotated daily (same as logs)
 

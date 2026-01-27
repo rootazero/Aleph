@@ -149,7 +149,7 @@ impl AetherCore {
             env: config.env.into_iter().map(|e| (e.key, e.value)).collect(),
             cwd: config.working_directory,
             requires_runtime: None,
-            timeout_seconds: 30,
+            timeout_seconds: 300,
         };
 
         let mut cfg = self.lock_config();
@@ -347,7 +347,7 @@ impl AetherCore {
                         env,
                         cwd,
                         requires_runtime: None,
-                        timeout_seconds: 30,
+                        timeout_seconds: 300,
                     });
             }
         }

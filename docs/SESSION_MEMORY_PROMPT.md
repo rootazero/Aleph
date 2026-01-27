@@ -216,7 +216,7 @@ provider = "openai"
 
 ### Phase 8: Configuration & Testing
 - 创建 `config.example.toml`
-- 实现配置加载（`~/.config/aether/config.toml`）
+- 实现配置加载（`~/.aether/config.toml`）
 - 编写集成测试（`tests/integration_ai.rs`）
 - 性能基准测试（`benches/ai_benchmarks.rs`）
 

@@ -530,20 +530,20 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 1. Create test config with old hotkey:
    ```bash
-   mkdir -p ~/.config/aether
-   cat > ~/.config/aether/config.toml <<EOF
+   mkdir -p ~/.aether
+   cat > ~/.aether/config.toml <<EOF
    [shortcuts]
    command_prompt = "Command+Option+/"
    EOF
    ```
 2. Launch Aether
 3. Verify: Console logs show "Migrating command_prompt hotkey: Command+Option+/ -> Option+Space"
-4. Verify: `~/.config/aether/config.toml` now contains `command_prompt = "Option+Space"`
+4. Verify: `~/.aether/config.toml` now contains `command_prompt = "Option+Space"`
 5. Verify: Settings UI shows "⌥ ⌘ ␣" (Option+Command+Space)
 
 **Step 2: Test new default hotkey works**
 
-1. Delete `~/.config/aether/config.toml`
+1. Delete `~/.aether/config.toml`
 2. Launch Aether
 3. Open Settings → Shortcuts
 4. Verify: Command Completion shows "⌥ ⌘ ␣" (Option+Command+Space)
@@ -557,13 +557,13 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 3. Verify: Dropdown includes "Esc" option with "⎋" symbol
 4. Select "Esc"
 5. Click Save
-6. Verify: `~/.config/aether/config.toml` contains `command_prompt = "Option+Command+Esc"`
+6. Verify: `~/.aether/config.toml` contains `command_prompt = "Option+Command+Esc"`
 7. Press Option+Command+Esc
 8. Verify: Multi-turn window appears
 
 **Step 4: Test preservation of custom hotkeys**
 
-1. Edit `~/.config/aether/config.toml`
+1. Edit `~/.aether/config.toml`
 2. Set: `command_prompt = "Control+Shift+/"`
 3. Relaunch Aether
 4. Verify: NO migration log message (custom hotkey preserved)

@@ -189,7 +189,7 @@ Continue: "Now add type hints"
 
 ### Config File Location
 
-`~/.config/aether/config.toml`
+`~/.aether/config.toml`
 
 ### Quick Configuration
 

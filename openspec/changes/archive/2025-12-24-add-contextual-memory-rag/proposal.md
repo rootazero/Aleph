@@ -30,7 +30,7 @@ Add a **Context-Aware Local RAG** system that:
 2. **Stores Memories Locally**: Uses an embedded vector database to store interaction embeddings:
    - User input + AI output pairs embedded using a lightweight local model
    - Zero-knowledge cloud: raw memories never leave the device
-   - Database file stored in `~/.config/aether/memory.db` or `~/.config/aether/memory.lance`
+   - Database file stored in `~/.aether/memory.db` or `~/.aether/memory.lance`
 
 3. **Retrieves Relevant Context**: When processing a new request:
    - Query vector DB filtered by current `app_bundle_id` + `window_title`
@@ -236,7 +236,7 @@ candle-inference = ["candle-core", "candle-nn", "candle-transformers"]
 - **Model**: `sentence-transformers/all-MiniLM-L6-v2`
 - **Format**: ONNX (for `ort`) or SafeTensors (for `candle`)
 - **Download Source**: Hugging Face Hub
-- **Storage**: `~/.config/aether/models/all-MiniLM-L6-v2/`
+- **Storage**: `~/.aether/models/all-MiniLM-L6-v2/`
 - **Size**: ~23MB
 - **License**: Apache 2.0
 
@@ -269,7 +269,7 @@ candle-inference = ["candle-core", "candle-nn", "candle-transformers"]
 - Cloud providers never see the full memory database
 
 ### Local Storage
-- Database file: `~/.config/aether/memory.db` or `.lance`
+- Database file: `~/.aether/memory.db` or `.lance`
 - Permissions: 600 (user read/write only)
 - No encryption at rest (relies on OS-level disk encryption like FileVault)
 

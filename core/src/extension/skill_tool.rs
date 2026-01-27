@@ -87,8 +87,8 @@ fn evaluate_permission_rule(rule: &PermissionRule, skill_name: &str) -> Permissi
     }
 }
 
-/// Default timeout for permission requests (30 seconds)
-const PERMISSION_TIMEOUT_SECS: u64 = 30;
+/// Default timeout for permission requests (300 seconds)
+const PERMISSION_TIMEOUT_SECS: u64 = 300;
 
 /// Request skill permission asynchronously via EventBus
 ///

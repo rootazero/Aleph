@@ -34,8 +34,8 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
-/// Default timeout for command execution (30 seconds)
-const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 30;
+/// Default timeout for command execution (300 seconds)
+const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 300;
 
 /// Hook execution context
 #[derive(Debug, Clone, Default)]

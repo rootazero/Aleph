@@ -158,10 +158,10 @@ fn resolve_command(&self, cmd: &str) -> PathBuf {
 
 ### Decision 4: Plugin Storage Location
 
-**Decision**: Store plugins in `~/.config/aether/plugins/` with state in `~/.config/aether/plugins.json`.
+**Decision**: Store plugins in `~/.aether/plugins/` with state in `~/.aether/plugins.json`.
 
 ```
-~/.config/aether/
+~/.aether/
 ├── plugins/
 │   ├── plugin-a/
 │   └── plugin-b/

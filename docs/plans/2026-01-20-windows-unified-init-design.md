@@ -297,7 +297,7 @@ public bool Initialize()
 ## 目录结构（初始化完成后）
 
 ```
-~/.config/aether/                    # Windows: %USERPROFILE%\.config\aether
+~/.aether/                    # Windows: %USERPROFILE%\.config\aether
 ├── config.toml                      # 配置文件
 ├── memory.db                        # 向量数据库
 ├── logs/                            # 日志目录
@@ -319,7 +319,7 @@ public bool Initialize()
 
 ## 测试计划
 
-1. **首次启动测试**：删除 ~/.config/aether，启动应用，验证初始化流程
+1. **首次启动测试**：删除 ~/.aether，启动应用，验证初始化流程
 2. **已初始化启动测试**：保留配置，启动应用，验证跳过初始化
 3. **网络错误测试**：断网启动，验证重试按钮功能
 4. **部分初始化测试**：中断初始化，重启验证恢复逻辑

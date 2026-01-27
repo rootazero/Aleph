@@ -180,7 +180,7 @@
 
 ### Security Constraints
 - **PII scrubbing**: Regex-based removal of phone/email before cloud API calls
-- **Local-first**: Config stored in `~/.config/aether/config.toml`
+- **Local-first**: Config stored in `~/.aether/config.toml`
 - **No telemetry**: Zero tracking, no analytics
 - **API key storage**: Use macOS Keychain (via `Security` framework in Swift)
 
@@ -226,7 +226,7 @@
 
 ## Configuration Storage
 
-**Location**: `~/.config/aether/config.toml`
+**Location**: `~/.aether/config.toml`
 
 **Schema**: TOML format with sections:
 - `[general]` - Theme, sound, default provider

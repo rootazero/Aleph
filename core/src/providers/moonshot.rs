@@ -11,7 +11,7 @@
 /// - `model`: Model name (e.g., "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k")
 ///
 /// Optional fields are inherited from OpenAiProvider:
-/// - `timeout_seconds`: Request timeout (defaults to 30)
+/// - `timeout_seconds`: Request timeout (defaults to 300)
 /// - `max_tokens`: Maximum response tokens
 /// - `temperature`: Response randomness (0.0-2.0)
 ///

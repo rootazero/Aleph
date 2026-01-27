@@ -500,7 +500,7 @@ async fn test_end_to_end_ai_processing() {
 ## Security Considerations
 
 ### API Key Storage
-- **Phase 5**: 明文存储在 `~/.config/aether/config.toml`
+- **Phase 5**: 明文存储在 `~/.aether/config.toml`
 - 文件权限：`600` (仅当前用户可读写)
 - **Phase 6**: 迁移到 macOS Keychain
 

@@ -735,7 +735,7 @@ struct TavilyResult {
 
 ### 4.1 Google CSE 配置
 
-**文件**: `~/.config/aether/config.toml`
+**文件**: `~/.aether/config.toml`
 
 ```toml
 [search]

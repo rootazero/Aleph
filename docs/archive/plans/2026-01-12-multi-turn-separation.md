@@ -169,7 +169,7 @@ final class ConversationStore {
 
     private func getDBPath() -> String {
         let configDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/aether")
+            .appendingPathComponent(".aether")
 
         // Create directory if needed
         try? FileManager.default.createDirectory(

@@ -346,7 +346,7 @@ pub async fn process_request(&self, user_input: &str) -> Result<String> {
 ## Privacy & Security Guarantees
 
 ### Local-First Architecture ✅
-- All memory data stored in `~/.config/aether/memory.db`
+- All memory data stored in `~/.aether/memory.db`
 - Vector embeddings computed locally
 - No raw memory data sent to cloud
 

@@ -46,7 +46,7 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Click "Save"
 - [ ] Verify provider appears in list with "✓ Configured" status
 - [ ] Verify API key is NOT visible in config.toml (only stored in Keychain)
-  - Check: `cat ~/.config/aether/config.toml | grep "sk-test-key"`
+  - Check: `cat ~/.aether/config.toml | grep "sk-test-key"`
   - Expected: No matches (key should not be in file)
 
 ### 1.2 Test Provider Connection
@@ -140,7 +140,7 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Drag rule #2 (`^/draw`) to position #1
 - [ ] Verify order changes in UI
 - [ ] Verify config.toml reflects new order
-  - Check: `cat ~/.config/aether/config.toml`
+  - Check: `cat ~/.aether/config.toml`
   - Expected: Rules appear in dragged order
 
 ### 2.5 Edit Rule
@@ -340,7 +340,7 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Open Settings window (keep it open)
 - [ ] Open Terminal and edit config:
   ```bash
-  nano ~/.config/aether/config.toml
+  nano ~/.aether/config.toml
   ```
 - [ ] Change `default_hotkey` from `Command+Grave` to `Command+Shift+B`
 - [ ] Save file (Ctrl+O, Enter, Ctrl+X)

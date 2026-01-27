@@ -280,17 +280,17 @@ final class ModernSettingsUITests: XCTestCase {
     func testConfigFilePath() throws {
         // Test config file path construction
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        let configDir = homeDir.appendingPathComponent(".config/aether")
+        let configDir = homeDir.appendingPathComponent(".aether")
         let configFile = configDir.appendingPathComponent("config.toml")
 
-        XCTAssertTrue(configFile.path.contains(".config/aether/config.toml"))
+        XCTAssertTrue(configFile.path.contains(".aether/config.toml"))
     }
 
     func testConfigFileCreation() throws {
         // Test config directory creation
         let fileManager = FileManager.default
         let homeDir = fileManager.homeDirectoryForCurrentUser
-        let configDir = homeDir.appendingPathComponent(".config/aether")
+        let configDir = homeDir.appendingPathComponent(".aether")
 
         // This would normally create the directory if it doesn't exist
         var isDirectory: ObjCBool = false

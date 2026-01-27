@@ -8,7 +8,7 @@ Aether currently has placeholder Settings UI components (SettingsView, Providers
 2. Enables users to create and manage routing rules with drag-to-reorder functionality
 3. Supports global hotkey customization with visual key recorder
 4. Provides behavior configuration (input/output modes, typing speed, PII scrubbing)
-5. Persists all changes to `~/.config/aether/config.toml` with hot-reload support
+5. Persists all changes to `~/.aether/config.toml` with hot-reload support
 
 This change directly implements Phase 6 from CLAUDE.md and unblocks user customization, which is critical for production deployment.
 

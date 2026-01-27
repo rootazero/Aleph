@@ -45,8 +45,8 @@ use tracing::{debug, info, trace, warn};
 /// Default timeout for npm operations (5 minutes)
 const NPM_TIMEOUT_SECS: u64 = 300;
 
-/// Default timeout for IPC operations (30 seconds)
-const IPC_TIMEOUT_SECS: u64 = 30;
+/// Default timeout for IPC operations (300 seconds)
+const IPC_TIMEOUT_SECS: u64 = 300;
 
 /// npm package installer using Aether's fnm/Node.js runtime
 pub struct NpmInstaller {

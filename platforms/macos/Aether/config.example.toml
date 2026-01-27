@@ -1,5 +1,5 @@
 # Aether Configuration Example
-# Copy this file to ~/.config/aether/config.toml and customize
+# Copy this file to ~/.aether/config.toml and customize
 
 # Legacy hotkey field (deprecated - use [trigger] section below)
 # Kept for backward compatibility with old config files
@@ -125,7 +125,7 @@ provider_type = "openai"  # Optional, inferred from name
 api_key = "sk-..."        # Get from https://platform.openai.com
 model = "gpt-4o"          # Options: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
 color = "#10a37f"         # Brand color for UI
-timeout_seconds = 30
+timeout_seconds = 300
 
 # Common generation parameters (optional)
 max_tokens = 4096         # Maximum response length
@@ -144,7 +144,7 @@ provider_type = "claude"  # Optional, inferred from name
 api_key = "sk-ant-..."    # Get from https://console.anthropic.com
 model = "claude-3-5-sonnet-20241022"  # Options: claude-3-5-sonnet, claude-3-opus, etc.
 color = "#d97757"
-timeout_seconds = 30
+timeout_seconds = 300
 
 # Common generation parameters (optional)
 max_tokens = 4096         # Maximum response length
@@ -164,7 +164,7 @@ api_key = "..."           # Get from https://makersuite.google.com/app/apikey
 model = "gemini-3-flash"  # Options: gemini-3-flash, gemini-3-pro
 base_url = "https://generativelanguage.googleapis.com/v1beta"
 color = "#4285F4"         # Google Blue
-timeout_seconds = 30
+timeout_seconds = 300
 
 # Common generation parameters (optional)
 max_tokens = 2048         # Maximum response length (maxOutputTokens)
@@ -210,7 +210,7 @@ api_key = "sk-..."                 # Get from https://platform.deepseek.com
 model = "deepseek-chat"
 base_url = "https://api.deepseek.com"  # Custom API endpoint
 color = "#0066cc"
-timeout_seconds = 30
+timeout_seconds = 300
 max_tokens = 4096
 temperature = 0.7
 
@@ -223,7 +223,7 @@ api_key = "sk-..."                 # Get from https://platform.moonshot.cn
 model = "moonshot-v1-8k"          # Options: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k
 base_url = "https://api.moonshot.cn/v1"
 color = "#ff6b6b"
-timeout_seconds = 30
+timeout_seconds = 300
 max_tokens = 8192
 temperature = 0.7
 
@@ -238,7 +238,7 @@ api_key = "..."                    # Get from https://console.volcengine.com/ark
 model = "doubao-1-5-pro-32k"       # Options: doubao-1-5-pro-32k, doubao-1-5-lite-32k, doubao-seed-1.6, ep-xxxx (endpoint ID)
 # base_url is optional - defaults to https://ark.cn-beijing.volces.com/api/v3
 color = "#3370FF"                  # ByteDance/Volcengine blue
-timeout_seconds = 30
+timeout_seconds = 300
 max_tokens = 4096
 temperature = 0.7
 
@@ -255,7 +255,7 @@ api_key = "your-azure-key"
 model = "gpt-4o"                   # Your deployment name
 base_url = "https://your-resource.openai.azure.com"
 color = "#0078d4"
-timeout_seconds = 30
+timeout_seconds = 300
 max_tokens = 4096
 temperature = 0.7
 
@@ -379,7 +379,7 @@ excluded_apps = [
 #
 # Example 10: Performance profiling (Phase 7)
 # - Set enable_performance_logging = true
-# - Check logs at ~/.config/aether/logs/aether-YYYY-MM-DD.log
+# - Check logs at ~/.aether/logs/aether-YYYY-MM-DD.log
 # - Logs show timing for: clipboard, memory, AI, paste stages
 # - Useful for debugging slow operations or API latency issues
 #
@@ -458,7 +458,7 @@ excluded_apps = [
 #     - Supported formats: PNG, JPEG, GIF
 #
 # 14. Logging & Privacy (Phase 7):
-#     - Logs stored in ~/.config/aether/logs/
+#     - Logs stored in ~/.aether/logs/
 #     - Automatic daily rotation
 #     - Old logs deleted after log_retention_days
 #     - PII automatically scrubbed (emails, phones, API keys)
@@ -510,7 +510,7 @@ excluded_apps = [
 #
 # "Config not saving" (Phase 6):
 # - File permissions are automatically set to 600 on save
-# - Verify config directory exists: mkdir -p ~/.config/aether
+# - Verify config directory exists: mkdir -p ~/.aether
 # - Check for TOML syntax errors (use Settings UI validation)
 #
 # "Hot-reload not working" (Phase 6):
@@ -534,7 +534,7 @@ excluded_apps = [
 # - Verify output_mode = "typewriter" in config
 #
 # "Logs not appearing" (Phase 7):
-# - Check ~/.config/aether/logs/ directory exists
+# - Check ~/.aether/logs/ directory exists
 # - Verify log_retention_days > 0 (0 = logs disabled)
 # - Check disk space (logs auto-delete when full)
 #

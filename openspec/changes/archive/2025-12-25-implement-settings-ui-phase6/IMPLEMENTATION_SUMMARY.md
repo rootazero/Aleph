@@ -17,7 +17,7 @@
 - 添加 `ConfigWatcher` 导入
 - 在 `AetherCore` 结构体中添加 `config_watcher: Option<ConfigWatcher>` 字段
 - 在构造函数中初始化 ConfigWatcher:
-  - 监听 `~/.config/aether/config.toml` 文件
+  - 监听 `~/.aether/config.toml` 文件
   - 使用 500ms 防抖延迟
   - 配置变更时更新内部 config 并调用 `on_config_changed()` 回调
 

@@ -472,10 +472,10 @@ impl LoopCallback for FfiLoopCallback {
                 // Format tool call with human-readable description
                 let (description, _verb) = format_tool_description(tool_name, arguments);
 
-                // CRITICAL FIX: Append to response instead of using temporary status
-                // This ensures users can see what the agent is doing without it disappearing
-                let message = format!("⚡ {}\n", description);
-                self.append_response(&message).await;
+                // Show tool progress as temporary status (not in final output)
+                // Use set_status() instead of append_response() to avoid cluttering final summary
+                let message = format!("⚡ {}", description);
+                self.set_status(&message).await;
                 self.handler.on_tool_start(tool_name.clone());
 
                 // Create and publish ToolCallPart (Added event)
@@ -580,10 +580,10 @@ impl LoopCallback for FfiLoopCallback {
                     let output_str = output.to_string();
                     let display_output = truncate_str(&output_str, 100);
 
-                    // CRITICAL FIX: Append success message to response
-                    // This ensures users can see the completion status
-                    let message = format!("  ✓ {}完成 ({}ms)\n", verb, duration_ms);
-                    self.append_response(&message).await;
+                    // Show completion as temporary status (not in final output)
+                    // Tool progress should not clutter the final summary
+                    let message = format!("✓ {}完成 ({}ms)", verb, duration_ms);
+                    self.set_status(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), display_output);
                 }
                 ActionResult::ToolError { error, .. } => {
@@ -592,9 +592,9 @@ impl LoopCallback for FfiLoopCallback {
                         error = %error,
                         "Tool execution failed"
                     );
-                    // CRITICAL FIX: Append error message to response
-                    let message = format!("  ✗ {}失败: {}\n", verb, error);
-                    self.append_response(&message).await;
+                    // Show error as temporary status (not in final output)
+                    let message = format!("✗ {}失败: {}", verb, error);
+                    self.set_status(&message).await;
                     self.handler.on_tool_result(tool_name.clone(), format!("Error: {}", error));
                 }
                 _ => {}
@@ -634,9 +634,9 @@ impl LoopCallback for FfiLoopCallback {
         }
         question_display.push_str("\n\n");
 
-        // CRITICAL FIX: Append question to response instead of using temporary status
-        // This ensures the question remains visible during and after user input
-        self.append_response(&question_display).await;
+        // Show question as temporary status (not persisted in final output)
+        // Clarification UI should handle this interaction, not the final summary
+        self.set_status(&question_display).await;
 
         // Create pending input request and notify Swift UI
         let options_vec = options.map(|opts| opts.to_vec()).unwrap_or_default();
@@ -663,11 +663,13 @@ impl LoopCallback for FfiLoopCallback {
                     "Received user input response"
                 );
 
-                // Append user's response to response buffer (visible in final output)
-                if !response.is_empty() {
-                    let response_text = format!("📝 用户回复: {}\n\n", response);
-                    self.append_response(&response_text).await;
-                }
+                // Don't append user response to final output
+                // The clarification interaction should be handled by UI, not included in summary
+                // (Comment out the append_response call)
+                // if !response.is_empty() {
+                //     let response_text = format!("📝 用户回复: {}\n\n", response);
+                //     self.append_response(&response_text).await;
+                // }
 
                 response
             }
@@ -702,8 +704,8 @@ impl LoopCallback for FfiLoopCallback {
         }
         question_display.push_str("\n");
 
-        // Append question to response
-        self.append_response(&question_display).await;
+        // Show question as temporary status (not persisted in final output)
+        self.set_status(&question_display).await;
 
         // Auto-respond with first option for each group (temporary solution)
         let mut result = serde_json::Map::new();
@@ -721,8 +723,8 @@ impl LoopCallback for FfiLoopCallback {
             "Auto-responding to multi-group question (UI integration pending)"
         );
 
-        // Append auto-response notice to response buffer
-        self.append_response(&format!("📝 自动选择: {}\n\n", response)).await;
+        // Don't append auto-response to final output
+        // self.append_response(&format!("📝 自动选择: {}\n\n", response)).await;
 
         response
     }

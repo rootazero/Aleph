@@ -418,12 +418,12 @@ logger.error("Failed to initialize Rust core: \(error)")
 
 1. Check config file path:
    ```bash
-   cat ~/.config/aether/config.toml
+   cat ~/.aether/config.toml
    ```
 
 2. Verify write permissions:
    ```bash
-   ls -l ~/.config/aether/
+   ls -l ~/.aether/
    ```
 
 3. Add debug logging in config module:

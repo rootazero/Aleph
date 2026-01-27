@@ -279,7 +279,7 @@ struct SkillPermissionsEditor: View {
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Config File (~/.config/aether/config.toml)                          │
+│  Config File (~/.aether/config.toml)                          │
 │  ───────────────────────────────────────────────────────────────────│
 │  [skills.fs]                                                         │
 │  enabled = true                                                      │
@@ -360,7 +360,7 @@ env = { LINEAR_API_KEY = "..." }
 ```toml
 [skills]
 enabled = true
-skills_dir = "~/.config/aether/skills"
+skills_dir = "~/.aether/skills"
 auto_match_enabled = true
 ```
 
@@ -402,7 +402,7 @@ color = "#5E6AD2"
 
 # 提示模板 Skills
 [skills.templates]
-dir = "~/.config/aether/skills"
+dir = "~/.aether/skills"
 auto_match_enabled = true
 ```
 

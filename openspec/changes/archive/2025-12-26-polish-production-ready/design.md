@@ -284,7 +284,7 @@ Format layer (timestamp + level + target + message)
     ↓ formatted string
 File Appender (with rotation)
     ↓
-~/.config/aether/logs/aether-2025-12-25.log
+~/.aether/logs/aether-2025-12-25.log
 ```
 
 **PII Scrubbing Layer Implementation**:

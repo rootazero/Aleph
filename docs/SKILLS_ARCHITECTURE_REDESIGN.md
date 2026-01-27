@@ -125,7 +125,7 @@ Agent 通过工具调用访问这些文件：
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Skills Directory                            │
-│  ~/.config/aether/skills/                                       │
+│  ~/.aether/skills/                                       │
 │  ├── refine-text/                                               │
 │  │   ├── SKILL.md                                               │
 │  │   └── examples/                                              │
@@ -339,7 +339,7 @@ pub struct SkillMetadata {
    └─ 发起工具调用
 
 4. ReadSkillTool 执行
-   ├─ 读取 ~/.config/aether/skills/refine-text/SKILL.md
+   ├─ 读取 ~/.aether/skills/refine-text/SKILL.md
    ├─ 返回完整内容
    └─ ActionResult::ToolSuccess { output: { content: "..." } }
 

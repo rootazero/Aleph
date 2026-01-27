@@ -109,7 +109,7 @@ struct Message: Identifiable {
 }
 ```
 
-**Storage Location**: `~/.config/aether/conversations.db`
+**Storage Location**: `~/.aether/conversations.db`
 
 ## Interaction Flow
 

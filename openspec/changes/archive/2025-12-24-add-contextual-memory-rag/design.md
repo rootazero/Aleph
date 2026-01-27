@@ -61,7 +61,7 @@ This document details the architectural design for Aether's context-aware memory
                             ▼
                 ┌───────────────────────┐
                 │  Local Storage        │
-                │  ~/.config/aether/    │
+                │  ~/.aether/    │
                 │  - memory.db          │
                 │  - models/            │
                 └───────────────────────┘

@@ -25,7 +25,7 @@ struct ProviderConfigView: View {
     @State private var baseURL: String = ""
     @State private var color: Color = .blue
     @State private var providerType: String = "openai"
-    @State private var timeoutSeconds: String = "30"
+    @State private var timeoutSeconds: String = "300"
     @State private var maxTokens: String = ""
     @State private var temperature: String = ""
 
@@ -184,7 +184,7 @@ struct ProviderConfigView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             // Timeout
                             FormField(title: "Timeout (seconds)") {
-                                TextField("30", text: $timeoutSeconds)
+                                TextField("300", text: $timeoutSeconds)
                                     .textFieldStyle(.roundedBorder)
                                     .frame(width: 100)
                             }
@@ -345,7 +345,7 @@ struct ProviderConfigView: View {
                 model: model,
                 baseUrl: baseURL.isEmpty ? nil : baseURL,
                 color: color.toHex(),
-                timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+                timeoutSeconds: UInt64(timeoutSeconds) ?? 300,
                 enabled: false,
                 maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
                 temperature: temperature.isEmpty ? nil : Float(temperature),
@@ -392,7 +392,7 @@ struct ProviderConfigView: View {
                     model: model,
                     baseUrl: baseURL.isEmpty ? nil : baseURL,
                     color: color.toHex(),
-                    timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+                    timeoutSeconds: UInt64(timeoutSeconds) ?? 300,
                     enabled: false,  // Providers are disabled by default, user must explicitly enable
                     maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
                     temperature: temperature.isEmpty ? nil : Float(temperature),

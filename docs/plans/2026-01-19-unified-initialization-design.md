@@ -19,7 +19,7 @@ Refactor the initialization module to consolidate all first-launch tasks into a 
 ## Directory Structure
 
 ```
-~/.config/aether/
+~/.aether/
 ├── config.toml           # Main configuration
 ├── memory.db             # SQLite vector database
 ├── logs/                 # Log files

@@ -13,10 +13,10 @@ The plugin system supports:
 
 ## Plugin Directory Structure
 
-Plugins are installed in `~/.config/aether/plugins/`. Each plugin follows the Claude Code directory structure:
+Plugins are installed in `~/.aether/plugins/`. Each plugin follows the Claude Code directory structure:
 
 ```
-~/.config/aether/plugins/
+~/.aether/plugins/
 └── my-plugin/
     ├── .claude-plugin/
     │   └── plugin.json       # Plugin manifest (required)
@@ -286,7 +286,7 @@ enum ExtensionAsyncError: Error {
 
 ## Plugin State Persistence
 
-Plugin enable/disable state is stored in `~/.config/aether/plugins.json`:
+Plugin enable/disable state is stored in `~/.aether/plugins.json`:
 
 ```json
 {

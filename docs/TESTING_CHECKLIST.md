@@ -145,7 +145,7 @@
 
 **检查配置文件**:
 ```bash
-cat ~/.config/aether/config.toml
+cat ~/.aether/config.toml
 ```
 - [ ] **验证**: config.toml 文件包含正确的配置
 - [ ] **验证**: API keys 不在配置文件中（存储在 Keychain）
@@ -174,7 +174,7 @@ cat ~/.config/aether/config.toml
 #### 3.2 配置热重载
 
 - [ ] 在设置界面中修改配置
-- [ ] 在文本编辑器中直接编辑 `~/.config/aether/config.toml`
+- [ ] 在文本编辑器中直接编辑 `~/.aether/config.toml`
 - [ ] **验证**: 应用在 1 秒内检测到变更并重新加载
 
 #### 3.3 错误处理
@@ -233,5 +233,5 @@ cat ~/.config/aether/config.toml
 ## 注意事项
 
 1. **Accessibility 权限**: 应用需要 Accessibility 权限才能使用快捷键功能
-2. **首次启动**: 会自动创建 `~/.config/aether/` 目录和默认配置
+2. **首次启动**: 会自动创建 `~/.aether/` 目录和默认配置
 3. **日志查看**: 使用 `Console.app` 查看应用日志（搜索 "Aether"）

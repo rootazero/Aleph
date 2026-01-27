@@ -30,7 +30,7 @@ impl Default for HttpTransportConfig {
         Self {
             url: String::new(),
             headers: HashMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300),
         }
     }
 }
@@ -60,7 +60,7 @@ impl Default for HttpTransportConfig {
 /// let config = HttpTransportConfig {
 ///     url: "https://api.example.com/mcp".to_string(),
 ///     headers: [("Authorization".into(), "Bearer token".into())].into(),
-///     timeout: Duration::from_secs(30),
+///     timeout: Duration::from_secs(300),
 /// };
 ///
 /// let transport = HttpTransport::new("my-server", config);
@@ -224,11 +224,11 @@ mod tests {
         let config = HttpTransportConfig {
             url: "https://example.com/mcp".to_string(),
             headers: HashMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300),
         };
 
         assert_eq!(config.url, "https://example.com/mcp");
-        assert_eq!(config.timeout, Duration::from_secs(30));
+        assert_eq!(config.timeout, Duration::from_secs(300));
     }
 
     #[test]
@@ -237,7 +237,7 @@ mod tests {
 
         assert!(config.url.is_empty());
         assert!(config.headers.is_empty());
-        assert_eq!(config.timeout, Duration::from_secs(30));
+        assert_eq!(config.timeout, Duration::from_secs(300));
     }
 
     #[tokio::test]
@@ -245,7 +245,7 @@ mod tests {
         let config = HttpTransportConfig {
             url: "https://example.com/mcp".to_string(),
             headers: HashMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300),
         };
 
         let transport = HttpTransport::new("test-server", config);
@@ -285,7 +285,7 @@ mod tests {
         let config = HttpTransportConfig {
             url: "https://example.com/mcp".to_string(),
             headers: HashMap::new(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(300),
         };
 
         // Verify it can be used as a trait object

@@ -231,7 +231,7 @@ impl DefaultsResolver {
 ### 第一层：用户偏好存储
 
 ```toml
-# ~/.config/aether/preferences.toml（自动生成）
+# ~/.aether/preferences.toml（自动生成）
 [file_organize]
 default_method = "by_extension"    # 用户上次选择
 conflict_resolution = "rename"     # 冲突时自动重命名

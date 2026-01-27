@@ -14,7 +14,7 @@ This document provides detailed instructions for manual visual testing of the Mo
 
 ### Pre-Test Configuration
 1. Build Aether application: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether build`
-2. Reset config to defaults: `rm ~/.config/aether/config.toml`
+2. Reset config to defaults: `rm ~/.aether/config.toml`
 3. Launch Aether application
 4. Open Settings window (Cmd+,)
 

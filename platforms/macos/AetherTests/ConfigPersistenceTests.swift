@@ -57,7 +57,7 @@ final class ConfigPersistenceTests: XCTestCase {
                 model: "gpt-4o",
                 baseUrl: nil,
                 color: "#10a37f",
-                timeoutSeconds: 30,
+                timeoutSeconds: 300,
                 maxTokens: 4096,
                 temperature: 0.7
             )

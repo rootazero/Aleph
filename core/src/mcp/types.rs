@@ -303,7 +303,7 @@ mod tests {
             url: "https://example.com/mcp".to_string(),
             headers: std::collections::HashMap::new(),
             transport: TransportPreference::Auto,
-            timeout_seconds: Some(30),
+            timeout_seconds: Some(300),
         };
 
         assert_eq!(config.name, "remote-test");

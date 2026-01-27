@@ -338,7 +338,7 @@ All Rust core memory APIs have comprehensive unit tests:
 
 ### Security Considerations
 
-- ✅ All memory data stored locally in `~/.config/aether/memory.db`
+- ✅ All memory data stored locally in `~/.aether/memory.db`
 - ✅ No network transmission of raw memory data
 - ✅ PII scrubbing before storage (implemented in Task 18)
 - ✅ App exclusion list prevents sensitive app tracking

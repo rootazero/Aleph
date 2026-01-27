@@ -243,7 +243,7 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
 
 ## 🔒 Privacy & Security Status
 
-- ✅ All data stored locally (`~/.config/aether/memory.db`)
+- ✅ All data stored locally (`~/.aether/memory.db`)
 - ✅ PII scrubbing before storage
 - ✅ App exclusion list (password managers)
 - ✅ User-controlled retention policies

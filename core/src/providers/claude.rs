@@ -11,7 +11,7 @@
 ///
 /// Optional fields:
 /// - `base_url`: Custom API endpoint (defaults to "https://api.anthropic.com")
-/// - `timeout_seconds`: Request timeout (defaults to 30)
+/// - `timeout_seconds`: Request timeout (defaults to 300)
 /// - `max_tokens`: Maximum response tokens (required by Claude API)
 /// - `temperature`: Response randomness (0.0-1.0)
 ///
@@ -37,7 +37,7 @@
 ///     model: "claude-3-5-sonnet-20241022".to_string(),
 ///     base_url: None,
 ///     color: "#d97757".to_string(),
-///     timeout_seconds: 30,
+///     timeout_seconds: 300,
 ///     max_tokens: Some(4096),
 ///     temperature: Some(0.7),
 /// };

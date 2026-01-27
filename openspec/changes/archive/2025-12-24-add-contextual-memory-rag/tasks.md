@@ -213,7 +213,7 @@ This document outlines the implementation tasks for adding context-aware local R
 **Status**: ✅ **COMPLETED** (2025-12-24)
 
 **Steps**:
-1. ✅ Create directory: `~/.config/aether/models/all-MiniLM-L6-v2/`
+1. ✅ Create directory: `~/.aether/models/all-MiniLM-L6-v2/`
 2. ✅ Download ONNX model from Hugging Face:
    ```bash
    wget https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx

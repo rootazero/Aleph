@@ -2,7 +2,7 @@
 
 ### Requirement: Plugin Discovery
 
-The system SHALL discover plugins from the configured plugins directory (`~/.config/aether/plugins/` by default).
+The system SHALL discover plugins from the configured plugins directory (`~/.aether/plugins/` by default).
 
 #### Scenario: Plugin directory scanning
 - **WHEN** the plugin manager initializes

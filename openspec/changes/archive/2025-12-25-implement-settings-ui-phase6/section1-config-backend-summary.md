@@ -43,7 +43,7 @@ pub trait KeychainManager {
 **实现内容:**
 - 使用 `notify` crate + macOS FSEvents
 - 500ms 防抖延迟
-- 自动检测 `~/.config/aether/config.toml` 变更
+- 自动检测 `~/.aether/config.toml` 变更
 - 集成到 AetherCore，触发 `on_config_changed()` 回调
 
 **关键特性:**

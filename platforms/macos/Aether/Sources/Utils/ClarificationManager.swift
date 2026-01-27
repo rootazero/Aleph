@@ -58,7 +58,7 @@ final class ClarificationManager: ObservableObject, @unchecked Sendable {
     private var pendingResult: ClarificationResult?
 
     /// Timeout for clarification requests (seconds)
-    private let timeoutSeconds: Double = 30.0
+    private let timeoutSeconds: Double = 300.0
 
     private init() {}
 

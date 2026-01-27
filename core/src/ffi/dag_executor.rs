@@ -334,7 +334,7 @@ impl ExecutionCallback for FfiExecutionCallback {
             .on_stream_chunk("⏳ 等待用户确认任务计划...\n".to_string());
 
         // Wait for the decision with timeout
-        const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
+        const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(300);
 
         match tokio::time::timeout(CONFIRMATION_TIMEOUT, receiver).await {
             Ok(Ok(decision)) => {

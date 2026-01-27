@@ -179,7 +179,7 @@ C. 输入清理与预处理
     * 特别项: 针对内网或特定环境的证书忽略选项 (Allow Insecure SSL)。
 
 配置存储方案 (技术实现)
-所有这些设置不建议用复杂的数据库，建议直接映射到一个 TOML 或 JSON 配置文件中，存放在 ~/.config/aether/config.toml。
+所有这些设置不建议用复杂的数据库，建议直接映射到一个 TOML 或 JSON 配置文件中，存放在 ~/.aether/config.toml。
 这样你可以随时通过命令行备份你的配置，或者直接用 Vim 编辑配置（符合你的 CLI 习惯），而设置界面只是这个文件的 GUI 编辑器。
 config.toml 结构预览：
 Ini, TOML

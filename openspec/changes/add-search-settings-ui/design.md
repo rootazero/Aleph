@@ -26,7 +26,7 @@ This document outlines the architectural decisions for adding a comprehensive Se
 
 ### Problem
 
-1. **Configuration Complexity**: Users must manually edit `~/.config/aether/config.toml` to configure search providers
+1. **Configuration Complexity**: Users must manually edit `~/.aether/config.toml` to configure search providers
 2. **No Validation Feedback**: No way to test if API keys and endpoints are valid
 3. **Command Ambiguity**: Slash commands like `/search` can conflict with custom commands like `/se` due to prefix matching
 4. **Scattered UI**: Search-related PII settings are in Behavior tab, not with other search configuration

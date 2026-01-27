@@ -578,7 +578,7 @@ impl SearchProvider for TavilyProvider {
 ### Search Configuration in `config.toml`
 
 ```toml
-# ~/.config/aether/config.toml
+# ~/.aether/config.toml
 
 [search]
 enabled = true

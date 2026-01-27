@@ -21,6 +21,8 @@ struct PlanConfirmationBubbleView: View {
         HStack(alignment: .top, spacing: 0) {
             // Content aligned to left (assistant side)
             confirmationCard
+                // Prevent window dragging in plan confirmation area to allow text selection
+                .background(NonDraggableArea())
             Spacer(minLength: 40)
         }
     }

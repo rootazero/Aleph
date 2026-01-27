@@ -606,7 +606,7 @@ pub fn init_core(
                     None,
                     None,
                     None,
-                    30u64, // Default timeout
+                    300u64, // Default timeout
                 )
             }
         } else {
@@ -621,7 +621,7 @@ pub fn init_core(
                 None,
                 None,
                 None,
-                30u64, // Default timeout
+                300u64, // Default timeout
             )
         }
     };

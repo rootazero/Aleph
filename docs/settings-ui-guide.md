@@ -419,7 +419,7 @@ View and manage Aether's long-term memory (context-aware interactions).
 **Solutions:**
 1. Check Console.app for errors
 2. Restart Aether: Quit (Cmd+Q) and relaunch
-3. Reset settings: Delete `~/.config/aether/config.toml` and restart
+3. Reset settings: Delete `~/.aether/config.toml` and restart
 
 ### Changes Not Saving
 
@@ -428,11 +428,11 @@ View and manage Aether's long-term memory (context-aware interactions).
 **Solutions:**
 1. Check file permissions:
    ```bash
-   chmod 644 ~/.config/aether/config.toml
+   chmod 644 ~/.aether/config.toml
    ```
 2. Verify config directory exists:
    ```bash
-   mkdir -p ~/.config/aether
+   mkdir -p ~/.aether
    ```
 3. Check for TOML syntax errors (use Settings UI validation)
 

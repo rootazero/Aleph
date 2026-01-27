@@ -448,7 +448,7 @@ mod tests {
         let toml_str = r#"
             enabled = true
             default_mode = "best_of_n"
-            default_timeout_secs = 30
+            default_timeout_secs = 300
             quality_threshold = 0.8
 
             [[strategies]]

@@ -9,7 +9,7 @@
 
 - **Build Profile**: Release (optimized)
 - **Test Command**: `cargo test --release memory::embedding::tests`
-- **Model Path**: `~/.config/aether/models/all-MiniLM-L6-v2/`
+- **Model Path**: `~/.aether/models/all-MiniLM-L6-v2/`
 
 ## Performance Results
 
