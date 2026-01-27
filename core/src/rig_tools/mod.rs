@@ -32,6 +32,7 @@ use std::sync::{Arc, Mutex};
 use tracing::debug;
 
 pub mod bash_exec;
+pub mod builtin_registry;
 pub mod code_exec;
 pub mod error;
 pub mod file_ops;

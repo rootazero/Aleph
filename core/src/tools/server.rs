@@ -143,6 +143,23 @@ impl AetherToolServer {
         self
     }
 
+    /// Add a boxed tool during construction (builder pattern).
+    ///
+    /// This method is useful when tools are created dynamically and already boxed.
+    /// ```rust,ignore
+    /// let tool = create_tool_boxed("search", &config);
+    /// let server = AetherToolServer::new().tool_boxed(tool);
+    /// ```
+    pub fn tool_boxed(self, tool: Box<dyn AetherToolDyn>) -> Self {
+        // Get mutable access synchronously during construction
+        // Safe because we own the server and no other references exist
+        if let Ok(mut tools) = self.tools.try_write() {
+            let name = tool.name().to_string();
+            tools.insert(name, Arc::from(tool));
+        }
+        self
+    }
+
     /// Add a tool to the server.
     ///
     /// If a tool with the same name already exists, it will be replaced.
