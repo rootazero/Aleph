@@ -128,9 +128,23 @@ pub fn run_skill_with_agent_loop(
         .insert("skill_name".to_string(), skill.display_name.clone());
 
     // Create loop config - skills may need more steps for complex operations
+    // Default: 100 steps (vs 30 previously), configurable via AETHER_SKILL_MAX_STEPS
+    let default_max_steps = 100;
+    let max_steps = std::env::var("AETHER_SKILL_MAX_STEPS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(default_max_steps)
+        .min(500); // Hard upper limit to prevent resource exhaustion
+
     let loop_config = LoopConfig::default()
-        .with_max_steps(30)
+        .with_max_steps(max_steps)
         .with_max_tokens(150_000);
+
+    info!(
+        skill_id = %skill.skill_id,
+        max_steps = max_steps,
+        "Skill execution configured"
+    );
 
     // Get runtime capabilities for system prompt injection
     let runtime_capabilities = match RuntimeRegistry::new() {
@@ -301,5 +315,55 @@ pub fn run_skill_with_agent_loop(
             info!(skill_id = %skill.skill_id, "Skill execution aborted by user");
             handler.on_error("Operation cancelled".to_string());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper function to parse max_steps - same logic as production code
+    fn parse_max_steps_from_env(env_value: Option<&str>) -> usize {
+        let default_max_steps = 100;
+        env_value
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(default_max_steps)
+            .min(500)
+    }
+
+    #[test]
+    fn test_max_steps_default() {
+        let max_steps = parse_max_steps_from_env(None);
+        assert_eq!(max_steps, 100, "Default max_steps should be 100");
+    }
+
+    #[test]
+    fn test_max_steps_env_override() {
+        let max_steps = parse_max_steps_from_env(Some("150"));
+        assert_eq!(max_steps, 150, "max_steps should be overridden to 150");
+    }
+
+    #[test]
+    fn test_max_steps_upper_limit() {
+        let max_steps = parse_max_steps_from_env(Some("1000"));
+        assert_eq!(max_steps, 500, "max_steps should be capped at 500");
+    }
+
+    #[test]
+    fn test_max_steps_invalid_env() {
+        let max_steps = parse_max_steps_from_env(Some("invalid"));
+        assert_eq!(max_steps, 100, "Should fall back to default when env var is invalid");
+    }
+
+    #[test]
+    fn test_max_steps_zero() {
+        let max_steps = parse_max_steps_from_env(Some("0"));
+        assert_eq!(max_steps, 0, "Should allow 0 if explicitly set");
+    }
+
+    #[test]
+    fn test_max_steps_exactly_500() {
+        let max_steps = parse_max_steps_from_env(Some("500"));
+        assert_eq!(max_steps, 500, "Should allow exactly 500");
     }
 }

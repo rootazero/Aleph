@@ -200,6 +200,10 @@ pub struct LoopGuard {
     recent_tool_calls: Vec<ToolCallRecord>,
     /// Doom loop detection threshold
     doom_loop_threshold: usize,
+    /// Global tool call history (not cleared on reset)
+    global_tool_history: Vec<ToolCallRecord>,
+    /// Global doom loop threshold (higher than local)
+    global_doom_threshold: usize,
 }
 
 impl LoopGuard {
@@ -216,20 +220,28 @@ impl LoopGuard {
             failure_window: failure_threshold + 2, // Allow some headroom
             recent_tool_calls: Vec::new(),
             doom_loop_threshold,
+            global_tool_history: Vec::new(),
+            global_doom_threshold: 10, // Global threshold is higher
         }
     }
 
     /// Create a guard with custom thresholds
-    pub fn with_thresholds(config: LoopConfig, stuck_threshold: usize, failure_threshold: usize) -> Self {
+    pub fn with_thresholds(
+        config: LoopConfig,
+        stuck_threshold: usize,
+        failure_threshold: usize,
+    ) -> Self {
         let doom_loop_threshold = config.doom_loop_threshold;
         Self {
             config,
             recent_actions: Vec::new(),
             stuck_threshold,
             failure_threshold,
-            failure_window: failure_threshold + 2, // Allow some headroom
+            failure_window: failure_threshold + 2,
             recent_tool_calls: Vec::new(),
             doom_loop_threshold,
+            global_tool_history: Vec::new(),
+            global_doom_threshold: 10,
         }
     }
 
@@ -271,6 +283,11 @@ impl LoopGuard {
             return Some(violation);
         }
 
+        // Check for global doom loop (across resets)
+        if let Some(violation) = self.check_global_doom_loop() {
+            return Some(violation);
+        }
+
         // Check for stuck loop (same action repeated)
         if let Some(violation) = self.check_stuck() {
             return Some(violation);
@@ -308,12 +325,23 @@ impl LoopGuard {
     /// This should be called for every tool call with the exact arguments.
     pub fn record_tool_call(&mut self, tool_name: &str, arguments: &serde_json::Value) {
         let record = ToolCallRecord::new(tool_name.to_string(), arguments.clone());
-        self.recent_tool_calls.push(record);
+
+        // Add to recent (will be cleared on reset)
+        self.recent_tool_calls.push(record.clone());
 
         // Keep bounded
         let max_history = self.doom_loop_threshold * 2;
         if self.recent_tool_calls.len() > max_history {
             self.recent_tool_calls.remove(0);
+        }
+
+        // Add to global history (persists across resets)
+        self.global_tool_history.push(record);
+
+        // Keep global history bounded
+        let max_global = self.global_doom_threshold * 3;
+        if self.global_tool_history.len() > max_global {
+            self.global_tool_history.remove(0);
         }
     }
 
@@ -338,6 +366,48 @@ impl LoopGuard {
                 repeat_count: self.doom_loop_threshold,
                 arguments_preview: first.arguments_preview(100),
             });
+        }
+
+        None
+    }
+
+    /// Check for global doom loop (across resets)
+    ///
+    /// This catches patterns where the user manually continues through
+    /// multiple doom loop warnings, but the overall session still shows
+    /// excessive repetition.
+    fn check_global_doom_loop(&self) -> Option<GuardViolation> {
+        if self.global_tool_history.len() < self.global_doom_threshold {
+            return None;
+        }
+
+        // Count occurrences of each unique tool call
+        let mut call_counts: std::collections::HashMap<(String, u64), usize> =
+            std::collections::HashMap::new();
+
+        for record in &self.global_tool_history {
+            let key = (record.tool_name.clone(), record.arguments_hash);
+            *call_counts.entry(key).or_insert(0) += 1;
+        }
+
+        // Find the most repeated call
+        if let Some((tool_key, count)) = call_counts.iter().max_by_key(|(_, count)| *count) {
+            if *count >= self.global_doom_threshold {
+                // Find a representative record for preview
+                let representative = self
+                    .global_tool_history
+                    .iter()
+                    .find(|r| {
+                        r.tool_name == tool_key.0 && r.arguments_hash == tool_key.1
+                    })
+                    .unwrap();
+
+                return Some(GuardViolation::DoomLoop {
+                    tool_name: tool_key.0.clone(),
+                    repeat_count: *count,
+                    arguments_preview: representative.arguments_preview(100),
+                });
+            }
         }
 
         None
