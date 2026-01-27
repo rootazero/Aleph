@@ -1,12 +1,12 @@
 //! Built-in tools configuration and creation
 //!
 //! This module creates tool server instances using the unified builtin registry.
-//! All tool definitions come from rig_tools::builtin_registry for consistency.
+//! All tool definitions come from executor::builtin_registry for consistency.
 
-use crate::generation::GenerationProviderRegistry;
-use crate::rig_tools::builtin_registry::{
-    create_tool_boxed, get_builtin_tool_names, BuiltinToolsConfig,
+use crate::executor::{
+    create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig as UnifiedBuiltinToolConfig,
 };
+use crate::generation::GenerationProviderRegistry;
 use crate::tools::{AetherToolServer, AetherToolServerHandle};
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
@@ -25,7 +25,7 @@ pub const BUILTIN_TOOLS: &[&str] = &[
 
 /// Configuration for built-in tools
 ///
-/// DEPRECATED: Use rig_tools::builtin_registry::BuiltinToolsConfig instead.
+/// DEPRECATED: Use executor::builtin_registry::BuiltinToolConfig instead.
 /// This type is kept for backward compatibility.
 #[derive(Clone, Default)]
 pub struct BuiltinToolConfig {
@@ -56,15 +56,17 @@ impl std::fmt::Debug for BuiltinToolConfig {
 
 /// Create a tool server handle with built-in tools
 ///
-/// This function uses the unified builtin registry to ensure consistency
-/// with BuiltinToolRegistry used by Agent Loop.
+/// This function uses the unified builtin registry from executor::builtin_registry
+/// to ensure consistency with BuiltinToolRegistry used by Agent Loop.
 ///
 /// Returns an `AetherToolServerHandle` that can be shared across threads.
 pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AetherToolServerHandle {
     // Convert to unified config
-    let unified_config = config.map(|cfg| BuiltinToolsConfig {
+    let unified_config = config.map(|cfg| UnifiedBuiltinToolConfig {
         tavily_api_key: cfg.tavily_api_key.clone(),
         generation_registry: cfg.generation_registry.clone(),
+        dispatcher_registry: None,
+        sub_agent_dispatcher: None,
     });
 
     let mut server = AetherToolServer::new();

@@ -32,7 +32,10 @@ mod builtin_registry;
 mod single_step;
 mod types;
 
-pub use builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+pub use builtin_registry::{
+    create_tool_boxed, get_builtin_tool_names, is_builtin_tool, BuiltinToolConfig,
+    BuiltinToolDefinition, BuiltinToolRegistry, BUILTIN_TOOL_DEFINITIONS,
+};
 pub use single_step::{SingleStepConfig, SingleStepExecutor, ToolRegistry};
 pub use types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
