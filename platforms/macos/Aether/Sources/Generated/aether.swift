@@ -2104,6 +2104,9 @@ public struct AgentExecutionSummaryFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension AgentExecutionSummaryFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2173,6 +2176,9 @@ public struct AgentProgressEventFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension AgentProgressEventFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2232,6 +2238,9 @@ public struct AgentTaskDependencyFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension AgentTaskDependencyFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2293,6 +2302,9 @@ public struct AgentTaskFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension AgentTaskFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2360,6 +2372,9 @@ public struct AgentTaskGraphFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension AgentTaskGraphFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2421,6 +2436,9 @@ public struct AiRetrievalPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension AiRetrievalPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2476,6 +2494,9 @@ public struct AmbiguousTaskFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension AmbiguousTaskFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2527,6 +2548,9 @@ public struct AppMemoryInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension AppMemoryInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2578,6 +2602,9 @@ public struct BehaviorConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension BehaviorConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2653,6 +2680,9 @@ public struct BudgetLimitStatusFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension BudgetLimitStatusFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2742,6 +2772,9 @@ public struct BudgetStatusFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension BudgetStatusFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2807,6 +2840,9 @@ public struct CapabilityMappingFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension CapabilityMappingFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2862,6 +2898,9 @@ public struct CapturedContext: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension CapturedContext: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2919,6 +2958,9 @@ public struct ClarificationOption: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ClarificationOption: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2982,6 +3024,9 @@ public struct ClarificationRequest: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ClarificationRequest: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3045,6 +3090,9 @@ public struct ClarificationResult: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ClarificationResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3112,6 +3160,9 @@ public struct CodeExecConfigFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension CodeExecConfigFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3189,6 +3240,9 @@ public struct CommandNode: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension CommandNode: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3254,6 +3308,9 @@ public struct CompressionPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension CompressionPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3311,6 +3368,9 @@ public struct CompressionResult: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension CompressionResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3370,6 +3430,9 @@ public struct CompressionStats: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension CompressionStats: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3445,6 +3508,9 @@ public struct ContextRuleConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ContextRuleConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3520,6 +3586,9 @@ public struct ConversationTurn: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ConversationTurn: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3581,6 +3650,9 @@ public struct DagTaskInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension DagTaskInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3642,6 +3714,9 @@ public struct DagTaskPlan: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension DagTaskPlan: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3701,6 +3776,9 @@ public struct ExecutableTaskFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ExecutableTaskFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3758,6 +3836,9 @@ public struct ExperimentalPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ExperimentalPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3819,6 +3900,9 @@ public struct FileOpsConfigFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension FileOpsConfigFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3900,6 +3984,9 @@ public struct FullConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension FullConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3975,6 +4062,9 @@ public struct GeneralConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension GeneralConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4032,6 +4122,9 @@ public struct GenerationDataFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension GenerationDataFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4103,6 +4196,9 @@ public struct GenerationMetadataFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension GenerationMetadataFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4176,6 +4272,9 @@ public struct GenerationOutputFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension GenerationOutputFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4269,6 +4368,9 @@ public struct GenerationParamsFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension GenerationParamsFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4362,6 +4464,9 @@ public struct GenerationProgressFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension GenerationProgressFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4431,6 +4536,9 @@ public struct GenerationProviderConfigFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension GenerationProviderConfigFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4498,6 +4606,9 @@ public struct GenerationProviderInfoFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension GenerationProviderInfoFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4565,6 +4676,9 @@ public struct HealthStatisticsFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension HealthStatisticsFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4661,6 +4775,9 @@ public struct InitResultFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension InitResultFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4720,6 +4837,9 @@ public struct IntentDetectionPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension IntentDetectionPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4777,6 +4897,9 @@ public struct KeywordPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension KeywordPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4842,6 +4965,9 @@ public struct KeywordRuleConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension KeywordRuleConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4916,6 +5042,9 @@ public struct LoadSummaryFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension LoadSummaryFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -4975,6 +5104,9 @@ public struct McpEnvVar: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension McpEnvVar: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5046,6 +5178,9 @@ public struct McpServerConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension McpServerConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5117,6 +5252,9 @@ public struct McpServerErrorFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension McpServerErrorFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5170,6 +5308,9 @@ public struct McpServerPermissions: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension McpServerPermissions: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5225,6 +5366,9 @@ public struct McpServerStatusInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension McpServerStatusInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5284,6 +5428,9 @@ public struct McpServiceInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension McpServiceInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5355,6 +5502,9 @@ public struct McpSettingsConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension McpSettingsConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5420,6 +5570,9 @@ public struct McpStartupReportFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension McpStartupReportFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5475,6 +5628,9 @@ public struct McpToolInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension McpToolInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5538,6 +5694,9 @@ public struct MediaAttachment: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension MediaAttachment: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5631,6 +5790,9 @@ public struct MemoryConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension MemoryConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5726,6 +5888,9 @@ public struct MemoryEntry: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension MemoryEntry: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5793,6 +5958,9 @@ public struct MemoryItem: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension MemoryItem: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5850,6 +6018,9 @@ public struct MemoryPolicies: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension MemoryPolicies: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5907,6 +6078,9 @@ public struct MemoryStats: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension MemoryStats: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -5976,6 +6150,9 @@ public struct MetricsPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension MetricsPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6049,6 +6226,9 @@ public struct ModelHealthSummaryFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ModelHealthSummaryFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6122,6 +6302,9 @@ public struct ModelProfileFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ModelProfileFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6191,6 +6374,9 @@ public struct ModelRoutingRulesFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ModelRoutingRulesFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6254,6 +6440,9 @@ public struct PiiConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension PiiConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6321,6 +6510,9 @@ public struct PartUpdateEventFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension PartUpdateEventFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6396,6 +6588,9 @@ public struct PendingConfirmationInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension PendingConfirmationInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6475,6 +6670,9 @@ public struct PluginInfoFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension PluginInfoFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6546,6 +6744,9 @@ public struct PluginSkillFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension PluginSkillFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6617,6 +6818,9 @@ public struct PoliciesConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension PoliciesConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6688,6 +6892,9 @@ public struct PolicyKeywordRule: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension PolicyKeywordRule: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6745,6 +6952,9 @@ public struct PolicyWeightedKeyword: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension PolicyWeightedKeyword: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6804,6 +7014,9 @@ public struct ProcessOptions: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ProcessOptions: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6895,6 +7108,9 @@ public struct ProviderConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ProviderConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -6978,6 +7194,9 @@ public struct ProviderConfigEntry: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ProviderConfigEntry: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7033,6 +7252,9 @@ public struct ProviderTestResult: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ProviderTestResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7098,6 +7320,9 @@ public struct RetryPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension RetryPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7177,6 +7402,9 @@ public struct RoutingRuleConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension RoutingRuleConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7252,6 +7480,9 @@ public struct RuntimeInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension RuntimeInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7311,6 +7542,9 @@ public struct RuntimeUpdateInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension RuntimeUpdateInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7368,6 +7602,9 @@ public struct SearchBackendConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension SearchBackendConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7423,6 +7660,9 @@ public struct SearchBackendEntry: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension SearchBackendEntry: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7484,6 +7724,9 @@ public struct SearchConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension SearchConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7549,6 +7792,9 @@ public struct SearchProviderTestConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension SearchProviderTestConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7612,6 +7858,9 @@ public struct SessionSummary: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension SessionSummary: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7675,6 +7924,9 @@ public struct ShortcutsConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ShortcutsConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7734,6 +7986,9 @@ public struct SkillInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension SkillInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7791,6 +8046,9 @@ public struct SkillsConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension SkillsConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7856,6 +8114,9 @@ public struct SmartMatchingConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension SmartMatchingConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7931,6 +8192,9 @@ public struct StageResultFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension StageResultFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -7996,6 +8260,9 @@ public struct TaskParametersFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension TaskParametersFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8049,6 +8316,9 @@ public struct TaskTypeMappingFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension TaskTypeMappingFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8100,6 +8370,9 @@ public struct TestConnectionResult: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension TestConnectionResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8159,6 +8432,9 @@ public struct TextFormatPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension TextFormatPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8220,6 +8496,9 @@ public struct ToolInfoFfi: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ToolInfoFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8287,6 +8566,9 @@ public struct ToolSafetyPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension ToolSafetyPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8352,6 +8634,9 @@ public struct TriggerConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension TriggerConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8409,6 +8694,9 @@ public struct TypoCorrectionConfig: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension TypoCorrectionConfig: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8496,6 +8784,9 @@ public struct UnifiedToolInfo: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension UnifiedToolInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8581,6 +8872,9 @@ public struct VisionRequest: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension VisionRequest: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8642,6 +8936,9 @@ public struct VisionResult: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension VisionResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8709,6 +9006,9 @@ public struct WebFetchPolicy: Equatable, Hashable {
     
 }
 
+#if compiler(>=6)
+extension WebFetchPolicy: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8772,6 +9072,9 @@ public enum AetherException: Swift.Error, Equatable, Hashable, Foundation.Locali
     
 }
 
+#if compiler(>=6)
+extension AetherException: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8851,6 +9154,9 @@ public enum AetherFfiError: Swift.Error, Equatable, Hashable, Foundation.Localiz
     
 }
 
+#if compiler(>=6)
+extension AetherFfiError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -8946,6 +9252,9 @@ public enum AgentExecutionState: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension AgentExecutionState: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9045,6 +9354,9 @@ public enum AgentProgressEventType: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension AgentProgressEventType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9142,6 +9454,9 @@ public enum AgentTaskStatusState: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension AgentTaskStatusState: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9230,6 +9545,9 @@ public enum AgentTaskTypeCategory: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension AgentTaskTypeCategory: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9331,6 +9649,9 @@ public enum BudgetEnforcementFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension BudgetEnforcementFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9403,6 +9724,9 @@ public enum BudgetPeriodFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension BudgetPeriodFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9484,6 +9808,9 @@ public enum BudgetScopeFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension BudgetScopeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9567,6 +9894,9 @@ public enum CaptureMode: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension CaptureMode: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9639,6 +9969,9 @@ public enum ClarificationResultType: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ClarificationResultType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9715,6 +10048,9 @@ public enum ClarificationType: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ClarificationType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9780,6 +10116,9 @@ public enum CommandType: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension CommandType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9851,6 +10190,9 @@ public enum ConflictResolutionFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ConflictResolutionFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -9924,6 +10266,9 @@ public enum DagTaskDisplayStatus: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension DagTaskDisplayStatus: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10009,6 +10354,9 @@ public enum ErrorType: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ErrorType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10092,6 +10440,9 @@ public enum ExecutionIntentTypeFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ExecutionIntentTypeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10176,6 +10527,9 @@ public enum ExtensionAsyncError: Swift.Error, Equatable, Hashable, Foundation.Lo
     
 }
 
+#if compiler(>=6)
+extension ExtensionAsyncError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10267,6 +10621,9 @@ public enum GenerationDataTypeFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension GenerationDataTypeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10339,6 +10696,9 @@ public enum GenerationTypeFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension GenerationTypeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10418,6 +10778,9 @@ public enum LogLevel: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension LogLevel: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10502,6 +10865,9 @@ public enum McpServerStatus: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension McpServerStatus: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10578,6 +10944,9 @@ public enum McpServerType: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension McpServerType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10651,6 +11020,9 @@ public enum ModelCapabilityFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ModelCapabilityFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10770,6 +11142,9 @@ public enum ModelCostStrategyFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ModelCostStrategyFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10842,6 +11217,9 @@ public enum ModelCostTierFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ModelCostTierFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -10922,6 +11300,9 @@ public enum ModelHealthStatusFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ModelHealthStatusFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11011,6 +11392,9 @@ public enum ModelLatencyTierFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ModelLatencyTierFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11082,6 +11466,9 @@ public enum OrganizeMethodFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension OrganizeMethodFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11154,6 +11541,9 @@ public enum ParameterSourceFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ParameterSourceFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11231,6 +11621,9 @@ public enum PartEventTypeFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension PartEventTypeFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11307,6 +11700,9 @@ public enum ProcessingState: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ProcessingState: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11425,6 +11821,9 @@ public enum TaskCategoryFfi: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension TaskCategoryFfi: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11600,6 +11999,9 @@ public enum ToolSourceType: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension ToolSourceType: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11684,6 +12086,9 @@ public enum TypoCorrectionResult: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension TypoCorrectionResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11754,6 +12159,9 @@ public enum UserConfirmationDecision: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension UserConfirmationDecision: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11833,6 +12241,9 @@ public enum UserDecision: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension UserDecision: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -11898,6 +12309,9 @@ public enum VisionTask: Equatable, Hashable {
 
 }
 
+#if compiler(>=6)
+extension VisionTask: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)

@@ -1,30 +1,31 @@
-//! Unified builtin tool registry - Single Source of Truth
+//! Builtin tool definitions - Single Source of Truth
 //!
 //! This module defines ALL builtin tools in one place, ensuring consistency
-//! between AetherToolServer (hot-reload/management) and BuiltinToolRegistry (execution).
+//! across the system.
 //!
 //! # Architecture
 //!
-//! Before this module:
-//! - AetherToolServer defined tools in agents/rig/tools.rs
-//! - BuiltinToolRegistry defined tools in executor/builtin_registry/registry.rs
-//! - Tools could get out of sync (e.g., bash tool missing from registry)
+//! This is the authoritative source for builtin tool definitions.
+//! Both BuiltinToolRegistry (Agent Loop execution) and AetherToolServer (tool management)
+//! source their tool definitions from this module.
 //!
-//! After this module:
-//! - Single definition of all builtin tools
-//! - Both systems source from this module
-//! - Guaranteed consistency
+//! # Usage
+//!
+//! - `BUILTIN_TOOL_DEFINITIONS` - List of all tool definitions
+//! - `create_tool_boxed()` - Create boxed tool instance for AetherToolServer
+//! - `get_builtin_tool_names()` - Get list of all tool names
+//! - `is_builtin_tool()` - Check if a name is a builtin tool
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use crate::generation::GenerationProviderRegistry;
-use crate::tools::AetherToolDyn; // Use AetherToolDyn instead of AetherTool
-
-use super::{
+use crate::rig_tools::{
     BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool,
     ReadSkillTool, SearchTool, WebFetchTool, YouTubeTool,
 };
-use super::skill_reader::ListSkillsTool as SkillListTool;
+use crate::rig_tools::skill_reader::ListSkillsTool as SkillListTool;
+use crate::tools::AetherToolDyn;
+
+use super::BuiltinToolConfig;
 
 /// Definition of a builtin tool
 ///
@@ -39,10 +40,10 @@ pub struct BuiltinToolDefinition {
     pub requires_config: bool,
 }
 
-/// All builtin tools in the system
+/// All builtin tools in the system - Single Source of Truth
 ///
-/// This is the Single Source of Truth for builtin tools.
-/// Both AetherToolServer and BuiltinToolRegistry use this list.
+/// This is the authoritative list of all builtin tools.
+/// Both BuiltinToolRegistry and AetherToolServer use this list.
 pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "search",
@@ -96,19 +97,10 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
 ];
 
-/// Configuration for creating builtin tools
-#[derive(Clone, Default)]
-pub struct BuiltinToolsConfig {
-    /// Tavily API key for search tool (optional)
-    pub tavily_api_key: Option<String>,
-    /// Generation provider registry for image/video/audio generation (optional)
-    pub generation_registry: Option<Arc<RwLock<GenerationProviderRegistry>>>,
-}
-
 /// Create a boxed tool instance by name
 ///
 /// This function is used by AetherToolServer to create tool instances
-/// for hot-reload and management.
+/// for tool management and hot-reload capabilities.
 ///
 /// # Arguments
 /// * `name` - Tool name (must match BUILTIN_TOOL_DEFINITIONS)
@@ -116,10 +108,10 @@ pub struct BuiltinToolsConfig {
 ///
 /// # Returns
 /// * `Some(tool)` - Boxed tool instance if the tool exists
-/// * `None` - If the tool name is unknown
+/// * `None` - If the tool name is unknown or requires missing config
 pub fn create_tool_boxed(
     name: &str,
-    config: Option<&BuiltinToolsConfig>,
+    config: Option<&BuiltinToolConfig>,
 ) -> Option<Box<dyn AetherToolDyn>> {
     match name {
         "search" => {
@@ -147,52 +139,6 @@ pub fn create_tool_boxed(
         "read_skill" => Some(Box::new(ReadSkillTool::default())),
         "list_skills" => Some(Box::new(SkillListTool::default())),
         _ => None,
-    }
-}
-
-/// Create typed tool instances for BuiltinToolRegistry
-///
-/// This struct holds actual tool instances (not boxed) for direct invocation.
-/// Used by BuiltinToolRegistry for high-performance execution.
-pub struct TypedBuiltinTools {
-    pub search_tool: SearchTool,
-    pub web_fetch_tool: WebFetchTool,
-    pub youtube_tool: YouTubeTool,
-    pub file_ops_tool: FileOpsTool,
-    pub bash_tool: BashExecTool,
-    pub code_exec_tool: CodeExecTool,
-    pub pdf_generate_tool: PdfGenerateTool,
-    pub image_generate_tool: Option<ImageGenerateTool>,
-    pub read_skill_tool: ReadSkillTool,
-    pub list_skills_tool: SkillListTool,
-}
-
-/// Create typed tool instances for BuiltinToolRegistry
-///
-/// This function creates concrete typed instances for direct invocation,
-/// avoiding the overhead of dynamic dispatch.
-pub fn create_typed_tools(config: Option<&BuiltinToolsConfig>) -> TypedBuiltinTools {
-    let search_tool = if let Some(cfg) = config {
-        SearchTool::with_api_key(cfg.tavily_api_key.clone())
-    } else {
-        SearchTool::new()
-    };
-
-    let image_generate_tool = config
-        .and_then(|cfg| cfg.generation_registry.as_ref())
-        .map(|registry| ImageGenerateTool::new(Arc::clone(registry)));
-
-    TypedBuiltinTools {
-        search_tool,
-        web_fetch_tool: WebFetchTool::new(),
-        youtube_tool: YouTubeTool::new(),
-        file_ops_tool: FileOpsTool::new(),
-        bash_tool: BashExecTool::new(),
-        code_exec_tool: CodeExecTool::new(),
-        pdf_generate_tool: PdfGenerateTool::new(),
-        image_generate_tool,
-        read_skill_tool: ReadSkillTool::default(),
-        list_skills_tool: SkillListTool::default(),
     }
 }
 
@@ -253,19 +199,6 @@ mod tests {
 
         // Test tool requiring config (should return None without config)
         assert!(create_tool_boxed("generate_image", None).is_none());
-    }
-
-    #[test]
-    fn test_create_typed_tools() {
-        let tools = create_typed_tools(None);
-
-        // Verify tools are created
-        assert_eq!(BashExecTool::NAME, "bash");
-        assert_eq!(CodeExecTool::NAME, "code_exec");
-        assert_eq!(FileOpsTool::NAME, "file_ops");
-
-        // Image tool should be None without generation registry
-        assert!(tools.image_generate_tool.is_none());
     }
 
     #[test]
