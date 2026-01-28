@@ -114,6 +114,10 @@ pub mod gateway;
 #[cfg(feature = "cron")]
 pub mod cron;
 
+// NEW: Browser control via CDP
+#[cfg(feature = "browser")]
+pub mod browser;
+
 // NEW: Permission and Question systems (OpenCode compatible)
 pub mod permission; // Rule-based permission system
 pub mod question; // Structured user interaction

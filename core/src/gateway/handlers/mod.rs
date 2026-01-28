@@ -11,6 +11,8 @@ pub mod auth;
 pub mod events;
 pub mod channel;
 pub mod config;
+#[cfg(feature = "browser")]
+pub mod browser;
 
 use std::collections::HashMap;
 use std::future::Future;
