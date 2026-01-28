@@ -153,6 +153,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Stop output coordinator (removes ESC key monitor)
         outputCoordinator?.stop()
 
+        // Shutdown Gateway connection
+        GatewayManager.shared.shutdown()
+        print("[Aether] Gateway shutdown")
+
         // Clean up Rust core (only if initialized)
         print("[Aether] Application terminating")
     }
@@ -885,6 +889,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         clipboardMonitor.startMonitoring()
         print("[Aether] Clipboard monitoring started for context tracking")
 
+        // Initialize Gateway connection (non-blocking)
+        // Gateway provides WebSocket-based agent communication as alternative to FFI
+        initializeGateway()
+
         // Initialize core (rig-core based) - unified AI processing interface
         initializeCore()
 
@@ -899,6 +907,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             object: nil
         )
 
+    }
+
+    /// Initialize Gateway connection (non-blocking)
+    ///
+    /// Attempts to connect to the Gateway WebSocket server.
+    /// If Gateway is running, it will be used for agent execution.
+    /// If not, falls back to FFI-based processing.
+    private func initializeGateway() {
+        Task {
+            do {
+                try await GatewayManager.shared.initialize()
+                print("[Aether] 🌐 Gateway connected - WebSocket mode available")
+            } catch {
+                print("[Aether] Gateway not available (using FFI): \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Handle config change notification (rebuild providers menu)

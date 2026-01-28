@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import os.log
 
 /// Gateway connection state
@@ -73,9 +74,8 @@ final class GatewayClient: ObservableObject {
         self.config = config
     }
 
-    deinit {
-        disconnect()
-    }
+    // Note: Disconnection is handled by GatewayManager.shutdown()
+    // Cannot call MainActor-isolated disconnect() from nonisolated deinit
 
     // MARK: - Connection Management
 

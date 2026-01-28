@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import os.log
 
 /// Manages the Gateway process lifecycle and client connection
@@ -303,6 +304,7 @@ private class Socket {
 // MARK: - fd_set helpers
 
 private func __darwin_fd_zero(_ set: inout fd_set) {
-    set.__fds_bits = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    withUnsafeMutableBytes(of: &set) { buffer in
+        buffer.baseAddress?.initializeMemory(as: UInt8.self, repeating: 0, count: buffer.count)
+    }
 }
