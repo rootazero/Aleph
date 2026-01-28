@@ -295,7 +295,7 @@ impl VectorDatabase {
         Ok(())
     }
 
-    /// Find similar facts for conflict detection
+    /// Find similar facts for conflict detection using sqlite-vec
     pub async fn find_similar_facts(
         &self,
         query_embedding: &[f32],
@@ -303,20 +303,35 @@ impl VectorDatabase {
         exclude_id: Option<&str>,
     ) -> Result<Vec<MemoryFact>, AetherError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let query_bytes = Self::serialize_embedding(query_embedding);
+
+        // Fetch more candidates than needed, filter by threshold after
+        let limit = 50u32;
 
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, content, fact_type, embedding, source_memory_ids,
-                       created_at, updated_at, confidence, is_valid, invalidation_reason
-                FROM memory_facts
-                WHERE embedding IS NOT NULL AND is_valid = 1
+                WITH vec_matches AS (
+                    SELECT rowid, distance
+                    FROM facts_vec
+                    WHERE embedding MATCH ?1
+                    ORDER BY distance
+                    LIMIT ?2
+                )
+                SELECT
+                    f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
+                    f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
+                    1.0 / (1.0 + vm.distance) as similarity
+                FROM memory_facts f
+                INNER JOIN vec_matches vm ON f.rowid = vm.rowid
+                WHERE f.is_valid = 1
+                ORDER BY vm.distance
                 "#,
             )
             .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
 
-        let facts = stmt
-            .query_map([], |row| {
+        let facts: Vec<MemoryFact> = stmt
+            .query_map(params![query_bytes, limit], |row| {
                 let id: String = row.get(0)?;
                 let content: String = row.get(1)?;
                 let fact_type_str: String = row.get(2)?;
@@ -327,6 +342,7 @@ impl VectorDatabase {
                 let confidence: f32 = row.get(7)?;
                 let is_valid: i32 = row.get(8)?;
                 let invalidation_reason: Option<String> = row.get(9)?;
+                let similarity: f64 = row.get(10)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -343,32 +359,23 @@ impl VectorDatabase {
                     confidence,
                     is_valid: is_valid != 0,
                     invalidation_reason,
-                    similarity_score: None,
+                    similarity_score: Some(similarity as f32),
                 })
             })
             .map_err(|e| AetherError::config(format!("Failed to query facts: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AetherError::config(format!("Failed to parse fact rows: {}", e)))?;
 
-        // Filter by similarity threshold and exclude_id
+        // Filter by threshold and exclude_id
         let similar_facts: Vec<MemoryFact> = facts
             .into_iter()
-            .filter_map(|mut fact| {
-                // Exclude specified ID
+            .filter(|fact| {
                 if let Some(ex_id) = exclude_id {
                     if fact.id == ex_id {
-                        return None;
+                        return false;
                     }
                 }
-
-                if let Some(ref emb) = fact.embedding {
-                    let score = Self::cosine_similarity(query_embedding, emb);
-                    if score >= threshold {
-                        fact.similarity_score = Some(score);
-                        return Some(fact);
-                    }
-                }
-                None
+                fact.similarity_score.unwrap_or(0.0) >= threshold
             })
             .collect();
 
