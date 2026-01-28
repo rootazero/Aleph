@@ -390,4 +390,20 @@ export const commands = {
 
   /** Get application logs */
   getLogs: () => invoke<string>('get_logs'),
+
+  // ============================================================================
+  // Confirmations & Responses
+  // ============================================================================
+
+  /** Respond to tool confirmation request */
+  respondToolConfirmation: (confirmationId: string, approved: boolean) =>
+    invoke('respond_tool_confirmation', { confirmationId, approved }),
+
+  /** Respond to plan confirmation request */
+  respondPlanConfirmation: (planId: string, approved: boolean) =>
+    invoke('respond_plan_confirmation', { planId, approved }),
+
+  /** Respond to clarification request */
+  respondClarification: (clarificationId: string, response: string) =>
+    invoke('respond_clarification', { clarificationId, response }),
 };
