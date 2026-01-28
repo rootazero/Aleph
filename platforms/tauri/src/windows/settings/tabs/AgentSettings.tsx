@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { SettingsCard } from '@/components/ui/settings-card';
+import { SettingsSection } from '@/components/ui/settings-section';
+import { InfoBox } from '@/components/ui/info-box';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
@@ -14,7 +16,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  AlertTriangle,
   FolderOpen,
   Terminal,
   Globe,
@@ -28,6 +29,9 @@ import {
   Trash2,
   Pencil,
   Info,
+  Repeat,
+  Shield,
+  Play,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -162,7 +166,8 @@ export function AgentSettings() {
   ];
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-lg max-w-2xl">
+      {/* Page Header */}
       <div>
         <h1 className="text-title mb-1">{t('settings.agent.title')}</h1>
         <p className="text-caption text-muted-foreground">
@@ -171,15 +176,11 @@ export function AgentSettings() {
       </div>
 
       {/* File Operations Section */}
-      <section className="space-y-4">
-        <h2 className="text-body font-medium text-foreground flex items-center gap-2">
-          <FolderOpen className="h-4 w-4" />
-          {t('settings.agent.fileOps.title', 'File Operations')}
-        </h2>
-
+      <SettingsSection header={t('settings.agent.fileOps.title', 'File Operations')}>
         <SettingsCard
           title={t('settings.agent.fileOps.enabled', 'Enable File Operations')}
           description={t('settings.agent.fileOps.enabledDescription', 'Allow the agent to read, write, and modify files')}
+          icon={FolderOpen}
         >
           <Switch
             checked={agent.file_ops.enabled}
@@ -317,28 +318,21 @@ export function AgentSettings() {
 
               {!agent.file_ops.require_confirmation_for_write &&
                 !agent.file_ops.require_confirmation_for_delete && (
-                  <div className="flex items-start gap-2 p-2 rounded-small bg-warning/10 text-warning">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                    <p className="text-caption">
-                      {t('settings.agent.fileOps.noConfirmationWarning', 'Disabling confirmations allows the agent to modify files without asking. Use with caution.')}
-                    </p>
-                  </div>
+                  <InfoBox variant="warning">
+                    {t('settings.agent.fileOps.noConfirmationWarning', 'Disabling confirmations allows the agent to modify files without asking. Use with caution.')}
+                  </InfoBox>
                 )}
             </div>
           </>
         )}
-      </section>
+      </SettingsSection>
 
       {/* Code Execution Section */}
-      <section className="space-y-4">
-        <h2 className="text-body font-medium text-foreground flex items-center gap-2">
-          <Terminal className="h-4 w-4" />
-          {t('settings.agent.codeExec.title', 'Code Execution')}
-        </h2>
-
+      <SettingsSection header={t('settings.agent.codeExec.title', 'Code Execution')}>
         <SettingsCard
           title={t('settings.agent.codeExec.enabled', 'Enable Code Execution')}
           description={t('settings.agent.codeExec.enabledDescription', 'Allow the agent to execute code and scripts')}
+          icon={Terminal}
           className={cn(agent.code_exec.enabled && 'border-warning/50 bg-warning/5')}
         >
           <Switch
@@ -349,17 +343,15 @@ export function AgentSettings() {
 
         {agent.code_exec.enabled && (
           <>
-            <div className="flex items-start gap-2 p-3 rounded-medium bg-warning/10 text-warning">
-              <AlertTriangle className="h-5 w-5 flex-shrink-0 mt-0.5" />
-              <p className="text-caption">
-                {t('settings.agent.codeExec.warning', 'Code execution is enabled. The agent can run commands on your system. Make sure to configure sandbox mode and blocked commands.')}
-              </p>
-            </div>
+            <InfoBox variant="warning">
+              {t('settings.agent.codeExec.warning', 'Code execution is enabled. The agent can run commands on your system. Make sure to configure sandbox mode and blocked commands.')}
+            </InfoBox>
 
             {/* Sandbox Mode */}
             <SettingsCard
               title={t('settings.agent.codeExec.sandbox', 'Sandbox Mode')}
               description={t('settings.agent.codeExec.sandboxDescription', 'Run commands in an isolated environment with restricted permissions')}
+              icon={Shield}
             >
               <Switch
                 checked={agent.code_exec.sandbox_enabled}
@@ -372,14 +364,12 @@ export function AgentSettings() {
               <SettingsCard
                 title={t('settings.agent.codeExec.network', 'Allow Network Access')}
                 description={t('settings.agent.codeExec.networkDescription', 'Allow sandboxed code to make network requests')}
+                icon={Network}
               >
-                <div className="flex items-center gap-2">
-                  <Network className="h-4 w-4 text-muted-foreground" />
-                  <Switch
-                    checked={agent.code_exec.allow_network}
-                    onCheckedChange={(checked) => updateCodeExec({ allow_network: checked })}
-                  />
-                </div>
+                <Switch
+                  checked={agent.code_exec.allow_network}
+                  onCheckedChange={(checked) => updateCodeExec({ allow_network: checked })}
+                />
               </SettingsCard>
             )}
 
@@ -387,9 +377,9 @@ export function AgentSettings() {
             <SettingsCard
               title={t('settings.agent.codeExec.timeout', 'Execution Timeout')}
               description={t('settings.agent.codeExec.timeoutDescription', 'Maximum time a command can run before being terminated')}
+              icon={Clock}
             >
-              <div className="flex items-center gap-3 w-48">
-                <Clock className="h-4 w-4 text-muted-foreground" />
+              <div className="flex items-center gap-md w-48">
                 <Slider
                   value={[agent.code_exec.timeout_seconds]}
                   onValueChange={([value]) => updateCodeExec({ timeout_seconds: value })}
@@ -408,6 +398,7 @@ export function AgentSettings() {
             <SettingsCard
               title={t('settings.agent.codeExec.runtime', 'Default Runtime')}
               description={t('settings.agent.codeExec.runtimeDescription', 'Default environment for executing code')}
+              icon={Play}
             >
               <Select
                 value={agent.code_exec.default_runtime}
@@ -474,32 +465,27 @@ export function AgentSettings() {
             </div>
           </>
         )}
-      </section>
+      </SettingsSection>
 
       {/* Other Settings */}
-      <section className="space-y-4">
-        <h2 className="text-body font-medium text-foreground">
-          {t('settings.agent.other', 'Other Settings')}
-        </h2>
-
+      <SettingsSection header={t('settings.agent.other', 'Other Settings')}>
         <SettingsCard
           title={t('settings.agent.webBrowsing', 'Web Browsing')}
           description={t('settings.agent.webBrowsingDescription', 'Allow the agent to search and browse the web')}
+          icon={Globe}
         >
-          <div className="flex items-center gap-2">
-            <Globe className="h-4 w-4 text-muted-foreground" />
-            <Switch
-              checked={agent.web_browsing}
-              onCheckedChange={(checked) => updateAgent({ web_browsing: checked })}
-            />
-          </div>
+          <Switch
+            checked={agent.web_browsing}
+            onCheckedChange={(checked) => updateAgent({ web_browsing: checked })}
+          />
         </SettingsCard>
 
         <SettingsCard
           title={t('settings.agent.maxIterations', 'Max Iterations')}
           description={t('settings.agent.maxIterationsDescription', 'Maximum steps the agent can take per task')}
+          icon={Repeat}
         >
-          <div className="flex items-center gap-3 w-48">
+          <div className="flex items-center gap-md w-48">
             <Slider
               value={[agent.max_iterations]}
               onValueChange={([value]) => updateAgent({ max_iterations: value })}
@@ -508,12 +494,12 @@ export function AgentSettings() {
               step={1}
               className="flex-1"
             />
-            <span className="text-caption text-muted-foreground w-8 text-right">
+            <span className="text-caption text-muted-foreground w-8 text-right font-mono">
               {agent.max_iterations}
             </span>
           </div>
         </SettingsCard>
-      </section>
+      </SettingsSection>
     </div>
   );
 }

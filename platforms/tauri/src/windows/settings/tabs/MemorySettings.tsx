@@ -1,5 +1,7 @@
 import { useSettingsStore } from '@/stores/settingsStore';
 import { SettingsCard } from '@/components/ui/settings-card';
+import { SettingsSection } from '@/components/ui/settings-section';
+import { InfoBox } from '@/components/ui/info-box';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import {
@@ -10,46 +12,48 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Trash2, Brain, Database } from 'lucide-react';
+import { Trash2, Brain, Database, Save, History, Gauge } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export function MemorySettings() {
+  const { t } = useTranslation();
   const memory = useSettingsStore((s) => s.memory);
   const updateMemory = useSettingsStore((s) => s.updateMemory);
 
   const handleClearMemory = () => {
-    // TODO: Implement clear memory
+    // TODO: Implement clear memory via Tauri command
     console.log('Clear memory');
   };
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-lg max-w-2xl">
+      {/* Page Header */}
       <div>
-        <h1 className="text-title mb-1">Memory</h1>
+        <h1 className="text-title mb-1">{t('settings.memory.title', 'Memory')}</h1>
         <p className="text-caption text-muted-foreground">
-          Configure conversation memory and context retention
+          {t('settings.memory.description', 'Configure conversation memory and context retention')}
         </p>
       </div>
 
       {/* Core Settings */}
-      <section className="space-y-4">
+      <SettingsSection header={t('settings.memory.coreSection', 'Core Settings')}>
         <SettingsCard
-          title="Enable Memory"
-          description="Remember context from previous conversations"
+          title={t('settings.memory.enabled', 'Enable Memory')}
+          description={t('settings.memory.enabledDescription', 'Remember context from previous conversations')}
+          icon={Brain}
         >
-          <div className="flex items-center gap-2">
-            <Brain className="h-4 w-4 text-muted-foreground" />
-            <Switch
-              checked={memory.enabled}
-              onCheckedChange={(checked) => updateMemory({ enabled: checked })}
-            />
-          </div>
+          <Switch
+            checked={memory.enabled}
+            onCheckedChange={(checked) => updateMemory({ enabled: checked })}
+          />
         </SettingsCard>
 
         {memory.enabled && (
           <>
             <SettingsCard
-              title="Auto Save"
-              description="Automatically save important context"
+              title={t('settings.memory.autoSave', 'Auto Save')}
+              description={t('settings.memory.autoSaveDescription', 'Automatically save important context')}
+              icon={Save}
             >
               <Switch
                 checked={memory.auto_save}
@@ -58,10 +62,11 @@ export function MemorySettings() {
             </SettingsCard>
 
             <SettingsCard
-              title="Max History"
-              description="Number of conversations to remember"
+              title={t('settings.memory.maxHistory', 'Max History')}
+              description={t('settings.memory.maxHistoryDescription', 'Number of conversations to remember')}
+              icon={History}
             >
-              <div className="flex items-center gap-3 w-48">
+              <div className="flex items-center gap-md w-48">
                 <Slider
                   value={[memory.max_history]}
                   onValueChange={([value]) => updateMemory({ max_history: value })}
@@ -70,26 +75,22 @@ export function MemorySettings() {
                   step={10}
                   className="flex-1"
                 />
-                <span className="text-caption text-muted-foreground w-10 text-right">
+                <span className="text-caption text-muted-foreground w-10 text-right font-mono">
                   {memory.max_history}
                 </span>
               </div>
             </SettingsCard>
           </>
         )}
-      </section>
+      </SettingsSection>
 
       {/* Embedding Settings */}
       {memory.enabled && (
-        <section className="space-y-4">
-          <h2 className="text-body font-medium text-foreground flex items-center gap-2">
-            <Database className="h-4 w-4" />
-            Embeddings
-          </h2>
-
+        <SettingsSection header={t('settings.memory.embeddingsSection', 'Embeddings')}>
           <SettingsCard
-            title="Embedding Model"
-            description="Model used for semantic search"
+            title={t('settings.memory.embeddingModel', 'Embedding Model')}
+            description={t('settings.memory.embeddingModelDescription', 'Model used for semantic search')}
+            icon={Database}
           >
             <Select
               value={memory.embedding_model}
@@ -113,10 +114,11 @@ export function MemorySettings() {
           </SettingsCard>
 
           <SettingsCard
-            title="Similarity Threshold"
-            description="Minimum similarity score for memory retrieval"
+            title={t('settings.memory.similarityThreshold', 'Similarity Threshold')}
+            description={t('settings.memory.similarityThresholdDescription', 'Minimum similarity score for memory retrieval')}
+            icon={Gauge}
           >
-            <div className="flex items-center gap-3 w-48">
+            <div className="flex items-center gap-md w-48">
               <Slider
                 value={[memory.similarity_threshold]}
                 onValueChange={([value]) =>
@@ -132,21 +134,19 @@ export function MemorySettings() {
               </span>
             </div>
           </SettingsCard>
-        </section>
+        </SettingsSection>
       )}
 
       {/* Danger Zone */}
-      <section className="space-y-4 pt-4 border-t border-border">
-        <h2 className="text-body font-medium text-destructive">Danger Zone</h2>
-
-        <div className="p-4 rounded-card border border-destructive/50 bg-destructive/5">
+      <SettingsSection header={t('settings.memory.dangerZone', 'Danger Zone')}>
+        <div className="p-md rounded-md border border-destructive/50 bg-destructive/5">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-body font-medium text-foreground">
-                Clear All Memory
+                {t('settings.memory.clearAll', 'Clear All Memory')}
               </p>
               <p className="text-caption text-muted-foreground">
-                Permanently delete all stored memories. This cannot be undone.
+                {t('settings.memory.clearAllDescription', 'Permanently delete all stored memories. This cannot be undone.')}
               </p>
             </div>
             <Button
@@ -155,11 +155,15 @@ export function MemorySettings() {
               onClick={handleClearMemory}
             >
               <Trash2 className="h-4 w-4 mr-2" />
-              Clear
+              {t('common.clear', 'Clear')}
             </Button>
           </div>
         </div>
-      </section>
+
+        <InfoBox variant="warning">
+          {t('settings.memory.clearWarning', 'Clearing memory will remove all saved context and conversation history. This action is irreversible.')}
+        </InfoBox>
+      </SettingsSection>
     </div>
   );
 }
