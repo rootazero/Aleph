@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
+import { SettingsSection } from '@/components/ui/settings-section';
+import { InfoBox } from '@/components/ui/info-box';
 import {
   Dialog,
   DialogContent,
@@ -12,8 +14,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Plus, Server, Trash2, Play, X } from 'lucide-react';
+import { Plus, Server, Trash2, Play, X, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 import type { McpServer } from '@/lib/commands';
 
 // Master-Detail Layout Component
@@ -304,6 +307,7 @@ function AddServerDialog({
 }
 
 export function McpSettings() {
+  const { t } = useTranslation();
   const mcp = useSettingsStore((s) => s.mcp);
   const updateMcp = useSettingsStore((s) => s.updateMcp);
 
@@ -343,59 +347,73 @@ export function McpSettings() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-lg max-w-4xl">
+      {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-title mb-1">MCP Servers</h1>
+          <h1 className="text-title mb-1">{t('settings.mcp.title', 'MCP Servers')}</h1>
           <p className="text-caption text-muted-foreground">
-            Manage Model Context Protocol servers
+            {t('settings.mcp.description', 'Manage Model Context Protocol servers')}
           </p>
         </div>
         <Button onClick={() => setDialogOpen(true)}>
           <Plus className="h-4 w-4 mr-2" />
-          Add Server
+          {t('settings.mcp.addServer', 'Add Server')}
         </Button>
       </div>
 
-      {mcp.servers.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-card">
-          <Server className="h-12 w-12 mx-auto mb-4 opacity-50" />
-          <p>No MCP servers configured</p>
-          <p className="text-caption mt-1">
-            Add a server to extend Aether&apos;s capabilities
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Master List */}
-          <div className="space-y-4">
-            <h2 className="text-body font-medium text-muted-foreground">
-              Servers ({mcp.servers.length})
-            </h2>
-            <McpServerList
-              servers={mcp.servers}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-              onToggle={handleToggle}
-            />
+      {/* Server Management */}
+      <SettingsSection header={t('settings.mcp.serversSection', 'Servers')}>
+        {mcp.servers.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-card">
+            <Server className="h-12 w-12 mx-auto mb-4 opacity-50" />
+            <p>{t('settings.mcp.noServers', 'No MCP servers configured')}</p>
+            <p className="text-caption mt-1">
+              {t('settings.mcp.noServersHint', "Add a server to extend Aether's capabilities")}
+            </p>
           </div>
-
-          {/* Detail Panel */}
-          <div className="lg:border-l lg:pl-6 border-border">
-            {selectedServer ? (
-              <McpServerDetail
-                server={selectedServer}
-                onUpdate={handleUpdate}
-                onDelete={() => handleDelete(selectedServer.id)}
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-lg">
+            {/* Master List */}
+            <div className="space-y-md">
+              <p className="text-caption text-muted-foreground">
+                {t('settings.mcp.serversCount', 'Servers ({{count}})', { count: mcp.servers.length })}
+              </p>
+              <McpServerList
+                servers={mcp.servers}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onToggle={handleToggle}
               />
-            ) : (
-              <div className="flex items-center justify-center h-64 text-muted-foreground">
-                <p>Select a server to configure</p>
-              </div>
-            )}
+            </div>
+
+            {/* Detail Panel */}
+            <div className="lg:border-l lg:pl-lg border-border">
+              {selectedServer ? (
+                <McpServerDetail
+                  server={selectedServer}
+                  onUpdate={handleUpdate}
+                  onDelete={() => handleDelete(selectedServer.id)}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-64 text-muted-foreground">
+                  <p>{t('settings.mcp.selectServer', 'Select a server to configure')}</p>
+                </div>
+              )}
+            </div>
           </div>
+        )}
+      </SettingsSection>
+
+      {/* Info */}
+      <InfoBox variant="info">
+        <div className="flex items-start gap-sm">
+          <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <span>
+            {t('settings.mcp.hint', 'MCP servers extend Aether with additional tools and capabilities. Visit the Model Context Protocol documentation to learn more.')}
+          </span>
         </div>
-      )}
+      </InfoBox>
 
       <AddServerDialog open={dialogOpen} onOpenChange={setDialogOpen} onAdd={handleAdd} />
     </div>
