@@ -110,6 +110,10 @@ pub mod vision; // NEW: Vision capability (screen OCR, image understanding) // N
 #[cfg(feature = "gateway")]
 pub mod gateway;
 
+// NEW: Cron job scheduling
+#[cfg(feature = "cron")]
+pub mod cron;
+
 // NEW: Permission and Question systems (OpenCode compatible)
 pub mod permission; // Rule-based permission system
 pub mod question; // Structured user interaction
