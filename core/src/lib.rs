@@ -106,6 +106,10 @@ pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
 pub mod vision; // NEW: Vision capability (screen OCR, image understanding) // NEW: Media generation providers (image, video, audio, speech)
 
+// NEW: WebSocket Gateway for Moltbot-style architecture
+#[cfg(feature = "gateway")]
+pub mod gateway;
+
 // NEW: Permission and Question systems (OpenCode compatible)
 pub mod permission; // Rule-based permission system
 pub mod question; // Structured user interaction
