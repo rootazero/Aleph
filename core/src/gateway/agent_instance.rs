@@ -7,9 +7,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::router::SessionKey;
+use super::session_manager::SessionManager;
+use super::session_storage::SessionStorage;
 
 /// Configuration for an agent instance
 #[derive(Debug, Clone)]
@@ -68,7 +70,7 @@ pub enum AgentState {
 ///
 /// Each instance has:
 /// - Dedicated workspace directory
-/// - Separate session store (SQLite)
+/// - Separate session store (JSONL files + optional SQLite via SessionManager)
 /// - Independent configuration
 /// - Isolated state
 pub struct AgentInstance {
@@ -76,10 +78,14 @@ pub struct AgentInstance {
     config: AgentInstanceConfig,
     /// Current agent state
     state: Arc<RwLock<AgentState>>,
-    /// Agent directory (contains workspace, sessions.db, config)
+    /// Agent directory (contains workspace, sessions/, config)
     agent_dir: PathBuf,
-    /// Active sessions for this agent
+    /// Active sessions for this agent (in-memory cache)
     sessions: Arc<RwLock<HashMap<String, SessionData>>>,
+    /// Persistent session storage (JSONL files)
+    storage: Option<SessionStorage>,
+    /// Optional session manager for SQLite persistence
+    session_manager: Option<Arc<SessionManager>>,
 }
 
 /// Session data stored in memory
@@ -143,6 +149,21 @@ impl AgentInstance {
             let _ = std::fs::set_permissions(&agent_dir, perms);
         }
 
+        // Initialize session storage
+        let storage = match SessionStorage::new(&agent_dir) {
+            Ok(s) => {
+                info!("Session storage initialized for agent '{}'", config.agent_id);
+                Some(s)
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to initialize session storage for agent '{}': {}. Sessions will not be persisted.",
+                    config.agent_id, e
+                );
+                None
+            }
+        };
+
         info!(
             "Created agent instance '{}' at {:?}",
             config.agent_id, agent_dir
@@ -153,7 +174,25 @@ impl AgentInstance {
             state: Arc::new(RwLock::new(AgentState::Idle)),
             agent_dir,
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            storage,
+            session_manager: None,
         })
+    }
+
+    /// Create a new agent instance with SessionManager for SQLite persistence
+    ///
+    /// Messages are persisted both to JSONL files and to SQLite via SessionManager.
+    pub fn with_session_manager(
+        config: AgentInstanceConfig,
+        session_manager: Arc<SessionManager>,
+    ) -> Result<Self, AgentInstanceError> {
+        let mut instance = Self::new(config)?;
+        instance.session_manager = Some(session_manager);
+        info!(
+            "Agent '{}' connected to SessionManager for SQLite persistence",
+            instance.config.agent_id
+        );
+        Ok(instance)
     }
 
     /// Get the agent ID
@@ -197,21 +236,68 @@ impl AgentInstance {
     }
 
     /// Get or create a session
+    ///
+    /// If the session exists on disk (JSONL), it will be loaded into memory.
+    /// If not, a new session is created both in memory and on disk.
+    /// Also syncs with SessionManager (SQLite) if connected.
     pub async fn get_or_create_session(&self, key: &SessionKey) -> SessionInfo {
         let key_str = key.to_key_string();
         let mut sessions = self.sessions.write().await;
 
-        let data = sessions.entry(key_str.clone()).or_insert_with(|| {
+        // Check if already in memory
+        if let Some(data) = sessions.get(&key_str) {
+            return SessionInfo {
+                key: key_str,
+                agent_id: self.config.agent_id.clone(),
+                message_count: data.messages.len(),
+                created_at: data.created_at,
+                last_active_at: data.last_active_at,
+            };
+        }
+
+        // Try to load from storage
+        let mut loaded_from_disk = false;
+        if let Some(ref storage) = self.storage {
+            if let Some(loaded) = storage.load_session(&key_str) {
+                debug!("Loaded session '{}' from disk with {} messages", key_str, loaded.messages.len());
+                sessions.insert(key_str.clone(), SessionData {
+                    key: key.clone(),
+                    messages: loaded.messages,
+                    created_at: loaded.meta.created_at,
+                    last_active_at: chrono::Utc::now(),
+                    metadata: HashMap::new(),
+                });
+                loaded_from_disk = true;
+            }
+        }
+
+        // Create new session if not loaded from disk
+        if !loaded_from_disk {
             let now = chrono::Utc::now();
-            SessionData {
+            sessions.insert(key_str.clone(), SessionData {
                 key: key.clone(),
                 messages: Vec::new(),
                 created_at: now,
                 last_active_at: now,
                 metadata: HashMap::new(),
-            }
-        });
+            });
 
+            // Create on disk
+            if let Some(ref storage) = self.storage {
+                if let Err(e) = storage.create_session(&key_str, &self.config.agent_id) {
+                    warn!("Failed to create session file for '{}': {}", key_str, e);
+                }
+            }
+        }
+
+        // Ensure session exists in SessionManager (SQLite)
+        if let Some(ref sm) = self.session_manager {
+            if let Err(e) = sm.get_or_create(key).await {
+                warn!("Failed to sync session to SessionManager: {}", e);
+            }
+        }
+
+        let data = sessions.get(&key_str).unwrap();
         SessionInfo {
             key: key_str,
             agent_id: self.config.agent_id.clone(),
@@ -222,18 +308,51 @@ impl AgentInstance {
     }
 
     /// Add a message to a session
+    ///
+    /// The message is added to the in-memory session and persisted to disk (JSONL).
+    /// If SessionManager is connected, also persists to SQLite.
     pub async fn add_message(&self, key: &SessionKey, role: MessageRole, content: &str) {
         let key_str = key.to_key_string();
-        let mut sessions = self.sessions.write().await;
+        let role_str = match role {
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+            MessageRole::System => "system",
+            MessageRole::Tool => "tool",
+        };
 
-        if let Some(data) = sessions.get_mut(&key_str) {
-            data.messages.push(SessionMessage {
-                role,
-                content: content.to_string(),
-                timestamp: chrono::Utc::now(),
-                metadata: None,
-            });
-            data.last_active_at = chrono::Utc::now();
+        // Update in-memory cache
+        {
+            let mut sessions = self.sessions.write().await;
+
+            if let Some(data) = sessions.get_mut(&key_str) {
+                let timestamp = chrono::Utc::now();
+                data.messages.push(SessionMessage {
+                    role: role.clone(),
+                    content: content.to_string(),
+                    timestamp,
+                    metadata: None,
+                });
+                data.last_active_at = timestamp;
+
+                // Persist to JSONL storage
+                if let Some(ref storage) = self.storage {
+                    if let Err(e) = storage.append_message(&key_str, role.clone(), content, None) {
+                        warn!("Failed to persist message to JSONL '{}': {}", key_str, e);
+                    }
+                }
+            }
+        }
+
+        // Persist to SQLite via SessionManager (if connected)
+        if let Some(ref sm) = self.session_manager {
+            // Ensure session exists in SessionManager
+            if let Err(e) = sm.get_or_create(key).await {
+                warn!("Failed to ensure session in SessionManager: {}", e);
+            }
+            // Add message
+            if let Err(e) = sm.add_message(key, role_str, content).await {
+                warn!("Failed to persist message to SQLite '{}': {}", key_str, e);
+            }
         }
     }
 
@@ -255,6 +374,8 @@ impl AgentInstance {
     }
 
     /// Reset (clear) a session
+    ///
+    /// Clears in-memory messages and marks the session as reset in storage.
     pub async fn reset_session(&self, key: &SessionKey) -> bool {
         let key_str = key.to_key_string();
         let mut sessions = self.sessions.write().await;
@@ -262,6 +383,14 @@ impl AgentInstance {
         if let Some(data) = sessions.get_mut(&key_str) {
             data.messages.clear();
             data.last_active_at = chrono::Utc::now();
+
+            // Mark as reset in storage
+            if let Some(ref storage) = self.storage {
+                if let Err(e) = storage.reset_session(&key_str) {
+                    warn!("Failed to reset session '{}' in storage: {}", key_str, e);
+                }
+            }
+
             debug!("Reset session: {}", key_str);
             true
         } else {

@@ -1,6 +1,10 @@
 //! Session Handlers
 //!
 //! RPC handlers for session management: list, history, reset, send.
+//!
+//! Provides two sets of handlers:
+//! - In-memory handlers using SessionStore (for development/testing)
+//! - Database-backed handlers using SessionManager (for production)
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -9,8 +13,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};
 use super::super::router::SessionKey;
+use super::super::session_manager::SessionManager;
 
 /// Session information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +284,204 @@ pub async fn handle_delete(
                     "deleted": deleted,
                 }),
             )
+        }
+        None => JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
+    }
+}
+
+// =============================================================================
+// Database-backed handlers using SessionManager
+// =============================================================================
+
+/// Handle sessions.list RPC request with database backend
+pub async fn handle_list_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    let agent_id = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("agent_id"))
+        .and_then(|v| v.as_str());
+
+    match manager.list_sessions(agent_id).await {
+        Ok(sessions) => {
+            let infos: Vec<SessionInfo> = sessions
+                .into_iter()
+                .map(|m| SessionInfo {
+                    key: m.key,
+                    agent_id: m.agent_id,
+                    session_type: m.session_type,
+                    message_count: m.message_count as u32,
+                    created_at: chrono::DateTime::from_timestamp(m.created_at, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default(),
+                    last_active_at: chrono::DateTime::from_timestamp(m.last_active_at, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default(),
+                })
+                .collect();
+            let count = infos.len();
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "sessions": infos,
+                    "count": count,
+                }),
+            )
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to list sessions: {}", e),
+        ),
+    }
+}
+
+/// Handle sessions.history RPC request with database backend
+pub async fn handle_history_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(Value::Object(map)) => map,
+        _ => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
+        }
+    };
+
+    let session_key_str = match params.get("session_key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key");
+        }
+    };
+
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+
+    // Parse session key from string
+    let session_key = match SessionKey::from_key_string(session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid session_key format");
+        }
+    };
+
+    match manager.get_history(&session_key, limit).await {
+        Ok(messages) => {
+            let history: Vec<HistoryMessage> = messages
+                .into_iter()
+                .map(|m| HistoryMessage {
+                    role: m.role,
+                    content: m.content,
+                    timestamp: chrono::DateTime::from_timestamp(m.timestamp, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default(),
+                    metadata: m.metadata.map(|s| {
+                        serde_json::from_str(&s).unwrap_or(Value::Null)
+                    }),
+                })
+                .collect();
+            let count = history.len();
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "session_key": session_key_str,
+                    "messages": history,
+                    "count": count,
+                }),
+            )
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to get history: {}", e),
+        ),
+    }
+}
+
+/// Handle sessions.reset RPC request with database backend
+pub async fn handle_reset_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    let session_key_str = match &request.params {
+        Some(Value::Object(map)) => map.get("session_key").and_then(|v| v.as_str()),
+        _ => None,
+    };
+
+    match session_key_str {
+        Some(key_str) => {
+            let session_key = match SessionKey::from_key_string(key_str) {
+                Some(k) => k,
+                None => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        "Invalid session_key format",
+                    );
+                }
+            };
+
+            match manager.reset_session(&session_key).await {
+                Ok(reset) => JsonRpcResponse::success(
+                    request.id,
+                    json!({
+                        "session_key": key_str,
+                        "reset": reset,
+                    }),
+                ),
+                Err(e) => JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to reset session: {}", e),
+                ),
+            }
+        }
+        None => JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
+    }
+}
+
+/// Handle sessions.delete RPC request with database backend
+pub async fn handle_delete_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    let session_key_str = match &request.params {
+        Some(Value::Object(map)) => map.get("session_key").and_then(|v| v.as_str()),
+        _ => None,
+    };
+
+    match session_key_str {
+        Some(key_str) => {
+            let session_key = match SessionKey::from_key_string(key_str) {
+                Some(k) => k,
+                None => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        "Invalid session_key format",
+                    );
+                }
+            };
+
+            match manager.delete_session(&session_key).await {
+                Ok(deleted) => JsonRpcResponse::success(
+                    request.id,
+                    json!({
+                        "session_key": key_str,
+                        "deleted": deleted,
+                    }),
+                ),
+                Err(e) => JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to delete session: {}", e),
+                ),
+            }
         }
         None => JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
     }
