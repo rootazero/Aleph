@@ -81,9 +81,6 @@ pub struct Config {
     /// Orchestrator configuration (Three-Layer Control architecture)
     #[serde(default)]
     pub orchestrator: OrchestratorConfig,
-    /// Typo correction configuration (quick double-space correction)
-    #[serde(default)]
-    pub typo_correction: TypoCorrectionConfig,
     /// Sub-agent synchronization configuration
     #[serde(default)]
     pub subagent: SubAgentConfig,
@@ -116,8 +113,6 @@ pub struct FullConfig {
     pub skills: Option<SkillsConfig>,
     #[serde(default)]
     pub policies: PoliciesConfig,
-    #[serde(default)]
-    pub typo_correction: TypoCorrectionConfig,
 }
 
 impl From<Config> for FullConfig {
@@ -143,7 +138,6 @@ impl From<Config> for FullConfig {
             smart_matching: config.smart_matching,
             skills: Some(config.skills),
             policies: config.policies,
-            typo_correction: config.typo_correction,
         }
     }
 }
@@ -177,7 +171,6 @@ impl Default for Config {
             policies: PoliciesConfig::default(),
             generation: GenerationConfig::default(),
             orchestrator: OrchestratorConfig::default(),
-            typo_correction: TypoCorrectionConfig::default(),
             subagent: SubAgentConfig::default(),
         }
     }

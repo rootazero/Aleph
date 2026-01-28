@@ -388,20 +388,6 @@ impl AetherCore {
         Ok(())
     }
 
-    /// Update typo correction configuration
-    pub fn update_typo_correction_config(
-        &self,
-        typo_correction: crate::config::TypoCorrectionConfig,
-    ) -> Result<(), AetherFfiError> {
-        let mut config = self.lock_config();
-        config.typo_correction = typo_correction;
-        config
-            .save()
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
-        info!("Typo correction configuration updated");
-        Ok(())
-    }
-
     /// Update policies configuration
     pub fn update_policies(
         &self,

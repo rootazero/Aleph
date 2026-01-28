@@ -32,8 +32,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     // Weak reference to AetherCore for cancellation functionality
     private weak var core: AetherCore?
 
-    // Weak reference to InputCoordinator for output handling
-    private weak var inputCoordinator: InputCoordinator?
 
     // MARK: - State
 
@@ -87,10 +85,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         self.haloWindow = window
     }
 
-    // Set InputCoordinator reference for output handling
-    func setInputCoordinator(_ coordinator: InputCoordinator?) {
-        self.inputCoordinator = coordinator
-    }
 
     // MARK: - AetherEventHandler Protocol
 
@@ -201,11 +195,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Notify InputCoordinator if processing is pending
-            if self.inputCoordinator?.isProcessingPending == true {
-                self.inputCoordinator?.handleCompletion(response: response)
-                return
-            }
 
             // Notify MultiTurnCoordinator if processing is pending
             if MultiTurnCoordinator.shared.isProcessingPending {
@@ -239,13 +228,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Notify InputCoordinator if processing is pending
-            if self.inputCoordinator?.isProcessingPending == true {
-                self.inputCoordinator?.handleError(message: message)
-                // Still show error notification
-                self.showErrorNotification(message: message)
-                return
-            }
 
             // Notify MultiTurnCoordinator if processing is pending
             if MultiTurnCoordinator.shared.isProcessingPending {

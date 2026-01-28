@@ -22,7 +22,9 @@ use crate::ffi::AetherEventHandler;
 use crate::ffi::FfiLoopCallback;
 use crate::generation::GenerationProviderRegistry;
 use crate::intent::{TaskCategory, ThinkingContext};
-use crate::rig_tools::file_ops::{clear_written_files, take_written_files};
+use crate::rig_tools::file_ops::{
+    clear_written_files, mark_session_start, scan_new_files_in_working_dir, take_written_files,
+};
 use crate::runtimes::{RuntimeCapability, RuntimeRegistry};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
 use crate::tools::AetherToolServerHandle;
@@ -78,6 +80,9 @@ pub fn run_agent_loop(
 
     // Clear any previously tracked written files for this session
     clear_written_files();
+
+    // Mark the start of session for detecting newly created files
+    mark_session_start();
 
     // Build input with attachment content if present
     let full_input = if let Some(attachment_text) = extract_attachment_text(attachments) {
@@ -273,7 +278,19 @@ pub fn run_agent_loop(
             info!(steps = steps, "Agent Loop completed");
 
             // Collect files written during tool execution
-            let written_files = take_written_files();
+            let mut written_files = take_written_files();
+
+            // Scan working directory for additional files created during session
+            // This captures files created by bash commands, Python scripts, etc.
+            let scanned_files = scan_new_files_in_working_dir();
+            if !scanned_files.is_empty() {
+                info!(
+                    scanned_count = scanned_files.len(),
+                    "Found additional files in working directory not tracked by tools"
+                );
+                written_files.extend(scanned_files);
+            }
+
             let final_summary = if written_files.is_empty() {
                 summary.clone()
             } else {

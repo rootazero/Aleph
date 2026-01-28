@@ -288,7 +288,7 @@ impl SessionCompactor {
                     context_parts.push(format!("[Reasoning]: {}", r.content));
                 }
                 SessionPart::PlanCreated(p) => {
-                    let steps = p.steps.join(", ");
+                    let steps = p.steps.iter().map(|s| s.description.as_str()).collect::<Vec<_>>().join(", ");
                     context_parts.push(format!("[Plan Created]: {} - Steps: {}", p.plan_id, steps));
                 }
                 SessionPart::SubAgentCall(sa) => {
@@ -510,7 +510,7 @@ impl SessionCompactor {
                 SessionPart::PlanCreated(plan) => {
                     let mut tokens = TokenTracker::estimate_tokens(&plan.plan_id);
                     for step in &plan.steps {
-                        tokens += TokenTracker::estimate_tokens(step);
+                        tokens += TokenTracker::estimate_tokens(&step.description);
                     }
                     tokens
                 }

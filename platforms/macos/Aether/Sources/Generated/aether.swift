@@ -694,8 +694,6 @@ public protocol AetherCoreProtocol: AnyObject, Sendable {
     
     func confirmTaskPlan(planId: String, confirmed: Bool)  -> Bool
     
-    func correctTypo(text: String)  -> TypoCorrectionResult
-    
     func deleteGenerationProvider(name: String) throws 
     
     func deleteMcpServer(id: String) throws 
@@ -873,8 +871,6 @@ public protocol AetherCoreProtocol: AnyObject, Sendable {
     func updateShortcuts(shortcuts: ShortcutsConfig) throws 
     
     func updateTriggerConfig(trigger: TriggerConfig) throws 
-    
-    func updateTypoCorrectionConfig(typoCorrection: TypoCorrectionConfig) throws 
     
     func validateRegex(pattern: String) throws  -> Bool
     
@@ -1233,15 +1229,6 @@ open func confirmTaskPlan(planId: String, confirmed: Bool) -> Bool  {
             self.uniffiCloneHandle(),
         FfiConverterString.lower(planId),
         FfiConverterBool.lower(confirmed),$0
-    )
-})
-}
-    
-open func correctTypo(text: String) -> TypoCorrectionResult  {
-    return try!  FfiConverterTypeTypoCorrectionResult_lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_correct_typo(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(text),$0
     )
 })
 }
@@ -2009,14 +1996,6 @@ open func updateTriggerConfig(trigger: TriggerConfig)throws   {try rustCallWithE
     uniffi_aethecore_fn_method_aethercore_update_trigger_config(
             self.uniffiCloneHandle(),
         FfiConverterTypeTriggerConfig_lower(trigger),$0
-    )
-}
-}
-    
-open func updateTypoCorrectionConfig(typoCorrection: TypoCorrectionConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_aethecore_fn_method_aethercore_update_typo_correction_config(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeTypoCorrectionConfig_lower(typoCorrection),$0
     )
 }
 }
@@ -3883,11 +3862,10 @@ public struct FullConfig: Equatable, Hashable {
     public var smartMatching: SmartMatchingConfig
     public var skills: SkillsConfig?
     public var policies: PoliciesConfig
-    public var typoCorrection: TypoCorrectionConfig
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?, smartMatching: SmartMatchingConfig, skills: SkillsConfig?, policies: PoliciesConfig, typoCorrection: TypoCorrectionConfig) {
+    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?, smartMatching: SmartMatchingConfig, skills: SkillsConfig?, policies: PoliciesConfig) {
         self.defaultHotkey = defaultHotkey
         self.general = general
         self.memory = memory
@@ -3900,7 +3878,6 @@ public struct FullConfig: Equatable, Hashable {
         self.smartMatching = smartMatching
         self.skills = skills
         self.policies = policies
-        self.typoCorrection = typoCorrection
     }
 
     
@@ -3927,8 +3904,7 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
                 trigger: FfiConverterOptionTypeTriggerConfig.read(from: &buf), 
                 smartMatching: FfiConverterTypeSmartMatchingConfig.read(from: &buf), 
                 skills: FfiConverterOptionTypeSkillsConfig.read(from: &buf), 
-                policies: FfiConverterTypePoliciesConfig.read(from: &buf), 
-                typoCorrection: FfiConverterTypeTypoCorrectionConfig.read(from: &buf)
+                policies: FfiConverterTypePoliciesConfig.read(from: &buf)
         )
     }
 
@@ -3945,7 +3921,6 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
         FfiConverterTypeSmartMatchingConfig.write(value.smartMatching, into: &buf)
         FfiConverterOptionTypeSkillsConfig.write(value.skills, into: &buf)
         FfiConverterTypePoliciesConfig.write(value.policies, into: &buf)
-        FfiConverterTypeTypoCorrectionConfig.write(value.typoCorrection, into: &buf)
     }
 }
 
@@ -8454,69 +8429,6 @@ public func FfiConverterTypeTriggerConfig_lower(_ value: TriggerConfig) -> RustB
 }
 
 
-public struct TypoCorrectionConfig: Equatable, Hashable {
-    public var enabled: Bool
-    public var provider: String?
-    public var model: String?
-    public var timeoutSeconds: UInt64
-    public var maxLength: UInt64
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(enabled: Bool, provider: String?, model: String?, timeoutSeconds: UInt64, maxLength: UInt64) {
-        self.enabled = enabled
-        self.provider = provider
-        self.model = model
-        self.timeoutSeconds = timeoutSeconds
-        self.maxLength = maxLength
-    }
-
-    
-
-    
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeTypoCorrectionConfig: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TypoCorrectionConfig {
-        return
-            try TypoCorrectionConfig(
-                enabled: FfiConverterBool.read(from: &buf), 
-                provider: FfiConverterOptionString.read(from: &buf), 
-                model: FfiConverterOptionString.read(from: &buf), 
-                timeoutSeconds: FfiConverterUInt64.read(from: &buf), 
-                maxLength: FfiConverterUInt64.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: TypoCorrectionConfig, into buf: inout [UInt8]) {
-        FfiConverterBool.write(value.enabled, into: &buf)
-        FfiConverterOptionString.write(value.provider, into: &buf)
-        FfiConverterOptionString.write(value.model, into: &buf)
-        FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
-        FfiConverterUInt64.write(value.maxLength, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTypoCorrectionConfig_lift(_ buf: RustBuffer) throws -> TypoCorrectionConfig {
-    return try FfiConverterTypeTypoCorrectionConfig.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTypoCorrectionConfig_lower(_ value: TypoCorrectionConfig) -> RustBuffer {
-    return FfiConverterTypeTypoCorrectionConfig.lower(value)
-}
-
-
 public struct UnifiedToolInfo: Equatable, Hashable {
     public var id: String
     public var name: String
@@ -11739,77 +11651,6 @@ public func FfiConverterTypeToolSourceType_lift(_ buf: RustBuffer) throws -> Too
 #endif
 public func FfiConverterTypeToolSourceType_lower(_ value: ToolSourceType) -> RustBuffer {
     return FfiConverterTypeToolSourceType.lower(value)
-}
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-
-public enum TypoCorrectionResult: Equatable, Hashable {
-    
-    case success(correctedText: String, hasChanges: Bool
-    )
-    case error(message: String
-    )
-
-
-
-
-
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeTypoCorrectionResult: FfiConverterRustBuffer {
-    typealias SwiftType = TypoCorrectionResult
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TypoCorrectionResult {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        
-        case 1: return .success(correctedText: try FfiConverterString.read(from: &buf), hasChanges: try FfiConverterBool.read(from: &buf)
-        )
-        
-        case 2: return .error(message: try FfiConverterString.read(from: &buf)
-        )
-        
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: TypoCorrectionResult, into buf: inout [UInt8]) {
-        switch value {
-        
-        
-        case let .success(correctedText,hasChanges):
-            writeInt(&buf, Int32(1))
-            FfiConverterString.write(correctedText, into: &buf)
-            FfiConverterBool.write(hasChanges, into: &buf)
-            
-        
-        case let .error(message):
-            writeInt(&buf, Int32(2))
-            FfiConverterString.write(message, into: &buf)
-            
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTypoCorrectionResult_lift(_ buf: RustBuffer) throws -> TypoCorrectionResult {
-    return try FfiConverterTypeTypoCorrectionResult.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeTypoCorrectionResult_lower(_ value: TypoCorrectionResult) -> RustBuffer {
-    return FfiConverterTypeTypoCorrectionResult.lower(value)
 }
 
 
@@ -15506,9 +15347,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_confirm_task_plan() != 10053) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_correct_typo() != 59285) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_method_aethercore_delete_generation_provider() != 12851) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -15774,9 +15612,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_trigger_config() != 40092) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_typo_correction_config() != 35870) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 52126) {

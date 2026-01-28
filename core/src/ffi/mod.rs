@@ -40,7 +40,6 @@ mod skills;
 mod subscription;
 pub mod tool_discovery;
 mod tools;
-mod typo_correction;
 mod user_input;
 
 // Agent Loop FFI adapter for new architecture
@@ -74,7 +73,6 @@ pub use self::processing::ProcessOptions;
 pub use self::plugins::{PluginInfoFFI, PluginSkillFFI};
 pub use self::runtime::{RuntimeInfo, RuntimeUpdateInfo};
 pub use self::session::SessionSummary;
-pub use self::typo_correction::TypoCorrectionResult;
 #[cfg(feature = "uniffi")]
 pub use self::subscription::{subscribe_events, unsubscribe_events, EventSubscriptionHandler};
 

@@ -336,15 +336,6 @@ dictionary BehaviorConfig {
   u32 typing_speed;      // Characters per second for typewriter mode (10-200)
 };
 
-// Typo correction configuration (double-space trigger)
-dictionary TypoCorrectionConfig {
-  boolean enabled;           // Whether typo correction is enabled
-  string? provider;          // Provider name (e.g., "openai", "gemini")
-  string? model;             // Optional model override (e.g., "gpt-4o-mini")
-  u64 timeout_seconds;       // Timeout for correction requests (default: 5)
-  u64 max_length;            // Maximum text length to process (default: 2000)
-};
-
 // Trigger configuration (hotkey-system-refactor)
 // Controls hotkeys for Replace and Append operations
 dictionary TriggerConfig {
@@ -459,7 +450,6 @@ dictionary FullConfig {
   SmartMatchingConfig smart_matching;
   SkillsConfig? skills;  // Skills configuration (add-skills-capability)
   PoliciesConfig policies;  // Mechanism-policy separation configuration
-  TypoCorrectionConfig typo_correction;  // Typo correction configuration (double-space trigger)
 };
 
 // =============================================================================
@@ -962,15 +952,6 @@ dictionary GenerationProviderInfoFFI {
   string? default_model;
 };
 
-// ===== TYPO CORRECTION =====
-
-// Result of typo correction operation
-[Enum]
-interface TypoCorrectionResult {
-  Success(string corrected_text, boolean has_changes);
-  Error(string message);
-};
-
 // ===== CORE INTERFACE (rig-core based) =====
 // New simplified interface using rig-core for AI provider integration.
 // This provides a cleaner API compared to v1 and will eventually replace it.
@@ -1100,9 +1081,6 @@ interface AetherCore {
 
     [Throws=AetherFfiError]
     void update_search_config(SearchConfig search);
-
-    [Throws=AetherFfiError]
-    void update_typo_correction_config(TypoCorrectionConfig typo_correction);
 
     [Throws=AetherFfiError]
     void update_policies(PoliciesConfig policies);
@@ -1508,11 +1486,6 @@ interface AetherCore {
     // Returns None if yt-dlp is not installed
     string? get_ytdlp_path();
 
-    // ===== TYPO CORRECTION =====
-
-    // Correct typos in text using AI
-    // Bypasses complex routing for minimal latency (sync method, uses internal runtime)
-    TypoCorrectionResult correct_typo(string text);
 };
 
 // Session summary for FFI (Phase 5)
