@@ -60,6 +60,8 @@ pub mod channel_registry;
 pub mod channels;
 #[cfg(feature = "gateway")]
 pub mod device_store;
+#[cfg(feature = "gateway")]
+pub mod hot_reload;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -104,3 +106,5 @@ pub use handlers::auth::{AuthContext, handle_connect, handle_pairing_approve, ha
 pub use handlers::events::{SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list};
 #[cfg(feature = "gateway")]
 pub use event_bus::{TopicEvent, TopicFilter, topic_matches};
+#[cfg(feature = "gateway")]
+pub use hot_reload::{ConfigWatcher, ConfigWatcherConfig, ConfigEvent, ConfigWatcherError};

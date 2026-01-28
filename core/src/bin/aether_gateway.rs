@@ -60,11 +60,14 @@ use aethecore::gateway::{
     GatewayEventEmitter, GatewayConfig as FullGatewayConfig,
     SessionManager, SessionManagerConfig,
     ChannelRegistry,
+    ConfigWatcher, ConfigWatcherConfig, ConfigEvent,
 };
 #[cfg(feature = "gateway")]
 use aethecore::gateway::handlers::session as session_handlers;
 #[cfg(feature = "gateway")]
 use aethecore::gateway::handlers::channel as channel_handlers;
+#[cfg(feature = "gateway")]
+use aethecore::gateway::handlers::config as config_handlers;
 #[cfg(all(feature = "gateway", target_os = "macos"))]
 use aethecore::gateway::channels::imessage::{IMessageChannel, IMessageConfig};
 #[cfg(feature = "gateway")]
@@ -892,6 +895,142 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  - channel.send    : Send message via channel");
             println!();
         }
+
+        // Initialize ConfigWatcher for hot configuration reload
+        let config_path = args.config.clone()
+            .map(|p| expand_path(&p.to_string_lossy()))
+            .or_else(|| {
+                dirs::home_dir().map(|h| h.join(".aether/config.toml"))
+            });
+
+        let config_watcher: Option<Arc<ConfigWatcher>> = if let Some(path) = config_path {
+            if path.exists() {
+                let watcher_config = ConfigWatcherConfig {
+                    config_path: path.clone(),
+                    debounce_duration: std::time::Duration::from_millis(500),
+                    channel_capacity: 16,
+                };
+
+                match ConfigWatcher::new(watcher_config) {
+                    Ok(watcher) => {
+                        let watcher = Arc::new(watcher);
+
+                        // Register config handlers
+                        // config.reload
+                        let cw_reload = watcher.clone();
+                        server.handlers_mut().register("config.reload", move |req| {
+                            let cw = cw_reload.clone();
+                            async move { config_handlers::handle_reload(req, cw).await }
+                        });
+
+                        // config.get
+                        let cw_get = watcher.clone();
+                        server.handlers_mut().register("config.get", move |req| {
+                            let cw = cw_get.clone();
+                            async move { config_handlers::handle_get(req, cw).await }
+                        });
+
+                        // config.validate
+                        let cw_validate = watcher.clone();
+                        server.handlers_mut().register("config.validate", move |req| {
+                            let cw = cw_validate.clone();
+                            async move { config_handlers::handle_validate(req, cw).await }
+                        });
+
+                        // config.path
+                        let cw_path = watcher.clone();
+                        server.handlers_mut().register("config.path", move |req| {
+                            let cw = cw_path.clone();
+                            async move { config_handlers::handle_path(req, cw).await }
+                        });
+
+                        if !args.daemon {
+                            println!("Config methods:");
+                            println!("  - config.reload   : Force reload configuration");
+                            println!("  - config.get      : Get current configuration");
+                            println!("  - config.validate : Validate config file");
+                            println!("  - config.path     : Get config file path");
+                            println!();
+                        }
+
+                        // Start watching for config changes
+                        let watcher_for_watch = watcher.clone();
+                        let event_bus_for_config = event_bus.clone();
+                        let daemon_mode = args.daemon;
+                        tokio::spawn(async move {
+                            let mut config_rx = watcher_for_watch.subscribe();
+
+                            // Start the file watcher
+                            let watcher_handle = watcher_for_watch.clone().start_watching();
+
+                            // Process config events
+                            while let Ok(event) = config_rx.recv().await {
+                                match event {
+                                    ConfigEvent::Reloaded(new_config) => {
+                                        if !daemon_mode {
+                                            println!("Configuration reloaded: {} agents", new_config.agents.len());
+                                        }
+                                        // Emit event to connected clients
+                                        use aethecore::gateway::TopicEvent;
+                                        let event = TopicEvent::new(
+                                            "config.reloaded",
+                                            serde_json::json!({
+                                                "agents": new_config.agents.keys().collect::<Vec<_>>(),
+                                                "timestamp": chrono::Utc::now().to_rfc3339(),
+                                            }),
+                                        );
+                                        let _ = event_bus_for_config.publish_json(&event);
+                                    }
+                                    ConfigEvent::ValidationFailed(err) => {
+                                        if !daemon_mode {
+                                            eprintln!("Config validation failed: {}", err);
+                                        }
+                                        use aethecore::gateway::TopicEvent;
+                                        let event = TopicEvent::new(
+                                            "config.error",
+                                            serde_json::json!({
+                                                "error": err,
+                                                "timestamp": chrono::Utc::now().to_rfc3339(),
+                                            }),
+                                        );
+                                        let _ = event_bus_for_config.publish_json(&event);
+                                    }
+                                    ConfigEvent::FileError(err) => {
+                                        if !daemon_mode {
+                                            eprintln!("Config file error: {}", err);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Wait for watcher to finish (it won't unless there's an error)
+                            let _ = watcher_handle.await;
+                        });
+
+                        if !args.daemon {
+                            println!("Hot config reload enabled: {}", path.display());
+                            println!();
+                        }
+
+                        Some(watcher)
+                    }
+                    Err(e) => {
+                        if !args.daemon {
+                            eprintln!("Warning: Failed to initialize config watcher: {}", e);
+                        }
+                        None
+                    }
+                }
+            } else {
+                if !args.daemon {
+                    println!("No config file found at {}, hot reload disabled", path.display());
+                    println!();
+                }
+                None
+            }
+        } else {
+            None
+        };
 
         // Set up graceful shutdown
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
