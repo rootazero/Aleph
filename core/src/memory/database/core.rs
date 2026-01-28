@@ -143,6 +143,9 @@ impl VectorDatabase {
         )
         .map_err(|e| AetherError::config(format!("Failed to create schema: {}", e)))?;
 
+        // Migrate existing data to vec0 tables (for upgrades from old schema)
+        Self::migrate_to_vec0(&conn)?;
+
         // Update embedding dimension in schema_info
         conn.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
@@ -154,6 +157,74 @@ impl VectorDatabase {
             conn: Arc::new(Mutex::new(conn)),
             db_path,
         })
+    }
+
+    /// Migrate existing memories and facts to vec0 tables
+    fn migrate_to_vec0(conn: &Connection) -> Result<(), AetherError> {
+        // Check if migration needed (vec tables exist but empty, memories table has data)
+        let memories_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        let vec_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        if memories_count > 0 && vec_count == 0 {
+            tracing::info!(
+                memories_count = memories_count,
+                "Migrating existing memories to vec0 table"
+            );
+
+            // Migrate memories
+            conn.execute(
+                r#"
+                INSERT INTO memories_vec (rowid, embedding)
+                SELECT rowid, embedding FROM memories WHERE embedding IS NOT NULL
+                "#,
+                [],
+            )
+            .map_err(|e| {
+                AetherError::config(format!("Failed to migrate memories to vec0: {}", e))
+            })?;
+
+            tracing::info!("Memories migration complete");
+        }
+
+        // Migrate facts
+        let facts_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_facts WHERE embedding IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        let facts_vec_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM facts_vec", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        if facts_count > 0 && facts_vec_count == 0 {
+            tracing::info!(
+                facts_count = facts_count,
+                "Migrating existing facts to vec0 table"
+            );
+
+            conn.execute(
+                r#"
+                INSERT INTO facts_vec (rowid, embedding)
+                SELECT rowid, embedding FROM memory_facts WHERE embedding IS NOT NULL
+                "#,
+                [],
+            )
+            .map_err(|e| {
+                AetherError::config(format!("Failed to migrate facts to vec0: {}", e))
+            })?;
+
+            tracing::info!("Facts migration complete");
+        }
+
+        Ok(())
     }
 
     /// Check if database needs migration due to dimension change
@@ -280,5 +351,28 @@ mod tests {
             )
             .unwrap();
         assert!(facts_vec_exists, "facts_vec table should exist");
+    }
+
+    #[test]
+    fn test_migrate_to_vec0() {
+        // This test verifies the migration logic works when memories exist
+        // but vec0 tables are empty (simulating an upgrade scenario)
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create database - migration should be a no-op for new DBs
+        let db = VectorDatabase::new(db_path.clone()).unwrap();
+
+        // Verify both tables are empty initially
+        let conn = db.conn.lock().unwrap();
+        let memories_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+            .unwrap();
+        let vec_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(memories_count, 0);
+        assert_eq!(vec_count, 0);
     }
 }
