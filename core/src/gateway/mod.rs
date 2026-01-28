@@ -48,6 +48,16 @@ pub mod session_manager;
 pub mod execution_engine;
 #[cfg(feature = "gateway")]
 pub mod loop_callback_adapter;
+#[cfg(feature = "gateway")]
+pub mod provider_factory;
+#[cfg(feature = "gateway")]
+pub mod session_storage;
+#[cfg(feature = "gateway")]
+pub mod channel;
+#[cfg(feature = "gateway")]
+pub mod channel_registry;
+#[cfg(feature = "gateway")]
+pub mod channels;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -71,3 +81,16 @@ pub use session_manager::SessionManager;
 pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus};
 #[cfg(feature = "gateway")]
 pub use loop_callback_adapter::{EventEmittingCallback, ResponseChunkEmitter, UserQuestion};
+#[cfg(feature = "gateway")]
+pub use provider_factory::{create_provider_registry_from_env, can_create_provider_from_env, ProviderFactoryError};
+#[cfg(feature = "gateway")]
+pub use session_storage::{SessionStorage, LoadedSession, SessionMeta};
+#[cfg(feature = "gateway")]
+pub use channel::{
+    Channel, ChannelFactory, ChannelConfig, ChannelInfo, ChannelCapabilities,
+    ChannelId, ConversationId, UserId, MessageId,
+    InboundMessage, OutboundMessage, SendResult, Attachment,
+    ChannelStatus, ChannelError, ChannelResult,
+};
+#[cfg(feature = "gateway")]
+pub use channel_registry::{ChannelRegistry, ChannelStatusSummary};

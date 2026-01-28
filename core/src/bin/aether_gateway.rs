@@ -54,6 +54,14 @@ use aethecore::gateway::router::AgentRouter;
 #[cfg(feature = "gateway")]
 use aethecore::gateway::handlers::agent::{AgentRunManager, handle_run};
 #[cfg(feature = "gateway")]
+use aethecore::gateway::{
+    can_create_provider_from_env, create_provider_registry_from_env,
+    ExecutionEngine, ExecutionEngineConfig, AgentRegistry,
+    GatewayEventEmitter, GatewayConfig as FullGatewayConfig,
+};
+#[cfg(feature = "gateway")]
+use aethecore::executor::BuiltinToolRegistry;
+#[cfg(feature = "gateway")]
 use std::sync::Arc;
 
 /// Default PID file location
@@ -348,7 +356,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "gateway")]
     {
-        use aethecore::gateway::server::GatewayConfig;
+        use aethecore::gateway::server::GatewayConfig as ServerConfig;
+
+        // Load configuration from file or defaults
+        let full_config = match &args.config {
+            Some(config_path) => {
+                let path = expand_path(&config_path.to_string_lossy());
+                match FullGatewayConfig::load(&path) {
+                    Ok(cfg) => {
+                        if !args.daemon {
+                            println!("Loaded config from: {}", path.display());
+                        }
+                        cfg
+                    }
+                    Err(e) => {
+                        eprintln!("Error loading config from {}: {}", path.display(), e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            None => {
+                // Try default location, fall back to defaults if not found
+                match FullGatewayConfig::load_default() {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        if !args.daemon {
+                            eprintln!("Warning: {}, using defaults", e);
+                        }
+                        FullGatewayConfig::default()
+                    }
+                }
+            }
+        };
+
+        // CLI args override config file settings
+        let final_bind = if args.bind != "127.0.0.1" {
+            args.bind.clone()
+        } else {
+            full_config.gateway.host.clone()
+        };
+        let final_port = if args.port != 18789 {
+            args.port
+        } else {
+            full_config.gateway.port
+        };
+        let final_max_connections = if args.max_connections != 1000 {
+            args.max_connections
+        } else {
+            full_config.gateway.max_connections
+        };
+
+        // Update addr with possibly overridden values
+        let addr: SocketAddr = format!("{}:{}", final_bind, final_port)
+            .parse()
+            .map_err(|e| format!("Invalid address: {}", e))?;
 
         if !args.daemon {
             println!("╔═══════════════════════════════════════════════╗");
@@ -364,11 +425,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  - version   : Get server version info");
             println!("  - agent.run : Execute agent request with streaming");
             println!();
+            println!("Agents: {:?}", full_config.agents.keys().collect::<Vec<_>>());
+            println!();
         }
 
-        let config = GatewayConfig {
-            max_connections: args.max_connections,
-            require_auth: false,
+        let config = ServerConfig {
+            max_connections: final_max_connections,
+            require_auth: full_config.gateway.require_auth,
             timeout_secs: 300,
         };
 
@@ -377,14 +440,99 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Set up agent.run handler with dependencies
         let event_bus = server.event_bus().clone();
         let router = Arc::new(AgentRouter::new());
-        let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus));
 
-        // Register agent.run handler
-        let run_manager_clone = run_manager.clone();
-        server.handlers_mut().register("agent.run", move |req| {
-            let manager = run_manager_clone.clone();
-            async move { handle_run(req, manager).await }
-        });
+        // Try to create real ExecutionEngine with Claude provider
+        if can_create_provider_from_env() {
+            match create_provider_registry_from_env() {
+                Ok(provider_registry) => {
+                    // Create BuiltinToolRegistry
+                    let tool_registry = Arc::new(BuiltinToolRegistry::new());
+
+                    // Build tools list from builtin definitions
+                    use aethecore::executor::BUILTIN_TOOL_DEFINITIONS;
+                    use aethecore::dispatcher::{UnifiedTool, ToolSource};
+                    let tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
+                        .iter()
+                        .map(|def| UnifiedTool::new(
+                            &format!("builtin:{}", def.name),
+                            def.name,
+                            def.description,
+                            ToolSource::Builtin,
+                        ))
+                        .collect();
+
+                    // Create ExecutionEngine
+                    let engine = Arc::new(ExecutionEngine::new(
+                        ExecutionEngineConfig::default(),
+                        provider_registry,
+                        tool_registry,
+                        tools,
+                    ));
+
+                    // Create agent registry with agents from config
+                    let agent_registry = Arc::new(AgentRegistry::new());
+                    for agent_config in full_config.get_agent_instance_configs() {
+                        let agent_id = agent_config.agent_id.clone();
+                        match aethecore::gateway::AgentInstance::new(agent_config) {
+                            Ok(agent) => {
+                                agent_registry.register(agent).await;
+                                if !args.daemon {
+                                    println!("  Registered agent: {}", agent_id);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: Failed to create agent '{}': {}", agent_id, e);
+                            }
+                        }
+                    }
+
+                    if !args.daemon {
+                        println!("  Mode: Real AgentLoop (Claude API)");
+                        println!();
+                    }
+
+                    // Register agent.run handler with real execution
+                    let engine_clone = engine.clone();
+                    let event_bus_clone = event_bus.clone();
+                    let router_clone = router.clone();
+                    let agent_registry_clone = agent_registry.clone();
+                    server.handlers_mut().register("agent.run", move |req| {
+                        let engine = engine_clone.clone();
+                        let event_bus = event_bus_clone.clone();
+                        let router = router_clone.clone();
+                        let agent_registry = agent_registry_clone.clone();
+                        async move {
+                            handle_run_with_engine(req, engine, event_bus, router, agent_registry).await
+                        }
+                    });
+                }
+                Err(e) => {
+                    if !args.daemon {
+                        eprintln!("Warning: Failed to create provider: {}. Falling back to simulated mode.", e);
+                    }
+                    // Fall back to simulated mode
+                    let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
+                    let run_manager_clone = run_manager.clone();
+                    server.handlers_mut().register("agent.run", move |req| {
+                        let manager = run_manager_clone.clone();
+                        async move { handle_run(req, manager).await }
+                    });
+                }
+            }
+        } else {
+            if !args.daemon {
+                println!("  Mode: Simulated (set ANTHROPIC_API_KEY for real execution)");
+                println!();
+            }
+
+            // Use simulated AgentRunManager
+            let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
+            let run_manager_clone = run_manager.clone();
+            server.handlers_mut().register("agent.run", move |req| {
+                let manager = run_manager_clone.clone();
+                async move { handle_run(req, manager).await }
+            });
+        }
 
         // Set up graceful shutdown
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -424,4 +572,145 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Handle agent.run with real ExecutionEngine
+#[cfg(feature = "gateway")]
+async fn handle_run_with_engine<P, R>(
+    request: aethecore::gateway::JsonRpcRequest,
+    engine: Arc<ExecutionEngine<P, R>>,
+    event_bus: Arc<GatewayEventBus>,
+    router: Arc<AgentRouter>,
+    agent_registry: Arc<AgentRegistry>,
+) -> aethecore::gateway::JsonRpcResponse
+where
+    P: aethecore::thinker::ProviderRegistry + 'static,
+    R: aethecore::executor::ToolRegistry + 'static,
+{
+    use aethecore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
+    use aethecore::gateway::RunRequest;
+    use serde::{Deserialize, Serialize};
+    use serde_json::{json, Value};
+
+    /// Parameters for agent.run request
+    #[derive(Debug, Clone, Deserialize)]
+    struct AgentRunParams {
+        pub input: String,
+        #[serde(default)]
+        pub session_key: Option<String>,
+        #[serde(default)]
+        pub channel: Option<String>,
+        #[serde(default)]
+        pub peer_id: Option<String>,
+        #[serde(default = "default_stream")]
+        pub stream: bool,
+    }
+
+    fn default_stream() -> bool {
+        true
+    }
+
+    /// Result of agent.run request
+    #[derive(Debug, Clone, Serialize)]
+    struct AgentRunResult {
+        pub run_id: String,
+        pub session_key: String,
+        pub accepted_at: String,
+    }
+
+    // Parse params
+    let params: AgentRunParams = match request.params {
+        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map)) {
+            Ok(p) => p,
+            Err(e) => {
+                return aethecore::gateway::JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        _ => {
+            return aethecore::gateway::JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing or invalid params object",
+            );
+        }
+    };
+
+    // Validate input
+    if params.input.trim().is_empty() {
+        return aethecore::gateway::JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "Input cannot be empty",
+        );
+    }
+
+    // Generate run ID
+    let run_id = uuid::Uuid::new_v4().to_string();
+
+    // Resolve session key
+    let session_key = router
+        .route(
+            params.session_key.as_deref(),
+            params.channel.as_deref(),
+            params.peer_id.as_deref(),
+        )
+        .await;
+
+    let session_key_str = session_key.to_key_string();
+    let accepted_at = chrono::Utc::now().to_rfc3339();
+
+    // Get default agent
+    let agent = match agent_registry.get_default().await {
+        Some(a) => a,
+        None => {
+            return aethecore::gateway::JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "No default agent available",
+            );
+        }
+    };
+
+    // Create emitter for streaming events
+    let emitter = Arc::new(GatewayEventEmitter::new(event_bus.clone()));
+
+    // Create run request
+    let run_request = RunRequest {
+        run_id: run_id.clone(),
+        input: params.input.clone(),
+        session_key: session_key.clone(),
+        timeout_secs: None,
+        metadata: std::collections::HashMap::new(),
+    };
+
+    // Spawn execution task
+    let engine_clone = engine.clone();
+    let emitter_clone = emitter.clone();
+    let run_id_clone = run_id.clone();
+    tokio::spawn(async move {
+        match engine_clone
+            .execute(run_request, agent, emitter_clone)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(run_id = %run_id_clone, "Agent run completed successfully");
+            }
+            Err(e) => {
+                tracing::error!(run_id = %run_id_clone, error = %e, "Agent run failed");
+            }
+        }
+    });
+
+    // Return immediate response
+    let result = AgentRunResult {
+        run_id,
+        session_key: session_key_str,
+        accepted_at,
+    };
+
+    aethecore::gateway::JsonRpcResponse::success(request.id, json!(result))
 }
