@@ -3,6 +3,7 @@
 /// Contains the database connection, schema setup, and migration logic.
 use crate::error::AetherError;
 use rusqlite::{params, Connection, OptionalExtension};
+use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -26,6 +27,15 @@ impl VectorDatabase {
             std::fs::create_dir_all(parent).map_err(|e| {
                 AetherError::config(format!("Failed to create database directory: {}", e))
             })?;
+        }
+
+        // Register sqlite-vec extension before opening any connection
+        // SAFETY: sqlite3_vec_init is the C entrypoint for the extension.
+        // sqlite3_auto_extension registers it to be loaded for all new connections.
+        unsafe {
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite3_vec_init as *const (),
+            )));
         }
 
         let conn = Connection::open(&db_path)
@@ -213,4 +223,25 @@ pub struct MemoryStats {
     pub database_size_mb: f64,
     pub oldest_memory_timestamp: i64,
     pub newest_memory_timestamp: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_sqlite_vec_extension_loaded() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        // vec_version() returns the sqlite-vec version if loaded
+        let version: String = conn
+            .query_row("SELECT vec_version()", [], |row| row.get(0))
+            .expect("sqlite-vec extension should be loaded");
+
+        assert!(version.starts_with("v0."), "Expected version v0.x, got {}", version);
+    }
 }
