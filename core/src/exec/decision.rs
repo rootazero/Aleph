@@ -114,6 +114,7 @@ pub fn decide_exec_approval(
 }
 
 /// Decision for a single segment
+#[allow(dead_code)] // Deny variant for future blocklist support
 enum SegmentDecision {
     Allow,
     NeedApproval,
