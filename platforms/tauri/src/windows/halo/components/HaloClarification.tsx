@@ -37,16 +37,16 @@ export function HaloClarification({
   };
 
   return (
-    <div className="flex flex-col gap-3 p-4 min-w-[280px] max-w-[400px]">
+    <div className="flex flex-col gap-3 p-3 min-w-[260px] max-w-[380px]">
       {/* Question */}
       <div className="flex items-start gap-2">
-        <HelpCircle className="w-5 h-5 text-info flex-shrink-0 mt-0.5" />
-        <p className="text-body text-foreground">{question}</p>
+        <HelpCircle className="w-4 h-4 text-[hsl(var(--info))] flex-shrink-0 mt-0.5" />
+        <p className="text-sm text-foreground">{question}</p>
       </div>
 
       {/* Options or Input */}
       {options && options.length > 0 ? (
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1">
           {options.map((option, index) => (
             <motion.button
               key={index}
@@ -55,9 +55,9 @@ export function HaloClarification({
               transition={{ delay: index * 0.05 }}
               onClick={() => setSelectedOption(option)}
               className={cn(
-                'text-left px-3 py-2 rounded-medium text-body transition-colors',
+                'text-left px-2.5 py-1.5 rounded-md text-sm transition-colors',
                 selectedOption === option
-                  ? 'bg-primary text-primary-foreground'
+                  ? 'bg-[hsl(var(--accent-blue))] text-white'
                   : 'bg-secondary hover:bg-secondary/80'
               )}
             >
@@ -73,7 +73,7 @@ export function HaloClarification({
           onKeyDown={handleKeyDown}
           placeholder="Type your response..."
           autoFocus
-          className="w-full px-3 py-2 rounded-medium border border-input bg-background text-body focus:outline-none focus:ring-2 focus:ring-ring"
+          className="w-full px-2.5 py-1.5 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(var(--accent-blue))]/50"
         />
       )}
 
