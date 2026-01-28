@@ -99,7 +99,19 @@ pub fn build_request_with_mode(
         messages,
         max_tokens: config.max_tokens,
         temperature: config.temperature,
+        reasoning_effort: None, // Set via apply_thinking_config if needed
     }
+}
+
+/// Apply thinking configuration to an existing request
+///
+/// For OpenAI o1/o3 models, this sets the reasoning_effort field.
+/// Call this after building the base request if thinking is enabled.
+pub fn apply_thinking_config(
+    request: &mut ChatCompletionRequest,
+    reasoning_effort: Option<&str>,
+) {
+    request.reasoning_effort = reasoning_effort.map(|s| s.to_string());
 }
 
 /// Build request body with image for vision API
@@ -154,6 +166,7 @@ pub fn build_vision_request(
         messages,
         max_tokens: Some(4096), // Vision responses can be longer
         temperature: config.temperature,
+        reasoning_effort: None,
     }
 }
 
@@ -224,5 +237,6 @@ pub fn build_multimodal_request(
         messages,
         max_tokens: Some(config.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
         temperature: config.temperature,
+        reasoning_effort: None,
     }
 }

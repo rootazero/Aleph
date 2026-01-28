@@ -48,6 +48,7 @@
 /// # Ok(())
 /// # }
 /// ```
+use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AetherError, Result};
@@ -87,6 +88,18 @@ struct MessagesRequest {
     system: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    /// Extended thinking configuration for Claude
+    /// Format: { "type": "enabled", "budget_tokens": N }
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingBlock>,
+}
+
+/// Extended thinking configuration for Claude API
+#[derive(Debug, Serialize)]
+struct ThinkingBlock {
+    #[serde(rename = "type")]
+    thinking_type: String,
+    budget_tokens: u32,
 }
 
 /// Message format for Claude API
@@ -257,7 +270,23 @@ impl ClaudeProvider {
             max_tokens,
             system: system_prompt.map(|s| s.to_string()),
             temperature: self.config.temperature,
+            thinking: None, // Set via with_thinking() if needed
         }
+    }
+
+    /// Build request body with thinking configuration
+    fn build_request_with_thinking(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+        budget_tokens: u32,
+    ) -> MessagesRequest {
+        let mut request = self.build_request(input, system_prompt);
+        request.thinking = Some(ThinkingBlock {
+            thinking_type: "enabled".to_string(),
+            budget_tokens,
+        });
+        request
     }
 
     /// Build request body with image for vision API
@@ -318,6 +347,7 @@ impl ClaudeProvider {
             max_tokens: 4096, // Vision responses can be longer
             system: system_prompt.map(|s| s.to_string()),
             temperature: self.config.temperature,
+            thinking: None,
         }
     }
 
@@ -375,6 +405,7 @@ impl ClaudeProvider {
             max_tokens: self.config.max_tokens.unwrap_or(4096),
             system: system_prompt.map(|s| s.to_string()),
             temperature: self.config.temperature,
+            thinking: None,
         }
     }
 
@@ -740,6 +771,112 @@ impl AiProvider for ClaudeProvider {
 
     fn color(&self) -> &str {
         &self.config.color
+    }
+
+    fn supports_thinking(&self) -> bool {
+        true
+    }
+
+    fn max_think_level(&self) -> ThinkLevel {
+        // Claude Opus models support XHigh, others support High
+        let model_lower = self.config.model.to_lowercase();
+        if model_lower.contains("opus") {
+            ThinkLevel::XHigh
+        } else {
+            ThinkLevel::High
+        }
+    }
+
+    fn process_with_thinking(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+        think_level: ThinkLevel,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // If thinking is off, use standard processing
+            if think_level == ThinkLevel::Off {
+                return self.process(&input, system_prompt.as_deref()).await;
+            }
+
+            debug!(
+                model = %self.config.model,
+                think_level = %think_level,
+                input_length = input.len(),
+                "Sending request to Claude with extended thinking"
+            );
+
+            // Build request with thinking configuration
+            let budget_tokens = think_level.token_budget();
+            let request_body = self.build_request_with_thinking(
+                &input,
+                system_prompt.as_deref(),
+                budget_tokens,
+            );
+
+            // Send POST request with Claude-specific headers
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .header(
+                    "x-api-key",
+                    self.config.api_key.as_ref().unwrap_or(&String::new()),
+                )
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        error!("Claude thinking request timed out");
+                        AetherError::Timeout {
+                            suggestion: Some("Extended thinking may take longer. Try again or reduce thinking level.".to_string()),
+                        }
+                    } else if e.is_connect() {
+                        error!(error = %e, "Failed to connect to Claude");
+                        AetherError::network(format!("Failed to connect to Claude: {}", e))
+                    } else {
+                        error!(error = %e, "Claude network error");
+                        AetherError::network(format!("Network error: {}", e))
+                    }
+                })?;
+
+            // Check status code
+            if !response.status().is_success() {
+                let status = response.status();
+                debug!(status = %status, "Claude thinking request failed");
+                return Err(self.handle_error(response).await);
+            }
+
+            // Parse response
+            let messages_response: MessagesResponse = response.json().await.map_err(|e| {
+                error!(error = %e, "Failed to parse Claude thinking response");
+                AetherError::provider(format!("Failed to parse Claude response: {}", e))
+            })?;
+
+            // Extract text from first content block
+            let text = messages_response
+                .content
+                .first()
+                .ok_or_else(|| {
+                    error!("Claude returned no content");
+                    AetherError::provider("No response from Claude")
+                })?
+                .text
+                .clone();
+
+            info!(
+                response_length = text.len(),
+                think_level = %think_level,
+                "Claude thinking request completed successfully"
+            );
+
+            Ok(text)
+        })
     }
 }
 

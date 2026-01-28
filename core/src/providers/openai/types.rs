@@ -13,6 +13,10 @@ pub struct ChatCompletionRequest {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// Reasoning effort for o1/o3 models: "low", "medium", "high"
+    /// Only applicable to models that support extended thinking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Message format for chat API
