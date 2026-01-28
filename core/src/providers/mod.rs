@@ -61,6 +61,7 @@ pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
 pub use t8star::T8StarProvider;
 
+use crate::agents::thinking::{ThinkLevel, ThinkingConfig};
 use crate::config::ProviderConfig;
 use crate::error::AetherError;
 use std::sync::Arc;
@@ -381,6 +382,59 @@ pub trait AiProvider: Send + Sync {
         _force_standard_mode: bool,
     ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         self.process(input, system_prompt)
+    }
+
+    /// Process input with thinking level configuration
+    ///
+    /// This method enables extended thinking/reasoning for supported models.
+    /// The actual implementation depends on the provider:
+    /// - Anthropic: Uses `thinking` block with `budget_tokens`
+    /// - OpenAI: Uses `reasoning_effort` for o1/o3 models
+    /// - Gemini: Uses `thinking_config` or `thinking_level`
+    /// - Other: Falls back to standard processing
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The user input text to process
+    /// * `system_prompt` - Optional system prompt to guide AI behavior
+    /// * `think_level` - Thinking level to use (Off, Minimal, Low, Medium, High, XHigh)
+    ///
+    /// # Default Implementation
+    ///
+    /// Default implementation ignores `think_level` and calls `process()`.
+    /// Providers that support thinking should override this method.
+    fn process_with_thinking(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+        _think_level: ThinkLevel,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Default: ignore thinking level and use standard processing
+        self.process(input, system_prompt)
+    }
+
+    /// Check if provider supports extended thinking
+    ///
+    /// # Returns
+    ///
+    /// * `true` if provider supports thinking level control
+    /// * `false` if provider only supports standard processing
+    ///
+    /// # Default Implementation
+    ///
+    /// Default returns `false`. Providers with thinking support should override.
+    fn supports_thinking(&self) -> bool {
+        false
+    }
+
+    /// Get maximum supported thinking level for this provider/model
+    ///
+    /// # Returns
+    ///
+    /// The highest thinking level this provider supports.
+    /// Default is `ThinkLevel::Off` (no thinking support).
+    fn max_think_level(&self) -> ThinkLevel {
+        ThinkLevel::Off
     }
 }
 

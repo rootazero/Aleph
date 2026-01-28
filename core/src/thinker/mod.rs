@@ -48,6 +48,7 @@ pub use tool_filter::{IntentFilterConfig, IntentFilterResult, ToolFilter, ToolFi
 use crate::agent_loop::{
     CompressionConfig, LoopState, ModelRoutingConfig, Observation, ThinkerTrait, Thinking, ToolInfo,
 };
+use crate::agents::thinking::ThinkLevel;
 use crate::dispatcher::UnifiedTool;
 use crate::error::Result;
 use crate::providers::AiProvider;
@@ -63,6 +64,8 @@ pub struct ThinkerConfig {
     pub model_routing: ModelRoutingConfig,
     /// Compression configuration (for observation building)
     pub compression: CompressionConfig,
+    /// Thinking level for LLM reasoning depth
+    pub think_level: ThinkLevel,
 }
 
 impl Default for ThinkerConfig {
@@ -72,6 +75,7 @@ impl Default for ThinkerConfig {
             tool_filter: ToolFilterConfig::default(),
             model_routing: ModelRoutingConfig::default(),
             compression: CompressionConfig::default(),
+            think_level: ThinkLevel::default(),
         }
     }
 }
@@ -183,9 +187,22 @@ impl<P: ProviderRegistry> Thinker<P> {
 
         let full_prompt = prompt_parts.join("\n\n");
 
-        provider
-            .process(&full_prompt, Some(system))
-            .await
+        // Use thinking-aware processing if provider supports it and level is not Off
+        let think_level = self.config.think_level;
+        if think_level != ThinkLevel::Off && provider.supports_thinking() {
+            tracing::debug!(
+                think_level = %think_level,
+                provider = %provider.name(),
+                "Using extended thinking"
+            );
+            provider
+                .process_with_thinking(&full_prompt, Some(system), think_level)
+                .await
+        } else {
+            provider
+                .process(&full_prompt, Some(system))
+                .await
+        }
     }
 
     /// Parse LLM response into Thinking
