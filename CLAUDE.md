@@ -19,7 +19,49 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 # CLAUDE.md
 
+> *"这是人类历史上第一次，把一个非人的灵魂装进一个壳子。"*
+> — 攻壳机动队 / Ghost in the Shell
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
+## 🔮 核心哲学：从知识到躯壳
+
+Aether 不只是工具，而是一个理念的具象化 —— **让 AI 拥有干涉世界的能力**。
+
+### 五层涌现架构
+
+```
+散落的积木 → 分类堆放 → 堆叠整齐 → 功能模块 → 多态智能体
+   ↓            ↓           ↓          ↓           ↓
+经验之海    领域分类    原子技能    即插即用    随需而变
+(Know)     (Classify)  (Know-how)  (Compose)   (Embody)
+```
+
+| 层级 | 名称 | 本质转变 |
+|------|------|----------|
+| **L1** | 经验之海 (Sea of Knowledge) | 互联网、代码、历史、常识 — AI 的预训练养料 |
+| **L2** | 领域分类 (Domain Classification) | 医学、法律、编程、物理 — 知识有了学科边界 |
+| **L3** | 原子技能 (Atomic Skills) | **Know-what → Know-how** — 从拥有知识到拥有能力 |
+| **L4** | 功能模块 (Functional Modules) | 技能封装，即插即用 — AI 可以组合能力达成目标 |
+| **L5** | 多态智能体 (Polymorphic Agents) | **灵魂获得躯壳** — 随需变身，干涉物理/数字世界 |
+
+### Aether 的三重定位
+
+- **通向 AGI 的一条可能通路** — 当智能获得行动能力
+- **杀鸡用的牛刀** — 过度设计是刻意的，因为 AI 能做一切
+- **AI 海啸上的小船** — 巨浪有多高，它就能浮起多高，带着掌舵人走向浪潮之巅
+
+### Ghost 美学
+
+| 原则 | 实现 |
+|------|------|
+| **Invisible First** | 无 Dock 图标、无常驻窗口，只有后台进程 + 菜单栏 |
+| **De-GUI** | 光标处涌现、任务后消融的临时 UI |
+| **Frictionless** | AI 来到你身边，而不是你去找 AI |
+| **Native-First** | 100% 原生代码 (Rust + Swift)，零 Webview |
+| **Polymorphic** | 一个灵魂，无限形态 — 高达、战车、房屋、火箭、游乐场 |
 
 ---
 
@@ -30,7 +72,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **参考实现**: [Moltbot](https://github.com/moltbot/moltbot) - TypeScript 版本，74.9k+ stars
 > **我们的目标**: 用 Rust 重写核心，保持相同的架构设计和功能完整性
 
-### 核心定位
+### 技术定位
 
 **Aether 是一个自托管的个人 AI 助手**，你可以在自己的设备上运行。它通过统一的 Gateway 控制面连接多个消息渠道（WhatsApp、Telegram、Slack、Discord、iMessage 等），同时支持 macOS/iOS/Android 原生应用、语音交互、Canvas 可视化工作区。
 

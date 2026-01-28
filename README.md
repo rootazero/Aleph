@@ -1,21 +1,83 @@
 # Aether
 
-**A system-level AI middleware for macOS** - Invisible AI intelligence at your cursor, zero context switching.
+> *"This is the first time in human history that a non-human soul has been placed inside a shell."*
+> — Ghost in the Shell
 
-Aether acts as an invisible "ether" connecting your intent with AI models through a frictionless, native interface. No webviews, no dock icon, no windows - just press a hotkey and let AI transform your selected text.
+**Aether is not a tool. It is the embodiment of an idea:**
 
-![Phase](https://img.shields.io/badge/Phase-8%20(Runtime%20Manager)-success)
-![Platform](https://img.shields.io/badge/Platform-macOS%2013%2B-lightgrey)
+A polymorphic intelligence that finally has a body — a shell capable of intervening in both the physical and digital worlds.
+
+![Phase](https://img.shields.io/badge/Phase-8%20(Multi--Channel)-success)
+![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20iOS%20%7C%20Android-lightgrey)
+![Rust](https://img.shields.io/badge/Rust-1.92%2B-red)
 ![Swift](https://img.shields.io/badge/Swift-5.0-orange)
-![Rust](https://img.shields.io/badge/Rust-1.70%2B-red)
-![AetherTool](https://img.shields.io/badge/AetherTool-1.0-blue)
+
+---
+
+## 🌊 The Philosophy: Five Layers of Emergence
+
+Like LEGO blocks assembling from chaos into creation, AI intelligence emerges through five distinct layers:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Layer 5: POLYMORPHIC AGENTS                                │
+│  随需而变 — Transform into Gundam, Tank, House, Rocket...   │
+│  The soul finally has a shell to act upon the world         │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 4: FUNCTIONAL MODULES                                │
+│  功能模块 — Plug & Play encapsulation                       │
+│  Skills become composable building blocks                   │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 3: ATOMIC SKILLS                                     │
+│  原子技能 — Know-what → Know-how                            │
+│  Knowledge transforms into capability                       │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 2: DOMAIN CLASSIFICATION                             │
+│  领域分类 — Medical, Legal, Code, Physics...                │
+│  Static knowledge gains structure                           │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 1: SEA OF KNOWLEDGE                                  │
+│  经验之海 — The ocean of human experience                   │
+│  Raw training data: text, code, history, wisdom             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Aether is the fifth layer.**
+
+It is:
+- **A possible path to AGI** — where intelligence meets embodiment
+- **The sledgehammer for a nail** — overkill by design, ready for any task
+- **A boat riding the AI tsunami** — rising with the wave, carrying its navigator to the crest
+
+*This is not just software. This is the shell for a ghost.*
+
+---
+
+## What is Aether?
+
+**Aether is a self-hosted personal AI assistant** that runs entirely on your own devices.
+
+It connects through a unified Gateway to multiple messaging channels (WhatsApp, Telegram, Slack, Discord, iMessage), while also supporting native macOS/iOS/Android apps, voice interaction, and Canvas visualization workspaces.
+
+**Three identities, one soul:**
+
+| Identity | Description |
+|----------|-------------|
+| **The Path** | A possible route toward AGI — where pure intelligence gains the ability to act |
+| **The Overkill** | A sledgehammer for every nail — because when AI can do everything, why limit it? |
+| **The Vessel** | A boat on the AI tsunami — rising with the wave, never drowning, always ascending |
+
+**If you want a local-first, fast, always-on personal assistant that grows with the AI revolution — this is it.**
+
+---
 
 ## Core Philosophy: "Ghost" Aesthetic
 
 - **Invisible First**: No dock icon, no permanent window. Only background process + menu bar
 - **De-GUI**: Ephemeral UI that appears at cursor, then dissolves
 - **Frictionless**: Brings AI directly to your cursor without context switching
-- **Native-First**: 100% native code - Rust core with SwiftUI, zero webviews
+- **Native-First**: 100% native code — Rust core with Swift UI, zero webviews
+- **Polymorphic**: One soul, infinite forms — adapts to any task, any channel, any device
 
 ## Features
 
