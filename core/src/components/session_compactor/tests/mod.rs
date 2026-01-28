@@ -1244,6 +1244,8 @@ use serde_json::json;
         // Add reasoning part
         session.parts.push(SessionPart::Reasoning(ReasoningPart {
             content: "Thinking through the problem...".to_string(),
+            step: 0,
+            is_complete: true,
             timestamp: 1100,
         }));
 
@@ -1270,8 +1272,28 @@ use serde_json::json;
         // Add plan
         session.parts.push(SessionPart::PlanCreated(PlanPart {
             plan_id: "plan-123".to_string(),
-            steps: vec!["Step 1".to_string(), "Step 2".to_string(), "Step 3".to_string()],
-            timestamp: 1100,
+            steps: vec![
+                crate::components::types::PlanStep {
+                    step_id: "step-1".to_string(),
+                    description: "Step 1".to_string(),
+                    status: crate::components::types::StepStatus::Pending,
+                    dependencies: vec![],
+                },
+                crate::components::types::PlanStep {
+                    step_id: "step-2".to_string(),
+                    description: "Step 2".to_string(),
+                    status: crate::components::types::StepStatus::Pending,
+                    dependencies: vec![],
+                },
+                crate::components::types::PlanStep {
+                    step_id: "step-3".to_string(),
+                    description: "Step 3".to_string(),
+                    status: crate::components::types::StepStatus::Pending,
+                    dependencies: vec![],
+                },
+            ],
+            requires_confirmation: false,
+            created_at: 1100,
         }));
 
         let context = compactor.build_summary_context(&session);

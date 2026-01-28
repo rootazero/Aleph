@@ -22,7 +22,7 @@ use crate::event::{
     ToolCallResult,
 };
 
-use super::{AiResponsePart, PlanPart, SessionPart, ToolCallPart, ToolCallStatus, UserInputPart};
+use super::{AiResponsePart, PlanPart, PlanStep, SessionPart, StepStatus, ToolCallPart, ToolCallStatus, UserInputPart};
 
 // ============================================================================
 // SessionRecorder Component
@@ -376,8 +376,14 @@ impl SessionRecorder {
     fn plan_to_part(plan: &TaskPlan) -> SessionPart {
         SessionPart::PlanCreated(PlanPart {
             plan_id: plan.id.clone(),
-            steps: plan.steps.iter().map(|s| s.description.clone()).collect(),
-            timestamp: chrono::Utc::now().timestamp(),
+            steps: plan.steps.iter().map(|s| PlanStep {
+                step_id: s.id.clone(),
+                description: s.description.clone(),
+                status: StepStatus::Pending,
+                dependencies: s.depends_on.clone(),
+            }).collect(),
+            requires_confirmation: false,  // Default to false for now
+            created_at: chrono::Utc::now().timestamp_millis(),
         })
     }
 
@@ -881,8 +887,8 @@ mod tests {
         if let Some(SessionPart::PlanCreated(plan)) = part {
             assert_eq!(plan.plan_id, "plan-001");
             assert_eq!(plan.steps.len(), 2);
-            assert_eq!(plan.steps[0], "First step");
-            assert_eq!(plan.steps[1], "Second step");
+            assert_eq!(plan.steps[0].description, "First step");
+            assert_eq!(plan.steps[1].description, "Second step");
         } else {
             panic!("Expected PlanCreated part");
         }

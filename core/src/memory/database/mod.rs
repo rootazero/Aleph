@@ -31,6 +31,19 @@ mod tests {
         VectorDatabase::new(db_path).unwrap()
     }
 
+    /// Create a 512-dimensional test embedding with the first `n` values set
+    /// to the provided values and the rest to 0.0.
+    /// This ensures embeddings match the vec0 table's expected dimension.
+    fn make_test_embedding(values: &[f32]) -> Vec<f32> {
+        let mut embedding = vec![0.0f32; CURRENT_EMBEDDING_DIM as usize];
+        for (i, &v) in values.iter().enumerate() {
+            if i < embedding.len() {
+                embedding[i] = v;
+            }
+        }
+        embedding
+    }
+
     fn create_test_memory(id: &str, app: &str, window: &str, embedding: Vec<f32>) -> MemoryEntry {
         MemoryEntry::with_embedding(
             id.to_string(),
@@ -51,7 +64,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_and_retrieve() {
         let db = create_test_db();
-        let embedding = vec![0.1, 0.2, 0.3, 0.4];
+        let embedding = make_test_embedding(&[0.1, 0.2, 0.3, 0.4]);
         let memory =
             create_test_memory("test-id", "com.apple.Notes", "Test.txt", embedding.clone());
 
@@ -65,8 +78,8 @@ mod tests {
     #[tokio::test]
     async fn test_search_memories_by_context() {
         let db = create_test_db();
-        let embedding1 = vec![1.0, 0.0, 0.0, 0.0];
-        let embedding2 = vec![0.0, 1.0, 0.0, 0.0];
+        let embedding1 = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
+        let embedding2 = make_test_embedding(&[0.0, 1.0, 0.0, 0.0]);
 
         let memory1 = create_test_memory("id1", "com.apple.Notes", "Doc1.txt", embedding1.clone());
         let memory2 = create_test_memory("id2", "com.apple.Notes", "Doc1.txt", embedding2.clone());
@@ -75,7 +88,7 @@ mod tests {
         db.insert_memory(memory2).await.unwrap();
 
         // Search with query similar to embedding1
-        let query = vec![0.9, 0.1, 0.0, 0.0];
+        let query = make_test_embedding(&[0.9, 0.1, 0.0, 0.0]);
         let results = db
             .search_memories("com.apple.Notes", "Doc1.txt", &query, 10)
             .await
@@ -89,7 +102,7 @@ mod tests {
     #[tokio::test]
     async fn test_context_isolation() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
 
         let memory1 = create_test_memory("id1", "com.apple.Notes", "Doc1.txt", embedding.clone());
         let memory2 = create_test_memory("id2", "com.apple.Notes", "Doc2.txt", embedding.clone());
@@ -113,7 +126,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_memory() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
         let memory = create_test_memory("test-id", "com.apple.Notes", "Test.txt", embedding);
 
         db.insert_memory(memory).await.unwrap();
@@ -126,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn test_clear_memories_all() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
 
         for i in 0..5 {
             let memory = create_test_memory(
@@ -148,7 +161,7 @@ mod tests {
     #[tokio::test]
     async fn test_clear_memories_by_app() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
 
         let memory1 = create_test_memory("id1", "com.apple.Notes", "Test.txt", embedding.clone());
         let memory2 =
@@ -168,7 +181,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_older_than() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
 
         // Create memory with old timestamp
         let old_memory = MemoryEntry::with_embedding(
@@ -221,18 +234,17 @@ mod tests {
     async fn test_search_memories_with_empty_embedding() {
         let db = create_test_db();
 
-        // Search with empty embedding should return empty results
-        let results = db
+        // Search with empty embedding should return error (zero-length vectors not supported)
+        let result = db
             .search_memories("com.apple.Notes", "Test.txt", &Vec::new(), 5)
-            .await
-            .unwrap();
-        assert!(results.is_empty());
+            .await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_search_memories_zero_limit() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
         let memory = create_test_memory("id1", "com.apple.Notes", "Test.txt", embedding.clone());
 
         db.insert_memory(memory).await.unwrap();
@@ -260,7 +272,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_stats_multiple_apps() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
 
         // Insert memories for different apps
         let memory1 = create_test_memory("id1", "com.apple.Notes", "Test.txt", embedding.clone());
@@ -279,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn test_clear_memories_by_window_title() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
 
         let memory1 = create_test_memory("id1", "com.apple.Notes", "Doc1.txt", embedding.clone());
         let memory2 = create_test_memory("id2", "com.apple.Notes", "Doc2.txt", embedding);
@@ -300,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_memory_with_special_characters() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
 
         let memory = MemoryEntry::with_embedding(
             "special-id".to_string(),
@@ -322,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_memories_returns_exact_match() {
         let db = create_test_db();
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding = make_test_embedding(&[1.0, 0.0, 0.0, 0.0]);
         let memory = create_test_memory("id1", "com.apple.Notes", "Test.txt", embedding.clone());
 
         db.insert_memory(memory).await.unwrap();
