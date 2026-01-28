@@ -34,6 +34,13 @@ pub struct AgentRunParams {
     /// Whether to stream events (default: true)
     #[serde(default = "default_stream")]
     pub stream: bool,
+    /// Thinking level for LLM reasoning depth
+    ///
+    /// Supports: "off", "minimal", "low", "medium", "high", "xhigh"
+    /// Also supports aliases: "think", "ultrathink", "max", etc.
+    /// Default is "minimal" if not specified.
+    #[serde(default)]
+    pub thinking: Option<String>,
 }
 
 fn default_stream() -> bool {

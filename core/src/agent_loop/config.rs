@@ -4,6 +4,7 @@
 //! including guard limits, compression settings, tool policies,
 //! and permission modes (Normal, AutoAcceptEdits, PlanMode).
 
+use crate::agents::thinking::ThinkLevel;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -154,6 +155,25 @@ pub struct LoopConfig {
     /// Requires use_unified_session to be true.
     #[serde(default)]
     pub use_realtime_overflow: bool,
+
+    // ========================================================================
+    // Thinking Levels System
+    // ========================================================================
+
+    /// Default thinking level for LLM calls
+    ///
+    /// Controls the depth of reasoning the model performs before responding.
+    /// Higher levels produce more thorough responses at the cost of latency.
+    /// Default is Minimal.
+    #[serde(default)]
+    pub think_level: ThinkLevel,
+
+    /// Whether to enable automatic thinking level fallback on errors
+    ///
+    /// When enabled, if a thinking level is not supported by the model,
+    /// the system will automatically try a lower level.
+    #[serde(default = "default_true")]
+    pub enable_thinking_fallback: bool,
 }
 
 /// Retry configuration for think operations (LLM calls)
@@ -249,6 +269,9 @@ impl Default for LoopConfig {
             use_unified_session: false,
             use_message_builder: false,
             use_realtime_overflow: false,
+            // Thinking levels system
+            think_level: ThinkLevel::default(),
+            enable_thinking_fallback: true,
         }
     }
 }
@@ -501,6 +524,18 @@ impl LoopConfig {
         self
     }
 
+    /// Builder pattern: set thinking level
+    pub fn with_think_level(mut self, level: ThinkLevel) -> Self {
+        self.think_level = level;
+        self
+    }
+
+    /// Builder pattern: enable/disable thinking fallback
+    pub fn with_thinking_fallback(mut self, enabled: bool) -> Self {
+        self.enable_thinking_fallback = enabled;
+        self
+    }
+
     /// Check if the current mode allows a specific tool
     ///
     /// In PlanMode, only read operations are allowed.
@@ -585,6 +620,9 @@ impl LoopConfig {
             use_unified_session: true,
             use_message_builder: true,
             use_realtime_overflow: true,
+            // Thinking levels
+            think_level: ThinkLevel::Minimal,
+            enable_thinking_fallback: true,
         }
     }
 
