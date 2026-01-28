@@ -1,6 +1,5 @@
 import { useRef, useEffect } from 'react';
-import { Send, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Send } from 'lucide-react';
 import { useUnifiedHaloStore } from '@/stores/unifiedHaloStore';
 
 export function InputArea() {
@@ -20,7 +19,6 @@ export function InputArea() {
     filteredTopics,
     selectedCommandIndex,
     selectedTopicIndex,
-    hide,
   } = useUnifiedHaloStore();
 
   useEffect(() => {
@@ -81,9 +79,16 @@ export function InputArea() {
     handleInputChange(e.target.value);
   };
 
+  const canSend =
+    inputText.trim() &&
+    !inputText.startsWith('/') &&
+    !isProcessing &&
+    displayState.type !== 'commandList' &&
+    displayState.type !== 'topicList';
+
   return (
-    <div className="flex flex-col gap-2 p-3">
-      <div className="relative">
+    <div className="p-3">
+      <div className="flex items-end gap-2">
         <textarea
           ref={inputRef}
           value={inputText}
@@ -92,33 +97,24 @@ export function InputArea() {
           placeholder="Type a message... (/ for commands, // for topics)"
           rows={2}
           disabled={isProcessing}
-          className="w-full px-3 py-2 pr-10 rounded-lg border border-input bg-background/80 backdrop-blur-sm text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+          className="flex-1 px-3 py-2 rounded-md border border-border/50 card-glass text-sm resize-none focus:outline-none focus:ring-1 focus:ring-[hsl(var(--accent-purple))]/50 disabled:opacity-50 placeholder:text-muted-foreground/60"
         />
-        <button
-          onClick={hide}
-          className="absolute top-2 right-2 p-1 rounded hover:bg-secondary/80 transition-colors"
-        >
-          <X className="w-4 h-4 text-muted-foreground" />
-        </button>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">
-          {displayState.type === 'commandList' && 'Select command with ↑↓, Enter to execute'}
-          {displayState.type === 'topicList' && 'Select topic with ↑↓, Enter to switch'}
-          {displayState.type === 'empty' && 'Enter to send, Esc to close'}
-          {displayState.type === 'conversation' && 'Enter to send, Shift+Enter for new line'}
-        </span>
-        {displayState.type !== 'commandList' && displayState.type !== 'topicList' && (
-          <Button
-            size="sm"
+        {canSend && (
+          <button
             onClick={sendMessage}
-            disabled={!inputText.trim() || inputText.startsWith('/') || isProcessing}
+            className="flex-shrink-0 w-8 h-8 rounded-md bg-[hsl(var(--accent-purple))] hover:bg-[hsl(var(--accent-purple))]/90 text-white flex items-center justify-center transition-colors"
           >
-            <Send className="w-3.5 h-3.5 mr-1.5" />
-            Send
-          </Button>
+            <Send className="w-3.5 h-3.5" />
+          </button>
         )}
+      </div>
+      <div className="mt-1.5 px-1">
+        <span className="text-[11px] text-muted-foreground/60">
+          {displayState.type === 'commandList' && '↑↓ select  ↵ execute  esc close'}
+          {displayState.type === 'topicList' && '↑↓ select  ↵ switch  esc close'}
+          {displayState.type === 'empty' && '↵ send  esc close'}
+          {displayState.type === 'conversation' && '↵ send  ⇧↵ new line  esc close'}
+        </span>
       </div>
     </div>
   );
