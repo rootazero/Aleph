@@ -217,16 +217,6 @@ impl VectorDatabase {
             .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
             .collect()
     }
-
-    /// Calculate cosine similarity between two vectors using SIMD optimization.
-    ///
-    /// Delegates to the SIMD module which automatically selects the best
-    /// implementation for the current platform (NEON on Apple Silicon,
-    /// AVX/SSE on x86_64).
-    #[inline]
-    pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-        crate::memory::simd::cosine_similarity(a, b)
-    }
 }
 
 /// Memory database statistics

@@ -20,7 +20,6 @@ pub mod embedding;
 pub mod fact_retrieval;
 pub mod ingestion;
 pub mod retrieval;
-pub mod simd;
 
 // Integration tests (compiled only in test mode)
 #[cfg(test)]
