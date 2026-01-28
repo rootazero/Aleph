@@ -6,7 +6,9 @@
 //! - `sessions_spawn`: Spawn a sub-agent task
 
 pub mod policy;
+pub mod types;
 pub mod visibility;
 
 pub use policy::{A2ARule, AgentToAgentPolicy, RuleMatcher};
+pub use types::{SendStatus, SessionKind, SessionListRow, SessionMessage, SpawnStatus};
 pub use visibility::{SessionToolsVisibility, VisibilityContext};
