@@ -17,11 +17,10 @@ import AppKit
 /// ```
 /// ~/.aether/
 /// ├── conversations.db
+/// ├── output/{topicId}/             # AI-generated files (referenced, not copied)
 /// └── attachments/
 ///     ├── user/{messageId}/         # User uploaded files
 ///     │   └── {uuid}_{filename}
-///     ├── generated/{messageId}/    # Tool-generated files
-///     │   └── {uuid}_{tool}_{ts}.{ext}
 ///     └── cached/{messageId}/       # Remote URL cache
 ///         └── {hash}_{filename}
 /// ```
@@ -33,6 +32,17 @@ final class AttachmentFileManager: @unchecked Sendable {
     // MARK: - Singleton
 
     static let shared = AttachmentFileManager()
+
+    // MARK: - Thumbnail Cache (Phase 5: Performance optimization)
+
+    /// Thumbnail memory cache (NSCache auto-manages memory)
+    nonisolated(unsafe) private static let thumbnailCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 100              // Max 100 thumbnails
+        cache.totalCostLimit = 50 * 1024 * 1024  // Max 50MB memory
+        cache.name = "com.aether.thumbnailCache"
+        return cache
+    }()
 
     // MARK: - Directory Paths
 
@@ -46,11 +56,6 @@ final class AttachmentFileManager: @unchecked Sendable {
     /// User uploads directory
     static var userUploadsDirectory: URL {
         attachmentsDirectory.appendingPathComponent("user")
-    }
-
-    /// Tool-generated files directory
-    static var generatedDirectory: URL {
-        attachmentsDirectory.appendingPathComponent("generated")
     }
 
     /// Cached remote files directory
@@ -70,7 +75,6 @@ final class AttachmentFileManager: @unchecked Sendable {
         let dirs = [
             Self.attachmentsDirectory,
             Self.userUploadsDirectory,
-            Self.generatedDirectory,
             Self.cachedDirectory
         ]
 
@@ -131,46 +135,6 @@ final class AttachmentFileManager: @unchecked Sendable {
     /// - Returns: Relative path for database storage
     func saveUserUpload(from pending: PendingAttachment, messageId: String) -> String? {
         return saveUserUpload(data: pending.data, filename: pending.fileName, messageId: messageId)
-    }
-
-    /// Save tool-generated file
-    /// - Parameters:
-    ///   - sourceURL: Source file URL (local file)
-    ///   - toolName: Name of the tool that generated it
-    ///   - messageId: Associated message ID
-    /// - Returns: Relative path for database storage
-    func saveGeneratedFile(from sourceURL: URL, toolName: String, messageId: String) -> String? {
-        let fm = FileManager.default
-
-        // Create message-specific directory
-        let messageDir = Self.generatedDirectory.appendingPathComponent(messageId)
-        do {
-            try fm.createDirectory(at: messageDir, withIntermediateDirectories: true)
-        } catch {
-            print("[AttachmentFileManager] Failed to create message directory: \(error)")
-            return nil
-        }
-
-        // Generate filename: {uuid}_{tool}_{timestamp}.{ext}
-        let uuid = UUID().uuidString.prefix(8)
-        let timestamp = Int(Date().timeIntervalSince1970)
-        let ext = sourceURL.pathExtension.isEmpty ? "bin" : sourceURL.pathExtension
-        let storedFilename = "\(uuid)_\(toolName)_\(timestamp).\(ext)"
-        let destURL = messageDir.appendingPathComponent(storedFilename)
-
-        // Copy file
-        do {
-            if fm.fileExists(atPath: destURL.path) {
-                try fm.removeItem(at: destURL)
-            }
-            try fm.copyItem(at: sourceURL, to: destURL)
-            let relativePath = "generated/\(messageId)/\(storedFilename)"
-            print("[AttachmentFileManager] Saved generated file: \(relativePath)")
-            return relativePath
-        } catch {
-            print("[AttachmentFileManager] Failed to save generated file: \(error)")
-            return nil
-        }
     }
 
     /// Cache remote URL locally
@@ -234,12 +198,21 @@ final class AttachmentFileManager: @unchecked Sendable {
         return try? Data(contentsOf: url)
     }
 
-    /// Get thumbnail for image attachment
+    /// Get thumbnail for image attachment (Phase 5: with caching)
     /// - Parameters:
     ///   - relativePath: Path relative to attachments directory
     ///   - maxSize: Maximum dimension for thumbnail
     /// - Returns: Thumbnail image, or nil if failed
     func getThumbnail(relativePath: String, maxSize: CGFloat = 64) -> NSImage? {
+        // Generate cache key
+        let cacheKey = thumbnailCacheKey(relativePath: relativePath, size: maxSize)
+
+        // 1. Check cache
+        if let cached = Self.thumbnailCache.object(forKey: cacheKey as NSString) {
+            return cached
+        }
+
+        // 2. Generate thumbnail
         let url = getFileURL(relativePath: relativePath)
         guard let image = NSImage(contentsOf: url) else { return nil }
 
@@ -262,7 +235,22 @@ final class AttachmentFileManager: @unchecked Sendable {
         )
         thumbnail.unlockFocus()
 
+        // 3. Cache (cost = estimated image size in bytes)
+        let cost = Int(targetSize.width * targetSize.height * 4)  // RGBA estimation
+        Self.thumbnailCache.setObject(thumbnail, forKey: cacheKey as NSString, cost: cost)
+
         return thumbnail
+    }
+
+    /// Generate cache key for thumbnail
+    private func thumbnailCacheKey(relativePath: String, size: CGFloat) -> String {
+        "\(relativePath)-\(Int(size))"
+    }
+
+    /// Clear thumbnail cache (for debugging/testing)
+    static func clearThumbnailCache() {
+        thumbnailCache.removeAllObjects()
+        print("[AttachmentFileManager] Thumbnail cache cleared")
     }
 
     // MARK: - Delete Operations
@@ -292,7 +280,7 @@ final class AttachmentFileManager: @unchecked Sendable {
         var deleted = 0
 
         // Delete from all subdirectories
-        let subDirs = ["user", "generated", "cached"]
+        let subDirs = ["user", "cached"]
         for subDir in subDirs {
             let messageDir = Self.attachmentsDirectory
                 .appendingPathComponent(subDir)
@@ -330,7 +318,7 @@ final class AttachmentFileManager: @unchecked Sendable {
     /// Clean up empty directories
     func cleanupEmptyDirectories() {
         let fm = FileManager.default
-        let subDirs = ["user", "generated", "cached"]
+        let subDirs = ["user", "cached"]
 
         for subDir in subDirs {
             let dir = Self.attachmentsDirectory.appendingPathComponent(subDir)

@@ -154,7 +154,8 @@ final class EventStreamManager: ObservableObject {
 
         case .askUser(let e):
             // TODO: Handle user questions through UI
-            logger.info("User question: \(e.question)")
+            let questionText = e.questions.first?.question ?? e.question ?? "Question"
+            logger.info("User question: \(questionText)")
 
         case .unknown(let type):
             logger.warning("Unknown event type: \(type)")

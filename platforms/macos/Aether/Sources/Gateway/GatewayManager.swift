@@ -215,7 +215,7 @@ final class GatewayManager: ObservableObject {
             delay = min(delay * 2, 1.0) // Exponential backoff, max 1s
         }
 
-        throw GatewayError.timeout
+        throw GatewayError.timeout(method: "waitForPort", timeout: timeout)
     }
 
     private func startHealthMonitoring() {

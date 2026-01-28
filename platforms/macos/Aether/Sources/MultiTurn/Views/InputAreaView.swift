@@ -82,6 +82,7 @@ struct InputAreaView: View {
                 .focused($isFocused)
                 .frame(maxWidth: .infinity)
                 .frame(height: 24)
+                .background(WindowDragBlocker())  // Prevent window dragging to allow text selection
 
                 // Inline attachments (right side of input)
                 if !viewModel.pendingAttachments.isEmpty {

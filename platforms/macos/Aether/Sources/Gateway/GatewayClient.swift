@@ -30,6 +30,7 @@ struct GatewayClientConfig {
     let reconnectBaseDelay: TimeInterval
     let reconnectMaxDelay: TimeInterval
     let pingInterval: TimeInterval
+    let defaultRequestTimeout: TimeInterval
 
     static let `default` = GatewayClientConfig(
         host: "127.0.0.1",
@@ -37,7 +38,8 @@ struct GatewayClientConfig {
         maxReconnectAttempts: 10,
         reconnectBaseDelay: 1.0,
         reconnectMaxDelay: 30.0,
-        pingInterval: 30.0
+        pingInterval: 30.0,
+        defaultRequestTimeout: 30.0
     )
 
     var url: URL {
@@ -153,9 +155,13 @@ final class GatewayClient: ObservableObject {
 
     // MARK: - RPC Methods
 
-    /// Send a JSON-RPC request and wait for response
-    func call<T: Decodable>(method: String, params: Any? = nil) async throws -> T {
-        let response = try await sendRequest(method: method, params: params)
+    /// Send a JSON-RPC request and wait for response with timeout
+    func call<T: Decodable>(
+        method: String,
+        params: Any? = nil,
+        timeout: TimeInterval? = nil
+    ) async throws -> T {
+        let response = try await sendRequest(method: method, params: params, timeout: timeout)
 
         if let error = response.error {
             throw error
@@ -169,8 +175,12 @@ final class GatewayClient: ObservableObject {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    /// Send a JSON-RPC request
-    func sendRequest(method: String, params: Any? = nil) async throws -> JsonRpcResponse {
+    /// Send a JSON-RPC request with timeout
+    func sendRequest(
+        method: String,
+        params: Any? = nil,
+        timeout: TimeInterval? = nil
+    ) async throws -> JsonRpcResponse {
         guard isConnected, let webSocketTask = webSocketTask else {
             throw GatewayError.notConnected
         }
@@ -185,19 +195,74 @@ final class GatewayClient: ObservableObject {
 
         logger.debug("Sending request: \(method)")
 
-        return try await withCheckedThrowingContinuation { continuation in
-            if case .string(let idString) = id {
-                pendingRequests[idString] = continuation
-            }
+        let effectiveTimeout = timeout ?? config.defaultRequestTimeout
 
-            Task {
-                do {
-                    try await webSocketTask.send(.string(jsonString))
-                } catch {
-                    if case .string(let idString) = id {
-                        pendingRequests.removeValue(forKey: idString)
+        // Create timeout task
+        let timeoutTask = Task {
+            try await Task.sleep(nanoseconds: UInt64(effectiveTimeout * 1_000_000_000))
+            return true
+        }
+
+        // Create request task
+        let requestTask = Task { () -> JsonRpcResponse in
+            try await withCheckedThrowingContinuation { continuation in
+                if case .string(let idString) = id {
+                    pendingRequests[idString] = continuation
+                }
+
+                Task {
+                    do {
+                        try await webSocketTask.send(.string(jsonString))
+                    } catch {
+                        if case .string(let idString) = id {
+                            pendingRequests.removeValue(forKey: idString)
+                        }
+                        continuation.resume(throwing: error)
                     }
-                    continuation.resume(throwing: error)
+                }
+            }
+        }
+
+        // Race: wait for response or timeout
+        return try await withTaskCancellationHandler {
+            // Use withThrowingTaskGroup to race between request and timeout
+            try await withThrowingTaskGroup(of: JsonRpcResponse?.self) { group in
+                // Request task
+                group.addTask {
+                    try await requestTask.value
+                }
+
+                // Timeout task
+                group.addTask {
+                    if try await timeoutTask.value {
+                        throw GatewayError.timeout(method: method, timeout: effectiveTimeout)
+                    }
+                    return nil
+                }
+
+                // Return first successful result
+                while let result = try await group.next() {
+                    if let response = result {
+                        // Cancel remaining tasks
+                        group.cancelAll()
+                        // Clean up pending request on timeout cancellation
+                        if case .string(let idString) = id {
+                            pendingRequests.removeValue(forKey: idString)
+                        }
+                        return response
+                    }
+                }
+
+                // Should not reach here
+                throw GatewayError.timeout(method: method, timeout: effectiveTimeout)
+            }
+        } onCancel: {
+            // Clean up on cancellation
+            timeoutTask.cancel()
+            requestTask.cancel()
+            if case .string(let idString) = id {
+                Task { @MainActor in
+                    self.pendingRequests.removeValue(forKey: idString)
                 }
             }
         }
@@ -251,6 +316,30 @@ final class GatewayClient: ObservableObject {
     /// Get Gateway version
     func version() async throws -> VersionResult {
         try await call(method: "version")
+    }
+
+    /// Answer a user question (AskUser event)
+    func answer(runId: String, questionId: String, answers: [String: String]) async throws {
+        let params = AnswerParams(runId: runId, questionId: questionId, answers: answers)
+        let _: EmptyResult = try await call(method: "agent.answer", params: params)
+    }
+
+    /// Cancel a running agent
+    func cancelRun(runId: String) async throws {
+        let params = CancelParams(runId: runId)
+        let _: EmptyResult = try await call(method: "agent.cancel", params: params)
+    }
+
+    /// Subscribe to events for a topic pattern
+    func subscribe(topic: String) async throws {
+        let params = SubscribeParams(topic: topic)
+        let _: EmptyResult = try await call(method: "events.subscribe", params: params)
+    }
+
+    /// Unsubscribe from events
+    func unsubscribe(topic: String) async throws {
+        let params = SubscribeParams(topic: topic)
+        let _: EmptyResult = try await call(method: "events.unsubscribe", params: params)
     }
 
     // MARK: - Private Methods
@@ -433,16 +522,25 @@ enum GatewayError: LocalizedError {
     case disconnected
     case encodingFailed
     case invalidResponse(String)
-    case timeout
+    case timeout(method: String, timeout: TimeInterval)
+    case answerFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .notConnected: return "Not connected to Gateway"
-        case .connectionFailed(let msg): return "Connection failed: \(msg)"
-        case .disconnected: return "Disconnected from Gateway"
-        case .encodingFailed: return "Failed to encode request"
-        case .invalidResponse(let msg): return "Invalid response: \(msg)"
-        case .timeout: return "Request timed out"
+        case .notConnected:
+            return "Not connected to Gateway"
+        case .connectionFailed(let msg):
+            return "Connection failed: \(msg)"
+        case .disconnected:
+            return "Disconnected from Gateway"
+        case .encodingFailed:
+            return "Failed to encode request"
+        case .invalidResponse(let msg):
+            return "Invalid response: \(msg)"
+        case .timeout(let method, let timeout):
+            return "Request '\(method)' timed out after \(Int(timeout))s"
+        case .answerFailed(let msg):
+            return "Failed to send answer: \(msg)"
         }
     }
 }
