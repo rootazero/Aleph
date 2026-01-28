@@ -540,21 +540,17 @@ mod tests {
     #[tokio::test]
     async fn test_failover_provider_creation() {
         // Create with mock providers
+        let mut test_provider_config = ProviderConfig::test_config("test");
+        test_provider_config.provider_type = Some("mock".to_string());
+        test_provider_config.api_key = None;
+        test_provider_config.color = "#000000".to_string();
+        test_provider_config.timeout_seconds = 30;
+
         let config = FailoverConfig {
             providers: vec![ProviderEntry {
                 name: "mock".to_string(),
                 priority: 1,
-                config: ProviderConfig {
-                    provider_type: Some("mock".to_string()),
-                    api_key: None,
-                    model: "test".to_string(),
-                    base_url: None,
-                    color: "#000000".to_string(),
-                    timeout_seconds: 30,
-                    max_tokens: None,
-                    temperature: None,
-                    system_prompt_mode: None,
-                },
+                config: test_provider_config,
             }],
             ..Default::default()
         };
