@@ -338,11 +338,20 @@ let app = Router::new()
 - `core/src/gateway/handlers/auth.rs` - RPC handlers
 - `core/src/bin/aether_gateway.rs` - CLI commands (pairing/devices subcommands)
 
-### Phase 7.3: WebChat UI
-- [ ] Access at http://127.0.0.1:18789/
-- [ ] Real-time message streaming
-- [ ] Session list with switching
-- [ ] Mobile responsive design
+### Phase 7.3: WebChat UI ✅ COMPLETE
+- [x] Access at http://127.0.0.1:18790/ (separate HTTP port)
+- [x] Real-time message streaming via WebSocket
+- [x] Session list with switching
+- [x] Mobile responsive design (Tailwind CSS)
+- [x] Dark/light theme toggle
+- [x] Markdown rendering with syntax highlighting
+
+**Implementation:**
+- React + Vite + TypeScript + Tailwind CSS
+- WebSocket hook (`useGateway.ts`) for Gateway communication
+- Components: Sidebar, ChatInput, MessageBubble
+- Static file serving via Axum (tower-http)
+- CLI args: `--webchat-dir`, `--webchat-port`
 
 ---
 

@@ -62,6 +62,8 @@ pub mod channels;
 pub mod device_store;
 #[cfg(feature = "gateway")]
 pub mod hot_reload;
+#[cfg(feature = "gateway")]
+pub mod http_server;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
