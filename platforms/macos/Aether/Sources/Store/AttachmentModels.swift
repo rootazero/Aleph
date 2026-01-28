@@ -90,8 +90,9 @@ struct StoredAttachment: Identifiable, Codable, FetchableRecord, PersistableReco
     /// Original filename
     var filename: String?
 
-    /// Local path relative to attachments directory
-    /// e.g., "user/msg123/uuid_file.png"
+    /// Local path to the file
+    /// - For user uploads and cached files: relative to ~/.aether/attachments/ (e.g., "user/msg123/file.png")
+    /// - For AI-generated files: absolute path to ~/.aether/output/{topicId}/ (e.g., "/Users/.../output/.../file.txt")
     var localPath: String?
 
     /// Original remote URL (for remote_url type)
@@ -139,6 +140,13 @@ struct StoredAttachment: Identifiable, Codable, FetchableRecord, PersistableReco
     /// Absolute URL to the local file (if exists)
     var fileURL: URL? {
         guard let localPath = localPath else { return nil }
+
+        // If path is absolute (starts with /), use it directly
+        if localPath.hasPrefix("/") {
+            return URL(fileURLWithPath: localPath)
+        }
+
+        // Otherwise, treat as relative to attachments directory
         let baseDir = AttachmentFileManager.attachmentsDirectory
         return baseDir.appendingPathComponent(localPath)
     }
@@ -262,11 +270,22 @@ extension StoredAttachment {
     }
 
     /// Get file size from local path
-    private static func getFileSize(at relativePath: String?) -> Int64 {
-        guard let relativePath = relativePath else { return 0 }
-        let fullPath = AttachmentFileManager.attachmentsDirectory
-            .appendingPathComponent(relativePath)
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: fullPath.path),
+    private static func getFileSize(at localPath: String?) -> Int64 {
+        guard let localPath = localPath else { return 0 }
+
+        // Determine full path (absolute or relative)
+        let fullPath: String
+        if localPath.hasPrefix("/") {
+            // Absolute path
+            fullPath = localPath
+        } else {
+            // Relative to attachments directory
+            fullPath = AttachmentFileManager.attachmentsDirectory
+                .appendingPathComponent(localPath)
+                .path
+        }
+
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: fullPath),
               let size = attrs[.size] as? Int64 else {
             return 0
         }

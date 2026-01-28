@@ -118,6 +118,64 @@ final class AttachmentStore: @unchecked Sendable {
         }
     }
 
+    /// Batch get attachments for multiple messages (Phase 5: Performance optimization)
+    /// Solves N+1 query problem by fetching all attachments in a single query
+    /// - Parameter messageIds: Array of message IDs
+    /// - Returns: Dictionary mapping message ID to attachments
+    func batchGetAttachments(messageIds: [String]) -> [String: [StoredAttachment]] {
+        guard !messageIds.isEmpty else {
+            return [:]
+        }
+
+        do {
+            let attachments = try ConversationStore.shared.dbRead { db in
+                try StoredAttachment
+                    .filter(messageIds.contains(Column("messageId")))
+                    .order(Column("createdAt").asc)
+                    .fetchAll(db)
+            } ?? []
+
+            // Group by messageId
+            var grouped: [String: [StoredAttachment]] = [:]
+            for attachment in attachments {
+                grouped[attachment.messageId, default: []].append(attachment)
+            }
+
+            print("[AttachmentStore] Batch query returned \(attachments.count) attachments for \(messageIds.count) messages")
+            return grouped
+        } catch {
+            print("[AttachmentStore] Failed to batch fetch attachments: \(error)")
+            return [:]
+        }
+    }
+
+    /// Get attachments grouped by message ID for a topic (Phase 5: Performance optimization)
+    /// Optimized version that returns grouped attachments in a single query
+    /// - Parameter topicId: The topic ID
+    /// - Returns: Dictionary mapping message ID to attachments
+    func getAttachmentsByTopic(topicId: String) -> [String: [StoredAttachment]] {
+        do {
+            let attachments = try ConversationStore.shared.dbRead { db in
+                try StoredAttachment
+                    .joining(required: StoredAttachment.message.filter(Column("topicId") == topicId))
+                    .order(Column("createdAt").asc)
+                    .fetchAll(db)
+            } ?? []
+
+            // Group by messageId
+            var grouped: [String: [StoredAttachment]] = [:]
+            for attachment in attachments {
+                grouped[attachment.messageId, default: []].append(attachment)
+            }
+
+            print("[AttachmentStore] Topic query returned \(attachments.count) attachments grouped by message")
+            return grouped
+        } catch {
+            print("[AttachmentStore] Failed to fetch topic attachments (grouped): \(error)")
+            return [:]
+        }
+    }
+
     /// Update attachment's local path (e.g., after caching remote URL)
     /// - Parameters:
     ///   - id: The attachment ID

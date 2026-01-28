@@ -85,20 +85,43 @@ struct ToolCallPart: Identifiable, Sendable {
 
     /// One-line summary for collapsed display
     var collapsedSummary: String {
+        let action: String
+        switch toolName {
+        case "file_ops":
+            action = "文件操作"
+        case "search":
+            action = "搜索"
+        case "web_fetch", "youtube":
+            action = "网络访问"
+        case "generate_image", "generate_video", "generate_audio":
+            action = "生成内容"
+        case "pdf_generate":
+            action = "生成PDF"
+        case "code_exec":
+            action = "执行代码"
+        case "bash_exec":
+            action = "执行命令"
+        case "read_skill", "list_skills":
+            action = "访问技能"
+        case "get_tool_schema", "list_tools":
+            action = "查询工具"
+        case "mcp_wrapper":
+            action = "调用服务"
+        default:
+            action = toolName
+        }
+
         switch status {
-        case .pending:
-            return "Pending: \(toolName)"
         case .running:
-            return "Running: \(displayDescription)"
+            return "\(action)..."
         case .completed:
-            if let duration = durationMs {
-                return "\(toolName) completed (\(duration)ms)"
-            }
-            return "\(toolName) completed"
+            return "✓ \(action)完成"
         case .failed:
-            return "\(toolName) failed"
+            return "✗ \(action)失败"
         case .aborted:
-            return "\(toolName) aborted"
+            return "⏹ \(action)已中止"
+        case .pending:
+            return "⏸ \(action)待执行"
         }
     }
 
@@ -241,10 +264,58 @@ private func formatToolDescription(toolName: String, input: String) -> String {
         let truncatedUrl = truncateString(url, maxLength: 40)
         return "Fetch: \(truncatedUrl)"
 
+    case "youtube":
+        let url = json["url"] as? String ?? ""
+        let truncatedUrl = truncateString(url, maxLength: 40)
+        return "YouTube: \(truncatedUrl)"
+
     case "generate_image":
         let prompt = json["prompt"] as? String ?? ""
         let truncatedPrompt = truncateString(prompt, maxLength: 25)
         return "Generate: \(truncatedPrompt)"
+
+    case "generate_video":
+        let prompt = json["prompt"] as? String ?? ""
+        let truncatedPrompt = truncateString(prompt, maxLength: 25)
+        return "Generate Video: \(truncatedPrompt)"
+
+    case "generate_audio":
+        let prompt = json["prompt"] as? String ?? ""
+        let truncatedPrompt = truncateString(prompt, maxLength: 25)
+        return "Generate Audio: \(truncatedPrompt)"
+
+    case "pdf_generate":
+        return "Generate PDF"
+
+    case "code_exec":
+        let language = json["language"] as? String ?? "code"
+        let code = json["code"] as? String ?? ""
+        let truncatedCode = truncateString(code.replacingOccurrences(of: "\n", with: " "), maxLength: 30)
+        return "Execute \(language): \(truncatedCode)"
+
+    case "bash_exec":
+        let cmd = json["command"] as? String ?? ""
+        let truncatedCmd = truncateString(cmd, maxLength: 50)
+        return "Command: \(truncatedCmd)"
+
+    case "read_skill":
+        let skillId = json["skill_id"] as? String ?? "?"
+        return "Read skill: \(skillId)"
+
+    case "list_skills":
+        return "List skills"
+
+    case "get_tool_schema":
+        let tool = json["tool_name"] as? String ?? "?"
+        return "Query tool: \(tool)"
+
+    case "list_tools":
+        return "List tools"
+
+    case "mcp_wrapper":
+        let server = json["server"] as? String ?? "?"
+        let method = json["method"] as? String ?? "?"
+        return "MCP: \(server)/\(method)"
 
     default:
         return toolName
@@ -286,5 +357,66 @@ extension PartEventTypeFfi {
         case .updated: return "updated"
         case .removed: return "removed"
         }
+    }
+}
+
+// MARK: - ReasoningPart
+
+/// Represents an AI reasoning part for UI rendering
+struct ReasoningPart: Identifiable, Sendable {
+    let id: String
+    let content: String
+    let step: Int
+    var isComplete: Bool
+    let timestamp: Int64
+
+    /// Parse from JSON dictionary
+    static func fromJSON(_ json: [String: Any]) -> ReasoningPart? {
+        guard let content = json["content"] as? String,
+              let step = json["step"] as? Int,
+              let isComplete = json["is_complete"] as? Bool,
+              let timestamp = json["timestamp"] as? Int64 else {
+            return nil
+        }
+
+        // Generate stable ID from content + timestamp
+        let id = "reasoning_\(timestamp)_\(step)"
+
+        return ReasoningPart(
+            id: id,
+            content: content,
+            step: step,
+            isComplete: isComplete,
+            timestamp: timestamp
+        )
+    }
+}
+
+// MARK: - PlanPart
+
+/// Represents a task plan part for UI rendering
+struct PlanPart: Identifiable, Sendable {
+    let id: String  // plan_id
+    let steps: [PlanStep]
+    let requiresConfirmation: Bool
+    let createdAt: Int64
+
+    /// Parse from JSON dictionary
+    static func fromJSON(_ json: [String: Any]) -> PlanPart? {
+        guard let id = json["plan_id"] as? String,
+              let stepsArray = json["steps"] as? [[String: Any]],
+              let requiresConfirmation = json["requires_confirmation"] as? Bool,
+              let createdAt = json["created_at"] as? Int64 else {
+            return nil
+        }
+
+        let steps = stepsArray.compactMap { PlanStep.fromJSON($0) }
+
+        return PlanPart(
+            id: id,
+            steps: steps,
+            requiresConfirmation: requiresConfirmation,
+            createdAt: createdAt
+        )
     }
 }

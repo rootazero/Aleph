@@ -68,30 +68,43 @@ struct UnifiedConversationView: View {
         .animation(.smooth(duration: 0.25), value: viewModel.displayState)
     }
 
-    // MARK: - Status Bar (Minimal Single-Line Design)
+    // MARK: - Status Bar (Multi-Layer Intelligent Progress Display)
 
-    /// Minimal status bar: single line, ~20px height
-    /// Shows what Agent is doing in plain language, not technical details
+    /// Multi-layer status bar: shows plan progress + thinking + tool activity
+    /// Height adapts to content (1-3 lines, ~24px per line + padding)
     private var infoStreamStatusBar: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .top, spacing: 8) {
             // Spinner when active
             if viewModel.statusIsLoading {
                 ProgressView()
                     .scaleEffect(0.5)
                     .frame(width: 12, height: 12)
+                    .padding(.top, 2)
             }
 
-            // Single line status text (plain language)
-            Text(viewModel.statusText)
-                .font(.system(size: 11))
-                .foregroundColor(GlassColors.secondaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            // Multi-layer status display
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(Array(viewModel.statusMessages.enumerated()), id: \.offset) { index, message in
+                    Text(message)
+                        .font(.system(size: index == 0 ? 12 : 11, weight: index == 0 ? .medium : .regular))
+                        .foregroundColor(index == 0 ? GlassColors.secondaryText : GlassColors.secondaryText.opacity(0.8))
+                        .lineLimit(1)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .move(edge: .top)),
+                            removal: .opacity
+                        ))
+                }
+            }
+            .animation(.smooth(duration: 0.25), value: viewModel.statusMessages.count)
 
             Spacer()
         }
-        .frame(height: 20)
-        .padding(.horizontal, 14)
+        .frame(height: viewModel.dynamicStatusBarHeight)  // Use dynamic height
+        .animation(.smooth(duration: 0.25), value: viewModel.dynamicStatusBarHeight)  // Animate height changes
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .modifier(StatusStreamGlassModifier())
+        .padding(.horizontal, 16)  // Outer padding for alignment
     }
 
     // MARK: - Content Area (Mutually Exclusive)
@@ -206,6 +219,50 @@ struct LiquidGlassWindowModifier: ViewModifier {
                     }
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+    }
+}
+
+// MARK: - Status Stream Glass Modifier
+
+/// Applies glass effect to the status stream area with subtle background differentiation
+/// Uses lighter overlay than input area to create visual hierarchy
+struct StatusStreamGlassModifier: ViewModifier {
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            // macOS 26+: Use .clear with subtle dimming for visual distinction
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        // Lighter dimming than input area (0.15 vs 0.25) for subtle differentiation
+                        .fill(Color.white.opacity(0.06))
+                )
+                .glassEffect(
+                    .clear,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+        } else {
+            // macOS 15-25: Fallback using subtle background
+            content
+                .background(
+                    ZStack {
+                        // Base glass layer
+                        VisualEffectBackground(
+                            material: .underWindowBackground,
+                            blendingMode: .withinWindow
+                        )
+
+                        // Light overlay for subtle visual feedback
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.white.opacity(0.06))
+
+                        // Subtle border with white color
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                )
         }
     }
 }

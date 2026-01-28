@@ -20,6 +20,10 @@ struct MessageBubbleView: View {
     @State private var isHovering = false
     @State private var storedAttachments: [StoredAttachment] = []
 
+    // Phase 5: Access ViewModel for preloaded attachments
+    // Note: Using @Environment since UnifiedConversationViewModel uses @Observable, not ObservableObject
+    @Environment(UnifiedConversationViewModel.self) var viewModel
+
     private var isUser: Bool {
         message.role == .user
     }
@@ -74,12 +78,13 @@ struct MessageBubbleView: View {
         .buttonStyle(.plain)
     }
 
-    /// Load stored attachments for this message
+    /// Load stored attachments for this message (Phase 5: from preloaded cache)
     private func loadStoredAttachments() {
-        // Load from database
-        storedAttachments = AttachmentStore.shared.getAttachments(forMessage: message.id)
+        // Get from ViewModel's preloaded cache (avoids N+1 queries)
+        storedAttachments = viewModel.getAttachments(forMessage: message.id)
+
         if !storedAttachments.isEmpty {
-            print("[MessageBubble] Loaded \(storedAttachments.count) attachments for message: \(message.id)")
+            print("[MessageBubble] Loaded \(storedAttachments.count) attachments for message: \(message.id) [from cache]")
         }
     }
 }

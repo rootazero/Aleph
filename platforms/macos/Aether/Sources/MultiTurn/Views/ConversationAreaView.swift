@@ -82,43 +82,100 @@ struct ConversationAreaView: View {
     private var messagesList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(spacing: 12) {
-                    // Display completed messages only (skip streaming message - shown in bottom status area)
-                    ForEach(viewModel.messages) { message in
-                        // Skip the streaming message - it will be displayed in the bottom status area
-                        if message.id != viewModel.streamingMessageId {
-                            MessageBubbleView(
-                                message: message,
-                                onCopy: { viewModel.copyMessage(message) }
-                            )
-                            .id(message.id)
+                LazyVStack(spacing: 12, pinnedViews: []) {
+                    // Section 1: Active Parts (pinned at top, eagerly loaded)
+                    Section {
+                        // Active reasoning parts (Phase 2: Part-driven UI)
+                        if !viewModel.activeReasoningParts.isEmpty {
+                            VStack(spacing: 6) {
+                                ForEach(viewModel.activeReasoningParts) { part in
+                                    ReasoningPartView(part: part)
+                                        .id("reasoning-\(part.id)")
+                                        .transition(.asymmetric(
+                                            insertion: .opacity.combined(with: .move(edge: .top)),
+                                            removal: .opacity
+                                        ))
+                                }
+                            }
+                            .padding(.bottom, 8)
                         }
+
+                        // Active plan parts (Phase 2: Part-driven UI)
+                        if !viewModel.activePlanParts.isEmpty {
+                            VStack(spacing: 6) {
+                                ForEach(viewModel.activePlanParts) { part in
+                                    PlanPartView(part: part)
+                                        .id("plan-\(part.id)")
+                                        .transition(.asymmetric(
+                                            insertion: .opacity.combined(with: .move(edge: .top)),
+                                            removal: .opacity
+                                        ))
+                                }
+                            }
+                            .padding(.bottom, 8)
+                        }
+
+                        // Active tool calls section
+                        if !viewModel.activeToolCalls.isEmpty {
+                            VStack(spacing: 6) {
+                                ForEach(viewModel.activeToolCalls) { toolCall in
+                                    ToolCallPartView(part: toolCall)
+                                        .id("tool-\(toolCall.id)")
+                                        .transition(.asymmetric(
+                                            insertion: .opacity.combined(with: .move(edge: .top)),
+                                            removal: .opacity.combined(with: .scale(scale: 0.95))
+                                        ))
+                                }
+                            }
+                            .padding(.bottom, 8)
+                        }
+                    } header: {
+                        EmptyView()
                     }
 
-                    // Display inline plan confirmation if pending
-                    if let confirmation = viewModel.pendingPlanConfirmation {
-                        PlanConfirmationBubbleView(
-                            confirmation: confirmation,
-                            onConfirm: { viewModel.confirmPendingPlan() },
-                            onCancel: { viewModel.cancelPendingPlan() }
-                        )
-                        .id("plan_confirmation_\(confirmation.planId)")
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    }
+                    // Section 2: Historical Messages (lazy rendered for performance)
+                    Section {
+                        // Display completed messages only
+                        ForEach(viewModel.messages) { message in
+                            if message.id != viewModel.streamingMessageId {
+                                MessageBubbleView(
+                                    message: message,
+                                    onCopy: { viewModel.copyMessage(message) }
+                                )
+                                .id("message-\(message.id)")
+                            }
+                        }
 
-                    // Display inline user input request if pending
-                    if let inputRequest = viewModel.pendingUserInputRequest {
-                        UserInputBubbleView(
-                            request: inputRequest,
-                            onRespond: { response in
-                                viewModel.respondToUserInput(response: response)
-                            },
-                            onCancel: { viewModel.cancelUserInputRequest() }
-                        )
-                        .id("user_input_\(inputRequest.requestId)")
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        // Display inline plan confirmation if pending
+                        if let confirmation = viewModel.pendingPlanConfirmation {
+                            PlanConfirmationBubbleView(
+                                confirmation: confirmation,
+                                onConfirm: { viewModel.confirmPendingPlan() },
+                                onCancel: { viewModel.cancelPendingPlan() }
+                            )
+                            .id("plan_confirmation_\(confirmation.planId)")
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        }
+
+                        // Display inline user input request if pending
+                        if let inputRequest = viewModel.pendingUserInputRequest {
+                            UserInputBubbleView(
+                                request: inputRequest,
+                                onRespond: { response in
+                                    viewModel.respondToUserInput(response: response)
+                                },
+                                onCancel: { viewModel.cancelUserInputRequest() }
+                            )
+                            .id("user_input_\(inputRequest.requestId)")
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        }
+                    } header: {
+                        EmptyView()
                     }
                 }
+                .animation(.smooth(duration: 0.25), value: viewModel.activeReasoningParts.count)
+                .animation(.smooth(duration: 0.25), value: viewModel.activePlanParts.count)
+                .animation(.smooth(duration: 0.25), value: viewModel.activeToolCalls.count)
                 .padding(12)
                 .background(
                     GeometryReader { geometry in
@@ -144,7 +201,7 @@ struct ConversationAreaView: View {
             .onChange(of: viewModel.messages.count) {
                 if let lastId = viewModel.messages.last?.id {
                     withAnimation {
-                        proxy.scrollTo(lastId, anchor: .bottom)
+                        proxy.scrollTo("message-\(lastId)", anchor: .bottom)
                     }
                 }
             }

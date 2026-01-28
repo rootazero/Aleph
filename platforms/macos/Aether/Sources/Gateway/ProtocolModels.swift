@@ -313,18 +313,69 @@ struct RunErrorEvent: Codable, Sendable {
     }
 }
 
-struct AskUserEvent: Codable, Sendable {
+struct AskUserEvent: Codable, Sendable, Identifiable {
     let runId: String
     let seq: UInt64
-    let question: String
-    let options: [String]
+    let questionId: String
+    let questions: [UserQuestion]
+
+    // Legacy fields for compatibility
+    let question: String?
+    let options: [String]?
 
     enum CodingKeys: String, CodingKey {
         case runId = "run_id"
         case seq
+        case questionId = "question_id"
+        case questions
         case question
         case options
     }
+
+    var id: String { questionId }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        runId = try container.decode(String.self, forKey: .runId)
+        seq = try container.decode(UInt64.self, forKey: .seq)
+        questionId = try container.decodeIfPresent(String.self, forKey: .questionId) ?? UUID().uuidString
+        questions = try container.decodeIfPresent([UserQuestion].self, forKey: .questions) ?? []
+        question = try container.decodeIfPresent(String.self, forKey: .question)
+        options = try container.decodeIfPresent([String].self, forKey: .options)
+    }
+}
+
+/// User question with options
+struct UserQuestion: Codable, Sendable, Identifiable {
+    let header: String
+    let question: String
+    let options: [QuestionOption]
+    let multiSelect: Bool
+
+    var id: String { header }
+
+    enum CodingKeys: String, CodingKey {
+        case header
+        case question
+        case options
+        case multiSelect = "multi_select"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        header = try container.decode(String.self, forKey: .header)
+        question = try container.decode(String.self, forKey: .question)
+        options = try container.decode([QuestionOption].self, forKey: .options)
+        multiSelect = try container.decodeIfPresent(Bool.self, forKey: .multiSelect) ?? false
+    }
+}
+
+/// Question option
+struct QuestionOption: Codable, Sendable, Identifiable {
+    let label: String
+    let description: String?
+
+    var id: String { label }
 }
 
 // MARK: - RPC Request/Response Types
@@ -375,6 +426,36 @@ struct VersionResult: Codable, Sendable {
     let version: String
     let `protocol`: String
 }
+
+/// Answer parameters for AskUser response
+struct AnswerParams: Codable, Sendable {
+    let runId: String
+    let questionId: String
+    let answers: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+        case questionId = "question_id"
+        case answers
+    }
+}
+
+/// Cancel run parameters
+struct CancelParams: Codable, Sendable {
+    let runId: String
+
+    enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+    }
+}
+
+/// Subscribe/unsubscribe parameters
+struct SubscribeParams: Codable, Sendable {
+    let topic: String
+}
+
+/// Empty result for void responses
+struct EmptyResult: Codable, Sendable {}
 
 // MARK: - AnyCodable Helper
 
