@@ -11,6 +11,9 @@ pub mod auth;
 pub mod events;
 pub mod channel;
 pub mod config;
+pub mod logs;
+pub mod commands;
+pub mod ocr;
 #[cfg(feature = "browser")]
 pub mod browser;
 
@@ -45,6 +48,14 @@ impl HandlerRegistry {
         registry.register("health", health::handle);
         registry.register("echo", echo::handle);
         registry.register("version", version::handle);
+
+        // Logs handlers
+        registry.register("logs.getLevel", logs::handle_get_level);
+        registry.register("logs.setLevel", logs::handle_set_level);
+        registry.register("logs.getDirectory", logs::handle_get_directory);
+
+        // Commands handlers
+        registry.register("commands.list", commands::handle_list);
 
         registry
     }
