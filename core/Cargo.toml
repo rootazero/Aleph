@@ -25,6 +25,8 @@ discord = ["dep:serenity", "gateway"]
 all-channels = ["telegram", "discord"]
 # Cron job scheduling
 cron = ["dep:cron", "gateway"]
+# Browser control via CDP
+browser = ["dep:chromiumoxide", "gateway"]
 
 [dependencies]
 # UniFFI (optional, enabled by default for macOS)
@@ -135,6 +137,9 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 
 # Cron dependencies (optional)
 cron = { version = "0.13", optional = true }
+
+# Browser control dependencies (optional)
+chromiumoxide = { version = "0.7", optional = true, default-features = false, features = ["tokio-runtime"] }
 
 [build-dependencies]
 uniffi = { version = "0.31", features = ["build"] }
