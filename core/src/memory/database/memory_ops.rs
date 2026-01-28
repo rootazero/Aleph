@@ -7,17 +7,124 @@ use rusqlite::params;
 
 use super::core::{MemoryStats, VectorDatabase};
 
+#[cfg(test)]
+mod vec_sync_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_insert_memory_syncs_to_vec_table() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        // Create a test memory with embedding (512 dimensions)
+        let memory = MemoryEntry {
+            id: "test-id-1".to_string(),
+            context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
+            user_input: "test input".to_string(),
+            ai_output: "test output".to_string(),
+            embedding: Some(vec![0.1; 512]),
+            similarity_score: None,
+        };
+
+        db.insert_memory(memory).await.unwrap();
+
+        // Verify the vector was inserted into memories_vec
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(count, 1, "Should have 1 row in memories_vec");
+    }
+
+    #[tokio::test]
+    async fn test_insert_multiple_memories_syncs_to_vec_table() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        // Insert multiple memories
+        for i in 0..3 {
+            let memory = MemoryEntry {
+                id: format!("test-id-{}", i),
+                context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
+                user_input: format!("test input {}", i),
+                ai_output: format!("test output {}", i),
+                embedding: Some(vec![0.1 * (i as f32 + 1.0); 512]),
+                similarity_score: None,
+            };
+            db.insert_memory(memory).await.unwrap();
+        }
+
+        // Verify all vectors were inserted into memories_vec
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(count, 3, "Should have 3 rows in memories_vec");
+    }
+
+    #[tokio::test]
+    async fn test_vec_table_rowid_matches_memory_rowid() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        let memory = MemoryEntry {
+            id: "test-id-rowid".to_string(),
+            context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
+            user_input: "test input".to_string(),
+            ai_output: "test output".to_string(),
+            embedding: Some(vec![0.5; 512]),
+            similarity_score: None,
+        };
+
+        db.insert_memory(memory).await.unwrap();
+
+        let conn = db.conn.lock().unwrap();
+
+        // Get rowid from memories table
+        let memory_rowid: i64 = conn
+            .query_row(
+                "SELECT rowid FROM memories WHERE id = 'test-id-rowid'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        // Get rowid from memories_vec table
+        let vec_rowid: i64 = conn
+            .query_row("SELECT rowid FROM memories_vec LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(
+            memory_rowid, vec_rowid,
+            "memories_vec rowid should match memories rowid"
+        );
+    }
+}
+
 impl VectorDatabase {
     /// Insert memory entry into database
+    ///
+    /// Inserts into both the main `memories` table and the `memories_vec`
+    /// virtual table for KNN search via sqlite-vec.
     pub async fn insert_memory(&self, memory: MemoryEntry) -> Result<(), AetherError> {
         let embedding = memory
             .embedding
             .ok_or_else(|| AetherError::config("Cannot insert memory without embedding"))?;
 
-        // Serialize embedding to bytes
+        // Serialize embedding to bytes for main table
         let embedding_bytes = Self::serialize_embedding(&embedding);
 
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Insert into main memories table
         conn.execute(
             r#"
             INSERT INTO memories (id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp, topic_id)
@@ -35,6 +142,23 @@ impl VectorDatabase {
             ],
         )
         .map_err(|e| AetherError::config(format!("Failed to insert memory: {}", e)))?;
+
+        // Get the rowid of the inserted memory for vec0 table
+        let rowid: i64 = conn
+            .query_row(
+                "SELECT rowid FROM memories WHERE id = ?1",
+                params![memory.id],
+                |row| row.get(0),
+            )
+            .map_err(|e| AetherError::config(format!("Failed to get memory rowid: {}", e)))?;
+
+        // Insert into vec0 table with matching rowid
+        // sqlite-vec expects the embedding as a blob
+        conn.execute(
+            "INSERT INTO memories_vec (rowid, embedding) VALUES (?1, ?2)",
+            params![rowid, embedding_bytes],
+        )
+        .map_err(|e| AetherError::config(format!("Failed to insert into memories_vec: {}", e)))?;
 
         Ok(())
     }
