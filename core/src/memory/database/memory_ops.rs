@@ -4,6 +4,7 @@
 use crate::error::AetherError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use rusqlite::params;
+use rusqlite::OptionalExtension;
 
 use super::core::{MemoryStats, VectorDatabase};
 
@@ -143,6 +144,96 @@ mod vec_sync_tests {
         if results.len() > 1 {
             assert!(results[0].similarity_score.unwrap() >= results[1].similarity_score.unwrap());
         }
+    }
+
+    #[tokio::test]
+    async fn test_delete_memory_removes_from_vec_table() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        let memory = MemoryEntry {
+            id: "test-delete-id".to_string(),
+            context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
+            user_input: "test input".to_string(),
+            ai_output: "test output".to_string(),
+            embedding: Some(vec![0.1; 512]),
+            similarity_score: None,
+        };
+        db.insert_memory(memory).await.unwrap();
+
+        {
+            let conn = db.conn.lock().unwrap();
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 1);
+        }
+
+        db.delete_memory("test-delete-id").await.unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "Vec table should be empty after delete");
+    }
+
+    #[tokio::test]
+    async fn test_clear_memories_clears_vec_table() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        for i in 0..5 {
+            let memory = MemoryEntry {
+                id: format!("test-id-{}", i),
+                context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
+                user_input: format!("input {}", i),
+                ai_output: format!("output {}", i),
+                embedding: Some(vec![0.1; 512]),
+                similarity_score: None,
+            };
+            db.insert_memory(memory).await.unwrap();
+        }
+
+        db.clear_memories(None, None).await.unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "Vec table should be empty after clear");
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_topic_clears_vec_table() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        let mut context = ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string());
+        context.topic_id = "topic-123".to_string();
+
+        for i in 0..3 {
+            let memory = MemoryEntry {
+                id: format!("topic-mem-{}", i),
+                context: context.clone(),
+                user_input: format!("input {}", i),
+                ai_output: format!("output {}", i),
+                embedding: Some(vec![0.1; 512]),
+                similarity_score: None,
+            };
+            db.insert_memory(memory).await.unwrap();
+        }
+
+        db.delete_by_topic_id("topic-123").await.unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "Vec table should be empty after topic delete");
     }
 }
 
@@ -365,12 +456,31 @@ impl VectorDatabase {
     /// Delete memory by ID
     pub async fn delete_memory(&self, id: &str) -> Result<(), AetherError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Get rowid before deleting from main table
+        let rowid: Option<i64> = conn
+            .query_row(
+                "SELECT rowid FROM memories WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AetherError::config(format!("Failed to get memory rowid: {}", e)))?;
+
         let rows_affected = conn
             .execute("DELETE FROM memories WHERE id = ?1", params![id])
             .map_err(|e| AetherError::config(format!("Failed to delete memory: {}", e)))?;
 
         if rows_affected == 0 {
             return Err(AetherError::config(format!("Memory not found: {}", id)));
+        }
+
+        // Delete from vec0 table using rowid
+        if let Some(rid) = rowid {
+            conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rid])
+                .map_err(|e| {
+                    AetherError::config(format!("Failed to delete from memories_vec: {}", e))
+                })?;
         }
 
         Ok(())
@@ -383,6 +493,53 @@ impl VectorDatabase {
         window_title: Option<&str>,
     ) -> Result<u64, AetherError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // If clearing all, also clear vec table
+        if app_bundle_id.is_none() && window_title.is_none() {
+            conn.execute("DELETE FROM memories_vec", [])
+                .map_err(|e| {
+                    AetherError::config(format!("Failed to clear memories_vec: {}", e))
+                })?;
+        } else {
+            // Get rowids to delete from vec table first
+            let (where_clause, params_vec): (String, Vec<&str>) =
+                match (app_bundle_id, window_title) {
+                    (Some(app), Some(window)) => (
+                        "WHERE app_bundle_id = ?1 AND window_title = ?2".to_string(),
+                        vec![app, window],
+                    ),
+                    (Some(app), None) => {
+                        ("WHERE app_bundle_id = ?1".to_string(), vec![app])
+                    }
+                    (None, Some(window)) => {
+                        ("WHERE window_title = ?1".to_string(), vec![window])
+                    }
+                    (None, None) => unreachable!(),
+                };
+
+            // Get rowids before deleting
+            let rowids: Vec<i64> = {
+                let query = format!("SELECT rowid FROM memories {}", where_clause);
+                let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec
+                    .iter()
+                    .map(|s| s as &dyn rusqlite::ToSql)
+                    .collect();
+                let mut stmt = conn.prepare(&query).map_err(|e| {
+                    AetherError::config(format!("Failed to prepare query: {}", e))
+                })?;
+                let rows = stmt
+                    .query_map(params_refs.as_slice(), |row| row.get::<_, i64>(0))
+                    .map_err(|e| AetherError::config(format!("Failed to query rowids: {}", e)))?;
+                let collected: Vec<i64> = rows.filter_map(|r| r.ok()).collect();
+                collected
+            };
+
+            // Delete from vec table
+            for rowid in &rowids {
+                conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rowid])
+                    .ok(); // Ignore errors for individual deletes
+            }
+        }
 
         let (query, params_vec): (String, Vec<&str>) = match (app_bundle_id, window_title) {
             (Some(app), Some(window)) => (
@@ -418,6 +575,25 @@ impl VectorDatabase {
     /// all related memories are also removed from the database.
     pub async fn delete_by_topic_id(&self, topic_id: &str) -> Result<u64, AetherError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Get rowids before deleting
+        let rowids: Vec<i64> = {
+            let mut stmt = conn
+                .prepare("SELECT rowid FROM memories WHERE topic_id = ?1")
+                .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            let rows = stmt
+                .query_map(params![topic_id], |row| row.get::<_, i64>(0))
+                .map_err(|e| AetherError::config(format!("Failed to query rowids: {}", e)))?;
+            let collected: Vec<i64> = rows.filter_map(|r| r.ok()).collect();
+            collected
+        };
+
+        // Delete from vec table first
+        for rowid in &rowids {
+            conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rowid])
+                .ok();
+        }
+
         let rows_affected = conn
             .execute(
                 "DELETE FROM memories WHERE topic_id = ?1",
