@@ -7,7 +7,7 @@
 //! - **CLI**: Command-line interface channel for testing and local use
 //! - **iMessage**: macOS iMessage integration (requires Full Disk Access)
 //! - **Telegram**: Telegram Bot API integration (requires `telegram` feature)
-//! - (More channels to be added: Discord, Slack, etc.)
+//! - **Discord**: Discord Bot API integration (requires `discord` feature)
 
 pub mod cli;
 
@@ -17,6 +17,9 @@ pub mod imessage;
 #[cfg(feature = "telegram")]
 pub mod telegram;
 
+#[cfg(feature = "discord")]
+pub mod discord;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -24,3 +27,6 @@ pub use imessage::{IMessageChannel, IMessageChannelFactory, IMessageConfig, IMes
 
 #[cfg(feature = "telegram")]
 pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
+
+#[cfg(feature = "discord")]
+pub use discord::{DiscordChannel, DiscordChannelFactory, DiscordConfig};
