@@ -7,6 +7,9 @@ pub mod echo;
 pub mod version;
 pub mod agent;
 pub mod session;
+pub mod auth;
+pub mod events;
+pub mod channel;
 
 use std::collections::HashMap;
 use std::future::Future;

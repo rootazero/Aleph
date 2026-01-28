@@ -59,9 +59,14 @@ use aethecore::gateway::{
     ExecutionEngine, ExecutionEngineConfig, AgentRegistry,
     GatewayEventEmitter, GatewayConfig as FullGatewayConfig,
     SessionManager, SessionManagerConfig,
+    ChannelRegistry,
 };
 #[cfg(feature = "gateway")]
 use aethecore::gateway::handlers::session as session_handlers;
+#[cfg(feature = "gateway")]
+use aethecore::gateway::handlers::channel as channel_handlers;
+#[cfg(all(feature = "gateway", target_os = "macos"))]
+use aethecore::gateway::channels::imessage::{IMessageChannel, IMessageConfig};
 #[cfg(feature = "gateway")]
 use aethecore::executor::BuiltinToolRegistry;
 #[cfg(feature = "gateway")]
@@ -822,6 +827,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  - sessions.history: Get session message history");
             println!("  - sessions.reset  : Clear session messages");
             println!("  - sessions.delete : Delete a session");
+            println!();
+        }
+
+        // Initialize ChannelRegistry for multi-channel messaging
+        let channel_registry = Arc::new(ChannelRegistry::new());
+
+        // Register iMessage channel on macOS
+        #[cfg(target_os = "macos")]
+        {
+            // Create iMessage config with enabled = true
+            let mut imessage_config = IMessageConfig::default();
+            imessage_config.enabled = true;
+
+            let imessage_channel = IMessageChannel::new(imessage_config);
+            let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
+            if !args.daemon {
+                println!("Registered channel: {} (iMessage)", channel_id);
+            }
+        }
+
+        // Register channel handlers
+        // channels.list
+        let cr_list = channel_registry.clone();
+        server.handlers_mut().register("channels.list", move |req| {
+            let cr = cr_list.clone();
+            async move { channel_handlers::handle_list(req, cr).await }
+        });
+
+        // channels.status
+        let cr_status = channel_registry.clone();
+        server.handlers_mut().register("channels.status", move |req| {
+            let cr = cr_status.clone();
+            async move { channel_handlers::handle_status(req, cr).await }
+        });
+
+        // channel.start
+        let cr_start = channel_registry.clone();
+        server.handlers_mut().register("channel.start", move |req| {
+            let cr = cr_start.clone();
+            async move { channel_handlers::handle_start(req, cr).await }
+        });
+
+        // channel.stop
+        let cr_stop = channel_registry.clone();
+        server.handlers_mut().register("channel.stop", move |req| {
+            let cr = cr_stop.clone();
+            async move { channel_handlers::handle_stop(req, cr).await }
+        });
+
+        // channel.send
+        let cr_send = channel_registry.clone();
+        server.handlers_mut().register("channel.send", move |req| {
+            let cr = cr_send.clone();
+            async move { channel_handlers::handle_send(req, cr).await }
+        });
+
+        if !args.daemon {
+            println!("Channel methods:");
+            println!("  - channels.list   : List all channels");
+            println!("  - channels.status : Get channel status");
+            println!("  - channel.start   : Start a channel");
+            println!("  - channel.stop    : Stop a channel");
+            println!("  - channel.send    : Send message via channel");
             println!();
         }
 
