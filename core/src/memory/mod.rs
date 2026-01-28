@@ -1,13 +1,20 @@
 //! Memory module for context-aware local RAG
 //!
 //! This module provides functionality for storing and retrieving interaction memories
-//! with context anchors (app_bundle_id + window_title). Supports both embedding-based
-//! vector similarity search and AI-based relevance evaluation.
+//! with context anchors (app_bundle_id + window_title). Uses sqlite-vec extension for
+//! efficient KNN vector similarity search.
 //!
 //! ## Dual-Layer Architecture
 //!
 //! - **Layer 1 (Raw Logs)**: Original conversation pairs in `memories` table
 //! - **Layer 2 (Compressed Facts)**: LLM-extracted facts in `memory_facts` table
+//!
+//! ## Vector Search
+//!
+//! Vector similarity search is powered by sqlite-vec extension:
+//! - `memories_vec`: vec0 virtual table for memory embeddings
+//! - `facts_vec`: vec0 virtual table for fact embeddings
+//! - Uses L2 distance converted to similarity score: 1/(1+distance)
 
 // Public submodules
 pub mod ai_retrieval;
