@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import os.log
 
 /// Manages event streams for agent runs

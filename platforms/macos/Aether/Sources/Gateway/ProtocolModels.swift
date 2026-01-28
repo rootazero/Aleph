@@ -3,7 +3,7 @@ import Foundation
 // MARK: - JSON-RPC 2.0 Protocol Types
 
 /// JSON-RPC 2.0 Request
-struct JsonRpcRequest: Codable {
+struct JsonRpcRequest: Codable, Sendable {
     let jsonrpc: String
     let method: String
     let params: AnyCodable?
@@ -23,7 +23,7 @@ struct JsonRpcRequest: Codable {
 }
 
 /// JSON-RPC 2.0 Response
-struct JsonRpcResponse: Codable {
+struct JsonRpcResponse: Codable, Sendable {
     let jsonrpc: String
     let result: AnyCodable?
     let error: JsonRpcError?
@@ -34,7 +34,7 @@ struct JsonRpcResponse: Codable {
 }
 
 /// JSON-RPC 2.0 Error
-struct JsonRpcError: Codable, Error {
+struct JsonRpcError: Codable, Error, Sendable {
     let code: Int
     let message: String
     let data: AnyCodable?
@@ -48,7 +48,7 @@ struct JsonRpcError: Codable, Error {
 }
 
 /// JSON-RPC ID (can be string, number, or null)
-enum JsonRpcId: Codable, Equatable {
+enum JsonRpcId: Codable, Equatable, Sendable {
     case string(String)
     case number(Int)
     case null
@@ -86,7 +86,7 @@ enum JsonRpcId: Codable, Equatable {
 // MARK: - Stream Event Types
 
 /// Stream events from the Gateway
-enum StreamEvent: Codable {
+enum StreamEvent: Codable, Sendable {
     case runAccepted(RunAcceptedEvent)
     case reasoning(ReasoningEvent)
     case toolStart(ToolStartEvent)
@@ -176,7 +176,7 @@ enum StreamEvent: Codable {
     }
 }
 
-struct RunAcceptedEvent: Codable {
+struct RunAcceptedEvent: Codable, Sendable {
     let runId: String
     let sessionKey: String
     let acceptedAt: String
@@ -188,7 +188,7 @@ struct RunAcceptedEvent: Codable {
     }
 }
 
-struct ReasoningEvent: Codable {
+struct ReasoningEvent: Codable, Sendable {
     let runId: String
     let seq: UInt64
     let content: String
@@ -202,7 +202,7 @@ struct ReasoningEvent: Codable {
     }
 }
 
-struct ToolStartEvent: Codable {
+struct ToolStartEvent: Codable, Sendable {
     let runId: String
     let seq: UInt64
     let toolName: String
@@ -218,7 +218,7 @@ struct ToolStartEvent: Codable {
     }
 }
 
-struct ToolUpdateEvent: Codable {
+struct ToolUpdateEvent: Codable, Sendable {
     let runId: String
     let seq: UInt64
     let toolId: String
@@ -232,7 +232,7 @@ struct ToolUpdateEvent: Codable {
     }
 }
 
-struct ToolEndEvent: Codable {
+struct ToolEndEvent: Codable, Sendable {
     let runId: String
     let seq: UInt64
     let toolId: String
@@ -248,14 +248,14 @@ struct ToolEndEvent: Codable {
     }
 }
 
-struct ToolResult: Codable {
+struct ToolResult: Codable, Sendable {
     let success: Bool
     let output: String?
     let error: String?
     let metadata: AnyCodable?
 }
 
-struct ResponseChunkEvent: Codable {
+struct ResponseChunkEvent: Codable, Sendable {
     let runId: String
     let seq: UInt64
     let content: String
@@ -271,7 +271,7 @@ struct ResponseChunkEvent: Codable {
     }
 }
 
-struct RunCompleteEvent: Codable {
+struct RunCompleteEvent: Codable, Sendable {
     let runId: String
     let seq: UInt64
     let summary: RunSummary
@@ -285,7 +285,7 @@ struct RunCompleteEvent: Codable {
     }
 }
 
-struct RunSummary: Codable {
+struct RunSummary: Codable, Equatable, Sendable {
     let totalTokens: UInt64
     let toolCalls: UInt32
     let loops: UInt32
@@ -299,7 +299,7 @@ struct RunSummary: Codable {
     }
 }
 
-struct RunErrorEvent: Codable {
+struct RunErrorEvent: Codable, Sendable {
     let runId: String
     let seq: UInt64
     let error: String
@@ -313,7 +313,7 @@ struct RunErrorEvent: Codable {
     }
 }
 
-struct AskUserEvent: Codable {
+struct AskUserEvent: Codable, Sendable {
     let runId: String
     let seq: UInt64
     let question: String
@@ -329,7 +329,7 @@ struct AskUserEvent: Codable {
 
 // MARK: - RPC Request/Response Types
 
-struct AgentRunParams: Codable {
+struct AgentRunParams: Codable, Sendable {
     let input: String
     let sessionKey: String?
     let channel: String?
@@ -353,7 +353,7 @@ struct AgentRunParams: Codable {
     }
 }
 
-struct AgentRunResult: Codable {
+struct AgentRunResult: Codable, Sendable {
     let runId: String
     let sessionKey: String
     let acceptedAt: String
@@ -365,12 +365,12 @@ struct AgentRunResult: Codable {
     }
 }
 
-struct HealthResult: Codable {
+struct HealthResult: Codable, Sendable {
     let status: String
     let timestamp: String
 }
 
-struct VersionResult: Codable {
+struct VersionResult: Codable, Sendable {
     let name: String
     let version: String
     let `protocol`: String
@@ -379,7 +379,10 @@ struct VersionResult: Codable {
 // MARK: - AnyCodable Helper
 
 /// Type-erased Codable wrapper for arbitrary JSON values
-struct AnyCodable: Codable {
+/// Note: @unchecked Sendable because the wrapped values are JSON primitives
+/// (Bool, Int, Double, String, and arrays/dictionaries of these) which are
+/// effectively immutable after creation.
+struct AnyCodable: Codable, @unchecked Sendable {
     let value: Any
 
     init(_ value: Any) {

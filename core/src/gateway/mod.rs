@@ -46,6 +46,8 @@ pub mod config;
 pub mod session_manager;
 #[cfg(feature = "gateway")]
 pub mod execution_engine;
+#[cfg(feature = "gateway")]
+pub mod loop_callback_adapter;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -67,3 +69,5 @@ pub use config::GatewayConfig;
 pub use session_manager::SessionManager;
 #[cfg(feature = "gateway")]
 pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus};
+#[cfg(feature = "gateway")]
+pub use loop_callback_adapter::{EventEmittingCallback, ResponseChunkEmitter, UserQuestion};

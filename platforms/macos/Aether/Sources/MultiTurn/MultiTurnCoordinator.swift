@@ -40,6 +40,16 @@ final class MultiTurnCoordinator {
 
     private weak var core: AetherCore?
 
+    /// Gateway adapter for WebSocket-based processing
+    private lazy var gatewayAdapter: GatewayMultiTurnAdapter = {
+        let adapter = GatewayMultiTurnAdapter()
+        adapter.configure(coordinator: self)
+        return adapter
+    }()
+
+    /// Current Gateway run task (for cancellation)
+    private var gatewayTask: Task<Void, Never>?
+
     /// Pending context for async callbacks
     private var pendingTopic: Topic?
     private var pendingUserInput: String?
@@ -70,6 +80,12 @@ final class MultiTurnCoordinator {
 
     /// Typewriter task (can be cancelled)
     private var typewriterTask: Task<Void, Never>?
+
+    /// Whether to use Gateway WebSocket instead of FFI
+    /// Returns true if Gateway is connected and ready
+    private var useGateway: Bool {
+        GatewayManager.shared.isReady
+    }
 
     // MARK: - Initialization
 
@@ -172,6 +188,11 @@ final class MultiTurnCoordinator {
         typewriterTask?.cancel()
         typewriterTask = nil
 
+        // Cancel any ongoing Gateway task
+        gatewayTask?.cancel()
+        gatewayTask = nil
+        gatewayAdapter.reset()
+
         // Clean up incomplete topics (no messages OR only user messages without AI reply)
         if let topic = currentTopic {
             let messages = ConversationStore.shared.getMessages(topicId: topic.id)
@@ -263,18 +284,29 @@ final class MultiTurnCoordinator {
     ///   - isFirstMessage: Whether this is the first message in the topic
     private func processWithAI(text: String, topic: Topic, userDisplayText: String, attachments: [MediaAttachment], isFirstMessage: Bool) {
 
-        // async processing
-        guard let core = core else {
-            print("[MultiTurnCoordinator] ⚠️ Core not available")
-            return
-        }
-
-        print("[MultiTurnCoordinator] 🚀 Using interface (rig-core)")
-
         // Store pending context for callbacks
         pendingTopic = topic
         pendingUserInput = userDisplayText
         pendingIsFirstMessage = isFirstMessage
+
+        // Check if Gateway is available
+        if useGateway {
+            print("[MultiTurnCoordinator] 🌐 Using Gateway (WebSocket)")
+            processWithGateway(text: text, topic: topic)
+            return
+        }
+
+        // Fallback to FFI
+        guard let core = core else {
+            print("[MultiTurnCoordinator] ⚠️ Core not available and Gateway not ready")
+            clearPendingContext()
+            DispatchQueue.main.async { [weak self] in
+                self?.unifiedWindow.viewModel.setError("No AI backend available")
+            }
+            return
+        }
+
+        print("[MultiTurnCoordinator] 🚀 Using interface (rig-core FFI)")
 
         // Pass preferred language from LocalizationManager for AI responses
         let options = ProcessOptions(
@@ -294,6 +326,32 @@ final class MultiTurnCoordinator {
             clearPendingContext()
             DispatchQueue.main.async { [weak self] in
                 self?.unifiedWindow.viewModel.setError(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Process input via Gateway WebSocket
+    /// - Parameters:
+    ///   - text: The input text to send
+    ///   - topic: The current conversation topic
+    private func processWithGateway(text: String, topic: Topic) {
+        // Cancel any existing Gateway task
+        gatewayTask?.cancel()
+
+        gatewayTask = Task { @MainActor in
+            do {
+                // Run agent via Gateway with streaming
+                try await GatewayManager.shared.runAgentWithAdapter(
+                    input: text,
+                    sessionKey: topic.id,
+                    adapter: gatewayAdapter
+                )
+            } catch {
+                // Only handle error if not cancelled
+                if !Task.isCancelled {
+                    print("[MultiTurnCoordinator] Gateway error: \(error)")
+                    handleError(message: error.localizedDescription)
+                }
             }
         }
     }
