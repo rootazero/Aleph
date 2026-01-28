@@ -29,6 +29,10 @@ pub mod server;
 #[cfg(feature = "gateway")]
 pub mod event_bus;
 #[cfg(feature = "gateway")]
+pub mod event_emitter;
+#[cfg(feature = "gateway")]
+pub mod router;
+#[cfg(feature = "gateway")]
 pub mod security;
 #[cfg(feature = "gateway")]
 pub mod handlers;
@@ -39,3 +43,7 @@ pub use server::GatewayServer;
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
 #[cfg(feature = "gateway")]
 pub use event_bus::GatewayEventBus;
+#[cfg(feature = "gateway")]
+pub use event_emitter::{EventEmitter, StreamEvent, GatewayEventEmitter, NoOpEventEmitter};
+#[cfg(feature = "gateway")]
+pub use router::AgentRouter;

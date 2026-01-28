@@ -5,6 +5,8 @@
 pub mod health;
 pub mod echo;
 pub mod version;
+pub mod agent;
+pub mod session;
 
 use std::collections::HashMap;
 use std::future::Future;
