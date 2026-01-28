@@ -28,9 +28,6 @@ final class PermissionCoordinator {
     /// Menu bar manager for icon updates
     private weak var menuBarManager: MenuBarManager?
 
-    /// Input coordinator for state sync
-    private weak var inputCoordinator: InputCoordinator?
-
     // MARK: - State
 
     /// Whether permission gate is currently active
@@ -50,10 +47,8 @@ final class PermissionCoordinator {
     ///
     /// - Parameters:
     ///   - menuBarManager: Menu bar manager for icon updates
-    ///   - inputCoordinator: Input coordinator for state sync
-    func configure(menuBarManager: MenuBarManager?, inputCoordinator: InputCoordinator?) {
+    func configure(menuBarManager: MenuBarManager?) {
         self.menuBarManager = menuBarManager
-        self.inputCoordinator = inputCoordinator
     }
 
     // MARK: - Permission Gate
@@ -63,7 +58,6 @@ final class PermissionCoordinator {
         print("[PermissionCoordinator] Showing permission gate - permissions not granted")
 
         isActive = true
-        inputCoordinator?.isPermissionGateActive = true
 
         // Disable settings menu item
         menuBarManager?.setSettingsEnabled(false)
@@ -114,7 +108,6 @@ final class PermissionCoordinator {
         print("[PermissionCoordinator] Permission gate dismissed - all permissions granted")
 
         isActive = false
-        inputCoordinator?.isPermissionGateActive = false
 
         // Enable settings menu item
         menuBarManager?.setSettingsEnabled(true)

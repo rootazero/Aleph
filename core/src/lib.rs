@@ -100,7 +100,6 @@ pub mod thinker; // NEW: LLM decision-making layer for Agent Loop
 mod title_generator; // Title generation for conversation topics
 pub mod tool_output; // NEW: Tool output truncation and cleanup (OpenCode style)
 pub mod tools; // NEW: Unified tool system (replacing rig-core Tool trait)
-pub mod typo_correction; // NEW: Quick typo correction with double-space trigger
 pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module
 pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
@@ -174,7 +173,6 @@ pub use crate::config::{
     TextFormatPolicy,
     ToolSafetyPolicy,
     TriggerConfig,
-    TypoCorrectionConfig,
     VideoConfig,
     WebFetchPolicy,
 };
@@ -369,8 +367,6 @@ pub use crate::ffi::dispatcher_types::{
     StageResultFFI,
     TaskTypeMappingFFI,
 };
-// Typo correction FFI types
-pub use crate::ffi::TypoCorrectionResult;
 
 // Generation exports (media generation providers)
 // Note: providers module is accessible via aethecore::generation::providers

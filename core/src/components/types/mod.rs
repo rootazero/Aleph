@@ -35,6 +35,8 @@ pub use parts::{
     ToolCallStatus,
     ReasoningPart,
     PlanPart,
+    PlanStep,
+    StepStatus,
     SubAgentPart,
     SummaryPart,
     CompactionMarker,

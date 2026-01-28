@@ -13,8 +13,9 @@ mod types;
 
 // Re-export public API
 pub use state::{
-    clear_written_files, get_working_dir, get_written_files, record_written_file, set_working_dir,
-    take_written_files, WrittenFile,
+    clear_written_files, get_working_dir, get_written_files, mark_session_start,
+    record_written_file, scan_new_files_in_working_dir, set_working_dir, take_written_files,
+    WrittenFile,
 };
 pub use tool::FileOpsTool;
 pub use types::{FileInfo, FileOperation, FileOpsArgs, FileOpsOutput};

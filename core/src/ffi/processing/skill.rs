@@ -19,7 +19,9 @@ use crate::ffi::FfiLoopCallback;
 use crate::ffi::AetherEventHandler;
 use crate::generation::GenerationProviderRegistry;
 use crate::intent::SkillInvocation;
-use crate::rig_tools::file_ops::{clear_written_files, take_written_files};
+use crate::rig_tools::file_ops::{
+    clear_written_files, mark_session_start, scan_new_files_in_working_dir, take_written_files,
+};
 use crate::rig_tools::set_tool_progress_handler;
 use crate::runtimes::{RuntimeCapability, RuntimeRegistry};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
@@ -64,6 +66,9 @@ pub fn run_skill_with_agent_loop(
 
     // Clear any previously tracked written files for this session
     clear_written_files();
+
+    // Mark the start of session for detecting newly created files
+    mark_session_start();
 
     // Set up tool progress callback for additional streaming updates
     let progress_adapter = Arc::new(FfiToolProgressAdapter::new(handler.clone()));
@@ -128,8 +133,8 @@ pub fn run_skill_with_agent_loop(
         .insert("skill_name".to_string(), skill.display_name.clone());
 
     // Create loop config - skills may need more steps for complex operations
-    // Default: 100 steps (vs 30 previously), configurable via AETHER_SKILL_MAX_STEPS
-    let default_max_steps = 100;
+    // Default: 30 steps (reduced from 100 to prevent token explosion), configurable via AETHER_SKILL_MAX_STEPS
+    let default_max_steps = 30;
     let max_steps = std::env::var("AETHER_SKILL_MAX_STEPS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -246,7 +251,19 @@ pub fn run_skill_with_agent_loop(
             );
 
             // Collect files written during tool execution
-            let written_files = take_written_files();
+            let mut written_files = take_written_files();
+
+            // Scan working directory for additional files created during session
+            // This captures files created by bash commands, Python scripts, etc.
+            let scanned_files = scan_new_files_in_working_dir();
+            if !scanned_files.is_empty() {
+                info!(
+                    scanned_count = scanned_files.len(),
+                    "Found additional files in working directory not tracked by tools"
+                );
+                written_files.extend(scanned_files);
+            }
+
             let final_summary = if written_files.is_empty() {
                 summary.clone()
             } else {

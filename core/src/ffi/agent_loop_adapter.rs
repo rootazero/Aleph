@@ -21,7 +21,7 @@ use tracing::{debug, info, warn};
 use crate::agent_loop::{
     callback::LoopCallback, guards::GuardViolation, Action, ActionResult, LoopState, Thinking,
 };
-use crate::components::{PartUpdateData, SessionPart, ToolCallPart, ToolCallStatus};
+use crate::components::{PartUpdateData, ReasoningPart, SessionPart, ToolCallPart, ToolCallStatus};
 use crate::ffi::{AetherEventHandler, PartUpdateEventFFI};
 
 /// Safely truncate a string at character boundaries (UTF-8 safe)
@@ -38,6 +38,76 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
         .map(|(i, _)| i)
         .unwrap_or(s.len());
     format!("{}...", &s[..end_byte])
+}
+
+/// Clean thinking stream content for UI display
+///
+/// Removes common LLM noise patterns and truncates long content.
+/// This ensures the status bar shows concise, relevant information.
+fn clean_thinking_stream(raw: &str) -> String {
+    let mut cleaned = raw
+        // Remove common noise patterns
+        .replace("I should ", "")
+        .replace("I will ", "")
+        .replace("Let me ", "")
+        .replace("I need to ", "")
+        .replace("First, ", "")
+        .replace("Next, ", "");
+
+    // Remove XML-like tags (e.g., <thinking>...</thinking>)
+    if cleaned.contains('<') {
+        // Simple tag removal (not a full XML parser)
+        cleaned = cleaned
+            .split('<')
+            .filter_map(|s| s.split('>').nth(1))
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
+
+    // Collapse multiple whitespaces
+    while cleaned.contains("  ") {
+        cleaned = cleaned.replace("  ", " ");
+    }
+
+    // Truncate long thinking (max 200 chars for status bar)
+    if cleaned.len() > 200 {
+        cleaned.truncate(197);
+        cleaned.push_str("...");
+    }
+
+    // Remove newlines
+    cleaned = cleaned.replace('\n', " ");
+
+    cleaned.trim().to_string()
+}
+
+/// Extract high-level activity description from tool operation
+///
+/// Provides user-friendly descriptions that hide implementation details.
+/// Currently unused but prepared for future Part system integration (Phase 3).
+#[allow(dead_code)]
+fn extract_high_level_activity(tool_name: &str, operation: Option<&str>) -> String {
+    match tool_name {
+        "file_ops" => {
+            match operation {
+                Some("mkdir") | Some("write") | Some("copy") | Some("move") | Some("organize") | Some("batch_move") => "管理文件",
+                Some("read") | Some("list") => "读取数据",
+                Some("search") => "搜索文件",
+                Some("delete") => "删除文件",
+                _ => "文件操作",
+            }
+        },
+        "search" => "搜索信息",
+        "web_fetch" | "youtube" => "访问网络",
+        "generate_image" | "generate_video" | "generate_audio" => "生成内容",
+        "pdf_generate" => "生成文档",
+        "code_exec" => "执行代码",
+        "bash_exec" => "执行命令",
+        "read_skill" | "list_skills" => "访问技能",
+        "get_tool_schema" | "list_tools" => "查询工具",
+        "mcp_wrapper" => "调用服务",
+        _ => "执行操作",
+    }.to_string()
 }
 
 /// Format tool action into a human-readable description
@@ -194,6 +264,73 @@ fn format_tool_description(tool_name: &str, arguments: &Value) -> (String, Strin
             "正在生成 PDF 文档".to_string(),
             "生成PDF".to_string(),
         ),
+        "code_exec" => {
+            let language = obj
+                .and_then(|o| o.get("language"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("代码");
+            let code = obj
+                .and_then(|o| o.get("code"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let code_preview = truncate_str(code, 30).replace('\n', " ");
+            (
+                format!("正在执行{}: {}", language, code_preview),
+                format!("执行{}", language),
+            )
+        },
+        "bash_exec" => {
+            let cmd = obj
+                .and_then(|o| o.get("command"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            (
+                format!("正在执行命令: {}", truncate_str(cmd, 50)),
+                "执行命令".to_string(),
+            )
+        },
+        "read_skill" => {
+            let skill_id = obj
+                .and_then(|o| o.get("skill_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            (
+                format!("正在读取技能: {}", skill_id),
+                "读取技能".to_string(),
+            )
+        },
+        "list_skills" => (
+            "正在列出所有技能".to_string(),
+            "列出技能".to_string(),
+        ),
+        "get_tool_schema" => {
+            let tool_name = obj
+                .and_then(|o| o.get("tool_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            (
+                format!("正在查询工具: {}", tool_name),
+                "查询工具".to_string(),
+            )
+        },
+        "list_tools" => (
+            "正在列出所有工具".to_string(),
+            "列出工具".to_string(),
+        ),
+        "mcp_wrapper" => {
+            let server = obj
+                .and_then(|o| o.get("server"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let method = obj
+                .and_then(|o| o.get("method"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            (
+                format!("正在调用服务 {}: {}", server, method),
+                format!("调用{}", server),
+            )
+        },
         _ => {
             // Generic fallback for unknown tools
             (
@@ -272,6 +409,8 @@ pub struct FfiLoopCallback {
     last_streamed_len: RwLock<usize>,
     /// Active tool call parts (part_id -> ToolCallPart)
     active_tool_calls: RwLock<std::collections::HashMap<String, ToolCallPart>>,
+    /// Current agent loop step (for ReasoningPart tracking)
+    current_step: RwLock<usize>,
 }
 
 impl FfiLoopCallback {
@@ -286,6 +425,7 @@ impl FfiLoopCallback {
             session_id: RwLock::new(String::new()),
             last_streamed_len: RwLock::new(0),
             active_tool_calls: RwLock::new(std::collections::HashMap::new()),
+            current_step: RwLock::new(0),
         }
     }
 
@@ -305,6 +445,7 @@ impl FfiLoopCallback {
             session_id: RwLock::new(String::new()),
             last_streamed_len: RwLock::new(0),
             active_tool_calls: RwLock::new(std::collections::HashMap::new()),
+            current_step: RwLock::new(0),
         }
     }
 
@@ -414,11 +555,14 @@ impl LoopCallback for FfiLoopCallback {
             *session_id = state.session_id.clone();
         }
 
-        self.handler.on_thinking();
+        // Legacy callback - deprecated (Phase 3: use ReasoningPart instead)
+        // self.handler.on_thinking();
     }
 
     async fn on_step_start(&self, step: usize) {
         info!(step = step, "AgentLoop step started");
+        // Update current step for ReasoningPart tracking
+        *self.current_step.write().await = step;
         // Don't show step headers - each step's status will replace the previous one
         // The UI will show current activity without historical step clutter
     }
@@ -442,22 +586,28 @@ impl LoopCallback for FfiLoopCallback {
     }
 
     async fn on_thinking_stream(&self, content: &str) {
-        // Stream thinking content to UI as status (replaces previous status)
         if !content.is_empty() {
-            let formatted = format!("💭 {}", content);
-            self.set_status(&formatted).await;
-            debug!(content_len = content.len(), "Thinking stream chunk sent to UI");
+            // Clean the thinking content before sending to UI
+            let cleaned = clean_thinking_stream(content);
 
-            // Publish streaming text delta as Part event
-            let session_id = self.session_id.read().await.clone();
-            if !session_id.is_empty() {
-                let data = PartUpdateData::text_delta(
-                    &session_id,
-                    "thinking_stream",
-                    "reasoning",
-                    content,
-                );
-                self.publish_part_event(data).await;
+            if !cleaned.is_empty() {  // Only send non-empty cleaned content
+                let formatted = format!("💭 {}", cleaned);
+                self.set_status(&formatted).await;
+                debug!(content_len = content.len(), cleaned_len = cleaned.len(), "Thinking stream chunk sent to UI (cleaned)");
+
+                // Publish ReasoningPart event (Phase 1: Part-driven UI)
+                let session_id = self.session_id.read().await.clone();
+                if !session_id.is_empty() {
+                    let current_step = *self.current_step.read().await;
+                    let part = SessionPart::Reasoning(ReasoningPart {
+                        content: cleaned.clone(),
+                        step: current_step,
+                        is_complete: false,
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                    });
+                    let data = PartUpdateData::updated(&session_id, &part, None);
+                    self.publish_part_event(data).await;
+                }
             }
         }
     }
@@ -476,7 +626,9 @@ impl LoopCallback for FfiLoopCallback {
                 // Use set_status() instead of append_response() to avoid cluttering final summary
                 let message = format!("⚡ {}", description);
                 self.set_status(&message).await;
-                self.handler.on_tool_start(tool_name.clone());
+
+                // Legacy callback - deprecated (Phase 3: use ToolCallPart instead)
+                // self.handler.on_tool_start(tool_name.clone());
 
                 // Create and publish ToolCallPart (Added event)
                 let part_id = uuid::Uuid::new_v4().to_string();
@@ -870,9 +1022,9 @@ mod tests {
         // Status updates replace each other
         assert!(events.contains(&"chunk:Loading...".to_string()));
         assert!(events.contains(&"chunk:Processing...".to_string()));
-        // Response accumulates
+        // Response sends only NEW content (incremental streaming)
         assert!(events.contains(&"chunk:Hello, ".to_string()));
-        assert!(events.contains(&"chunk:Hello, world!".to_string()));
+        assert!(events.contains(&"chunk:world!".to_string())); // Only the new part
 
         let response = callback.get_response().await;
         assert_eq!(response, "Hello, world!");
@@ -954,5 +1106,73 @@ mod tests {
         let truncated = truncate_path(long_path, 40);
         assert!(truncated.len() <= 40);
         assert!(truncated.contains("..."));
+    }
+
+    #[test]
+    fn test_clean_thinking_stream() {
+        // Test noise removal
+        assert_eq!(
+            clean_thinking_stream("I should analyze the code first"),
+            "analyze the code first"
+        );
+        assert_eq!(
+            clean_thinking_stream("Let me  think  about  it"),
+            "think about it"
+        );
+        assert_eq!(
+            clean_thinking_stream("I will start by reading the file"),
+            "start by reading the file"
+        );
+        assert_eq!(
+            clean_thinking_stream("I need to check the documentation"),
+            "check the documentation"
+        );
+        assert_eq!(
+            clean_thinking_stream("First, we should verify the input"),
+            "we should verify the input"
+        );
+
+        // Test newline removal
+        assert_eq!(
+            clean_thinking_stream("Line 1\nLine 2\nLine 3"),
+            "Line 1 Line 2 Line 3"
+        );
+
+        // Test whitespace collapse
+        assert_eq!(
+            clean_thinking_stream("Too    many     spaces"),
+            "Too many spaces"
+        );
+
+        // Test truncation (over 200 chars)
+        let long_text = "a".repeat(250);
+        let cleaned = clean_thinking_stream(&long_text);
+        assert_eq!(cleaned.len(), 200); // 197 + "..."
+        assert!(cleaned.ends_with("..."));
+
+        // Test empty input
+        assert_eq!(clean_thinking_stream(""), "");
+        assert_eq!(clean_thinking_stream("   "), "");
+    }
+
+    #[test]
+    fn test_extract_high_level_activity() {
+        // Test file_ops
+        assert_eq!(extract_high_level_activity("file_ops", Some("mkdir")), "管理文件");
+        assert_eq!(extract_high_level_activity("file_ops", Some("write")), "管理文件");
+        assert_eq!(extract_high_level_activity("file_ops", Some("read")), "读取数据");
+        assert_eq!(extract_high_level_activity("file_ops", Some("search")), "搜索文件");
+        assert_eq!(extract_high_level_activity("file_ops", Some("delete")), "删除文件");
+
+        // Test other tools
+        assert_eq!(extract_high_level_activity("search", None), "搜索信息");
+        assert_eq!(extract_high_level_activity("web_fetch", None), "访问网络");
+        assert_eq!(extract_high_level_activity("code_exec", None), "执行代码");
+        assert_eq!(extract_high_level_activity("bash_exec", None), "执行命令");
+        assert_eq!(extract_high_level_activity("read_skill", None), "访问技能");
+        assert_eq!(extract_high_level_activity("mcp_wrapper", None), "调用服务");
+
+        // Test unknown tool
+        assert_eq!(extract_high_level_activity("unknown_tool", None), "执行操作");
     }
 }

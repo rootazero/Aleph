@@ -31,7 +31,6 @@ pub mod skills;
 pub mod smart_flow;
 pub mod subagent;
 pub mod tools;
-pub mod typo_correction;
 pub mod video;
 
 // Re-export all types for backward compatibility
@@ -50,5 +49,4 @@ pub use skills::*;
 pub use smart_flow::*;
 pub use subagent::*;
 pub use tools::*;
-pub use typo_correction::*;
 pub use video::*;

@@ -21,7 +21,7 @@ pub use user_input::UserInputPart;
 pub use ai_response::AiResponsePart;
 pub use tool_call::{ToolCallPart, ToolCallStatus};
 pub use reasoning::ReasoningPart;
-pub use plan::PlanPart;
+pub use plan::{PlanPart, PlanStep, StepStatus};
 pub use sub_agent::SubAgentPart;
 pub use summary::SummaryPart;
 pub use markers::CompactionMarker;

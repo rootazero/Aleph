@@ -361,10 +361,4 @@ extension UserQuestion {
     }
 }
 
-extension QuestionOption {
-    init(label: String, description: String?) {
-        self.label = label
-        self.description = description
-    }
-}
 #endif

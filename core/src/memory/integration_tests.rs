@@ -673,7 +673,7 @@ mod integration_tests {
             let id = format!("mem-{}", i);
             memory_ids.push(id.clone());
 
-            let embedding = vec![1.0; 4];
+            let embedding = vec![1.0; 512];
             let memory = MemoryEntry::with_embedding(
                 id,
                 context.clone(),

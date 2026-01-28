@@ -214,17 +214,6 @@ final class DependencyContainer: ObservableObject {
         return _haloWindow
     }
 
-    /// Input coordinator (lazy, requires core)
-    private var _inputCoordinator: InputCoordinator?
-    var inputCoordinator: InputCoordinator? {
-        return _inputCoordinator
-    }
-
-    /// Output coordinator (lazy, requires core)
-    private var _outputCoordinator: OutputCoordinator?
-    var outputCoordinator: OutputCoordinator? {
-        return _outputCoordinator
-    }
 
     // MARK: - State
 
@@ -312,9 +301,7 @@ final class DependencyContainer: ObservableObject {
             eventHandler.setHaloWindow(_haloWindow)
         }
 
-        // TODO: Create other coordinators as they are extracted from AppDelegate
-        // _inputCoordinator = InputCoordinator(...)
-        // _outputCoordinator = OutputCoordinator(...)
+        // Single-turn coordinators removed - use MultiTurnCoordinator for conversations
 
         areCoordinatorsInitialized = true
         print("[DependencyContainer] Coordinators initialized successfully")
@@ -332,8 +319,6 @@ final class DependencyContainer: ObservableObject {
         clipboardMonitor.stopMonitoring()
 
         // Clear coordinators
-        _outputCoordinator = nil
-        _inputCoordinator = nil
         _haloWindow = nil
 
         // Clear core services
@@ -391,7 +376,3 @@ enum DependencyError: LocalizedError {
 // MARK: - Placeholder Types (to be created)
 
 // HaloWindowController - Implemented in Controllers/HaloWindowController.swift
-
-// InputCoordinator - Implemented in Coordinator/InputCoordinator.swift
-
-// OutputCoordinator - Implemented in Coordinator/OutputCoordinator.swift

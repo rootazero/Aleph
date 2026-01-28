@@ -29,11 +29,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Halo overlay window
     private var haloWindow: HaloWindow?
 
-    // Output coordinator for managing AI response output
-    private var outputCoordinator: OutputCoordinator?
-
-    // Input coordinator for managing input capture
-    private var inputCoordinator: InputCoordinator?
 
     // Settings window (used by legacy Settings scene and WindowGroup)
     private var settingsWindow: NSWindow?
@@ -150,8 +145,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Stop clipboard monitoring
         clipboardMonitor.stopMonitoring()
 
-        // Stop output coordinator (removes ESC key monitor)
-        outputCoordinator?.stop()
 
         // Shutdown Gateway connection
         GatewayManager.shared.shutdown()
@@ -545,11 +538,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         hotkeyService = HotkeyService()
         hotkeyService?.configure(
             core: core,
-            onReplace: { [weak self] in
-                self?.inputCoordinator?.handleReplaceTriggered()
+            onReplace: {
+                // Single-turn mode removed - use multi-turn conversation
+                MultiTurnCoordinator.shared.showOrBringToFront()
             },
-            onAppend: { [weak self] in
-                self?.inputCoordinator?.handleAppendTriggered()
+            onAppend: {
+                // Single-turn mode removed - use multi-turn conversation
+                MultiTurnCoordinator.shared.showOrBringToFront()
             }
         )
 
@@ -565,9 +560,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Update menu bar icon to show active state
         updateMenuBarIcon(state: .listening)
 
-        // Start typo correction feature (double-space trigger)
-        TypoCorrectionCoordinator.shared.start()
-        print("[Aether] TypoCorrectionCoordinator started")
     }
 
     // MARK: - Core Initialization (rig-core based)
@@ -602,20 +594,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             if let coreInstance = core {
                 eventHandler.setCore(coreInstance)
             }
-
-            // Configure OutputCoordinator with dependencies
-            outputCoordinator?.configure(core: core, haloWindow: haloWindow)
-
-            // Configure InputCoordinator with dependencies
-            inputCoordinator?.configure(
-                core: core,
-                haloWindow: haloWindow,
-                eventHandler: eventHandler,
-                outputCoordinator: outputCoordinator
-            )
-
-            // Set InputCoordinator reference in EventHandler for callbacks
-            eventHandler.setInputCoordinator(inputCoordinator)
 
             // Configure MultiTurnCoordinator with dependencies
             MultiTurnCoordinator.shared.configure(core: core)
@@ -661,7 +639,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             let options = ProcessOptions(
                 appContext: appContext,
                 windowTitle: windowTitle,
-                topicId: nil,  // Single-turn mode
+                topicId: nil,  // Will be set by MultiTurnCoordinator for conversations
                 stream: stream,
                 attachments: nil,  // No attachments for direct process calls
                 preferredLanguage: LocalizationManager.shared.currentLanguage
@@ -765,8 +743,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Configure with dependencies
         permissionCoordinator?.configure(
-            menuBarManager: menuBarManager,
-            inputCoordinator: inputCoordinator
+            menuBarManager: menuBarManager
         )
 
         // Set callback for when permissions are granted
@@ -877,13 +854,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Initialize event handler (rig-core based)
         eventHandler = EventHandler(haloWindow: haloWindow)
-
-        // Initialize output coordinator (will configure with core after Rust core init)
-        outputCoordinator = OutputCoordinator()
-        outputCoordinator?.start()
-
-        // Initialize input coordinator (will configure with core after Rust core init)
-        inputCoordinator = InputCoordinator()
 
         // Start clipboard monitoring for context tracking
         clipboardMonitor.startMonitoring()
@@ -1110,15 +1080,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         print("[AppDelegate] Initializing trigger system: replace=\(replaceKey.rawValue), append=\(appendKey.rawValue)")
 
         // Create GlobalHotkeyMonitor with Replace/Append callbacks
-        // Delegate to InputCoordinator for trigger handling
+        // Single-turn mode removed - redirect to multi-turn conversation
         hotkeyMonitor = GlobalHotkeyMonitor(
             replaceKey: replaceKey,
             appendKey: appendKey,
-            onReplaceTriggered: { [weak self] in
-                self?.inputCoordinator?.handleReplaceTriggered()
+            onReplaceTriggered: {
+                MultiTurnCoordinator.shared.showOrBringToFront()
             },
-            onAppendTriggered: { [weak self] in
-                self?.inputCoordinator?.handleAppendTriggered()
+            onAppendTriggered: {
+                MultiTurnCoordinator.shared.showOrBringToFront()
             }
         )
 
