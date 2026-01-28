@@ -58,7 +58,10 @@ use aethecore::gateway::{
     can_create_provider_from_env, create_provider_registry_from_env,
     ExecutionEngine, ExecutionEngineConfig, AgentRegistry,
     GatewayEventEmitter, GatewayConfig as FullGatewayConfig,
+    SessionManager, SessionManagerConfig,
 };
+#[cfg(feature = "gateway")]
+use aethecore::gateway::handlers::session as session_handlers;
 #[cfg(feature = "gateway")]
 use aethecore::executor::BuiltinToolRegistry;
 #[cfg(feature = "gateway")]
@@ -123,7 +126,50 @@ enum Command {
     /// Stop a running daemon
     Stop,
     /// Check gateway status
-    Status,
+    Status {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage device pairing
+    Pairing {
+        #[command(subcommand)]
+        action: PairingAction,
+    },
+    /// Manage approved devices
+    Devices {
+        #[command(subcommand)]
+        action: DevicesAction,
+    },
+}
+
+/// Pairing subcommands
+#[derive(Subcommand, Debug)]
+enum PairingAction {
+    /// List pending pairing requests
+    List,
+    /// Approve a pairing request
+    Approve {
+        /// The 6-digit pairing code
+        code: String,
+    },
+    /// Reject a pairing request
+    Reject {
+        /// The 6-digit pairing code
+        code: String,
+    },
+}
+
+/// Devices subcommands
+#[derive(Subcommand, Debug)]
+enum DevicesAction {
+    /// List approved devices
+    List,
+    /// Revoke an approved device
+    Revoke {
+        /// The device ID to revoke
+        device_id: String,
+    },
 }
 
 /// Expand ~ to home directory
@@ -209,15 +255,175 @@ fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Handle status command
-fn handle_status(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(pid) = read_pid_file(pid_file) {
-        if is_process_running(pid) {
-            println!("Gateway is running (PID {})", pid);
-        } else {
-            println!("Gateway is not running (stale PID file for PID {})", pid);
-        }
+fn handle_status(pid_file: &str, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let pid = read_pid_file(pid_file);
+    let running = pid.map(|p| is_process_running(p)).unwrap_or(false);
+
+    if json {
+        let status = serde_json::json!({
+            "running": running,
+            "pid": pid,
+        });
+        println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
-        println!("Gateway is not running (no PID file)");
+        match (pid, running) {
+            (Some(p), true) => println!("Gateway is running (PID {})", p),
+            (Some(p), false) => println!("Gateway is not running (stale PID file for PID {})", p),
+            (None, _) => println!("Gateway is not running (no PID file)"),
+        }
+    }
+    Ok(())
+}
+
+/// Get default device store path
+fn get_device_store_path() -> PathBuf {
+    expand_path("~/.aether/devices.db")
+}
+
+/// Handle pairing list command
+#[cfg(feature = "gateway")]
+async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::gateway::security::PairingManager;
+
+    let manager = PairingManager::new();
+    let pending = manager.list_pending().await;
+
+    if pending.is_empty() {
+        println!("No pending pairing requests");
+    } else {
+        println!("Pending pairing requests:");
+        println!("{:<8} {:<30} {:<10}", "CODE", "DEVICE NAME", "EXPIRES IN");
+        println!("{}", "-".repeat(50));
+        for (code, device_name, expires_in) in pending {
+            println!("{:<8} {:<30} {}s", code, device_name, expires_in);
+        }
+    }
+    Ok(())
+}
+
+/// Handle pairing approve command
+#[cfg(feature = "gateway")]
+async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::gateway::security::{PairingManager, TokenManager};
+    use aethecore::gateway::device_store::{DeviceStore, ApprovedDevice};
+
+    let pairing_manager = PairingManager::new();
+    let token_manager = TokenManager::new();
+
+    // Get pairing info
+    let pairing_info = match pairing_manager.get_pairing_info(code).await {
+        Some(info) => info,
+        None => {
+            eprintln!("Error: Invalid or expired pairing code: {}", code);
+            std::process::exit(1);
+        }
+    };
+
+    // Confirm pairing
+    let device_name = match pairing_manager.confirm_pairing(code).await {
+        Some(name) => name,
+        None => {
+            eprintln!("Error: Failed to confirm pairing");
+            std::process::exit(1);
+        }
+    };
+
+    // Create device store and approve device
+    let store_path = get_device_store_path();
+    if let Some(parent) = store_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let device_store = DeviceStore::open(&store_path)?;
+
+    let device_id = uuid::Uuid::new_v4().to_string();
+    let device = ApprovedDevice::new(
+        device_id.clone(),
+        device_name.clone(),
+        pairing_info.device_type,
+    );
+
+    device_store.approve_device(&device)?;
+
+    // Generate token
+    let token = token_manager
+        .generate_token_with_device(vec!["*".to_string()], Some(device_id.clone()))
+        .await;
+
+    println!("Device approved successfully!");
+    println!("  Device ID:   {}", device_id);
+    println!("  Device Name: {}", device_name);
+    println!("  Token:       {}", token);
+    println!();
+    println!("The device can now connect using this token.");
+
+    Ok(())
+}
+
+/// Handle pairing reject command
+#[cfg(feature = "gateway")]
+async fn handle_pairing_reject(code: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::gateway::security::PairingManager;
+
+    let manager = PairingManager::new();
+    if manager.cancel_pairing(code).await {
+        println!("Pairing request rejected: {}", code);
+    } else {
+        eprintln!("Error: Invalid or expired pairing code: {}", code);
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Handle devices list command
+#[cfg(feature = "gateway")]
+fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::gateway::device_store::DeviceStore;
+
+    let store_path = get_device_store_path();
+    if !store_path.exists() {
+        println!("No approved devices");
+        return Ok(());
+    }
+
+    let device_store = DeviceStore::open(&store_path)?;
+    let devices = device_store.list_devices();
+
+    if devices.is_empty() {
+        println!("No approved devices");
+    } else {
+        println!("Approved devices:");
+        println!("{:<36} {:<20} {:<10} {:<20}", "DEVICE ID", "NAME", "TYPE", "APPROVED AT");
+        println!("{}", "-".repeat(90));
+        for device in devices {
+            let device_type = device.device_type.unwrap_or_else(|| "-".to_string());
+            let approved_at = &device.approved_at[..19]; // Truncate to "2026-01-28T12:00:00"
+            println!(
+                "{:<36} {:<20} {:<10} {:<20}",
+                device.device_id, device.device_name, device_type, approved_at
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Handle devices revoke command
+#[cfg(feature = "gateway")]
+fn handle_devices_revoke(device_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::gateway::device_store::DeviceStore;
+
+    let store_path = get_device_store_path();
+    if !store_path.exists() {
+        eprintln!("Error: No device store found");
+        std::process::exit(1);
+    }
+
+    let device_store = DeviceStore::open(&store_path)?;
+
+    if device_store.revoke_device(device_id)? {
+        println!("Device revoked: {}", device_id);
+    } else {
+        eprintln!("Error: Device not found: {}", device_id);
+        std::process::exit(1);
     }
     Ok(())
 }
@@ -313,8 +519,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Stop) => {
             return handle_stop(&args.pid_file);
         }
-        Some(Command::Status) => {
-            return handle_status(&args.pid_file);
+        Some(Command::Status { json }) => {
+            return handle_status(&args.pid_file, json);
+        }
+        #[cfg(feature = "gateway")]
+        Some(Command::Pairing { action }) => {
+            return match action {
+                PairingAction::List => handle_pairing_list().await,
+                PairingAction::Approve { code } => handle_pairing_approve(&code).await,
+                PairingAction::Reject { code } => handle_pairing_reject(&code).await,
+            };
+        }
+        #[cfg(feature = "gateway")]
+        Some(Command::Devices { action }) => {
+            return match action {
+                DevicesAction::List => handle_devices_list(),
+                DevicesAction::Revoke { device_id } => handle_devices_revoke(&device_id),
+            };
+        }
+        #[cfg(not(feature = "gateway"))]
+        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) => {
+            eprintln!("Error: Gateway feature is not enabled.");
+            std::process::exit(1);
         }
         Some(Command::Start) | None => {
             // Continue with start logic
@@ -437,6 +663,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut server = GatewayServer::with_config(addr, config);
 
+        // Initialize SessionManager for persistent session storage (before creating agents)
+        let session_manager: Arc<SessionManager> = match SessionManager::with_defaults() {
+            Ok(sm) => {
+                if !args.daemon {
+                    println!("Session manager initialized (SQLite persistence)");
+                }
+                Arc::new(sm)
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to initialize session manager: {}. Using temp storage.", e);
+                // Create fallback with temporary path
+                let temp_path = std::env::temp_dir().join("aether_sessions.db");
+                match SessionManager::new(SessionManagerConfig {
+                    db_path: temp_path,
+                    ..Default::default()
+                }) {
+                    Ok(sm) => Arc::new(sm),
+                    Err(e2) => {
+                        eprintln!("Error: Could not create fallback session manager: {}", e2);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        };
+
         // Set up agent.run handler with dependencies
         let event_bus = server.event_bus().clone();
         let router = Arc::new(AgentRouter::new());
@@ -469,15 +720,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tools,
                     ));
 
-                    // Create agent registry with agents from config
+                    // Create agent registry with agents from config (using SessionManager for persistence)
                     let agent_registry = Arc::new(AgentRegistry::new());
                     for agent_config in full_config.get_agent_instance_configs() {
                         let agent_id = agent_config.agent_id.clone();
-                        match aethecore::gateway::AgentInstance::new(agent_config) {
+                        match aethecore::gateway::AgentInstance::with_session_manager(
+                            agent_config,
+                            session_manager.clone(),
+                        ) {
                             Ok(agent) => {
                                 agent_registry.register(agent).await;
                                 if !args.daemon {
-                                    println!("  Registered agent: {}", agent_id);
+                                    println!("  Registered agent: {} (with SQLite persistence)", agent_id);
                                 }
                             }
                             Err(e) => {
@@ -532,6 +786,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let manager = run_manager_clone.clone();
                 async move { handle_run(req, manager).await }
             });
+        }
+
+        // Register session handlers with SessionManager (already initialized above)
+        // sessions.list
+        let sm_list = session_manager.clone();
+        server.handlers_mut().register("sessions.list", move |req| {
+            let sm = sm_list.clone();
+            async move { session_handlers::handle_list_db(req, sm).await }
+        });
+
+        // sessions.history
+        let sm_history = session_manager.clone();
+        server.handlers_mut().register("sessions.history", move |req| {
+            let sm = sm_history.clone();
+            async move { session_handlers::handle_history_db(req, sm).await }
+        });
+
+        // sessions.reset
+        let sm_reset = session_manager.clone();
+        server.handlers_mut().register("sessions.reset", move |req| {
+            let sm = sm_reset.clone();
+            async move { session_handlers::handle_reset_db(req, sm).await }
+        });
+
+        // sessions.delete
+        let sm_delete = session_manager.clone();
+        server.handlers_mut().register("sessions.delete", move |req| {
+            let sm = sm_delete.clone();
+            async move { session_handlers::handle_delete_db(req, sm).await }
+        });
+
+        if !args.daemon {
+            println!("  - sessions.list   : List all sessions");
+            println!("  - sessions.history: Get session message history");
+            println!("  - sessions.reset  : Clear session messages");
+            println!("  - sessions.delete : Delete a session");
+            println!();
         }
 
         // Set up graceful shutdown

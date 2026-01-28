@@ -58,6 +58,8 @@ pub mod channel;
 pub mod channel_registry;
 #[cfg(feature = "gateway")]
 pub mod channels;
+#[cfg(feature = "gateway")]
+pub mod device_store;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -76,7 +78,7 @@ pub use agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry, Agen
 #[cfg(feature = "gateway")]
 pub use config::GatewayConfig;
 #[cfg(feature = "gateway")]
-pub use session_manager::SessionManager;
+pub use session_manager::{SessionManager, SessionManagerConfig};
 #[cfg(feature = "gateway")]
 pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus};
 #[cfg(feature = "gateway")]
@@ -94,3 +96,11 @@ pub use channel::{
 };
 #[cfg(feature = "gateway")]
 pub use channel_registry::{ChannelRegistry, ChannelStatusSummary};
+#[cfg(feature = "gateway")]
+pub use device_store::{DeviceStore, ApprovedDevice};
+#[cfg(feature = "gateway")]
+pub use handlers::auth::{AuthContext, handle_connect, handle_pairing_approve, handle_pairing_reject, handle_pairing_list, handle_devices_list, handle_devices_revoke, create_hello_notification};
+#[cfg(feature = "gateway")]
+pub use handlers::events::{SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list};
+#[cfg(feature = "gateway")]
+pub use event_bus::{TopicEvent, TopicFilter, topic_matches};

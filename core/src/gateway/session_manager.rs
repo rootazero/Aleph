@@ -6,8 +6,7 @@
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
 use super::router::SessionKey;
@@ -65,9 +64,13 @@ impl Default for SessionManagerConfig {
 }
 
 /// Session manager with SQLite persistence
+///
+/// Uses `std::sync::Mutex` for the connection because `rusqlite::Connection`
+/// is not `Sync` (it uses `RefCell` internally). This is safe for async use
+/// as long as we don't hold the lock across await points.
 pub struct SessionManager {
     config: SessionManagerConfig,
-    conn: Arc<RwLock<Connection>>,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl SessionManager {
@@ -91,7 +94,7 @@ impl SessionManager {
 
         Ok(Self {
             config,
-            conn: Arc::new(RwLock::new(conn)),
+            conn: Arc::new(Mutex::new(conn)),
         })
     }
 
@@ -144,7 +147,7 @@ impl SessionManager {
         let session_type = session_type_str(key);
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.write().await;
+        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Try to get existing session
         let existing: Option<SessionMetadata> = conn
@@ -211,36 +214,39 @@ impl SessionManager {
         let key_str = key.to_key_string();
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.write().await;
+        // Use scope block to ensure lock is released before any await
+        let (message_id, needs_compaction) = {
+            let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
-        // Insert message
-        conn.execute(
-            "INSERT INTO messages (session_key, role, content, timestamp) VALUES (?, ?, ?, ?)",
-            params![&key_str, role, content, now],
-        )
-        .map_err(|e| SessionManagerError::DatabaseError(format!("Insert message failed: {}", e)))?;
-
-        let message_id = conn.last_insert_rowid();
-
-        // Update session stats
-        conn.execute(
-            "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1 WHERE key = ?",
-            params![now, &key_str],
-        )
-        .ok();
-
-        // Check if compaction needed
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM messages WHERE session_key = ?",
-                params![&key_str],
-                |row| row.get(0),
+            // Insert message
+            conn.execute(
+                "INSERT INTO messages (session_key, role, content, timestamp) VALUES (?, ?, ?, ?)",
+                params![&key_str, role, content, now],
             )
-            .unwrap_or(0);
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Insert message failed: {}", e)))?;
 
-        drop(conn); // Release lock before potential compaction
+            let message_id = conn.last_insert_rowid();
 
-        if count as usize > self.config.max_messages {
+            // Update session stats
+            conn.execute(
+                "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1 WHERE key = ?",
+                params![now, &key_str],
+            )
+            .ok();
+
+            // Check if compaction needed
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM messages WHERE session_key = ?",
+                    params![&key_str],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            (message_id, count as usize > self.config.max_messages)
+        }; // Lock released here
+
+        if needs_compaction {
             self.compact_session(key).await?;
         }
 
@@ -254,7 +260,7 @@ impl SessionManager {
         limit: Option<usize>,
     ) -> Result<Vec<StoredMessage>, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self.conn.read().await;
+        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         let query = match limit {
             Some(n) => format!(
@@ -297,7 +303,7 @@ impl SessionManager {
     /// Reset (clear) a session
     pub async fn reset_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self.conn.write().await;
+        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         let deleted = conn
             .execute("DELETE FROM messages WHERE session_key = ?", params![&key_str])
@@ -317,7 +323,7 @@ impl SessionManager {
     /// Delete a session entirely
     pub async fn delete_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self.conn.write().await;
+        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Delete messages first
         conn.execute("DELETE FROM messages WHERE session_key = ?", params![&key_str])
@@ -338,7 +344,7 @@ impl SessionManager {
         &self,
         agent_id: Option<&str>,
     ) -> Result<Vec<SessionMetadata>, SessionManagerError> {
-        let conn = self.conn.read().await;
+        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         let sessions = if let Some(id) = agent_id {
             let mut stmt = conn
@@ -400,7 +406,7 @@ impl SessionManager {
         let key_str = key.to_key_string();
         let keep = self.config.compaction_keep as i64;
 
-        let conn = self.conn.write().await;
+        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Get the ID threshold
         let threshold_id: Option<i64> = conn
@@ -452,7 +458,7 @@ impl SessionManager {
         let expiry_threshold =
             chrono::Utc::now().timestamp() - self.config.session_expiry_secs as i64;
 
-        let conn = self.conn.write().await;
+        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Get sessions to delete
         let keys: Vec<String> = {
