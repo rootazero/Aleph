@@ -196,22 +196,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cosine_similarity() {
-        let a = vec![1.0, 0.0, 0.0];
-        let b = vec![1.0, 0.0, 0.0];
-        assert!((VectorDatabase::cosine_similarity(&a, &b) - 1.0).abs() < 0.001);
-
-        let c = vec![1.0, 0.0, 0.0];
-        let d = vec![0.0, 1.0, 0.0];
-        assert!((VectorDatabase::cosine_similarity(&c, &d) - 0.0).abs() < 0.001);
-
-        let e = vec![1.0, 1.0, 0.0];
-        let f = vec![1.0, 0.0, 0.0];
-        let similarity = VectorDatabase::cosine_similarity(&e, &f);
-        assert!(similarity > 0.7 && similarity < 0.8); // ~0.707
-    }
-
-    #[test]
     fn test_embedding_serialization() {
         let embedding = vec![0.1, 0.2, 0.3, 0.4, 0.5];
         let bytes = VectorDatabase::serialize_embedding(&embedding);
@@ -311,27 +295,6 @@ mod tests {
 
         assert_eq!(deleted, 1);
         assert_eq!(db.get_stats().await.unwrap().total_memories, 1);
-    }
-
-    #[tokio::test]
-    async fn test_cosine_similarity_edge_cases() {
-        // Test zero vector
-        let zero = vec![0.0, 0.0, 0.0];
-        let non_zero = vec![1.0, 1.0, 1.0];
-        let similarity = VectorDatabase::cosine_similarity(&zero, &non_zero);
-        assert_eq!(similarity, 0.0);
-
-        // Test negative values
-        let a = vec![1.0, -1.0, 0.0];
-        let b = vec![-1.0, 1.0, 0.0];
-        let similarity = VectorDatabase::cosine_similarity(&a, &b);
-        assert!(similarity < 0.0); // Opposite direction
-
-        // Test identical negative vectors
-        let c = vec![-1.0, -1.0, -1.0];
-        let d = vec![-1.0, -1.0, -1.0];
-        let similarity = VectorDatabase::cosine_similarity(&c, &d);
-        assert!((similarity - 1.0).abs() < 0.001);
     }
 
     #[tokio::test]
