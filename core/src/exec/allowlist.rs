@@ -2,7 +2,6 @@
 
 use super::analysis::CommandResolution;
 use super::config::AllowlistEntry;
-use std::path::Path;
 
 /// Check if a resolution matches any allowlist entry
 pub fn match_allowlist<'a>(
