@@ -359,30 +359,48 @@ final class MultiTurnCoordinator {
     /// Handle AI response
     private func handleAIResponse(_ response: String, topic: Topic, userInput: String, isFirstMessage: Bool) {
         // Load output mode config from behavior settings
+        // Default values
         var outputMode = "typewriter"
         var typingSpeed: Int = 50
 
-        if let core = core {
-            do {
-                let config = try core.loadConfig()
-                if let behavior = config.behavior {
-                    outputMode = behavior.outputMode
-                    typingSpeed = Int(behavior.typingSpeed)
+        // Try Gateway RPC first, then FFI fallback
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+
+            // Try to load behavior config via Gateway
+            if self.useGateway {
+                do {
+                    let behaviorConfig = try await GatewayManager.shared.client.configBehaviorGet()
+                    // Note: GWBehaviorConfig doesn't have outputMode/typingSpeed yet
+                    // These may need to be added to the Rust handler
+                    // For now, use defaults
+                    print("[MultiTurnCoordinator] Loaded behavior config via Gateway")
+                } catch {
+                    print("[MultiTurnCoordinator] Gateway config load failed: \(error)")
                 }
-            } catch {
-                print("[MultiTurnCoordinator] Failed to load config, using defaults: \(error)")
+            } else if let core = self.core {
+                // Fallback to FFI
+                do {
+                    let config = try core.loadConfig()
+                    if let behavior = config.behavior {
+                        outputMode = behavior.outputMode
+                        typingSpeed = Int(behavior.typingSpeed)
+                    }
+                } catch {
+                    print("[MultiTurnCoordinator] Failed to load config via FFI, using defaults: \(error)")
+                }
             }
-        }
 
-        print("[MultiTurnCoordinator] Output mode: \(outputMode), speed: \(typingSpeed)")
+            print("[MultiTurnCoordinator] Output mode: \(outputMode), speed: \(typingSpeed)")
 
-        if outputMode == "typewriter" {
-            // Typewriter mode - stream character by character
-            startTypewriterOutput(response: response, topic: topic, userInput: userInput, isFirstMessage: isFirstMessage, speed: typingSpeed)
-        } else {
-            // Instant mode - add full message at once
-            unifiedWindow.viewModel.addAssistantMessage(response)
-            finishResponse(topic: topic, userInput: userInput, aiResponse: response, isFirstMessage: isFirstMessage)
+            if outputMode == "typewriter" {
+                // Typewriter mode - stream character by character
+                self.startTypewriterOutput(response: response, topic: topic, userInput: userInput, isFirstMessage: isFirstMessage, speed: typingSpeed)
+            } else {
+                // Instant mode - add full message at once
+                self.unifiedWindow.viewModel.addAssistantMessage(response)
+                self.finishResponse(topic: topic, userInput: userInput, aiResponse: response, isFirstMessage: isFirstMessage)
+            }
         }
     }
 
@@ -459,16 +477,50 @@ final class MultiTurnCoordinator {
     }
 
     /// Generate title for topic
-    /// Note: The Rust function is now synchronous (uses internal Tokio runtime)
+    /// Uses Gateway RPC when available, falls back to FFI
     private func generateTitle(topic: Topic, userInput: String, aiResponse: String) {
-        print("[MultiTurnCoordinator] generateTitle called for topic: \(topic.id), core is \(core != nil ? "available" : "NIL")")
+        print("[MultiTurnCoordinator] generateTitle called for topic: \(topic.id)")
 
+        // Prefer Gateway RPC for title generation
+        if useGateway {
+            print("[MultiTurnCoordinator] Generating title via Gateway RPC...")
+            Task { @MainActor [weak self] in
+                do {
+                    let title = try await GatewayManager.shared.client.agentGenerateTitle(
+                        userInput: userInput,
+                        aiResponse: aiResponse
+                    )
+
+                    // Update in store
+                    ConversationStore.shared.updateTopicTitle(id: topic.id, title: title)
+
+                    // Update UI
+                    if var updatedTopic = self?.unifiedWindow.viewModel.topic {
+                        updatedTopic.title = title
+                        self?.unifiedWindow.viewModel.topic = updatedTopic
+                    }
+                    print("[MultiTurnCoordinator] Title updated via Gateway: \(title)")
+                } catch {
+                    print("[MultiTurnCoordinator] Gateway title generation failed, falling back to FFI: \(error)")
+                    // Fallback to FFI
+                    self?.generateTitleViaFFI(topic: topic, userInput: userInput, aiResponse: aiResponse)
+                }
+            }
+            return
+        }
+
+        // Fallback to FFI
+        generateTitleViaFFI(topic: topic, userInput: userInput, aiResponse: aiResponse)
+    }
+
+    /// Generate title via FFI (fallback when Gateway unavailable)
+    private func generateTitleViaFFI(topic: Topic, userInput: String, aiResponse: String) {
         guard let core = core else {
             print("[MultiTurnCoordinator] ERROR: core is nil, cannot generate title")
             return
         }
 
-        print("[MultiTurnCoordinator] Generating title with AI...")
+        print("[MultiTurnCoordinator] Generating title via FFI...")
 
         // Run on background thread since the Rust function may block
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -485,10 +537,10 @@ final class MultiTurnCoordinator {
                         updatedTopic.title = title
                         self?.unifiedWindow.viewModel.topic = updatedTopic
                     }
-                    print("[MultiTurnCoordinator] Title updated: \(title)")
+                    print("[MultiTurnCoordinator] Title updated via FFI: \(title)")
                 }
             } catch {
-                print("[MultiTurnCoordinator] Failed to generate title: \(error)")
+                print("[MultiTurnCoordinator] Failed to generate title via FFI: \(error)")
             }
         }
     }
