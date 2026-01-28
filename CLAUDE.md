@@ -19,7 +19,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 # CLAUDE.md
 
-> *"这是人类历史上第一次，把机器的灵魂装进壳子。"*
+> *"这是人类历史上第一次，赋予了机器的灵魂一个躯壳。"*
 > — 攻壳机动队 / Ghost in the Shell
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
