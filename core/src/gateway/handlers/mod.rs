@@ -11,9 +11,16 @@ pub mod auth;
 pub mod events;
 pub mod channel;
 pub mod config;
+pub mod config_ext;
 pub mod logs;
 pub mod commands;
 pub mod ocr;
+pub mod memory;
+pub mod plugins;
+pub mod skills;
+pub mod mcp;
+pub mod providers;
+pub mod generation;
 #[cfg(feature = "browser")]
 pub mod browser;
 
