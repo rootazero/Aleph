@@ -1,414 +1,91 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Plus, Star, Trash2, Settings, Eye, EyeOff, Check } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { ProviderListCard } from '@/components/ui/provider-list-card';
+import { ProviderEditPanel } from '@/components/ui/provider-edit-panel';
+import { Plus, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ProviderConfig } from '@/lib/commands';
 import { presetProviders, type PresetProvider } from '@/lib/presetProviders';
-
-const providerIcons: Record<string, string> = {
-  openai: '🤖',
-  anthropic: '🧠',
-  gemini: '✨',
-  ollama: '🦙',
-  custom: '⚙️',
-};
-
-// Check if a preset provider is already configured
-function isPresetConfigured(
-  presetId: string,
-  providers: ProviderConfig[]
-): ProviderConfig | undefined {
-  return providers.find(
-    (p) => p.id === presetId || p.name.toLowerCase() === presetId.toLowerCase()
-  );
-}
-
-function PresetProviderCard({
-  preset,
-  isConfigured,
-  onClick,
-}: {
-  preset: PresetProvider;
-  isConfigured: boolean;
-  onClick: () => void;
-}) {
-  const { t } = useTranslation();
-  const Icon = preset.icon;
-
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'relative flex flex-col items-center gap-2 p-4 rounded-card border transition-all',
-        'hover:border-primary/50 hover:bg-accent/30',
-        isConfigured
-          ? 'border-primary/30 bg-primary/5'
-          : 'border-border bg-card'
-      )}
-    >
-      {isConfigured && (
-        <div className="absolute top-2 right-2">
-          <Check className="h-4 w-4 text-primary" />
-        </div>
-      )}
-      <div
-        className="w-10 h-10 rounded-lg flex items-center justify-center"
-        style={{ backgroundColor: `${preset.color}20` }}
-      >
-        <Icon className="h-5 w-5" style={{ color: preset.color }} />
-      </div>
-      <div className="text-center">
-        <p className="text-body font-medium text-foreground">{preset.name}</p>
-        <p className="text-caption text-muted-foreground line-clamp-1">
-          {preset.description}
-        </p>
-      </div>
-      {isConfigured && (
-        <span className="text-xs text-primary font-medium">
-          {t('settings.providers.configured')}
-        </span>
-      )}
-    </button>
-  );
-}
-
-function ProviderCard({
-  provider,
-  isDefault,
-  onToggle,
-  onSetDefault,
-  onEdit,
-  onDelete,
-}: {
-  provider: ProviderConfig;
-  isDefault: boolean;
-  onToggle: () => void;
-  onSetDefault: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
-}) {
-  const { t } = useTranslation();
-
-  // Find matching preset for icon
-  const matchingPreset = presetProviders.find(
-    (p) => p.id === provider.id || p.name.toLowerCase() === provider.name.toLowerCase()
-  );
-
-  return (
-    <div
-      className={cn(
-        'p-4 rounded-card border transition-colors',
-        provider.enabled ? 'border-border bg-card' : 'border-border/50 bg-muted/30'
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          {matchingPreset ? (
-            <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center"
-              style={{ backgroundColor: `${matchingPreset.color}20` }}
-            >
-              <matchingPreset.icon
-                className="h-4 w-4"
-                style={{ color: matchingPreset.color }}
-              />
-            </div>
-          ) : (
-            <span className="text-2xl">{providerIcons[provider.type]}</span>
-          )}
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-body font-medium text-foreground">
-                {provider.name}
-              </span>
-              {isDefault && (
-                <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
-              )}
-            </div>
-            <span className="text-caption text-muted-foreground">
-              {t(`settings.providers.types.${provider.type}`)}
-              {provider.model && ` · ${provider.model}`}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onSetDefault}
-            title={t('common.setAsDefault')}
-            className={cn(isDefault && 'text-yellow-500')}
-          >
-            <Star className={cn('h-4 w-4', isDefault && 'fill-current')} />
-          </Button>
-          <Button variant="ghost" size="icon" onClick={onEdit} title={t('common.edit')}>
-            <Settings className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onDelete}
-            title={t('common.delete')}
-            className="text-destructive hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-          <Switch checked={provider.enabled} onCheckedChange={onToggle} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ProviderDialog({
-  open,
-  onOpenChange,
-  provider,
-  preset,
-  onSave,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  provider: ProviderConfig | null;
-  preset: PresetProvider | null;
-  onSave: (provider: ProviderConfig) => void;
-}) {
-  const { t } = useTranslation();
-  const [form, setForm] = useState<ProviderConfig>({
-    id: crypto.randomUUID(),
-    name: '',
-    type: 'openai',
-    api_key: '',
-    base_url: '',
-    model: '',
-    enabled: true,
-    is_default: false,
-  });
-  const [showApiKey, setShowApiKey] = useState(false);
-
-  // Update form when provider or preset changes
-  useEffect(() => {
-    if (provider) {
-      setForm(provider);
-    } else if (preset) {
-      setForm({
-        id: preset.id,
-        name: preset.name,
-        type: preset.type,
-        api_key: '',
-        base_url: preset.baseUrl || '',
-        model: preset.defaultModel,
-        enabled: true,
-        is_default: false,
-      });
-    } else {
-      setForm({
-        id: crypto.randomUUID(),
-        name: '',
-        type: 'openai',
-        api_key: '',
-        base_url: '',
-        model: '',
-        enabled: true,
-        is_default: false,
-      });
-    }
-  }, [provider, preset, open]);
-
-  const handleSave = () => {
-    if (form.name.trim()) {
-      onSave(form);
-      onOpenChange(false);
-    }
-  };
-
-  const dialogTitle = provider
-    ? t('settings.providers.editProvider')
-    : preset
-      ? t('settings.providers.configurePreset', { name: preset.name })
-      : t('settings.providers.addProvider');
-
-  const showBaseUrl = form.type === 'custom' || form.type === 'ollama' || form.base_url;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{dialogTitle}</DialogTitle>
-          <DialogDescription>
-            {t('settings.providers.configureDescription')}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <label className="text-body font-medium">{t('settings.providers.providerName')}</label>
-            <Input
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="My OpenAI"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-body font-medium">{t('settings.providers.providerType')}</label>
-            <Select
-              value={form.type}
-              onValueChange={(value) =>
-                setForm({
-                  ...form,
-                  type: value as ProviderConfig['type'],
-                })
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai">{t('settings.providers.types.openai')}</SelectItem>
-                <SelectItem value="anthropic">{t('settings.providers.types.anthropic')}</SelectItem>
-                <SelectItem value="gemini">{t('settings.providers.types.gemini')}</SelectItem>
-                <SelectItem value="ollama">{t('settings.providers.types.ollama')}</SelectItem>
-                <SelectItem value="custom">{t('settings.providers.types.custom')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-body font-medium">{t('settings.providers.apiKey')}</label>
-            <div className="relative">
-              <Input
-                type={showApiKey ? 'text' : 'password'}
-                value={form.api_key || ''}
-                onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-                placeholder={form.type === 'ollama' ? t('common.notRequired') : 'sk-...'}
-                className="pr-10"
-              />
-              <button
-                type="button"
-                onClick={() => setShowApiKey(!showApiKey)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                {showApiKey ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-          </div>
-
-          {showBaseUrl && (
-            <div className="space-y-2">
-              <label className="text-body font-medium">{t('settings.providers.baseUrl')}</label>
-              <Input
-                value={form.base_url || ''}
-                onChange={(e) => setForm({ ...form, base_url: e.target.value })}
-                placeholder={
-                  form.type === 'ollama'
-                    ? 'http://localhost:11434'
-                    : 'https://api.example.com/v1'
-                }
-              />
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <label className="text-body font-medium">{t('settings.providers.model')}</label>
-            <Input
-              value={form.model || ''}
-              onChange={(e) => setForm({ ...form, model: e.target.value })}
-              placeholder={
-                form.type === 'openai'
-                  ? 'gpt-4o'
-                  : form.type === 'anthropic'
-                    ? 'claude-3-5-sonnet'
-                    : form.type === 'gemini'
-                      ? 'gemini-2.0-flash'
-                      : form.type === 'ollama'
-                        ? 'llama3.2'
-                        : 'model-name'
-              }
-            />
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            {t('common.cancel')}
-          </Button>
-          <Button onClick={handleSave} disabled={!form.name.trim()}>
-            {provider ? t('common.save') : t('common.add')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 export function ProvidersSettings() {
   const { t } = useTranslation();
   const providers = useSettingsStore((s) => s.providers);
   const updateProviders = useSettingsStore((s) => s.updateProviders);
 
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingProvider, setEditingProvider] = useState<ProviderConfig | null>(null);
-  const [selectedPreset, setSelectedPreset] = useState<PresetProvider | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isAddingNew, setIsAddingNew] = useState(false);
 
-  const handleToggle = (id: string) => {
-    updateProviders({
-      providers: providers.providers.map((p) =>
-        p.id === id ? { ...p, enabled: !p.enabled } : p
-      ),
+  // Combine presets and configured providers
+  const allProviders = useMemo(() => {
+    const configured = new Map(providers.providers.map((p) => [p.id, p]));
+
+    // Start with presets
+    const items: Array<{
+      id: string;
+      preset?: PresetProvider;
+      provider?: ProviderConfig;
+    }> = presetProviders.map((preset) => ({
+      id: preset.id,
+      preset,
+      provider: configured.get(preset.id),
+    }));
+
+    // Add custom providers not in presets
+    providers.providers.forEach((provider) => {
+      if (!presetProviders.find((p) => p.id === provider.id)) {
+        items.push({
+          id: provider.id,
+          provider,
+        });
+      }
     });
+
+    return items;
+  }, [providers.providers]);
+
+  // Filter by search
+  const filteredProviders = useMemo(() => {
+    if (!searchQuery.trim()) return allProviders;
+    const query = searchQuery.toLowerCase();
+    return allProviders.filter(
+      (item) =>
+        item.preset?.name.toLowerCase().includes(query) ||
+        item.provider?.name.toLowerCase().includes(query) ||
+        item.preset?.description?.toLowerCase().includes(query)
+    );
+  }, [allProviders, searchQuery]);
+
+  // Get selected item
+  const selectedItem = useMemo(() => {
+    if (!selectedId) return null;
+    return allProviders.find((item) => item.id === selectedId) || null;
+  }, [selectedId, allProviders]);
+
+  const isConfigured = (id: string) =>
+    providers.providers.some((p) => p.id === id);
+  const isActive = (id: string) =>
+    providers.providers.find((p) => p.id === id)?.enabled ?? false;
+  const isDefault = (id: string) => providers.default_provider_id === id;
+
+  const handleSelect = (id: string) => {
+    setSelectedId(id);
+    const item = allProviders.find((i) => i.id === id);
+    // If selecting an unconfigured preset, enter "add new" mode
+    setIsAddingNew(!!item?.preset && !item?.provider);
   };
 
-  const handleSetDefault = (id: string) => {
-    updateProviders({
-      default_provider_id: id,
-      providers: providers.providers.map((p) => ({
-        ...p,
-        is_default: p.id === id,
-      })),
-    });
-  };
-
-  const handleEdit = (provider: ProviderConfig) => {
-    setEditingProvider(provider);
-    setSelectedPreset(null);
-    setDialogOpen(true);
-  };
-
-  const handleDelete = (id: string) => {
-    updateProviders({
-      providers: providers.providers.filter((p) => p.id !== id),
-      default_provider_id:
-        providers.default_provider_id === id ? '' : providers.default_provider_id,
-    });
+  const handleAddCustom = () => {
+    setSelectedId(null);
+    setIsAddingNew(true);
   };
 
   const handleSave = (provider: ProviderConfig) => {
-    const existingIndex = providers.providers.findIndex((p) => p.id === provider.id);
+    const existingIndex = providers.providers.findIndex(
+      (p) => p.id === provider.id
+    );
     if (existingIndex >= 0) {
       // Update existing
       updateProviders({
@@ -422,102 +99,113 @@ export function ProvidersSettings() {
         providers: [...providers.providers, provider],
       });
     }
-    setEditingProvider(null);
-    setSelectedPreset(null);
+    setIsAddingNew(false);
   };
 
-  const handleAddNew = () => {
-    setEditingProvider(null);
-    setSelectedPreset(null);
-    setDialogOpen(true);
+  const handleDelete = () => {
+    if (!selectedId) return;
+    updateProviders({
+      providers: providers.providers.filter((p) => p.id !== selectedId),
+      default_provider_id:
+        providers.default_provider_id === selectedId
+          ? ''
+          : providers.default_provider_id,
+    });
+    setSelectedId(null);
   };
 
-  const handlePresetClick = (preset: PresetProvider) => {
-    const existingProvider = isPresetConfigured(preset.id, providers.providers);
-    if (existingProvider) {
-      // Edit existing provider
-      setEditingProvider(existingProvider);
-      setSelectedPreset(null);
-    } else {
-      // Configure new preset
-      setEditingProvider(null);
-      setSelectedPreset(preset);
-    }
-    setDialogOpen(true);
+  const handleSetDefault = () => {
+    if (!selectedId) return;
+    updateProviders({
+      default_provider_id: selectedId,
+      providers: providers.providers.map((p) => ({
+        ...p,
+        is_default: p.id === selectedId,
+      })),
+    });
   };
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-title mb-1">{t('settings.providers.title')}</h1>
-          <p className="text-caption text-muted-foreground">
-            {t('settings.providers.description')}
-          </p>
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="px-lg pt-lg pb-md">
+        <h1 className="text-title mb-1">{t('settings.providers.title')}</h1>
+        <p className="text-caption text-muted-foreground">
+          {t('settings.providers.description')}
+        </p>
+      </div>
+
+      {/* Toolbar */}
+      <div className="px-lg pb-md flex items-center gap-md">
+        {/* Search */}
+        <div className="relative w-60">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t('settings.providers.searchPlaceholder', 'Search providers...')}
+            className="pl-9"
+          />
         </div>
-        <Button onClick={handleAddNew}>
-          <Plus className="h-4 w-4 mr-2" />
-          {t('settings.providers.addProvider')}
+        <div className="flex-1" />
+        {/* Add Custom */}
+        <Button onClick={handleAddCustom}>
+          <Plus className="w-4 h-4 mr-1.5" />
+          {t('settings.providers.addCustom', 'Add Custom')}
         </Button>
       </div>
 
-      {/* Preset Providers Grid */}
-      <div className="space-y-3">
-        <h2 className="text-body font-medium text-foreground">
-          {t('settings.providers.presets')}
-        </h2>
-        <p className="text-caption text-muted-foreground">
-          {t('settings.providers.presetsDescription')}
-        </p>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-          {presetProviders.map((preset) => (
-            <PresetProviderCard
-              key={preset.id}
-              preset={preset}
-              isConfigured={!!isPresetConfigured(preset.id, providers.providers)}
-              onClick={() => handlePresetClick(preset)}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Configured Providers List */}
-      {providers.providers.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-body font-medium text-foreground">
-            {t('settings.providers.configuredProviders')}
-          </h2>
-          <div className="space-y-3">
-            {providers.providers.map((provider) => (
-              <ProviderCard
-                key={provider.id}
-                provider={provider}
-                isDefault={provider.id === providers.default_provider_id}
-                onToggle={() => handleToggle(provider.id)}
-                onSetDefault={() => handleSetDefault(provider.id)}
-                onEdit={() => handleEdit(provider)}
-                onDelete={() => handleDelete(provider.id)}
+      {/* Two-panel layout */}
+      <div className="flex-1 flex gap-md px-lg pb-lg min-h-0">
+        {/* Left: Provider List */}
+        <aside className="w-60 shrink-0 flex flex-col rounded-md border border-border bg-muted/30 overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-sm space-y-xs">
+            {filteredProviders.map((item) => (
+              <ProviderListCard
+                key={item.id}
+                preset={item.preset}
+                provider={item.provider}
+                isSelected={selectedId === item.id}
+                isConfigured={isConfigured(item.id)}
+                isActive={isActive(item.id)}
+                isDefault={isDefault(item.id)}
+                onClick={() => handleSelect(item.id)}
               />
             ))}
+            {filteredProviders.length === 0 && (
+              <p className="text-caption text-muted-foreground text-center py-md">
+                {t('settings.providers.noResults', 'No providers found')}
+              </p>
+            )}
           </div>
-        </div>
-      )}
+        </aside>
 
-      {/* Empty state for configured providers */}
-      {providers.providers.length === 0 && (
-        <div className="text-center py-8 text-muted-foreground border border-dashed rounded-card">
-          <p>{t('settings.providers.noProviders')}</p>
-          <p className="text-caption mt-1">{t('settings.providers.noProvidersHint')}</p>
-        </div>
-      )}
-
-      <ProviderDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        provider={editingProvider}
-        preset={selectedPreset}
-        onSave={handleSave}
-      />
+        {/* Right: Edit Panel */}
+        <main className="flex-1 rounded-md border border-border bg-card overflow-hidden">
+          {selectedItem || isAddingNew ? (
+            <ProviderEditPanel
+              provider={selectedItem?.provider || null}
+              preset={selectedItem?.preset || null}
+              isDefault={selectedId ? isDefault(selectedId) : false}
+              isNew={isAddingNew}
+              onSave={handleSave}
+              onDelete={handleDelete}
+              onSetDefault={handleSetDefault}
+            />
+          ) : (
+            <div className="flex items-center justify-center h-full text-muted-foreground">
+              <div className="text-center">
+                <p className="text-body">
+                  {t('settings.providers.selectProvider', 'Select a provider to configure')}
+                </p>
+                <p className="text-caption mt-1">
+                  {t('settings.providers.selectProviderHint', 'Or click "Add Custom" to create a new one')}
+                </p>
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
     </div>
   );
 }
