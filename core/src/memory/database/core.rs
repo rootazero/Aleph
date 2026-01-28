@@ -125,6 +125,20 @@ impl VectorDatabase {
 
             -- Index for compression history queries
             CREATE INDEX IF NOT EXISTS idx_compression_time ON compression_sessions(compressed_at);
+
+            -- ================================================================
+            -- sqlite-vec Virtual Tables for Vector Search
+            -- ================================================================
+
+            -- Vector index for memories (512-dim float32)
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
+                embedding float[512]
+            );
+
+            -- Vector index for facts (512-dim float32)
+            CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
+                embedding float[512]
+            );
             "#,
         )
         .map_err(|e| AetherError::config(format!("Failed to create schema: {}", e)))?;
@@ -242,6 +256,39 @@ mod tests {
             .query_row("SELECT vec_version()", [], |row| row.get(0))
             .expect("sqlite-vec extension should be loaded");
 
-        assert!(version.starts_with("v0."), "Expected version v0.x, got {}", version);
+        assert!(
+            version.starts_with("v0."),
+            "Expected version v0.x, got {}",
+            version
+        );
+    }
+
+    #[test]
+    fn test_vec0_tables_created() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        let conn = db.conn.lock().unwrap();
+
+        // Check memories_vec table exists
+        let memories_vec_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memories_vec'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(memories_vec_exists, "memories_vec table should exist");
+
+        // Check facts_vec table exists
+        let facts_vec_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='facts_vec'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(facts_vec_exists, "facts_vec table should exist");
     }
 }
