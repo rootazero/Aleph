@@ -386,6 +386,23 @@ pub use crate::executor::{
     ToolRegistry as ExecutorToolRegistry,
 };
 
+// Exec security exports (command execution approval)
+pub use crate::exec::{
+    // Config
+    AgentExecConfig, AllowlistEntry, ExecApprovalsFile, ExecAsk, ExecDefaults, ExecSecurity,
+    ResolvedExecConfig, SocketConfig,
+    // Analysis
+    CommandAnalysis, CommandResolution, CommandSegment,
+    // Parser
+    analyze_shell_command, tokenize_segment,
+    // Allowlist
+    match_allowlist,
+    // Decision
+    decide_exec_approval, ApprovalDecision, ApprovalRequest, ExecContext, DEFAULT_SAFE_BINS,
+    // Socket
+    ApprovalDecisionType, ApprovalRequestPayload, SegmentInfo, SocketMessage,
+};
+
 // Prompt exports (unified prompt management)
 pub use crate::prompt::{
     ConversationalPrompt, ExecutorPrompt, PromptBuilder, PromptConfig, PromptTemplate, TemplateVar,
