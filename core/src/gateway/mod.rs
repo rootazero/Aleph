@@ -37,6 +37,16 @@ pub mod security;
 #[cfg(feature = "gateway")]
 pub mod handlers;
 
+// Phase 4: Multi-Agent & Dispatcher
+#[cfg(feature = "gateway")]
+pub mod agent_instance;
+#[cfg(feature = "gateway")]
+pub mod config;
+#[cfg(feature = "gateway")]
+pub mod session_manager;
+#[cfg(feature = "gateway")]
+pub mod execution_engine;
+
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
 #[cfg(feature = "gateway")]
@@ -47,3 +57,13 @@ pub use event_bus::GatewayEventBus;
 pub use event_emitter::{EventEmitter, StreamEvent, GatewayEventEmitter, NoOpEventEmitter};
 #[cfg(feature = "gateway")]
 pub use router::AgentRouter;
+
+// Phase 4 exports
+#[cfg(feature = "gateway")]
+pub use agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry, AgentState};
+#[cfg(feature = "gateway")]
+pub use config::GatewayConfig;
+#[cfg(feature = "gateway")]
+pub use session_manager::SessionManager;
+#[cfg(feature = "gateway")]
+pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus};
