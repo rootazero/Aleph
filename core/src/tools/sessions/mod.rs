@@ -8,11 +8,13 @@
 pub mod list;
 pub mod policy;
 pub mod registry;
+pub mod send;
 pub mod types;
 pub mod visibility;
 
 pub use list::{SessionsListParams, SessionsListResult};
 pub use policy::{A2ARule, AgentToAgentPolicy, RuleMatcher};
 pub use registry::{SubagentRegistry, SubagentRun};
+pub use send::{SessionsSendParams, SessionsSendResult};
 pub use types::{SendStatus, SessionKind, SessionListRow, SessionMessage, SpawnStatus};
 pub use visibility::{SessionToolsVisibility, VisibilityContext};
