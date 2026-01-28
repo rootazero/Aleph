@@ -124,6 +124,14 @@ struct Args {
     /// Maximum number of concurrent connections
     #[arg(long, default_value = "1000")]
     max_connections: usize,
+
+    /// WebChat UI directory (serves static files)
+    #[arg(long)]
+    webchat_dir: Option<PathBuf>,
+
+    /// WebChat HTTP port (default: same as WebSocket port)
+    #[arg(long)]
+    webchat_port: Option<u16>,
 }
 
 /// Gateway subcommands
@@ -1032,6 +1040,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         };
 
+        // Start WebChat HTTP server if configured
+        let webchat_dir = args.webchat_dir.clone().or_else(|| {
+            // Try default locations: ./ui/webchat/dist or ../ui/webchat/dist or ~/.aether/webchat
+            let mut candidates = vec![
+                PathBuf::from("ui/webchat/dist"),
+                PathBuf::from("../ui/webchat/dist"),
+            ];
+            if let Some(home) = dirs::home_dir() {
+                candidates.push(home.join(".aether/webchat"));
+            }
+            candidates.into_iter().find(|p| p.exists())
+        });
+
+        if let Some(webchat_path) = webchat_dir {
+            if webchat_path.exists() {
+                let webchat_port = args.webchat_port.unwrap_or(final_port);
+                let webchat_addr: SocketAddr = format!("{}:{}", final_bind, webchat_port)
+                    .parse()
+                    .expect("Invalid webchat address");
+
+                // Only start separate HTTP server if port is different from WS port
+                if webchat_port != final_port {
+                    let webchat_path_clone = webchat_path.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = serve_webchat(webchat_addr, webchat_path_clone).await {
+                            tracing::error!("WebChat server error: {}", e);
+                        }
+                    });
+
+                    if !args.daemon {
+                        println!("WebChat UI:");
+                        println!("  - URL: http://{}", webchat_addr);
+                        println!("  - Static: {}", webchat_path.display());
+                        println!();
+                    }
+                } else {
+                    if !args.daemon {
+                        println!("WebChat UI directory found: {}", webchat_path.display());
+                        println!("  Note: WebChat requires a separate HTTP port (use --webchat-port)");
+                        println!();
+                    }
+                }
+            } else if !args.daemon {
+                println!("WebChat directory not found: {}", webchat_path.display());
+                println!();
+            }
+        }
+
         // Set up graceful shutdown
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let pid_file = args.pid_file.clone();
@@ -1211,4 +1267,44 @@ where
     };
 
     aethecore::gateway::JsonRpcResponse::success(request.id, json!(result))
+}
+
+/// Serve WebChat static files
+#[cfg(feature = "gateway")]
+async fn serve_webchat(
+    addr: SocketAddr,
+    static_dir: PathBuf,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use axum::{
+        Router,
+        http::{StatusCode, header},
+        response::IntoResponse,
+    };
+    use tower_http::services::{ServeDir, ServeFile};
+
+    tracing::info!("Starting WebChat server on http://{}", addr);
+
+    // Create fallback for SPA routing
+    let index_path = static_dir.join("index.html");
+    let serve_dir = ServeDir::new(&static_dir)
+        .append_index_html_on_directories(true)
+        .fallback(ServeFile::new(&index_path));
+
+    // Build router with CORS headers for development
+    let app = Router::new()
+        .fallback_service(serve_dir)
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        );
+
+    // Create listener
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // Serve
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }
