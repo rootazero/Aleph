@@ -7,28 +7,35 @@ const config: Config = {
     extend: {
       // Spacing (aligned with macOS DesignTokens.Spacing)
       spacing: {
-        xs: '4px',
-        sm: '8px',
-        md: '12px',
-        lg: '16px',
-        xl: '24px',
+        xs: '4px',   // tight spacing between related elements
+        sm: '8px',   // compact spacing for dense UIs
+        md: '16px',  // standard spacing between elements
+        lg: '24px',  // comfortable spacing for sections
+        xl: '32px',  // loose spacing for major sections
       },
 
-      // Border Radius (aligned with macOS DesignTokens.CornerRadius)
+      // Border Radius (aligned with macOS DesignTokens.CornerRadius - concentric system)
       borderRadius: {
-        small: '4px',
-        medium: '8px',
+        // Concentric radius system
+        xs: '4px',   // minimum radius
+        sm: '6px',   // small controls, buttons
+        md: '10px',  // cards, inputs
+        lg: '12px',  // content areas, windows
+        xl: '16px',  // large containers, modals
+        // Legacy aliases (for backward compatibility)
+        small: '6px',
+        medium: '10px',
         large: '12px',
         card: '10px',
       },
 
       // Font Size (aligned with macOS DesignTokens.Typography)
       fontSize: {
-        body: ['14px', { lineHeight: '20px' }],
-        caption: ['12px', { lineHeight: '16px' }],
-        heading: ['16px', { lineHeight: '24px', fontWeight: '600' }],
-        title: ['20px', { lineHeight: '28px', fontWeight: '600' }],
-        code: ['13px', { lineHeight: '18px' }],
+        title: ['22px', { lineHeight: '1.3', fontWeight: '600' }],    // page titles
+        heading: ['17px', { lineHeight: '1.4', fontWeight: '500' }],  // section headers
+        body: ['14px', { lineHeight: '1.5', fontWeight: '400' }],     // body text
+        caption: ['12px', { lineHeight: '1.4', fontWeight: '400' }],  // supporting text
+        code: ['13px', { lineHeight: '1.4' }],                        // monospace code
       },
 
       fontFamily: {
