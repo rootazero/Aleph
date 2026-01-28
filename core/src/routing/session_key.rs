@@ -4,6 +4,7 @@
 //! into a single hierarchical key for session lookup and persistence.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// DM session isolation strategy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -197,6 +198,183 @@ impl SessionKey {
             main_key: DEFAULT_MAIN_KEY.to_string(),
         }
     }
+
+    /// Serialize to string key for storage/lookup
+    pub fn to_key_string(&self) -> String {
+        match self {
+            Self::Main { agent_id, main_key } => {
+                format!("agent:{}:{}", agent_id, main_key)
+            }
+            Self::DirectMessage {
+                agent_id,
+                channel,
+                peer_id,
+                dm_scope,
+            } => match dm_scope {
+                DmScope::Main => format!("agent:{}:main", agent_id),
+                DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
+                DmScope::PerChannelPeer => {
+                    format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
+                }
+            },
+            Self::Group {
+                agent_id,
+                channel,
+                peer_kind,
+                peer_id,
+                thread_id,
+            } => {
+                let kind = match peer_kind {
+                    PeerKind::Group => "group",
+                    PeerKind::Channel => "channel",
+                    PeerKind::Thread => "thread",
+                };
+                match thread_id {
+                    Some(tid) => format!(
+                        "agent:{}:{}:{}:{}:thread:{}",
+                        agent_id, channel, kind, peer_id, tid
+                    ),
+                    None => format!("agent:{}:{}:{}:{}", agent_id, channel, kind, peer_id),
+                }
+            }
+            Self::Task {
+                agent_id,
+                task_type,
+                task_id,
+            } => {
+                format!("agent:{}:{}:{}", agent_id, task_type, task_id)
+            }
+            Self::Subagent {
+                parent_key,
+                subagent_id,
+            } => {
+                format!("{}:subagent:{}", parent_key.to_key_string(), subagent_id)
+            }
+            Self::Ephemeral {
+                agent_id,
+                ephemeral_id,
+            } => {
+                format!("agent:{}:ephemeral:{}", agent_id, ephemeral_id)
+            }
+        }
+    }
+
+    /// Parse a session key from a string
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim().to_lowercase();
+        let parts: Vec<&str> = s.split(':').collect();
+
+        if parts.len() < 3 || parts[0] != "agent" {
+            return None;
+        }
+
+        let agent_id = normalize_agent_id(parts[1]);
+        if agent_id.is_empty() {
+            return None;
+        }
+
+        let rest = &parts[2..];
+
+        match rest {
+            // agent:id:dm:peer (per-peer DM)
+            ["dm", peer_id] => Some(Self::DirectMessage {
+                agent_id,
+                channel: String::new(),
+                peer_id: peer_id.to_string(),
+                dm_scope: DmScope::PerPeer,
+            }),
+
+            // agent:id:channel:dm:peer (per-channel-peer DM)
+            [channel, "dm", peer_id] => Some(Self::DirectMessage {
+                agent_id,
+                channel: channel.to_string(),
+                peer_id: peer_id.to_string(),
+                dm_scope: DmScope::PerChannelPeer,
+            }),
+
+            // agent:id:channel:group:peer:thread:tid
+            [channel, "group", peer_id, "thread", thread_id] => Some(Self::Group {
+                agent_id,
+                channel: channel.to_string(),
+                peer_kind: PeerKind::Group,
+                peer_id: peer_id.to_string(),
+                thread_id: Some(thread_id.to_string()),
+            }),
+
+            // agent:id:channel:channel:peer:thread:tid
+            [channel, "channel", peer_id, "thread", thread_id] => Some(Self::Group {
+                agent_id,
+                channel: channel.to_string(),
+                peer_kind: PeerKind::Channel,
+                peer_id: peer_id.to_string(),
+                thread_id: Some(thread_id.to_string()),
+            }),
+
+            // agent:id:channel:group:peer
+            [channel, "group", peer_id] => Some(Self::Group {
+                agent_id,
+                channel: channel.to_string(),
+                peer_kind: PeerKind::Group,
+                peer_id: peer_id.to_string(),
+                thread_id: None,
+            }),
+
+            // agent:id:channel:channel:peer
+            [channel, "channel", peer_id] => Some(Self::Group {
+                agent_id,
+                channel: channel.to_string(),
+                peer_kind: PeerKind::Channel,
+                peer_id: peer_id.to_string(),
+                thread_id: None,
+            }),
+
+            // agent:id:cron|webhook|scheduled:task_id
+            [task_type @ ("cron" | "webhook" | "scheduled"), task_id] => Some(Self::Task {
+                agent_id,
+                task_type: task_type.to_string(),
+                task_id: task_id.to_string(),
+            }),
+
+            // agent:id:ephemeral:uuid
+            ["ephemeral", ephemeral_id] => Some(Self::Ephemeral {
+                agent_id,
+                ephemeral_id: ephemeral_id.to_string(),
+            }),
+
+            // agent:id:main (or any single token as main_key)
+            [main_key] => Some(Self::Main {
+                agent_id,
+                main_key: main_key.to_string(),
+            }),
+
+            _ => None,
+        }
+    }
+
+    /// Parse legacy format from gateway/router.rs for backward compatibility
+    pub fn from_legacy(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s.split(':').collect();
+
+        if parts.len() < 3 || parts[0] != "agent" {
+            return None;
+        }
+
+        let agent_id = parts[1].to_string();
+
+        match parts.get(2..) {
+            Some(&["peer", ref rest @ ..]) if !rest.is_empty() => Some(Self::DirectMessage {
+                agent_id,
+                channel: String::new(),
+                peer_id: rest.join(":"),
+                dm_scope: DmScope::PerPeer,
+            }),
+            Some(&["ephemeral", ephemeral_id]) => Some(Self::Ephemeral {
+                agent_id,
+                ephemeral_id: ephemeral_id.to_string(),
+            }),
+            _ => Self::parse(s),
+        }
+    }
 }
 
 /// Normalize agent ID: lowercase, alphanumeric + dash/underscore, max 64 chars
@@ -229,6 +407,12 @@ pub fn normalize_agent_id(id: &str) -> String {
         result[..64].to_string()
     } else {
         result
+    }
+}
+
+impl fmt::Display for SessionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_key_string())
     }
 }
 
@@ -290,5 +474,126 @@ mod tests {
         let dm = SessionKey::dm("work", "telegram", "user1", DmScope::PerPeer);
         let main = dm.main_session_key();
         assert!(matches!(main, SessionKey::Main { agent_id, main_key } if agent_id == "work" && main_key == "main"));
+    }
+
+    // --- Serialization tests ---
+
+    #[test]
+    fn test_to_key_string_main() {
+        let key = SessionKey::main("main");
+        assert_eq!(key.to_key_string(), "agent:main:main");
+    }
+
+    #[test]
+    fn test_to_key_string_dm_per_peer() {
+        let key = SessionKey::dm("main", "telegram", "user123", DmScope::PerPeer);
+        assert_eq!(key.to_key_string(), "agent:main:dm:user123");
+    }
+
+    #[test]
+    fn test_to_key_string_dm_per_channel_peer() {
+        let key = SessionKey::dm("main", "telegram", "user123", DmScope::PerChannelPeer);
+        assert_eq!(key.to_key_string(), "agent:main:telegram:dm:user123");
+    }
+
+    #[test]
+    fn test_to_key_string_group() {
+        let key = SessionKey::group("main", "discord", PeerKind::Group, "guild456");
+        assert_eq!(key.to_key_string(), "agent:main:discord:group:guild456");
+    }
+
+    #[test]
+    fn test_to_key_string_group_channel() {
+        let key = SessionKey::group("main", "slack", PeerKind::Channel, "C123");
+        assert_eq!(key.to_key_string(), "agent:main:slack:channel:c123");
+    }
+
+    #[test]
+    fn test_to_key_string_group_thread() {
+        let key = SessionKey::group_thread("main", "telegram", PeerKind::Group, "chat789", "t1");
+        assert_eq!(key.to_key_string(), "agent:main:telegram:group:chat789:thread:t1");
+    }
+
+    #[test]
+    fn test_to_key_string_task() {
+        let key = SessionKey::task("main", "cron", "daily-summary");
+        assert_eq!(key.to_key_string(), "agent:main:cron:daily-summary");
+    }
+
+    #[test]
+    fn test_to_key_string_subagent() {
+        let parent = SessionKey::main("main");
+        let key = SessionKey::Subagent {
+            parent_key: Box::new(parent),
+            subagent_id: "coding".to_string(),
+        };
+        assert_eq!(key.to_key_string(), "agent:main:main:subagent:coding");
+    }
+
+    // --- Parse tests ---
+
+    #[test]
+    fn test_parse_main() {
+        let key = SessionKey::parse("agent:main:main").unwrap();
+        assert!(matches!(key, SessionKey::Main { agent_id, main_key } if agent_id == "main" && main_key == "main"));
+    }
+
+    #[test]
+    fn test_parse_dm_per_peer() {
+        let key = SessionKey::parse("agent:main:dm:user123").unwrap();
+        assert!(matches!(key, SessionKey::DirectMessage { peer_id, dm_scope: DmScope::PerPeer, .. } if peer_id == "user123"));
+    }
+
+    #[test]
+    fn test_parse_dm_per_channel_peer() {
+        let key = SessionKey::parse("agent:main:telegram:dm:user123").unwrap();
+        assert!(matches!(key, SessionKey::DirectMessage { channel, peer_id, dm_scope: DmScope::PerChannelPeer, .. } if channel == "telegram" && peer_id == "user123"));
+    }
+
+    #[test]
+    fn test_parse_group() {
+        let key = SessionKey::parse("agent:main:discord:group:guild456").unwrap();
+        assert!(matches!(key, SessionKey::Group { channel, peer_kind: PeerKind::Group, peer_id, .. } if channel == "discord" && peer_id == "guild456"));
+    }
+
+    #[test]
+    fn test_parse_group_thread() {
+        let key = SessionKey::parse("agent:main:telegram:group:chat789:thread:t1").unwrap();
+        assert!(matches!(key, SessionKey::Group { thread_id: Some(tid), .. } if tid == "t1"));
+    }
+
+    #[test]
+    fn test_parse_task() {
+        let key = SessionKey::parse("agent:main:cron:daily").unwrap();
+        assert!(matches!(key, SessionKey::Task { task_type, task_id, .. } if task_type == "cron" && task_id == "daily"));
+    }
+
+    #[test]
+    fn test_parse_ephemeral() {
+        let key = SessionKey::parse("agent:main:ephemeral:abc-123").unwrap();
+        assert!(matches!(key, SessionKey::Ephemeral { ephemeral_id, .. } if ephemeral_id == "abc-123"));
+    }
+
+    #[test]
+    fn test_parse_invalid() {
+        assert!(SessionKey::parse("invalid").is_none());
+        assert!(SessionKey::parse("agent:").is_none());
+        assert!(SessionKey::parse("").is_none());
+    }
+
+    #[test]
+    fn test_roundtrip() {
+        let keys = vec![
+            SessionKey::main("work"),
+            SessionKey::dm("main", "telegram", "user1", DmScope::PerPeer),
+            SessionKey::dm("main", "discord", "user2", DmScope::PerChannelPeer),
+            SessionKey::group("main", "slack", PeerKind::Channel, "C123"),
+            SessionKey::task("main", "webhook", "hook-1"),
+        ];
+        for key in keys {
+            let s = key.to_key_string();
+            let parsed = SessionKey::parse(&s).unwrap_or_else(|| panic!("Failed to parse: {}", s));
+            assert_eq!(parsed.to_key_string(), s, "Roundtrip failed for: {}", s);
+        }
     }
 }
