@@ -10,5 +10,5 @@ pub mod config;
 
 pub use config::{
     AgentExecConfig, AllowlistEntry, ExecAsk, ExecApprovalsFile, ExecDefaults, ExecSecurity,
-    SocketConfig,
+    ResolvedExecConfig, SocketConfig,
 };
