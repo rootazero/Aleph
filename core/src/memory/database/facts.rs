@@ -41,6 +41,23 @@ impl VectorDatabase {
         )
         .map_err(|e| AetherError::config(format!("Failed to insert fact: {}", e)))?;
 
+        // Sync to facts_vec if embedding exists
+        if let Some(ref emb_bytes) = embedding_bytes {
+            let rowid: i64 = conn
+                .query_row(
+                    "SELECT rowid FROM memory_facts WHERE id = ?1",
+                    params![fact.id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AetherError::config(format!("Failed to get fact rowid: {}", e)))?;
+
+            conn.execute(
+                "INSERT INTO facts_vec (rowid, embedding) VALUES (?1, ?2)",
+                params![rowid, emb_bytes],
+            )
+            .map_err(|e| AetherError::config(format!("Failed to insert into facts_vec: {}", e)))?;
+        }
+
         Ok(())
     }
 
@@ -79,12 +96,31 @@ impl VectorDatabase {
                 ],
             )
             .map_err(|e| AetherError::config(format!("Failed to insert fact: {}", e)))?;
+
+            // Sync to facts_vec if embedding exists
+            if let Some(ref emb_bytes) = embedding_bytes {
+                let rowid: i64 = conn
+                    .query_row(
+                        "SELECT rowid FROM memory_facts WHERE id = ?1",
+                        params![fact.id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| AetherError::config(format!("Failed to get fact rowid: {}", e)))?;
+
+                conn.execute(
+                    "INSERT INTO facts_vec (rowid, embedding) VALUES (?1, ?2)",
+                    params![rowid, emb_bytes],
+                )
+                .map_err(|e| {
+                    AetherError::config(format!("Failed to insert into facts_vec: {}", e))
+                })?;
+            }
         }
 
         Ok(())
     }
 
-    /// Search facts by vector similarity
+    /// Search facts by vector similarity using sqlite-vec
     pub async fn search_facts(
         &self,
         query_embedding: &[f32],
@@ -92,20 +128,42 @@ impl VectorDatabase {
         include_invalid: bool,
     ) -> Result<Vec<MemoryFact>, AetherError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let query_bytes = Self::serialize_embedding(query_embedding);
 
         let query = if include_invalid {
             r#"
-            SELECT id, content, fact_type, embedding, source_memory_ids,
-                   created_at, updated_at, confidence, is_valid, invalidation_reason
-            FROM memory_facts
-            WHERE embedding IS NOT NULL
+            WITH vec_matches AS (
+                SELECT rowid, distance
+                FROM facts_vec
+                WHERE embedding MATCH ?1
+                ORDER BY distance
+                LIMIT ?2
+            )
+            SELECT
+                f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
+                f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
+                1.0 / (1.0 + vm.distance) as similarity
+            FROM memory_facts f
+            INNER JOIN vec_matches vm ON f.rowid = vm.rowid
+            ORDER BY vm.distance
             "#
         } else {
             r#"
-            SELECT id, content, fact_type, embedding, source_memory_ids,
-                   created_at, updated_at, confidence, is_valid, invalidation_reason
-            FROM memory_facts
-            WHERE embedding IS NOT NULL AND is_valid = 1
+            WITH vec_matches AS (
+                SELECT rowid, distance
+                FROM facts_vec
+                WHERE embedding MATCH ?1
+                ORDER BY distance
+                LIMIT ?2
+            )
+            SELECT
+                f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
+                f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
+                1.0 / (1.0 + vm.distance) as similarity
+            FROM memory_facts f
+            INNER JOIN vec_matches vm ON f.rowid = vm.rowid
+            WHERE f.is_valid = 1
+            ORDER BY vm.distance
             "#
         };
 
@@ -114,7 +172,7 @@ impl VectorDatabase {
             .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
 
         let facts = stmt
-            .query_map([], |row| {
+            .query_map(params![query_bytes, limit], |row| {
                 let id: String = row.get(0)?;
                 let content: String = row.get(1)?;
                 let fact_type_str: String = row.get(2)?;
@@ -125,6 +183,7 @@ impl VectorDatabase {
                 let confidence: f32 = row.get(7)?;
                 let is_valid: i32 = row.get(8)?;
                 let invalidation_reason: Option<String> = row.get(9)?;
+                let similarity: f64 = row.get(10)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -141,36 +200,14 @@ impl VectorDatabase {
                     confidence,
                     is_valid: is_valid != 0,
                     invalidation_reason,
-                    similarity_score: None,
+                    similarity_score: Some(similarity as f32),
                 })
             })
             .map_err(|e| AetherError::config(format!("Failed to query facts: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AetherError::config(format!("Failed to parse fact rows: {}", e)))?;
 
-        // Calculate similarity scores and sort
-        let mut scored_facts: Vec<MemoryFact> = facts
-            .into_iter()
-            .filter_map(|mut fact| {
-                if let Some(ref emb) = fact.embedding {
-                    let score = Self::cosine_similarity(query_embedding, emb);
-                    fact.similarity_score = Some(score);
-                    Some(fact)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        scored_facts.sort_by(|a, b| {
-            b.similarity_score
-                .partial_cmp(&a.similarity_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        scored_facts.truncate(limit as usize);
-
-        Ok(scored_facts)
+        Ok(facts)
     }
 
     /// Get facts by type
@@ -410,5 +447,76 @@ impl VectorDatabase {
             .map_err(|e| AetherError::config(format!("Failed to clear facts: {}", e)))?;
 
         Ok(rows_affected as u64)
+    }
+}
+
+#[cfg(test)]
+mod vec_tests {
+    use super::*;
+    use crate::memory::context::FactType;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_insert_fact_syncs_to_vec_table() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        let fact = MemoryFact {
+            id: "fact-1".to_string(),
+            content: "Test fact".to_string(),
+            fact_type: FactType::Preference,
+            embedding: Some(vec![0.1; 512]),
+            source_memory_ids: vec!["mem-1".to_string()],
+            created_at: 1000,
+            updated_at: 1000,
+            confidence: 0.9,
+            is_valid: true,
+            invalidation_reason: None,
+            similarity_score: None,
+        };
+
+        db.insert_fact(fact).await.unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM facts_vec", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(count, 1, "Should have 1 row in facts_vec");
+    }
+
+    #[tokio::test]
+    async fn test_search_facts_uses_vec0() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        // Insert facts with embeddings
+        for i in 0..3 {
+            let mut embedding = vec![0.0f32; 512];
+            embedding[0] = i as f32 * 0.1;
+
+            let fact = MemoryFact {
+                id: format!("fact-{}", i),
+                content: format!("Fact {}", i),
+                fact_type: FactType::Preference,
+                embedding: Some(embedding),
+                source_memory_ids: vec![],
+                created_at: 1000 + i,
+                updated_at: 1000 + i,
+                confidence: 0.9,
+                is_valid: true,
+                invalidation_reason: None,
+                similarity_score: None,
+            };
+            db.insert_fact(fact).await.unwrap();
+        }
+
+        let query = vec![0.0f32; 512];
+        let results = db.search_facts(&query, 2, false).await.unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].similarity_score.is_some());
     }
 }
