@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use tokio::sync::watch;
 
+use crate::agents::thinking::{is_thinking_level_error, ThinkingFallbackState};
 use crate::event::{EventBus, StopReason};
 
 use super::callback::LoopCallback;
@@ -333,19 +334,52 @@ where
                 }
             }
 
-            // ===== Think =====
+            // ===== Think (with fallback retry) =====
             callback.on_step_start(state.step_count).await;
             callback.on_thinking_start(state.step_count).await;
 
-            let thinking = match self.thinker.think(&state, &tools).await {
-                Ok(t) => t,
-                Err(e) => {
-                    let reason = format!("Thinking failed: {}", e);
-                    callback.on_failed(&reason).await;
-                    return LoopResult::Failed {
-                        reason,
-                        steps: state.step_count,
-                    };
+            // Initialize thinking fallback state with current level
+            let initial_level = self.thinker.current_think_level();
+            let mut fallback_state = ThinkingFallbackState::new(initial_level);
+
+            let thinking = loop {
+                let current_level = fallback_state.current;
+                let result = self
+                    .thinker
+                    .think_with_level(&state, &tools, current_level)
+                    .await;
+
+                match result {
+                    Ok(t) => break t,
+                    Err(e) => {
+                        let error_msg = e.to_string();
+
+                        // Check if this is a thinking level error and fallback is enabled
+                        if self.config.enable_thinking_fallback
+                            && is_thinking_level_error(&error_msg)
+                        {
+                            // Try to fallback to a lower thinking level
+                            if let Some(next_level) = fallback_state.try_fallback(Some(&error_msg))
+                            {
+                                tracing::info!(
+                                    from_level = %current_level,
+                                    to_level = %next_level,
+                                    error = %error_msg,
+                                    "Thinking level not supported, falling back"
+                                );
+                                // Continue the loop with the new level
+                                continue;
+                            }
+                        }
+
+                        // Either fallback is disabled, not a thinking error, or exhausted
+                        let reason = format!("Thinking failed: {}", e);
+                        callback.on_failed(&reason).await;
+                        return LoopResult::Failed {
+                            reason,
+                            steps: state.step_count,
+                        };
+                    }
                 }
             };
 

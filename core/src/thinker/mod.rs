@@ -167,12 +167,13 @@ impl<P: ProviderRegistry> Thinker<P> {
         (system, messages)
     }
 
-    /// Call LLM and get response
-    async fn call_llm(
+    /// Call LLM with a specific thinking level
+    async fn call_llm_with_level(
         &self,
         provider: Arc<dyn AiProvider>,
         system: &str,
         messages: &[Message],
+        think_level: ThinkLevel,
     ) -> Result<String> {
         // Build the full prompt from messages
         let mut prompt_parts = Vec::new();
@@ -188,7 +189,6 @@ impl<P: ProviderRegistry> Thinker<P> {
         let full_prompt = prompt_parts.join("\n\n");
 
         // Use thinking-aware processing if provider supports it and level is not Off
-        let think_level = self.config.think_level;
         if think_level != ThinkLevel::Off && provider.supports_thinking() {
             tracing::debug!(
                 think_level = %think_level,
@@ -224,6 +224,16 @@ impl<P: ProviderRegistry> Thinker<P> {
 #[async_trait::async_trait]
 impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
     async fn think(&self, state: &LoopState, tools: &[UnifiedTool]) -> Result<Thinking> {
+        self.think_with_level(state, tools, self.config.think_level)
+            .await
+    }
+
+    async fn think_with_level(
+        &self,
+        state: &LoopState,
+        tools: &[UnifiedTool],
+        level: ThinkLevel,
+    ) -> Result<Thinking> {
         // 1. Build initial observation (with empty tool list for filtering)
         let initial_observation = self.build_observation(state, &[]);
 
@@ -245,13 +255,16 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
             .get(&model_id)
             .unwrap_or_else(|| self.providers.default_provider());
 
-        // 7. Call LLM
-        let response = self.call_llm(provider, &system, &messages).await?;
+        // 7. Call LLM with specified thinking level
+        let response = self
+            .call_llm_with_level(provider, &system, &messages, level)
+            .await?;
 
         // Log raw LLM response for debugging parse failures
         tracing::debug!(
             response_len = response.len(),
             response_preview = %response.chars().take(500).collect::<String>(),
+            think_level = %level,
             "LLM raw response (preview)"
         );
 
@@ -263,6 +276,7 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
             tracing::warn!(
                 response_len = response.len(),
                 response_full = %response,
+                think_level = %level,
                 "Failed to parse LLM response - full content logged"
             );
         }
@@ -273,6 +287,10 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
         self.decision_parser.validate(&thinking.decision)?;
 
         Ok(thinking)
+    }
+
+    fn current_think_level(&self) -> ThinkLevel {
+        self.config.think_level
     }
 }
 

@@ -1,6 +1,7 @@
 //! Trait abstractions for agent loop components
 
 use crate::agent_loop::{Action, ActionResult, LoopState, LoopStep, Thinking};
+use crate::agents::thinking::ThinkLevel;
 use crate::error::Result;
 
 /// Thinker trait - abstraction for the thinking layer
@@ -9,12 +10,30 @@ use crate::error::Result;
 /// LLM-based decision making.
 #[async_trait::async_trait]
 pub trait ThinkerTrait: Send + Sync {
-    /// Think and produce a decision
+    /// Think and produce a decision using the configured thinking level
     async fn think(
         &self,
         state: &LoopState,
         tools: &[crate::dispatcher::UnifiedTool],
     ) -> Result<Thinking>;
+
+    /// Think with a specific thinking level override
+    ///
+    /// Used by the fallback mechanism to retry with lower thinking levels.
+    /// Default implementation ignores the level and calls think().
+    async fn think_with_level(
+        &self,
+        state: &LoopState,
+        tools: &[crate::dispatcher::UnifiedTool],
+        _level: ThinkLevel,
+    ) -> Result<Thinking> {
+        self.think(state, tools).await
+    }
+
+    /// Get the current thinking level
+    fn current_think_level(&self) -> ThinkLevel {
+        ThinkLevel::default()
+    }
 }
 
 /// Action Executor trait - abstraction for the execution layer

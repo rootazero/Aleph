@@ -14,9 +14,12 @@ use std::pin::Pin;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
+use crate::agents::thinking::ThinkLevel;
+
 use super::error::{handle_error, is_retryable_status, MAX_RETRIES};
 use super::request::{
-    build_multimodal_request, build_request, build_request_with_mode, build_vision_request,
+    apply_thinking_config, build_multimodal_request, build_request, build_request_with_mode,
+    build_vision_request,
 };
 use super::types::ChatCompletionResponse;
 
@@ -639,6 +642,151 @@ impl AiProvider for OpenAiProvider {
                 .first()
                 .map(|c| c.message.content.clone())
                 .ok_or_else(|| AetherError::provider("No response from OpenAI"))
+        })
+    }
+
+    fn supports_thinking(&self) -> bool {
+        // OpenAI o1/o3 models support reasoning_effort
+        let model_lower = self.config.model.to_lowercase();
+        model_lower.contains("o1") || model_lower.contains("o3") || model_lower.contains("gpt-5")
+    }
+
+    fn max_think_level(&self) -> ThinkLevel {
+        let model_lower = self.config.model.to_lowercase();
+        if model_lower.contains("o1") || model_lower.contains("o3") || model_lower.contains("gpt-5")
+        {
+            ThinkLevel::High // OpenAI reasoning_effort only goes to "high"
+        } else {
+            ThinkLevel::Off
+        }
+    }
+
+    fn process_with_thinking(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+        think_level: ThinkLevel,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Check if model supports thinking
+            if !self.supports_thinking() || think_level == ThinkLevel::Off {
+                return self.process(&input, system_prompt.as_deref()).await;
+            }
+
+            debug!(
+                model = %self.config.model,
+                think_level = %think_level,
+                input_length = input.len(),
+                "Sending request to OpenAI with reasoning effort"
+            );
+
+            // Build request with thinking configuration
+            let mut request_body = build_request(&self.config, &input, system_prompt.as_deref());
+
+            // Map ThinkLevel to OpenAI reasoning_effort
+            let reasoning_effort = match think_level {
+                ThinkLevel::Off | ThinkLevel::Minimal => None,
+                ThinkLevel::Low => Some("low"),
+                ThinkLevel::Medium => Some("medium"),
+                ThinkLevel::High | ThinkLevel::XHigh => Some("high"),
+            };
+
+            apply_thinking_config(&mut request_body, reasoning_effort);
+
+            // Log request for debugging
+            if let Ok(json_body) = serde_json::to_string_pretty(&request_body) {
+                debug!(
+                    request_body = %json_body,
+                    "OpenAI thinking request body"
+                );
+            }
+
+            // Send request with retry logic
+            let mut last_error: Option<AetherError> = None;
+            for attempt in 0..=MAX_RETRIES {
+                if attempt > 0 {
+                    let backoff = Duration::from_secs(1 << (attempt - 1));
+                    warn!(
+                        attempt = attempt,
+                        max_retries = MAX_RETRIES,
+                        backoff_secs = backoff.as_secs(),
+                        "Retrying OpenAI thinking request"
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
+
+                let response = match self
+                    .client
+                    .post(&self.endpoint)
+                    .header(
+                        "Authorization",
+                        format!(
+                            "Bearer {}",
+                            self.config.api_key.as_ref().unwrap_or(&String::new())
+                        ),
+                    )
+                    .header("Content-Type", "application/json")
+                    .json(&request_body)
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        let err = if e.is_timeout() {
+                            error!("OpenAI thinking request timed out");
+                            AetherError::Timeout {
+                                suggestion: Some(
+                                    "Extended thinking may take longer. Try again or reduce thinking level."
+                                        .to_string(),
+                                ),
+                            }
+                        } else if e.is_connect() {
+                            AetherError::network(format!("Failed to connect: {}", e))
+                        } else {
+                            AetherError::network(format!("Network error: {}", e))
+                        };
+                        last_error = Some(err);
+                        continue;
+                    }
+                };
+
+                let status = response.status();
+                if status.is_success() {
+                    let completion: ChatCompletionResponse =
+                        response.json().await.map_err(|e| {
+                            AetherError::provider(format!("Failed to parse response: {}", e))
+                        })?;
+
+                    let content = completion
+                        .choices
+                        .first()
+                        .ok_or_else(|| AetherError::provider("No response from OpenAI"))?
+                        .message
+                        .content
+                        .clone();
+
+                    info!(
+                        response_length = content.len(),
+                        think_level = %think_level,
+                        "OpenAI thinking request completed"
+                    );
+
+                    return Ok(content);
+                }
+
+                if is_retryable_status(status) && attempt < MAX_RETRIES {
+                    last_error = Some(handle_error(&self.name, &self.endpoint, response).await);
+                    continue;
+                }
+
+                return Err(handle_error(&self.name, &self.endpoint, response).await);
+            }
+
+            Err(last_error
+                .unwrap_or_else(|| AetherError::provider("Request failed after max retries")))
         })
     }
 }
