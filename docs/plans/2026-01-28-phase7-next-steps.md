@@ -322,11 +322,21 @@ let app = Router::new()
 - Integrated hot reload into aether_gateway.rs
 - Events broadcast to connected clients on config change
 
-### Phase 7.2: Device Pairing
-- [ ] New devices require approval
-- [ ] Pairing code valid for 5 minutes
-- [ ] Device tokens persist across restarts
-- [ ] CLI commands work: approve/reject/list
+### Phase 7.2: Device Pairing ✅ ALREADY IMPLEMENTED
+- [x] New devices require approval
+- [x] Pairing code valid for 5 minutes
+- [x] Device tokens persist across restarts (SQLite-backed DeviceStore)
+- [x] CLI commands work: approve/reject/list
+- [x] RPC handlers: pairing.approve, pairing.reject, pairing.list, devices.list, devices.revoke
+- [x] TokenManager with validation and device-scoped tokens
+- [x] PairingManager with 6-digit code generation
+
+**Already implemented in:**
+- `core/src/gateway/device_store.rs` - SQLite device registry
+- `core/src/gateway/security/pairing.rs` - Pairing flow management
+- `core/src/gateway/security/token.rs` - Token generation/validation
+- `core/src/gateway/handlers/auth.rs` - RPC handlers
+- `core/src/bin/aether_gateway.rs` - CLI commands (pairing/devices subcommands)
 
 ### Phase 7.3: WebChat UI
 - [ ] Access at http://127.0.0.1:18789/
