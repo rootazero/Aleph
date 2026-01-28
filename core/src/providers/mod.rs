@@ -61,7 +61,7 @@ pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
 pub use t8star::T8StarProvider;
 
-use crate::agents::thinking::{ThinkLevel, ThinkingConfig};
+use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::error::AetherError;
 use std::sync::Arc;
