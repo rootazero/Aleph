@@ -507,6 +507,23 @@ pub use crate::question::{QuestionError, QuestionManager, QuestionManagerConfig}
 // Tool system exports (unified tool traits replacing rig-core)
 pub use crate::tools::{AetherTool, AetherToolDyn, AetherToolServer, AetherToolServerHandle};
 
+// Session tools exports (A2A communication)
+pub use crate::tools::sessions::{
+    // Policy
+    AgentToAgentPolicy, A2ARule, RuleMatcher,
+    // Visibility
+    SessionToolsVisibility, VisibilityContext,
+    // Types
+    SendStatus, SessionKind, SessionListRow, SessionMessage, SpawnStatus,
+    // Registry
+    SubagentRegistry, SubagentRun,
+    // Tool params/results
+    SessionsListParams, SessionsListResult,
+    SessionsSendParams, SessionsSendResult,
+    SessionsSpawnParams, SessionsSpawnResult,
+    build_subagent_system_prompt,
+};
+
 // Agent system exports (unified: agent loop + sub-agent delegation)
 pub use crate::agents::{
     // Sub-agent delegation
