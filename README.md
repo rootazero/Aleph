@@ -1,6 +1,6 @@
 # Aether
 
-> *"This is the first time in human history that a non-human soul has been placed inside a shell."*
+> *"This is the first time in human history that a machine soul has been placed inside a shell."*
 > — Ghost in the Shell
 
 **Aether is not a tool. It is the embodiment of an idea:**
