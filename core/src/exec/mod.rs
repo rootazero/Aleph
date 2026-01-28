@@ -6,10 +6,12 @@
 //! - Allowlist pattern matching
 //! - User approval via socket protocol
 
+pub mod allowlist;
 pub mod analysis;
 pub mod config;
 pub mod parser;
 
+pub use allowlist::match_allowlist;
 pub use analysis::{CommandAnalysis, CommandResolution, CommandSegment};
 pub use config::{
     AgentExecConfig, AllowlistEntry, ExecAsk, ExecApprovalsFile, ExecDefaults, ExecSecurity,
