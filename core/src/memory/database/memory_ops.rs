@@ -107,6 +107,43 @@ mod vec_sync_tests {
             "memories_vec rowid should match memories rowid"
         );
     }
+
+    #[tokio::test]
+    async fn test_search_memories_uses_vec0() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        // Insert test memories with different embeddings
+        for i in 0..5 {
+            let mut embedding = vec![0.0f32; 512];
+            embedding[0] = i as f32 * 0.1; // Varying first element
+
+            let memory = MemoryEntry {
+                id: format!("test-id-{}", i),
+                context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
+                user_input: format!("input {}", i),
+                ai_output: format!("output {}", i),
+                embedding: Some(embedding),
+                similarity_score: None,
+            };
+            db.insert_memory(memory).await.unwrap();
+        }
+
+        // Search with a query embedding similar to the first memory
+        let query_embedding = vec![0.0f32; 512];
+        let results = db
+            .search_memories("com.test.app", "test.txt", &query_embedding, 3)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 3, "Should return 3 results");
+        // First result should be most similar (closest to query)
+        assert!(results[0].similarity_score.is_some());
+        if results.len() > 1 {
+            assert!(results[0].similarity_score.unwrap() >= results[1].similarity_score.unwrap());
+        }
+    }
 }
 
 impl VectorDatabase {
@@ -163,7 +200,11 @@ impl VectorDatabase {
         Ok(())
     }
 
-    /// Search memories by context and embedding similarity
+    /// Search memories by context and embedding similarity using sqlite-vec
+    ///
+    /// Uses sqlite-vec's vec0 KNN query for efficient similarity search.
+    /// The query first finds nearest neighbors in the vector index, then
+    /// joins with the main table for context filtering.
     pub async fn search_memories(
         &self,
         app_bundle_id: &str,
@@ -173,77 +214,74 @@ impl VectorDatabase {
     ) -> Result<Vec<MemoryEntry>, AetherError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Query memories matching the context
-        // If app_bundle_id or window_title is empty, treat it as "any value"
+        // Serialize query embedding for sqlite-vec
+        let query_bytes = Self::serialize_embedding(query_embedding);
+
+        // Use sqlite-vec KNN search with context filtering
+        // Strategy: First get candidate rowids from vec0, then join with main table for filtering
         let mut stmt = conn
             .prepare(
                 r#"
-            SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp, topic_id
-            FROM memories
-            WHERE (?1 = '' OR app_bundle_id = ?1)
-              AND (?2 = '' OR window_title = ?2)
-            ORDER BY timestamp DESC
-            LIMIT ?3
-            "#,
+                WITH vec_matches AS (
+                    SELECT rowid, distance
+                    FROM memories_vec
+                    WHERE embedding MATCH ?1
+                    ORDER BY distance
+                    LIMIT ?2
+                )
+                SELECT
+                    m.id, m.app_bundle_id, m.window_title, m.user_input, m.ai_output,
+                    m.embedding, m.timestamp, m.topic_id,
+                    1.0 / (1.0 + vm.distance) as similarity
+                FROM memories m
+                INNER JOIN vec_matches vm ON m.rowid = vm.rowid
+                WHERE (?3 = '' OR m.app_bundle_id = ?3)
+                  AND (?4 = '' OR m.window_title = ?4)
+                ORDER BY vm.distance
+                LIMIT ?5
+                "#,
             )
             .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
 
+        // Fetch more candidates to account for context filtering
+        let fetch_limit = limit * 3;
+
         let memories = stmt
-            .query_map(params![app_bundle_id, window_title, limit], |row| {
-                let id: String = row.get(0)?;
-                let app_id: String = row.get(1)?;
-                let window: String = row.get(2)?;
-                let user_input: String = row.get(3)?;
-                let ai_output: String = row.get(4)?;
-                let embedding_bytes: Vec<u8> = row.get(5)?;
-                let timestamp: i64 = row.get(6)?;
-                let topic_id: String = row.get(7)?;
+            .query_map(
+                params![query_bytes, fetch_limit, app_bundle_id, window_title, limit],
+                |row| {
+                    let id: String = row.get(0)?;
+                    let app_id: String = row.get(1)?;
+                    let window: String = row.get(2)?;
+                    let user_input: String = row.get(3)?;
+                    let ai_output: String = row.get(4)?;
+                    let embedding_bytes: Vec<u8> = row.get(5)?;
+                    let timestamp: i64 = row.get(6)?;
+                    let topic_id: String = row.get(7)?;
+                    let similarity: f64 = row.get(8)?;
 
-                let embedding = Self::deserialize_embedding(&embedding_bytes);
+                    let embedding = Self::deserialize_embedding(&embedding_bytes);
 
-                Ok(MemoryEntry {
-                    id,
-                    context: ContextAnchor {
-                        app_bundle_id: app_id,
-                        window_title: window,
-                        timestamp,
-                        topic_id,
-                    },
-                    user_input,
-                    ai_output,
-                    embedding: Some(embedding),
-                    similarity_score: None,
-                })
-            })
+                    Ok(MemoryEntry {
+                        id,
+                        context: ContextAnchor {
+                            app_bundle_id: app_id,
+                            window_title: window,
+                            timestamp,
+                            topic_id,
+                        },
+                        user_input,
+                        ai_output,
+                        embedding: Some(embedding),
+                        similarity_score: Some(similarity as f32),
+                    })
+                },
+            )
             .map_err(|e| AetherError::config(format!("Failed to query memories: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AetherError::config(format!("Failed to parse memory rows: {}", e)))?;
 
-        // Calculate similarity scores and sort by score
-        let mut scored_memories: Vec<MemoryEntry> = memories
-            .into_iter()
-            .filter_map(|mut memory| {
-                if let Some(ref emb) = memory.embedding {
-                    let score = Self::cosine_similarity(query_embedding, emb);
-                    memory.similarity_score = Some(score);
-                    Some(memory)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Sort by similarity score (descending)
-        scored_memories.sort_by(|a, b| {
-            b.similarity_score
-                .partial_cmp(&a.similarity_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Take top K results
-        scored_memories.truncate(limit as usize);
-
-        Ok(scored_memories)
+        Ok(memories)
     }
 
     /// Get recent memories without embedding similarity search
