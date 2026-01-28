@@ -15,6 +15,8 @@ default = ["uniffi"]
 uniffi = ["dep:uniffi"]
 # Windows: C ABI for csbindgen P/Invoke bindings
 cabi = []
+# Gateway: WebSocket control plane for Moltbot-style architecture
+gateway = ["dep:tokio-tungstenite", "dep:futures-util", "dep:clap"]
 
 [dependencies]
 # UniFFI (optional, enabled by default for macOS)
@@ -27,7 +29,7 @@ uniffi = { version = "0.31", features = ["cli"], optional = true }
 # - enigo → Swift KeyboardSimulator (CGEvent)
 # - core-foundation/core-graphics → no longer needed
 
-tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util"] }
+tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
@@ -73,6 +75,8 @@ tempfile = "3.8"
 git2 = "0.19"
 # For file pattern matching (MCP/Services)
 glob = "0.3"
+# For directory traversal (file scanning)
+walkdir = "2.5"
 # For hostname detection (Services)
 hostname = "0.4"
 # For username detection (Services)
@@ -104,6 +108,11 @@ pulldown-cmark = "0.12"
 # For HTTP date parsing (Retry-After header)
 httpdate = "1.0"
 
+# Gateway dependencies (optional)
+tokio-tungstenite = { version = "0.26", optional = true }
+futures-util = { version = "0.3", optional = true }
+clap = { version = "4.4", features = ["derive"], optional = true }
+
 [build-dependencies]
 uniffi = { version = "0.31", features = ["build"] }
 # csbindgen for Windows C# bindings
@@ -113,6 +122,11 @@ csbindgen = "1.9"
 name = "uniffi-bindgen"
 path = "src/bin/uniffi_bindgen.rs"
 required-features = ["uniffi"]
+
+[[bin]]
+name = "aether-gateway"
+path = "src/bin/aether_gateway.rs"
+required-features = ["gateway"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
