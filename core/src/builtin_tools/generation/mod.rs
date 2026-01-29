@@ -10,7 +10,7 @@ pub use image_generate::{ImageGenerateArgs, ImageGenerateOutput, ImageGenerateTo
 pub use speech_generate::{SpeechGenerateArgs, SpeechGenerateOutput, SpeechGenerateTool};
 
 use crate::generation::GenerationError;
-use crate::rig_tools::error::ToolError;
+use crate::builtin_tools::error::ToolError;
 
 /// Convert GenerationError to ToolError for tool execution
 impl From<GenerationError> for ToolError {

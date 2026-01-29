@@ -22,7 +22,7 @@ use crate::ffi::AetherEventHandler;
 use crate::ffi::FfiLoopCallback;
 use crate::generation::GenerationProviderRegistry;
 use crate::intent::{TaskCategory, ThinkingContext};
-use crate::rig_tools::file_ops::{
+use crate::builtin_tools::file_ops::{
     clear_written_files, mark_session_start, scan_new_files_in_working_dir, take_written_files,
 };
 use crate::runtimes::{RuntimeCapability, RuntimeRegistry};

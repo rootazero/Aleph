@@ -81,7 +81,7 @@ impl AetherCore {
         parameters_schema: String,
     ) -> Result<(), AetherFfiError> {
         use crate::mcp::McpTool;
-        use crate::rig_tools::McpToolWrapper;
+        use crate::builtin_tools::McpToolWrapper;
 
         info!(tool_name = %tool_name, "Adding MCP tool dynamically");
 

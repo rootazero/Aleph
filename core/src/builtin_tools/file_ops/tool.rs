@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tracing::info;
 
 use crate::error::Result;
-use crate::rig_tools::error::ToolError;
+use crate::builtin_tools::error::ToolError;
 use crate::tools::AetherTool;
 use super::batch::{execute_batch_move, execute_organize};
 use super::ops::{
@@ -69,7 +69,7 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
     /// Execute file operation based on args (internal implementation)
     async fn call_impl(&self, args: FileOpsArgs) -> std::result::Result<FileOpsOutput, ToolError> {
-        use crate::rig_tools::{notify_tool_result, notify_tool_start};
+        use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 
         // Format operation description for notification
         let op_name = match &args.operation {

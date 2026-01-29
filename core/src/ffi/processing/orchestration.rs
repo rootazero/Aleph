@@ -79,13 +79,13 @@ pub fn process_with_agent_loop(
             // Create topic directory if it doesn't exist
             if std::fs::create_dir_all(&topic_dir).is_ok() {
                 info!(topic_dir = %topic_dir.display(), topic_id = %tid, "Setting session working directory");
-                crate::rig_tools::file_ops::set_working_dir(Some(topic_dir));
+                crate::builtin_tools::file_ops::set_working_dir(Some(topic_dir));
             }
         }
     } else {
         // 🔒 FROZEN: Single-turn mode - no persistent working directory
         // Clear any previous working directory for single-turn mode
-        crate::rig_tools::file_ops::set_working_dir(None);
+        crate::builtin_tools::file_ops::set_working_dir(None);
     }
 
     // ================================================================

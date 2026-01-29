@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
 
-use crate::rig_tools::error::ToolError;
+use crate::builtin_tools::error::ToolError;
 use super::path_utils::check_and_resolve_path;
 use super::state::record_written_file;
 use super::types::{FileInfo, FileOpsOutput};

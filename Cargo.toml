@@ -81,10 +81,6 @@ schemars = "0.8"
 scraper = "0.22"
 url = "2.5"
 
-# AI framework
-rig-core = "0.28"
-rig-sqlite = "0.1.31"
-
 # Caching
 lru = "0.12"
 

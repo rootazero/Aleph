@@ -18,11 +18,11 @@
 
 use std::sync::Arc;
 
-use crate::rig_tools::{
+use crate::builtin_tools::{
     BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool,
     ReadSkillTool, SearchTool, WebFetchTool, YouTubeTool,
 };
-use crate::rig_tools::skill_reader::ListSkillsTool as SkillListTool;
+use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::tools::AetherToolDyn;
 
 use super::BuiltinToolConfig;

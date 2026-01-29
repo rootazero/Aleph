@@ -1,7 +1,7 @@
 //! Tool progress callback adapter for FFI
 
 use crate::ffi::AetherEventHandler;
-use crate::rig_tools::ToolProgressCallback;
+use crate::builtin_tools::ToolProgressCallback;
 use std::sync::Arc;
 
 /// Adapter to bridge tool progress callbacks to the FFI event handler

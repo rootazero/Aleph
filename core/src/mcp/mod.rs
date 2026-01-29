@@ -4,7 +4,7 @@
 //!
 //! # Architecture
 //!
-//! - **MCP Tools**: Wrapped via `McpToolWrapper` in `rig_tools` module
+//! - **MCP Tools**: Wrapped via `McpToolWrapper` in `builtin_tools` module
 //!   for integration with rig-core
 //!
 //! - **External MCP Servers**: Managed by `McpClient`
@@ -29,7 +29,7 @@
 //! │                         Tool Sources                            │
 //! ├─────────────────────────────────────────────────────────────────┤
 //! │  Aether Tools              │  External MCP Servers              │
-//! │  (see crate::rig_tools)    │  (see this mcp module)             │
+//! │  (see crate::builtin_tools)    │  (see this mcp module)             │
 //! │  ├── SearchTool            │  ├── McpTransport trait            │
 //! │  ├── WebFetchTool          │  │   ├── StdioTransport            │
 //! │  ├── YouTubeTool           │  │   ├── HttpTransport             │
