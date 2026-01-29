@@ -2,7 +2,7 @@
 //  ShortcutsView.swift
 //  Aether
 //
-//  Keyboard shortcuts configuration tab for command completion and OCR capture.
+//  Keyboard shortcuts configuration tab for command completion hotkey.
 //
 
 import SwiftUI
@@ -18,18 +18,10 @@ struct ShortcutsView: View {
     @State private var commandModifier2: CommandModifier? = nil  // Optional second modifier
     @State private var commandCharKey: CommandCharKey = .space
 
-    // OCR capture hotkey (two modifiers + character)
-    @State private var ocrModifier1: CommandModifier = .command
-    @State private var ocrModifier2: CommandModifier = .option
-    @State private var ocrCharKey: OcrCharKey = .o
-
     // Saved settings (for comparison)
     @State private var savedCommandModifier1: CommandModifier = .option
     @State private var savedCommandModifier2: CommandModifier? = nil
     @State private var savedCommandCharKey: CommandCharKey = .space
-    @State private var savedOcrModifier1: CommandModifier = .command
-    @State private var savedOcrModifier2: CommandModifier = .option
-    @State private var savedOcrCharKey: OcrCharKey = .o
 
     // UI state
     @State private var isSaving = false
@@ -39,9 +31,6 @@ struct ShortcutsView: View {
     private let defaultCommandModifier1: CommandModifier = .option
     private let defaultCommandModifier2: CommandModifier? = nil
     private let defaultCommandCharKey: CommandCharKey = .space
-    private let defaultOcrModifier1: CommandModifier = .command
-    private let defaultOcrModifier2: CommandModifier = .option
-    private let defaultOcrCharKey: OcrCharKey = .o
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,9 +38,6 @@ struct ShortcutsView: View {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
                     // Command Completion Hotkey Card
                     commandCompletionCard
-
-                    // OCR Capture Hotkey Card
-                    ocrCaptureCard
 
                     // Permission Card
                     permissionCard
@@ -76,21 +62,6 @@ struct ShortcutsView: View {
         }
         .onChange(of: commandModifier1) { _, _ in syncUnsavedChanges() }
         .onChange(of: commandCharKey) { _, _ in syncUnsavedChanges() }
-        .onChange(of: ocrModifier1) { _, newValue in
-            // Ensure modifier2 is different from modifier1
-            if ocrModifier2 == newValue {
-                ocrModifier2 = CommandModifier.allCases.first { $0 != newValue } ?? .option
-            }
-            syncUnsavedChanges()
-        }
-        .onChange(of: ocrModifier2) { _, newValue in
-            // Ensure modifier1 is different from modifier2
-            if ocrModifier1 == newValue {
-                ocrModifier1 = CommandModifier.allCases.first { $0 != newValue } ?? .command
-            }
-            syncUnsavedChanges()
-        }
-        .onChange(of: ocrCharKey) { _, _ in syncUnsavedChanges() }
         .onChange(of: isSaving) { _, _ in syncUnsavedChanges() }
     }
 
@@ -190,113 +161,6 @@ struct ShortcutsView: View {
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
-    /// OCR capture hotkey card (screen capture OCR)
-    private var ocrCaptureCard: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.shortcuts.ocr_capture"), systemImage: "text.viewfinder")
-                .font(DesignTokens.Typography.heading)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                Text(L("settings.shortcuts.ocr_capture_description"))
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                // OCR capture hotkey row
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                    HStack {
-                        Image(systemName: "camera.viewfinder")
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-                            .frame(width: 20)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L("settings.shortcuts.ocr_capture_title"))
-                                .font(DesignTokens.Typography.body)
-                            Text(L("settings.shortcuts.ocr_capture_hint"))
-                                .font(DesignTokens.Typography.caption)
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
-                        }
-
-                        Spacer()
-
-                        // Show current hotkey
-                        Text(ocrCaptureDisplayString)
-                            .font(DesignTokens.Typography.code)
-                            .foregroundColor(DesignTokens.Colors.accentBlue)
-                            .padding(.horizontal, DesignTokens.Spacing.sm)
-                            .padding(.vertical, DesignTokens.Spacing.xs)
-                            .background(DesignTokens.Colors.accentBlue.opacity(0.1))
-                            .cornerRadius(DesignTokens.CornerRadius.small)
-                    }
-
-                    // Hotkey pickers (two modifiers + key)
-                    HStack(spacing: DesignTokens.Spacing.sm) {
-                        // First modifier
-                        Picker("", selection: $ocrModifier1) {
-                            ForEach(CommandModifier.allCases, id: \.self) { modifier in
-                                Text(modifier.displayName).tag(modifier)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
-                        .frame(width: 100)
-
-                        Text("+")
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                        // Second modifier (filtered to exclude first)
-                        Picker("", selection: $ocrModifier2) {
-                            ForEach(CommandModifier.allCases.filter { $0 != ocrModifier1 }, id: \.self) { modifier in
-                                Text(modifier.displayName).tag(modifier)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
-                        .frame(width: 100)
-
-                        Text("+")
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                        // Character key
-                        Picker("", selection: $ocrCharKey) {
-                            ForEach(OcrCharKey.allCases, id: \.self) { key in
-                                Text(key.displayName).tag(key)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
-                        .frame(width: 80)
-
-                        Spacer()
-
-                        // Reset to default button
-                        if !isOcrCaptureDefault {
-                            Button {
-                                ocrModifier1 = defaultOcrModifier1
-                                ocrModifier2 = defaultOcrModifier2
-                                ocrCharKey = defaultOcrCharKey
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.counterclockwise")
-                                    Text(L("common.reset"))
-                                }
-                                .font(DesignTokens.Typography.caption)
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .padding(DesignTokens.Spacing.sm)
-                .background(DesignTokens.Colors.border.opacity(0.3))
-                .cornerRadius(DesignTokens.CornerRadius.small)
-            }
-        }
-        .padding(DesignTokens.Spacing.md)
-        .background(DesignTokens.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-    }
-
     /// Permission card
     private var permissionCard: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -364,31 +228,11 @@ struct ShortcutsView: View {
         commandCharKey == defaultCommandCharKey
     }
 
-    /// Display string for OCR capture hotkey (e.g., "⌘ ⌥ O")
-    private var ocrCaptureDisplayString: String {
-        "\(ocrModifier1.symbol) \(ocrModifier2.symbol) \(ocrCharKey.displayChar)"
-    }
-
-    /// Config string for OCR capture (e.g., "Command+Option+O")
-    private var ocrCaptureConfigString: String {
-        "\(ocrModifier1.rawValue)+\(ocrModifier2.rawValue)+\(ocrCharKey.rawValue)"
-    }
-
-    /// Check if OCR capture is at default value
-    private var isOcrCaptureDefault: Bool {
-        ocrModifier1 == defaultOcrModifier1 &&
-        ocrModifier2 == defaultOcrModifier2 &&
-        ocrCharKey == defaultOcrCharKey
-    }
-
     /// Check if current state differs from saved state
     private var hasLocalUnsavedChanges: Bool {
         return commandModifier1 != savedCommandModifier1 ||
                commandModifier2 != savedCommandModifier2 ||
-               commandCharKey != savedCommandCharKey ||
-               ocrModifier1 != savedOcrModifier1 ||
-               ocrModifier2 != savedOcrModifier2 ||
-               ocrCharKey != savedOcrCharKey
+               commandCharKey != savedCommandCharKey
     }
 
     /// Status message for UnifiedSaveBar
@@ -415,17 +259,12 @@ struct ShortcutsView: View {
                 let config = try core.loadConfig()
 
                 await MainActor.run {
-                    // Load shortcuts config (Command completion + OCR capture)
+                    // Load shortcuts config (Command completion)
                     if let shortcuts = config.shortcuts {
                         parseCommandPrompt(shortcuts.commandPrompt)
                         savedCommandModifier1 = commandModifier1
                         savedCommandModifier2 = commandModifier2
                         savedCommandCharKey = commandCharKey
-
-                        parseOcrCapture(shortcuts.ocrCapture)
-                        savedOcrModifier1 = ocrModifier1
-                        savedOcrModifier2 = ocrModifier2
-                        savedOcrCharKey = ocrCharKey
                     }
                 }
             } catch {
@@ -461,22 +300,6 @@ struct ShortcutsView: View {
         }
     }
 
-    /// Parse OCR capture string (e.g., "Command+Option+O") into components
-    private func parseOcrCapture(_ configString: String) {
-        let parts = configString.split(separator: "+").map { String($0) }
-        guard parts.count == 3 else { return }
-
-        if let mod1 = CommandModifier(rawValue: parts[0]) {
-            ocrModifier1 = mod1
-        }
-        if let mod2 = CommandModifier(rawValue: parts[1]) {
-            ocrModifier2 = mod2
-        }
-        if let key = OcrCharKey(rawValue: parts[2]) {
-            ocrCharKey = key
-        }
-    }
-
     private func saveSettings() async {
         guard let core = core else {
             await MainActor.run {
@@ -491,27 +314,22 @@ struct ShortcutsView: View {
         }
 
         do {
-            // Save shortcuts config (Command completion + OCR capture)
+            // Save shortcuts config (Command completion)
             let shortcutsConfig = ShortcutsConfig(
                 summon: "Command+Grave",  // Legacy, not used
                 cancel: "Escape",
-                commandPrompt: commandPromptConfigString,
-                ocrCapture: ocrCaptureConfigString
+                commandPrompt: commandPromptConfigString
             )
             try core.updateShortcuts(shortcuts: shortcutsConfig)
 
             print("Shortcut settings saved successfully:")
             print("  Command Prompt: \(commandPromptConfigString)")
-            print("  OCR Capture: \(ocrCaptureConfigString)")
 
             await MainActor.run {
                 // Update saved state to match current state
                 savedCommandModifier1 = commandModifier1
                 savedCommandModifier2 = commandModifier2
                 savedCommandCharKey = commandCharKey
-                savedOcrModifier1 = ocrModifier1
-                savedOcrModifier2 = ocrModifier2
-                savedOcrCharKey = ocrCharKey
 
                 isSaving = false
                 errorMessage = nil
@@ -519,7 +337,6 @@ struct ShortcutsView: View {
                 // Notify AppDelegate to update hotkeys at runtime
                 if let appDelegate = NSApp.delegate as? AppDelegate {
                     appDelegate.updateCommandPromptHotkey(shortcutsConfig)
-                    appDelegate.updateOcrCaptureHotkey(shortcutsConfig)
                 }
 
                 // Post notification for other components
@@ -542,9 +359,6 @@ struct ShortcutsView: View {
         commandModifier1 = savedCommandModifier1
         commandModifier2 = savedCommandModifier2
         commandCharKey = savedCommandCharKey
-        ocrModifier1 = savedOcrModifier1
-        ocrModifier2 = savedOcrModifier2
-        ocrCharKey = savedOcrCharKey
         errorMessage = nil
     }
 
@@ -642,37 +456,6 @@ enum CommandCharKey: String, CaseIterable {
         case .space: return 49
         case .esc: return 53
         }
-    }
-}
-
-// MARK: - OCR Character Key Enum
-
-/// Character keys for OCR capture hotkey (includes letters and numbers)
-enum OcrCharKey: String, CaseIterable {
-    // Letters (for semantic hotkeys like O for OCR)
-    case o = "O"
-    case s = "S"
-    // Numbers
-    case zero = "0"
-    case one = "1"
-    case two = "2"
-    case three = "3"
-    case four = "4"
-    case five = "5"
-    case six = "6"
-    case seven = "7"
-    case eight = "8"
-    case nine = "9"
-    // Common symbols
-    case slash = "/"
-    case grave = "`"
-
-    var displayName: String {
-        rawValue
-    }
-
-    var displayChar: String {
-        rawValue
     }
 }
 

@@ -2,8 +2,7 @@
 //  HotkeyService.swift
 //  Aether
 //
-//  Unified hotkey management service that coordinates all hotkey systems:
-//  - VisionHotkeyManager: OCR capture hotkey
+//  Unified hotkey management service that coordinates hotkey systems:
 //  - Multi-turn hotkey: Command prompt hotkey (Option+Space)
 //
 //  Extracted from AppDelegate to improve separation of concerns.
@@ -18,14 +17,10 @@ import Combine
 ///
 /// This service consolidates hotkey management that was previously scattered
 /// across AppDelegate, providing a single point of control for:
-/// - Vision/OCR capture hotkey (via VisionHotkeyManager)
 /// - Multi-turn conversation hotkey (inline implementation)
 final class HotkeyService {
 
     // MARK: - Properties
-
-    /// Vision hotkey manager for OCR capture
-    private var visionHotkeyManager: VisionHotkeyManager?
 
     /// Multi-turn hotkey monitors
     private var multiTurnGlobalMonitor: Any?
@@ -56,52 +51,14 @@ final class HotkeyService {
 
     /// Start all hotkey monitoring
     func startAllHotkeys() {
-        startVisionHotkeys()
         startMultiTurnHotkey()
         print("[HotkeyService] All hotkey systems started")
     }
 
     /// Stop all hotkey monitoring
     func stopAllHotkeys() {
-        stopVisionHotkeys()
         stopMultiTurnHotkey()
         print("[HotkeyService] All hotkey systems stopped")
-    }
-
-    // MARK: - Vision Hotkeys (OCR Capture)
-
-    /// Start vision hotkey monitoring
-    private func startVisionHotkeys() {
-        visionHotkeyManager = VisionHotkeyManager()
-        visionHotkeyManager?.registerHotkeys()
-
-        // Load config and update hotkey if available
-        if let core = core {
-            do {
-                let config = try core.loadConfig()
-                if let shortcuts = config.shortcuts {
-                    visionHotkeyManager?.updateHotkey(from: shortcuts)
-                }
-            } catch {
-                print("[HotkeyService] Failed to load vision hotkey config: \(error)")
-            }
-        }
-
-        print("[HotkeyService] Vision hotkeys started")
-    }
-
-    /// Stop vision hotkey monitoring
-    private func stopVisionHotkeys() {
-        visionHotkeyManager?.unregisterHotkeys()
-        visionHotkeyManager = nil
-    }
-
-    /// Update vision hotkey configuration at runtime
-    ///
-    /// - Parameter shortcuts: New shortcuts configuration
-    func updateVisionHotkey(shortcuts: ShortcutsConfig) {
-        visionHotkeyManager?.updateHotkey(from: shortcuts)
-        print("[HotkeyService] Vision hotkey updated")
     }
 
     // MARK: - Multi-Turn Hotkey (Command Prompt)

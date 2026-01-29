@@ -45,10 +45,6 @@ pub struct ShortcutsConfig {
     /// Format: "Modifier1+Modifier2+Key" where modifiers are Command, Option, Control, Shift
     #[serde(default = "default_command_prompt_hotkey")]
     pub command_prompt: String,
-    /// OCR capture hotkey (e.g., "Command+Shift+Control+4")
-    /// Format: "Modifier1+Modifier2+...+Key"
-    #[serde(default = "default_ocr_capture_hotkey")]
-    pub ocr_capture: String,
 }
 
 /// Legacy default hotkey - kept for backward compatibility
@@ -65,17 +61,12 @@ pub fn default_command_prompt_hotkey() -> String {
     "Option+Space".to_string()
 }
 
-pub fn default_ocr_capture_hotkey() -> String {
-    "Command+Option+O".to_string()
-}
-
 impl Default for ShortcutsConfig {
     fn default() -> Self {
         Self {
             summon: default_summon_hotkey(),
             cancel: Some("Escape".to_string()),
             command_prompt: default_command_prompt_hotkey(),
-            ocr_capture: default_ocr_capture_hotkey(),
         }
     }
 }
