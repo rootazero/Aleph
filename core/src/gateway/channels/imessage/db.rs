@@ -11,7 +11,7 @@
 //! To convert to Unix timestamp:
 //! `unix_timestamp = apple_timestamp / 1_000_000_000 + 978307200`
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::path::Path;
 use tracing::{debug, trace};

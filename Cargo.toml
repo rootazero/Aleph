@@ -84,5 +84,4 @@ url = "2.5"
 # Caching
 lru = "0.12"
 
-# UniFFI (optional, macOS only)
-uniffi = { version = "0.28", features = ["cli"] }
+# UniFFI removed - using Gateway WebSocket architecture

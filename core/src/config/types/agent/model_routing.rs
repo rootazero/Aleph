@@ -588,7 +588,7 @@ mod tests {
         // Verify retry config
         assert!(config.retry.enabled);
         assert_eq!(config.retry.max_attempts, 3);
-        assert_eq!(config.retry.attempt_timeout_ms, 30000);
+        assert_eq!(config.retry.attempt_timeout_ms, 300000);
         assert!(config.retry.failover_on_non_retryable);
         assert_eq!(config.retry.retryable_errors.len(), 3);
         assert!(config

@@ -249,7 +249,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
 
     // Return list of installed plugin names
     // For simplicity, return empty list - caller should use plugins.list to refresh
-    JsonRpcResponse::success(request.id, json!({ "installedNames": [] as Vec<String> }))
+    JsonRpcResponse::success(request.id, json!({ "installedNames": Vec::<String>::new() }))
 }
 
 // ============================================================================
