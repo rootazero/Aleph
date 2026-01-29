@@ -259,10 +259,6 @@
 "settings.shortcuts.ocr_capture_title" = "区域截图OCR";
 "settings.shortcuts.ocr_capture_hint" = "选择区域并提取文字";
 
-// MARK: - Hotkey Display
-"hotkey.double_tap_shift" = "双击 Shift";
-"hotkey.double_tap_key" = "双击 %@";
-
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "行为";
 "settings.behavior.description" = "配置 Aether 如何捕获输入和传递输出。";
@@ -304,40 +300,6 @@
 "settings.behavior.window_visibility" = "窗口显示";
 "settings.behavior.keep_window_visible" = "处理时保持窗口可见";
 "settings.behavior.keep_window_visible_description" = "开启后，AI处理时对话窗口保持可见；关闭后窗口会暂时隐藏，显示处理指示器。";
-"settings.behavior.typo_correction" = "输入法纠错";
-"settings.behavior.typo_correction_enable" = "启用输入法纠错";
-"settings.behavior.typo_correction_description" = "使用AI自动修正中英文输入错误，包括同音字、拼写错误、前后鼻音等常见输入法问题。";
-"settings.behavior.typo_correction_trigger" = "双击空格键（200毫秒内）触发纠错";
-"settings.behavior.typo_correction_provider" = "AI 提供商";
-"settings.behavior.typo_correction_provider_none" = "请选择提供商...";
-"settings.behavior.typo_correction_model" = "模型（可选）";
-"settings.behavior.typo_correction_model_placeholder" = "例如：gpt-4o-mini";
-"settings.behavior.typo_correction_model_hint" = "留空则使用提供商默认模型";
-
-// MARK: - Settings Window - Trigger System (Hotkey Configuration)
-"settings.trigger.title" = "触发热键";
-"settings.trigger.description" = "配置替换和追加模式的热键。双击指定的修饰键即可触发。";
-"settings.trigger.replace_hotkey" = "替换热键";
-"settings.trigger.append_hotkey" = "追加热键";
-"settings.trigger.same_key_warning" = "替换和追加使用了相同的热键！";
-
-// MARK: - Modifier Keys
-"modifier.left_shift" = "左 Shift";
-"modifier.right_shift" = "右 Shift";
-"modifier.left_control" = "左 Control";
-"modifier.right_control" = "右 Control";
-"modifier.left_option" = "左 Option";
-"modifier.right_option" = "右 Option";
-"modifier.left_command" = "左 Command";
-"modifier.right_command" = "右 Command";
-"modifier.side.left" = "左";
-"modifier.side.right" = "右";
-
-// MARK: - Hotkey Actions
-"action.replace" = "替换";
-"action.replace.description" = "AI 回复替换原文本";
-"action.append" = "追加";
-"action.append.description" = "AI 回复追加在原文本后面";
 
 // MARK: - Settings Window - Search Tab
 "settings.search.title" = "搜索引擎";

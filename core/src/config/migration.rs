@@ -3,9 +3,8 @@
 //! This module handles migrating configuration from old formats to new formats.
 
 use crate::config::Config;
-use crate::config::types::TriggerConfig;
 use crate::error::{AetherError, Result};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 impl Config {
     /// Migrate PII config from behavior to search (integrate-search-registry)
@@ -20,28 +19,6 @@ impl Config {
         // BehaviorConfig deprecated - pii_scrubbing_enabled field removed
         // Old configs will have the field ignored by serde
         false
-    }
-
-    /// Migrate from old config to new trigger config
-    ///
-    /// Sets default replace/append hotkeys if trigger config doesn't exist.
-    ///
-    /// Returns true if migration was performed
-    pub(crate) fn migrate_trigger_config(&mut self) -> bool {
-        // Check if migration is needed
-        if self.trigger.is_some() {
-            return false;
-        }
-
-        debug!("Migrating to new trigger config with default hotkeys");
-
-        // Create trigger config with defaults
-        self.trigger = Some(TriggerConfig {
-            replace_hotkey: crate::config::types::general::default_replace_hotkey(),
-            append_hotkey: crate::config::types::general::default_append_hotkey(),
-        });
-
-        true
     }
 
     /// Migrate old command_prompt hotkey to new default

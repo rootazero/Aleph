@@ -259,10 +259,6 @@
 "settings.shortcuts.ocr_capture_title" = "Region Capture OCR";
 "settings.shortcuts.ocr_capture_hint" = "Select a region and extract text";
 
-// MARK: - Hotkey Display
-"hotkey.double_tap_shift" = "Double-tap Shift";
-"hotkey.double_tap_key" = "Double-tap %@";
-
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "Behavior";
 "settings.behavior.description" = "Configure how Aether captures input and delivers output.";
@@ -304,38 +300,6 @@
 "settings.behavior.window_visibility" = "Window Visibility";
 "settings.behavior.keep_window_visible" = "Keep Window Visible During Processing";
 "settings.behavior.keep_window_visible_description" = "When enabled, the conversation window stays visible during AI processing. When disabled, the window hides and a processing indicator appears instead.";
-"settings.behavior.typo_correction" = "Typo Correction";
-"settings.behavior.typo_correction_enable" = "Enable Typo Correction";
-"settings.behavior.typo_correction_description" = "Automatically fix typos and common input errors in Chinese and English text using AI. Great for input method errors and spelling mistakes.";
-"settings.behavior.typo_correction_trigger" = "Double-tap Space (within 200ms) to trigger correction";
-"settings.behavior.typo_correction_provider" = "AI Provider";
-"settings.behavior.typo_correction_provider_none" = "Select a provider...";
-"settings.behavior.typo_correction_model" = "Model (optional)";
-"settings.behavior.typo_correction_model_placeholder" = "e.g., gpt-4o-mini";
-"settings.behavior.typo_correction_model_hint" = "Leave empty to use the provider's default model";
-
-// MARK: - Settings Window - Trigger Hotkeys
-"settings.trigger.title" = "Trigger Hotkeys";
-"settings.trigger.description" = "Configure hotkeys for Replace and Append modes. Double-tap the configured modifier key to trigger.";
-"settings.trigger.same_key_warning" = "Replace and Append are using the same key!";
-
-// MARK: - Modifier Keys
-"modifier.left_shift" = "Left Shift";
-"modifier.right_shift" = "Right Shift";
-"modifier.left_control" = "Left Control";
-"modifier.right_control" = "Right Control";
-"modifier.left_option" = "Left Option";
-"modifier.right_option" = "Right Option";
-"modifier.left_command" = "Left Command";
-"modifier.right_command" = "Right Command";
-"modifier.side.left" = "L";
-"modifier.side.right" = "R";
-
-// MARK: - Hotkey Actions
-"action.replace" = "Replace";
-"action.replace.description" = "AI response replaces original text";
-"action.append" = "Append";
-"action.append.description" = "AI response appends after original text";
 
 // MARK: - Settings Window - Search Tab
 "settings.search.title" = "Search Engine";

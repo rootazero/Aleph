@@ -3,9 +3,8 @@
 //  Aether
 //
 //  Unified hotkey management service that coordinates all hotkey systems:
-//  - GlobalHotkeyMonitor: Double-tap modifier keys (Replace/Append)
 //  - VisionHotkeyManager: OCR capture hotkey
-//  - Multi-turn hotkey: Command prompt hotkey (Option+Cmd+Space)
+//  - Multi-turn hotkey: Command prompt hotkey (Option+Space)
 //
 //  Extracted from AppDelegate to improve separation of concerns.
 //
@@ -19,15 +18,11 @@ import Combine
 ///
 /// This service consolidates hotkey management that was previously scattered
 /// across AppDelegate, providing a single point of control for:
-/// - Replace/Append double-tap hotkeys (via GlobalHotkeyMonitor)
 /// - Vision/OCR capture hotkey (via VisionHotkeyManager)
 /// - Multi-turn conversation hotkey (inline implementation)
 final class HotkeyService {
 
     // MARK: - Properties
-
-    /// Global hotkey monitor for Replace/Append double-tap
-    private var globalHotkeyMonitor: GlobalHotkeyMonitor?
 
     /// Vision hotkey manager for OCR capture
     private var visionHotkeyManager: VisionHotkeyManager?
@@ -40,10 +35,6 @@ final class HotkeyService {
     private var multiTurnModifiers: NSEvent.ModifierFlags = [.option]
     private var multiTurnKeyCode: UInt16 = 49 // Space key
 
-    /// Callbacks for hotkey events
-    private var onReplaceTriggered: (() -> Void)?
-    private var onAppendTriggered: (() -> Void)?
-
     /// Reference to core for loading config
     private weak var core: AetherCore?
 
@@ -53,95 +44,28 @@ final class HotkeyService {
 
     // MARK: - Configuration
 
-    /// Configure the hotkey service with callbacks and core reference
+    /// Configure the hotkey service with core reference
     ///
-    /// - Parameters:
-    ///   - core: AetherCore instance for loading configuration
-    ///   - onReplace: Callback when Replace hotkey is triggered
-    ///   - onAppend: Callback when Append hotkey is triggered
-    func configure(
-        core: AetherCore?,
-        onReplace: @escaping () -> Void,
-        onAppend: @escaping () -> Void
-    ) {
+    /// - Parameter core: AetherCore instance for loading configuration
+    func configure(core: AetherCore?) {
         self.core = core
-        self.onReplaceTriggered = onReplace
-        self.onAppendTriggered = onAppend
-
         print("[HotkeyService] Configured with core: \(core != nil ? "available" : "nil")")
     }
 
     // MARK: - Start/Stop All Hotkeys
 
     /// Start all hotkey monitoring
-    ///
-    /// - Parameter triggerConfig: Trigger configuration for Replace/Append keys
-    func startAllHotkeys(triggerConfig: TriggerConfig) {
-        startGlobalHotkeys(triggerConfig: triggerConfig)
+    func startAllHotkeys() {
         startVisionHotkeys()
         startMultiTurnHotkey()
-
         print("[HotkeyService] All hotkey systems started")
     }
 
     /// Stop all hotkey monitoring
     func stopAllHotkeys() {
-        stopGlobalHotkeys()
         stopVisionHotkeys()
         stopMultiTurnHotkey()
-
         print("[HotkeyService] All hotkey systems stopped")
-    }
-
-    // MARK: - Global Hotkeys (Replace/Append)
-
-    /// Start global hotkey monitoring for Replace/Append
-    private func startGlobalHotkeys(triggerConfig: TriggerConfig) {
-        guard let onReplace = onReplaceTriggered,
-              let onAppend = onAppendTriggered else {
-            print("[HotkeyService] WARNING: Callbacks not configured for global hotkeys")
-            return
-        }
-
-        // Parse Replace key
-        let replaceKey = parseModifierKey(triggerConfig.replaceHotkey) ?? .leftShift
-
-        // Parse Append key
-        let appendKey = parseModifierKey(triggerConfig.appendHotkey) ?? .rightShift
-
-        globalHotkeyMonitor = GlobalHotkeyMonitor(
-            replaceKey: replaceKey,
-            appendKey: appendKey,
-            onReplaceTriggered: onReplace,
-            onAppendTriggered: onAppend
-        )
-
-        if globalHotkeyMonitor?.startMonitoring() == true {
-            print("[HotkeyService] Global hotkeys started: replace=\(replaceKey.displayName), append=\(appendKey.displayName)")
-        } else {
-            print("[HotkeyService] WARNING: Failed to start global hotkey monitoring")
-        }
-    }
-
-    /// Stop global hotkey monitoring
-    private func stopGlobalHotkeys() {
-        globalHotkeyMonitor?.stopMonitoring()
-        globalHotkeyMonitor = nil
-    }
-
-    /// Update global hotkey configuration at runtime
-    ///
-    /// - Parameter triggerConfig: New trigger configuration
-    func updateGlobalHotkeys(triggerConfig: TriggerConfig) {
-        let replaceKey = parseModifierKey(triggerConfig.replaceHotkey) ?? .leftShift
-        let appendKey = parseModifierKey(triggerConfig.appendHotkey) ?? .rightShift
-
-        globalHotkeyMonitor?.configureTrigger(
-            replaceKey: replaceKey,
-            appendKey: appendKey
-        )
-
-        print("[HotkeyService] Global hotkeys updated: replace=\(replaceKey.displayName), append=\(appendKey.displayName)")
     }
 
     // MARK: - Vision Hotkeys (OCR Capture)
@@ -312,32 +236,6 @@ final class HotkeyService {
         startMultiTurnHotkey()
 
         print("[HotkeyService] Multi-turn hotkey updated and monitors reinstalled")
-    }
-
-    // MARK: - Helper Methods
-
-    /// Parse modifier key from config string
-    ///
-    /// Note: Only Shift, Option, Command are supported (no Control - macOS limitation)
-    private func parseModifierKey(_ configString: String) -> ModifierKey? {
-        let lowercased = configString.lowercased()
-
-        if lowercased.contains("left") {
-            if lowercased.contains("shift") { return ModifierKey.leftShift }
-            if lowercased.contains("option") || lowercased.contains("alt") { return ModifierKey.leftOption }
-            if lowercased.contains("command") || lowercased.contains("cmd") { return ModifierKey.leftCommand }
-        } else if lowercased.contains("right") {
-            if lowercased.contains("shift") { return ModifierKey.rightShift }
-            if lowercased.contains("option") || lowercased.contains("alt") { return ModifierKey.rightOption }
-            if lowercased.contains("command") || lowercased.contains("cmd") { return ModifierKey.rightCommand }
-        }
-
-        // Default to left variant
-        if lowercased.contains("shift") { return ModifierKey.leftShift }
-        if lowercased.contains("option") || lowercased.contains("alt") { return ModifierKey.leftOption }
-        if lowercased.contains("command") || lowercased.contains("cmd") { return ModifierKey.leftCommand }
-
-        return nil
     }
 
     // MARK: - Cleanup
