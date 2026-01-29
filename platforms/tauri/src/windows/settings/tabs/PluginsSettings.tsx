@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useGatewayStore, gateway } from '@/stores/gatewayStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -25,17 +26,18 @@ import {
   Plus,
   Plug,
   Trash2,
-  Settings,
   RefreshCw,
   Download,
   GitBranch,
   FileArchive,
   Folder,
   Info,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
-import type { Plugin } from '@/lib/commands';
+import type { GWPluginInfo } from '@/lib/gateway';
 
 const sourceIcons = {
   git: GitBranch,
@@ -52,15 +54,17 @@ const sourceLabels = {
 function PluginCard({
   plugin,
   onToggle,
-  onConfigure,
   onDelete,
+  isToggling,
 }: {
-  plugin: Plugin;
+  plugin: GWPluginInfo;
   onToggle: () => void;
-  onConfigure: () => void;
   onDelete: () => void;
+  isToggling?: boolean;
 }) {
-  const Icon = sourceIcons[plugin.source];
+  // Determine source from plugin info (Gateway doesn't provide source, default to git)
+  const source = 'git' as keyof typeof sourceIcons;
+  const Icon = sourceIcons[source];
 
   return (
     <div
@@ -84,22 +88,16 @@ function PluginCard({
               </span>
             </div>
             <p className="text-caption text-muted-foreground mt-1 line-clamp-2">
-              {plugin.description}
+              {plugin.description || 'No description'}
             </p>
             <div className="flex items-center gap-1 mt-2 text-caption text-muted-foreground">
               <Icon className="h-3 w-3" />
-              <span>{sourceLabels[plugin.source]}</span>
-              {plugin.source_url && (
-                <span className="truncate max-w-48">· {plugin.source_url}</span>
-              )}
+              <span>{sourceLabels[source]}</span>
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-          <Button variant="ghost" size="icon" onClick={onConfigure} title="Configure">
-            <Settings className="h-4 w-4" />
-          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -109,7 +107,11 @@ function PluginCard({
           >
             <Trash2 className="h-4 w-4" />
           </Button>
-          <Switch checked={plugin.enabled} onCheckedChange={onToggle} />
+          {isToggling ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Switch checked={plugin.enabled} onCheckedChange={onToggle} />
+          )}
         </div>
       </div>
     </div>
@@ -123,33 +125,28 @@ function InstallPluginDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onInstall: (plugin: Plugin) => void;
+  onInstall: (url: string) => Promise<void>;
 }) {
   const [source, setSource] = useState<'git' | 'zip' | 'local'>('git');
   const [url, setUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleInstall = async () => {
     if (!url.trim()) return;
 
     setIsLoading(true);
-    // Simulate installation
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    setError(null);
 
-    const plugin: Plugin = {
-      id: crypto.randomUUID(),
-      name: url.split('/').pop()?.replace('.git', '').replace('.zip', '') || 'Plugin',
-      version: '1.0.0',
-      description: 'Newly installed plugin',
-      source,
-      source_url: url,
-      enabled: true,
-    };
-
-    onInstall(plugin);
-    setUrl('');
-    setIsLoading(false);
-    onOpenChange(false);
+    try {
+      await onInstall(url);
+      setUrl('');
+      onOpenChange(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Installation failed');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -212,6 +209,13 @@ function InstallPluginDialog({
               }
             />
           </div>
+
+          {error && (
+            <div className="flex items-center gap-2 text-destructive text-sm">
+              <AlertCircle className="h-4 w-4" />
+              {error}
+            </div>
+          )}
         </div>
 
         <DialogFooter>
@@ -239,34 +243,129 @@ function InstallPluginDialog({
 
 export function PluginsSettings() {
   const { t } = useTranslation();
-  const plugins = useSettingsStore((s) => s.plugins);
+  const localPlugins = useSettingsStore((s) => s.plugins);
   const updatePlugins = useSettingsStore((s) => s.updatePlugins);
+  const isConnected = useGatewayStore((s) => s.isConnected);
 
+  // Gateway-loaded plugins
+  const [plugins, setPlugins] = useState<GWPluginInfo[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  const handleToggle = (id: string) => {
-    updatePlugins({
-      plugins: plugins.plugins.map((p) =>
-        p.id === id ? { ...p, enabled: !p.enabled } : p
-      ),
-    });
+  // Load plugins from Gateway
+  const loadPlugins = useCallback(async () => {
+    if (!isConnected()) {
+      // Fallback to local settings
+      setPlugins(localPlugins.plugins.map(p => ({
+        id: p.id,
+        name: p.name,
+        version: p.version,
+        enabled: p.enabled,
+        description: p.description,
+      })));
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await gateway.pluginsList();
+      setPlugins(result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load plugins');
+      // Fallback to local
+      setPlugins(localPlugins.plugins.map(p => ({
+        id: p.id,
+        name: p.name,
+        version: p.version,
+        enabled: p.enabled,
+        description: p.description,
+      })));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isConnected, localPlugins.plugins]);
+
+  useEffect(() => {
+    loadPlugins();
+  }, [loadPlugins]);
+
+  const handleToggle = async (plugin: GWPluginInfo) => {
+    setTogglingId(plugin.id);
+
+    try {
+      if (isConnected()) {
+        if (plugin.enabled) {
+          await gateway.pluginsDisable(plugin.id);
+        } else {
+          await gateway.pluginsEnable(plugin.id);
+        }
+        // Reload to get updated state
+        await loadPlugins();
+      } else {
+        // Fallback to local
+        updatePlugins({
+          plugins: localPlugins.plugins.map((p) =>
+            p.id === plugin.id ? { ...p, enabled: !p.enabled } : p
+          ),
+        });
+        setPlugins(prev => prev.map(p =>
+          p.id === plugin.id ? { ...p, enabled: !p.enabled } : p
+        ));
+      }
+    } catch (e) {
+      console.error('Failed to toggle plugin:', e);
+    } finally {
+      setTogglingId(null);
+    }
   };
 
-  const handleDelete = (id: string) => {
-    updatePlugins({
-      plugins: plugins.plugins.filter((p) => p.id !== id),
-    });
+  const handleDelete = async (plugin: GWPluginInfo) => {
+    try {
+      if (isConnected()) {
+        await gateway.pluginsUninstall(plugin.id);
+        await loadPlugins();
+      } else {
+        updatePlugins({
+          plugins: localPlugins.plugins.filter((p) => p.id !== plugin.id),
+        });
+        setPlugins(prev => prev.filter(p => p.id !== plugin.id));
+      }
+    } catch (e) {
+      console.error('Failed to delete plugin:', e);
+    }
   };
 
-  const handleInstall = (plugin: Plugin) => {
-    updatePlugins({
-      plugins: [...plugins.plugins, plugin],
-    });
-  };
-
-  const handleConfigure = (plugin: Plugin) => {
-    // TODO: Open plugin configuration dialog
-    console.log('Configure plugin:', plugin);
+  const handleInstall = async (url: string) => {
+    if (isConnected()) {
+      await gateway.pluginsInstall(url);
+      await loadPlugins();
+    } else {
+      // Fallback to local simulation
+      const plugin = {
+        id: crypto.randomUUID(),
+        name: url.split('/').pop()?.replace('.git', '').replace('.zip', '') || 'Plugin',
+        version: '1.0.0',
+        description: 'Newly installed plugin',
+        source: 'git' as const,
+        source_url: url,
+        enabled: true,
+      };
+      updatePlugins({
+        plugins: [...localPlugins.plugins, plugin],
+      });
+      setPlugins(prev => [...prev, {
+        id: plugin.id,
+        name: plugin.name,
+        version: plugin.version,
+        enabled: plugin.enabled,
+        description: plugin.description,
+      }]);
+    }
   };
 
   return (
@@ -279,11 +378,26 @@ export function PluginsSettings() {
             {t('settings.plugins.description', 'Extend Aether with third-party plugins')}
           </p>
         </div>
-        <Button onClick={() => setDialogOpen(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          {t('settings.plugins.installPlugin', 'Install Plugin')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" onClick={loadPlugins} disabled={isLoading}>
+            <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+          </Button>
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            {t('settings.plugins.installPlugin', 'Install Plugin')}
+          </Button>
+        </div>
       </div>
+
+      {/* Error Message */}
+      {error && (
+        <InfoBox variant="error">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            <span>{error}</span>
+          </div>
+        </InfoBox>
+      )}
 
       {/* Global Settings */}
       <SettingsSection header={t('settings.plugins.settingsSection', 'Settings')}>
@@ -293,15 +407,19 @@ export function PluginsSettings() {
           icon={RefreshCw}
         >
           <Switch
-            checked={plugins.auto_update}
+            checked={localPlugins.auto_update}
             onCheckedChange={(checked) => updatePlugins({ auto_update: checked })}
           />
         </SettingsCard>
       </SettingsSection>
 
       {/* Installed Plugins */}
-      <SettingsSection header={t('settings.plugins.installedSection', 'Installed Plugins ({{count}})', { count: plugins.plugins.length })}>
-        {plugins.plugins.length === 0 ? (
+      <SettingsSection header={t('settings.plugins.installedSection', 'Installed Plugins ({{count}})', { count: plugins.length })}>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        ) : plugins.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-card">
             <Plug className="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p>{t('settings.plugins.noPlugins', 'No plugins installed')}</p>
@@ -311,13 +429,13 @@ export function PluginsSettings() {
           </div>
         ) : (
           <div className="space-y-sm">
-            {plugins.plugins.map((plugin) => (
+            {plugins.map((plugin) => (
               <PluginCard
                 key={plugin.id}
                 plugin={plugin}
-                onToggle={() => handleToggle(plugin.id)}
-                onConfigure={() => handleConfigure(plugin)}
-                onDelete={() => handleDelete(plugin.id)}
+                onToggle={() => handleToggle(plugin)}
+                onDelete={() => handleDelete(plugin)}
+                isToggling={togglingId === plugin.id}
               />
             ))}
           </div>
