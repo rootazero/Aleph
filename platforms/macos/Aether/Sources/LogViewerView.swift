@@ -38,20 +38,29 @@ struct LogViewerView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 250)
                 .onChange(of: logLevel) { _, newLevel in
-                    do {
-                        // Convert string to LogLevel enum
-                        let level: LogLevel
-                        switch newLevel {
-                        case "error": level = .error
-                        case "warn": level = .warn
-                        case "info": level = .info
-                        case "debug": level = .debug
-                        default: level = .info
+                    Task {
+                        do {
+                            // Prefer Gateway RPC when available
+                            if GatewayManager.shared.isReady {
+                                try await GatewayManager.shared.client.logsSetLevel(newLevel)
+                            } else {
+                                // Convert string to LogLevel enum for FFI
+                                let level: LogLevel
+                                switch newLevel {
+                                case "error": level = .error
+                                case "warn": level = .warn
+                                case "info": level = .info
+                                case "debug": level = .debug
+                                default: level = .info
+                                }
+                                try core.setLogLevel(level: level)
+                            }
+                            loadLogs()
+                        } catch {
+                            await MainActor.run {
+                                errorMessage = "Failed to set log level: \(error.localizedDescription)"
+                            }
                         }
-                        try core.setLogLevel(level: level)
-                        loadLogs()
-                    } catch {
-                        errorMessage = "Failed to set log level: \(error.localizedDescription)"
                     }
                 }
 
@@ -235,7 +244,13 @@ struct LogViewerView: View {
 
         Task {
             do {
-                let logDir = try core.getLogDirectory()
+                // Prefer Gateway RPC when available
+                let logDir: String
+                if GatewayManager.shared.isReady {
+                    logDir = try await GatewayManager.shared.client.logsGetDirectory()
+                } else {
+                    logDir = try core.getLogDirectory()
+                }
                 let content = try await readRecentLogs(from: logDir)
 
                 await MainActor.run {
@@ -252,6 +267,27 @@ struct LogViewerView: View {
     }
 
     private func loadCurrentLogLevel() {
+        Task {
+            // Prefer Gateway RPC when available
+            if GatewayManager.shared.isReady {
+                do {
+                    let level = try await GatewayManager.shared.client.logsGetLevel()
+                    await MainActor.run {
+                        // Gateway returns string directly
+                        logLevel = level == "trace" ? "debug" : level
+                    }
+                } catch {
+                    // Fallback to FFI on error
+                    await loadCurrentLogLevelViaFFI()
+                }
+            } else {
+                await loadCurrentLogLevelViaFFI()
+            }
+        }
+    }
+
+    @MainActor
+    private func loadCurrentLogLevelViaFFI() {
         let level = core.getLogLevel()
         // Convert LogLevel enum to string
         switch level {
@@ -266,7 +302,13 @@ struct LogViewerView: View {
     private func exportLogs() {
         Task {
             do {
-                let logDir = try core.getLogDirectory()
+                // Prefer Gateway RPC when available
+                let logDir: String
+                if GatewayManager.shared.isReady {
+                    logDir = try await GatewayManager.shared.client.logsGetDirectory()
+                } else {
+                    logDir = try core.getLogDirectory()
+                }
                 let zipURL = try await createLogsZip(from: logDir)
 
                 await MainActor.run {
@@ -309,7 +351,13 @@ struct LogViewerView: View {
     private func clearLogs() {
         Task {
             do {
-                let logDir = try core.getLogDirectory()
+                // Prefer Gateway RPC when available
+                let logDir: String
+                if GatewayManager.shared.isReady {
+                    logDir = try await GatewayManager.shared.client.logsGetDirectory()
+                } else {
+                    logDir = try core.getLogDirectory()
+                }
                 let logDirURL = URL(fileURLWithPath: logDir)
 
                 // Get all log files
