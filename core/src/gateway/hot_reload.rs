@@ -305,8 +305,11 @@ model = "claude-sonnet-4-5"
         let initial = watcher.current_config().await;
         assert_eq!(initial.gateway.port, 18789);
 
-        // Modify config file
-        temp_file.reopen().unwrap();
+        // Modify config file - truncate and rewrite
+        use std::io::{Seek, SeekFrom};
+        let file = temp_file.as_file_mut();
+        file.set_len(0).unwrap(); // Truncate
+        file.seek(SeekFrom::Start(0)).unwrap(); // Seek to beginning
         writeln!(
             temp_file,
             r#"

@@ -213,7 +213,22 @@ pub fn is_phone_number(s: &str) -> bool {
 
 /// Check if a string looks like an email
 pub fn is_email(s: &str) -> bool {
-    s.contains('@') && s.contains('.') && !s.starts_with('@') && !s.ends_with('.')
+    // Basic email validation:
+    // - Contains exactly one @
+    // - Has something before and after @
+    // - Has a . after @ but not immediately after
+    // - Doesn't end with .
+    if let Some(at_pos) = s.find('@') {
+        let before = &s[..at_pos];
+        let after = &s[at_pos + 1..];
+        !before.is_empty()
+            && !after.is_empty()
+            && after.contains('.')
+            && !after.starts_with('.')
+            && !s.ends_with('.')
+    } else {
+        false
+    }
 }
 
 /// Check if a sender is in the allowlist

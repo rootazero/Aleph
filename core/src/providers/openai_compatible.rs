@@ -209,7 +209,9 @@ mod tests {
     fn test_local_vllm_example() {
         let mut config = ProviderConfig::test_config("meta-llama/Llama-2-7b-chat-hf");
         config.base_url = Some("http://localhost:8000/v1".to_string());
-        config.api_key = None; // Local server may not need API key
+        // Local server may not need API key, but underlying provider requires one
+        // Use a dummy key - vLLM typically ignores it
+        config.api_key = Some("local".to_string());
 
         let provider = OpenAiCompatibleProvider::new("vllm".to_string(), config).unwrap();
         assert_eq!(provider.name(), "vllm");
