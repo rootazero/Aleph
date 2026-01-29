@@ -469,6 +469,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         print("[AppDelegate] User selected provider from menu: \(providerName)")
 
+        // Prefer Gateway RPC when available
+        if GatewayManager.shared.isReady {
+            Task { @MainActor in
+                do {
+                    let success = try await GatewayManager.shared.client.providersSetDefault(name: providerName)
+                    if success {
+                        print("[AppDelegate] ✅ Default provider set to: \(providerName) via Gateway")
+                        self.rebuildProvidersMenu()
+                    } else {
+                        print("[AppDelegate] ❌ Gateway returned false for setDefaultProvider")
+                    }
+                } catch {
+                    print("[AppDelegate] Gateway setDefaultProvider failed, falling back to FFI: \(error)")
+                    self.setDefaultProviderViaFFI(providerName: providerName)
+                }
+            }
+            return
+        }
+
+        setDefaultProviderViaFFI(providerName: providerName)
+    }
+
+    /// Set default provider via FFI (fallback)
+    private func setDefaultProviderViaFFI(providerName: String) {
         guard let core = core else {
             print("[AppDelegate] ERROR: Core not initialized")
             return
@@ -477,7 +501,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         do {
             try core.setDefaultProvider(providerName: providerName)
 
-            print("[AppDelegate] ✅ Default provider set to: \(providerName)")
+            print("[AppDelegate] ✅ Default provider set to: \(providerName) via FFI")
 
             // Rebuild menu to update checkmark
             rebuildProvidersMenu()
@@ -688,6 +712,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Clear all memory
     func clearMemory() -> Bool {
+        // Prefer Gateway RPC when available
+        if GatewayManager.shared.isReady {
+            Task {
+                do {
+                    try await GatewayManager.shared.client.memoryClear()
+                    print("[Aether] memory cleared via Gateway")
+                } catch {
+                    print("[Aether] Gateway memory clear failed: \(error)")
+                    // Fallback to FFI
+                    self.clearMemoryViaFFI()
+                }
+            }
+            return true // Optimistic return since async
+        }
+
+        return clearMemoryViaFFI()
+    }
+
+    /// Clear memory via FFI (fallback)
+    private func clearMemoryViaFFI() -> Bool {
         guard let core = core else {
             print("[Aether] Error: core not initialized for memory clear")
             return false
@@ -695,7 +739,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         do {
             try core.clearMemory()
-            print("[Aether] memory cleared")
+            print("[Aether] memory cleared via FFI")
             return true
         } catch {
             print("[Aether] memory clear error: \(error)")
