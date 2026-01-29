@@ -473,7 +473,7 @@ mod vec_tests {
             id: "fact-1".to_string(),
             content: "Test fact".to_string(),
             fact_type: FactType::Preference,
-            embedding: Some(vec![0.1; 512]),
+            embedding: Some(vec![0.1; crate::memory::EMBEDDING_DIM]),
             source_memory_ids: vec!["mem-1".to_string()],
             created_at: 1000,
             updated_at: 1000,
@@ -501,7 +501,7 @@ mod vec_tests {
 
         // Insert facts with embeddings
         for i in 0..3 {
-            let mut embedding = vec![0.0f32; 512];
+            let mut embedding = vec![0.0f32; crate::memory::EMBEDDING_DIM];
             embedding[0] = i as f32 * 0.1;
 
             let fact = MemoryFact {
@@ -520,7 +520,7 @@ mod vec_tests {
             db.insert_fact(fact).await.unwrap();
         }
 
-        let query = vec![0.0f32; 512];
+        let query = vec![0.0f32; crate::memory::EMBEDDING_DIM];
         let results = db.search_facts(&query, 2, false).await.unwrap();
 
         assert_eq!(results.len(), 2);

@@ -31,7 +31,7 @@ mod tests {
         VectorDatabase::new(db_path).unwrap()
     }
 
-    /// Create a 512-dimensional test embedding with the first `n` values set
+    /// Create a 384-dimensional test embedding with the first `n` values set
     /// to the provided values and the rest to 0.0.
     /// This ensures embeddings match the vec0 table's expected dimension.
     fn make_test_embedding(values: &[f32]) -> Vec<f32> {
@@ -350,8 +350,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedding_serialization_large_vectors() {
-        // Test with 512-dimensional vector (real embedding size for bge-small-zh-v1.5)
-        let embedding: Vec<f32> = (0..512).map(|i| (i as f32) * 0.001).collect();
+        // Test with 384-dimensional vector (multilingual-e5-small embedding size)
+        let embedding: Vec<f32> = (0..CURRENT_EMBEDDING_DIM).map(|i| (i as f32) * 0.001).collect();
         let bytes = VectorDatabase::serialize_embedding(&embedding);
         let deserialized = VectorDatabase::deserialize_embedding(&bytes);
 

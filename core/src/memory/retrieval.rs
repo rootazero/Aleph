@@ -6,7 +6,7 @@ use crate::config::MemoryConfig;
 use crate::error::AetherError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::database::VectorDatabase;
-use crate::memory::embedding::EmbeddingModel;
+use crate::memory::smart_embedder::SmartEmbedder;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 #[derive(Clone)]
 pub struct MemoryRetrieval {
     database: Arc<VectorDatabase>,
-    embedding_model: Arc<EmbeddingModel>,
+    embedder: Arc<SmartEmbedder>,
     config: Arc<MemoryConfig>,
 }
 
@@ -22,12 +22,12 @@ impl MemoryRetrieval {
     /// Create new retrieval service
     pub fn new(
         database: Arc<VectorDatabase>,
-        embedding_model: Arc<EmbeddingModel>,
+        embedder: Arc<SmartEmbedder>,
         config: Arc<MemoryConfig>,
     ) -> Self {
         Self {
             database,
-            embedding_model,
+            embedder,
             config,
         }
     }
@@ -68,7 +68,7 @@ impl MemoryRetrieval {
 
         // 2. Generate query embedding
         debug!("Generating query embedding");
-        let query_embedding = self.embedding_model.embed_text(query).await.map_err(|e| {
+        let query_embedding = self.embedder.embed(query).await.map_err(|e| {
             warn!(error = %e, "Failed to generate query embedding");
             AetherError::config(format!("Failed to generate query embedding: {}", e))
         })?;
@@ -151,7 +151,7 @@ impl MemoryRetrieval {
 
         // 2. Generate query embedding
         debug!("Generating query embedding");
-        let query_embedding = self.embedding_model.embed_text(query).await.map_err(|e| {
+        let query_embedding = self.embedder.embed(query).await.map_err(|e| {
             warn!(error = %e, "Failed to generate query embedding");
             AetherError::config(format!("Failed to generate query embedding: {}", e))
         })?;
@@ -214,9 +214,9 @@ mod tests {
         Arc::new(VectorDatabase::new(db_path).unwrap())
     }
 
-    fn create_test_model() -> Arc<EmbeddingModel> {
-        let model_path = EmbeddingModel::get_default_model_path().unwrap();
-        Arc::new(EmbeddingModel::new(model_path).unwrap())
+    fn create_test_model() -> Arc<SmartEmbedder> {
+        let cache_dir = SmartEmbedder::default_cache_dir().unwrap();
+        Arc::new(SmartEmbedder::new(cache_dir, 300))
     }
 
     fn create_test_config() -> Arc<MemoryConfig> {

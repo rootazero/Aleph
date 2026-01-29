@@ -19,13 +19,13 @@ mod vec_sync_tests {
         let db_path = temp_dir.path().join("test.db");
         let db = VectorDatabase::new(db_path).unwrap();
 
-        // Create a test memory with embedding (512 dimensions)
+        // Create a test memory with embedding (EMBEDDING_DIM dimensions)
         let memory = MemoryEntry {
             id: "test-id-1".to_string(),
             context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
             user_input: "test input".to_string(),
             ai_output: "test output".to_string(),
-            embedding: Some(vec![0.1; 512]),
+            embedding: Some(vec![0.1; crate::memory::EMBEDDING_DIM]),
             similarity_score: None,
         };
 
@@ -53,7 +53,7 @@ mod vec_sync_tests {
                 context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
                 user_input: format!("test input {}", i),
                 ai_output: format!("test output {}", i),
-                embedding: Some(vec![0.1 * (i as f32 + 1.0); 512]),
+                embedding: Some(vec![0.1 * (i as f32 + 1.0); crate::memory::EMBEDDING_DIM]),
                 similarity_score: None,
             };
             db.insert_memory(memory).await.unwrap();
@@ -79,7 +79,7 @@ mod vec_sync_tests {
             context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
             user_input: "test input".to_string(),
             ai_output: "test output".to_string(),
-            embedding: Some(vec![0.5; 512]),
+            embedding: Some(vec![0.5; crate::memory::EMBEDDING_DIM]),
             similarity_score: None,
         };
 
@@ -117,7 +117,7 @@ mod vec_sync_tests {
 
         // Insert test memories with different embeddings
         for i in 0..5 {
-            let mut embedding = vec![0.0f32; 512];
+            let mut embedding = vec![0.0f32; crate::memory::EMBEDDING_DIM];
             embedding[0] = i as f32 * 0.1; // Varying first element
 
             let memory = MemoryEntry {
@@ -132,7 +132,7 @@ mod vec_sync_tests {
         }
 
         // Search with a query embedding similar to the first memory
-        let query_embedding = vec![0.0f32; 512];
+        let query_embedding = vec![0.0f32; crate::memory::EMBEDDING_DIM];
         let results = db
             .search_memories("com.test.app", "test.txt", &query_embedding, 3)
             .await
@@ -157,7 +157,7 @@ mod vec_sync_tests {
             context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
             user_input: "test input".to_string(),
             ai_output: "test output".to_string(),
-            embedding: Some(vec![0.1; 512]),
+            embedding: Some(vec![0.1; crate::memory::EMBEDDING_DIM]),
             similarity_score: None,
         };
         db.insert_memory(memory).await.unwrap();
@@ -191,7 +191,7 @@ mod vec_sync_tests {
                 context: ContextAnchor::now("com.test.app".to_string(), "test.txt".to_string()),
                 user_input: format!("input {}", i),
                 ai_output: format!("output {}", i),
-                embedding: Some(vec![0.1; 512]),
+                embedding: Some(vec![0.1; crate::memory::EMBEDDING_DIM]),
                 similarity_score: None,
             };
             db.insert_memory(memory).await.unwrap();
@@ -221,7 +221,7 @@ mod vec_sync_tests {
                 context: context.clone(),
                 user_input: format!("input {}", i),
                 ai_output: format!("output {}", i),
-                embedding: Some(vec![0.1; 512]),
+                embedding: Some(vec![0.1; crate::memory::EMBEDDING_DIM]),
                 similarity_score: None,
             };
             db.insert_memory(memory).await.unwrap();

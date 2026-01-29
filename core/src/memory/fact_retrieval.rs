@@ -6,7 +6,7 @@
 use crate::error::AetherError;
 use crate::memory::context::{MemoryEntry, MemoryFact};
 use crate::memory::database::VectorDatabase;
-use crate::memory::embedding::EmbeddingModel;
+use crate::memory::smart_embedder::SmartEmbedder;
 use std::sync::Arc;
 
 /// Configuration for fact retrieval
@@ -54,7 +54,7 @@ impl RetrievalResult {
 /// Fact-first retrieval service
 pub struct FactRetrieval {
     database: Arc<VectorDatabase>,
-    embedding_model: Arc<EmbeddingModel>,
+    embedder: SmartEmbedder,
     config: FactRetrievalConfig,
 }
 
@@ -62,22 +62,19 @@ impl FactRetrieval {
     /// Create a new fact retrieval service
     pub fn new(
         database: Arc<VectorDatabase>,
-        embedding_model: Arc<EmbeddingModel>,
+        embedder: SmartEmbedder,
         config: FactRetrievalConfig,
     ) -> Self {
         Self {
             database,
-            embedding_model,
+            embedder,
             config,
         }
     }
 
     /// Create with default configuration
-    pub fn with_defaults(
-        database: Arc<VectorDatabase>,
-        embedding_model: Arc<EmbeddingModel>,
-    ) -> Self {
-        Self::new(database, embedding_model, FactRetrievalConfig::default())
+    pub fn with_defaults(database: Arc<VectorDatabase>, embedder: SmartEmbedder) -> Self {
+        Self::new(database, embedder, FactRetrievalConfig::default())
     }
 
     /// Retrieve relevant context for a query
@@ -88,8 +85,8 @@ impl FactRetrieval {
     pub async fn retrieve(&self, query: &str) -> Result<RetrievalResult, AetherError> {
         // Generate query embedding
         let query_embedding = self
-            .embedding_model
-            .embed_text(query)
+            .embedder
+            .embed(query)
             .await
             .map_err(|e| AetherError::other(format!("Failed to embed query: {}", e)))?;
 
@@ -138,8 +135,8 @@ impl FactRetrieval {
         max_raw_fallback: u32,
     ) -> Result<RetrievalResult, AetherError> {
         let query_embedding = self
-            .embedding_model
-            .embed_text(query)
+            .embedder
+            .embed(query)
             .await
             .map_err(|e| AetherError::other(format!("Failed to embed query: {}", e)))?;
 
@@ -260,11 +257,11 @@ mod tests {
         let db_path = temp_dir.path().join("test_retrieval.db");
         let database = Arc::new(VectorDatabase::new(db_path).unwrap());
 
-        let model_dir = temp_dir.path().join("models");
-        std::fs::create_dir_all(&model_dir).unwrap();
-        let embedding_model = Arc::new(EmbeddingModel::new(model_dir).unwrap());
+        let cache_dir = temp_dir.path().join("models");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let embedder = SmartEmbedder::new(cache_dir, 300);
 
-        let retrieval = FactRetrieval::with_defaults(Arc::clone(&database), embedding_model);
+        let retrieval = FactRetrieval::with_defaults(Arc::clone(&database), embedder);
 
         (retrieval, database)
     }

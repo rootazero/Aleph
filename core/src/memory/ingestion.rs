@@ -6,7 +6,7 @@ use crate::config::MemoryConfig;
 use crate::error::AetherError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::database::VectorDatabase;
-use crate::memory::embedding::EmbeddingModel;
+use crate::memory::smart_embedder::SmartEmbedder;
 use crate::utils::pii::scrub_pii;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -16,7 +16,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct MemoryIngestion {
     database: Arc<VectorDatabase>,
-    embedding_model: Arc<EmbeddingModel>,
+    embedder: Arc<SmartEmbedder>,
     config: Arc<MemoryConfig>,
 }
 
@@ -24,12 +24,12 @@ impl MemoryIngestion {
     /// Create new ingestion service
     pub fn new(
         database: Arc<VectorDatabase>,
-        embedding_model: Arc<EmbeddingModel>,
+        embedder: Arc<SmartEmbedder>,
         config: Arc<MemoryConfig>,
     ) -> Self {
         Self {
             database,
-            embedding_model,
+            embedder,
             config,
         }
     }
@@ -100,8 +100,8 @@ impl MemoryIngestion {
         );
 
         let embedding = self
-            .embedding_model
-            .embed_text(&combined_text)
+            .embedder
+            .embed(&combined_text)
             .await
             .map_err(|e| AetherError::config(format!("Failed to generate embedding: {}", e)))?;
 
@@ -150,9 +150,9 @@ mod tests {
     }
 
     // Helper to create test embedding model
-    fn create_test_model() -> Arc<EmbeddingModel> {
-        let model_path = EmbeddingModel::get_default_model_path().unwrap();
-        Arc::new(EmbeddingModel::new(model_path).unwrap())
+    fn create_test_model() -> Arc<SmartEmbedder> {
+        let cache_dir = SmartEmbedder::default_cache_dir().unwrap();
+        Arc::new(SmartEmbedder::new(cache_dir, 300))
     }
 
     // Helper to create test config
@@ -210,7 +210,7 @@ mod tests {
             .unwrap();
 
         // Retrieve and verify PII was scrubbed
-        let embedding = vec![0.0; 512]; // Dummy query embedding
+        let embedding = vec![0.0; crate::memory::EMBEDDING_DIM]; // Dummy query embedding
         let memories = db
             .search_memories(
                 &context.app_bundle_id,
@@ -281,7 +281,7 @@ mod tests {
             .unwrap();
 
         // Retrieve memory and verify embedding exists
-        let query_embedding = vec![0.0; 512];
+        let query_embedding = vec![0.0; crate::memory::EMBEDDING_DIM];
         let memories = db
             .search_memories(
                 &context.app_bundle_id,
@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].id, memory_id);
         assert!(memories[0].embedding.is_some());
-        assert_eq!(memories[0].embedding.as_ref().unwrap().len(), 512);
+        assert_eq!(memories[0].embedding.as_ref().unwrap().len(), crate::memory::EMBEDDING_DIM);
     }
 
     #[tokio::test]
