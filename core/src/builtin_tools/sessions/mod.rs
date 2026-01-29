@@ -50,6 +50,7 @@
 pub mod helpers;
 #[cfg(feature = "gateway")]
 pub mod list_tool;
+#[cfg(feature = "gateway")]
 pub mod send_tool;
 
 pub use helpers::{
@@ -61,6 +62,7 @@ pub use list_tool::{
     SessionListRow, SessionsListArgs, SessionsListOutput, SessionsListTool,
 };
 
+#[cfg(feature = "gateway")]
 pub use send_tool::{
     SessionsSendArgs, SessionsSendOutput, SessionsSendStatus, SessionsSendTool,
 };
