@@ -72,6 +72,8 @@ pub mod pairing_store;
 pub mod reply_emitter;
 #[cfg(feature = "gateway")]
 pub mod routing_config;
+#[cfg(feature = "gateway")]
+pub mod inbound_router;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -126,3 +128,5 @@ pub use pairing_store::{PairingStore, PairingRequest, PairingError, SqlitePairin
 pub use reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
 #[cfg(feature = "gateway")]
 pub use routing_config::{RoutingConfig, DmScope};
+#[cfg(feature = "gateway")]
+pub use inbound_router::{InboundMessageRouter, RoutingError, ChannelConfig as RouterChannelConfig, DmPolicy, GroupPolicy};
