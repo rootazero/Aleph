@@ -64,6 +64,8 @@ pub mod device_store;
 pub mod hot_reload;
 #[cfg(feature = "gateway")]
 pub mod http_server;
+#[cfg(feature = "gateway")]
+pub mod inbound_context;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -110,3 +112,5 @@ pub use handlers::events::{SubscriptionManager, handle_subscribe, handle_unsubsc
 pub use event_bus::{TopicEvent, TopicFilter, topic_matches};
 #[cfg(feature = "gateway")]
 pub use hot_reload::{ConfigWatcher, ConfigWatcherConfig, ConfigEvent, ConfigWatcherError};
+#[cfg(feature = "gateway")]
+pub use inbound_context::{InboundContext, ReplyRoute};
