@@ -1,16 +1,10 @@
 // Build script for Aether Core
 //
-// - UniFFI scaffolding generation for macOS (default)
-// - csbindgen P/Invoke generation for Windows (cabi feature)
+// UniFFI removed - using Gateway WebSocket architecture
+// csbindgen retained for Windows (cabi feature, deprecated)
 
 fn main() {
-    // UniFFI scaffolding for macOS
-    #[cfg(feature = "uniffi")]
-    {
-        uniffi::generate_scaffolding("src/aether.udl").unwrap();
-    }
-
-    // csbindgen for Windows
+    // csbindgen for Windows (deprecated)
     #[cfg(feature = "cabi")]
     {
         csbindgen::Builder::default()

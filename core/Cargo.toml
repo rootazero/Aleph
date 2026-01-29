@@ -5,15 +5,13 @@ edition = "2021"
 rust-version = "1.92"
 
 [lib]
-crate-type = ["cdylib", "staticlib", "rlib"]
+crate-type = ["rlib"]
 name = "aethecore"
 
 [features]
-# Default includes UniFFI for backward compatibility with existing macOS builds
-default = ["uniffi"]
-# macOS: UniFFI for Swift bindings
-uniffi = ["dep:uniffi"]
-# Windows: C ABI for csbindgen P/Invoke bindings
+# Default: Gateway-only architecture (no FFI)
+default = ["gateway"]
+# Windows: C ABI for csbindgen P/Invoke bindings (deprecated)
 cabi = []
 # Gateway: WebSocket control plane for Moltbot-style architecture
 gateway = ["dep:tokio-tungstenite", "dep:futures-util", "dep:clap", "dep:tower-http", "dep:axum", "dep:hyper", "dep:hyper-util", "dep:tower", "dep:mime_guess"]
@@ -29,9 +27,7 @@ cron = ["dep:cron", "gateway"]
 browser = ["dep:chromiumoxide", "gateway"]
 
 [dependencies]
-# UniFFI (optional, enabled by default for macOS)
-uniffi = { version = "0.31", features = ["cli"], optional = true }
-
+# REMOVED: UniFFI - using Gateway WebSocket architecture
 # REMOVED: System API dependencies (rdev, arboard, enigo) - now handled by Swift layer
 # See: refactor-native-api-separation proposal
 # - rdev → Swift GlobalHotkeyMonitor (CGEventTap)
@@ -143,14 +139,8 @@ cron = { version = "0.13", optional = true }
 chromiumoxide = { version = "0.7", optional = true, default-features = false, features = ["tokio-runtime"] }
 
 [build-dependencies]
-uniffi = { version = "0.31", features = ["build"] }
-# csbindgen for Windows C# bindings
+# csbindgen for Windows C# bindings (deprecated)
 csbindgen = "1.9"
-
-[[bin]]
-name = "uniffi-bindgen"
-path = "src/bin/uniffi_bindgen.rs"
-required-features = ["uniffi"]
 
 [[bin]]
 name = "aether-gateway"

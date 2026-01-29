@@ -517,6 +517,7 @@ mod tests {
             channel: None,
             peer_id: None,
             stream: false,
+            thinking: None,
         };
 
         let result = manager.start_run(params).await.unwrap();
@@ -536,6 +537,7 @@ mod tests {
             channel: None,
             peer_id: None,
             stream: false,
+            thinking: None,
         };
 
         let result = manager.start_run(params).await.unwrap();

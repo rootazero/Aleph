@@ -35,7 +35,7 @@ pub async fn handle_list_providers(request: JsonRpcRequest) -> JsonRpcResponse {
     // For now, return empty list
     JsonRpcResponse::success(
         request.id,
-        json!({ "providers": [] as Vec<GenerationProviderInfo> }),
+        json!({ "providers": Vec::<GenerationProviderInfo>::new() }),
     )
 }
 

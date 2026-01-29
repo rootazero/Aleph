@@ -147,12 +147,13 @@ impl Skill {
             id: self.id.clone(),
             name: self.frontmatter.name.clone(),
             description: self.frontmatter.description.clone(),
+            triggers: self.frontmatter.triggers.clone(),
             allowed_tools: self.frontmatter.allowed_tools.clone(),
         }
     }
 }
 
-/// Skill information for FFI/UI display
+/// Skill information for UI display
 ///
 /// A simplified view of Skill without the full instructions.
 #[derive(Debug, Clone)]
@@ -163,6 +164,8 @@ pub struct SkillInfo {
     pub name: String,
     /// Description
     pub description: String,
+    /// Trigger keywords for auto-detection
+    pub triggers: Vec<String>,
     /// Allowed tools
     pub allowed_tools: Vec<String>,
 }
@@ -293,11 +296,11 @@ pub fn list_installed_skills() -> Result<Vec<SkillInfo>> {
     Ok(skills.into_iter().map(|s| s.to_info()).collect())
 }
 
-/// Delete a skill by ID (internal use only)
+/// Delete a skill by ID
 ///
-/// For external callers, use `AetherCore::delete_skill()` which triggers
-/// automatic tool registry refresh.
-pub(crate) fn delete_skill(skill_id: String) -> Result<()> {
+/// Removes the skill directory from the skills folder.
+/// Note: Callers should refresh tool registry after deletion if needed.
+pub fn delete_skill(skill_id: String) -> Result<()> {
     let skills_dir = get_skills_dir()?;
     let skill_path = skills_dir.join(&skill_id);
 
@@ -317,11 +320,11 @@ pub(crate) fn delete_skill(skill_id: String) -> Result<()> {
     Ok(())
 }
 
-/// Install a skill from URL (internal use only)
+/// Install a skill from URL
 ///
-/// For external callers, use `AetherCore::install_skill()` which triggers
-/// automatic tool registry refresh.
-pub(crate) fn install_skill_from_url(url: String) -> Result<SkillInfo> {
+/// Downloads and installs a skill from a GitHub repository URL.
+/// Note: Callers should refresh tool registry after installation if needed.
+pub fn install_skill_from_url(url: String) -> Result<SkillInfo> {
     let skills_dir = get_skills_dir()?;
 
     // Ensure skills directory exists
@@ -341,11 +344,11 @@ pub(crate) fn install_skill_from_url(url: String) -> Result<SkillInfo> {
     Ok(skill.to_info())
 }
 
-/// Install skills from ZIP (internal use only)
+/// Install skills from ZIP
 ///
-/// For external callers, use `AetherCore::install_skills_from_zip()` which
-/// triggers automatic tool registry refresh.
-pub(crate) fn install_skills_from_zip(zip_path: String) -> Result<Vec<String>> {
+/// Extracts and installs skills from a ZIP archive.
+/// Note: Callers should refresh tool registry after installation if needed.
+pub fn install_skills_from_zip(zip_path: String) -> Result<Vec<String>> {
     let skills_dir = get_skills_dir()?;
     let zip_path = PathBuf::from(&zip_path);
 

@@ -5,35 +5,27 @@
 //!
 //! # Architecture
 //!
-//! The core library is built as a headless service (cdylib/staticlib) that exposes
-//! a clean FFI boundary via UniFFI. Native clients (Swift on macOS, C# on Windows,
-//! GTK on Linux) communicate with this core to access AI processing, tool execution,
+//! The core library runs as a standalone daemon (`aether-gateway`) that exposes
+//! a WebSocket JSON-RPC interface. Native clients (Swift on macOS, React on Web)
+//! communicate with this gateway to access AI processing, tool execution,
 //! and memory management functionality.
 //!
-//! # V2 Interface (Primary)
-//!
-//! The primary interface is `AetherV2Core`, which uses the rig-core framework for
-//! AI provider integration and tool execution.
-//!
-//! - **AetherV2Core**: Main entry point for all AI and tool operations
-//! - **AetherV2EventHandler**: Callback interface for Rust → Client communication
-//! - **ProcessingState**: State machine for UI feedback
-//!
-//! # Usage Example
-//!
-//! ```rust,ignore
-//! use aethecore::UniffiAetherCore;
-//!
-//! // Initialize core with event handler
-//! let handler = MyEventHandler::new();
-//! let core = UniffiAetherCore::new("/path/to/config.toml", handler).unwrap();
-//!
-//! // Process user input (uses RigAgentManager internally)
-//! let result = core.process("Hello, world!".to_string(), None);
-//!
-//! // List available tools
-//! let tools = core.list_tools();
+//! ```text
+//! ┌─────────────────┐      ┌─────────────────┐
+//! │  macOS App      │      │  aether-gateway │
+//! │  (Swift)        │─────▶│  (Rust Daemon)  │
+//! │                 │  WS  │  ws://127.0.0.1 │
+//! └─────────────────┘      └─────────────────┘
 //! ```
+//!
+//! # Gateway Interface
+//!
+//! The primary interface is the WebSocket Gateway with JSON-RPC 2.0 protocol:
+//!
+//! - **agent.run**: Execute AI agent with tool calling
+//! - **session.***: Session management (history, compaction)
+//! - **config.***: Configuration management (hot-reload)
+//! - **memory.***: Memory operations (search, store)
 //!
 //! # Features
 //!
@@ -43,11 +35,10 @@
 //! - ✅ Configuration hot-reload
 //! - ✅ Multi-turn conversation support
 //! - ✅ Vision/OCR capabilities
+//! - ✅ WebSocket streaming for real-time updates
 
-// Allow clippy lints for UniFFI generated code
 #![allow(clippy::empty_line_after_doc_comments)]
 #![allow(clippy::missing_errors_doc)]
-#![allow(unpredictable_function_pointer_comparisons)]
 
 // Module declarations
 // NOTE: clipboard module retained for ImageData/ImageFormat types (used by AI providers)
@@ -69,7 +60,7 @@ mod error;
 pub mod event; // NEW: Event-driven architecture for agentic loop
 mod event_handler;
 pub mod executor; // Unified executor for multi-step task execution
-pub mod ffi; // FFI module - split AetherCore implementation
+// FFI module removed - using Gateway WebSocket architecture
 pub mod generation;
 pub mod initialization {
     //! Unified initialization module
@@ -102,7 +93,7 @@ pub mod tool_output; // NEW: Tool output truncation and cleanup (OpenCode style)
 pub mod tools; // NEW: Unified tool system (replacing rig-core Tool trait)
 pub mod exec; // Command execution security
 pub mod routing; // Channel-aware routing and session key system
-pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module
+// uniffi_core removed - using Gateway WebSocket architecture
 pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
 pub mod vision; // NEW: Vision capability (screen OCR, image understanding) // NEW: Media generation providers (image, video, audio, speech)
@@ -185,7 +176,7 @@ pub use crate::core::{
 };
 pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::memory::context::CompressionResult;
-// Event handler types (legacy V1 trait removed, use AetherEventHandler from uniffi_core)
+// Event handler types
 pub use crate::event_handler::{
     ErrorType, McpServerErrorFFI, McpStartupReportFFI, ProcessingState,
 };
@@ -322,53 +313,7 @@ pub use crate::utils::pii;
 pub use crate::vision::{
     CaptureMode, VisionConfig, VisionRequest, VisionResult, VisionService, VisionTask,
 };
-// Dispatcher FFI exports (task orchestration, model routing)
-pub use crate::ffi::dispatcher_types::{
-    // Budget management types (Model Router P1)
-    BudgetEnforcementFFI,
-    BudgetLimitStatusFFI,
-    BudgetPeriodFFI,
-    BudgetScopeFFI,
-    BudgetStatusFFI,
-    // P2: Semantic Cache types
-    CacheHitTypeFFI,
-    CacheStatsFFI,
-    // Model Router types
-    CapabilityMappingFFI,
-    // Base Cowork types
-    CodeExecConfigFFI,
-    // P2: Prompt Analysis types
-    ContextSizeFFI,
-    AgentExecutionState,
-    AgentExecutionSummaryFFI,
-    AgentProgressEventFFI,
-    AgentProgressEventType,
-    AgentProgressHandler,
-    AgentTaskDependencyFFI,
-    AgentTaskFFI,
-    AgentTaskGraphFFI,
-    AgentTaskStatusState,
-    AgentTaskTypeCategory,
-    DomainFFI,
-    FfiProgressSubscriber,
-    FileOpsConfigFFI,
-    // Health monitoring types
-    HealthStatisticsFFI,
-    LanguageFFI,
-    // Model profile types
-    ModelCapabilityFFI,
-    ModelCostStrategyFFI,
-    ModelCostTierFFI,
-    ModelHealthStatusFFI,
-    ModelHealthSummaryFFI,
-    ModelLatencyTierFFI,
-    ModelProfileFFI,
-    ModelRoutingRulesFFI,
-    PromptFeaturesFFI,
-    ReasoningLevelFFI,
-    StageResultFFI,
-    TaskTypeMappingFFI,
-};
+// Dispatcher FFI exports removed - types moved to gateway/handlers/
 
 // Generation exports (media generation providers)
 // Note: providers module is accessible via aethecore::generation::providers
@@ -566,42 +511,8 @@ pub use crate::agents::{
 // Note: ToolCallInfo/ToolCallResult from agents::rig::types are internal;
 // use crate::event::ToolCallResult for event system
 
-// Core interface exports (rig-core based architecture)
-pub use crate::uniffi_core::{
-    init_core,
-    AetherCore,
-    AetherEventHandler,
-    AetherFfiError,
-    // Generation FFI types
-    GenerationDataFFI,
-    GenerationDataTypeFFI,
-    GenerationMetadataFFI,
-    GenerationOutputFFI,
-    GenerationParamsFFI,
-    GenerationProgressFFI,
-    GenerationProviderConfigFFI,
-    GenerationProviderInfoFFI,
-    GenerationTypeFFI,
-    MemoryItem,
-    // Part update event types (message flow rendering)
-    PartEventTypeFFI,
-    PartUpdateEventFFI,
-    // Plugin FFI types
-    PluginInfoFFI,
-    PluginSkillFFI,
-    ProcessOptions,
-    // Runtime FFI types
-    RuntimeInfo,
-    RuntimeUpdateInfo,
-    SessionSummary,
-    ToolInfoFFI,
-};
-
-// Initialization FFI types (unified) - UniFFI only
-#[cfg(feature = "uniffi")]
-pub use crate::uniffi_core::{
-    needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI,
-};
+// Core interface moved to Gateway WebSocket architecture
+// See gateway/handlers/ for RPC method implementations
 
 // Test-only exports
 #[cfg(test)]
@@ -651,11 +562,5 @@ pub fn init_logging() {
     }
 }
 
-// Include UniFFI scaffolding (macOS only)
-// This generates all the FFI glue code at compile time
-#[cfg(feature = "uniffi")]
-uniffi::include_scaffolding!("aether");
-
-// C ABI exports for Windows (csbindgen)
-#[cfg(feature = "cabi")]
-pub mod ffi_cabi;
+// UniFFI and C ABI removed - using Gateway WebSocket architecture
+// See core/src/gateway/ for the new control plane implementation

@@ -39,7 +39,7 @@ impl From<SkillInfo> for SkillInfoJson {
 
 /// List all installed skills
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
-    match skills::list_skills() {
+    match skills::list_installed_skills() {
         Ok(skills) => {
             let skills_json: Vec<SkillInfoJson> =
                 skills.into_iter().map(SkillInfoJson::from).collect();

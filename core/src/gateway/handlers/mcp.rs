@@ -38,7 +38,7 @@ pub struct McpServerStatus {
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     // TODO: Get from MCP manager state
     // For now, return empty list
-    JsonRpcResponse::success(request.id, json!({ "servers": [] as Vec<McpServerInfo> }))
+    JsonRpcResponse::success(request.id, json!({ "servers": Vec::<McpServerInfo>::new() }))
 }
 
 // ============================================================================
@@ -250,7 +250,7 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
     };
 
     // TODO: Get from MCP manager
-    JsonRpcResponse::success(request.id, json!({ "logs": [] as Vec<String> }))
+    JsonRpcResponse::success(request.id, json!({ "logs": Vec::<String>::new() }))
 }
 
 #[cfg(test)]

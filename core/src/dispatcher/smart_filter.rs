@@ -47,7 +47,7 @@
 
 use crate::dispatcher::tool_filter::{FilterResult, ToolFilter, ToolFilterConfig};
 use crate::dispatcher::UnifiedTool;
-use crate::ffi::tool_discovery::{infer_required_tools, ToolCategory};
+use crate::dispatcher::content_category::{infer_required_tools, ContentCategory};
 use crate::intent::TaskCategory;
 
 use std::collections::HashSet;
@@ -130,7 +130,7 @@ impl SmartToolFilter {
         &self,
         result: &mut FilterResult,
         all_tools: &[UnifiedTool],
-        content_categories: &[ToolCategory],
+        content_categories: &[ContentCategory],
     ) {
         // Collect existing full-schema tool names
         let existing: HashSet<String> = result
@@ -162,39 +162,39 @@ impl SmartToolFilter {
     }
 
     /// Check if a tool matches a content category
-    fn tool_matches_category(tool: &UnifiedTool, category: &ToolCategory) -> bool {
+    fn tool_matches_category(tool: &UnifiedTool, category: &ContentCategory) -> bool {
         let name = tool.name.as_str();
         let desc_lower = tool.description.to_lowercase();
 
         match category {
-            ToolCategory::FileOps => {
+            ContentCategory::FileOps => {
                 name == "file_ops" || desc_lower.contains("file") || desc_lower.contains("directory")
             }
-            ToolCategory::Search => {
+            ContentCategory::Search => {
                 name == "search" || desc_lower.contains("search") || desc_lower.contains("find")
             }
-            ToolCategory::WebFetch => {
+            ContentCategory::WebFetch => {
                 name == "web_fetch" || desc_lower.contains("fetch") || desc_lower.contains("url")
             }
-            ToolCategory::YouTube => {
+            ContentCategory::YouTube => {
                 name == "youtube" || desc_lower.contains("youtube") || desc_lower.contains("video")
             }
-            ToolCategory::Bash => {
+            ContentCategory::Bash => {
                 name == "bash" || desc_lower.contains("bash") || desc_lower.contains("shell") || desc_lower.contains("command")
             }
-            ToolCategory::CodeExec => {
+            ContentCategory::CodeExec => {
                 name == "code_exec" || desc_lower.contains("code") || desc_lower.contains("execute")
             }
-            ToolCategory::ImageGen => {
+            ContentCategory::ImageGen => {
                 name == "generate_image" || name.contains("image") || desc_lower.contains("image generation")
             }
-            ToolCategory::VideoGen => {
+            ContentCategory::VideoGen => {
                 name == "generate_video" || name.contains("video") || desc_lower.contains("video generation")
             }
-            ToolCategory::AudioGen => {
+            ContentCategory::AudioGen => {
                 name == "generate_audio" || name.contains("audio") || desc_lower.contains("audio generation")
             }
-            ToolCategory::SpeechGen => {
+            ContentCategory::SpeechGen => {
                 name == "generate_speech" || desc_lower.contains("speech") || desc_lower.contains("tts")
             }
         }
@@ -211,6 +211,7 @@ impl Default for SmartToolFilter {
 mod tests {
     use super::*;
     use crate::dispatcher::ToolSource;
+    use crate::dispatcher::content_category::ContentCategory;
 
     fn create_test_tool(name: &str, desc: &str) -> UnifiedTool {
         UnifiedTool::new(
@@ -322,11 +323,11 @@ mod tests {
         let file_tool = create_test_tool("file_ops", "File system operations");
         let search_tool = create_test_tool("search", "Search the web");
 
-        assert!(SmartToolFilter::tool_matches_category(&image_tool, &ToolCategory::ImageGen));
-        assert!(SmartToolFilter::tool_matches_category(&file_tool, &ToolCategory::FileOps));
-        assert!(SmartToolFilter::tool_matches_category(&search_tool, &ToolCategory::Search));
+        assert!(SmartToolFilter::tool_matches_category(&image_tool, &ContentCategory::ImageGen));
+        assert!(SmartToolFilter::tool_matches_category(&file_tool, &ContentCategory::FileOps));
+        assert!(SmartToolFilter::tool_matches_category(&search_tool, &ContentCategory::Search));
 
-        assert!(!SmartToolFilter::tool_matches_category(&image_tool, &ToolCategory::FileOps));
-        assert!(!SmartToolFilter::tool_matches_category(&file_tool, &ToolCategory::Search));
+        assert!(!SmartToolFilter::tool_matches_category(&image_tool, &ContentCategory::FileOps));
+        assert!(!SmartToolFilter::tool_matches_category(&file_tool, &ContentCategory::Search));
     }
 }

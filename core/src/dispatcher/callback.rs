@@ -183,7 +183,6 @@ impl DagTaskPlan {
 
 /// User's decision on whether to proceed with execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UserDecision {
     /// User confirmed, proceed with execution
     Confirmed,

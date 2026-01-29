@@ -134,11 +134,7 @@ pub async fn handle_search(
                     user_input: m.user_input,
                     ai_output: m.ai_output,
                     timestamp: m.context.timestamp,
-                    similarity_score: if m.similarity_score > 0.0 {
-                        Some(m.similarity_score)
-                    } else {
-                        None
-                    },
+                    similarity_score: m.similarity_score,
                 })
                 .collect();
 
@@ -323,7 +319,7 @@ pub async fn handle_stats(
             request.id,
             json!({
                 "totalMemories": stats.total_memories,
-                "databaseSizeBytes": stats.database_size_bytes,
+                "databaseSizeMb": stats.database_size_mb,
             }),
         ),
         Err(e) => JsonRpcResponse::error(
@@ -379,7 +375,7 @@ pub async fn handle_app_list(
                 .into_iter()
                 .map(|(app_bundle_id, memory_count)| AppMemoryInfo {
                     app_bundle_id,
-                    memory_count,
+                    memory_count: memory_count as i64,
                 })
                 .collect();
             JsonRpcResponse::success(request.id, json!({ "apps": app_list }))

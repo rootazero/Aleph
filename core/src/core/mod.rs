@@ -5,10 +5,8 @@
 //! - `CapturedContext`: Context from active application
 //! - `MediaAttachment`: Multimodal content support
 //! - `CompressionStats`: Memory compression statistics
-//! - `MemoryEntryFFI`: Memory entry for FFI
 //! - `AppMemoryInfo`: App memory info for UI
 //!
-//! Note: The main AetherCore interface is in `uniffi_core` module.
 //! Note: `Capability` here is for agent capabilities, distinct from
 //!       `cowork::model_router::Capability` which represents model capabilities.
 

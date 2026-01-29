@@ -49,6 +49,7 @@ impl Default for ConfigWatcherConfig {
 }
 
 /// Watches configuration file for changes and broadcasts events
+#[derive(Debug)]
 pub struct ConfigWatcher {
     config: ConfigWatcherConfig,
     current_config: Arc<RwLock<Arc<GatewayConfig>>>,

@@ -263,6 +263,7 @@ model = "claude-opus-4-5"
         let (watcher, _temp_file) = create_test_watcher().await;
 
         let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
             id: Some(serde_json::json!(1)),
             method: "config.get".to_string(),
             params: None,
@@ -281,6 +282,7 @@ model = "claude-opus-4-5"
         let (watcher, _temp_file) = create_test_watcher().await;
 
         let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
             id: Some(serde_json::json!(1)),
             method: "config.get".to_string(),
             params: Some(json!({"section": "gateway"})),
@@ -298,6 +300,7 @@ model = "claude-opus-4-5"
         let (watcher, _temp_file) = create_test_watcher().await;
 
         let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
             id: Some(serde_json::json!(1)),
             method: "config.validate".to_string(),
             params: None,
@@ -315,6 +318,7 @@ model = "claude-opus-4-5"
         let (watcher, _temp_file) = create_test_watcher().await;
 
         let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
             id: Some(serde_json::json!(1)),
             method: "config.reload".to_string(),
             params: None,

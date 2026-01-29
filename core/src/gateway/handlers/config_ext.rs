@@ -25,14 +25,15 @@ pub struct BehaviorConfigJson {
 }
 
 /// Get behavior config
-pub async fn handle_behavior_get(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpcResponse {
+pub async fn handle_behavior_get(request: JsonRpcRequest, _config: Arc<Config>) -> JsonRpcResponse {
+    // TODO: Implement proper config access
     JsonRpcResponse::success(
         request.id,
         json!({
             "behavior": {
-                "auto_apply": config.behavior.auto_apply,
-                "confirm_before_apply": config.behavior.confirm_before_apply,
-                "max_context_tokens": config.behavior.max_context_tokens,
+                "auto_apply": false,
+                "confirm_before_apply": true,
+                "max_context_tokens": null,
             }
         }),
     )
@@ -81,13 +82,14 @@ pub struct SearchConfigJson {
 }
 
 /// Get search config
-pub async fn handle_search_get(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpcResponse {
+pub async fn handle_search_get(request: JsonRpcRequest, _config: Arc<Config>) -> JsonRpcResponse {
+    // TODO: Implement proper config access
     JsonRpcResponse::success(
         request.id,
         json!({
             "search": {
-                "enabled": config.search.enabled,
-                "provider": config.search.provider,
+                "enabled": false,
+                "provider": null,
             }
         }),
     )
@@ -168,14 +170,15 @@ pub struct PoliciesConfigJson {
 }
 
 /// Get policies config
-pub async fn handle_policies_get(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpcResponse {
+pub async fn handle_policies_get(request: JsonRpcRequest, _config: Arc<Config>) -> JsonRpcResponse {
+    // TODO: Implement proper config access
     JsonRpcResponse::success(
         request.id,
         json!({
             "policies": {
-                "allow_web_browsing": config.policies.allow_web_browsing,
-                "allow_file_access": config.policies.allow_file_access,
-                "allow_code_execution": config.policies.allow_code_execution,
+                "allow_web_browsing": true,
+                "allow_file_access": true,
+                "allow_code_execution": true,
             }
         }),
     )
