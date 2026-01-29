@@ -14,6 +14,10 @@ use crate::generation::GenerationProviderRegistry;
 use crate::builtin_tools::{BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
+#[cfg(feature = "gateway")]
+use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
+#[cfg(feature = "gateway")]
+use crate::gateway::context::GatewayContext;
 use crate::three_layer::{Capability, CapabilityGate};
 use crate::tools::AetherTool;
 use tokio::sync::RwLock;
@@ -51,6 +55,9 @@ pub struct BuiltinToolRegistry {
     pub(crate) dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
     /// Sub-agent dispatcher for delegation (smart tool discovery)
     pub(crate) sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
+    /// Gateway context for sessions tools (sessions_list, sessions_send)
+    #[cfg(feature = "gateway")]
+    pub(crate) gateway_context: Option<Arc<GatewayContext>>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
     /// Capability gate for security enforcement
@@ -315,6 +322,34 @@ impl BuiltinToolRegistry {
             info!("Registered delegate tool in BuiltinToolRegistry");
         }
 
+        // Add sessions tools (if gateway_context is provided)
+        #[cfg(feature = "gateway")]
+        let gateway_context = config.gateway_context.clone();
+        #[cfg(feature = "gateway")]
+        if gateway_context.is_some() {
+            tools.insert(
+                "sessions_list".to_string(),
+                UnifiedTool::new(
+                    "builtin:sessions_list",
+                    "sessions_list",
+                    SessionsListTool::DESCRIPTION,
+                    ToolSource::Builtin,
+                ),
+            );
+
+            tools.insert(
+                "sessions_send".to_string(),
+                UnifiedTool::new(
+                    "builtin:sessions_send",
+                    "sessions_send",
+                    SessionsSendTool::DESCRIPTION,
+                    ToolSource::Builtin,
+                ),
+            );
+
+            info!("Registered sessions tools (sessions_list, sessions_send) in BuiltinToolRegistry");
+        }
+
         Self {
             search_tool,
             web_fetch_tool,
@@ -329,6 +364,8 @@ impl BuiltinToolRegistry {
             generation_registry,
             dispatcher_registry,
             sub_agent_dispatcher,
+            #[cfg(feature = "gateway")]
+            gateway_context,
             tools,
             capability_gate,
         }
@@ -368,6 +405,9 @@ impl BuiltinToolRegistry {
             "delegate" => None,
             // Skill reading tools - no special capability required (just reading skill files)
             "read_skill" | "list_skills" => None,
+            // Sessions tools - no special capability required (policy checks are internal)
+            #[cfg(feature = "gateway")]
+            "sessions_list" | "sessions_send" => None,
             _ => None,
         }
     }
@@ -459,6 +499,28 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Skill reading tools - use call_json
             "read_skill" => Box::pin(async move { self.read_skill_tool.call_json(arguments).await }),
             "list_skills" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
+
+            // Sessions tools for cross-session communication (requires gateway feature)
+            #[cfg(feature = "gateway")]
+            "sessions_list" => Box::pin(async move {
+                let context = self.gateway_context.as_ref().ok_or_else(|| {
+                    AetherError::tool("sessions_list not available: no gateway context configured")
+                })?;
+                // Use "main" as default caller_agent_id; in practice, this would come from
+                // the agent executing the tool via higher-level context
+                let tool = SessionsListTool::new(Arc::clone(context), "main");
+                tool.call_json(arguments).await
+            }),
+            #[cfg(feature = "gateway")]
+            "sessions_send" => Box::pin(async move {
+                let context = self.gateway_context.as_ref().ok_or_else(|| {
+                    AetherError::tool("sessions_send not available: no gateway context configured")
+                })?;
+                // Note: GatewayContext doesn't implement Clone, so we dereference and clone
+                // the inner context for SessionsSendTool which expects GatewayContext by value
+                let tool = SessionsSendTool::with_context((**context).clone(), "main");
+                tool.call_json(arguments).await
+            }),
 
             _ => {
                 let tool = tool_name.to_string();
