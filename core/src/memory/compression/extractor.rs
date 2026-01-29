@@ -290,8 +290,9 @@ EXAMPLE OUTPUT:
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_extract_json_simple() {
+    #[tokio::test]
+    #[ignore = "Requires embedding model download"]
+    async fn test_extract_json_simple() {
         let extractor = create_test_extractor();
 
         let response = r#"{"facts": []}"#;
@@ -299,8 +300,9 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_extract_json_with_markdown() {
+    #[tokio::test]
+    #[ignore = "Requires embedding model download"]
+    async fn test_extract_json_with_markdown() {
         let extractor = create_test_extractor();
 
         let response = r#"Here are the facts:
@@ -312,8 +314,9 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_extract_json_with_text_before() {
+    #[tokio::test]
+    #[ignore = "Requires embedding model download"]
+    async fn test_extract_json_with_text_before() {
         let extractor = create_test_extractor();
 
         let response = r#"Based on the conversations, I extracted:
