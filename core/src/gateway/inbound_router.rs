@@ -7,11 +7,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
+use super::agent_instance::AgentRegistry;
 use super::channel::{InboundMessage, OutboundMessage};
 use super::channel_registry::ChannelRegistry;
+use super::execution_adapter::ExecutionAdapter;
+use super::execution_engine::RunRequest;
 use super::inbound_context::{InboundContext, ReplyRoute};
 use super::pairing_store::{PairingError, PairingStore};
+use super::reply_emitter::ReplyEmitter;
 use super::router::SessionKey;
 use super::routing_config::{DmScope, RoutingConfig};
 
@@ -58,6 +63,9 @@ pub enum RoutingError {
     #[error("Execution error: {0}")]
     Execution(String),
 
+    #[error("Agent not found: {0}")]
+    AgentNotFound(String),
+
     #[error("Pairing error: {0}")]
     Pairing(#[from] PairingError),
 }
@@ -69,6 +77,10 @@ pub struct InboundMessageRouter {
     config: RoutingConfig,
     /// Channel-specific configs (keyed by channel_id)
     channel_configs: HashMap<String, ChannelConfig>,
+    /// Agent registry for looking up agent instances
+    agent_registry: Option<Arc<AgentRegistry>>,
+    /// Execution adapter for running agents
+    execution_adapter: Option<Arc<dyn ExecutionAdapter>>,
 }
 
 /// Unified channel config for permission checking
@@ -142,7 +154,9 @@ impl From<&super::channels::imessage::IMessageConfig> for ChannelConfig {
 }
 
 impl InboundMessageRouter {
-    /// Create a new inbound message router
+    /// Create a new inbound message router (basic, without execution support)
+    ///
+    /// Use `with_execution()` for full execution capabilities.
     pub fn new(
         channel_registry: Arc<ChannelRegistry>,
         pairing_store: Arc<dyn PairingStore>,
@@ -153,6 +167,29 @@ impl InboundMessageRouter {
             pairing_store,
             config,
             channel_configs: HashMap::new(),
+            agent_registry: None,
+            execution_adapter: None,
+        }
+    }
+
+    /// Create a new inbound message router with full execution support
+    ///
+    /// This constructor enables the router to actually execute agents when
+    /// messages arrive, rather than just logging what would happen.
+    pub fn with_execution(
+        channel_registry: Arc<ChannelRegistry>,
+        pairing_store: Arc<dyn PairingStore>,
+        config: RoutingConfig,
+        agent_registry: Arc<AgentRegistry>,
+        execution_adapter: Arc<dyn ExecutionAdapter>,
+    ) -> Self {
+        Self {
+            channel_registry,
+            pairing_store,
+            config,
+            channel_configs: HashMap::new(),
+            agent_registry: Some(agent_registry),
+            execution_adapter: Some(execution_adapter),
         }
     }
 
@@ -213,13 +250,8 @@ impl InboundMessageRouter {
             }
         };
 
-        // For now, log that we would execute
-        // TODO: Integrate with ExecutionEngine in next task
-        info!(
-            "Would execute agent for session {} with input: {}",
-            ctx.session_key.to_key_string(),
-            &ctx.message.text[..ctx.message.text.len().min(100)]
-        );
+        // Execute the agent for this context
+        self.execute_for_context(&ctx).await?;
 
         Ok(())
     }
@@ -241,6 +273,89 @@ impl InboundMessageRouter {
 
         InboundContext::new(msg.clone(), reply_route, session_key)
             .with_sender_normalized(sender_normalized)
+    }
+
+    /// Execute the agent for the given context
+    ///
+    /// This method:
+    /// 1. Gets the agent from the registry
+    /// 2. Generates a unique run ID
+    /// 3. Creates a ReplyEmitter to route responses back to the channel
+    /// 4. Builds a RunRequest with the message context
+    /// 5. Spawns a non-blocking execution task
+    ///
+    /// If execution support is not configured (agent_registry or execution_adapter
+    /// is None), this method logs a warning and returns Ok(()).
+    async fn execute_for_context(&self, ctx: &InboundContext) -> Result<(), RoutingError> {
+        // Check if execution support is configured
+        let (agent_registry, execution_adapter) = match (
+            self.agent_registry.as_ref(),
+            self.execution_adapter.as_ref(),
+        ) {
+            (Some(ar), Some(ea)) => (ar.clone(), ea.clone()),
+            _ => {
+                // No execution support configured, log what would happen
+                info!(
+                    "Would execute agent for session {} with input: {} (execution not configured)",
+                    ctx.session_key.to_key_string(),
+                    &ctx.message.text[..ctx.message.text.len().min(100)]
+                );
+                return Ok(());
+            }
+        };
+
+        // Get the agent ID from the session key
+        let agent_id = ctx.session_key.agent_id();
+
+        // Look up the agent in the registry
+        let agent = agent_registry.get(agent_id).await.ok_or_else(|| {
+            RoutingError::AgentNotFound(agent_id.to_string())
+        })?;
+
+        // Generate a unique run ID
+        let run_id = Uuid::new_v4().to_string();
+
+        // Create a ReplyEmitter to route responses back to the channel
+        let emitter = Arc::new(ReplyEmitter::new(
+            self.channel_registry.clone(),
+            ctx.reply_route.clone(),
+            run_id.clone(),
+        ));
+
+        // Build the run request
+        let mut metadata = HashMap::new();
+        metadata.insert("channel_id".to_string(), ctx.message.channel_id.as_str().to_string());
+        metadata.insert("sender_id".to_string(), ctx.sender_normalized.clone());
+        if ctx.message.is_group {
+            metadata.insert("is_group".to_string(), "true".to_string());
+        }
+        if ctx.is_mentioned {
+            metadata.insert("is_mentioned".to_string(), "true".to_string());
+        }
+
+        let request = RunRequest {
+            run_id: run_id.clone(),
+            input: ctx.message.text.clone(),
+            session_key: ctx.session_key.clone(),
+            timeout_secs: None,
+            metadata,
+        };
+
+        info!(
+            "Executing agent '{}' for session {} (run_id: {})",
+            agent_id,
+            ctx.session_key.to_key_string(),
+            run_id
+        );
+
+        // Spawn the execution task (non-blocking)
+        tokio::spawn(async move {
+            if let Err(e) = execution_adapter.execute(request, agent, emitter).await {
+                error!("Agent execution failed (run_id: {}): {}", run_id, e);
+            }
+        });
+
+        Ok(())
     }
 
     /// Resolve SessionKey for a message
