@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useGatewayStore, gateway } from '@/stores/gatewayStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { SettingsSection } from '@/components/ui/settings-section';
 import { InfoBox } from '@/components/ui/info-box';
@@ -14,29 +14,35 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Sparkles, Plus, Trash2, X, Zap, Tag, Info } from 'lucide-react';
+import {
+  Sparkles,
+  Plus,
+  Trash2,
+  Zap,
+  Tag,
+  Info,
+  RefreshCw,
+  Loader2,
+  AlertCircle,
+  Download,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
-import type { Skill } from '@/lib/commands';
+import type { GWSkillInfo } from '@/lib/gateway';
 
-function SkillCard({
-  skill,
-  onToggle,
-  onDelete,
-  onEdit,
-}: {
-  skill: Skill;
-  onToggle: () => void;
+interface SkillCardProps {
+  skill: GWSkillInfo;
   onDelete: () => void;
-  onEdit: () => void;
-}) {
+  isDeleting?: boolean;
+}
+
+function SkillCard({ skill, onDelete, isDeleting }: SkillCardProps) {
   return (
     <div
       className={cn(
-        'p-4 rounded-card border transition-colors cursor-pointer hover:border-primary/50',
-        skill.enabled ? 'border-border bg-card' : 'border-border/50 bg-muted/30'
+        'p-4 rounded-card border transition-colors',
+        'border-border bg-card'
       )}
-      onClick={onEdit}
     >
       <div className="flex items-start justify-between">
         <div className="flex items-start gap-3">
@@ -46,95 +52,66 @@ function SkillCard({
           <div>
             <p className="text-body font-medium text-foreground">{skill.name}</p>
             <p className="text-caption text-muted-foreground mt-1 line-clamp-2">
-              {skill.description}
+              {skill.description || 'No description'}
             </p>
-            {skill.trigger_keywords.length > 0 && (
+            {skill.source && (
               <div className="flex items-center gap-1 mt-2">
                 <Tag className="h-3 w-3 text-muted-foreground" />
-                <div className="flex flex-wrap gap-1">
-                  {skill.trigger_keywords.slice(0, 3).map((keyword) => (
-                    <Badge key={keyword} variant="outline" className="text-xs">
-                      {keyword}
-                    </Badge>
-                  ))}
-                  {skill.trigger_keywords.length > 3 && (
-                    <Badge variant="outline" className="text-xs">
-                      +{skill.trigger_keywords.length - 3}
-                    </Badge>
-                  )}
-                </div>
+                <Badge variant="outline" className="text-xs">
+                  {skill.source}
+                </Badge>
               </div>
             )}
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            title="Delete"
-            className="text-destructive hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-          <Switch
-            checked={skill.enabled}
-            onCheckedChange={onToggle}
-            onClick={(e) => e.stopPropagation()}
-          />
+          {isDeleting ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onDelete}
+              title="Delete"
+              className="text-destructive hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function SkillDialog({
+function InstallSkillDialog({
   open,
   onOpenChange,
-  skill,
-  onSave,
+  onInstall,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  skill: Skill | null;
-  onSave: (skill: Skill) => void;
+  onInstall: (url: string) => Promise<void>;
 }) {
-  const [form, setForm] = useState<Skill>(
-    skill || {
-      id: crypto.randomUUID(),
-      name: '',
-      description: '',
-      enabled: true,
-      trigger_keywords: [],
-    }
-  );
-  const [newKeyword, setNewKeyword] = useState('');
+  const [url, setUrl] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const addKeyword = () => {
-    if (newKeyword.trim() && !form.trigger_keywords.includes(newKeyword.trim())) {
-      setForm({
-        ...form,
-        trigger_keywords: [...form.trigger_keywords, newKeyword.trim()],
-      });
-      setNewKeyword('');
-    }
-  };
+  const handleInstall = async () => {
+    if (!url.trim()) return;
 
-  const removeKeyword = (keyword: string) => {
-    setForm({
-      ...form,
-      trigger_keywords: form.trigger_keywords.filter((k) => k !== keyword),
-    });
-  };
+    setIsLoading(true);
+    setError(null);
 
-  const handleSave = () => {
-    if (form.name.trim()) {
-      onSave(form);
+    try {
+      await onInstall(url);
+      setUrl('');
       onOpenChange(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Installation failed');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -142,74 +119,46 @@ function SkillDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{skill ? 'Edit Skill' : 'Create Skill'}</DialogTitle>
+          <DialogTitle>Install Skill</DialogTitle>
           <DialogDescription>
-            Define a custom skill with trigger keywords
+            Install a skill from a URL
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <label className="text-body font-medium">Name</label>
+            <label className="text-body font-medium">Skill URL</label>
             <Input
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="My Custom Skill"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://github.com/user/skill.git"
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="text-body font-medium">Description</label>
-            <Input
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              placeholder="What this skill does..."
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-body font-medium">Trigger Keywords</label>
-            <div className="flex gap-2">
-              <Input
-                value={newKeyword}
-                onChange={(e) => setNewKeyword(e.target.value)}
-                placeholder="Add keyword..."
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    addKeyword();
-                  }
-                }}
-              />
-              <Button variant="secondary" size="icon" onClick={addKeyword}>
-                <Plus className="h-4 w-4" />
-              </Button>
+          {error && (
+            <div className="flex items-center gap-2 text-destructive text-sm">
+              <AlertCircle className="h-4 w-4" />
+              {error}
             </div>
-            {form.trigger_keywords.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-2">
-                {form.trigger_keywords.map((keyword) => (
-                  <Badge
-                    key={keyword}
-                    variant="secondary"
-                    className="flex items-center gap-1"
-                  >
-                    {keyword}
-                    <button onClick={() => removeKeyword(keyword)} className="ml-1">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </Badge>
-                ))}
-              </div>
-            )}
-          </div>
+          )}
         </div>
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={!form.name.trim()}>
-            {skill ? 'Save' : 'Create'}
+          <Button onClick={handleInstall} disabled={!url.trim() || isLoading}>
+            {isLoading ? (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                Installing...
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4 mr-2" />
+                Install
+              </>
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -219,47 +168,98 @@ function SkillDialog({
 
 export function SkillsSettings() {
   const { t } = useTranslation();
-  const skills = useSettingsStore((s) => s.skills);
+  const localSkills = useSettingsStore((s) => s.skills);
   const updateSkills = useSettingsStore((s) => s.updateSkills);
+  const isConnected = useGatewayStore((s) => s.isConnected);
 
+  // Gateway-loaded skills
+  const [skills, setSkills] = useState<GWSkillInfo[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
 
-  const handleToggle = (id: string) => {
-    updateSkills({
-      skills: skills.skills.map((s) =>
-        s.id === id ? { ...s, enabled: !s.enabled } : s
-      ),
-    });
-  };
-
-  const handleDelete = (id: string) => {
-    updateSkills({
-      skills: skills.skills.filter((s) => s.id !== id),
-    });
-  };
-
-  const handleSave = (skill: Skill) => {
-    if (editingSkill) {
-      updateSkills({
-        skills: skills.skills.map((s) => (s.id === skill.id ? skill : s)),
-      });
-    } else {
-      updateSkills({
-        skills: [...skills.skills, skill],
-      });
+  // Load skills from Gateway
+  const loadSkills = useCallback(async () => {
+    if (!isConnected()) {
+      // Fallback to local settings
+      setSkills(localSkills.skills.map(s => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        source: null,
+      })));
+      setIsLoading(false);
+      return;
     }
-    setEditingSkill(null);
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await gateway.skillsList();
+      setSkills(result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load skills');
+      // Fallback to local
+      setSkills(localSkills.skills.map(s => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        source: null,
+      })));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isConnected, localSkills.skills]);
+
+  useEffect(() => {
+    loadSkills();
+  }, [loadSkills]);
+
+  const handleDelete = async (skill: GWSkillInfo) => {
+    setDeletingId(skill.id);
+
+    try {
+      if (isConnected()) {
+        await gateway.skillsDelete(skill.id);
+        await loadSkills();
+      } else {
+        updateSkills({
+          skills: localSkills.skills.filter((s) => s.id !== skill.id),
+        });
+        setSkills(prev => prev.filter(s => s.id !== skill.id));
+      }
+    } catch (e) {
+      console.error('Failed to delete skill:', e);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
-  const handleEdit = (skill: Skill) => {
-    setEditingSkill(skill);
-    setDialogOpen(true);
-  };
-
-  const handleAddNew = () => {
-    setEditingSkill(null);
-    setDialogOpen(true);
+  const handleInstall = async (url: string) => {
+    if (isConnected()) {
+      await gateway.skillsInstall(url);
+      await loadSkills();
+    } else {
+      // Fallback to local simulation
+      const skill = {
+        id: crypto.randomUUID(),
+        name: url.split('/').pop()?.replace('.git', '') || 'Skill',
+        description: 'Newly installed skill',
+        enabled: true,
+        trigger_keywords: [],
+      };
+      updateSkills({
+        skills: [...localSkills.skills, skill],
+      });
+      setSkills(prev => [...prev, {
+        id: skill.id,
+        name: skill.name,
+        description: skill.description,
+        source: 'local',
+      }]);
+    }
   };
 
   return (
@@ -269,34 +269,52 @@ export function SkillsSettings() {
         <div>
           <h1 className="text-title mb-1">{t('settings.skills.title', 'Skills')}</h1>
           <p className="text-caption text-muted-foreground">
-            {t('settings.skills.description', 'Create custom skills triggered by keywords')}
+            {t('settings.skills.description', 'Install and manage AI skills')}
           </p>
         </div>
-        <Button onClick={handleAddNew}>
-          <Plus className="h-4 w-4 mr-2" />
-          {t('settings.skills.createSkill', 'Create Skill')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" onClick={loadSkills} disabled={isLoading}>
+            <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+          </Button>
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            {t('settings.skills.installSkill', 'Install Skill')}
+          </Button>
+        </div>
       </div>
 
+      {/* Error Message */}
+      {error && (
+        <InfoBox variant="error">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            <span>{error}</span>
+          </div>
+        </InfoBox>
+      )}
+
       {/* Skills List */}
-      <SettingsSection header={t('settings.skills.definedSection', 'Defined Skills ({{count}})', { count: skills.skills.length })}>
-        {skills.skills.length === 0 ? (
+      <SettingsSection header={t('settings.skills.installedSection', 'Installed Skills ({{count}})', { count: skills.length })}>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        ) : skills.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-card">
             <Sparkles className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p>{t('settings.skills.noSkills', 'No skills defined')}</p>
+            <p>{t('settings.skills.noSkills', 'No skills installed')}</p>
             <p className="text-caption mt-1">
-              {t('settings.skills.noSkillsHint', 'Create skills to trigger specific AI behaviors')}
+              {t('settings.skills.noSkillsHint', 'Install skills to extend AI capabilities')}
             </p>
           </div>
         ) : (
           <div className="space-y-sm">
-            {skills.skills.map((skill) => (
+            {skills.map((skill) => (
               <SkillCard
                 key={skill.id}
                 skill={skill}
-                onToggle={() => handleToggle(skill.id)}
-                onDelete={() => handleDelete(skill.id)}
-                onEdit={() => handleEdit(skill)}
+                onDelete={() => handleDelete(skill)}
+                isDeleting={deletingId === skill.id}
               />
             ))}
           </div>
@@ -308,16 +326,15 @@ export function SkillsSettings() {
         <div className="flex items-start gap-sm">
           <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <span>
-            {t('settings.skills.hint', 'Skills allow you to define custom behaviors that activate when specific keywords are detected in your conversations.')}
+            {t('settings.skills.hint', 'Skills extend the AI with specialized capabilities. Install skills from Git repositories or local folders.')}
           </span>
         </div>
       </InfoBox>
 
-      <SkillDialog
+      <InstallSkillDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        skill={editingSkill}
-        onSave={handleSave}
+        onInstall={handleInstall}
       />
     </div>
   );

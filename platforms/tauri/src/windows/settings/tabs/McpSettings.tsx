@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useGatewayStore, gateway } from '@/stores/gatewayStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -14,32 +15,43 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Plus, Server, Trash2, Play, X, Info } from 'lucide-react';
+import { Plus, Server, Trash2, Play, X, Info, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
 import type { McpServer } from '@/lib/commands';
 
+// Unified server type for both Gateway and local
+interface UnifiedMcpServer {
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+}
+
 // Master-Detail Layout Component
 function McpServerList({
   servers,
-  selectedId,
+  selectedName,
   onSelect,
   onToggle,
+  isToggling,
 }: {
-  servers: McpServer[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  onToggle: (id: string) => void;
+  servers: UnifiedMcpServer[];
+  selectedName: string | null;
+  onSelect: (name: string) => void;
+  onToggle: (name: string) => void;
+  isToggling?: string | null;
 }) {
   return (
     <div className="space-y-2">
       {servers.map((server) => (
         <button
-          key={server.id}
-          onClick={() => onSelect(server.id)}
+          key={server.name}
+          onClick={() => onSelect(server.name)}
           className={cn(
             'w-full flex items-center justify-between p-3 rounded-card border text-left transition-colors',
-            selectedId === server.id
+            selectedName === server.name
               ? 'border-primary bg-accent'
               : 'border-border bg-card hover:bg-accent/50'
           )}
@@ -60,11 +72,15 @@ function McpServerList({
               </p>
             </div>
           </div>
-          <Switch
-            checked={server.enabled}
-            onCheckedChange={() => onToggle(server.id)}
-            onClick={(e) => e.stopPropagation()}
-          />
+          {isToggling === server.name ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Switch
+              checked={server.enabled}
+              onCheckedChange={() => onToggle(server.name)}
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
         </button>
       ))}
     </div>
@@ -75,10 +91,12 @@ function McpServerDetail({
   server,
   onUpdate,
   onDelete,
+  isDeleting,
 }: {
-  server: McpServer;
-  onUpdate: (server: McpServer) => void;
+  server: UnifiedMcpServer;
+  onUpdate: (server: UnifiedMcpServer) => void;
   onDelete: () => void;
+  isDeleting?: boolean;
 }) {
   const [newArg, setNewArg] = useState('');
   const [newEnvKey, setNewEnvKey] = useState('');
@@ -121,14 +139,18 @@ function McpServerDetail({
             <Play className="h-4 w-4 mr-1" />
             Test
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onDelete}
-            className="text-destructive hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          {isDeleting ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onDelete}
+              className="text-destructive hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -241,24 +263,28 @@ function AddServerDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onAdd: (server: McpServer) => void;
+  onAdd: (name: string, command: string) => Promise<void>;
 }) {
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleAdd = () => {
-    if (name.trim() && command.trim()) {
-      onAdd({
-        id: crypto.randomUUID(),
-        name: name.trim(),
-        command: command.trim(),
-        args: [],
-        env: {},
-        enabled: true,
-      });
+  const handleAdd = async () => {
+    if (!name.trim() || !command.trim()) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      await onAdd(name.trim(), command.trim());
       setName('');
       setCommand('');
       onOpenChange(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add server');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -291,14 +317,28 @@ function AddServerDialog({
               className="font-mono text-sm"
             />
           </div>
+
+          {error && (
+            <div className="flex items-center gap-2 text-destructive text-sm">
+              <AlertCircle className="h-4 w-4" />
+              {error}
+            </div>
+          )}
         </div>
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleAdd} disabled={!name.trim() || !command.trim()}>
-            Add
+          <Button onClick={handleAdd} disabled={!name.trim() || !command.trim() || isLoading}>
+            {isLoading ? (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                Adding...
+              </>
+            ) : (
+              'Add'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -308,42 +348,174 @@ function AddServerDialog({
 
 export function McpSettings() {
   const { t } = useTranslation();
-  const mcp = useSettingsStore((s) => s.mcp);
+  const localMcp = useSettingsStore((s) => s.mcp);
   const updateMcp = useSettingsStore((s) => s.updateMcp);
+  const isConnected = useGatewayStore((s) => s.isConnected);
 
-  const [selectedId, setSelectedId] = useState<string | null>(
-    mcp.servers[0]?.id || null
-  );
+  // Gateway-loaded servers
+  const [servers, setServers] = useState<UnifiedMcpServer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [togglingName, setTogglingName] = useState<string | null>(null);
+  const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [selectedName, setSelectedName] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  const selectedServer = mcp.servers.find((s) => s.id === selectedId);
+  // Convert local McpServer to unified format
+  const toUnifiedServer = (s: McpServer): UnifiedMcpServer => ({
+    name: s.name,
+    command: s.command,
+    args: s.args,
+    env: s.env,
+    enabled: s.enabled,
+  });
 
-  const handleToggle = (id: string) => {
-    updateMcp({
-      servers: mcp.servers.map((s) =>
-        s.id === id ? { ...s, enabled: !s.enabled } : s
-      ),
-    });
+  // Load servers from Gateway
+  const loadServers = useCallback(async () => {
+    if (!isConnected()) {
+      // Fallback to local settings
+      const localServers = localMcp.servers.map(toUnifiedServer);
+      setServers(localServers);
+      if (localServers.length > 0 && !selectedName) {
+        setSelectedName(localServers[0].name);
+      }
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await gateway.mcpListServers();
+      // Gateway returns minimal info (name, enabled, url, transport)
+      // For display, we map to unified format
+      const unifiedServers: UnifiedMcpServer[] = result.map(s => ({
+        name: s.name,
+        command: s.url || s.transport || 'Unknown',
+        args: [],
+        env: {},
+        enabled: s.enabled,
+      }));
+      setServers(unifiedServers);
+      if (unifiedServers.length > 0 && !selectedName) {
+        setSelectedName(unifiedServers[0].name);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load MCP servers');
+      // Fallback to local
+      const localServers = localMcp.servers.map(toUnifiedServer);
+      setServers(localServers);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isConnected, localMcp.servers, selectedName]);
+
+  useEffect(() => {
+    loadServers();
+  }, [loadServers]);
+
+  const selectedServer = servers.find((s) => s.name === selectedName);
+
+  const handleToggle = async (name: string) => {
+    setTogglingName(name);
+
+    try {
+      const server = servers.find(s => s.name === name);
+      if (!server) return;
+
+      if (isConnected()) {
+        if (server.enabled) {
+          await gateway.mcpDisableServer(name);
+        } else {
+          await gateway.mcpEnableServer(name);
+        }
+        await loadServers();
+      } else {
+        // Fallback to local
+        updateMcp({
+          servers: localMcp.servers.map((s) =>
+            s.name === name ? { ...s, enabled: !s.enabled } : s
+          ),
+        });
+        setServers(prev => prev.map(s =>
+          s.name === name ? { ...s, enabled: !s.enabled } : s
+        ));
+      }
+    } catch (e) {
+      console.error('Failed to toggle MCP server:', e);
+    } finally {
+      setTogglingName(null);
+    }
   };
 
-  const handleUpdate = (server: McpServer) => {
+  const handleUpdate = (server: UnifiedMcpServer) => {
+    // For now, updates only work locally since Gateway doesn't have an update method
+    // Gateway uses add + remove for updates
     updateMcp({
-      servers: mcp.servers.map((s) => (s.id === server.id ? server : s)),
+      servers: localMcp.servers.map((s) => (s.name === server.name ? { ...s, ...server } : s)),
     });
+    setServers(prev => prev.map(s => s.name === server.name ? server : s));
   };
 
-  const handleDelete = (id: string) => {
-    updateMcp({
-      servers: mcp.servers.filter((s) => s.id !== id),
-    });
-    setSelectedId(mcp.servers.find((s) => s.id !== id)?.id || null);
+  const handleDelete = async (name: string) => {
+    setDeletingName(name);
+
+    try {
+      if (isConnected()) {
+        await gateway.mcpRemoveServer(name);
+        await loadServers();
+      } else {
+        updateMcp({
+          servers: localMcp.servers.filter((s) => s.name !== name),
+        });
+        setServers(prev => prev.filter(s => s.name !== name));
+      }
+      // Select another server
+      const remaining = servers.filter(s => s.name !== name);
+      setSelectedName(remaining.length > 0 ? remaining[0].name : null);
+    } catch (e) {
+      console.error('Failed to delete MCP server:', e);
+    } finally {
+      setDeletingName(null);
+    }
   };
 
-  const handleAdd = (server: McpServer) => {
-    updateMcp({
-      servers: [...mcp.servers, server],
-    });
-    setSelectedId(server.id);
+  const handleAdd = async (name: string, command: string) => {
+    if (isConnected()) {
+      // Gateway uses GWMcpServerConfig with transport
+      await gateway.mcpAddServer({
+        name,
+        enabled: true,
+        transport: 'stdio',
+        command,
+        args: [],
+        env: {},
+      });
+      await loadServers();
+      setSelectedName(name);
+    } else {
+      // Fallback to local simulation
+      const server = {
+        id: crypto.randomUUID(),
+        name,
+        command,
+        args: [],
+        env: {},
+        enabled: true,
+      };
+      updateMcp({
+        servers: [...localMcp.servers, server],
+      });
+      setServers(prev => [...prev, {
+        name: server.name,
+        command: server.command,
+        args: server.args,
+        env: server.env,
+        enabled: server.enabled,
+      }]);
+      setSelectedName(name);
+    }
   };
 
   return (
@@ -356,15 +528,34 @@ export function McpSettings() {
             {t('settings.mcp.description', 'Manage Model Context Protocol servers')}
           </p>
         </div>
-        <Button onClick={() => setDialogOpen(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          {t('settings.mcp.addServer', 'Add Server')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" onClick={loadServers} disabled={isLoading}>
+            <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+          </Button>
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            {t('settings.mcp.addServer', 'Add Server')}
+          </Button>
+        </div>
       </div>
+
+      {/* Error Message */}
+      {error && (
+        <InfoBox variant="error">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            <span>{error}</span>
+          </div>
+        </InfoBox>
+      )}
 
       {/* Server Management */}
       <SettingsSection header={t('settings.mcp.serversSection', 'Servers')}>
-        {mcp.servers.length === 0 ? (
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        ) : servers.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-card">
             <Server className="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p>{t('settings.mcp.noServers', 'No MCP servers configured')}</p>
@@ -377,13 +568,14 @@ export function McpSettings() {
             {/* Master List */}
             <div className="space-y-md">
               <p className="text-caption text-muted-foreground">
-                {t('settings.mcp.serversCount', 'Servers ({{count}})', { count: mcp.servers.length })}
+                {t('settings.mcp.serversCount', 'Servers ({{count}})', { count: servers.length })}
               </p>
               <McpServerList
-                servers={mcp.servers}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
+                servers={servers}
+                selectedName={selectedName}
+                onSelect={setSelectedName}
                 onToggle={handleToggle}
+                isToggling={togglingName}
               />
             </div>
 
@@ -393,7 +585,8 @@ export function McpSettings() {
                 <McpServerDetail
                   server={selectedServer}
                   onUpdate={handleUpdate}
-                  onDelete={() => handleDelete(selectedServer.id)}
+                  onDelete={() => handleDelete(selectedServer.name)}
+                  isDeleting={deletingName === selectedServer.name}
                 />
               ) : (
                 <div className="flex items-center justify-center h-64 text-muted-foreground">
