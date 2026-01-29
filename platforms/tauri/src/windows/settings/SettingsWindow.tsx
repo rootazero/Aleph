@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useGatewayStore } from '@/stores/gatewayStore';
 import { useTheme } from '@/hooks/useTheme';
 import { SettingsSidebar, type SettingsTab } from './SettingsSidebar';
 import { SaveBar } from '@/components/ui/save-bar';
+import { GatewayStatus } from '@/components/ui/gateway-status';
 
 // Import all settings tabs
 import { GeneralSettings } from './tabs/GeneralSettings';
@@ -23,6 +25,7 @@ import { PoliciesSettings } from './tabs/PoliciesSettings';
 export function SettingsWindow() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const { load, save, discard, isDirty, isLoading } = useSettingsStore();
+  const { connect: connectGateway, connectionState } = useGatewayStore();
 
   // Initialize theme
   useTheme();
@@ -31,6 +34,15 @@ export function SettingsWindow() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Connect to Gateway on mount
+  useEffect(() => {
+    if (connectionState === 'disconnected') {
+      connectGateway().catch((error) => {
+        console.warn('[Settings] Gateway connection failed, using Tauri fallback:', error);
+      });
+    }
+  }, [connectGateway, connectionState]);
 
   const handleSave = async () => {
     try {
@@ -84,8 +96,12 @@ export function SettingsWindow() {
   return (
     <div className="flex h-screen bg-background">
       {/* Sidebar */}
-      <aside className="w-52 border-r bg-muted/30 p-2 flex-shrink-0">
+      <aside className="w-52 border-r bg-muted/30 p-2 flex-shrink-0 flex flex-col">
         <SettingsSidebar activeTab={activeTab} onTabChange={setActiveTab} />
+        {/* Gateway Status */}
+        <div className="mt-auto pt-2 px-2 pb-1 border-t border-border/50">
+          <GatewayStatus showLabel autoConnect={false} />
+        </div>
       </aside>
 
       {/* Main content */}
