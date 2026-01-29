@@ -6,11 +6,13 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use async_trait::async_trait;
 use tokio::sync::{mpsc, watch, RwLock};
 use tracing::{debug, error, info, warn};
 
 use super::agent_instance::{AgentInstance, AgentState, MessageRole};
-use super::event_emitter::{EventEmitter, RunSummary, StreamEvent};
+use super::event_emitter::{DynEventEmitter, EventEmitter, RunSummary, StreamEvent};
+use super::execution_adapter::ExecutionAdapter;
 use super::loop_callback_adapter::EventEmittingCallback;
 use super::router::SessionKey;
 
@@ -152,6 +154,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Remove and trigger abort for a run
+    #[allow(dead_code)]
     async fn trigger_abort(&self, run_id: &str) -> bool {
         let mut senders = self.abort_senders.write().await;
         if let Some(sender) = senders.remove(run_id) {
@@ -746,11 +749,108 @@ impl SimpleExecutionEngine {
 
         Ok(response)
     }
+
+    /// Get the status of a run
+    pub async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        let runs = self.active_runs.read().await;
+        runs.get(run_id).map(|run| RunStatus {
+            run_id: run_id.to_string(),
+            state: run.state.clone(),
+            started_at: Some(run.started_at),
+            completed_at: match run.state {
+                RunState::Completed | RunState::Cancelled | RunState::Failed { .. } => {
+                    Some(chrono::Utc::now())
+                }
+                _ => None,
+            },
+            steps_completed: run.steps_completed,
+            current_tool: run.current_tool.clone(),
+        })
+    }
+
+    /// Cancel a run
+    pub async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        let runs = self.active_runs.read().await;
+
+        if let Some(run) = runs.get(run_id) {
+            if let Some(ref cancel_tx) = run.cancel_tx {
+                let _ = cancel_tx.send(()).await;
+                info!("Sent cancellation signal for run {}", run_id);
+                return Ok(());
+            } else {
+                return Err(ExecutionError::RunNotActive(run_id.to_string()));
+            }
+        }
+
+        Err(ExecutionError::RunNotFound(run_id.to_string()))
+    }
 }
 
 impl Default for SimpleExecutionEngine {
     fn default() -> Self {
         Self::new(ExecutionEngineConfig::default())
+    }
+}
+
+// ============================================================================
+// ExecutionAdapter trait implementations
+// ============================================================================
+
+/// Implement ExecutionAdapter for the full ExecutionEngine with AgentLoop integration.
+///
+/// This allows InboundMessageRouter to use ExecutionEngine via a trait object,
+/// enabling routing without being generic over provider and tool registry types.
+#[async_trait]
+impl<P, R> ExecutionAdapter for ExecutionEngine<P, R>
+where
+    P: ThinkerProviderRegistry + Send + Sync + 'static,
+    R: ToolRegistry + Send + Sync + 'static,
+{
+    async fn execute(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        // Wrap the dyn trait object in DynEventEmitter to make it Sized,
+        // then delegate to the existing generic execute method
+        let wrapper = Arc::new(DynEventEmitter::new(emitter));
+        ExecutionEngine::execute(self, request, agent, wrapper).await
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        ExecutionEngine::cancel(self, run_id).await
+    }
+
+    async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        ExecutionEngine::get_status(self, run_id).await
+    }
+}
+
+/// Implement ExecutionAdapter for SimpleExecutionEngine.
+///
+/// This allows InboundMessageRouter to use SimpleExecutionEngine via a trait object,
+/// which is useful when providers/tools are not configured.
+#[async_trait]
+impl ExecutionAdapter for SimpleExecutionEngine {
+    async fn execute(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        // Wrap the dyn trait object in DynEventEmitter to make it Sized,
+        // then delegate to the existing generic execute method
+        let wrapper = Arc::new(DynEventEmitter::new(emitter));
+        SimpleExecutionEngine::execute(self, request, agent, wrapper).await
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        SimpleExecutionEngine::cancel(self, run_id).await
+    }
+
+    async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        SimpleExecutionEngine::get_status(self, run_id).await
     }
 }
 

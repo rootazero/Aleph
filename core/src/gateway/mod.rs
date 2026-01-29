@@ -84,7 +84,7 @@ pub use protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
 #[cfg(feature = "gateway")]
 pub use event_bus::GatewayEventBus;
 #[cfg(feature = "gateway")]
-pub use event_emitter::{EventEmitter, StreamEvent, GatewayEventEmitter, NoOpEventEmitter};
+pub use event_emitter::{EventEmitter, StreamEvent, GatewayEventEmitter, NoOpEventEmitter, DynEventEmitter};
 #[cfg(feature = "gateway")]
 pub use router::AgentRouter;
 
@@ -96,7 +96,7 @@ pub use config::GatewayConfig;
 #[cfg(feature = "gateway")]
 pub use session_manager::{SessionManager, SessionManagerConfig};
 #[cfg(feature = "gateway")]
-pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus};
+pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine};
 #[cfg(feature = "gateway")]
 pub use loop_callback_adapter::{EventEmittingCallback, ResponseChunkEmitter, UserQuestion};
 #[cfg(feature = "gateway")]

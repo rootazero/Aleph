@@ -364,6 +364,33 @@ impl EventEmitter for CollectingEventEmitter {
     }
 }
 
+/// Wrapper for dynamic EventEmitter trait objects
+///
+/// This wrapper allows passing `Arc<dyn EventEmitter + Send + Sync>` to generic
+/// functions that require `E: EventEmitter + Send + Sync + 'static`.
+/// The wrapper is Sized and delegates all calls to the inner trait object.
+pub struct DynEventEmitter {
+    inner: Arc<dyn EventEmitter + Send + Sync>,
+}
+
+impl DynEventEmitter {
+    /// Create a new wrapper around a dynamic EventEmitter
+    pub fn new(emitter: Arc<dyn EventEmitter + Send + Sync>) -> Self {
+        Self { inner: emitter }
+    }
+}
+
+#[async_trait]
+impl EventEmitter for DynEventEmitter {
+    async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
+        self.inner.emit(event).await
+    }
+
+    fn next_seq(&self) -> u64 {
+        self.inner.next_seq()
+    }
+}
+
 /// Get the JSON-RPC method name for a stream event
 fn event_method(event: &StreamEvent) -> &'static str {
     match event {
