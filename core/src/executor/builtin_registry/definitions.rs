@@ -95,6 +95,18 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "List all installed skills",
         requires_config: false,
     },
+    #[cfg(feature = "gateway")]
+    BuiltinToolDefinition {
+        name: "sessions_list",
+        description: "List sessions accessible to this agent for cross-session communication",
+        requires_config: true, // Requires gateway_context
+    },
+    #[cfg(feature = "gateway")]
+    BuiltinToolDefinition {
+        name: "sessions_send",
+        description: "Send messages to other sessions (same or different agent)",
+        requires_config: true, // Requires gateway_context
+    },
 ];
 
 /// Create a boxed tool instance by name
@@ -138,6 +150,11 @@ pub fn create_tool_boxed(
         }
         "read_skill" => Some(Box::new(ReadSkillTool::default())),
         "list_skills" => Some(Box::new(SkillListTool::default())),
+        // Sessions tools require gateway_context and caller_agent_id at runtime,
+        // so they cannot be created via create_tool_boxed. They are created
+        // dynamically in BuiltinToolRegistry::execute_tool().
+        #[cfg(feature = "gateway")]
+        "sessions_list" | "sessions_send" => None,
         _ => None,
     }
 }
@@ -178,6 +195,24 @@ mod tests {
         assert!(names.contains(&"list_skills".to_string()));
     }
 
+    #[cfg(feature = "gateway")]
+    #[test]
+    fn test_sessions_tools_defined() {
+        let names = get_builtin_tool_names();
+
+        // Verify sessions tools are defined when gateway feature is enabled
+        assert!(names.contains(&"sessions_list".to_string()));
+        assert!(names.contains(&"sessions_send".to_string()));
+    }
+
+    #[cfg(feature = "gateway")]
+    #[test]
+    fn test_sessions_tools_require_config() {
+        // Sessions tools require gateway_context (dynamic creation)
+        assert!(create_tool_boxed("sessions_list", None).is_none());
+        assert!(create_tool_boxed("sessions_send", None).is_none());
+    }
+
     #[test]
     fn test_is_builtin_tool() {
         assert!(is_builtin_tool("bash"));
@@ -185,6 +220,13 @@ mod tests {
         assert!(is_builtin_tool("file_ops"));
         assert!(!is_builtin_tool("unknown_tool"));
         assert!(!is_builtin_tool("mcp:filesystem"));
+    }
+
+    #[cfg(feature = "gateway")]
+    #[test]
+    fn test_is_builtin_tool_sessions() {
+        assert!(is_builtin_tool("sessions_list"));
+        assert!(is_builtin_tool("sessions_send"));
     }
 
     #[test]

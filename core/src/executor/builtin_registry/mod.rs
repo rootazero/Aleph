@@ -346,4 +346,213 @@ mod tests {
         // Should succeed (even with no tools available, it returns info about available servers)
         assert!(result.is_ok());
     }
+
+    // ========================================================================
+    // Sessions Tools Tests (gateway feature only)
+    // ========================================================================
+
+    #[cfg(feature = "gateway")]
+    mod sessions_tests {
+        use super::*;
+        use crate::gateway::a2a_policy::AgentToAgentPolicy;
+        use crate::gateway::agent_instance::AgentRegistry;
+        use crate::gateway::context::GatewayContext;
+        use crate::gateway::execution_adapter::ExecutionAdapter;
+        use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};
+        use crate::gateway::event_emitter::EventEmitter;
+        use crate::gateway::session_manager::SessionManagerConfig;
+        use crate::gateway::{SessionManager, AgentInstance};
+        use async_trait::async_trait;
+        use tempfile::tempdir;
+
+        /// Mock execution adapter for testing
+        struct MockExecutionAdapter;
+
+        #[async_trait]
+        impl ExecutionAdapter for MockExecutionAdapter {
+            async fn execute(
+                &self,
+                _request: RunRequest,
+                _agent: Arc<AgentInstance>,
+                _emitter: Arc<dyn EventEmitter + Send + Sync>,
+            ) -> std::result::Result<(), ExecutionError> {
+                Ok(())
+            }
+
+            async fn cancel(&self, run_id: &str) -> std::result::Result<(), ExecutionError> {
+                Err(ExecutionError::RunNotFound(run_id.to_string()))
+            }
+
+            async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+                Some(RunStatus {
+                    run_id: run_id.to_string(),
+                    state: RunState::Completed,
+                    started_at: Some(chrono::Utc::now()),
+                    completed_at: Some(chrono::Utc::now()),
+                    steps_completed: 0,
+                    current_tool: None,
+                })
+            }
+        }
+
+        fn create_test_gateway_context() -> Arc<GatewayContext> {
+            let temp = tempdir().unwrap();
+            let session_config = SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            };
+            let session_manager = Arc::new(SessionManager::new(session_config).unwrap());
+            let agent_registry = Arc::new(AgentRegistry::new());
+            let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
+            let a2a_policy = Arc::new(AgentToAgentPolicy::permissive());
+
+            Arc::new(GatewayContext::new(
+                session_manager,
+                agent_registry,
+                execution_adapter,
+                a2a_policy,
+            ))
+        }
+
+        #[test]
+        fn test_sessions_tools_not_registered_without_context() {
+            // Without gateway_context, sessions tools should not be registered
+            let registry = BuiltinToolRegistry::new();
+
+            assert!(registry.get_tool("sessions_list").is_none());
+            assert!(registry.get_tool("sessions_send").is_none());
+        }
+
+        #[test]
+        fn test_sessions_tools_registered_with_context() {
+            // With gateway_context, sessions tools should be registered
+            let gateway_context = create_test_gateway_context();
+            let config = BuiltinToolConfig {
+                gateway_context: Some(gateway_context),
+                ..Default::default()
+            };
+            let registry = BuiltinToolRegistry::with_config(config);
+
+            assert!(registry.get_tool("sessions_list").is_some());
+            assert!(registry.get_tool("sessions_send").is_some());
+
+            // Check tool metadata
+            let sessions_list = registry.get_tool("sessions_list").unwrap();
+            assert_eq!(sessions_list.name, "sessions_list");
+            assert_eq!(sessions_list.id, "builtin:sessions_list");
+
+            let sessions_send = registry.get_tool("sessions_send").unwrap();
+            assert_eq!(sessions_send.name, "sessions_send");
+            assert_eq!(sessions_send.id, "builtin:sessions_send");
+        }
+
+        #[test]
+        fn test_sessions_tools_no_special_capability() {
+            // Sessions tools should not require any special capability
+            let gateway_context = create_test_gateway_context();
+            let config = BuiltinToolConfig {
+                gateway_context: Some(gateway_context),
+                ..Default::default()
+            };
+            let registry = BuiltinToolRegistry::with_config(config);
+
+            assert_eq!(
+                registry.required_capability("sessions_list", &serde_json::json!({})),
+                None
+            );
+            assert_eq!(
+                registry.required_capability("sessions_send", &serde_json::json!({})),
+                None
+            );
+        }
+
+        #[tokio::test]
+        async fn test_sessions_list_execution_without_context() {
+            // Without gateway_context, sessions_list should fail with error
+            let registry = BuiltinToolRegistry::new();
+
+            let result = registry
+                .execute_tool(
+                    "sessions_list",
+                    serde_json::json!({}),
+                )
+                .await;
+
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(err.to_string().contains("sessions_list not available"));
+        }
+
+        #[tokio::test]
+        async fn test_sessions_list_execution_with_context() {
+            // With gateway_context, sessions_list should execute successfully
+            let gateway_context = create_test_gateway_context();
+            let config = BuiltinToolConfig {
+                gateway_context: Some(gateway_context),
+                ..Default::default()
+            };
+            let registry = BuiltinToolRegistry::with_config(config);
+
+            let result = registry
+                .execute_tool(
+                    "sessions_list",
+                    serde_json::json!({}),
+                )
+                .await;
+
+            assert!(result.is_ok());
+            let output = result.unwrap();
+            // Should return empty list since no sessions exist
+            assert!(output.get("count").is_some());
+            assert_eq!(output.get("count").unwrap().as_u64().unwrap(), 0);
+        }
+
+        #[tokio::test]
+        async fn test_sessions_send_execution_without_context() {
+            // Without gateway_context, sessions_send should fail with error
+            let registry = BuiltinToolRegistry::new();
+
+            let result = registry
+                .execute_tool(
+                    "sessions_send",
+                    serde_json::json!({
+                        "message": "Hello"
+                    }),
+                )
+                .await;
+
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(err.to_string().contains("sessions_send not available"));
+        }
+
+        #[tokio::test]
+        async fn test_sessions_send_execution_with_context() {
+            // With gateway_context, sessions_send should execute
+            // (though it may fail due to missing target agent)
+            let gateway_context = create_test_gateway_context();
+            let config = BuiltinToolConfig {
+                gateway_context: Some(gateway_context),
+                ..Default::default()
+            };
+            let registry = BuiltinToolRegistry::with_config(config);
+
+            let result = registry
+                .execute_tool(
+                    "sessions_send",
+                    serde_json::json!({
+                        "message": "Hello",
+                        "session_key": "agent:main:main"
+                    }),
+                )
+                .await;
+
+            // Should succeed but return an error status (agent not found)
+            assert!(result.is_ok());
+            let output = result.unwrap();
+            assert!(output.get("status").is_some());
+            // The status should be "error" since the target agent doesn't exist
+            assert_eq!(output.get("status").unwrap().as_str().unwrap(), "error");
+        }
+    }
 }

@@ -36,7 +36,7 @@ use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::router::SessionKey;
 use crate::tools::AetherTool;
 
-use super::super::{notify_tool_result, notify_tool_start};
+use super::super::notify_tool_start;
 use super::helpers::parse_session_key;
 
 /// Arguments for sessions_send tool
