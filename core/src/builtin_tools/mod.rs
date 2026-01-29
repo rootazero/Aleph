@@ -41,6 +41,7 @@ pub mod mcp_wrapper;
 pub mod meta_tools;
 pub mod pdf_generate;
 pub mod search;
+pub mod sessions;
 pub mod skill_reader;
 pub mod web_fetch;
 pub mod youtube;
