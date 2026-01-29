@@ -225,8 +225,9 @@ mod tests {
         Arc::new(config)
     }
 
-    #[test]
-    fn test_retrieval_creation() {
+    #[tokio::test]
+    #[ignore = "Requires embedding model download"]
+    async fn test_retrieval_creation() {
         let db = create_test_db();
         let model = create_test_model();
         let config = create_test_config();
@@ -234,6 +235,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_empty_database() {
         let db = create_test_db();
         let model = create_test_model();
@@ -250,6 +252,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_with_stored_memory() {
         let db = create_test_db();
         let model = create_test_model();
@@ -281,6 +284,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_respects_max_context_items() {
         let db = create_test_db();
         let model = create_test_model();
@@ -315,6 +319,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_filters_by_threshold() {
         let db = create_test_db();
         let model = create_test_model();
@@ -344,6 +349,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_when_disabled() {
         let db = create_test_db();
         let model = create_test_model();
@@ -363,6 +369,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_context_isolation() {
         let db = create_test_db();
         let model = create_test_model();
@@ -403,6 +410,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_with_empty_query() {
         let db = create_test_db();
         let model = create_test_model();
@@ -428,6 +436,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_with_long_query() {
         let db = create_test_db();
         let model = create_test_model();
@@ -456,6 +465,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_with_special_characters_in_query() {
         let db = create_test_db();
         let model = create_test_model();
@@ -487,6 +497,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_max_context_items_boundary() {
         let db = create_test_db();
         let model = create_test_model();
@@ -521,6 +532,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_different_apps_isolation() {
         let db = create_test_db();
         let model = create_test_model();
@@ -554,6 +566,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_retrieve_similarity_ordering() {
         let db = create_test_db();
         let model = create_test_model();

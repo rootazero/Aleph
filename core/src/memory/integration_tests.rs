@@ -33,6 +33,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_store_and_retrieve_single_memory() {
         let db = create_test_db();
         let model = create_test_model();
@@ -65,6 +66,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_store_multiple_and_retrieve_top_k() {
         let db = create_test_db();
         let model = create_test_model();
@@ -110,6 +112,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_context_isolation() {
         let db = create_test_db();
         let model = create_test_model();
@@ -160,6 +163,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_similarity_threshold_filtering() {
         let db = create_test_db();
         let model = create_test_model();
@@ -221,6 +225,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_memory_disabled() {
         let db = create_test_db();
         let model = create_test_model();
@@ -422,6 +427,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_augmenter_with_no_memories() {
         let augmenter = PromptAugmenter::new();
 
@@ -437,6 +443,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_augmenter_respects_max_memories() {
         let db = create_test_db();
         let model = create_test_model();
@@ -657,6 +664,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_concurrent_deletes() {
         use tokio::task::JoinSet;
 

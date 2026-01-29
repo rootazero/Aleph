@@ -267,6 +267,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_empty_retrieval() {
         let (retrieval, _) = create_test_retrieval().await;
 

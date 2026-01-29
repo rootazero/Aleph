@@ -160,8 +160,9 @@ mod tests {
         Arc::new(MemoryConfig::default())
     }
 
-    #[test]
-    fn test_ingestion_creation() {
+    #[tokio::test]
+    #[ignore = "Requires embedding model download"]
+    async fn test_ingestion_creation() {
         let db = create_test_db();
         let model = create_test_model();
         let config = create_test_config();
@@ -229,6 +230,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_store_memory_disabled() {
         let db = create_test_db();
         let model = create_test_model();
@@ -248,6 +250,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_store_memory_excluded_app() {
         let db = create_test_db();
         let model = create_test_model();
@@ -299,6 +302,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download"]
     async fn test_store_multiple_memories() {
         let db = create_test_db();
         let model = create_test_model();
