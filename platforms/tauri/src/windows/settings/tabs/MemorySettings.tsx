@@ -1,4 +1,6 @@
+import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useGatewayStore, gateway } from '@/stores/gatewayStore';
 import { SettingsCard } from '@/components/ui/settings-card';
 import { SettingsSection } from '@/components/ui/settings-section';
 import { InfoBox } from '@/components/ui/info-box';
@@ -12,17 +14,69 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Trash2, Brain, Database, Save, History, Gauge } from 'lucide-react';
+import { Trash2, Brain, Database, Save, History, Gauge, Loader2, HardDrive, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
+interface MemoryStats {
+  count: number;
+  size_bytes: number;
+}
 
 export function MemorySettings() {
   const { t } = useTranslation();
   const memory = useSettingsStore((s) => s.memory);
   const updateMemory = useSettingsStore((s) => s.updateMemory);
+  const isConnected = useGatewayStore((s) => s.isConnected);
 
-  const handleClearMemory = () => {
-    // TODO: Implement clear memory via Tauri command
-    console.log('Clear memory');
+  const [stats, setStats] = useState<MemoryStats | null>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+
+  const loadStats = useCallback(async () => {
+    if (!isConnected()) {
+      setStats(null);
+      return;
+    }
+
+    setIsLoadingStats(true);
+    try {
+      const result = await gateway.memoryStats();
+      setStats(result);
+    } catch (e) {
+      console.error('Failed to load memory stats:', e);
+      setStats(null);
+    } finally {
+      setIsLoadingStats(false);
+    }
+  }, [isConnected]);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  const handleClearMemory = async () => {
+    if (!isConnected()) {
+      console.log('Gateway not connected, cannot clear memory');
+      return;
+    }
+
+    setIsClearing(true);
+    try {
+      await gateway.memoryClear();
+      await loadStats();
+    } catch (e) {
+      console.error('Failed to clear memory:', e);
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  const formatBytes = (bytes: number): string => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   return (
@@ -137,6 +191,51 @@ export function MemorySettings() {
         </SettingsSection>
       )}
 
+      {/* Memory Stats */}
+      {isConnected() && (
+        <SettingsSection header={t('settings.memory.statsSection', 'Storage')}>
+          <div className="p-md rounded-md border border-border bg-muted/30">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-medium bg-primary/10 flex items-center justify-center">
+                  <HardDrive className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <p className="text-body font-medium text-foreground">
+                    {t('settings.memory.storageUsage', 'Memory Storage')}
+                  </p>
+                  {isLoadingStats ? (
+                    <p className="text-caption text-muted-foreground flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      {t('common.loading', 'Loading...')}
+                    </p>
+                  ) : stats ? (
+                    <p className="text-caption text-muted-foreground">
+                      {t('settings.memory.statsInfo', '{{count}} memories · {{size}}', {
+                        count: stats.count,
+                        size: formatBytes(stats.size_bytes),
+                      })}
+                    </p>
+                  ) : (
+                    <p className="text-caption text-muted-foreground">
+                      {t('settings.memory.noStats', 'Unable to load stats')}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={loadStats}
+                disabled={isLoadingStats}
+              >
+                <RefreshCw className={`h-4 w-4 ${isLoadingStats ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
+          </div>
+        </SettingsSection>
+      )}
+
       {/* Danger Zone */}
       <SettingsSection header={t('settings.memory.dangerZone', 'Danger Zone')}>
         <div className="p-md rounded-md border border-destructive/50 bg-destructive/5">
@@ -153,9 +252,19 @@ export function MemorySettings() {
               variant="destructive"
               size="sm"
               onClick={handleClearMemory}
+              disabled={isClearing || !isConnected()}
             >
-              <Trash2 className="h-4 w-4 mr-2" />
-              {t('common.clear', 'Clear')}
+              {isClearing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  {t('common.clearing', 'Clearing...')}
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  {t('common.clear', 'Clear')}
+                </>
+              )}
             </Button>
           </div>
         </div>
