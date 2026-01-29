@@ -212,7 +212,7 @@ mod tests {
             timestamp: old_timestamp,
             topic_id: "test-topic-old".to_string(),
         };
-        let embedding = vec![0.1; 512];
+        let embedding = vec![0.1; crate::memory::EMBEDDING_DIM];
         let old_memory = MemoryEntry::with_embedding(
             "old-id".to_string(),
             old_context,

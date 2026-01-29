@@ -7,8 +7,8 @@ use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// Current embedding dimension (bge-small-zh-v1.5)
-pub const CURRENT_EMBEDDING_DIM: u32 = 512;
+/// Current embedding dimension (multilingual-e5-small)
+pub const CURRENT_EMBEDDING_DIM: u32 = 384;
 
 /// Vector database for storing and searching memory embeddings
 pub struct VectorDatabase {
@@ -20,7 +20,7 @@ impl VectorDatabase {
     /// Initialize vector database with schema
     ///
     /// Includes migration logic for embedding dimension changes.
-    /// When embedding dimension changes (e.g., 384 -> 512), old data is cleared.
+    /// When embedding dimension changes (e.g., 512 -> 384), old data is cleared.
     pub fn new(db_path: PathBuf) -> Result<Self, AetherError> {
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
@@ -130,14 +130,14 @@ impl VectorDatabase {
             -- sqlite-vec Virtual Tables for Vector Search
             -- ================================================================
 
-            -- Vector index for memories (512-dim float32)
+            -- Vector index for memories (384-dim float32, multilingual-e5-small)
             CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
-                embedding float[512]
+                embedding float[384]
             );
 
-            -- Vector index for facts (512-dim float32)
+            -- Vector index for facts (384-dim float32, multilingual-e5-small)
             CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
-                embedding float[512]
+                embedding float[384]
             );
             "#,
         )

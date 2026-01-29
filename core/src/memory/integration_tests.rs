@@ -6,8 +6,8 @@
 mod integration_tests {
     use crate::config::MemoryConfig;
     use crate::memory::{
-        ContextAnchor, EmbeddingModel, MemoryEntry, MemoryIngestion, MemoryRetrieval,
-        PromptAugmenter, VectorDatabase,
+        ContextAnchor, MemoryEntry, MemoryIngestion, MemoryRetrieval, PromptAugmenter,
+        SmartEmbedder, VectorDatabase,
     };
     use std::sync::Arc;
     use uuid::Uuid;
@@ -20,9 +20,9 @@ mod integration_tests {
     }
 
     // Helper to create test embedding model
-    fn create_test_model() -> Arc<EmbeddingModel> {
-        let model_path = EmbeddingModel::get_default_model_path().unwrap();
-        Arc::new(EmbeddingModel::new(model_path).unwrap())
+    fn create_test_model() -> Arc<SmartEmbedder> {
+        let cache_dir = SmartEmbedder::default_cache_dir().unwrap();
+        Arc::new(SmartEmbedder::new(cache_dir, 300))
     }
 
     // Helper to create test config
@@ -673,7 +673,7 @@ mod integration_tests {
             let id = format!("mem-{}", i);
             memory_ids.push(id.clone());
 
-            let embedding = vec![1.0; 512];
+            let embedding = vec![1.0; crate::memory::EMBEDDING_DIM];
             let memory = MemoryEntry::with_embedding(
                 id,
                 context.clone(),

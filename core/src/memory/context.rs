@@ -66,7 +66,7 @@ pub struct MemoryEntry {
     pub user_input: String,
     /// AI response
     pub ai_output: String,
-    /// Vector embedding (512-dim for bge-small-zh-v1.5)
+    /// Vector embedding (384-dim for multilingual-e5-small)
     pub embedding: Option<Vec<f32>>,
     /// Similarity score (when retrieved from search)
     pub similarity_score: Option<f32>,
@@ -181,7 +181,7 @@ pub struct MemoryFact {
     pub content: String,
     /// Type classification
     pub fact_type: FactType,
-    /// Vector embedding (512-dim for bge-small-zh-v1.5)
+    /// Vector embedding (384-dim for multilingual-e5-small)
     pub embedding: Option<Vec<f32>>,
     /// Source memory IDs for traceability
     pub source_memory_ids: Vec<String>,

@@ -37,12 +37,11 @@ pub use system::{
 /// This module orchestrates the execution of different capabilities (Memory, Search, MCP, Video)
 /// in a fixed priority order, enriching the AgentPayload with context data.
 use crate::config::{McpConfig, MemoryConfig, SkillsConfig};
-use crate::error::{AetherError, Result};
+use crate::error::Result;
 use crate::mcp::McpClient;
-use crate::memory::{EmbeddingModel, FactRetrieval, FactRetrievalConfig, VectorDatabase};
+use crate::memory::{FactRetrieval, FactRetrievalConfig, SmartEmbedder, VectorDatabase};
 use crate::payload::{AgentPayload, Capability};
 use crate::skills::SkillsRegistry;
-use crate::utils::paths::get_embedding_model_dir;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -262,10 +261,8 @@ impl CapabilityExecutor {
         );
 
         // Initialize embedding model
-        let model_dir = get_embedding_model_dir()?;
-        let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
-            AetherError::config(format!("Failed to initialize embedding model: {}", e))
-        })?);
+        let cache_dir = SmartEmbedder::default_cache_dir()?;
+        let embedder = SmartEmbedder::new(cache_dir, crate::memory::DEFAULT_MODEL_TTL_SECS);
 
         // Configure fact retrieval with user settings
         let retrieval_config = FactRetrievalConfig {
@@ -275,11 +272,7 @@ impl CapabilityExecutor {
         };
 
         // Create fact retrieval service
-        let fact_retrieval = FactRetrieval::new(
-            Arc::clone(db),
-            Arc::clone(&embedding_model),
-            retrieval_config,
-        );
+        let fact_retrieval = FactRetrieval::new(Arc::clone(db), embedder, retrieval_config);
 
         // Retrieve using fact-first strategy
         let result = fact_retrieval.retrieve(query).await?;

@@ -8,10 +8,9 @@ use crate::capability::strategy::CapabilityStrategy;
 use crate::config::MemoryConfig;
 use crate::error::{AetherError, Result};
 use crate::memory::{ai_retrieval::AiMemoryRetriever, ContextAnchor as MemoryContextAnchor};
-use crate::memory::{EmbeddingModel, MemoryRetrieval, VectorDatabase};
+use crate::memory::{MemoryRetrieval, SmartEmbedder, VectorDatabase, DEFAULT_MODEL_TTL_SECS};
 use crate::payload::{AgentPayload, Capability};
 use crate::providers::AiProvider;
-use crate::utils::paths::get_embedding_model_dir;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
@@ -97,16 +96,12 @@ impl CapabilityStrategy for MemoryStrategy {
     }
 
     fn validate_config(&self) -> Result<()> {
-        // Check if embedding model directory exists when db is configured
+        // Check if embedding model cache directory exists when db is configured
         if self.memory_db.is_some() {
-            match get_embedding_model_dir() {
-                Ok(dir) => {
-                    if !dir.exists() {
-                        return Err(AetherError::config(format!(
-                            "Embedding model directory not found: {}",
-                            dir.display()
-                        )));
-                    }
+            match SmartEmbedder::default_cache_dir() {
+                Ok(cache_dir) => {
+                    // Note: directory is created on-demand, so we don't check existence
+                    debug!(cache_dir = %cache_dir.display(), "Embedding cache directory configured");
                 }
                 Err(e) => return Err(e),
             }
@@ -195,17 +190,15 @@ impl CapabilityStrategy for MemoryStrategy {
         );
 
         // Initialize embedding model
-        let model_dir = get_embedding_model_dir()?;
-        let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
-            AetherError::config(format!("Failed to initialize embedding model: {}", e))
-        })?);
+        let cache_dir = SmartEmbedder::default_cache_dir()?;
+        let embedder = Arc::new(SmartEmbedder::new(cache_dir, DEFAULT_MODEL_TTL_SECS));
 
         // Choose retrieval strategy
         let memories = if self.use_ai_retrieval {
-            self.execute_ai_retrieval(db, config, &embedding_model, &memory_anchor, query)
+            self.execute_ai_retrieval(db, config, &embedder, &memory_anchor, query)
                 .await?
         } else {
-            self.execute_embedding_retrieval(db, config, &embedding_model, &memory_anchor, query)
+            self.execute_embedding_retrieval(db, config, &embedder, &memory_anchor, query)
                 .await?
         };
 
@@ -232,14 +225,14 @@ impl MemoryStrategy {
         &self,
         db: &Arc<VectorDatabase>,
         config: &Arc<MemoryConfig>,
-        embedding_model: &Arc<EmbeddingModel>,
+        embedder: &Arc<SmartEmbedder>,
         anchor: &MemoryContextAnchor,
         query: &str,
     ) -> Result<Vec<crate::memory::MemoryEntry>> {
         let Some(ai_provider) = &self.ai_provider else {
             warn!("AI retrieval enabled but no provider configured, falling back to embedding");
             return self
-                .execute_embedding_retrieval(db, config, embedding_model, anchor, query)
+                .execute_embedding_retrieval(db, config, embedder, anchor, query)
                 .await;
         };
 
@@ -248,7 +241,7 @@ impl MemoryStrategy {
         // First, fetch candidate memories using embedding search
         let retrieval = MemoryRetrieval::new(
             Arc::clone(db),
-            Arc::clone(embedding_model),
+            Arc::clone(embedder),
             Arc::clone(config),
         );
 
@@ -286,14 +279,14 @@ impl MemoryStrategy {
         &self,
         db: &Arc<VectorDatabase>,
         config: &Arc<MemoryConfig>,
-        embedding_model: &Arc<EmbeddingModel>,
+        embedder: &Arc<SmartEmbedder>,
         anchor: &MemoryContextAnchor,
         query: &str,
     ) -> Result<Vec<crate::memory::MemoryEntry>> {
         debug!("Using embedding-based memory retrieval");
         let retrieval = MemoryRetrieval::new(
             Arc::clone(db),
-            Arc::clone(embedding_model),
+            Arc::clone(embedder),
             Arc::clone(config),
         );
         retrieval.retrieve_memories(anchor, query).await

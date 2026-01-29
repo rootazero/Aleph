@@ -174,7 +174,7 @@ mod tests {
             FactType::Preference,
             vec!["mem-1".to_string()],
         )
-        .with_embedding(vec![0.1; 512]);
+        .with_embedding(vec![0.1; crate::memory::EMBEDDING_DIM]);
 
         let resolutions = detector.resolve_conflicts(&fact).await.unwrap();
 
@@ -194,7 +194,7 @@ mod tests {
             FactType::Learning,
             vec!["mem-old".to_string()],
         )
-        .with_embedding(vec![0.5; 512]);
+        .with_embedding(vec![0.5; crate::memory::EMBEDDING_DIM]);
 
         database.insert_fact(old_fact.clone()).await.unwrap();
 
@@ -206,7 +206,7 @@ mod tests {
             FactType::Learning,
             vec!["mem-new".to_string()],
         )
-        .with_embedding(vec![0.5; 512]); // Same embedding = conflict
+        .with_embedding(vec![0.5; crate::memory::EMBEDDING_DIM]); // Same embedding = conflict
 
         let resolutions = detector.resolve_conflicts(&new_fact).await.unwrap();
 

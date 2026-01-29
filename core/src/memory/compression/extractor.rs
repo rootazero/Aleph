@@ -18,7 +18,7 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     format!("{}...", &s[..end_byte])
 }
 use crate::memory::context::{FactType, MemoryEntry, MemoryFact};
-use crate::memory::embedding::EmbeddingModel;
+use crate::memory::smart_embedder::SmartEmbedder;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -45,16 +45,13 @@ struct ExtractionResponse {
 /// Extracts facts from conversations using LLM
 pub struct FactExtractor {
     provider: Arc<dyn AiProvider>,
-    embedding_model: Arc<EmbeddingModel>,
+    embedder: SmartEmbedder,
 }
 
 impl FactExtractor {
     /// Create a new fact extractor
-    pub fn new(provider: Arc<dyn AiProvider>, embedding_model: Arc<EmbeddingModel>) -> Self {
-        Self {
-            provider,
-            embedding_model,
-        }
+    pub fn new(provider: Arc<dyn AiProvider>, embedder: SmartEmbedder) -> Self {
+        Self { provider, embedder }
     }
 
     /// Extract facts from a batch of memories
@@ -84,8 +81,8 @@ impl FactExtractor {
         let mut facts_with_embeddings = Vec::new();
         for extracted_fact in extracted {
             let embedding = self
-                .embedding_model
-                .embed_text(&extracted_fact.content)
+                .embedder
+                .embed(&extracted_fact.content)
                 .await
                 .map_err(|e| AetherError::other(format!("Embedding generation failed: {}", e)))?;
 
@@ -330,9 +327,9 @@ mod tests {
         use crate::providers::create_mock_provider;
 
         let provider = create_mock_provider();
-        let embedding_model =
-            Arc::new(EmbeddingModel::new(std::path::PathBuf::from("/tmp/test_models")).unwrap());
+        let cache_dir = std::path::PathBuf::from("/tmp/test_models");
+        let embedder = SmartEmbedder::new(cache_dir, 300);
 
-        FactExtractor::new(provider, embedding_model)
+        FactExtractor::new(provider, embedder)
     }
 }

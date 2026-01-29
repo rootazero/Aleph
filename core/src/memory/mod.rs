@@ -26,7 +26,9 @@ pub mod database;
 pub mod embedding;
 pub mod fact_retrieval;
 pub mod ingestion;
+pub mod reranker;
 pub mod retrieval;
+pub mod smart_embedder;
 
 // Integration tests (compiled only in test mode)
 #[cfg(test)]
@@ -44,7 +46,13 @@ pub use context::{
     MemoryFact,
 };
 pub use database::VectorDatabase;
+#[deprecated(
+    since = "0.1.0",
+    note = "Use SmartEmbedder for TTL-based lazy loading with multilingual-e5-small"
+)]
 pub use embedding::EmbeddingModel;
 pub use fact_retrieval::{FactRetrieval, FactRetrievalConfig, RetrievalResult};
 pub use ingestion::MemoryIngestion;
+pub use reranker::{NoOpReranker, Reranker, RerankResult};
 pub use retrieval::MemoryRetrieval;
+pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};

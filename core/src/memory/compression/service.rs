@@ -12,7 +12,7 @@ use super::scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig
 use crate::error::AetherError;
 use crate::memory::context::{CompressionResult, CompressionSession};
 use crate::memory::database::VectorDatabase;
-use crate::memory::embedding::EmbeddingModel;
+use crate::memory::smart_embedder::SmartEmbedder;
 use crate::providers::AiProvider;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -58,12 +58,12 @@ impl CompressionService {
     pub fn new(
         database: Arc<VectorDatabase>,
         provider: Arc<dyn AiProvider>,
-        embedding_model: Arc<EmbeddingModel>,
+        embedder: SmartEmbedder,
         config: CompressionConfig,
     ) -> Self {
         let provider_name = provider.name().to_string();
 
-        let extractor = Arc::new(FactExtractor::new(provider, embedding_model));
+        let extractor = Arc::new(FactExtractor::new(provider, embedder));
 
         let conflict_detector = Arc::new(ConflictDetector::new(
             Arc::clone(&database),
@@ -379,14 +379,13 @@ mod tests {
         let database = Arc::new(VectorDatabase::new(db_path).unwrap());
 
         let provider = create_mock_provider();
-        let model_dir = temp_dir.path().join("models");
-        std::fs::create_dir_all(&model_dir).unwrap();
-        let embedding_model = Arc::new(EmbeddingModel::new(model_dir).unwrap());
+        let cache_dir = temp_dir.path().join("models");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let embedder = SmartEmbedder::new(cache_dir, 300);
 
         let config = CompressionConfig::default();
 
-        let service =
-            CompressionService::new(Arc::clone(&database), provider, embedding_model, config);
+        let service = CompressionService::new(Arc::clone(&database), provider, embedder, config);
 
         (service, database)
     }
