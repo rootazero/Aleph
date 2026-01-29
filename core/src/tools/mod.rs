@@ -32,6 +32,7 @@
 //! ```
 
 mod server;
+pub mod sessions;
 mod traits;
 
 pub use server::{AetherToolServer, AetherToolServerHandle};

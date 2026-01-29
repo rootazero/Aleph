@@ -6,31 +6,69 @@ import {
   type StreamChunkPayload,
   type CompletePayload,
   type ErrorPayload,
+  type ToolCallStartPayload,
+  type ToolCallCompletePayload,
+  type ToolCallFailedPayload,
+  type PlanConfirmationPayload,
+  type PlanCreatedPayload,
+  type LoopProgressPayload,
+  type SessionCompletedPayload,
+  type SubagentStartedPayload,
+  type SubagentCompletedPayload,
+  type ToolConfirmationPayload,
+  type ClarificationPayload,
 } from '@/lib/events';
 import type { ContentDisplayState } from '@/windows/halo/types';
+import type { SystemCard } from '@/windows/halo/types';
+import type { PlanStep } from '@/windows/halo/components/HaloPlanConfirmation';
 
-// Message type for conversation
-export interface HaloMessage {
+// ============================================================================
+// Message Types
+// ============================================================================
+
+export interface UserMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user';
+  content: string;
+  timestamp: number;
+}
+
+export interface AssistantMessage {
+  id: string;
+  role: 'assistant';
   content: string;
   timestamp: number;
   isStreaming?: boolean;
 }
 
-// Command type
+export interface SystemMessage {
+  id: string;
+  role: 'system';
+  timestamp: number;
+  card: SystemCard;
+}
+
+export type HaloMessage = UserMessage | AssistantMessage | SystemMessage;
+
+// ============================================================================
+// Command & Topic Types
+// ============================================================================
+
 export interface HaloCommand {
   key: string;
   description: string;
   icon?: string;
 }
 
-// Topic type
 export interface HaloTopic {
   id: string;
   title: string;
   updatedAt: number;
 }
+
+// ============================================================================
+// Store Interface
+// ============================================================================
 
 interface UnifiedHaloStore {
   // Display state (mutually exclusive panels)
@@ -44,6 +82,19 @@ interface UnifiedHaloStore {
   currentTopicId: string | null;
   isProcessing: boolean;
   streamingContent: string;
+
+  // Tool call tracking (call_id -> card_id)
+  toolCallCards: Map<string, string>;
+
+  // Subagent tracking (child_session_id -> card_id)
+  subagentCards: Map<string, string>;
+
+  // Plan progress tracking (plan_id -> card_id)
+  planProgressCards: Map<string, string>;
+
+  // Confirmation tracking (confirmation_id -> card_id)
+  toolConfirmationCards: Map<string, string>;
+  clarificationCards: Map<string, string>;
 
   // Command list state
   commands: HaloCommand[];
@@ -72,6 +123,18 @@ interface UnifiedHaloStore {
   startStreaming: () => void;
   updateStreamingContent: (content: string) => void;
   finishStreaming: () => void;
+
+  // System card actions
+  addSystemCard: (card: SystemCard) => string;
+  updateSystemCard: (id: string, card: Partial<SystemCard>) => void;
+  removeSystemCard: (id: string) => void;
+
+  // Card interaction callbacks
+  handleToolConfirmation: (id: string, approved: boolean) => void;
+  handlePlanConfirmation: (id: string, approved: boolean) => void;
+  handleClarificationResponse: (id: string, response: string) => void;
+  handleErrorRetry: (id: string) => void;
+  handleCardDismiss: (id: string) => void;
 
   // Command actions
   loadCommands: () => void;
@@ -107,6 +170,11 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
   currentTopicId: null,
   isProcessing: false,
   streamingContent: '',
+  toolCallCards: new Map(),
+  subagentCards: new Map(),
+  planProgressCards: new Map(),
+  toolConfirmationCards: new Map(),
+  clarificationCards: new Map(),
   commands: [],
   filteredCommands: [],
   selectedCommandIndex: 0,
@@ -124,25 +192,24 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
 
     // Determine display state based on input prefix
     if (text.startsWith('//')) {
-      // Topic list mode
       set({ displayState: { type: 'topicList', prefix: '//' } });
       loadTopics();
-      filterTopics(text.slice(2)); // Remove "//" prefix
+      filterTopics(text.slice(2));
     } else if (text.startsWith('/')) {
-      // Command list mode
       set({ displayState: { type: 'commandList', prefix: '/' } });
       loadCommands();
-      filterCommands(text.slice(1)); // Remove "/" prefix
+      filterCommands(text.slice(1));
     } else if (messages.length > 0) {
-      // Has conversation history
       set({ displayState: { type: 'conversation' } });
     } else {
-      // Empty state (only input box)
       set({ displayState: { type: 'empty' } });
     }
   },
 
-  // Conversation actions
+  // ============================================================================
+  // Conversation Actions
+  // ============================================================================
+
   sendMessage: async () => {
     const { inputText, currentTopicId, addUserMessage } = get();
     const trimmed = inputText.trim();
@@ -152,7 +219,7 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
     set({
       inputText: '',
       isProcessing: true,
-      displayState: { type: 'conversation' }
+      displayState: { type: 'conversation' },
     });
 
     try {
@@ -164,7 +231,7 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
   },
 
   addUserMessage: (content) => {
-    const message: HaloMessage = {
+    const message: UserMessage = {
       id: generateId(),
       role: 'user',
       content,
@@ -177,7 +244,7 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
   },
 
   addAssistantMessage: (content) => {
-    const message: HaloMessage = {
+    const message: AssistantMessage = {
       id: generateId(),
       role: 'assistant',
       content,
@@ -190,7 +257,7 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
   },
 
   startStreaming: () => {
-    const streamingMessage: HaloMessage = {
+    const streamingMessage: AssistantMessage = {
       id: generateId(),
       role: 'assistant',
       content: '',
@@ -207,7 +274,9 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
     set((state) => ({
       streamingContent: content,
       messages: state.messages.map((m) =>
-        m.isStreaming ? { ...m, content } : m
+        m.role === 'assistant' && 'isStreaming' in m && m.isStreaming
+          ? { ...m, content }
+          : m
       ),
     }));
   },
@@ -217,14 +286,146 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
       isProcessing: false,
       streamingContent: '',
       messages: state.messages.map((m) =>
-        m.isStreaming ? { ...m, isStreaming: false } : m
+        m.role === 'assistant' && 'isStreaming' in m && m.isStreaming
+          ? { ...m, isStreaming: false }
+          : m
       ),
     }));
   },
 
-  // Command actions
+  // ============================================================================
+  // System Card Actions
+  // ============================================================================
+
+  addSystemCard: (card) => {
+    const id = generateId();
+    const message: SystemMessage = {
+      id,
+      role: 'system',
+      timestamp: Date.now(),
+      card,
+    };
+    set((state) => ({
+      messages: [...state.messages, message],
+      displayState: { type: 'conversation' },
+    }));
+    return id;
+  },
+
+  updateSystemCard: (id, cardUpdate) => {
+    set((state) => ({
+      messages: state.messages.map((m) => {
+        if (m.id === id && m.role === 'system') {
+          return {
+            ...m,
+            card: { ...m.card, ...cardUpdate } as SystemCard,
+          };
+        }
+        return m;
+      }),
+    }));
+  },
+
+  removeSystemCard: (id) => {
+    set((state) => ({
+      messages: state.messages.filter((m) => m.id !== id),
+    }));
+  },
+
+  // ============================================================================
+  // Card Interaction Callbacks
+  // ============================================================================
+
+  handleToolConfirmation: (id, approved) => {
+    const { messages, removeSystemCard, toolConfirmationCards } = get();
+    const message = messages.find((m) => m.id === id);
+    if (!message || message.role !== 'system' || message.card.type !== 'toolConfirmation') {
+      return;
+    }
+
+    // Find confirmation_id by card_id
+    let confirmationId: string | undefined;
+    for (const [confId, cardId] of toolConfirmationCards.entries()) {
+      if (cardId === id) {
+        confirmationId = confId;
+        break;
+      }
+    }
+
+    // Send confirmation to backend
+    if (confirmationId) {
+      commands.respondToolConfirmation(confirmationId, approved).catch(console.error);
+      set((state) => {
+        const newMap = new Map(state.toolConfirmationCards);
+        newMap.delete(confirmationId!);
+        return { toolConfirmationCards: newMap };
+      });
+    }
+    removeSystemCard(id);
+  },
+
+  handlePlanConfirmation: (id, approved) => {
+    const { messages, removeSystemCard, addSystemCard } = get();
+    const message = messages.find((m) => m.id === id);
+    if (!message || message.role !== 'system' || message.card.type !== 'planConfirmation') {
+      return;
+    }
+
+    // TODO: Find plan_id from tracking map when backend emits it
+    // For now, we don't have a plan_id in the confirmation card
+
+    if (approved) {
+      // Convert to progress card
+      const steps = message.card.steps.map((s, i) => ({
+        ...s,
+        status: i === 0 ? 'running' : 'pending',
+      })) as PlanStep[];
+      removeSystemCard(id);
+      addSystemCard({ type: 'planProgress', steps, currentIndex: 0 });
+    } else {
+      removeSystemCard(id);
+    }
+  },
+
+  handleClarificationResponse: (id, response) => {
+    const { removeSystemCard, clarificationCards } = get();
+
+    // Find clarification_id by card_id
+    let clarificationId: string | undefined;
+    for (const [clarId, cardId] of clarificationCards.entries()) {
+      if (cardId === id) {
+        clarificationId = clarId;
+        break;
+      }
+    }
+
+    // Send response to backend
+    if (clarificationId) {
+      commands.respondClarification(clarificationId, response).catch(console.error);
+      set((state) => {
+        const newMap = new Map(state.clarificationCards);
+        newMap.delete(clarificationId!);
+        return { clarificationCards: newMap };
+      });
+    }
+    removeSystemCard(id);
+  },
+
+  handleErrorRetry: (id) => {
+    const { removeSystemCard } = get();
+    removeSystemCard(id);
+    // TODO: Re-send the last user message
+  },
+
+  handleCardDismiss: (id) => {
+    get().removeSystemCard(id);
+  },
+
+  // ============================================================================
+  // Command Actions
+  // ============================================================================
+
   loadCommands: () => {
-    // TODO: Load from Rust backend via commands.listSkills() or similar
     const defaultCommands: HaloCommand[] = [
       { key: 'clear', description: 'Clear conversation history' },
       { key: 'settings', description: 'Open settings window' },
@@ -251,7 +452,6 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
   },
 
   selectCommand: (command) => {
-    // Execute the command
     switch (command.key) {
       case 'clear':
         set({ messages: [], displayState: { type: 'empty' }, inputText: '' });
@@ -261,7 +461,6 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
         get().hide();
         break;
       default:
-        // For other commands, put them in input and let user complete
         set({ inputText: `/${command.key} `, displayState: { type: 'empty' } });
     }
   },
@@ -277,9 +476,11 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
     set({ selectedCommandIndex: newIndex });
   },
 
-  // Topic actions
+  // ============================================================================
+  // Topic Actions
+  // ============================================================================
+
   loadTopics: () => {
-    // TODO: Load from backend
     const mockTopics: HaloTopic[] = [
       { id: '1', title: 'Recent conversation', updatedAt: Date.now() - 3600000 },
       { id: '2', title: 'Code review discussion', updatedAt: Date.now() - 86400000 },
@@ -294,19 +495,16 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
       return;
     }
     const lowerQuery = query.toLowerCase();
-    const filtered = topics.filter((t) =>
-      t.title.toLowerCase().includes(lowerQuery)
-    );
+    const filtered = topics.filter((t) => t.title.toLowerCase().includes(lowerQuery));
     set({ filteredTopics: filtered, selectedTopicIndex: 0 });
   },
 
   selectTopic: (topic) => {
-    // Switch to this topic and show conversation
     set({
       currentTopicId: topic.id,
       inputText: '',
       displayState: { type: 'conversation' },
-      messages: [], // TODO: Load messages from backend
+      messages: [],
     });
   },
 
@@ -321,7 +519,10 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
     set({ selectedTopicIndex: newIndex });
   },
 
-  // Window actions
+  // ============================================================================
+  // Window Actions
+  // ============================================================================
+
   show: async () => {
     set({ visible: true });
   },
@@ -336,42 +537,47 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
   },
 
   handleEscape: () => {
-    const { displayState, hide } = get();
+    const { displayState, hide, messages } = get();
 
-    // If showing command or topic list, close it first
     if (displayState.type === 'commandList' || displayState.type === 'topicList') {
-      const { messages } = get();
       set({
         inputText: '',
         displayState: messages.length > 0 ? { type: 'conversation' } : { type: 'empty' },
       });
     } else {
-      // Otherwise, hide the window
       hide();
     }
   },
 
+  // ============================================================================
   // Initialization
+  // ============================================================================
+
   initialize: async () => {
     const store = get();
     if (store.unsubscribe) return;
 
     const handlers: AetherEventHandlers = {
       onThinking: () => set({ isProcessing: true }),
+
       onStreamChunk: (payload: StreamChunkPayload) => {
         const { messages, streamingContent } = get();
         const newContent = streamingContent + payload.text;
 
-        // Start streaming if not already
-        const hasStreamingMessage = messages.some((m) => m.isStreaming);
+        const hasStreamingMessage = messages.some(
+          (m) => m.role === 'assistant' && 'isStreaming' in m && m.isStreaming
+        );
         if (!hasStreamingMessage) {
           get().startStreaming();
         }
         get().updateStreamingContent(newContent);
       },
+
       onComplete: (payload: CompletePayload) => {
         const { messages } = get();
-        const hasStreamingMessage = messages.some((m) => m.isStreaming);
+        const hasStreamingMessage = messages.some(
+          (m) => m.role === 'assistant' && 'isStreaming' in m && m.isStreaming
+        );
 
         if (hasStreamingMessage) {
           get().finishStreaming();
@@ -379,15 +585,220 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
           get().addAssistantMessage(payload.response);
         }
       },
+
       onError: (payload: ErrorPayload) => {
         console.error('AI Error:', payload.message);
         set({ isProcessing: false });
+        get().addSystemCard({
+          type: 'error',
+          message: payload.message,
+          canRetry: true,
+        });
+      },
+
+      // Tool call lifecycle
+      onToolCallStarted: (payload: ToolCallStartPayload) => {
+        const cardId = get().addSystemCard({
+          type: 'processing',
+          content: `Running ${payload.tool_name}...`,
+        });
+        // Track card by call_id for later cleanup
+        set((state) => {
+          const newMap = new Map(state.toolCallCards);
+          newMap.set(payload.call_id, cardId);
+          return { toolCallCards: newMap };
+        });
+      },
+
+      onToolCallCompleted: (payload: ToolCallCompletePayload) => {
+        const { toolCallCards, removeSystemCard } = get();
+        const cardId = toolCallCards.get(payload.call_id);
+        if (cardId) {
+          removeSystemCard(cardId);
+          set((state) => {
+            const newMap = new Map(state.toolCallCards);
+            newMap.delete(payload.call_id);
+            return { toolCallCards: newMap };
+          });
+        }
+      },
+
+      onToolCallFailed: (payload: ToolCallFailedPayload) => {
+        const { toolCallCards, removeSystemCard, addSystemCard } = get();
+        const cardId = toolCallCards.get(payload.call_id);
+        if (cardId) {
+          removeSystemCard(cardId);
+          set((state) => {
+            const newMap = new Map(state.toolCallCards);
+            newMap.delete(payload.call_id);
+            return { toolCallCards: newMap };
+          });
+        }
+        addSystemCard({
+          type: 'error',
+          message: payload.error,
+          canRetry: payload.is_retryable,
+        });
+      },
+
+      // Memory events
+      onMemoryStored: () => {
+        get().addSystemCard({
+          type: 'toast',
+          level: 'info',
+          message: 'Memory saved',
+        });
+      },
+
+      // Plan events
+      onPlanConfirmationRequired: (payload: PlanConfirmationPayload) => {
+        const steps: PlanStep[] = payload.tasks.map((task) => ({
+          id: task.id,
+          title: task.name,
+          status: 'pending' as const,
+        }));
+        get().addSystemCard({
+          type: 'planConfirmation',
+          steps,
+        });
+      },
+
+      onPlanCreated: (payload: PlanCreatedPayload) => {
+        const steps: PlanStep[] = payload.steps.map((step, i) => ({
+          id: `step-${i}`,
+          title: step,
+          status: i === 0 ? 'running' : ('pending' as const),
+        }));
+        const cardId = get().addSystemCard({
+          type: 'planProgress',
+          steps,
+          currentIndex: 0,
+        });
+        set((state) => {
+          const newMap = new Map(state.planProgressCards);
+          newMap.set(payload.session_id, cardId);
+          return { planProgressCards: newMap };
+        });
+      },
+
+      onLoopProgress: (payload: LoopProgressPayload) => {
+        const { planProgressCards, messages } = get();
+        const cardId = planProgressCards.get(payload.session_id);
+        if (cardId) {
+          const message = messages.find((m) => m.id === cardId);
+          if (message && message.role === 'system' && message.card.type === 'planProgress') {
+            const steps = message.card.steps.map((s, i) => ({
+              ...s,
+              status:
+                i < payload.iteration
+                  ? 'completed'
+                  : i === payload.iteration
+                    ? 'running'
+                    : ('pending' as const),
+            })) as PlanStep[];
+            get().updateSystemCard(cardId, { steps, currentIndex: payload.iteration });
+          }
+        }
+      },
+
+      onSessionCompleted: (payload: SessionCompletedPayload) => {
+        const { planProgressCards, removeSystemCard } = get();
+        const cardId = planProgressCards.get(payload.session_id);
+        if (cardId) {
+          removeSystemCard(cardId);
+          set((state) => {
+            const newMap = new Map(state.planProgressCards);
+            newMap.delete(payload.session_id);
+            return { planProgressCards: newMap };
+          });
+        }
+        set({ isProcessing: false });
+        get().addSystemCard({
+          type: 'success',
+          message: payload.summary || 'Task completed',
+        });
+      },
+
+      // Subagent events
+      onSubagentStarted: (payload: SubagentStartedPayload) => {
+        const cardId = get().addSystemCard({
+          type: 'agentProgress',
+          progress: {
+            goal: `Running agent ${payload.agent_id}`,
+            steps: [{ id: 'init', action: 'Initializing...', status: 'running' }],
+            currentStep: 0,
+          },
+        });
+        set((state) => {
+          const newMap = new Map(state.subagentCards);
+          newMap.set(payload.child_session_id, cardId);
+          return { subagentCards: newMap };
+        });
+      },
+
+      onSubagentCompleted: (payload: SubagentCompletedPayload) => {
+        const { subagentCards, updateSystemCard, removeSystemCard, addSystemCard } = get();
+        const cardId = subagentCards.get(payload.child_session_id);
+        if (cardId) {
+          if (payload.success) {
+            updateSystemCard(cardId, {
+              progress: {
+                goal: 'Agent completed',
+                steps: [{ id: 'done', action: payload.summary || 'Completed', status: 'completed' }],
+                currentStep: 0,
+              },
+            });
+            // Auto-remove after short delay
+            setTimeout(() => removeSystemCard(cardId), 2000);
+          } else {
+            removeSystemCard(cardId);
+            addSystemCard({
+              type: 'error',
+              message: payload.summary || 'Agent failed',
+              canRetry: false,
+            });
+          }
+          set((state) => {
+            const newMap = new Map(state.subagentCards);
+            newMap.delete(payload.child_session_id);
+            return { subagentCards: newMap };
+          });
+        }
+      },
+
+      // Tool confirmation events
+      onToolConfirmationRequired: (payload: ToolConfirmationPayload) => {
+        const cardId = get().addSystemCard({
+          type: 'toolConfirmation',
+          tool: payload.tool_name,
+          description: payload.description,
+          args: payload.args,
+        });
+        set((state) => {
+          const newMap = new Map(state.toolConfirmationCards);
+          newMap.set(payload.confirmation_id, cardId);
+          return { toolConfirmationCards: newMap };
+        });
+      },
+
+      // Clarification events
+      onClarificationRequired: (payload: ClarificationPayload) => {
+        const cardId = get().addSystemCard({
+          type: 'clarification',
+          question: payload.question,
+          options: payload.options,
+        });
+        set((state) => {
+          const newMap = new Map(state.clarificationCards);
+          newMap.set(payload.clarification_id, cardId);
+          return { clarificationCards: newMap };
+        });
       },
     };
 
     const unsubscribe = await subscribeToAetherEvents(handlers);
     set({ unsubscribe });
-    console.log('[UnifiedHaloStore] Initialized');
+    console.log('[UnifiedHaloStore] Initialized with card support');
   },
 
   cleanup: () => {

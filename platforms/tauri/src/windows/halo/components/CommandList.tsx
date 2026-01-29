@@ -23,11 +23,11 @@ function CommandItem({ command, isSelected, onClick }: CommandItemProps) {
       onClick={onClick}
       className={`w-full flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-left ${
         isSelected
-          ? 'bg-primary/10 text-primary'
-          : 'hover:bg-secondary/80 text-foreground'
+          ? 'bg-accent text-accent-foreground'
+          : 'hover:bg-accent/50 text-foreground'
       }`}
     >
-      <span className="text-muted-foreground">
+      <span className={isSelected ? 'text-[hsl(var(--accent-purple))]' : 'text-muted-foreground'}>
         {ICON_MAP[command.key] || <Command className="w-4 h-4" />}
       </span>
       <div className="flex-1 min-w-0">

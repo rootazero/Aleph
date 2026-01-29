@@ -47,6 +47,13 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         isMultiTurnModeActive()
     }
 
+    /// Check whether to use Gateway WebSocket instead of FFI
+    /// Must be called from MainActor context
+    @MainActor
+    private func useGateway() -> Bool {
+        GatewayManager.shared.isReady
+    }
+
     // MARK: - Agentic Session State (Phase 5)
 
     /// Current agentic session ID
@@ -802,10 +809,32 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         let confirmed = response == .alertFirstButtonReturn
         print("[EventHandler] Plan confirmation decision: planId=\(planId), confirmed=\(confirmed)")
 
-        // Send decision back to Rust
-        let success = core.confirmTaskPlan(planId: planId, confirmed: confirmed)
-        if !success {
-            print("[EventHandler] Warning: Plan confirmation may have expired or not found: \(planId)")
+        // Send decision back to Rust - prefer Gateway RPC
+        if useGateway() {
+            Task {
+                do {
+                    let success = try await GatewayManager.shared.client.agentConfirmPlan(
+                        planId: planId,
+                        confirmed: confirmed
+                    )
+                    if !success {
+                        print("[EventHandler] Warning: Plan confirmation returned false: \(planId)")
+                    }
+                } catch {
+                    print("[EventHandler] Gateway plan confirmation failed, falling back to FFI: \(error)")
+                    // Fallback to FFI
+                    let success = core.confirmTaskPlan(planId: planId, confirmed: confirmed)
+                    if !success {
+                        print("[EventHandler] Warning: Plan confirmation may have expired or not found: \(planId)")
+                    }
+                }
+            }
+        } else {
+            // FFI fallback
+            let success = core.confirmTaskPlan(planId: planId, confirmed: confirmed)
+            if !success {
+                print("[EventHandler] Warning: Plan confirmation may have expired or not found: \(planId)")
+            }
         }
     }
 
@@ -884,7 +913,9 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
             let userResponse = response == .alertFirstButtonReturn ? textField.stringValue : ""
 
             print("[EventHandler] User input response: requestId=\(requestId), response=\(userResponse)")
-            _ = core.respondToUserInput(requestId: requestId, response: userResponse)
+
+            // Send response back to Rust - prefer Gateway RPC
+            sendUserInputResponse(requestId: requestId, response: userResponse, core: core)
         } else {
             // Multiple choice options
             let alert = NSAlert()
@@ -907,7 +938,34 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
             }
 
             print("[EventHandler] User input response: requestId=\(requestId), response=\(userResponse)")
-            _ = core.respondToUserInput(requestId: requestId, response: userResponse)
+
+            // Send response back to Rust - prefer Gateway RPC
+            sendUserInputResponse(requestId: requestId, response: userResponse, core: core)
+        }
+    }
+
+    /// Send user input response via Gateway RPC with FFI fallback
+    @MainActor
+    private func sendUserInputResponse(requestId: String, response: String, core: AetherCore) {
+        if useGateway() {
+            Task {
+                do {
+                    let success = try await GatewayManager.shared.client.agentRespondToInput(
+                        requestId: requestId,
+                        response: response
+                    )
+                    if !success {
+                        print("[EventHandler] Warning: User input response returned false: \(requestId)")
+                    }
+                } catch {
+                    print("[EventHandler] Gateway user input response failed, falling back to FFI: \(error)")
+                    // Fallback to FFI
+                    _ = core.respondToUserInput(requestId: requestId, response: response)
+                }
+            }
+        } else {
+            // FFI fallback
+            _ = core.respondToUserInput(requestId: requestId, response: response)
         }
     }
 

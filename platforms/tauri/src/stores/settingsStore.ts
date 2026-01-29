@@ -75,12 +75,16 @@ const defaultSettings: Settings = {
     quick_capture: 'Ctrl+Alt+C',
   },
   behavior: {
-    output_mode: 'replace',
+    output_mode: 'typewriter',
     typing_speed: 50,
     auto_dismiss_delay: 3,
     show_notifications: true,
     pii_masking: false,
     pii_keywords: [],
+    pii_scrub_email: true,
+    pii_scrub_phone: true,
+    pii_scrub_ssn: true,
+    pii_scrub_credit_card: true,
   },
   providers: {
     providers: [],

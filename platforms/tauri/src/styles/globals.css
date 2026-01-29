@@ -10,6 +10,7 @@
 
     --card: 0 0% 100%;
     --card-foreground: 0 0% 9%;
+    --card-glass: 0 0% 100% / 0.8;  /* Semi-transparent card (macOS controlBackgroundColor) */
 
     --primary: 211 100% 50%;
     --primary-foreground: 0 0% 100%;
@@ -35,6 +36,10 @@
     --warning: 38 92% 50%;
     --error: 0 84% 60%;
     --info: 199 89% 48%;
+
+    /* Accent colors (from macOS DesignTokens.Colors) */
+    --accent-blue: 211 100% 50%;
+    --accent-purple: 262 85% 58%;
   }
 
   .dark {
@@ -44,6 +49,7 @@
 
     --card: 0 0% 12%;
     --card-foreground: 0 0% 95%;
+    --card-glass: 0 0% 12% / 0.8;  /* Semi-transparent card (macOS controlBackgroundColor) */
 
     --primary: 211 100% 60%;
     --primary-foreground: 0 0% 9%;
@@ -69,6 +75,10 @@
     --warning: 38 92% 50%;
     --error: 0 84% 60%;
     --info: 199 89% 58%;
+
+    /* Accent colors (from macOS DesignTokens.Colors) */
+    --accent-blue: 211 100% 60%;
+    --accent-purple: 262 85% 65%;
   }
 }
 
@@ -135,6 +145,56 @@
 
 .glass-subtle {
   @apply bg-white/50 dark:bg-black/30 backdrop-blur-lg;
+}
+
+/* Card glass effect (macOS controlBackgroundColor with opacity) */
+.card-glass {
+  background: hsl(var(--card-glass));
+  @apply backdrop-blur-xl;
+}
+
+/* Settings card style (matches macOS DesignTokens.cardBackground) */
+.settings-card {
+  @apply card-glass rounded-md border border-border p-md;
+}
+
+/* Info box variants (matches macOS info/warning/success/error styles) */
+.info-box {
+  @apply rounded-sm p-sm flex items-start gap-sm;
+}
+
+.info-box-info {
+  @apply info-box;
+  background: hsl(var(--info) / 0.08);
+  color: hsl(var(--info));
+}
+
+.info-box-warning {
+  @apply info-box;
+  background: hsl(var(--warning) / 0.08);
+  color: hsl(var(--warning));
+}
+
+.info-box-success {
+  @apply info-box;
+  background: hsl(var(--success) / 0.08);
+  color: hsl(var(--success));
+}
+
+.info-box-error {
+  @apply info-box;
+  background: hsl(var(--error) / 0.08);
+  color: hsl(var(--error));
+}
+
+/* ArcSpinner animation (macOS-style gradient arc rotation) */
+.arc-spinner {
+  animation: arc-spin 0.8s linear infinite;
+}
+
+@keyframes arc-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Disable text selection in UI elements */

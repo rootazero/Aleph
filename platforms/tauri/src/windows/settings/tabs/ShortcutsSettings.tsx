@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { SettingsCard } from '@/components/ui/settings-card';
+import { SettingsSection } from '@/components/ui/settings-section';
+import { InfoBox } from '@/components/ui/info-box';
 import { Button } from '@/components/ui/button';
-import { Keyboard, RotateCcw } from 'lucide-react';
+import { Keyboard, RotateCcw, Sparkles, Command, Mic, Camera } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
 
@@ -43,27 +45,27 @@ function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-sm">
       <button
         type="button"
         onClick={() => setIsRecording(true)}
         onBlur={() => setIsRecording(false)}
         onKeyDown={handleKeyDown}
         className={cn(
-          'px-3 py-1.5 rounded-medium border text-body font-mono min-w-[140px] text-center transition-colors',
+          'px-3 py-1.5 rounded-sm border text-body font-mono min-w-[140px] text-center transition-colors',
           isRecording
             ? 'border-primary bg-primary/10 text-primary'
             : 'border-border bg-secondary/50 text-foreground hover:bg-secondary'
         )}
       >
-        {isRecording ? t('common.pressKeys') : value}
+        {isRecording ? t('common.pressKeys', 'Press keys...') : value || '—'}
       </button>
       <Button
         variant="ghost"
         size="icon"
         className="h-8 w-8"
         onClick={() => onChange('')}
-        title={t('common.clearShortcut')}
+        title={t('common.clearShortcut', 'Clear shortcut')}
       >
         <RotateCcw className="h-4 w-4" />
       </Button>
@@ -76,31 +78,9 @@ export function ShortcutsSettings() {
   const shortcuts = useSettingsStore((s) => s.shortcuts);
   const updateShortcuts = useSettingsStore((s) => s.updateShortcuts);
 
-  const shortcutItems = [
-    {
-      key: 'show_halo' as const,
-      titleKey: 'settings.shortcuts.showHalo',
-      descriptionKey: 'settings.shortcuts.showHaloDescription',
-    },
-    {
-      key: 'command_completion' as const,
-      titleKey: 'settings.shortcuts.commandCompletion',
-      descriptionKey: 'settings.shortcuts.commandCompletionDescription',
-    },
-    {
-      key: 'toggle_listening' as const,
-      titleKey: 'settings.shortcuts.toggleListening',
-      descriptionKey: 'settings.shortcuts.toggleListeningDescription',
-    },
-    {
-      key: 'quick_capture' as const,
-      titleKey: 'settings.shortcuts.quickCapture',
-      descriptionKey: 'settings.shortcuts.quickCaptureDescription',
-    },
-  ];
-
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-lg max-w-2xl">
+      {/* Page Header */}
       <div>
         <h1 className="text-title mb-1">{t('settings.shortcuts.title')}</h1>
         <p className="text-caption text-muted-foreground">
@@ -108,27 +88,63 @@ export function ShortcutsSettings() {
         </p>
       </div>
 
-      <div className="space-y-4">
-        {shortcutItems.map((item) => (
-          <SettingsCard
-            key={item.key}
-            title={t(item.titleKey)}
-            description={t(item.descriptionKey)}
-          >
-            <ShortcutRecorder
-              value={shortcuts[item.key]}
-              onChange={(value) => updateShortcuts({ [item.key]: value })}
-            />
-          </SettingsCard>
-        ))}
-      </div>
+      {/* Global Shortcuts */}
+      <SettingsSection header={t('settings.shortcuts.globalSection', 'Global Shortcuts')}>
+        <SettingsCard
+          title={t('settings.shortcuts.showHalo', 'Show Halo')}
+          description={t('settings.shortcuts.showHaloDescription', 'Open the Halo command window')}
+          icon={Sparkles}
+        >
+          <ShortcutRecorder
+            value={shortcuts.show_halo}
+            onChange={(value) => updateShortcuts({ show_halo: value })}
+          />
+        </SettingsCard>
 
-      <div className="pt-4 border-t border-border">
-        <div className="flex items-center gap-2 text-caption text-muted-foreground">
+        <SettingsCard
+          title={t('settings.shortcuts.commandCompletion', 'Command Completion')}
+          description={t('settings.shortcuts.commandCompletionDescription', 'Trigger AI completion at cursor')}
+          icon={Command}
+        >
+          <ShortcutRecorder
+            value={shortcuts.command_completion}
+            onChange={(value) => updateShortcuts({ command_completion: value })}
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      {/* Voice & Media */}
+      <SettingsSection header={t('settings.shortcuts.voiceSection', 'Voice & Media')}>
+        <SettingsCard
+          title={t('settings.shortcuts.toggleListening', 'Toggle Listening')}
+          description={t('settings.shortcuts.toggleListeningDescription', 'Start or stop voice input')}
+          icon={Mic}
+        >
+          <ShortcutRecorder
+            value={shortcuts.toggle_listening}
+            onChange={(value) => updateShortcuts({ toggle_listening: value })}
+          />
+        </SettingsCard>
+
+        <SettingsCard
+          title={t('settings.shortcuts.quickCapture', 'Quick Capture')}
+          description={t('settings.shortcuts.quickCaptureDescription', 'Capture screen selection')}
+          icon={Camera}
+        >
+          <ShortcutRecorder
+            value={shortcuts.quick_capture}
+            onChange={(value) => updateShortcuts({ quick_capture: value })}
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      {/* Hint */}
+      <InfoBox variant="info">
+        <div className="flex items-center gap-sm">
           <Keyboard className="h-4 w-4" />
-          <span>{t('settings.shortcuts.hint')}</span>
+          <span>{t('settings.shortcuts.hint', 'Click on a shortcut field and press your desired key combination')}</span>
         </div>
-      </div>
+      </InfoBox>
     </div>
   );
 }

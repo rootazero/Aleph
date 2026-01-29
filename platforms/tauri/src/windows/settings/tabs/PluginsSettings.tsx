@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { SettingsCard } from '@/components/ui/settings-card';
+import { SettingsSection } from '@/components/ui/settings-section';
+import { InfoBox } from '@/components/ui/info-box';
 import {
   Dialog,
   DialogContent,
@@ -29,8 +31,10 @@ import {
   GitBranch,
   FileArchive,
   Folder,
+  Info,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 import type { Plugin } from '@/lib/commands';
 
 const sourceIcons = {
@@ -234,6 +238,7 @@ function InstallPluginDialog({
 }
 
 export function PluginsSettings() {
+  const { t } = useTranslation();
   const plugins = useSettingsStore((s) => s.plugins);
   const updatePlugins = useSettingsStore((s) => s.updatePlugins);
 
@@ -265,49 +270,47 @@ export function PluginsSettings() {
   };
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-lg max-w-3xl">
+      {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-title mb-1">Plugins</h1>
+          <h1 className="text-title mb-1">{t('settings.plugins.title', 'Plugins')}</h1>
           <p className="text-caption text-muted-foreground">
-            Extend Aether with third-party plugins
+            {t('settings.plugins.description', 'Extend Aether with third-party plugins')}
           </p>
         </div>
         <Button onClick={() => setDialogOpen(true)}>
           <Plus className="h-4 w-4 mr-2" />
-          Install Plugin
+          {t('settings.plugins.installPlugin', 'Install Plugin')}
         </Button>
       </div>
 
       {/* Global Settings */}
-      <div className="space-y-4">
+      <SettingsSection header={t('settings.plugins.settingsSection', 'Settings')}>
         <SettingsCard
-          title="Auto Update"
-          description="Automatically update plugins when new versions are available"
+          title={t('settings.plugins.autoUpdate', 'Auto Update')}
+          description={t('settings.plugins.autoUpdateDescription', 'Automatically update plugins when new versions are available')}
+          icon={RefreshCw}
         >
           <Switch
             checked={plugins.auto_update}
             onCheckedChange={(checked) => updatePlugins({ auto_update: checked })}
           />
         </SettingsCard>
-      </div>
+      </SettingsSection>
 
-      {/* Plugin List */}
-      <div className="space-y-4">
-        <h2 className="text-body font-medium text-muted-foreground">
-          Installed Plugins ({plugins.plugins.length})
-        </h2>
-
+      {/* Installed Plugins */}
+      <SettingsSection header={t('settings.plugins.installedSection', 'Installed Plugins ({{count}})', { count: plugins.plugins.length })}>
         {plugins.plugins.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-card">
             <Plug className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p>No plugins installed</p>
+            <p>{t('settings.plugins.noPlugins', 'No plugins installed')}</p>
             <p className="text-caption mt-1">
-              Install plugins to extend Aether&apos;s functionality
+              {t('settings.plugins.noPluginsHint', "Install plugins to extend Aether's functionality")}
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-sm">
             {plugins.plugins.map((plugin) => (
               <PluginCard
                 key={plugin.id}
@@ -319,7 +322,17 @@ export function PluginsSettings() {
             ))}
           </div>
         )}
-      </div>
+      </SettingsSection>
+
+      {/* Info */}
+      <InfoBox variant="info">
+        <div className="flex items-start gap-sm">
+          <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <span>
+            {t('settings.plugins.hint', 'Plugins can add new tools, integrations, and capabilities to Aether. Install plugins from Git repositories, ZIP archives, or local folders.')}
+          </span>
+        </div>
+      </InfoBox>
 
       <InstallPluginDialog
         open={dialogOpen}

@@ -367,6 +367,140 @@ pub async fn handle_list(
     )
 }
 
+// ============================================================================
+// Extended Agent Handlers (for remove-ffi migration)
+// ============================================================================
+
+/// Parameters for agent.confirmPlan
+#[derive(Debug, Deserialize)]
+pub struct ConfirmPlanParams {
+    /// Plan ID to confirm/reject
+    pub plan_id: String,
+    /// Whether to confirm (true) or reject (false)
+    pub confirmed: bool,
+}
+
+/// Handle agent.confirmPlan RPC request
+///
+/// Confirms or rejects a task plan that requires user approval.
+pub async fn handle_confirm_plan(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: ConfirmPlanParams = match request.params {
+        Some(ref p) => match serde_json::from_value(p.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing params: plan_id, confirmed required".to_string(),
+            );
+        }
+    };
+
+    // TODO: Forward to active agent instance
+    info!(
+        plan_id = %params.plan_id,
+        confirmed = params.confirmed,
+        "Plan confirmation received"
+    );
+
+    JsonRpcResponse::success(request.id, json!({ "ok": true }))
+}
+
+/// Parameters for agent.respondToInput
+#[derive(Debug, Deserialize)]
+pub struct RespondToInputParams {
+    /// Request ID for the user input request
+    pub request_id: String,
+    /// User's response
+    pub response: String,
+}
+
+/// Handle agent.respondToInput RPC request
+///
+/// Responds to a user input request from the agent.
+pub async fn handle_respond_to_input(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: RespondToInputParams = match request.params {
+        Some(ref p) => match serde_json::from_value(p.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing params: request_id, response required".to_string(),
+            );
+        }
+    };
+
+    // TODO: Forward to active agent instance
+    info!(
+        request_id = %params.request_id,
+        response_len = params.response.len(),
+        "User input response received"
+    );
+
+    JsonRpcResponse::success(request.id, json!({ "ok": true }))
+}
+
+/// Parameters for agent.generateTitle
+#[derive(Debug, Deserialize)]
+pub struct GenerateTitleParams {
+    /// User's input message
+    pub user_input: String,
+    /// AI's response
+    pub ai_response: String,
+}
+
+/// Handle agent.generateTitle RPC request
+///
+/// Generates a title for a conversation based on the first exchange.
+pub async fn handle_generate_title(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: GenerateTitleParams = match request.params {
+        Some(ref p) => match serde_json::from_value(p.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing params: user_input, ai_response required".to_string(),
+            );
+        }
+    };
+
+    // Generate a simple title from user input
+    // TODO: Use AI to generate a better title
+    let title = if params.user_input.len() > 50 {
+        format!("{}...", &params.user_input[..47])
+    } else {
+        params.user_input.clone()
+    };
+
+    JsonRpcResponse::success(request.id, json!({ "title": title }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
