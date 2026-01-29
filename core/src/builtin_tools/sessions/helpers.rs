@@ -3,10 +3,13 @@
 //! These helpers are used by sessions_list and sessions_send tools to
 //! classify, format, parse, and extract information from session keys.
 
+use serde::{Deserialize, Serialize};
+
 use crate::routing::session_key::SessionKey;
 
 /// Session kind classification for display and filtering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionKind {
     /// Main session (cross-channel shared)
     Main,
