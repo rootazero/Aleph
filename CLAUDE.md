@@ -423,7 +423,7 @@ aether/
 | Layer | Technology |
 |-------|------------|
 | **Gateway Core** | Rust + tokio + tokio-tungstenite + axum |
-| **Agent Runtime** | Rust + async/await + rig-core |
+| **Agent Runtime** | Rust + async/await + AetherTool |
 | **Session Storage** | SQLite + sqlite-vec (向量搜索) |
 | **FFI Bridge** | UniFFI 0.31+ (保留用于 Data Plane) |
 | **macOS App** | Swift + SwiftUI + AppKit |
