@@ -76,6 +76,8 @@ pub mod routing_config;
 pub mod inbound_router;
 #[cfg(feature = "gateway")]
 pub mod execution_adapter;
+#[cfg(feature = "gateway")]
+pub mod a2a_policy;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -134,3 +136,5 @@ pub use routing_config::{RoutingConfig, DmScope};
 pub use inbound_router::{InboundMessageRouter, RoutingError, ChannelConfig as RouterChannelConfig, DmPolicy, GroupPolicy};
 #[cfg(feature = "gateway")]
 pub use execution_adapter::ExecutionAdapter;
+#[cfg(feature = "gateway")]
+pub use a2a_policy::AgentToAgentPolicy;
