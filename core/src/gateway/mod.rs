@@ -78,6 +78,8 @@ pub mod inbound_router;
 pub mod execution_adapter;
 #[cfg(feature = "gateway")]
 pub mod a2a_policy;
+#[cfg(feature = "gateway")]
+pub mod context;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -138,3 +140,5 @@ pub use inbound_router::{InboundMessageRouter, RoutingError, ChannelConfig as Ro
 pub use execution_adapter::ExecutionAdapter;
 #[cfg(feature = "gateway")]
 pub use a2a_policy::AgentToAgentPolicy;
+#[cfg(feature = "gateway")]
+pub use context::GatewayContext;
