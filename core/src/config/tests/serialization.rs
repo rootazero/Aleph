@@ -54,7 +54,6 @@ fn test_shortcuts_config_serialization() {
         summon: "Command+Shift+A".to_string(),
         cancel: Some("Escape".to_string()),
         command_prompt: "Option+Space".to_string(),
-        ocr_capture: "Command+Option+O".to_string(),
     };
     let json = serde_json::to_string(&shortcuts).unwrap();
     assert!(json.contains("Command+Shift+A"));
@@ -165,7 +164,6 @@ fn test_config_toml_round_trip() {
         summon: "Command+Shift+A".to_string(),
         cancel: Some("Escape".to_string()),
         command_prompt: "Option+Space".to_string(),
-        ocr_capture: "Command+Option+O".to_string(),
     });
 
     config.behavior = Some(BehaviorConfig {

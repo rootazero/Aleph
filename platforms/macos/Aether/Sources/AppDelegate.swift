@@ -39,9 +39,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // First-time initialization window
     private var initializationWindow: NSWindow?
 
-    // Vision hotkey manager for screen capture OCR (legacy - now managed by HotkeyService)
-    private var visionHotkeyManager: VisionHotkeyManager?
-
     // Unified hotkey service (manages all hotkey systems)
     private var hotkeyService: HotkeyService?
 
@@ -128,7 +125,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         hotkeyService?.stopAllHotkeys()
 
         // Legacy cleanup (in case HotkeyService wasn't used)
-        visionHotkeyManager?.unregisterHotkeys()
         if let monitor = multiTurnHotkeyGlobalMonitor {
             NSEvent.removeMonitor(monitor)
             multiTurnHotkeyGlobalMonitor = nil
@@ -550,7 +546,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // Initialize unified HotkeyService (manages hotkey systems)
-        // - Vision/OCR hotkey (Cmd+Option+O)
         // - Multi-turn conversation hotkey (Option+Space)
         print("[Aether] Initializing HotkeyService...")
 
@@ -936,13 +931,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         hotkeyService?.updateMultiTurnHotkey(shortcuts: shortcuts)
     }
 
-    /// Update OCR capture hotkey configuration at runtime
-    func updateOcrCaptureHotkey(_ shortcuts: ShortcutsConfig) {
-        // Delegate to HotkeyService
-        hotkeyService?.updateVisionHotkey(shortcuts: shortcuts)
-    }
-
-    /// Get HaloWindow for external components (e.g., OCR feedback)
+    /// Get HaloWindow for external components
     func getHaloWindow() -> HaloWindow? {
         return haloWindow
     }
@@ -1067,35 +1056,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
         setupMultiTurnHotkey()
         print("[AppDelegate] Multi-turn hotkey updated and monitors reinstalled")
-    }
-
-    // MARK: - Vision Hotkeys
-
-    /// Initialize vision hotkey manager for screen capture OCR
-    ///
-    /// Default hotkey: Cmd+Shift+Ctrl+4 (Region selection capture + OCR)
-    /// Configurable via Settings → Shortcuts
-    private func initializeVisionHotkeys() {
-        visionHotkeyManager = VisionHotkeyManager()
-
-        // Load hotkey configuration from core
-        if let core = core {
-            Task {
-                do {
-                    let config = try core.loadConfig()
-                    if let shortcuts = config.shortcuts {
-                        await MainActor.run {
-                            visionHotkeyManager?.updateHotkey(from: shortcuts)
-                        }
-                    }
-                } catch {
-                    print("[AppDelegate] Failed to load OCR hotkey config: \(error)")
-                }
-            }
-        }
-
-        visionHotkeyManager?.registerHotkeys()
-        print("[AppDelegate] ✅ Vision hotkey registered")
     }
 
     // MARK: - Language Preference

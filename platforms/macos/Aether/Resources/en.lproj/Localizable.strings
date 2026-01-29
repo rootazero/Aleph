@@ -254,10 +254,6 @@
 "settings.shortcuts.command_completion_description" = "Press Option+Space to open the conversation window for multi-turn dialogue and commands.";
 "settings.shortcuts.command_completion_title" = "Conversation Window";
 "settings.shortcuts.command_completion_hint" = "Open multi-turn conversation window (default: Option+Space)";
-"settings.shortcuts.ocr_capture" = "Screen OCR";
-"settings.shortcuts.ocr_capture_description" = "Press the hotkey to capture a screen region and extract text using OCR.";
-"settings.shortcuts.ocr_capture_title" = "Region Capture OCR";
-"settings.shortcuts.ocr_capture_hint" = "Select a region and extract text";
 
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "Behavior";
