@@ -39,9 +39,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // First-time initialization window
     private var initializationWindow: NSWindow?
 
-    // Global hotkey monitor (Swift layer)
-    private var hotkeyMonitor: GlobalHotkeyMonitor?
-
     // Vision hotkey manager for screen capture OCR (legacy - now managed by HotkeyService)
     private var visionHotkeyManager: VisionHotkeyManager?
 
@@ -131,7 +128,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         hotkeyService?.stopAllHotkeys()
 
         // Legacy cleanup (in case HotkeyService wasn't used)
-        hotkeyMonitor?.stopMonitoring()
         visionHotkeyManager?.unregisterHotkeys()
         if let monitor = multiTurnHotkeyGlobalMonitor {
             NSEvent.removeMonitor(monitor)
@@ -553,27 +549,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        // Initialize unified HotkeyService (manages all hotkey systems)
-        // - Replace/Append hotkeys (double-tap modifier keys)
+        // Initialize unified HotkeyService (manages hotkey systems)
         // - Vision/OCR hotkey (Cmd+Option+O)
         // - Multi-turn conversation hotkey (Option+Space)
         print("[Aether] Initializing HotkeyService...")
 
         hotkeyService = HotkeyService()
-        hotkeyService?.configure(
-            core: core,
-            onReplace: {
-                // Single-turn mode removed - use multi-turn conversation
-                MultiTurnCoordinator.shared.showOrBringToFront()
-            },
-            onAppend: {
-                // Single-turn mode removed - use multi-turn conversation
-                MultiTurnCoordinator.shared.showOrBringToFront()
-            }
-        )
-
-        let triggerConfig = loadTriggerConfiguration()
-        hotkeyService?.startAllHotkeys(triggerConfig: triggerConfig)
+        hotkeyService?.configure(core: core)
+        hotkeyService?.startAllHotkeys()
 
         print("[Aether] HotkeyService initialized successfully")
 
@@ -1084,73 +1067,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
         setupMultiTurnHotkey()
         print("[AppDelegate] Multi-turn hotkey updated and monitors reinstalled")
-    }
-
-    // MARK: - Trigger System Configuration
-
-    /// Load trigger configuration from Rust Core
-    /// - Returns: TriggerConfig with mode, cut/copy hotkeys
-    private func loadTriggerConfiguration() -> TriggerConfig {
-        guard let core = core else {
-            print("[AppDelegate] Core not initialized, using default TriggerConfig")
-            return TriggerConfig.defaultConfig
-        }
-
-        do {
-            let config = try core.loadConfig()
-            if let trigger = config.trigger {
-                print("[AppDelegate] Loaded TriggerConfig: replace=\(trigger.replaceHotkey), append=\(trigger.appendHotkey)")
-                return trigger
-            }
-        } catch {
-            print("[AppDelegate] Failed to load TriggerConfig: \(error)")
-        }
-
-        return TriggerConfig.defaultConfig
-    }
-
-    /// Initialize the trigger-based hotkey system (new architecture)
-    ///
-    /// Uses two callbacks for Replace and Append hotkeys:
-    /// - onReplaceTriggered: Double-tap replace key (default: left Shift) - AI replaces original text
-    /// - onAppendTriggered: Double-tap append key (default: right Shift) - AI appends after original text
-    private func initializeTriggerSystem() {
-        let triggerConfig = loadTriggerConfiguration()
-
-        // Extract Swift types from TriggerConfig
-        let replaceKey = triggerConfig.replaceKey
-        let appendKey = triggerConfig.appendKey
-
-        print("[AppDelegate] Initializing trigger system: replace=\(replaceKey.rawValue), append=\(appendKey.rawValue)")
-
-        // Create GlobalHotkeyMonitor with Replace/Append callbacks
-        // Single-turn mode removed - redirect to multi-turn conversation
-        hotkeyMonitor = GlobalHotkeyMonitor(
-            replaceKey: replaceKey,
-            appendKey: appendKey,
-            onReplaceTriggered: {
-                MultiTurnCoordinator.shared.showOrBringToFront()
-            },
-            onAppendTriggered: {
-                MultiTurnCoordinator.shared.showOrBringToFront()
-            }
-        )
-
-        // Start monitoring
-        if hotkeyMonitor?.startMonitoring() == true {
-            print("[AppDelegate] ✅ Trigger system started")
-            print("[AppDelegate]   Replace: \(replaceKey.shortDisplayName), Append: \(appendKey.shortDisplayName)")
-        } else {
-            print("[AppDelegate] ❌ Failed to start trigger system")
-        }
-    }
-
-    /// Update trigger configuration at runtime
-    func updateTriggerConfiguration(_ triggerConfig: TriggerConfig) {
-        // Delegate to HotkeyService
-        hotkeyService?.updateGlobalHotkeys(triggerConfig: triggerConfig)
-
-        print("[AppDelegate] Trigger config updated via HotkeyService")
     }
 
     // MARK: - Vision Hotkeys

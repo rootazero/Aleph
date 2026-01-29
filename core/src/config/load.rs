@@ -102,12 +102,6 @@ impl Config {
             info!("Migrated PII config from behavior.pii_scrubbing_enabled to search.pii.enabled");
         }
 
-        // Migrate input_mode to trigger config (hotkey-system-refactor)
-        let trigger_migrated = config.migrate_trigger_config();
-        if trigger_migrated {
-            info!("Migrated input_mode config to new trigger config");
-        }
-
         // Migrate command_prompt hotkey from Command+Option+/ to Option+Space
         let hotkey_migrated = config.migrate_command_prompt_hotkey();
         if hotkey_migrated {
@@ -117,15 +111,12 @@ impl Config {
         // Auto-save if any migration was performed
         // IMPORTANT: Use incremental save to preserve user's existing config
         // This only updates the migrated sections without overwriting providers, rules, etc.
-        if pii_migrated || trigger_migrated || hotkey_migrated {
+        if pii_migrated || hotkey_migrated {
             let mut sections_to_save: Vec<&str> = Vec::new();
 
             if pii_migrated {
                 sections_to_save.push("search");
                 sections_to_save.push("behavior");
-            }
-            if trigger_migrated {
-                sections_to_save.push("trigger");
             }
             if hotkey_migrated {
                 sections_to_save.push("shortcuts");

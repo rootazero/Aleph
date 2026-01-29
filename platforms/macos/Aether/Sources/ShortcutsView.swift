@@ -2,8 +2,7 @@
 //  ShortcutsView.swift
 //  Aether
 //
-//  Keyboard shortcuts configuration tab for trigger hotkeys and command completion.
-//  Supports Replace/Append hotkeys (double-tap modifier) and Command Completion (modifier combo).
+//  Keyboard shortcuts configuration tab for command completion and OCR capture.
 //
 
 import SwiftUI
@@ -13,10 +12,6 @@ struct ShortcutsView: View {
     // Dependencies
     let core: AetherCore?
     @Binding var hasUnsavedChanges: Bool
-
-    // Trigger hotkeys (double-tap modifier keys)
-    @State private var replaceKey: ModifierKey = .leftShift
-    @State private var appendKey: ModifierKey = .rightShift
 
     // Command completion hotkey (one modifier + character, configurable to two)
     @State private var commandModifier1: CommandModifier = .option
@@ -29,8 +24,6 @@ struct ShortcutsView: View {
     @State private var ocrCharKey: OcrCharKey = .o
 
     // Saved settings (for comparison)
-    @State private var savedReplaceKey: ModifierKey = .leftShift
-    @State private var savedAppendKey: ModifierKey = .rightShift
     @State private var savedCommandModifier1: CommandModifier = .option
     @State private var savedCommandModifier2: CommandModifier? = nil
     @State private var savedCommandCharKey: CommandCharKey = .space
@@ -43,8 +36,6 @@ struct ShortcutsView: View {
     @State private var errorMessage: String?
 
     // Default values
-    private let defaultReplaceKey: ModifierKey = .leftShift
-    private let defaultAppendKey: ModifierKey = .rightShift
     private let defaultCommandModifier1: CommandModifier = .option
     private let defaultCommandModifier2: CommandModifier? = nil
     private let defaultCommandCharKey: CommandCharKey = .space
@@ -56,9 +47,6 @@ struct ShortcutsView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                    // Trigger Hotkeys Card (Replace/Append)
-                    triggerHotkeyCard
-
                     // Command Completion Hotkey Card
                     commandCompletionCard
 
@@ -86,8 +74,6 @@ struct ShortcutsView: View {
             loadSettings()
             syncUnsavedChanges()
         }
-        .onChange(of: replaceKey) { _, _ in syncUnsavedChanges() }
-        .onChange(of: appendKey) { _, _ in syncUnsavedChanges() }
         .onChange(of: commandModifier1) { _, _ in syncUnsavedChanges() }
         .onChange(of: commandCharKey) { _, _ in syncUnsavedChanges() }
         .onChange(of: ocrModifier1) { _, newValue in
@@ -109,127 +95,6 @@ struct ShortcutsView: View {
     }
 
     // MARK: - View Components
-
-    /// Trigger hotkey card (Replace/Append hotkeys configuration)
-    private var triggerHotkeyCard: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.trigger.title"), systemImage: "keyboard")
-                .font(DesignTokens.Typography.heading)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                Text(L("settings.trigger.description"))
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                // Replace hotkey picker
-                hotkeyPicker(
-                    action: .replace,
-                    selection: $replaceKey,
-                    otherKey: appendKey,
-                    defaultKey: defaultReplaceKey
-                )
-
-                // Append hotkey picker
-                hotkeyPicker(
-                    action: .append,
-                    selection: $appendKey,
-                    otherKey: replaceKey,
-                    defaultKey: defaultAppendKey
-                )
-            }
-        }
-        .padding(DesignTokens.Spacing.md)
-        .background(DesignTokens.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-    }
-
-    /// Hotkey picker row for Replace/Append configuration
-    @ViewBuilder
-    private func hotkeyPicker(
-        action: HotkeyAction,
-        selection: Binding<ModifierKey>,
-        otherKey: ModifierKey,
-        defaultKey: ModifierKey
-    ) -> some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            HStack {
-                Image(systemName: action.iconName)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                    .frame(width: 20)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(action.displayName)
-                        .font(DesignTokens.Typography.body)
-                    Text(action.description)
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                }
-
-                Spacer()
-
-                // Show current hotkey display
-                Text(selection.wrappedValue.shortDisplayName)
-                    .font(DesignTokens.Typography.code)
-                    .foregroundColor(DesignTokens.Colors.accentBlue)
-                    .padding(.horizontal, DesignTokens.Spacing.sm)
-                    .padding(.vertical, DesignTokens.Spacing.xs)
-                    .background(DesignTokens.Colors.accentBlue.opacity(0.1))
-                    .cornerRadius(DesignTokens.CornerRadius.small)
-            }
-
-            HStack(spacing: DesignTokens.Spacing.sm) {
-                // Modifier key picker (grouped by type)
-                Picker("", selection: selection) {
-                    // Shift group
-                    Text(ModifierKey.leftShift.displayName).tag(ModifierKey.leftShift)
-                    Text(ModifierKey.rightShift.displayName).tag(ModifierKey.rightShift)
-
-                    Divider()
-
-                    // Option group
-                    Text(ModifierKey.leftOption.displayName).tag(ModifierKey.leftOption)
-                    Text(ModifierKey.rightOption.displayName).tag(ModifierKey.rightOption)
-
-                    Divider()
-
-                    // Command group
-                    Text(ModifierKey.leftCommand.displayName).tag(ModifierKey.leftCommand)
-                    Text(ModifierKey.rightCommand.displayName).tag(ModifierKey.rightCommand)
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-
-                // Reset to default button
-                if selection.wrappedValue != defaultKey {
-                    Button {
-                        selection.wrappedValue = defaultKey
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.counterclockwise")
-                            Text(L("common.reset"))
-                        }
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            // Warning if same key as other action
-            if selection.wrappedValue == otherKey {
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(DesignTokens.Colors.warning)
-                    Text(L("settings.trigger.same_key_warning"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.warning)
-                }
-            }
-        }
-        .padding(DesignTokens.Spacing.sm)
-        .background(DesignTokens.Colors.border.opacity(0.3))
-        .cornerRadius(DesignTokens.CornerRadius.small)
-    }
 
     /// Command completion hotkey card (customizable)
     private var commandCompletionCard: some View {
@@ -518,9 +383,7 @@ struct ShortcutsView: View {
 
     /// Check if current state differs from saved state
     private var hasLocalUnsavedChanges: Bool {
-        return replaceKey != savedReplaceKey ||
-               appendKey != savedAppendKey ||
-               commandModifier1 != savedCommandModifier1 ||
+        return commandModifier1 != savedCommandModifier1 ||
                commandModifier2 != savedCommandModifier2 ||
                commandCharKey != savedCommandCharKey ||
                ocrModifier1 != savedOcrModifier1 ||
@@ -552,15 +415,6 @@ struct ShortcutsView: View {
                 let config = try core.loadConfig()
 
                 await MainActor.run {
-                    // Load trigger config (Replace/Append hotkeys)
-                    if let trigger = config.trigger {
-                        replaceKey = trigger.replaceKey
-                        savedReplaceKey = replaceKey
-
-                        appendKey = trigger.appendKey
-                        savedAppendKey = appendKey
-                    }
-
                     // Load shortcuts config (Command completion + OCR capture)
                     if let shortcuts = config.shortcuts {
                         parseCommandPrompt(shortcuts.commandPrompt)
@@ -637,13 +491,6 @@ struct ShortcutsView: View {
         }
 
         do {
-            // Save trigger config (Replace/Append hotkeys)
-            let triggerConfig = TriggerConfig.create(
-                replaceKey: replaceKey,
-                appendKey: appendKey
-            )
-            try core.updateTriggerConfig(trigger: triggerConfig)
-
             // Save shortcuts config (Command completion + OCR capture)
             let shortcutsConfig = ShortcutsConfig(
                 summon: "Command+Grave",  // Legacy, not used
@@ -654,15 +501,11 @@ struct ShortcutsView: View {
             try core.updateShortcuts(shortcuts: shortcutsConfig)
 
             print("Shortcut settings saved successfully:")
-            print("  Replace Key: \(replaceKey.rawValue)")
-            print("  Append Key: \(appendKey.rawValue)")
             print("  Command Prompt: \(commandPromptConfigString)")
             print("  OCR Capture: \(ocrCaptureConfigString)")
 
             await MainActor.run {
                 // Update saved state to match current state
-                savedReplaceKey = replaceKey
-                savedAppendKey = appendKey
                 savedCommandModifier1 = commandModifier1
                 savedCommandModifier2 = commandModifier2
                 savedCommandCharKey = commandCharKey
@@ -673,9 +516,8 @@ struct ShortcutsView: View {
                 isSaving = false
                 errorMessage = nil
 
-                // Notify AppDelegate to update trigger system at runtime
+                // Notify AppDelegate to update hotkeys at runtime
                 if let appDelegate = NSApp.delegate as? AppDelegate {
-                    appDelegate.updateTriggerConfiguration(triggerConfig)
                     appDelegate.updateCommandPromptHotkey(shortcutsConfig)
                     appDelegate.updateOcrCaptureHotkey(shortcutsConfig)
                 }
@@ -697,8 +539,6 @@ struct ShortcutsView: View {
 
     /// Cancel editing and revert to saved state
     private func cancelEditing() {
-        replaceKey = savedReplaceKey
-        appendKey = savedAppendKey
         commandModifier1 = savedCommandModifier1
         commandModifier2 = savedCommandModifier2
         commandCharKey = savedCommandCharKey

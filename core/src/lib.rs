@@ -166,7 +166,6 @@ pub use crate::config::{
     TestConnectionResult,
     TextFormatPolicy,
     ToolSafetyPolicy,
-    TriggerConfig,
     VideoConfig,
     WebFetchPolicy,
 };

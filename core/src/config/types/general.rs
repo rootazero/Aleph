@@ -4,7 +4,6 @@
 //! - GeneralConfig: App-wide settings (default provider, logging, language)
 //! - ShortcutsConfig: Keyboard shortcuts configuration
 //! - BehaviorConfig: Input/output behavior settings
-//! - TriggerConfig: Hotkey trigger configuration
 
 use serde::{Deserialize, Serialize};
 
@@ -34,13 +33,9 @@ pub struct GeneralConfig {
 // =============================================================================
 
 /// Shortcuts configuration (Phase 6 - Task 4.2)
-///
-/// Note: The `summon` field is LEGACY and not used in the new trigger system.
-/// Use TriggerConfig.replace_hotkey and TriggerConfig.append_hotkey instead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutsConfig {
-    /// Legacy summon hotkey - NOT USED in new trigger system
-    /// Kept for backward compatibility with old config files
+    /// Legacy summon hotkey - kept for backward compatibility with old config files
     #[serde(default = "default_summon_hotkey")]
     pub summon: String,
     /// Cancel operation hotkey (optional)
@@ -56,16 +51,14 @@ pub struct ShortcutsConfig {
     pub ocr_capture: String,
 }
 
-/// Legacy default hotkey - NOT USED in new trigger system
-/// Kept for backward compatibility
+/// Legacy default hotkey - kept for backward compatibility
 pub fn default_hotkey() -> String {
-    "Grave".to_string() // Legacy value, use TriggerConfig instead
+    "Grave".to_string()
 }
 
-/// Legacy default summon hotkey - NOT USED in new trigger system
-/// Kept for backward compatibility
+/// Legacy default summon hotkey - kept for backward compatibility
 pub fn default_summon_hotkey() -> String {
-    "Command+Grave".to_string() // Legacy value, use TriggerConfig instead
+    "Command+Grave".to_string()
 }
 
 pub fn default_command_prompt_hotkey() -> String {
@@ -129,50 +122,3 @@ impl Default for BehaviorConfig {
     }
 }
 
-// =============================================================================
-// TriggerConfig
-// =============================================================================
-
-/// Trigger configuration for hotkey system
-///
-/// Defines hotkeys for Replace and Append operations:
-/// - Replace: AI response replaces original text (default: double-tap left Shift)
-/// - Append: AI response appends after original text (default: double-tap right Shift)
-///
-/// # Example TOML
-/// ```toml
-/// [trigger]
-/// replace_hotkey = "DoubleTap+leftShift"
-/// append_hotkey = "DoubleTap+rightShift"
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TriggerConfig {
-    /// Hotkey for Replace action (AI response replaces original text)
-    /// Format: "DoubleTap+{modifierKey}"
-    /// Supported modifiers: leftShift, rightShift, leftControl, rightControl,
-    ///                     leftOption, rightOption, leftCommand, rightCommand
-    #[serde(default = "default_replace_hotkey")]
-    pub replace_hotkey: String,
-
-    /// Hotkey for Append action (AI response appends after original text)
-    /// Format: "DoubleTap+{modifierKey}"
-    #[serde(default = "default_append_hotkey")]
-    pub append_hotkey: String,
-}
-
-pub fn default_replace_hotkey() -> String {
-    "DoubleTap+leftShift".to_string()
-}
-
-pub fn default_append_hotkey() -> String {
-    "DoubleTap+rightShift".to_string()
-}
-
-impl Default for TriggerConfig {
-    fn default() -> Self {
-        Self {
-            replace_hotkey: default_replace_hotkey(),
-            append_hotkey: default_append_hotkey(),
-        }
-    }
-}

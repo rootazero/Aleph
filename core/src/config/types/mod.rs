@@ -3,7 +3,7 @@
 //! This module contains all struct definitions used in the configuration system.
 //! Types are organized by domain:
 //!
-//! - `general`: Core settings (GeneralConfig, ShortcutsConfig, BehaviorConfig, TriggerConfig)
+//! - `general`: Core settings (GeneralConfig, ShortcutsConfig, BehaviorConfig)
 //! - `provider`: AI provider settings (ProviderConfig, ProviderConfigEntry, TestConnectionResult)
 //! - `routing`: Routing rules (RoutingRuleConfig)
 //! - `memory`: Memory/RAG settings (MemoryConfig)
@@ -15,7 +15,6 @@
 //! - `dispatcher`: Dispatcher Layer settings (DispatcherConfigToml)
 //! - `agent`: Agent task orchestration settings (AgentConfigToml)
 //! - `orchestrator`: Three-Layer Control orchestrator settings (OrchestratorConfig, OrchestratorGuards)
-//! - `typo_correction`: Quick typo correction settings (TypoCorrectionConfig)
 
 pub mod agent;
 pub mod dispatcher;

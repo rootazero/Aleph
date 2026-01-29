@@ -55,9 +55,6 @@ pub struct Config {
     /// If present, takes precedence over legacy [tools] and [mcp] sections
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unified_tools: Option<UnifiedToolsConfig>,
-    /// Trigger configuration (hotkey system refactor)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger: Option<TriggerConfig>,
     /// Smart conversation flow configuration
     #[serde(default)]
     pub smart_flow: SmartFlowConfig,
@@ -106,8 +103,6 @@ pub struct FullConfig {
     #[serde(default)]
     pub search: Option<SearchConfig>,
     #[serde(default)]
-    pub trigger: Option<TriggerConfig>,
-    #[serde(default)]
     pub smart_matching: SmartMatchingConfig,
     #[serde(default)]
     pub skills: Option<SkillsConfig>,
@@ -134,7 +129,6 @@ impl From<Config> for FullConfig {
             shortcuts: config.shortcuts,
             behavior: config.behavior,
             search,
-            trigger: config.trigger,
             smart_matching: config.smart_matching,
             skills: Some(config.skills),
             policies: config.policies,
@@ -163,7 +157,6 @@ impl Default for Config {
             tools: ToolsConfig::default(),
             mcp: McpConfig::default(),
             unified_tools: None, // Use legacy tools + mcp by default for backward compatibility
-            trigger: Some(TriggerConfig::default()),
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),
             dispatcher: DispatcherConfigToml::default(),
