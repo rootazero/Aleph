@@ -74,6 +74,8 @@ pub mod reply_emitter;
 pub mod routing_config;
 #[cfg(feature = "gateway")]
 pub mod inbound_router;
+#[cfg(feature = "gateway")]
+pub mod execution_adapter;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -130,3 +132,5 @@ pub use reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
 pub use routing_config::{RoutingConfig, DmScope};
 #[cfg(feature = "gateway")]
 pub use inbound_router::{InboundMessageRouter, RoutingError, ChannelConfig as RouterChannelConfig, DmPolicy, GroupPolicy};
+#[cfg(feature = "gateway")]
+pub use execution_adapter::ExecutionAdapter;
