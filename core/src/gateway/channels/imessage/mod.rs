@@ -22,12 +22,12 @@
 mod db;
 mod sender;
 mod target;
-mod config;
+pub mod config;
 
 pub use db::MessagesDb;
 pub use sender::MessageSender;
 pub use target::{IMessageTarget, Service, parse_target, normalize_phone};
-pub use config::IMessageConfig;
+pub use config::{IMessageConfig, DmPolicy as IMessageDmPolicy, GroupPolicy as IMessageGroupPolicy};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -48,6 +48,7 @@ pub struct IMessageChannel {
     config: IMessageConfig,
     db: Arc<Mutex<Option<MessagesDb>>>,
     inbound_tx: mpsc::Sender<InboundMessage>,
+    #[allow(dead_code)]
     inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
     running: Arc<AtomicBool>,
     poll_handle: Option<tokio::task::JoinHandle<()>>,
