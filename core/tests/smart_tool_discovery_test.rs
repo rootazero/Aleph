@@ -16,7 +16,7 @@ use tokio::sync::RwLock;
 use aethecore::dispatcher::{
     ToolIndex, ToolIndexCategory, ToolIndexEntry, ToolRegistry, ToolSource, UnifiedTool,
 };
-use aethecore::rig_tools::meta_tools::{
+use aethecore::builtin_tools::meta_tools::{
     GetToolSchemaArgs, GetToolSchemaTool, ListToolsArgs, ListToolsTool,
 };
 use aethecore::tools::AetherTool;
