@@ -1133,9 +1133,34 @@ final class UnifiedConversationViewModel {
         guard let confirmation = pendingPlanConfirmation,
               let core = planConfirmationCore else { return }
 
-        let success = core.confirmTaskPlan(planId: confirmation.planId, confirmed: true)
-        if !success {
-            print("[UnifiedViewModel] Warning: Plan confirmation may have expired: \(confirmation.planId)")
+        let planId = confirmation.planId
+
+        // Prefer Gateway RPC when available
+        if GatewayManager.shared.isReady {
+            Task {
+                do {
+                    let success = try await GatewayManager.shared.client.agentConfirmPlan(
+                        planId: planId,
+                        confirmed: true
+                    )
+                    if !success {
+                        print("[UnifiedViewModel] Warning: Plan confirmation returned false: \(planId)")
+                    }
+                } catch {
+                    print("[UnifiedViewModel] Gateway plan confirmation failed, falling back to FFI: \(error)")
+                    // Fallback to FFI
+                    let success = core.confirmTaskPlan(planId: planId, confirmed: true)
+                    if !success {
+                        print("[UnifiedViewModel] Warning: Plan confirmation may have expired: \(planId)")
+                    }
+                }
+            }
+        } else {
+            // FFI fallback
+            let success = core.confirmTaskPlan(planId: planId, confirmed: true)
+            if !success {
+                print("[UnifiedViewModel] Warning: Plan confirmation may have expired: \(planId)")
+            }
         }
 
         // Clear the pending confirmation
@@ -1148,9 +1173,34 @@ final class UnifiedConversationViewModel {
         guard let confirmation = pendingPlanConfirmation,
               let core = planConfirmationCore else { return }
 
-        let success = core.confirmTaskPlan(planId: confirmation.planId, confirmed: false)
-        if !success {
-            print("[UnifiedViewModel] Warning: Plan confirmation may have expired: \(confirmation.planId)")
+        let planId = confirmation.planId
+
+        // Prefer Gateway RPC when available
+        if GatewayManager.shared.isReady {
+            Task {
+                do {
+                    let success = try await GatewayManager.shared.client.agentConfirmPlan(
+                        planId: planId,
+                        confirmed: false
+                    )
+                    if !success {
+                        print("[UnifiedViewModel] Warning: Plan cancellation returned false: \(planId)")
+                    }
+                } catch {
+                    print("[UnifiedViewModel] Gateway plan cancellation failed, falling back to FFI: \(error)")
+                    // Fallback to FFI
+                    let success = core.confirmTaskPlan(planId: planId, confirmed: false)
+                    if !success {
+                        print("[UnifiedViewModel] Warning: Plan confirmation may have expired: \(planId)")
+                    }
+                }
+            }
+        } else {
+            // FFI fallback
+            let success = core.confirmTaskPlan(planId: planId, confirmed: false)
+            if !success {
+                print("[UnifiedViewModel] Warning: Plan confirmation may have expired: \(planId)")
+            }
         }
 
         // Clear the pending confirmation
@@ -1185,9 +1235,34 @@ final class UnifiedConversationViewModel {
         guard let request = pendingUserInputRequest,
               let core = userInputCore else { return }
 
-        let success = core.respondToUserInput(requestId: request.requestId, response: response)
-        if !success {
-            print("[UnifiedViewModel] Warning: User input request may have expired: \(request.requestId)")
+        let requestId = request.requestId
+
+        // Prefer Gateway RPC when available
+        if GatewayManager.shared.isReady {
+            Task {
+                do {
+                    let success = try await GatewayManager.shared.client.agentRespondToInput(
+                        requestId: requestId,
+                        response: response
+                    )
+                    if !success {
+                        print("[UnifiedViewModel] Warning: User input response returned false: \(requestId)")
+                    }
+                } catch {
+                    print("[UnifiedViewModel] Gateway user input response failed, falling back to FFI: \(error)")
+                    // Fallback to FFI
+                    let success = core.respondToUserInput(requestId: requestId, response: response)
+                    if !success {
+                        print("[UnifiedViewModel] Warning: User input request may have expired: \(requestId)")
+                    }
+                }
+            }
+        } else {
+            // FFI fallback
+            let success = core.respondToUserInput(requestId: requestId, response: response)
+            if !success {
+                print("[UnifiedViewModel] Warning: User input request may have expired: \(requestId)")
+            }
         }
 
         // Clear the pending request
@@ -1200,9 +1275,34 @@ final class UnifiedConversationViewModel {
         guard let request = pendingUserInputRequest,
               let core = userInputCore else { return }
 
-        let success = core.respondToUserInput(requestId: request.requestId, response: "")
-        if !success {
-            print("[UnifiedViewModel] Warning: User input request may have expired: \(request.requestId)")
+        let requestId = request.requestId
+
+        // Prefer Gateway RPC when available
+        if GatewayManager.shared.isReady {
+            Task {
+                do {
+                    let success = try await GatewayManager.shared.client.agentRespondToInput(
+                        requestId: requestId,
+                        response: ""
+                    )
+                    if !success {
+                        print("[UnifiedViewModel] Warning: User input cancellation returned false: \(requestId)")
+                    }
+                } catch {
+                    print("[UnifiedViewModel] Gateway user input cancellation failed, falling back to FFI: \(error)")
+                    // Fallback to FFI
+                    let success = core.respondToUserInput(requestId: requestId, response: "")
+                    if !success {
+                        print("[UnifiedViewModel] Warning: User input request may have expired: \(requestId)")
+                    }
+                }
+            }
+        } else {
+            // FFI fallback
+            let success = core.respondToUserInput(requestId: requestId, response: "")
+            if !success {
+                print("[UnifiedViewModel] Warning: User input request may have expired: \(requestId)")
+            }
         }
 
         // Clear the pending request
