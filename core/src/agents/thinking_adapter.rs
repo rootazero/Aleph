@@ -368,20 +368,25 @@ mod tests {
 
     #[test]
     fn test_anthropic_params_all_levels() {
+        // Use claude-opus for XHigh since it supports extended thinking
         let levels = [
-            (ThinkLevel::Minimal, 1024),
-            (ThinkLevel::Low, 2048),
-            (ThinkLevel::Medium, 4096),
-            (ThinkLevel::High, 8192),
-            (ThinkLevel::XHigh, 16384),
+            (ThinkLevel::Minimal, "claude-3-5-sonnet", 1024),
+            (ThinkLevel::Low, "claude-3-5-sonnet", 2048),
+            (ThinkLevel::Medium, "claude-3-5-sonnet", 4096),
+            (ThinkLevel::High, "claude-3-5-sonnet", 8192),
+            (ThinkLevel::XHigh, "claude-opus-4-5-20251101", 16384), // XHigh needs Opus
         ];
 
-        for (level, expected_budget) in levels {
-            let config = ThinkingConfig::new(level, "claude", "claude-3-5-sonnet");
+        for (level, model, expected_budget) in levels {
+            let config = ThinkingConfig::new(level, "claude", model);
             let params = ThinkingAdapter::to_anthropic_params(&config).unwrap();
             assert_eq!(
                 params["thinking"]["budget_tokens"].as_u64(),
-                Some(expected_budget)
+                Some(expected_budget),
+                "Level {:?} with model {} should have budget {}",
+                level,
+                model,
+                expected_budget
             );
         }
     }
