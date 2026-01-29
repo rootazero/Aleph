@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::generation::{
     GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
-use crate::rig_tools::error::ToolError;
+use crate::builtin_tools::error::ToolError;
 use crate::tools::AetherTool;
 
 /// Arguments for speech generation

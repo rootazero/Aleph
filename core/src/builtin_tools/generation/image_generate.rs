@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::generation::{
     GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
-use crate::rig_tools::error::ToolError;
+use crate::builtin_tools::error::ToolError;
 use crate::tools::AetherTool;
 
 /// Arguments for image generation
@@ -91,7 +91,7 @@ impl ImageGenerateTool {
 
     /// Execute image generation (internal implementation)
     async fn call_impl(&self, args: ImageGenerateArgs) -> std::result::Result<ImageGenerateOutput, ToolError> {
-        use crate::rig_tools::{notify_tool_result, notify_tool_start};
+        use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 
         let start = Instant::now();
 

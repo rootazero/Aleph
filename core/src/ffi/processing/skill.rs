@@ -19,10 +19,10 @@ use crate::ffi::FfiLoopCallback;
 use crate::ffi::AetherEventHandler;
 use crate::generation::GenerationProviderRegistry;
 use crate::intent::SkillInvocation;
-use crate::rig_tools::file_ops::{
+use crate::builtin_tools::file_ops::{
     clear_written_files, mark_session_start, scan_new_files_in_working_dir, take_written_files,
 };
-use crate::rig_tools::set_tool_progress_handler;
+use crate::builtin_tools::set_tool_progress_handler;
 use crate::runtimes::{RuntimeCapability, RuntimeRegistry};
 use crate::thinker::{SingleProviderRegistry, Thinker, ThinkerConfig};
 use std::collections::HashMap;

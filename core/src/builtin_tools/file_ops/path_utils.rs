@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-use crate::rig_tools::error::ToolError;
+use crate::builtin_tools::error::ToolError;
 use super::state::get_working_dir;
 
 /// Denied paths for security

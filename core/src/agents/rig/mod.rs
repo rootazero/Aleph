@@ -1,7 +1,7 @@
-//! Agent Module for rig-core AI Agent
+//! Agent Configuration Module for AetherTool System
 //!
 //! This module provides configuration and tool server functionality for AI agents
-//! using the rig-core library with tool calling support.
+//! using the self-implemented AetherTool system with tool calling support.
 //!
 //! # Architecture
 //!
@@ -12,7 +12,7 @@
 //! │              Agent Loop (self-implemented)          │
 //! │                                                      │
 //! │  ┌─────────────────────────────────────────────────┐│
-//! │  │ rig-core ToolServer for hot-reload support      ││
+//! │  │ AetherTool ToolServer for hot-reload support    ││
 //! │  │ - SearchTool, WebFetchTool, YouTubeTool         ││
 //! │  │ - McpToolWrapper (hot-reload MCP tools)         ││
 //! │  └─────────────────────────────────────────────────┘│

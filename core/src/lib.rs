@@ -90,7 +90,7 @@ pub mod three_layer; // Three-layer control architecture (Orchestrator/Skill-DAG
 pub mod payload; // Structured context protocol with capability support
 pub mod prompt; // NEW: Unified prompt management (executor/conversational)
 pub mod providers;
-pub mod rig_tools; // NEW: Rig-compatible tool wrapper
+pub mod builtin_tools; // Built-in tools for AetherTool system
 pub mod runtimes; // NEW: Runtime manager for external tools (uv, fnm, yt-dlp)
 pub mod search; // NEW: Search capability with multiple provider support
 pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInfo)
