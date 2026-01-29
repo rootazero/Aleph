@@ -3,6 +3,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { SettingsSection } from '@/components/ui/settings-section';
 import {
   Dialog,
   DialogContent,
@@ -449,7 +450,8 @@ export function GenerationProvidersSettings() {
   };
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-lg max-w-2xl">
+      {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-title mb-1">{t('settings.generationProviders.title')}</h1>
@@ -483,11 +485,8 @@ export function GenerationProvidersSettings() {
       </Tabs>
 
       {/* Preset Providers Grid */}
-      <div className="space-y-3">
-        <h2 className="text-body font-medium text-foreground">
-          {t('settings.generationProviders.presets')}
-        </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <SettingsSection header={t('settings.generationProviders.presets')}>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-sm">
           {generationProviders[activeCategory].map((preset) => (
             <GenerationProviderCard
               key={preset.id}
@@ -499,15 +498,12 @@ export function GenerationProvidersSettings() {
             />
           ))}
         </div>
-      </div>
+      </SettingsSection>
 
       {/* Configured Providers List */}
       {categoryProviders.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-body font-medium text-foreground">
-            {t('settings.generationProviders.configuredProviders')}
-          </h2>
-          <div className="space-y-3">
+        <SettingsSection header={t('settings.generationProviders.configuredProviders')}>
+          <div className="space-y-sm">
             {categoryProviders.map((provider) => (
               <ConfiguredProviderCard
                 key={provider.id}
@@ -520,7 +516,7 @@ export function GenerationProvidersSettings() {
               />
             ))}
           </div>
-        </div>
+        </SettingsSection>
       )}
 
       {/* Empty state */}

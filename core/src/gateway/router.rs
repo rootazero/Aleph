@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+// Re-export new routing types for backward compatibility.
+// Existing code using gateway::router::SessionKey will continue to work.
+pub use crate::routing::SessionKey as NewSessionKey;
+pub use crate::routing::{DmScope, PeerKind};
+
 /// Session key types for hierarchical session management
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -138,6 +143,62 @@ impl SessionKey {
                 main_key: main_key.to_string(),
             }),
             None => None,
+        }
+    }
+}
+
+// Backward compatibility: convert between old and new SessionKey
+impl SessionKey {
+    /// Convert legacy SessionKey to new routing SessionKey
+    pub fn to_new(&self) -> crate::routing::SessionKey {
+        match self {
+            Self::Main { agent_id, main_key } => crate::routing::SessionKey::Main {
+                agent_id: agent_id.clone(),
+                main_key: main_key.clone(),
+            },
+            Self::PerPeer { agent_id, peer_id } => crate::routing::SessionKey::DirectMessage {
+                agent_id: agent_id.clone(),
+                channel: String::new(),
+                peer_id: peer_id.clone(),
+                dm_scope: crate::routing::DmScope::PerPeer,
+            },
+            Self::Task { agent_id, task_type, task_id } => crate::routing::SessionKey::Task {
+                agent_id: agent_id.clone(),
+                task_type: task_type.clone(),
+                task_id: task_id.clone(),
+            },
+            Self::Ephemeral { agent_id, ephemeral_id } => crate::routing::SessionKey::Ephemeral {
+                agent_id: agent_id.clone(),
+                ephemeral_id: ephemeral_id.clone(),
+            },
+        }
+    }
+
+    /// Create legacy SessionKey from new routing SessionKey
+    pub fn from_new(key: &crate::routing::SessionKey) -> Self {
+        match key {
+            crate::routing::SessionKey::Main { agent_id, main_key } => Self::Main {
+                agent_id: agent_id.clone(),
+                main_key: main_key.clone(),
+            },
+            crate::routing::SessionKey::DirectMessage { agent_id, peer_id, .. } => Self::PerPeer {
+                agent_id: agent_id.clone(),
+                peer_id: peer_id.clone(),
+            },
+            crate::routing::SessionKey::Group { agent_id, peer_id, .. } => Self::PerPeer {
+                agent_id: agent_id.clone(),
+                peer_id: peer_id.clone(),
+            },
+            crate::routing::SessionKey::Task { agent_id, task_type, task_id } => Self::Task {
+                agent_id: agent_id.clone(),
+                task_type: task_type.clone(),
+                task_id: task_id.clone(),
+            },
+            crate::routing::SessionKey::Subagent { parent_key, .. } => Self::from_new(parent_key),
+            crate::routing::SessionKey::Ephemeral { agent_id, ephemeral_id } => Self::Ephemeral {
+                agent_id: agent_id.clone(),
+                ephemeral_id: ephemeral_id.clone(),
+            },
         }
     }
 }

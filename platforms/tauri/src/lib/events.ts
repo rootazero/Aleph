@@ -117,6 +117,19 @@ export interface PlanConfirmationPayload {
   tasks: PlanTask[];
 }
 
+export interface ToolConfirmationPayload {
+  confirmation_id: string;
+  tool_name: string;
+  description?: string;
+  args: Record<string, unknown>;
+}
+
+export interface ClarificationPayload {
+  clarification_id: string;
+  question: string;
+  options?: string[];
+}
+
 // ============================================================================
 // Event Listeners
 // ============================================================================
@@ -144,6 +157,8 @@ export interface AetherEventHandlers {
   onSubagentStarted?: (payload: SubagentStartedPayload) => void;
   onSubagentCompleted?: (payload: SubagentCompletedPayload) => void;
   onPlanConfirmationRequired?: (payload: PlanConfirmationPayload) => void;
+  onToolConfirmationRequired?: (payload: ToolConfirmationPayload) => void;
+  onClarificationRequired?: (payload: ClarificationPayload) => void;
 }
 
 /**
@@ -306,6 +321,24 @@ export async function subscribeToAetherEvents(
     unlisteners.push(
       await listen('aether:plan-confirmation-required', (event) =>
         handlers.onPlanConfirmationRequired!(event.payload as PlanConfirmationPayload)
+      )
+    );
+  }
+
+  // Tool confirmation events
+  if (handlers.onToolConfirmationRequired) {
+    unlisteners.push(
+      await listen('aether:tool-confirmation-required', (event) =>
+        handlers.onToolConfirmationRequired!(event.payload as ToolConfirmationPayload)
+      )
+    );
+  }
+
+  // Clarification events
+  if (handlers.onClarificationRequired) {
+    unlisteners.push(
+      await listen('aether:clarification-required', (event) =>
+        handlers.onClarificationRequired!(event.payload as ClarificationPayload)
       )
     );
   }

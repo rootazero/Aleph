@@ -1,6 +1,8 @@
 import { useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { User, Bot, Loader2 } from 'lucide-react';
+import { User } from 'lucide-react';
+import { ArcSpinner } from '@/components/ui/arc-spinner';
+import { SystemCardRenderer } from './SystemCardRenderer';
 import { useUnifiedHaloStore } from '@/stores/unifiedHaloStore';
 import type { HaloMessage } from '@/stores/unifiedHaloStore';
 
@@ -9,34 +11,41 @@ interface MessageBubbleProps {
 }
 
 function MessageBubble({ message }: MessageBubbleProps) {
+  // Handle system cards
+  if (message.role === 'system') {
+    return <SystemCardRenderer id={message.id} card={message.card} />;
+  }
+
   const isUser = message.role === 'user';
 
-  return (
-    <div
-      className={`flex gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
-    >
-      <div
-        className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${
-          isUser ? 'bg-primary' : 'bg-secondary'
-        }`}
-      >
-        {isUser ? (
-          <User className="w-3.5 h-3.5 text-primary-foreground" />
-        ) : (
-          <Bot className="w-3.5 h-3.5 text-secondary-foreground" />
-        )}
+  if (isUser) {
+    return (
+      <div className="flex justify-end">
+        <div className="flex items-start gap-2 max-w-[80%] flex-row-reverse">
+          <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center">
+            <User className="w-3.5 h-3.5 text-primary" />
+          </div>
+          <div className="px-3 py-2 rounded-lg text-sm bg-primary text-primary-foreground">
+            {message.content}
+          </div>
+        </div>
       </div>
-      <div
-        className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
-          isUser
-            ? 'bg-primary text-primary-foreground'
-            : 'bg-secondary text-secondary-foreground'
-        }`}
-      >
-        {message.content}
-        {message.isStreaming && (
-          <span className="inline-block w-1.5 h-4 ml-1 bg-current animate-pulse" />
-        )}
+    );
+  }
+
+  // AI message with purple left accent line
+  return (
+    <div className="flex">
+      <div className="flex max-w-[85%]">
+        <div className="w-0.5 rounded-full bg-[hsl(var(--accent-purple))] flex-shrink-0 mr-3" />
+        <div className="px-3 py-2 rounded-lg text-sm bg-secondary/60 backdrop-blur-sm text-foreground">
+          {message.content}
+          {'isStreaming' in message && message.isStreaming && (
+            <span className="inline-flex items-center ml-1.5 align-middle">
+              <ArcSpinner size={12} />
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -71,15 +80,15 @@ export function ConversationArea({ maxHeight = 300 }: ConversationAreaProps) {
     >
       <div
         ref={scrollRef}
-        className="overflow-y-auto px-3 py-2 space-y-3"
+        className="overflow-y-auto px-3 py-3 space-y-3"
         style={{ maxHeight }}
       >
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
-        {isProcessing && !messages.some((m) => m.isStreaming) && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin" />
+        {isProcessing && !messages.some((m) => m.role === 'assistant' && 'isStreaming' in m && m.isStreaming) && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground pl-1">
+            <ArcSpinner size={16} />
             <span>Thinking...</span>
           </div>
         )}

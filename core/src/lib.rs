@@ -100,6 +100,8 @@ pub mod thinker; // NEW: LLM decision-making layer for Agent Loop
 mod title_generator; // Title generation for conversation topics
 pub mod tool_output; // NEW: Tool output truncation and cleanup (OpenCode style)
 pub mod tools; // NEW: Unified tool system (replacing rig-core Tool trait)
+pub mod exec; // Command execution security
+pub mod routing; // Channel-aware routing and session key system
 pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module
 pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
@@ -384,6 +386,23 @@ pub use crate::executor::{
     ToolRegistry as ExecutorToolRegistry,
 };
 
+// Exec security exports (command execution approval)
+pub use crate::exec::{
+    // Config
+    AgentExecConfig, AllowlistEntry, ExecApprovalsFile, ExecAsk, ExecDefaults, ExecSecurity,
+    ResolvedExecConfig, SocketConfig,
+    // Analysis
+    CommandAnalysis, CommandResolution, CommandSegment,
+    // Parser
+    analyze_shell_command, tokenize_segment,
+    // Allowlist
+    match_allowlist,
+    // Decision
+    decide_exec_approval, ApprovalDecision, ApprovalRequest, ExecContext, DEFAULT_SAFE_BINS,
+    // Socket
+    ApprovalDecisionType, ApprovalRequestPayload, SegmentInfo, SocketMessage,
+};
+
 // Prompt exports (unified prompt management)
 pub use crate::prompt::{
     ConversationalPrompt, ExecutorPrompt, PromptBuilder, PromptConfig, PromptTemplate, TemplateVar,
@@ -505,6 +524,23 @@ pub use crate::question::{QuestionError, QuestionManager, QuestionManagerConfig}
 
 // Tool system exports (unified tool traits replacing rig-core)
 pub use crate::tools::{AetherTool, AetherToolDyn, AetherToolServer, AetherToolServerHandle};
+
+// Session tools exports (A2A communication)
+pub use crate::tools::sessions::{
+    // Policy
+    AgentToAgentPolicy, A2ARule, RuleMatcher,
+    // Visibility
+    SessionToolsVisibility, VisibilityContext,
+    // Types
+    SendStatus, SessionKind, SessionListRow, SessionMessage, SpawnStatus,
+    // Registry
+    SubagentRegistry, SubagentRun,
+    // Tool params/results
+    SessionsListParams, SessionsListResult,
+    SessionsSendParams, SessionsSendResult,
+    SessionsSpawnParams, SessionsSpawnResult,
+    build_subagent_system_prompt,
+};
 
 // Agent system exports (unified: agent loop + sub-agent delegation)
 pub use crate::agents::{

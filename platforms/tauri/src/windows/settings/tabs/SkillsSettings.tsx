@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
+import { SettingsSection } from '@/components/ui/settings-section';
+import { InfoBox } from '@/components/ui/info-box';
 import {
   Dialog,
   DialogContent,
@@ -12,8 +14,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Sparkles, Plus, Trash2, X, Zap, Tag } from 'lucide-react';
+import { Sparkles, Plus, Trash2, X, Zap, Tag, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 import type { Skill } from '@/lib/commands';
 
 function SkillCard({
@@ -215,6 +218,7 @@ function SkillDialog({
 }
 
 export function SkillsSettings() {
+  const { t } = useTranslation();
   const skills = useSettingsStore((s) => s.skills);
   const updateSkills = useSettingsStore((s) => s.updateSkills);
 
@@ -259,41 +263,55 @@ export function SkillsSettings() {
   };
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-lg max-w-3xl">
+      {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-title mb-1">Skills</h1>
+          <h1 className="text-title mb-1">{t('settings.skills.title', 'Skills')}</h1>
           <p className="text-caption text-muted-foreground">
-            Create custom skills triggered by keywords
+            {t('settings.skills.description', 'Create custom skills triggered by keywords')}
           </p>
         </div>
         <Button onClick={handleAddNew}>
           <Plus className="h-4 w-4 mr-2" />
-          Create Skill
+          {t('settings.skills.createSkill', 'Create Skill')}
         </Button>
       </div>
 
-      {skills.skills.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-card">
-          <Sparkles className="h-12 w-12 mx-auto mb-4 opacity-50" />
-          <p>No skills defined</p>
-          <p className="text-caption mt-1">
-            Create skills to trigger specific AI behaviors
-          </p>
+      {/* Skills List */}
+      <SettingsSection header={t('settings.skills.definedSection', 'Defined Skills ({{count}})', { count: skills.skills.length })}>
+        {skills.skills.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-card">
+            <Sparkles className="h-12 w-12 mx-auto mb-4 opacity-50" />
+            <p>{t('settings.skills.noSkills', 'No skills defined')}</p>
+            <p className="text-caption mt-1">
+              {t('settings.skills.noSkillsHint', 'Create skills to trigger specific AI behaviors')}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-sm">
+            {skills.skills.map((skill) => (
+              <SkillCard
+                key={skill.id}
+                skill={skill}
+                onToggle={() => handleToggle(skill.id)}
+                onDelete={() => handleDelete(skill.id)}
+                onEdit={() => handleEdit(skill)}
+              />
+            ))}
+          </div>
+        )}
+      </SettingsSection>
+
+      {/* Info */}
+      <InfoBox variant="info">
+        <div className="flex items-start gap-sm">
+          <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <span>
+            {t('settings.skills.hint', 'Skills allow you to define custom behaviors that activate when specific keywords are detected in your conversations.')}
+          </span>
         </div>
-      ) : (
-        <div className="space-y-3">
-          {skills.skills.map((skill) => (
-            <SkillCard
-              key={skill.id}
-              skill={skill}
-              onToggle={() => handleToggle(skill.id)}
-              onDelete={() => handleDelete(skill.id)}
-              onEdit={() => handleEdit(skill)}
-            />
-          ))}
-        </div>
-      )}
+      </InfoBox>
 
       <SkillDialog
         open={dialogOpen}

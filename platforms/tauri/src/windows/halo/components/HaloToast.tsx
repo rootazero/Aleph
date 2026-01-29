@@ -13,18 +13,18 @@ const icons = {
 };
 
 const styles = {
-  info: 'text-info',
-  warning: 'text-warning',
-  error: 'text-error',
+  info: 'text-[hsl(var(--info))]',
+  warning: 'text-[hsl(var(--warning))]',
+  error: 'text-[hsl(var(--error))]',
 };
 
 export function HaloToast({ message, level }: HaloToastProps) {
   const Icon = icons[level];
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 min-w-[200px] max-w-[320px]">
-      <Icon className={cn('w-5 h-5 flex-shrink-0', styles[level])} />
-      <p className="text-body text-foreground">{message}</p>
+    <div className="flex items-center gap-2 min-w-[200px] max-w-[320px]">
+      <Icon className={cn('w-4 h-4 flex-shrink-0', styles[level])} />
+      <p className="text-sm text-foreground">{message}</p>
     </div>
   );
 }

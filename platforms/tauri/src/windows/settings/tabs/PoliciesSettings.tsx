@@ -1,5 +1,7 @@
 import { useSettingsStore } from '@/stores/settingsStore';
 import { SettingsCard } from '@/components/ui/settings-card';
+import { SettingsSection } from '@/components/ui/settings-section';
+import { InfoBox } from '@/components/ui/info-box';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import {
@@ -9,31 +11,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Shield, FileText, BarChart3, Clock } from 'lucide-react';
+import { Shield, FileText, BarChart3, Clock, Filter } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export function PoliciesSettings() {
+  const { t } = useTranslation();
   const policies = useSettingsStore((s) => s.policies);
   const updatePolicies = useSettingsStore((s) => s.updatePolicies);
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-lg max-w-2xl">
+      {/* Page Header */}
       <div>
-        <h1 className="text-title mb-1">Policies</h1>
+        <h1 className="text-title mb-1">{t('settings.policies.title', 'Policies')}</h1>
         <p className="text-caption text-muted-foreground">
-          Configure content moderation and data policies
+          {t('settings.policies.description', 'Configure content moderation and data policies')}
         </p>
       </div>
 
       {/* Content Safety */}
-      <section className="space-y-4">
-        <h2 className="text-body font-medium text-foreground flex items-center gap-2">
-          <Shield className="h-4 w-4" />
-          Content Safety
-        </h2>
-
+      <SettingsSection header={t('settings.policies.contentSafetySection', 'Content Safety')}>
         <SettingsCard
-          title="Content Filter"
-          description="Filter potentially harmful content"
+          title={t('settings.policies.contentFilter', 'Content Filter')}
+          description={t('settings.policies.contentFilterDescription', 'Filter potentially harmful content')}
+          icon={Shield}
         >
           <Switch
             checked={policies.content_filter}
@@ -45,8 +46,9 @@ export function PoliciesSettings() {
 
         {policies.content_filter && (
           <SettingsCard
-            title="Filter Level"
-            description="Strictness of content filtering"
+            title={t('settings.policies.filterLevel', 'Filter Level')}
+            description={t('settings.policies.filterLevelDescription', 'Strictness of content filtering')}
+            icon={Filter}
           >
             <Select
               value={policies.filter_level}
@@ -58,25 +60,21 @@ export function PoliciesSettings() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="strict">Strict</SelectItem>
-                <SelectItem value="moderate">Moderate</SelectItem>
-                <SelectItem value="off">Off</SelectItem>
+                <SelectItem value="strict">{t('settings.policies.strict', 'Strict')}</SelectItem>
+                <SelectItem value="moderate">{t('settings.policies.moderate', 'Moderate')}</SelectItem>
+                <SelectItem value="off">{t('settings.policies.off', 'Off')}</SelectItem>
               </SelectContent>
             </Select>
           </SettingsCard>
         )}
-      </section>
+      </SettingsSection>
 
       {/* Data & Privacy */}
-      <section className="space-y-4">
-        <h2 className="text-body font-medium text-foreground flex items-center gap-2">
-          <FileText className="h-4 w-4" />
-          Data & Privacy
-        </h2>
-
+      <SettingsSection header={t('settings.policies.dataPrivacySection', 'Data & Privacy')}>
         <SettingsCard
-          title="Log Conversations"
-          description="Save conversation history locally"
+          title={t('settings.policies.logConversations', 'Log Conversations')}
+          description={t('settings.policies.logConversationsDescription', 'Save conversation history locally')}
+          icon={FileText}
         >
           <Switch
             checked={policies.log_conversations}
@@ -88,11 +86,11 @@ export function PoliciesSettings() {
 
         {policies.log_conversations && (
           <SettingsCard
-            title="Data Retention"
-            description="Days to keep conversation logs"
+            title={t('settings.policies.dataRetention', 'Data Retention')}
+            description={t('settings.policies.dataRetentionDescription', 'Days to keep conversation logs')}
+            icon={Clock}
           >
-            <div className="flex items-center gap-3 w-48">
-              <Clock className="h-4 w-4 text-muted-foreground" />
+            <div className="flex items-center gap-md w-48">
               <Slider
                 value={[policies.data_retention_days]}
                 onValueChange={([value]) =>
@@ -103,24 +101,20 @@ export function PoliciesSettings() {
                 step={7}
                 className="flex-1"
               />
-              <span className="text-caption text-muted-foreground w-12 text-right">
+              <span className="text-caption text-muted-foreground w-12 text-right font-mono">
                 {policies.data_retention_days}d
               </span>
             </div>
           </SettingsCard>
         )}
-      </section>
+      </SettingsSection>
 
       {/* Analytics */}
-      <section className="space-y-4">
-        <h2 className="text-body font-medium text-foreground flex items-center gap-2">
-          <BarChart3 className="h-4 w-4" />
-          Analytics
-        </h2>
-
+      <SettingsSection header={t('settings.policies.analyticsSection', 'Analytics')}>
         <SettingsCard
-          title="Allow Analytics"
-          description="Send anonymous usage data to improve Aether"
+          title={t('settings.policies.allowAnalytics', 'Allow Analytics')}
+          description={t('settings.policies.allowAnalyticsDescription', 'Send anonymous usage data to improve Aether')}
+          icon={BarChart3}
         >
           <Switch
             checked={policies.allow_analytics}
@@ -131,12 +125,11 @@ export function PoliciesSettings() {
         </SettingsCard>
 
         {policies.allow_analytics && (
-          <div className="p-3 rounded-medium bg-muted/50 text-caption text-muted-foreground">
-            Analytics include: feature usage, performance metrics, and crash reports.
-            No personal data, conversation content, or API keys are collected.
-          </div>
+          <InfoBox variant="info">
+            {t('settings.policies.analyticsInfo', 'Analytics include: feature usage, performance metrics, and crash reports. No personal data, conversation content, or API keys are collected.')}
+          </InfoBox>
         )}
-      </section>
+      </SettingsSection>
     </div>
   );
 }

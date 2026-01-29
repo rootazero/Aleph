@@ -25,12 +25,17 @@ export interface ShortcutSettings {
 }
 
 export interface BehaviorSettings {
-  output_mode: 'replace' | 'append' | 'clipboard';
-  typing_speed: number; // 0-100
+  output_mode: 'replace' | 'append' | 'clipboard' | 'typewriter' | 'instant';
+  typing_speed: number; // 50-400 chars/sec
   auto_dismiss_delay: number; // seconds
   show_notifications: boolean;
   pii_masking: boolean;
   pii_keywords: string[];
+  // PII scrubbing options (macOS-aligned)
+  pii_scrub_email?: boolean;
+  pii_scrub_phone?: boolean;
+  pii_scrub_ssn?: boolean;
+  pii_scrub_credit_card?: boolean;
 }
 
 export interface ProviderConfig {
@@ -378,4 +383,27 @@ export const commands = {
 
   /** List installed skills */
   listSkills: () => invoke<SkillInfo[]>('list_skills'),
+
+  // ============================================================================
+  // Logs
+  // ============================================================================
+
+  /** Get application logs */
+  getLogs: () => invoke<string>('get_logs'),
+
+  // ============================================================================
+  // Confirmations & Responses
+  // ============================================================================
+
+  /** Respond to tool confirmation request */
+  respondToolConfirmation: (confirmationId: string, approved: boolean) =>
+    invoke('respond_tool_confirmation', { confirmationId, approved }),
+
+  /** Respond to plan confirmation request */
+  respondPlanConfirmation: (planId: string, approved: boolean) =>
+    invoke('respond_plan_confirmation', { planId, approved }),
+
+  /** Respond to clarification request */
+  respondClarification: (clarificationId: string, response: string) =>
+    invoke('respond_clarification', { clarificationId, response }),
 };
