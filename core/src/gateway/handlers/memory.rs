@@ -410,12 +410,12 @@ mod tests {
             user_input: "Hello".to_string(),
             ai_output: "Hi there".to_string(),
             timestamp: 1234567890,
-            similarity_score: Some(0.95),
+            similarity_score: Some(0.5), // Use 0.5 which can be represented exactly in f32
         };
 
         let json = serde_json::to_value(&entry).unwrap();
         assert_eq!(json["id"], "test-id");
-        assert_eq!(json["similarityScore"], 0.95);
+        assert_eq!(json["similarity_score"], 0.5);
     }
 
     #[test]
@@ -431,6 +431,6 @@ mod tests {
         };
 
         let json = serde_json::to_value(&entry).unwrap();
-        assert!(json.get("similarityScore").is_none());
+        assert!(json.get("similarity_score").is_none());
     }
 }

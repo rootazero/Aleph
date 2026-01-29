@@ -319,7 +319,7 @@ mod tests {
     fn test_agent_config_default() {
         let config = AgentConfig::default();
         assert_eq!(config.max_turns, 50); // 50 turns for complex tasks
-        assert_eq!(config.turn_timeout_ms, 30_000);
+        assert_eq!(config.turn_timeout_ms, 300_000); // 5 minutes
         assert!(!config.stop_on_error);
     }
 

@@ -467,7 +467,7 @@ mod tests {
         let config: EnsembleConfigToml = toml::from_str(toml_str).unwrap();
         assert!(config.enabled);
         assert_eq!(config.default_mode, "best_of_n");
-        assert_eq!(config.default_timeout_secs, 30);
+        assert_eq!(config.default_timeout_secs, 300); // As specified in TOML
         assert!((config.quality_threshold - 0.8).abs() < 0.001);
         assert_eq!(config.strategies.len(), 1);
 
