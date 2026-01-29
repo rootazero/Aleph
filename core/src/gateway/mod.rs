@@ -66,6 +66,8 @@ pub mod hot_reload;
 pub mod http_server;
 #[cfg(feature = "gateway")]
 pub mod inbound_context;
+#[cfg(feature = "gateway")]
+pub mod pairing_store;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -114,3 +116,5 @@ pub use event_bus::{TopicEvent, TopicFilter, topic_matches};
 pub use hot_reload::{ConfigWatcher, ConfigWatcherConfig, ConfigEvent, ConfigWatcherError};
 #[cfg(feature = "gateway")]
 pub use inbound_context::{InboundContext, ReplyRoute};
+#[cfg(feature = "gateway")]
+pub use pairing_store::{PairingStore, PairingRequest, PairingError, SqlitePairingStore};
