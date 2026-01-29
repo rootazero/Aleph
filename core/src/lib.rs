@@ -91,6 +91,7 @@ pub mod thinker; // NEW: LLM decision-making layer for Agent Loop
 mod title_generator; // Title generation for conversation topics
 pub mod tool_output; // NEW: Tool output truncation and cleanup (OpenCode style)
 pub mod tools; // NEW: Unified tool system (replacing rig-core Tool trait)
+pub mod thinking; // Thinking levels and streaming block processing
 pub mod exec; // Command execution security
 pub mod routing; // Channel-aware routing and session key system
 // uniffi_core removed - using Gateway WebSocket architecture
