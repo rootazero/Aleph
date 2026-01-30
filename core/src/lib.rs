@@ -74,6 +74,7 @@ pub mod intent; // NEW: Smart intent detection for conversation flow
 pub mod logging;
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod memory;
+pub mod markdown; // Markdown parsing utilities (fence detection for streaming)
 pub mod discovery; // NEW: Multi-level component discovery system (Claude Code compatible)
 pub mod extension; // NEW: Extension system (Claude Code compatible)
 pub mod metrics;
