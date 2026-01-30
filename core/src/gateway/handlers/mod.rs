@@ -20,6 +20,7 @@ pub mod plugins;
 pub mod skills;
 pub mod mcp;
 pub mod providers;
+pub mod profiles;
 pub mod generation;
 pub mod pairing;
 pub mod runs;
