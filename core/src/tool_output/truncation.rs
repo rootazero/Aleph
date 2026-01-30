@@ -263,7 +263,7 @@ pub fn get_tool_output_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
+    
 
     #[test]
     fn test_no_truncation_needed() {

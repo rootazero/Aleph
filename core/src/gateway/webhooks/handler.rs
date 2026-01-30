@@ -390,6 +390,7 @@ fn extract_event_type(headers: &HeaderMap, body: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::config::WebhookEndpointConfig;
     use axum::http::Request;
     use tower::ServiceExt;
 
