@@ -155,10 +155,12 @@ WhatsApp / Telegram / Slack / Discord / Signal / iMessage / WebChat / ...
 ### Phase 4: Tools & Automation
 
 - [x] **Browser Control** - Chrome DevTools Protocol (CDP)
-- [ ] **Canvas (A2UI)** - Agent 驱动的可视化工作区
+- [x] **SessionsSpawnTool** - Sub-agent spawning with model/thinking overrides
+- [x] **AuthProfileManager** - Hybrid storage for API key management
+- [x] **RunEventBus** - Event broadcasting with wait/queue mechanisms
 - [x] **Cron Jobs** - 定时任务调度 (Croner)
+- [ ] **Canvas (A2UI)** - Agent 驱动的可视化工作区
 - [ ] **Webhooks** - 外部触发器
-- [ ] **Sessions Tools** - Agent 间通信：sessions_list、sessions_send
 
 ### Phase 5: Nodes & Apps
 
@@ -192,9 +194,11 @@ Gateway 通过 HandlerRegistry 注册 RPC 方法，按域分组：
 | **browser** | `browser.*` | CDP 浏览器控制 | ✅ |
 | **chat** | `chat.*` | 消息发送、中断、历史 | 🔲 |
 | **cron** | `cron.*` | 定时任务管理 | ✅ |
+| **sessions** | `sessions.*` | Session spawning, communication | ✅ |
+| **run** | `run.*` | Run lifecycle, wait, queue | ✅ |
+| **profiles** | `profiles.*` | Profile listing, status | ✅ |
 | **nodes** | `nodes.*` | 设备节点管理 | 🔲 |
 | **models** | `models.*` | 模型列表、目录 | 🔲 |
-| **sessions** | `sessions.*` | 跨 session 通信工具 | 🔲 |
 | **voicewake** | `voicewake.*` | 语音唤醒控制 | 🔲 |
 
 ### 核心方法详解
