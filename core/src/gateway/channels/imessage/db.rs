@@ -338,6 +338,7 @@ impl MessagesDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     #[test]
     fn test_apple_timestamp_conversion() {

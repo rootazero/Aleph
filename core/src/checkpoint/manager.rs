@@ -499,7 +499,7 @@ mod tests {
         // Create multiple checkpoints
         manager.create_checkpoint(&[&test_file], Some("first")).await.unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        let id2 = manager.create_checkpoint(&[&test_file], Some("second")).await.unwrap();
+        let _id2 = manager.create_checkpoint(&[&test_file], Some("second")).await.unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         let id3 = manager.create_checkpoint(&[&test_file], Some("third")).await.unwrap();
 

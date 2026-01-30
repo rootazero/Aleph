@@ -293,14 +293,14 @@ mod tests {
         let mut parser = ThinkingTagParser::new();
 
         // First chunk with partial tag - may buffer
-        let (c1, t1) = parser.process("Hello <thi");
+        let (_c1, _t1) = parser.process("Hello <thi");
         // Parser buffers when it sees potential tag start
 
         // Complete the tag
-        let (c2, t2) = parser.process("nk>thinking");
+        let (_c2, _t2) = parser.process("nk>thinking");
         // Now "Hello " should be emitted as content and "thinking" as thinking
 
-        let (c3, t3) = parser.process("</think> done");
+        let (_c3, _t3) = parser.process("</think> done");
         // " done" should be content
 
         // Verify accumulated results
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn test_multiple_tags() {
         let mut parser = ThinkingTagParser::new();
-        let (content, thinking) = parser.process("<thinking>first</thinking>middle<thought>second</thought>end");
+        let (_content, _thinking) = parser.process("<thinking>first</thinking>middle<thought>second</thought>end");
         assert_eq!(parser.accumulated_thinking(), "firstsecond");
         assert_eq!(parser.accumulated_content(), "middleend");
     }
