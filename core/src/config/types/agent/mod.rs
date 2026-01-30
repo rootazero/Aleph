@@ -26,12 +26,14 @@ mod model_profile;
 mod model_routing;
 mod prompt_analysis;
 mod semantic_cache;
+mod subagents;
 
 // Re-export all public types
 pub use code_exec::CodeExecConfigToml;
 pub use file_ops::FileOpsConfigToml;
 pub use model_profile::ModelProfileConfigToml;
 pub use model_routing::ModelRoutingConfigToml;
+pub use subagents::SubagentsConfigToml;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -128,6 +130,12 @@ pub struct CoworkConfigToml {
     /// Model routing configuration
     #[serde(default)]
     pub model_routing: ModelRoutingConfigToml,
+
+    /// Sub-agent orchestration configuration
+    ///
+    /// Controls which agents can be spawned and default spawn settings.
+    #[serde(default)]
+    pub subagents: SubagentsConfigToml,
 }
 
 // =============================================================================
@@ -183,6 +191,7 @@ impl Default for CoworkConfigToml {
             code_exec: CodeExecConfigToml::default(),
             model_profiles: HashMap::new(),
             model_routing: ModelRoutingConfigToml::default(),
+            subagents: SubagentsConfigToml::default(),
         }
     }
 }
@@ -278,6 +287,9 @@ impl CoworkConfigToml {
         // Validate model routing (check profile references)
         let profile_ids: Vec<&str> = self.model_profiles.keys().map(|s| s.as_str()).collect();
         self.model_routing.validate(&profile_ids)?;
+
+        // Validate subagents configuration
+        self.subagents.validate()?;
 
         Ok(())
     }
