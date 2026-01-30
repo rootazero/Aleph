@@ -26,8 +26,10 @@
 //! ```
 
 pub mod config;
+pub mod message_ops;
 
 pub use config::{DiscordConfig, IntentsConfig};
+pub use message_ops::DiscordMessageOps;
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,

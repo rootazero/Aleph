@@ -24,8 +24,10 @@
 //! ```
 
 pub mod config;
+pub mod message_ops;
 
 pub use config::{TelegramConfig, WebhookConfig};
+pub use message_ops::TelegramMessageOps;
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,

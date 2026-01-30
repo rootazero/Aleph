@@ -189,6 +189,50 @@ impl MessageSender {
         execute_applescript(script).await?;
         Ok(())
     }
+
+    /// Send a tapback reaction to a message
+    ///
+    /// # Arguments
+    ///
+    /// * `chat_id` - The chat identifier
+    /// * `message_guid` - The GUID of the message to react to
+    /// * `tapback` - The tapback type (love, like, dislike, laugh, emphasize, question)
+    /// * `remove` - Whether to remove the tapback
+    ///
+    /// # Note
+    ///
+    /// iMessage tapbacks are complex to implement via AppleScript.
+    /// This is a best-effort implementation that may not work on all macOS versions.
+    pub async fn send_tapback(
+        chat_id: &str,
+        message_guid: &str,
+        tapback: &str,
+        remove: bool,
+    ) -> Result<(), SendError> {
+        if chat_id.is_empty() {
+            return Err(SendError::InvalidTarget("Empty chat ID".to_string()));
+        }
+
+        debug!(
+            "Sending tapback {} to message {} in chat {} (remove: {})",
+            tapback, message_guid, chat_id, remove
+        );
+
+        // Note: AppleScript doesn't have direct support for sending tapbacks.
+        // This would require using the Accessibility API or a more complex approach.
+        // For now, we'll return an error indicating this limitation.
+
+        // The proper implementation would use something like:
+        // - UI scripting via System Events
+        // - Private iMessage framework (SPI)
+        // - Or a third-party solution like BlueBubbles
+
+        Err(SendError::ScriptFailed(
+            "Tapback reactions via AppleScript are not fully supported. \
+             Consider using BlueBubbles or similar for full tapback support."
+                .to_string(),
+        ))
+    }
 }
 
 /// Execute an AppleScript and return the output

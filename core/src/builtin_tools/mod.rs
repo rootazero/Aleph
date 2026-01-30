@@ -12,6 +12,8 @@
 //! - [`PdfGenerateTool`] - PDF generation from text/Markdown
 //! - [`ImageGenerateTool`] - Image generation from text prompts
 //! - [`SpeechGenerateTool`] - Text-to-speech generation
+//! - [`CanvasTool`] - Visual canvas for A2UI rendering
+//! - [`MessageTool`] - Cross-channel message operations
 //!
 //! # Meta Tools (Smart Tool Discovery)
 //!
@@ -32,12 +34,14 @@ use std::sync::{Arc, Mutex};
 use tracing::debug;
 
 pub mod bash_exec;
+pub mod canvas;
 pub mod code_exec;
 pub mod error;
 pub mod file_ops;
 pub mod generation;
 pub mod invalid;
 pub mod mcp_wrapper;
+pub mod message;
 pub mod meta_tools;
 pub mod pdf_generate;
 pub mod search;
@@ -65,6 +69,22 @@ pub use skill_reader::{
 };
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
 pub use youtube::{YouTubeArgs, YouTubeTool};
+
+// Message tool re-exports
+pub use message::{
+    ChannelCapabilities, DeleteParams, EditParams, MessageAction, MessageOperations,
+    MessageResult, MessageTool, MessageToolArgs, MessageToolOutput, ReactParams, ReplyParams,
+    SendParams,
+};
+
+// Canvas tool re-exports
+pub use canvas::{
+    create_router as create_canvas_router, parse_jsonl, parse_message, validate_jsonl,
+    A2uiMessage, A2uiParseError, BeginRendering, CanvasAction, CanvasBackend, CanvasController,
+    CanvasHostConfig, CanvasHostState, CanvasState, CanvasTool, CanvasToolArgs, CanvasToolOutput,
+    Component, ComponentType, DataModelUpdate, DataUpdate, EventHandler, NoOpBackend,
+    SnapshotFormat, Surface, SurfaceManager, SurfaceUpdate, UserAction, WindowPlacement,
+};
 
 // ============================================================================
 // Tool Progress Callback System
