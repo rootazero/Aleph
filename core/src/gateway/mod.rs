@@ -82,6 +82,8 @@ pub mod a2a_policy;
 pub mod context;
 #[cfg(feature = "gateway")]
 pub mod webhooks;
+#[cfg(feature = "gateway")]
+pub mod run_event_bus;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -149,4 +151,9 @@ pub use webhooks::{
     WebhooksConfig, WebhookEndpointConfig, SignatureFormat,
     WebhookHandlerState, WebhookProcessor, WebhookRequest, WebhookError,
     create_router as create_webhook_router,
+};
+#[cfg(feature = "gateway")]
+pub use run_event_bus::{
+    RunEvent, RunStatus as RunEventStatus, RunEndResult,
+    WaitError, QueueError, ActiveRunHandle, wait_for_run_end,
 };
