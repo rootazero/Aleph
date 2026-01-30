@@ -43,6 +43,8 @@ pub mod moonshot;
 pub mod ollama;
 pub mod openai;
 pub mod openai_compatible;
+pub mod profile_config;
+pub mod profile_manager;
 pub mod registry;
 pub mod retry;
 pub mod shared;
@@ -67,6 +69,13 @@ pub use moonshot::MoonshotProvider;
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
 pub use openai_compatible::OpenAiCompatibleProvider;
+pub use profile_config::{
+    ProfileConfig, ProfileConfigError, ProfileConfigResult, ProfilesConfig, ProfileTier,
+};
+pub use profile_manager::{
+    AgentState, AuthProfileManager, EffectiveProfile, ProfileInfo, ProfileManagerError,
+    ProfileManagerResult, ProfileOverride, ProfileUsage, RuntimeStatus,
+};
 pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
 pub use t8star::T8StarProvider;
