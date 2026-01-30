@@ -31,6 +31,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 // Sub-modules
+pub mod auth_profiles;
 pub mod claude;
 pub mod deepseek;
 pub mod doubao;
@@ -47,6 +48,13 @@ pub mod shared;
 pub mod t8star;
 
 // Re-exports
+pub use auth_profiles::{
+    ApiKeyCredential, AuthProfileCredential, AuthProfileFailureReason,
+    AuthProfileStore, CooldownConfig, OAuthCredential, ProfileUsageStats,
+    TokenCredential, calculate_billing_cooldown_ms, calculate_cooldown_ms,
+    clear_profile_cooldown, mark_profile_failure, mark_profile_good,
+    mark_profile_used, normalize_provider_id, resolve_profile_order,
+};
 pub use claude::ClaudeProvider;
 pub use deepseek::DeepSeekProvider;
 pub use doubao::DoubaoProvider;
