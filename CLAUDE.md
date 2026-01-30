@@ -197,6 +197,23 @@ Gateway 通过 HandlerRegistry 注册 RPC 方法，按域分组：
 | **sessions** | `sessions.*` | 跨 session 通信工具 | 🔲 |
 | **voicewake** | `voicewake.*` | 语音唤醒控制 | 🔲 |
 
+### 核心方法详解
+
+**Agent 控制：**
+- `agent.run` - 执行 agent，返回 `run_id`，支持 streaming
+- `agent.status` - 查询 run 状态 (running/completed/failed/cancelled)
+- `agent.cancel` - 取消正在执行的 run
+
+**事件订阅：**
+- `events.subscribe` - 订阅事件模式 (glob 匹配，如 `stream.*`)
+- `events.unsubscribe` - 取消订阅
+- `events.list` - 列出当前订阅
+
+**设备认证：**
+- `connect` - 连接握手 (当 `require_auth: true` 时必需)
+- `pairing.list/approve/reject` - 配对请求管理
+- `devices.list/revoke` - 设备管理
+
 ### RPC 方法注册模式 (Rust)
 
 `core/src/gateway/handlers/` 中实现：
@@ -212,7 +229,9 @@ Gateway 通过 HandlerRegistry 注册 RPC 方法，按域分组：
 
 ### 连接流程
 
-客户端连接后，**第一帧必须是 connect 请求**，否则 Gateway 断开连接：
+当 `require_auth: true` 时，客户端连接后，**第一帧必须是 connect 请求**，否则 Gateway 返回 `AUTH_REQUIRED` 错误并断开连接。
+
+当 `require_auth: false` 时（默认），无需握手，可直接调用任意 RPC 方法。
 
 **Client → Gateway:**
 ```json
