@@ -52,22 +52,34 @@ use aethecore::gateway::event_bus::GatewayEventBus;
 #[cfg(feature = "gateway")]
 use aethecore::gateway::router::AgentRouter;
 #[cfg(feature = "gateway")]
-use aethecore::gateway::handlers::agent::{AgentRunManager, handle_run};
+use aethecore::gateway::handlers::agent::{
+    AgentRunManager, handle_run,
+    handle_status as handle_agent_status,
+    handle_cancel as handle_agent_cancel,
+};
 #[cfg(feature = "gateway")]
 use aethecore::gateway::{
     can_create_provider_from_env, create_provider_registry_from_env,
     ExecutionEngine, ExecutionEngineConfig, AgentRegistry,
     GatewayEventEmitter, GatewayConfig as FullGatewayConfig,
     SessionManager, SessionManagerConfig,
-    ChannelRegistry,
+    ChannelRegistry, InboundMessageRouter, RoutingConfig,
     ConfigWatcher, ConfigWatcherConfig, ConfigEvent,
 };
+#[cfg(feature = "gateway")]
+use aethecore::gateway::pairing_store::SqlitePairingStore;
 #[cfg(feature = "gateway")]
 use aethecore::gateway::handlers::session as session_handlers;
 #[cfg(feature = "gateway")]
 use aethecore::gateway::handlers::channel as channel_handlers;
 #[cfg(feature = "gateway")]
 use aethecore::gateway::handlers::config as config_handlers;
+#[cfg(feature = "gateway")]
+use aethecore::gateway::handlers::auth as auth_handlers;
+#[cfg(feature = "gateway")]
+use aethecore::gateway::security::{TokenManager, PairingManager};
+#[cfg(feature = "gateway")]
+use aethecore::gateway::device_store::DeviceStore;
 #[cfg(all(feature = "gateway", target_os = "macos"))]
 use aethecore::gateway::channels::imessage::{IMessageChannel, IMessageConfig};
 #[cfg(feature = "gateway")]
@@ -708,6 +720,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let event_bus = server.event_bus().clone();
         let router = Arc::new(AgentRouter::new());
 
+        // Create shared AgentRunManager for tracking run states (used by both modes)
+        let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
+
         // Try to create real ExecutionEngine with Claude provider
         if can_create_provider_from_env() {
             match create_provider_registry_from_env() {
@@ -780,8 +795,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if !args.daemon {
                         eprintln!("Warning: Failed to create provider: {}. Falling back to simulated mode.", e);
                     }
-                    // Fall back to simulated mode
-                    let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
+                    // Fall back to simulated mode using shared run_manager
                     let run_manager_clone = run_manager.clone();
                     server.handlers_mut().register("agent.run", move |req| {
                         let manager = run_manager_clone.clone();
@@ -795,13 +809,113 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!();
             }
 
-            // Use simulated AgentRunManager
-            let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
+            // Use simulated AgentRunManager (shared)
             let run_manager_clone = run_manager.clone();
             server.handlers_mut().register("agent.run", move |req| {
                 let manager = run_manager_clone.clone();
                 async move { handle_run(req, manager).await }
             });
+        }
+
+        // Register agent.status and agent.cancel handlers (work for both real and simulated modes)
+        let run_manager_status = run_manager.clone();
+        server.handlers_mut().register("agent.status", move |req| {
+            let manager = run_manager_status.clone();
+            async move { handle_agent_status(req, manager).await }
+        });
+
+        let run_manager_cancel = run_manager.clone();
+        server.handlers_mut().register("agent.cancel", move |req| {
+            let manager = run_manager_cancel.clone();
+            async move { handle_agent_cancel(req, manager).await }
+        });
+
+        if !args.daemon {
+            println!("Agent control methods:");
+            println!("  - agent.run     : Execute agent request with streaming");
+            println!("  - agent.status  : Query run status by run_id");
+            println!("  - agent.cancel  : Cancel an active run");
+            println!();
+        }
+
+        // Initialize authentication context
+        let device_store_path = dirs::home_dir()
+            .map(|h| h.join(".aether/devices.db"))
+            .unwrap_or_else(|| PathBuf::from("/tmp/aether_devices.db"));
+
+        // Ensure parent directory exists
+        if let Some(parent) = device_store_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let device_store = Arc::new(
+            DeviceStore::open(&device_store_path)
+                .unwrap_or_else(|e| {
+                    eprintln!("Warning: Failed to load device store from {:?}: {}. Using in-memory.", device_store_path, e);
+                    DeviceStore::in_memory().expect("Failed to create in-memory device store")
+                })
+        );
+        let token_manager = Arc::new(TokenManager::new());
+        let pairing_manager = Arc::new(PairingManager::new());
+        let auth_ctx = Arc::new(auth_handlers::AuthContext::new(
+            token_manager,
+            pairing_manager,
+            device_store,
+            full_config.gateway.require_auth,
+        ));
+
+        // Register auth handlers
+        // connect
+        let auth_ctx_connect = auth_ctx.clone();
+        server.handlers_mut().register("connect", move |req| {
+            let ctx = auth_ctx_connect.clone();
+            async move { auth_handlers::handle_connect(req, ctx).await }
+        });
+
+        // pairing.approve
+        let auth_ctx_pairing_approve = auth_ctx.clone();
+        server.handlers_mut().register("pairing.approve", move |req| {
+            let ctx = auth_ctx_pairing_approve.clone();
+            async move { auth_handlers::handle_pairing_approve(req, ctx).await }
+        });
+
+        // pairing.reject
+        let auth_ctx_pairing_reject = auth_ctx.clone();
+        server.handlers_mut().register("pairing.reject", move |req| {
+            let ctx = auth_ctx_pairing_reject.clone();
+            async move { auth_handlers::handle_pairing_reject(req, ctx).await }
+        });
+
+        // pairing.list
+        let auth_ctx_pairing_list = auth_ctx.clone();
+        server.handlers_mut().register("pairing.list", move |req| {
+            let ctx = auth_ctx_pairing_list.clone();
+            async move { auth_handlers::handle_pairing_list(req, ctx).await }
+        });
+
+        // devices.list
+        let auth_ctx_devices_list = auth_ctx.clone();
+        server.handlers_mut().register("devices.list", move |req| {
+            let ctx = auth_ctx_devices_list.clone();
+            async move { auth_handlers::handle_devices_list(req, ctx).await }
+        });
+
+        // devices.revoke
+        let auth_ctx_devices_revoke = auth_ctx.clone();
+        server.handlers_mut().register("devices.revoke", move |req| {
+            let ctx = auth_ctx_devices_revoke.clone();
+            async move { auth_handlers::handle_devices_revoke(req, ctx).await }
+        });
+
+        if !args.daemon {
+            println!("Auth methods:");
+            println!("  - connect         : Authenticate connection");
+            println!("  - pairing.approve : Approve device pairing");
+            println!("  - pairing.reject  : Reject device pairing");
+            println!("  - pairing.list    : List pending pairings");
+            println!("  - devices.list    : List approved devices");
+            println!("  - devices.revoke  : Revoke device access");
+            println!();
         }
 
         // Register session handlers with SessionManager (already initialized above)
@@ -901,6 +1015,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  - channel.start   : Start a channel");
             println!("  - channel.stop    : Stop a channel");
             println!("  - channel.send    : Send message via channel");
+            println!();
+        }
+
+        // Initialize PairingStore for InboundMessageRouter
+        let pairing_store_path = dirs::home_dir()
+            .map(|h| h.join(".aether/pairing.db"))
+            .unwrap_or_else(|| PathBuf::from("/tmp/aether_pairing.db"));
+
+        // Ensure parent directory exists
+        if let Some(parent) = pairing_store_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let pairing_store: Arc<dyn aethecore::gateway::pairing_store::PairingStore> = Arc::new(
+            SqlitePairingStore::new(&pairing_store_path)
+                .unwrap_or_else(|e| {
+                    eprintln!("Warning: Failed to create pairing store: {}. Using in-memory.", e);
+                    SqlitePairingStore::in_memory().expect("Failed to create in-memory pairing store")
+                })
+        );
+
+        // Create InboundMessageRouter with unified routing (uses AgentRouter bindings)
+        let routing_config = RoutingConfig::default();
+        let inbound_router = Arc::new(
+            InboundMessageRouter::new(
+                channel_registry.clone(),
+                pairing_store.clone(),
+                routing_config,
+            )
+            .with_agent_router(router.clone())
+        );
+
+        // Start the inbound message router
+        let _inbound_router_handle = inbound_router.clone().start().await;
+        if !args.daemon {
+            println!("Inbound message router started");
             println!();
         }
 
