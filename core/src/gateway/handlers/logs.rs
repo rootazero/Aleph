@@ -2,7 +2,7 @@
 //!
 //! Handlers for log level control and log directory access.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};

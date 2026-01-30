@@ -5,8 +5,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::mcp::McpServerConfig;
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 
 /// MCP server info for JSON serialization
 #[derive(Debug, Clone, Serialize)]
@@ -229,7 +228,7 @@ fn default_max_lines() -> u32 {
 
 /// Get MCP server logs
 pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: LogsParams = match request.params {
+    let _params: LogsParams = match request.params {
         Some(ref p) => match serde_json::from_value(p.clone()) {
             Ok(p) => p,
             Err(e) => {

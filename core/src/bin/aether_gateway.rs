@@ -1061,7 +1061,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dirs::home_dir().map(|h| h.join(".aether/config.toml"))
             });
 
-        let config_watcher: Option<Arc<ConfigWatcher>> = if let Some(path) = config_path {
+        let _config_watcher: Option<Arc<ConfigWatcher>> = if let Some(path) = config_path {
             if path.exists() {
                 let watcher_config = ConfigWatcherConfig {
                     config_path: path.clone(),
@@ -1298,6 +1298,7 @@ where
 
     /// Parameters for agent.run request
     #[derive(Debug, Clone, Deserialize)]
+    #[allow(dead_code)]
     struct AgentRunParams {
         pub input: String,
         #[serde(default)]
@@ -1425,11 +1426,7 @@ async fn serve_webchat(
     addr: SocketAddr,
     static_dir: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use axum::{
-        Router,
-        http::{StatusCode, header},
-        response::IntoResponse,
-    };
+    use axum::Router;
     use tower_http::services::{ServeDir, ServeFile};
 
     tracing::info!("Starting WebChat server on http://{}", addr);

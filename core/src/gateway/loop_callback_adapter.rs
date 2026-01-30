@@ -38,6 +38,7 @@ pub struct EventEmittingCallback<E: EventEmitter> {
     /// Timestamps for tool execution tracking
     tool_start_times: Mutex<HashMap<String, Instant>>,
     /// Channel for user response (for blocking on_user_input_required)
+    #[allow(dead_code)]
     user_response_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Channel sender for sending user questions to UI
     user_question_tx: Option<tokio::sync::mpsc::Sender<UserQuestion>>,

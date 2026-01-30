@@ -2,6 +2,7 @@
 //!
 //! Uses a lightweight AI call to generate concise titles from conversation content.
 
+#[allow(dead_code)]
 const TITLE_PROMPT: &str = r#"Based on the following conversation, generate a very short title (maximum 15 Chinese characters or 30 English characters). Return ONLY the title, nothing else.
 
 User: {user_input}
@@ -17,6 +18,7 @@ Title:"#;
 ///
 /// # Returns
 /// A prompt string to send to AI for title generation
+#[allow(dead_code)]
 pub fn build_title_prompt(user_input: &str, ai_response: &str) -> String {
     let truncated_user: String = user_input.chars().take(200).collect();
     let truncated_response: String = ai_response.chars().take(200).collect();

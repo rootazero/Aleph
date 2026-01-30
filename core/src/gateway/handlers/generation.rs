@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 
 /// Generation provider info
 #[derive(Debug, Clone, Serialize)]
@@ -144,7 +144,7 @@ pub struct TestProviderParams {
 
 /// Test a generation provider
 pub async fn handle_test_provider(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: TestProviderParams = match request.params {
+    let _params: TestProviderParams = match request.params {
         Some(ref p) => match serde_json::from_value(p.clone()) {
             Ok(p) => p,
             Err(e) => {

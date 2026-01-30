@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info};
 
-use crate::gateway::hot_reload::{ConfigEvent, ConfigWatcher};
+use crate::gateway::hot_reload::ConfigWatcher;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
 /// Handle config.reload RPC request
