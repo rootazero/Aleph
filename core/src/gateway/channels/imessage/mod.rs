@@ -23,11 +23,13 @@ mod db;
 mod sender;
 mod target;
 pub mod config;
+pub mod message_ops;
 
 pub use db::MessagesDb;
 pub use sender::MessageSender;
 pub use target::{IMessageTarget, Service, parse_target, normalize_phone};
 pub use config::{IMessageConfig, DmPolicy as IMessageDmPolicy, GroupPolicy as IMessageGroupPolicy};
+pub use message_ops::IMessageMessageOps;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

@@ -108,6 +108,10 @@ tar = "0.4"
 xz2 = "0.1"
 # For SHA-256 hashing (semantic cache)
 sha2 = "0.10"
+# For HMAC signature verification (webhooks)
+hmac = "0.12"
+subtle = "2.5"
+hex = "0.4"
 # For consistent hashing (A/B testing traffic splitting)
 siphasher = "1.0"
 # For PDF generation

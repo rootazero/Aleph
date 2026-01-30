@@ -11,7 +11,7 @@ use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AetherError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::builtin_tools::{BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
+use crate::builtin_tools::{BashExecTool, CanvasTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 #[cfg(feature = "gateway")]
@@ -45,6 +45,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) pdf_generate_tool: PdfGenerateTool,
     /// Image generation tool instance (optional - requires generation registry)
     pub(crate) image_generate_tool: Option<ImageGenerateTool>,
+    /// Canvas tool instance for visual rendering
+    pub(crate) canvas_tool: CanvasTool,
     /// Read skill tool instance (for Progressive Disclosure pattern)
     pub(crate) read_skill_tool: ReadSkillTool,
     /// List skills tool instance
@@ -128,6 +130,9 @@ impl BuiltinToolRegistry {
         let read_skill_tool = ReadSkillTool::default();
         let list_skills_tool = SkillListTool::default();
 
+        // Canvas tool for visual rendering
+        let canvas_tool = CanvasTool::new_noop();
+
         // Create image generation tool if generation registry is provided
         let image_generate_tool = config.generation_registry.as_ref().map(|registry| {
             info!("Creating ImageGenerateTool with generation registry");
@@ -203,6 +208,17 @@ impl BuiltinToolRegistry {
                 "builtin:pdf_generate",
                 "pdf_generate",
                 PdfGenerateTool::DESCRIPTION,
+                ToolSource::Builtin,
+            ),
+        );
+
+        // Canvas tool for visual rendering
+        tools.insert(
+            "canvas".to_string(),
+            UnifiedTool::new(
+                "builtin:canvas",
+                "canvas",
+                CanvasTool::DESCRIPTION,
                 ToolSource::Builtin,
             ),
         );
@@ -359,6 +375,7 @@ impl BuiltinToolRegistry {
             code_exec_tool,
             pdf_generate_tool,
             image_generate_tool,
+            canvas_tool,
             read_skill_tool,
             list_skills_tool,
             generation_registry,
@@ -399,6 +416,8 @@ impl BuiltinToolRegistry {
             "generate_image" => Some(Capability::LlmCall), // Image generation uses LLM-like API
             "generate_video" => Some(Capability::LlmCall), // Video generation uses LLM-like API
             "generate_audio" => Some(Capability::LlmCall), // Audio generation uses LLM-like API
+            // Canvas tool - no special capability required (visual rendering)
+            "canvas" => None,
             // Meta tools for smart tool discovery - no special capability required
             "list_tools" | "get_tool_schema" => None,
             // Delegate tool - no special capability required (sub-agents handle their own capabilities)
@@ -466,6 +485,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             "bash" => Box::pin(async move { self.bash_tool.call_json(arguments).await }),
             "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),
             "pdf_generate" => Box::pin(async move { self.pdf_generate_tool.call_json(arguments).await }),
+
+            // Canvas tool for visual rendering
+            "canvas" => Box::pin(async move { self.canvas_tool.call_json(arguments).await }),
 
             // Generation tools - image uses AetherTool, video/audio use legacy execute_* methods
             "generate_image" => Box::pin(async move {

@@ -80,6 +80,8 @@ pub mod execution_adapter;
 pub mod a2a_policy;
 #[cfg(feature = "gateway")]
 pub mod context;
+#[cfg(feature = "gateway")]
+pub mod webhooks;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -142,3 +144,9 @@ pub use execution_adapter::ExecutionAdapter;
 pub use a2a_policy::AgentToAgentPolicy;
 #[cfg(feature = "gateway")]
 pub use context::GatewayContext;
+#[cfg(feature = "gateway")]
+pub use webhooks::{
+    WebhooksConfig, WebhookEndpointConfig, SignatureFormat,
+    WebhookHandlerState, WebhookProcessor, WebhookRequest, WebhookError,
+    create_router as create_webhook_router,
+};
