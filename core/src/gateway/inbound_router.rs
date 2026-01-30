@@ -17,7 +17,7 @@ use super::execution_engine::RunRequest;
 use super::inbound_context::{InboundContext, ReplyRoute};
 use super::pairing_store::{PairingError, PairingStore};
 use super::reply_emitter::ReplyEmitter;
-use super::router::SessionKey;
+use super::router::{AgentRouter, SessionKey};
 use super::routing_config::{DmScope, RoutingConfig};
 
 #[cfg(target_os = "macos")]
@@ -81,6 +81,8 @@ pub struct InboundMessageRouter {
     agent_registry: Option<Arc<AgentRegistry>>,
     /// Execution adapter for running agents
     execution_adapter: Option<Arc<dyn ExecutionAdapter>>,
+    /// Agent router for binding-based agent selection (unified with WS routing)
+    agent_router: Option<Arc<AgentRouter>>,
 }
 
 /// Unified channel config for permission checking
@@ -169,6 +171,7 @@ impl InboundMessageRouter {
             channel_configs: HashMap::new(),
             agent_registry: None,
             execution_adapter: None,
+            agent_router: None,
         }
     }
 
@@ -190,7 +193,41 @@ impl InboundMessageRouter {
             channel_configs: HashMap::new(),
             agent_registry: Some(agent_registry),
             execution_adapter: Some(execution_adapter),
+            agent_router: None,
         }
+    }
+
+    /// Create a new inbound message router with full execution support and unified routing
+    ///
+    /// This constructor enables:
+    /// - Agent execution when messages arrive
+    /// - Unified routing using AgentRouter bindings (same as WS agent.run)
+    pub fn with_unified_routing(
+        channel_registry: Arc<ChannelRegistry>,
+        pairing_store: Arc<dyn PairingStore>,
+        config: RoutingConfig,
+        agent_registry: Arc<AgentRegistry>,
+        execution_adapter: Arc<dyn ExecutionAdapter>,
+        agent_router: Arc<AgentRouter>,
+    ) -> Self {
+        Self {
+            channel_registry,
+            pairing_store,
+            config,
+            channel_configs: HashMap::new(),
+            agent_registry: Some(agent_registry),
+            execution_adapter: Some(execution_adapter),
+            agent_router: Some(agent_router),
+        }
+    }
+
+    /// Set the agent router for unified routing
+    ///
+    /// When set, the router will use AgentRouter bindings to determine
+    /// which agent handles each inbound message (same logic as WS agent.run).
+    pub fn with_agent_router(mut self, router: Arc<AgentRouter>) -> Self {
+        self.agent_router = Some(router);
+        self
     }
 
     /// Register channel-specific configuration
@@ -238,8 +275,11 @@ impl InboundMessageRouter {
             &msg.text[..msg.text.len().min(50)]
         );
 
-        // Build context
-        let ctx = self.build_context(&msg);
+        // Resolve agent ID using unified routing (async)
+        let agent_id = self.resolve_agent_id_async(channel_id).await;
+
+        // Build context with resolved agent
+        let ctx = self.build_context_with_agent(&msg, &agent_id);
 
         // Check permissions
         let ctx = match self.check_permission(ctx).await {
@@ -256,14 +296,20 @@ impl InboundMessageRouter {
         Ok(())
     }
 
-    /// Build InboundContext from message
+    /// Build InboundContext from message (legacy, uses sync resolution)
     fn build_context(&self, msg: &InboundMessage) -> InboundContext {
+        let agent_id = self.config.default_agent.clone();
+        self.build_context_with_agent(msg, &agent_id)
+    }
+
+    /// Build InboundContext from message with pre-resolved agent ID
+    fn build_context_with_agent(&self, msg: &InboundMessage, agent_id: &str) -> InboundContext {
         let reply_route = ReplyRoute::new(
             msg.channel_id.clone(),
             msg.conversation_id.clone(),
         );
 
-        let session_key = self.resolve_session_key(msg);
+        let session_key = self.resolve_session_key_with_agent(msg, agent_id);
 
         let sender_normalized = if msg.channel_id.as_str() == "imessage" {
             normalize_phone(msg.sender_id.as_str())
@@ -358,9 +404,13 @@ impl InboundMessageRouter {
         Ok(())
     }
 
-    /// Resolve SessionKey for a message
+    /// Resolve SessionKey for a message (legacy, uses config.default_agent)
     fn resolve_session_key(&self, msg: &InboundMessage) -> SessionKey {
-        let agent_id = &self.config.default_agent;
+        self.resolve_session_key_with_agent(msg, &self.config.default_agent)
+    }
+
+    /// Resolve SessionKey for a message with pre-resolved agent ID
+    fn resolve_session_key_with_agent(&self, msg: &InboundMessage, agent_id: &str) -> SessionKey {
         let channel = msg.channel_id.as_str();
 
         if msg.is_group {
@@ -382,6 +432,19 @@ impl InboundMessageRouter {
                     format!("{}:dm:{}", channel, msg.sender_id.as_str()),
                 ),
             }
+        }
+    }
+
+    /// Resolve agent ID from channel using AgentRouter bindings (async)
+    ///
+    /// This provides unified routing behavior between inbound channel messages
+    /// and WS agent.run calls. If no router is configured, falls back to
+    /// the default_agent from RoutingConfig.
+    async fn resolve_agent_id_async(&self, channel: &str) -> String {
+        if let Some(router) = &self.agent_router {
+            router.route(None, Some(channel), None).await.agent_id().to_string()
+        } else {
+            self.config.default_agent.clone()
         }
     }
 
@@ -973,5 +1036,81 @@ mod tests {
         let msg = make_test_message(false);
         let key = router.resolve_session_key(&msg);
         assert!(key.to_key_string().contains("main"));
+    }
+
+    // =========================================================================
+    // Unified Routing Tests (AgentRouter integration)
+    // =========================================================================
+
+    /// Test: Unified routing respects AgentRouter bindings
+    ///
+    /// When a channel pattern is bound to a specific agent in AgentRouter,
+    /// inbound messages from that channel should route to that agent.
+    #[tokio::test]
+    async fn test_unified_routing_respects_bindings() {
+        use super::super::router::AgentRouter;
+
+        let channel_registry = Arc::new(ChannelRegistry::new());
+        let store = Arc::new(SqlitePairingStore::in_memory().unwrap());
+        let config = RoutingConfig::default();
+
+        // Create AgentRouter with a binding: imessage:* -> work
+        let agent_router = Arc::new(AgentRouter::new());
+        agent_router.register_agent("work").await;
+        agent_router.add_binding("imessage:*", "work").await;
+
+        // Create router with unified routing
+        let router = InboundMessageRouter::new(channel_registry, store, config)
+            .with_agent_router(agent_router);
+
+        // Resolve agent for imessage channel
+        let agent_id = router.resolve_agent_id_async("imessage").await;
+        assert_eq!(agent_id, "work", "Should route imessage to 'work' agent");
+
+        // Resolve agent for other channel (should use default)
+        let agent_id = router.resolve_agent_id_async("telegram").await;
+        assert_eq!(agent_id, "main", "Should route telegram to default 'main' agent");
+    }
+
+    /// Test: Unified routing falls back to default when no router
+    #[tokio::test]
+    async fn test_unified_routing_fallback_no_router() {
+        let channel_registry = Arc::new(ChannelRegistry::new());
+        let store = Arc::new(SqlitePairingStore::in_memory().unwrap());
+        let config = RoutingConfig::new("assistant");
+
+        // Create router WITHOUT AgentRouter
+        let router = InboundMessageRouter::new(channel_registry, store, config);
+
+        // Should fall back to config.default_agent
+        let agent_id = router.resolve_agent_id_async("imessage").await;
+        assert_eq!(agent_id, "assistant", "Should use config default_agent when no router");
+    }
+
+    /// Test: with_unified_routing constructor sets all fields
+    #[tokio::test]
+    async fn test_with_unified_routing_constructor() {
+        use super::super::router::AgentRouter;
+
+        let channel_registry = Arc::new(ChannelRegistry::new());
+        let store = Arc::new(SqlitePairingStore::in_memory().unwrap());
+        let config = RoutingConfig::default();
+        let agent_registry = Arc::new(AgentRegistry::new());
+        let adapter: Arc<dyn ExecutionAdapter> = Arc::new(TrackingExecutionAdapter::new());
+        let agent_router = Arc::new(AgentRouter::new());
+
+        let router = InboundMessageRouter::with_unified_routing(
+            channel_registry,
+            store,
+            config,
+            agent_registry,
+            adapter,
+            agent_router.clone(),
+        );
+
+        // Verify routing works through the agent_router
+        agent_router.add_binding("test:*", "custom").await;
+        let agent_id = router.resolve_agent_id_async("test:channel").await;
+        assert_eq!(agent_id, "custom", "Should use AgentRouter for resolution");
     }
 }

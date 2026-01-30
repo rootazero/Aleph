@@ -12,28 +12,46 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use futures_util::{StreamExt, SinkExt};
 use tracing::{info, warn, error, debug};
 
-use super::protocol::{JsonRpcRequest, JsonRpcResponse, PARSE_ERROR};
+use super::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR};
 use super::event_bus::GatewayEventBus;
 use super::handlers::HandlerRegistry;
+use super::handlers::events::{
+    SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list,
+};
 
 /// State for an individual WebSocket connection
-#[allow(dead_code)]
-struct ConnectionState {
+pub struct ConnectionState {
     /// Whether the connection has been authenticated
-    authenticated: bool,
+    pub authenticated: bool,
+    /// Whether this is the first message (for handshake enforcement)
+    pub first_message: bool,
     /// Event topics this connection is subscribed to
-    subscriptions: Vec<String>,
+    pub subscriptions: Vec<String>,
     /// Connection metadata
-    metadata: HashMap<String, String>,
+    pub metadata: HashMap<String, String>,
+    /// Device ID (set after successful connect)
+    pub device_id: Option<String>,
+    /// Permissions (set after successful connect)
+    pub permissions: Vec<String>,
 }
 
 impl ConnectionState {
     fn new() -> Self {
         Self {
             authenticated: false,
+            first_message: true,
             subscriptions: vec![],
             metadata: HashMap::new(),
+            device_id: None,
+            permissions: vec![],
         }
+    }
+
+    /// Mark connection as authenticated
+    pub fn authenticate(&mut self, device_id: String, permissions: Vec<String>) {
+        self.authenticated = true;
+        self.device_id = Some(device_id);
+        self.permissions = permissions;
     }
 }
 
@@ -82,6 +100,8 @@ pub struct GatewayServer {
     handlers: Arc<HandlerRegistry>,
     event_bus: Arc<GatewayEventBus>,
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
+    /// Subscription manager for per-connection event filtering
+    subscription_manager: Arc<SubscriptionManager>,
 }
 
 impl GatewayServer {
@@ -93,6 +113,7 @@ impl GatewayServer {
             handlers: Arc::new(HandlerRegistry::new()),
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
+            subscription_manager: Arc::new(SubscriptionManager::new()),
         }
     }
 
@@ -104,7 +125,13 @@ impl GatewayServer {
             handlers: Arc::new(HandlerRegistry::new()),
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
+            subscription_manager: Arc::new(SubscriptionManager::new()),
         }
+    }
+
+    /// Get a reference to the subscription manager
+    pub fn subscription_manager(&self) -> &Arc<SubscriptionManager> {
+        &self.subscription_manager
     }
 
     /// Get a reference to the handler registry for registering custom handlers
@@ -157,6 +184,7 @@ impl GatewayServer {
                     let handlers = self.handlers.clone();
                     let event_bus = self.event_bus.clone();
                     let connections = self.connections.clone();
+                    let subscription_manager = self.subscription_manager.clone();
                     let require_auth = self.config.require_auth;
 
                     tokio::spawn(async move {
@@ -166,6 +194,7 @@ impl GatewayServer {
                             handlers,
                             event_bus,
                             connections,
+                            subscription_manager,
                             require_auth,
                         )
                         .await
@@ -216,6 +245,7 @@ impl GatewayServer {
                     let handlers = self.handlers.clone();
                     let event_bus = self.event_bus.clone();
                     let connections = self.connections.clone();
+                    let subscription_manager = self.subscription_manager.clone();
                     let require_auth = self.config.require_auth;
 
                     tokio::spawn(async move {
@@ -225,6 +255,7 @@ impl GatewayServer {
                             handlers,
                             event_bus,
                             connections,
+                            subscription_manager,
                             require_auth,
                         )
                         .await
@@ -248,7 +279,8 @@ async fn handle_connection(
     handlers: Arc<HandlerRegistry>,
     event_bus: Arc<GatewayEventBus>,
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
-    _require_auth: bool,
+    subscription_manager: Arc<SubscriptionManager>,
+    require_auth: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ws_stream = accept_async(stream).await?;
     let (mut write, mut read) = ws_stream.split();
@@ -272,7 +304,124 @@ async fn handle_connection(
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         debug!("Received from {}: {}", conn_id, &text[..text.len().min(200)]);
-                        let response = process_request(&text, &handlers).await;
+
+                        // Parse request to check method for auth gating
+                        let request: Result<JsonRpcRequest, _> = serde_json::from_str(&text);
+
+                        let response = match request {
+                            Ok(ref req) => {
+                                // Check authentication requirement
+                                let (is_first, is_authenticated) = {
+                                    let conns = connections.read().await;
+                                    let state = conns.get(&conn_id);
+                                    (
+                                        state.map_or(true, |s| s.first_message),
+                                        state.map_or(false, |s| s.authenticated),
+                                    )
+                                };
+
+                                // Auth gating logic
+                                if require_auth && !is_authenticated {
+                                    // First message must be "connect"
+                                    if is_first && req.method != "connect" {
+                                        warn!(
+                                            "Connection {} rejected: first request must be 'connect' (got '{}')",
+                                            conn_id, req.method
+                                        );
+                                        let response = JsonRpcResponse::error(
+                                            req.id.clone(),
+                                            AUTH_REQUIRED,
+                                            "Authentication required: first request must be 'connect'",
+                                        );
+                                        let response_str = serde_json::to_string(&response).unwrap_or_default();
+                                        let _ = write.send(Message::Text(response_str.into())).await;
+                                        // Close connection after auth failure
+                                        break;
+                                    }
+
+                                    // Non-connect requests require authentication
+                                    if !is_first && req.method != "connect" {
+                                        warn!(
+                                            "Connection {} rejected: not authenticated (method: '{}')",
+                                            conn_id, req.method
+                                        );
+                                        serde_json::to_string(&JsonRpcResponse::error(
+                                            req.id.clone(),
+                                            AUTH_REQUIRED,
+                                            "Authentication required",
+                                        ))
+                                        .unwrap_or_default()
+                                    } else {
+                                        // Handle connect request
+                                        let response = process_request(&text, &handlers).await;
+
+                                        // If connect succeeded, mark as authenticated
+                                        if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
+                                            if resp.is_success() && req.method == "connect" {
+                                                // Extract device_id and permissions from result
+                                                let device_id = resp.result
+                                                    .as_ref()
+                                                    .and_then(|r| r.get("device_id"))
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("unknown")
+                                                    .to_string();
+                                                let permissions = resp.result
+                                                    .as_ref()
+                                                    .and_then(|r| r.get("permissions"))
+                                                    .and_then(|v| v.as_array())
+                                                    .map(|arr| {
+                                                        arr.iter()
+                                                            .filter_map(|v| v.as_str().map(String::from))
+                                                            .collect()
+                                                    })
+                                                    .unwrap_or_default();
+
+                                                let mut conns = connections.write().await;
+                                                if let Some(state) = conns.get_mut(&conn_id) {
+                                                    state.authenticate(device_id.clone(), permissions);
+                                                    state.first_message = false;
+                                                    info!("Connection {} authenticated (device: {})", conn_id, device_id);
+                                                }
+                                            }
+                                        }
+
+                                        // Mark first_message = false even if connect failed
+                                        {
+                                            let mut conns = connections.write().await;
+                                            if let Some(state) = conns.get_mut(&conn_id) {
+                                                state.first_message = false;
+                                            }
+                                        }
+
+                                        response
+                                    }
+                                } else {
+                                    // No auth required OR already authenticated
+                                    // Handle events.* methods specially (they need conn_id)
+                                    if req.method == "events.subscribe" {
+                                        let resp = handle_subscribe(req.clone(), &conn_id, subscription_manager.clone()).await;
+                                        serde_json::to_string(&resp).unwrap_or_default()
+                                    } else if req.method == "events.unsubscribe" {
+                                        let resp = handle_unsubscribe(req.clone(), &conn_id, subscription_manager.clone()).await;
+                                        serde_json::to_string(&resp).unwrap_or_default()
+                                    } else if req.method == "events.list" {
+                                        let resp = handle_events_list(req.clone(), &conn_id, subscription_manager.clone()).await;
+                                        serde_json::to_string(&resp).unwrap_or_default()
+                                    } else {
+                                        process_request(&text, &handlers).await
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                serde_json::to_string(&JsonRpcResponse::error(
+                                    None,
+                                    PARSE_ERROR,
+                                    format!("Parse error: {}", e),
+                                ))
+                                .unwrap_or_default()
+                            }
+                        };
+
                         if let Err(e) = write.send(Message::Text(response.into())).await {
                             error!("Failed to send response to {}: {}", conn_id, e);
                             break;
@@ -309,14 +458,31 @@ async fn handle_connection(
                     }
                 }
             }
-            // Forward events to client
+            // Forward events to client (with subscription filtering)
             event = event_rx.recv() => {
                 match event {
-                    Ok(event) => {
-                        debug!("Forwarding event to {}", conn_id);
-                        if let Err(e) = write.send(Message::Text(event.into())).await {
-                            error!("Failed to send event to {}: {}", conn_id, e);
-                            break;
+                    Ok(event_json) => {
+                        // Try to extract topic from event for filtering
+                        let should_forward = if let Ok(event_obj) = serde_json::from_str::<serde_json::Value>(&event_json) {
+                            // Check for topic in event (TopicEvent format)
+                            let topic = event_obj.get("topic")
+                                .and_then(|t| t.as_str())
+                                // Or method for JSON-RPC notification format
+                                .or_else(|| event_obj.get("method").and_then(|m| m.as_str()))
+                                .unwrap_or("");
+
+                            subscription_manager.should_receive(&conn_id, topic).await
+                        } else {
+                            // Can't parse event, forward by default
+                            true
+                        };
+
+                        if should_forward {
+                            debug!("Forwarding event to {}", conn_id);
+                            if let Err(e) = write.send(Message::Text(event_json.into())).await {
+                                error!("Failed to send event to {}: {}", conn_id, e);
+                                break;
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -336,6 +502,9 @@ async fn handle_connection(
         let mut conns = connections.write().await;
         conns.remove(&conn_id);
     }
+
+    // Remove subscriptions for this connection
+    subscription_manager.remove_connection(&conn_id).await;
 
     info!("Connection closed: {}", conn_id);
     Ok(())
