@@ -2,7 +2,7 @@
 //!
 //! Handlers for command listing and discovery.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};

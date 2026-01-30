@@ -297,6 +297,7 @@ impl InboundMessageRouter {
     }
 
     /// Build InboundContext from message (legacy, uses sync resolution)
+    #[allow(dead_code)]
     fn build_context(&self, msg: &InboundMessage) -> InboundContext {
         let agent_id = self.config.default_agent.clone();
         self.build_context_with_agent(msg, &agent_id)
@@ -405,6 +406,7 @@ impl InboundMessageRouter {
     }
 
     /// Resolve SessionKey for a message (legacy, uses config.default_agent)
+    #[allow(dead_code)]
     fn resolve_session_key(&self, msg: &InboundMessage) -> SessionKey {
         self.resolve_session_key_with_agent(msg, &self.config.default_agent)
     }

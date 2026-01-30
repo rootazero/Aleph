@@ -79,6 +79,7 @@ pub struct CliChannel {
     info: ChannelInfo,
     config: CliChannelConfig,
     state: Arc<RwLock<CliChannelState>>,
+    #[allow(dead_code)]
     inbound_rx: Arc<RwLock<Option<mpsc::Receiver<InboundMessage>>>>,
 }
 

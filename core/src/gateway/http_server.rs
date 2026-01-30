@@ -3,22 +3,14 @@
 //! Provides an HTTP server that serves both WebSocket connections and static files
 //! for the WebChat UI.
 
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::State,
-    http::{Request, Response, StatusCode, Uri},
-    routing::get,
+    http::{Response, StatusCode, Uri},
     Router,
 };
-use hyper::server::conn::http1;
-use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
-use tower::ServiceExt;
 use tower_http::services::ServeDir;
 use tracing::{debug, error, info};
 

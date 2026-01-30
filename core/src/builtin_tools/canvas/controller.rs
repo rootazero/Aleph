@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::a2ui::{parse_jsonl, A2uiMessage, SurfaceManager};
 use super::types::{

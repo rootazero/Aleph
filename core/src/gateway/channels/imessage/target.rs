@@ -206,12 +206,14 @@ pub fn normalize_phone(phone: &str) -> String {
 }
 
 /// Check if a string looks like a phone number
+#[allow(dead_code)]
 pub fn is_phone_number(s: &str) -> bool {
     let digits: usize = s.chars().filter(|c| c.is_ascii_digit()).count();
     digits >= 10 && digits <= 15
 }
 
 /// Check if a string looks like an email
+#[allow(dead_code)]
 pub fn is_email(s: &str) -> bool {
     // Basic email validation:
     // - Contains exactly one @

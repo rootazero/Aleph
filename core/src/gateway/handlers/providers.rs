@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::config::{Config, ProviderConfig};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use crate::config::Config;
 
 /// Provider info for JSON serialization
 #[derive(Debug, Clone, Serialize)]
@@ -204,7 +204,7 @@ pub struct TestParams {
 
 /// Test a provider connection
 pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: TestParams = match request.params {
+    let _params: TestParams = match request.params {
         Some(ref p) => match serde_json::from_value(p.clone()) {
             Ok(p) => p,
             Err(e) => {

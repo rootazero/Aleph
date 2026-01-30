@@ -105,6 +105,7 @@ impl BlockReplyChunker {
     }
 
     /// Get fence spans for current buffer (cached)
+    #[allow(dead_code)]
     fn fence_spans(&mut self) -> &[FenceSpan] {
         if self.cached_spans.is_none() && self.config.fence_aware {
             self.cached_spans = Some(parse_fence_spans(&self.buffer));

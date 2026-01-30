@@ -11,13 +11,13 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use super::config::{SignatureFormat, WebhookEndpointConfig, WebhooksConfig};
+use super::config::WebhooksConfig;
 use super::hmac::{verify_signature, VerificationResult};
 use super::template::{render_template, TemplateContext};
 

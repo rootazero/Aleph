@@ -6,7 +6,6 @@
 //!
 //! Handles edge cases like inline code blocks to avoid false positives.
 
-use std::borrow::Cow;
 
 /// Known thinking tag variants
 const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
@@ -83,7 +82,7 @@ impl ThinkingTagParser {
         while !self.buffer.is_empty() {
             match self.state {
                 BlockState::Content => {
-                    if let Some((pre, tag, post)) = self.find_opening_tag() {
+                    if let Some((pre, _tag, post)) = self.find_opening_tag() {
                         // Output content before tag
                         if !pre.is_empty() {
                             content_delta.push_str(&pre);
@@ -211,7 +210,7 @@ impl ThinkingTagParser {
         if self.buffer.starts_with("```") {
             // Find end of fence line
             let fence_end = self.buffer[3..].find('\n').map(|p| p + 4).unwrap_or(3);
-            let fence = self.buffer[..fence_end].to_string();
+            let _fence = self.buffer[..fence_end].to_string();
             self.code_fence_pattern = Some("```".to_string());
             self.state = BlockState::FencedCode;
             true

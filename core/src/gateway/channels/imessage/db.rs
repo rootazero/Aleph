@@ -11,7 +11,7 @@
 //! To convert to Unix timestamp:
 //! `unix_timestamp = apple_timestamp / 1_000_000_000 + 978307200`
 
-use chrono::{DateTime, Datelike, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::path::Path;
 use tracing::{debug, trace};
@@ -41,6 +41,7 @@ pub struct RawMessage {
     pub text: Option<String>,
     pub handle_id: i64,
     pub date: i64,
+    #[allow(dead_code)]
     pub is_from_me: bool,
     pub cache_has_attachments: bool,
     pub chat_id: Option<i64>,
