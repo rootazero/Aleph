@@ -10,8 +10,8 @@
 //! # Example
 //!
 //! ```rust
-//! use aether_core::event::filter::EventFilter;
-//! use aether_core::event::EventType;
+//! use aethecore::event::filter::EventFilter;
+//! use aethecore::event::EventType;
 //!
 //! // Filter for all tool events from a specific session
 //! let filter = EventFilter::new(vec![
@@ -66,8 +66,8 @@ impl EventFilter {
     /// # Example
     ///
     /// ```rust
-    /// use aether_core::event::filter::EventFilter;
-    /// use aether_core::event::EventType;
+    /// use aethecore::event::filter::EventFilter;
+    /// use aethecore::event::EventType;
     ///
     /// let filter = EventFilter::new(vec![EventType::ToolCallCompleted]);
     /// ```

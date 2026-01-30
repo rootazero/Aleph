@@ -300,6 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires network connection
     async fn test_web_fetch_call() {
         let tool = WebFetchTool::new();
         let args = WebFetchArgs {

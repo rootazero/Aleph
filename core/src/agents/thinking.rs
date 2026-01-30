@@ -187,7 +187,7 @@ impl std::str::FromStr for ThinkLevel {
 /// # Examples
 ///
 /// ```rust
-/// use aethecore::agents::thinking::normalize_think_level;
+/// use aethecore::agents::thinking::{normalize_think_level, ThinkLevel};
 ///
 /// assert_eq!(normalize_think_level("think"), Some(ThinkLevel::Minimal));
 /// assert_eq!(normalize_think_level("ultrathink"), Some(ThinkLevel::High));

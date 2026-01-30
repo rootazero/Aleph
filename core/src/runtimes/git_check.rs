@@ -14,7 +14,7 @@ use std::process::Command;
 ///
 /// # Example
 /// ```no_run
-/// use aether_core::runtimes::git_check;
+/// use aethecore::runtimes::git_check;
 ///
 /// match git_check::ensure_git_available() {
 ///     Ok(version) => println!("Git found: {}", version),
