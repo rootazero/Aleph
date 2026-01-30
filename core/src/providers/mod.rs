@@ -31,6 +31,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 // Sub-modules
+pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod claude;
 pub mod deepseek;
@@ -48,6 +49,7 @@ pub mod shared;
 pub mod t8star;
 
 // Re-exports
+pub use auth_profile_registry::{AuthProfileProviderRegistry, AuthProfileRegistryConfig};
 pub use auth_profiles::{
     ApiKeyCredential, AuthProfileCredential, AuthProfileFailureReason,
     AuthProfileStore, CooldownConfig, OAuthCredential, ProfileUsageStats,
