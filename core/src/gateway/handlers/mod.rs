@@ -22,6 +22,7 @@ pub mod mcp;
 pub mod providers;
 pub mod generation;
 pub mod pairing;
+pub mod runs;
 #[cfg(feature = "browser")]
 pub mod browser;
 
