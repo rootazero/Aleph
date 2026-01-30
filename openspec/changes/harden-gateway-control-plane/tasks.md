@@ -14,4 +14,4 @@
 - [x] Add/adjust routing tests to confirm bindings are respected for inbound messages.
 
 ## 3. Documentation
-- [ ] Update Gateway docs/comments where behavior changes (handshake, required RPCs, bindings usage).
+- [x] Update Gateway docs/comments where behavior changes (handshake, required RPCs, bindings usage).
