@@ -90,3 +90,6 @@ icons/
 agentstructure/
 .worktrees/
 Aether.dmg
+
+# Git worktrees
+.worktrees/
