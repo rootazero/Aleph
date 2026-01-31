@@ -728,11 +728,16 @@ impl VectorDatabase {
     /// Example: "rust programming" -> "rust" AND "programming"
     fn prepare_fts_query(text: &str) -> String {
         const STOP_WORDS: &[&str] = &[
+            // English stop words
             "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
             "have", "has", "had", "do", "does", "did", "will", "would", "could",
             "should", "may", "might", "must", "shall", "can", "of", "to", "in",
             "for", "on", "with", "at", "by", "from", "as", "into", "about",
             "that", "this", "it", "its", "and", "or", "but", "if", "then",
+            // Chinese stop words
+            "的", "是", "了", "在", "和", "有", "这", "那", "我", "你", "他",
+            "她", "它", "们", "个", "也", "就", "都", "而", "与", "及", "等",
+            "不", "把", "被", "让", "给", "向", "从", "到", "为", "以", "于",
         ];
 
         let tokens: Vec<&str> = text
