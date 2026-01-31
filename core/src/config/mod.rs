@@ -19,11 +19,15 @@ mod validate;
 mod migration;
 mod methods;
 
+pub mod schema;
 pub mod types;
 pub mod watcher;
 
 // Re-export main types
 pub use structs::{Config, FullConfig};
+
+// Re-export schema generation functions
+pub use schema::{generate_config_schema, generate_config_schema_json};
 
 // Re-export types for backward compatibility
 pub use types::*;
