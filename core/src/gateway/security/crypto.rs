@@ -7,6 +7,7 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hmac::{Hmac, Mac};
 use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
 
@@ -24,7 +25,7 @@ pub enum CryptoError {
 }
 
 /// Device fingerprint - first 16 hex characters of SHA256(public_key)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DeviceFingerprint(pub String);
 
 impl DeviceFingerprint {
