@@ -16,23 +16,6 @@ use crate::config::Config;
 // Types
 // ============================================================================
 
-/// Model capabilities
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct ModelCapabilities {
-    /// Supports text input
-    pub text: bool,
-    /// Supports image/vision input
-    pub vision: bool,
-    /// Supports tool/function calling
-    pub tools: bool,
-    /// Supports streaming responses
-    pub streaming: bool,
-    /// Supports extended thinking/reasoning
-    pub thinking: bool,
-    /// Supports JSON mode output
-    pub json_mode: bool,
-}
-
 /// Model information for JSON serialization
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelInfo {
@@ -46,8 +29,8 @@ pub struct ModelInfo {
     pub enabled: bool,
     /// Whether this is the default model
     pub is_default: bool,
-    /// Model capabilities
-    pub capabilities: ModelCapabilities,
+    /// Model capabilities as string list: "chat", "vision", "tools", "thinking"
+    pub capabilities: Vec<String>,
 }
 
 /// Parameters for models.list
@@ -76,101 +59,97 @@ pub struct GetParams {
 ///
 /// This function uses heuristics to determine what capabilities a model
 /// likely supports based on the provider and model identifier.
-pub fn infer_capabilities(provider_type: &str, model: &str) -> ModelCapabilities {
+///
+/// Returns a list of capability strings: "chat", "vision", "tools", "thinking"
+pub fn infer_capabilities(provider_type: &str, model: &str) -> Vec<String> {
     let model_lower = model.to_lowercase();
+    let mut capabilities = vec!["chat".to_string()]; // All models support chat
 
     match provider_type {
         "openai" => {
             // GPT-4 vision models
-            let vision = model_lower.contains("gpt-4")
+            let has_vision = model_lower.contains("gpt-4")
                 && (model_lower.contains("vision")
                     || model_lower.contains("turbo")
-                    || model_lower.contains("o")  // gpt-4o has vision
-                    || !model_lower.contains("0314")
-                    && !model_lower.contains("0613"));
+                    || model_lower.contains("o") // gpt-4o has vision
+                    || !model_lower.contains("0314") && !model_lower.contains("0613"));
 
             // o1/o3 reasoning models have thinking
-            let thinking = model_lower.starts_with("o1") || model_lower.starts_with("o3");
+            let has_thinking =
+                model_lower.starts_with("o1") || model_lower.starts_with("o3");
 
-            ModelCapabilities {
-                text: true,
-                vision,
-                tools: !thinking, // o1/o3 don't support tools yet
-                streaming: !thinking, // o1/o3 don't support streaming
-                thinking,
-                json_mode: model_lower.contains("gpt-4") || model_lower.contains("gpt-3.5-turbo"),
+            if has_vision {
+                capabilities.push("vision".to_string());
+            }
+            if !has_thinking {
+                // o1/o3 don't support tools yet
+                capabilities.push("tools".to_string());
+            }
+            if has_thinking {
+                capabilities.push("thinking".to_string());
             }
         }
         "claude" => {
             // Claude 3+ models have vision
-            let vision = model_lower.contains("claude-3");
+            if model_lower.contains("claude-3") {
+                capabilities.push("vision".to_string());
+            }
+
+            // All Claude models support tools
+            capabilities.push("tools".to_string());
 
             // Claude 3.5+ sonnet and opus have extended thinking support
-            let thinking = model_lower.contains("claude-3-5")
+            if model_lower.contains("claude-3-5")
                 || model_lower.contains("claude-3.5")
-                || model_lower.contains("opus");
-
-            ModelCapabilities {
-                text: true,
-                vision,
-                tools: true,
-                streaming: true,
-                thinking,
-                json_mode: true,
+                || model_lower.contains("opus")
+            {
+                capabilities.push("thinking".to_string());
             }
         }
         "gemini" => {
             // Gemini Pro Vision and newer models have vision
-            let vision = model_lower.contains("vision")
+            if model_lower.contains("vision")
                 || model_lower.contains("pro")
                 || model_lower.contains("ultra")
-                || model_lower.contains("flash");
+                || model_lower.contains("flash")
+            {
+                capabilities.push("vision".to_string());
+            }
+
+            // All Gemini models support tools
+            capabilities.push("tools".to_string());
 
             // Gemini 2.0 Flash has thinking support
-            let thinking = model_lower.contains("2.0") || model_lower.contains("flash-thinking");
-
-            ModelCapabilities {
-                text: true,
-                vision,
-                tools: true,
-                streaming: true,
-                thinking,
-                json_mode: true,
+            if model_lower.contains("2.0") || model_lower.contains("flash-thinking") {
+                capabilities.push("thinking".to_string());
             }
         }
         "ollama" => {
             // LLaVA and similar models have vision
-            let vision = model_lower.contains("llava")
+            if model_lower.contains("llava")
                 || model_lower.contains("bakllava")
-                || model_lower.contains("vision");
+                || model_lower.contains("vision")
+            {
+                capabilities.push("vision".to_string());
+            }
 
             // Most Ollama models support tools if they're larger models
-            let tools = model_lower.contains("llama3")
+            if model_lower.contains("llama3")
                 || model_lower.contains("mistral")
                 || model_lower.contains("mixtral")
-                || model_lower.contains("qwen");
-
-            ModelCapabilities {
-                text: true,
-                vision,
-                tools,
-                streaming: true,
-                thinking: false, // Local models typically don't have extended thinking
-                json_mode: tools, // JSON mode usually available when tools are
+                || model_lower.contains("qwen")
+            {
+                capabilities.push("tools".to_string());
             }
+
+            // Local models typically don't have extended thinking
         }
         _ => {
-            // Unknown provider - assume basic capabilities
-            ModelCapabilities {
-                text: true,
-                vision: false,
-                tools: false,
-                streaming: true,
-                thinking: false,
-                json_mode: false,
-            }
+            // Unknown provider - only basic chat capability
         }
     }
+
+    capabilities
 }
 
 // ============================================================================
@@ -419,14 +398,11 @@ mod tests {
             provider_type: "openai".to_string(),
             enabled: true,
             is_default: true,
-            capabilities: ModelCapabilities {
-                text: true,
-                vision: true,
-                tools: true,
-                streaming: true,
-                thinking: false,
-                json_mode: true,
-            },
+            capabilities: vec![
+                "chat".to_string(),
+                "vision".to_string(),
+                "tools".to_string(),
+            ],
         };
 
         let json = serde_json::to_value(&info).unwrap();
@@ -435,119 +411,104 @@ mod tests {
         assert_eq!(json["provider_type"], "openai");
         assert!(json["enabled"].as_bool().unwrap());
         assert!(json["is_default"].as_bool().unwrap());
-        assert!(json["capabilities"]["text"].as_bool().unwrap());
-        assert!(json["capabilities"]["vision"].as_bool().unwrap());
+        let caps = json["capabilities"].as_array().unwrap();
+        assert!(caps.iter().any(|c| c == "chat"));
+        assert!(caps.iter().any(|c| c == "vision"));
+        assert!(caps.iter().any(|c| c == "tools"));
     }
 
     #[test]
-    fn test_model_capabilities_serialize() {
-        let caps = ModelCapabilities {
-            text: true,
-            vision: true,
-            tools: true,
-            streaming: true,
-            thinking: false,
-            json_mode: true,
-        };
+    fn test_capabilities_serialize() {
+        let caps = vec![
+            "chat".to_string(),
+            "vision".to_string(),
+            "tools".to_string(),
+        ];
 
         let json = serde_json::to_value(&caps).unwrap();
-        assert!(json["text"].as_bool().unwrap());
-        assert!(json["vision"].as_bool().unwrap());
-        assert!(json["tools"].as_bool().unwrap());
-        assert!(json["streaming"].as_bool().unwrap());
-        assert!(!json["thinking"].as_bool().unwrap());
-        assert!(json["json_mode"].as_bool().unwrap());
+        let arr = json.as_array().unwrap();
+        assert!(arr.iter().any(|c| c == "chat"));
+        assert!(arr.iter().any(|c| c == "vision"));
+        assert!(arr.iter().any(|c| c == "tools"));
     }
 
     #[test]
     fn test_infer_capabilities_openai() {
-        // GPT-4o has vision, tools, streaming, json_mode
+        // GPT-4o has chat, vision, tools
         let caps = infer_capabilities("openai", "gpt-4o");
-        assert!(caps.text);
-        assert!(caps.vision);
-        assert!(caps.tools);
-        assert!(caps.streaming);
-        assert!(!caps.thinking);
-        assert!(caps.json_mode);
+        assert!(caps.contains(&"chat".to_string()));
+        assert!(caps.contains(&"vision".to_string()));
+        assert!(caps.contains(&"tools".to_string()));
+        assert!(!caps.contains(&"thinking".to_string()));
 
         // GPT-4 turbo has vision
         let caps = infer_capabilities("openai", "gpt-4-turbo");
-        assert!(caps.vision);
+        assert!(caps.contains(&"vision".to_string()));
 
-        // o1 has thinking but no tools/streaming
+        // o1 has thinking but no tools
         let caps = infer_capabilities("openai", "o1-preview");
-        assert!(caps.thinking);
-        assert!(!caps.tools);
-        assert!(!caps.streaming);
+        assert!(caps.contains(&"thinking".to_string()));
+        assert!(!caps.contains(&"tools".to_string()));
 
         // o3 also has thinking
         let caps = infer_capabilities("openai", "o3-mini");
-        assert!(caps.thinking);
+        assert!(caps.contains(&"thinking".to_string()));
     }
 
     #[test]
     fn test_infer_capabilities_claude() {
-        // Claude 3.5 Sonnet has all capabilities
+        // Claude 3.5 Sonnet has chat, vision, tools, thinking
         let caps = infer_capabilities("claude", "claude-3-5-sonnet-20241022");
-        assert!(caps.text);
-        assert!(caps.vision);
-        assert!(caps.tools);
-        assert!(caps.streaming);
-        assert!(caps.thinking);
-        assert!(caps.json_mode);
+        assert!(caps.contains(&"chat".to_string()));
+        assert!(caps.contains(&"vision".to_string()));
+        assert!(caps.contains(&"tools".to_string()));
+        assert!(caps.contains(&"thinking".to_string()));
 
-        // Claude 3 Opus has thinking
+        // Claude 3 Opus has thinking and vision
         let caps = infer_capabilities("claude", "claude-3-opus");
-        assert!(caps.thinking);
-        assert!(caps.vision);
+        assert!(caps.contains(&"thinking".to_string()));
+        assert!(caps.contains(&"vision".to_string()));
     }
 
     #[test]
     fn test_infer_capabilities_gemini() {
-        // Gemini Pro has vision
+        // Gemini Pro has chat, vision, tools
         let caps = infer_capabilities("gemini", "gemini-pro");
-        assert!(caps.text);
-        assert!(caps.vision);
-        assert!(caps.tools);
-        assert!(caps.streaming);
-        assert!(caps.json_mode);
+        assert!(caps.contains(&"chat".to_string()));
+        assert!(caps.contains(&"vision".to_string()));
+        assert!(caps.contains(&"tools".to_string()));
 
         // Gemini 2.0 Flash has thinking
         let caps = infer_capabilities("gemini", "gemini-2.0-flash");
-        assert!(caps.thinking);
+        assert!(caps.contains(&"thinking".to_string()));
     }
 
     #[test]
     fn test_infer_capabilities_ollama() {
-        // LLaVA has vision
+        // LLaVA has chat and vision
         let caps = infer_capabilities("ollama", "llava:latest");
-        assert!(caps.text);
-        assert!(caps.vision);
-        assert!(caps.streaming);
+        assert!(caps.contains(&"chat".to_string()));
+        assert!(caps.contains(&"vision".to_string()));
 
         // Llama3 has tools
         let caps = infer_capabilities("ollama", "llama3.2:latest");
-        assert!(caps.tools);
-        assert!(caps.json_mode);
+        assert!(caps.contains(&"tools".to_string()));
 
-        // Basic model
+        // Basic model only has chat
         let caps = infer_capabilities("ollama", "phi:latest");
-        assert!(caps.text);
-        assert!(caps.streaming);
-        assert!(!caps.tools);
-        assert!(!caps.vision);
+        assert!(caps.contains(&"chat".to_string()));
+        assert!(!caps.contains(&"tools".to_string()));
+        assert!(!caps.contains(&"vision".to_string()));
     }
 
     #[test]
     fn test_infer_capabilities_unknown() {
-        // Unknown provider gets basic capabilities
+        // Unknown provider gets only chat capability
         let caps = infer_capabilities("unknown", "some-model");
-        assert!(caps.text);
-        assert!(caps.streaming);
-        assert!(!caps.vision);
-        assert!(!caps.tools);
-        assert!(!caps.thinking);
-        assert!(!caps.json_mode);
+        assert!(caps.contains(&"chat".to_string()));
+        assert!(!caps.contains(&"vision".to_string()));
+        assert!(!caps.contains(&"tools".to_string()));
+        assert!(!caps.contains(&"thinking".to_string()));
     }
 
     #[tokio::test]
@@ -691,8 +652,9 @@ mod tests {
 
         assert!(response.is_success());
         let result = response.result.unwrap();
-        assert!(result["capabilities"]["text"].as_bool().unwrap());
-        assert!(result["capabilities"]["vision"].as_bool().unwrap());
+        let caps = result["capabilities"].as_array().unwrap();
+        assert!(caps.iter().any(|c| c == "chat"));
+        assert!(caps.iter().any(|c| c == "vision"));
     }
 
     #[tokio::test]
