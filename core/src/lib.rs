@@ -217,8 +217,8 @@ pub use crate::spec_driven::{
 // =============================================================================
 
 pub use crate::skill_evolution::{
-    CommitResult, EvolutionTracker, ExecutionStatus, GenerationResult, SkillExecution,
-    SkillGenerator, SkillMetrics, SolidificationConfig, SolidificationDetector,
+    CommitResult, EvolutionTracker, ExecutionStatus, GenerationResult, GitCommitter,
+    SkillExecution, SkillGenerator, SkillMetrics, SolidificationConfig, SolidificationDetector,
     SolidificationSuggestion,
 };
 
