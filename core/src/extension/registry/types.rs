@@ -33,11 +33,35 @@ pub struct ToolRegistration {
     pub plugin_id: String,
 }
 
-/// Events that can trigger plugin hooks
+/// Events that can trigger plugin hooks (for WASM/Node.js plugins).
 ///
 /// This enum is used by the plugin registration API to specify which events
-/// a plugin hook should respond to. These are specific to plugin lifecycle
-/// and differ from the general HookEvent enum in extension::types.
+/// a plugin hook should respond to. Uses **snake_case** serialization for
+/// JSON-RPC IPC with plugins.
+///
+/// # Difference from HookEvent
+///
+/// **`PluginHookEvent`** (this enum):
+/// - For WASM/Node.js plugin hooks registered via Plugin API
+/// - Uses snake_case serialization (`"before_tool_call"`, `"session_start"`)
+/// - Oriented toward plugin lifecycle and gateway events
+/// - Registered programmatically by plugins during load
+///
+/// **[`HookEvent`](crate::extension::types::HookEvent)**:
+/// - For shell command hooks configured in CLAUDE.md or config files
+/// - Uses PascalCase serialization (`"PreToolUse"`, `"SessionStart"`)
+/// - Oriented toward CLI/shell integration
+/// - Configured declaratively in config files
+///
+/// # Example (plugin registration via JSON-RPC)
+/// ```json
+/// {
+///   "hooks": [
+///     { "event": "before_tool_call", "handler": "onBeforeToolCall", "priority": 0 },
+///     { "event": "message_received", "handler": "onMessage", "priority": -10 }
+///   ]
+/// }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginHookEvent {
