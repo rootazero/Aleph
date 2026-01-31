@@ -1,6 +1,6 @@
 //! Component registry for managing loaded extensions
 
-use super::types::*;
+use crate::extension::types::*;
 use std::collections::HashMap;
 
 /// Component registry - stores and manages all loaded components
