@@ -10,7 +10,7 @@ pub mod ipc;
 pub mod process;
 
 pub use ipc::*;
-pub use process::NodeProcess;
+pub use process::{NodeProcess, DEFAULT_IPC_TIMEOUT};
 
 use std::collections::HashMap;
 use tracing::{error, info};
