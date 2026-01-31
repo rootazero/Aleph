@@ -25,6 +25,7 @@ pub mod generation;
 pub mod pairing;
 pub mod runs;
 pub mod models;
+pub mod chat;
 #[cfg(feature = "browser")]
 pub mod browser;
 
