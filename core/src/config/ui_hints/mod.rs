@@ -8,7 +8,6 @@ mod definitions;
 mod macros;
 
 pub use definitions::build_ui_hints;
-pub use macros::{define_groups, define_hints};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

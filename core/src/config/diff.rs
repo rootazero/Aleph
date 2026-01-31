@@ -4,6 +4,8 @@
 //! which paths have changed. This is useful for hot-reload systems that need
 //! to determine what actions to take based on configuration changes.
 
+#![allow(dead_code)] // Reserved for hot-reload feature
+
 use serde_json::Value;
 
 /// Compare two configs and return changed paths.

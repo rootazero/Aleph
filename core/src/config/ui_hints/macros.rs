@@ -115,8 +115,6 @@ macro_rules! define_hints {
 }
 
 // Re-export macros at module level for documentation purposes
-pub use define_groups;
-pub use define_hints;
 
 #[cfg(test)]
 mod tests {

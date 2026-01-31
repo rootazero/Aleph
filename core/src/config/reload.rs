@@ -5,6 +5,8 @@
 //! This enables efficient hot-reloading where only affected components
 //! are restarted rather than the entire application.
 
+#![allow(dead_code)] // Reserved for hot-reload feature
+
 use std::collections::HashSet;
 
 /// Plan for handling configuration changes.

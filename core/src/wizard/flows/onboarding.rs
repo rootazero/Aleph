@@ -2,9 +2,11 @@
 //!
 //! A 10-stage wizard for initial setup and configuration.
 
+#![allow(dead_code)] // In development
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::wizard::{
     RpcPrompter, WizardFlow, WizardOption, WizardPrompter, WizardSessionError,

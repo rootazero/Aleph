@@ -66,7 +66,7 @@ pub trait WizardPrompter: Send + Sync {
 }
 
 /// Pending answer state
-pub(super) struct PendingAnswer {
+pub(crate) struct PendingAnswer {
     pub sender: oneshot::Sender<Value>,
 }
 
@@ -79,7 +79,7 @@ pub struct RpcPrompter {
 
 impl RpcPrompter {
     /// Create a new RPC prompter
-    pub fn new(
+    pub(crate) fn new(
         step_tx: mpsc::Sender<WizardStep>,
         answers: Arc<RwLock<HashMap<String, PendingAnswer>>>,
     ) -> Self {
