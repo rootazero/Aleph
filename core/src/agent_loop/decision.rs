@@ -6,6 +6,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::answer::UserAnswer;
+use super::question::QuestionKind;
+
 /// Safely truncate a string at character boundaries (UTF-8 safe)
 fn truncate_str(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
@@ -39,6 +42,13 @@ pub enum Decision {
         question: String,
         groups: Vec<QuestionGroup>,
     },
+    /// Request rich user input with structured question type
+    AskUserRich {
+        question: String,
+        kind: QuestionKind,
+        #[serde(default)]
+        question_id: Option<String>,
+    },
     /// Task completed successfully
     Complete {
         summary: String,
@@ -69,6 +79,7 @@ impl Decision {
             Decision::UseTool { .. } => "tool",
             Decision::AskUser { .. } => "ask_user",
             Decision::AskUserMultigroup { .. } => "ask_user_multigroup",
+            Decision::AskUserRich { .. } => "ask_user_rich",
             Decision::Complete { .. } => "complete",
             Decision::Fail { .. } => "fail",
         }
@@ -94,6 +105,13 @@ pub enum Action {
     UserInteractionMultigroup {
         question: String,
         groups: Vec<QuestionGroup>,
+    },
+    /// Rich user interaction request
+    UserInteractionRich {
+        question: String,
+        kind: QuestionKind,
+        #[serde(default)]
+        question_id: Option<String>,
     },
     /// Task completion
     Completion {
@@ -137,6 +155,7 @@ impl Action {
             }
             Action::UserInteraction { .. } => "ask_user".to_string(),
             Action::UserInteractionMultigroup { .. } => "ask_user_multigroup".to_string(),
+            Action::UserInteractionRich { .. } => "ask_user_rich".to_string(),
             Action::Completion { .. } => "complete".to_string(),
             Action::Failure { .. } => "fail".to_string(),
         }
@@ -153,6 +172,9 @@ impl Action {
             Action::UserInteraction { question, .. } => question.clone(),
             Action::UserInteractionMultigroup { question, groups } => {
                 format!("{} ({} groups)", question, groups.len())
+            }
+            Action::UserInteractionRich { question, kind, .. } => {
+                format!("{} (type: {:?})", question, std::mem::discriminant(kind))
             }
             Action::Completion { summary } => summary.clone(),
             Action::Failure { reason } => reason.clone(),
@@ -178,6 +200,9 @@ impl From<Decision> for Action {
             Decision::AskUser { question, options } => Action::UserInteraction { question, options },
             Decision::AskUserMultigroup { question, groups } => {
                 Action::UserInteractionMultigroup { question, groups }
+            }
+            Decision::AskUserRich { question, kind, question_id } => {
+                Action::UserInteractionRich { question, kind, question_id }
             }
             Decision::Complete { summary } => Action::Completion { summary },
             Decision::Fail { reason } => Action::Failure { reason },
@@ -205,6 +230,10 @@ pub enum ActionResult {
     UserResponse {
         response: String,
     },
+    /// User provided structured response
+    UserResponseRich {
+        response: UserAnswer,
+    },
     /// Task completed
     Completed,
     /// Task failed
@@ -218,6 +247,7 @@ impl ActionResult {
             self,
             ActionResult::ToolSuccess { .. }
                 | ActionResult::UserResponse { .. }
+                | ActionResult::UserResponseRich { .. }
                 | ActionResult::Completed
         )
     }
@@ -241,6 +271,9 @@ impl ActionResult {
             ActionResult::UserResponse { response } => {
                 format!("User: {}", response)
             }
+            ActionResult::UserResponseRich { response } => {
+                format!("User: {}", response.to_llm_feedback())
+            }
             ActionResult::Completed => "Completed".to_string(),
             ActionResult::Failed => "Failed".to_string(),
         }
@@ -261,6 +294,9 @@ impl ActionResult {
             }
             ActionResult::UserResponse { response } => {
                 format!("User: {}", response)
+            }
+            ActionResult::UserResponseRich { response } => {
+                format!("User: {}", response.to_llm_feedback())
             }
             ActionResult::Completed => "Completed".to_string(),
             ActionResult::Failed => "Failed".to_string(),
@@ -295,6 +331,12 @@ pub enum LlmAction {
         question: String,
         groups: Vec<QuestionGroup>,
     },
+    AskUserRich {
+        question: String,
+        kind: QuestionKind,
+        #[serde(default)]
+        question_id: Option<String>,
+    },
     Complete {
         summary: String,
     },
@@ -316,6 +358,9 @@ impl From<LlmAction> for Decision {
             LlmAction::AskUser { question, options } => Decision::AskUser { question, options },
             LlmAction::AskUserMultigroup { question, groups } => {
                 Decision::AskUserMultigroup { question, groups }
+            }
+            LlmAction::AskUserRich { question, kind, question_id } => {
+                Decision::AskUserRich { question, kind, question_id }
             }
             LlmAction::Complete { summary } => Decision::Complete { summary },
             LlmAction::Fail { reason } => Decision::Fail { reason },
@@ -452,5 +497,44 @@ mod tests {
             .action_type(),
             "fail"
         );
+    }
+
+    #[test]
+    fn test_ask_user_rich_serialization() {
+        use super::super::question::{ChoiceOption, QuestionKind};
+
+        let decision = Decision::AskUserRich {
+            question: "Choose an option".to_string(),
+            kind: QuestionKind::SingleChoice {
+                choices: vec![
+                    ChoiceOption::new("Option A"),
+                    ChoiceOption::new("Option B"),
+                ],
+                default_index: Some(0),
+            },
+            question_id: None,
+        };
+
+        let json = serde_json::to_string(&decision).unwrap();
+        assert!(json.contains("ask_user_rich"));
+        assert!(json.contains("single_choice"));
+
+        let parsed: Decision = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Decision::AskUserRich { .. }));
+    }
+
+    #[test]
+    fn test_user_response_rich() {
+        use super::super::answer::UserAnswer;
+
+        let result = ActionResult::UserResponseRich {
+            response: UserAnswer::SingleChoice {
+                selected_index: 0,
+                selected_label: "Option A".to_string(),
+            },
+        };
+
+        assert!(result.is_success());
+        assert!(result.summary().contains("Option A"));
     }
 }

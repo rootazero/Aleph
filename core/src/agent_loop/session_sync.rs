@@ -172,6 +172,9 @@ impl SessionSync {
                 Action::UserInteractionMultigroup { .. } => {
                     // Multi-group user interactions are handled separately
                 }
+                Action::UserInteractionRich { .. } => {
+                    // Rich user interactions are handled separately
+                }
             }
         }
 
@@ -207,6 +210,9 @@ impl SessionSync {
                 None,
                 Some("Action failed".to_string()),
             ),
+            ActionResult::UserResponseRich { response } => {
+                (ToolCallStatus::Completed, Some(response.to_llm_feedback()), None)
+            }
         }
     }
 

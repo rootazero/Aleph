@@ -6,8 +6,10 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use super::answer::UserAnswer;
 use super::decision::{Action, ActionResult};
 use super::guards::GuardViolation;
+use super::question::QuestionKind;
 use super::state::{LoopState, Thinking};
 
 /// Callback interface for Agent Loop events
@@ -58,6 +60,55 @@ pub trait LoopCallback: Send + Sync {
         question: &str,
         groups: &[super::decision::QuestionGroup],
     ) -> String;
+
+    /// Called when LLM asks for rich user input with structured question type
+    /// Returns the user's structured response
+    async fn on_user_question(&self, question: &str, kind: &QuestionKind) -> UserAnswer {
+        // Default implementation: convert to legacy format for backward compatibility
+        match kind {
+            QuestionKind::Confirmation { default, .. } => {
+                let response = self.on_user_input_required(question, None).await;
+                let confirmed = response.to_lowercase() == "yes"
+                    || response.to_lowercase() == "y"
+                    || response == "true"
+                    || (response.is_empty() && *default);
+                UserAnswer::Confirmation { confirmed }
+            }
+            QuestionKind::SingleChoice { choices, .. } => {
+                let options: Vec<String> = choices.iter().map(|c| c.label.clone()).collect();
+                let response = self.on_user_input_required(question, Some(&options)).await;
+                let selected_index = choices
+                    .iter()
+                    .position(|c| c.label == response)
+                    .unwrap_or(0);
+                UserAnswer::SingleChoice {
+                    selected_index,
+                    selected_label: response,
+                }
+            }
+            QuestionKind::MultiChoice { choices, .. } => {
+                let options: Vec<String> = choices.iter().map(|c| c.label.clone()).collect();
+                let response = self.on_user_input_required(question, Some(&options)).await;
+                let selections: Vec<&str> = response.split(',').map(|s| s.trim()).collect();
+                let mut indices = Vec::new();
+                let mut labels = Vec::new();
+                for sel in selections {
+                    if let Some(idx) = choices.iter().position(|c| c.label == sel) {
+                        indices.push(idx);
+                        labels.push(sel.to_string());
+                    }
+                }
+                UserAnswer::MultiChoice {
+                    selected_indices: indices,
+                    selected_labels: labels,
+                }
+            }
+            QuestionKind::TextInput { .. } => {
+                let response = self.on_user_input_required(question, None).await;
+                UserAnswer::TextInput { text: response }
+            }
+        }
+    }
 
     /// Called when a guard is triggered
     async fn on_guard_triggered(&self, violation: &GuardViolation);
@@ -147,6 +198,9 @@ impl<T: LoopCallback + ?Sized> LoopCallback for &T {
             .on_user_multigroup_required(question, groups)
             .await
     }
+    async fn on_user_question(&self, question: &str, kind: &QuestionKind) -> UserAnswer {
+        (*self).on_user_question(question, kind).await
+    }
     async fn on_guard_triggered(&self, violation: &GuardViolation) {
         (*self).on_guard_triggered(violation).await
     }
@@ -213,6 +267,35 @@ impl LoopCallback for NoOpLoopCallback {
     ) -> String {
         // Auto-respond with first option for each group in JSON format
         "{\"default\":\"ok\"}".to_string()
+    }
+
+    async fn on_user_question(&self, _question: &str, kind: &QuestionKind) -> UserAnswer {
+        match kind {
+            QuestionKind::Confirmation { default, .. } => {
+                UserAnswer::Confirmation { confirmed: *default }
+            }
+            QuestionKind::SingleChoice {
+                choices,
+                default_index,
+            } => {
+                let idx = default_index.unwrap_or(0);
+                let label = choices.get(idx).map(|c| c.label.clone()).unwrap_or_default();
+                UserAnswer::SingleChoice {
+                    selected_index: idx,
+                    selected_label: label,
+                }
+            }
+            QuestionKind::MultiChoice { choices, .. } => {
+                let label = choices.first().map(|c| c.label.clone()).unwrap_or_default();
+                UserAnswer::MultiChoice {
+                    selected_indices: vec![0],
+                    selected_labels: vec![label],
+                }
+            }
+            QuestionKind::TextInput { .. } => UserAnswer::TextInput {
+                text: "ok".to_string(),
+            },
+        }
     }
 
     async fn on_guard_triggered(&self, _violation: &GuardViolation) {}
@@ -309,6 +392,23 @@ impl LoopCallback for LoggingCallback {
         "{\"default\":\"ok\"}".to_string()
     }
 
+    async fn on_user_question(&self, question: &str, kind: &QuestionKind) -> UserAnswer {
+        tracing::warn!(
+            "{} Rich user input required: {} (type: {:?}) (auto-responding)",
+            self.prefix,
+            question,
+            std::mem::discriminant(kind)
+        );
+        match kind {
+            QuestionKind::Confirmation { default, .. } => {
+                UserAnswer::Confirmation { confirmed: *default }
+            }
+            _ => UserAnswer::TextInput {
+                text: "continue".to_string(),
+            },
+        }
+    }
+
     async fn on_guard_triggered(&self, violation: &GuardViolation) {
         tracing::error!("{} Guard triggered: {}", self.prefix, violation.description());
     }
@@ -375,6 +475,7 @@ pub enum LoopEvent {
     ConfirmationRequired { tool_name: String },
     UserInputRequired { question: String },
     UserMultigroupRequired { question: String, group_count: usize },
+    UserQuestionRequired { question: String, kind_type: String },
     GuardTriggered { description: String },
     Complete { summary: String },
     Failed { reason: String },
@@ -462,6 +563,35 @@ impl LoopCallback for CollectingCallback {
         "{\"default\":\"ok\"}".to_string()
     }
 
+    async fn on_user_question(&self, question: &str, kind: &QuestionKind) -> UserAnswer {
+        self.push(LoopEvent::UserQuestionRequired {
+            question: question.to_string(),
+            kind_type: format!("{:?}", std::mem::discriminant(kind)),
+        });
+        match kind {
+            QuestionKind::Confirmation { default, .. } => {
+                UserAnswer::Confirmation { confirmed: *default }
+            }
+            QuestionKind::SingleChoice {
+                choices,
+                default_index,
+            } => {
+                let idx = default_index.unwrap_or(0);
+                UserAnswer::SingleChoice {
+                    selected_index: idx,
+                    selected_label: choices.get(idx).map(|c| c.label.clone()).unwrap_or_default(),
+                }
+            }
+            QuestionKind::MultiChoice { .. } => UserAnswer::MultiChoice {
+                selected_indices: vec![],
+                selected_labels: vec![],
+            },
+            QuestionKind::TextInput { .. } => UserAnswer::TextInput {
+                text: "test_response".to_string(),
+            },
+        }
+    }
+
     async fn on_guard_triggered(&self, violation: &GuardViolation) {
         self.push(LoopEvent::GuardTriggered {
             description: violation.description(),
@@ -533,5 +663,33 @@ mod tests {
         assert!(matches!(events[0], LoopEvent::LoopStart { .. }));
         assert!(matches!(events[1], LoopEvent::StepStart { step: 0 }));
         assert!(matches!(events[2], LoopEvent::Complete { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_collecting_callback_user_question() {
+        use super::super::answer::UserAnswer;
+        use super::super::question::{ChoiceOption, QuestionKind};
+
+        let callback = CollectingCallback::new();
+
+        let kind = QuestionKind::SingleChoice {
+            choices: vec![ChoiceOption::new("A"), ChoiceOption::new("B")],
+            default_index: Some(1),
+        };
+
+        let answer = callback.on_user_question("Pick one", &kind).await;
+
+        assert!(matches!(
+            answer,
+            UserAnswer::SingleChoice {
+                selected_index: 1,
+                ..
+            }
+        ));
+
+        let events = callback.events();
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, LoopEvent::UserQuestionRequired { .. })));
     }
 }

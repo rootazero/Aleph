@@ -454,6 +454,29 @@ where
                     guard.record_action("ask_user_multigroup");
                     continue;
                 }
+                Decision::AskUserRich { question, kind, question_id } => {
+                    let answer = callback
+                        .on_user_question(question, kind)
+                        .await;
+
+                    // Record user interaction as a step
+                    let step = LoopStep {
+                        step_id: state.step_count,
+                        observation_summary: String::new(),
+                        thinking: thinking.clone(),
+                        action: Action::UserInteractionRich {
+                            question: question.clone(),
+                            kind: kind.clone(),
+                            question_id: question_id.clone(),
+                        },
+                        result: ActionResult::UserResponseRich { response: answer },
+                        tokens_used: 0,
+                        duration_ms: 0,
+                    };
+                    state.record_step(step);
+                    guard.record_action("ask_user_rich");
+                    continue;
+                }
                 Decision::UseTool {
                     tool_name,
                     arguments,
@@ -1290,5 +1313,55 @@ mod tests {
             None,
         );
         assert!(agent_loop_minimal.overflow_detector.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_ask_user_rich_handling() {
+        use crate::agent_loop::question::{QuestionKind, ChoiceOption};
+        use crate::agent_loop::callback::LoopEvent;
+
+        let thinker = Arc::new(MockThinker::new(vec![
+            Decision::AskUserRich {
+                question: "Choose option".to_string(),
+                kind: QuestionKind::SingleChoice {
+                    choices: vec![
+                        ChoiceOption::new("A"),
+                        ChoiceOption::new("B"),
+                    ],
+                    default_index: Some(0),
+                },
+                question_id: None,
+            },
+            Decision::Complete {
+                summary: "Done after user choice".to_string(),
+            },
+        ]));
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        let agent_loop = AgentLoop::new(
+            thinker,
+            executor,
+            compressor,
+            LoopConfig::for_testing(),
+        );
+
+        let callback = CollectingCallback::new();
+
+        let result = agent_loop
+            .run(
+                "Test rich question".to_string(),
+                RequestContext::empty(),
+                vec![],
+                &callback,
+                None,
+                None,
+            )
+            .await;
+
+        assert!(matches!(result, LoopResult::Completed { steps: 1, .. }));
+
+        let events = callback.events();
+        assert!(events.iter().any(|e| matches!(e, LoopEvent::UserQuestionRequired { .. })));
     }
 }
