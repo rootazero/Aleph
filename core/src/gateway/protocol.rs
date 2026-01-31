@@ -126,6 +126,14 @@ impl JsonRpcResponse {
     pub fn is_error(&self) -> bool {
         self.error.is_some()
     }
+
+    /// Create a new response with a different id
+    ///
+    /// Useful for setting the id on a pre-constructed error response.
+    pub fn with_id(mut self, id: Option<Value>) -> Self {
+        self.id = id;
+        self
+    }
 }
 
 /// JSON-RPC 2.0 Error Object
