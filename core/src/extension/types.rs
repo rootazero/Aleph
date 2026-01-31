@@ -5,7 +5,7 @@
 use crate::discovery::DiscoverySource;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // =============================================================================
 // Skill Tool Types
@@ -330,6 +330,67 @@ pub struct PluginInfo {
     pub mcp_servers_count: usize,
 }
 
+/// Plugin origin - where the plugin was discovered from
+///
+/// Higher priority origins override lower priority ones when plugins
+/// have the same name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginOrigin {
+    /// From explicit config (highest priority)
+    Config,
+    /// From workspace .aether/ directory
+    Workspace,
+    /// From global ~/.aether/ directory
+    Global,
+    /// Bundled with core (lowest priority)
+    Bundled,
+}
+
+impl PluginOrigin {
+    /// Get the priority of this origin (higher = takes precedence)
+    pub fn priority(&self) -> u8 {
+        match self {
+            PluginOrigin::Config => 4,
+            PluginOrigin::Workspace => 3,
+            PluginOrigin::Global => 2,
+            PluginOrigin::Bundled => 1,
+        }
+    }
+}
+
+/// Plugin kind - the type/format of the plugin
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginKind {
+    /// WebAssembly plugin (.wasm)
+    Wasm,
+    /// Node.js plugin (package.json)
+    NodeJs,
+    /// Static content plugin (markdown files)
+    Static,
+}
+
+impl PluginKind {
+    /// Detect plugin kind from a file path
+    ///
+    /// Returns `Some(kind)` if the path indicates a known plugin type,
+    /// `None` otherwise.
+    pub fn detect_from_path(path: &Path) -> Option<Self> {
+        let filename = path.file_name()?.to_str()?;
+        let ext = path.extension().and_then(|e| e.to_str());
+
+        match (filename, ext) {
+            (_, Some("wasm")) => Some(PluginKind::Wasm),
+            ("package.json", _) => Some(PluginKind::NodeJs),
+            ("aether.plugin.json", _) => Some(PluginKind::Wasm),
+            ("SKILL.md" | "COMMAND.md" | "AGENT.md", _) => Some(PluginKind::Static),
+            (_, Some("md")) => Some(PluginKind::Static),
+            _ => None,
+        }
+    }
+}
+
 // =============================================================================
 // Hook Types
 // =============================================================================
@@ -519,5 +580,86 @@ mod tests {
 
         assert!(!agent.is_primary());
         assert!(agent.is_subagent());
+    }
+
+    #[test]
+    fn test_plugin_origin_priority() {
+        assert!(PluginOrigin::Config.priority() > PluginOrigin::Workspace.priority());
+        assert!(PluginOrigin::Workspace.priority() > PluginOrigin::Global.priority());
+        assert!(PluginOrigin::Global.priority() > PluginOrigin::Bundled.priority());
+    }
+
+    #[test]
+    fn test_plugin_origin_serde() {
+        let origin = PluginOrigin::Config;
+        let json = serde_json::to_string(&origin).unwrap();
+        assert_eq!(json, "\"config\"");
+
+        let parsed: PluginOrigin = serde_json::from_str("\"workspace\"").unwrap();
+        assert_eq!(parsed, PluginOrigin::Workspace);
+    }
+
+    #[test]
+    fn test_plugin_kind_detection() {
+        use std::path::Path;
+
+        // Wasm detection
+        assert_eq!(
+            PluginKind::detect_from_path(Path::new("plugin.wasm")),
+            Some(PluginKind::Wasm)
+        );
+        assert_eq!(
+            PluginKind::detect_from_path(Path::new("/path/to/my-plugin.wasm")),
+            Some(PluginKind::Wasm)
+        );
+
+        // Node.js detection
+        assert_eq!(
+            PluginKind::detect_from_path(Path::new("package.json")),
+            Some(PluginKind::NodeJs)
+        );
+        assert_eq!(
+            PluginKind::detect_from_path(Path::new("/some/dir/package.json")),
+            Some(PluginKind::NodeJs)
+        );
+
+        // Wasm plugin manifest
+        assert_eq!(
+            PluginKind::detect_from_path(Path::new("aether.plugin.json")),
+            Some(PluginKind::Wasm)
+        );
+
+        // Static content detection
+        assert_eq!(
+            PluginKind::detect_from_path(Path::new("SKILL.md")),
+            Some(PluginKind::Static)
+        );
+        assert_eq!(
+            PluginKind::detect_from_path(Path::new("COMMAND.md")),
+            Some(PluginKind::Static)
+        );
+        assert_eq!(
+            PluginKind::detect_from_path(Path::new("AGENT.md")),
+            Some(PluginKind::Static)
+        );
+        assert_eq!(
+            PluginKind::detect_from_path(Path::new("README.md")),
+            Some(PluginKind::Static)
+        );
+
+        // Unknown files
+        assert_eq!(PluginKind::detect_from_path(Path::new("config.yaml")), None);
+        assert_eq!(PluginKind::detect_from_path(Path::new("main.rs")), None);
+        assert_eq!(PluginKind::detect_from_path(Path::new("Cargo.toml")), None);
+    }
+
+    #[test]
+    fn test_plugin_kind_serde() {
+        let kind = PluginKind::Wasm;
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, "\"wasm\"");
+
+        let parsed: PluginKind = serde_json::from_str("\"nodejs\"").unwrap();
+        assert_eq!(parsed, PluginKind::NodeJs);
     }
 }
