@@ -518,6 +518,42 @@ impl ExtensionManager {
         self.plugin_loader.read().await
     }
 
+    /// Load a runtime plugin from a manifest.
+    ///
+    /// This method loads a plugin into the appropriate runtime (Node.js or WASM)
+    /// based on its kind, and registers its tools and hooks with the plugin registry.
+    ///
+    /// # Arguments
+    ///
+    /// * `manifest` - The plugin manifest containing metadata and entry point
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the plugin was loaded successfully
+    /// * `Err(ExtensionError)` if loading failed
+    pub async fn load_runtime_plugin(&self, manifest: &PluginManifest) -> ExtensionResult<()> {
+        let mut loader = self.plugin_loader.write().await;
+        let mut registry = self.plugin_registry.write().await;
+        loader.load_plugin(manifest, &mut registry)
+    }
+
+    /// Unload a runtime plugin.
+    ///
+    /// This method unloads a plugin from its runtime and removes it from tracking.
+    /// Note: This does not automatically unregister tools/hooks from the registry.
+    ///
+    /// # Arguments
+    ///
+    /// * `plugin_id` - The ID of the plugin to unload
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the plugin was unloaded successfully
+    /// * `Err(ExtensionError::PluginNotFound)` if the plugin is not loaded
+    pub async fn unload_runtime_plugin(&self, plugin_id: &str) -> ExtensionResult<()> {
+        self.plugin_loader.write().await.unload_plugin(plugin_id)
+    }
+
     // =========================================================================
     // Skill/Command Execution
     // =========================================================================

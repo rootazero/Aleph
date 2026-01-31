@@ -433,6 +433,22 @@ pub struct CallToolParams {
     pub args: serde_json::Value,
 }
 
+/// Parameters for plugins.load
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadPluginParams {
+    /// Path to the plugin directory (containing aether.plugin.json or package.json with aether field)
+    pub path: String,
+}
+
+/// Parameters for plugins.unload
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnloadPluginParams {
+    /// ID of the plugin to unload
+    pub plugin_id: String,
+}
+
 /// Call a tool on a loaded runtime plugin
 ///
 /// This handler invokes a tool handler registered by a Node.js or WASM plugin.
@@ -490,6 +506,143 @@ pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 }
 
+// ============================================================================
+// Load Plugin
+// ============================================================================
+
+/// Load a runtime plugin from a path
+///
+/// This handler loads a plugin from a directory containing a valid manifest
+/// (`aether.plugin.json` or `package.json` with aether field). The plugin
+/// is loaded into the appropriate runtime (Node.js or WASM) based on its kind.
+///
+/// # Params
+/// - `path`: Path to the plugin directory
+///
+/// # Returns
+/// - `pluginId`: ID of the loaded plugin
+/// - `name`: Human-readable name
+/// - `kind`: Plugin kind (NodeJs, Wasm, Static)
+///
+/// # Errors
+/// - `INTERNAL_ERROR`: Extension manager not initialized or loading failed
+/// - `INVALID_PARAMS`: Missing path or invalid manifest
+pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: LoadPluginParams = match request.params {
+        Some(ref p) => match serde_json::from_value(p.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing params: path required".to_string(),
+            );
+        }
+    };
+
+    // Get the extension manager from global state
+    let manager = match get_extension_manager() {
+        Ok(m) => m,
+        Err(e) => return e.with_id(request.id),
+    };
+
+    // Parse manifest from path
+    let path = std::path::Path::new(&params.path);
+    let manifest = match crate::extension::manifest::parse_manifest_from_dir(path).await {
+        Ok(m) => m,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Failed to parse manifest: {}", e),
+            );
+        }
+    };
+
+    // Load plugin into runtime
+    if let Err(e) = manager.load_runtime_plugin(&manifest).await {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to load plugin: {}", e),
+        );
+    }
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "pluginId": manifest.id,
+            "name": manifest.name,
+            "kind": format!("{:?}", manifest.kind),
+        }),
+    )
+}
+
+// ============================================================================
+// Unload Plugin
+// ============================================================================
+
+/// Unload a runtime plugin
+///
+/// This handler unloads a previously loaded plugin from its runtime.
+/// The plugin is removed from the loader's tracking but tools/hooks
+/// may still be registered in the registry.
+///
+/// # Params
+/// - `pluginId`: ID of the plugin to unload
+///
+/// # Returns
+/// - `ok`: true if successful
+///
+/// # Errors
+/// - `INTERNAL_ERROR`: Extension manager not initialized or plugin not found
+/// - `INVALID_PARAMS`: Missing pluginId
+pub async fn handle_unload(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: UnloadPluginParams = match request.params {
+        Some(ref p) => match serde_json::from_value(p.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing params: pluginId required".to_string(),
+            );
+        }
+    };
+
+    // Get the extension manager from global state
+    let manager = match get_extension_manager() {
+        Ok(m) => m,
+        Err(e) => return e.with_id(request.id),
+    };
+
+    // Unload from runtime
+    match manager.unload_runtime_plugin(&params.plugin_id).await {
+        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to unload plugin: {}", e),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,6 +682,20 @@ mod tests {
         });
         let params: CallToolParams = serde_json::from_value(json).unwrap();
         assert!(params.args.is_null());
+    }
+
+    #[test]
+    fn test_load_plugin_params() {
+        let json = json!({ "path": "/path/to/plugin" });
+        let params: LoadPluginParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.path, "/path/to/plugin");
+    }
+
+    #[test]
+    fn test_unload_plugin_params() {
+        let json = json!({ "pluginId": "my-plugin" });
+        let params: UnloadPluginParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.plugin_id, "my-plugin");
     }
 
     #[tokio::test]
@@ -603,5 +770,113 @@ mod tests {
         // Should return error because plugin doesn't exist
         assert!(response.is_error());
         assert_eq!(response.error.as_ref().unwrap().code, INTERNAL_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_handle_load_missing_params() {
+        let request = JsonRpcRequest::new("plugins.load", None, Some(json!(1)));
+        let response = handle_load(request).await;
+
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
+        assert!(response
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("path required"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_load_invalid_params() {
+        let request = JsonRpcRequest::new(
+            "plugins.load",
+            Some(json!({"invalid": "field"})),
+            Some(json!(1)),
+        );
+        let response = handle_load(request).await;
+
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn test_handle_load_nonexistent_path() {
+        // Initialize manager if not already done
+        if !is_extension_manager_initialized() {
+            let manager = ExtensionManager::with_defaults().await.unwrap();
+            let _ = init_extension_manager(Arc::new(manager));
+        }
+
+        let request = JsonRpcRequest::new(
+            "plugins.load",
+            Some(json!({"path": "/nonexistent/path/to/plugin"})),
+            Some(json!(1)),
+        );
+        let response = handle_load(request).await;
+
+        // Should fail because path doesn't exist
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
+        assert!(response
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("Failed to parse manifest"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_unload_missing_params() {
+        let request = JsonRpcRequest::new("plugins.unload", None, Some(json!(1)));
+        let response = handle_unload(request).await;
+
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
+        assert!(response
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("pluginId required"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_unload_invalid_params() {
+        let request = JsonRpcRequest::new(
+            "plugins.unload",
+            Some(json!({"invalid": "field"})),
+            Some(json!(1)),
+        );
+        let response = handle_unload(request).await;
+
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn test_handle_unload_nonexistent_plugin() {
+        // Initialize manager if not already done
+        if !is_extension_manager_initialized() {
+            let manager = ExtensionManager::with_defaults().await.unwrap();
+            let _ = init_extension_manager(Arc::new(manager));
+        }
+
+        let request = JsonRpcRequest::new(
+            "plugins.unload",
+            Some(json!({"pluginId": "nonexistent-plugin"})),
+            Some(json!(1)),
+        );
+        let response = handle_unload(request).await;
+
+        // Should fail because plugin is not loaded
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INTERNAL_ERROR);
+        assert!(response
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("Failed to unload plugin"));
     }
 }
