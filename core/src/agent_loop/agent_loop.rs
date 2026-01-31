@@ -454,6 +454,31 @@ where
                     guard.record_action("ask_user_multigroup");
                     continue;
                 }
+                Decision::AskUserRich { question, kind, question_id } => {
+                    // TODO: Implement rich user question handling in Task 4.1
+                    // For now, fall back to plain text response
+                    let response = callback
+                        .on_user_input_required(question, None)
+                        .await;
+
+                    // Record user interaction as a step
+                    let step = LoopStep {
+                        step_id: state.step_count,
+                        observation_summary: String::new(),
+                        thinking: thinking.clone(),
+                        action: Action::UserInteractionRich {
+                            question: question.clone(),
+                            kind: kind.clone(),
+                            question_id: question_id.clone(),
+                        },
+                        result: ActionResult::UserResponse { response },
+                        tokens_used: 0,
+                        duration_ms: 0,
+                    };
+                    state.record_step(step);
+                    guard.record_action("ask_user_rich");
+                    continue;
+                }
                 Decision::UseTool {
                     tool_name,
                     arguments,

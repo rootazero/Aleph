@@ -245,6 +245,14 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
                 }
             }
 
+            Action::UserInteractionRich { question, .. } => {
+                // Rich user interaction is handled by the callback system
+                // Similar to UserInteraction, this should be intercepted by AgentLoop
+                ActionResult::UserResponse {
+                    response: format!("Awaiting rich user response for: {}", question),
+                }
+            }
+
             Action::Completion { .. } => {
                 // Completion is a terminal action
                 ActionResult::Completed
