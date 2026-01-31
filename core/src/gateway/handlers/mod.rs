@@ -34,6 +34,7 @@
 //! | wizard | Wizard session management |
 //! | supervisor | Process supervision via PTY |
 //! | browser | Browser/CDP (feature-gated) |
+//! | poe | POE (Principle-Operation-Evaluation) task execution |
 
 pub mod health;
 pub mod echo;
@@ -64,6 +65,7 @@ pub mod exec_approvals;
 pub mod wizard;
 pub mod supervisor;
 pub mod approval_bridge;
+pub mod poe;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 #[cfg(feature = "browser")]
@@ -174,6 +176,36 @@ impl HandlerRegistry {
                 req.id,
                 INTERNAL_ERROR,
                 "chat.clear requires Gateway runtime - use Gateway::new()".to_string(),
+            )
+        });
+
+        // POE handlers (placeholders - actual handlers wired with PoeRunManager)
+        registry.register("poe.run", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "poe.run requires POE runtime - wire PoeRunManager first".to_string(),
+            )
+        });
+        registry.register("poe.status", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "poe.status requires POE runtime - wire PoeRunManager first".to_string(),
+            )
+        });
+        registry.register("poe.cancel", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "poe.cancel requires POE runtime - wire PoeRunManager first".to_string(),
+            )
+        });
+        registry.register("poe.list", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "poe.list requires POE runtime - wire PoeRunManager first".to_string(),
             )
         });
 
@@ -360,5 +392,14 @@ mod tests {
         assert!(registry.has_method("cron.list"));
         assert!(registry.has_method("cron.status"));
         assert!(registry.has_method("cron.run"));
+    }
+
+    #[test]
+    fn test_poe_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("poe.run"));
+        assert!(registry.has_method("poe.status"));
+        assert!(registry.has_method("poe.cancel"));
+        assert!(registry.has_method("poe.list"));
     }
 }
