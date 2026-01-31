@@ -367,6 +367,68 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
 
+// ============================================================================
+// Call Tool
+// ============================================================================
+
+/// Parameters for plugins.callTool
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallToolParams {
+    /// ID of the plugin containing the tool
+    pub plugin_id: String,
+    /// Name of the handler function to call
+    pub handler: String,
+    /// Arguments to pass to the tool
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+/// Call a tool on a loaded runtime plugin
+///
+/// This handler invokes a tool handler registered by a Node.js or WASM plugin.
+/// The plugin must be loaded first.
+///
+/// # Params
+/// - `pluginId`: Plugin that provides the tool
+/// - `handler`: Handler function name
+/// - `args`: JSON arguments to pass to the tool
+///
+/// # Returns
+/// - `result`: The tool's return value
+pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: CallToolParams = match request.params {
+        Some(ref p) => match serde_json::from_value(p.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing params: pluginId, handler required".to_string(),
+            );
+        }
+    };
+
+    // Note: This is a placeholder. Full implementation requires
+    // passing ExtensionManager via shared state (Task 6)
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "error": "Not yet wired - requires ExtensionManager in handler context",
+            "pluginId": params.plugin_id,
+            "handler": params.handler
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +445,28 @@ mod tests {
         let json = json!({"name": "my-plugin"});
         let params: ToggleParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.name, "my-plugin");
+    }
+
+    #[test]
+    fn test_call_tool_params() {
+        let json = json!({
+            "pluginId": "my-plugin",
+            "handler": "myTool",
+            "args": {"key": "value"}
+        });
+        let params: CallToolParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.plugin_id, "my-plugin");
+        assert_eq!(params.handler, "myTool");
+        assert_eq!(params.args["key"], "value");
+    }
+
+    #[test]
+    fn test_call_tool_params_default_args() {
+        let json = json!({
+            "pluginId": "test",
+            "handler": "handler"
+        });
+        let params: CallToolParams = serde_json::from_value(json).unwrap();
+        assert!(params.args.is_null());
     }
 }
