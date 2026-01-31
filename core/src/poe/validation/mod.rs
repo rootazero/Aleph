@@ -3,12 +3,12 @@
 //! This module provides three types of validators:
 //! - `HardValidator`: Deterministic checks (file existence, regex matching, commands)
 //! - `SemanticValidator`: LLM-based quality evaluation
-//! - `CompositeValidator`: Combines hard and semantic checks (will be added in Task 6)
+//! - `CompositeValidator`: Two-phase validation pipeline combining hard and semantic checks
 
 pub mod composite;
 pub mod hard;
 pub mod semantic;
 
+pub use composite::CompositeValidator;
 pub use hard::HardValidator;
 pub use semantic::SemanticValidator;
-// pub use composite::CompositeValidator; // will be added in Task 6
