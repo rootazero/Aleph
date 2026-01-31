@@ -228,8 +228,8 @@ pub use crate::skill_evolution::{
 // =============================================================================
 
 pub use crate::resilient::{
-    classify_error, DegradationReason, DegradationStrategy, ErrorClass, ResilienceConfig,
-    TaskContext, TaskOutcome,
+    classify_error, DegradationReason, DegradationStrategy, ErrorClass, FnTask, ResilienceConfig,
+    ResilientTask, TaskContext, TaskOutcome,
 };
 
 // =============================================================================
