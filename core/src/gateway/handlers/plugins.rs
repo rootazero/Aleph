@@ -3,11 +3,60 @@
 //! Handlers for plugin management: list, install, uninstall, enable, disable.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::extension::{ComponentLoader, PluginInfo, SyncExtensionManager};
+use crate::extension::{ComponentLoader, ExtensionManager, PluginInfo, SyncExtensionManager};
+
+// ============================================================================
+// Global Extension Manager (for plugin tool calls)
+// ============================================================================
+
+/// Global extension manager for plugin handlers.
+///
+/// This is initialized once at gateway startup via `init_extension_manager()`.
+/// The OnceCell ensures thread-safe lazy initialization.
+static EXTENSION_MANAGER: OnceCell<Arc<ExtensionManager>> = OnceCell::new();
+
+/// Initialize the extension manager for plugin handlers.
+///
+/// This should be called once during gateway startup, before any
+/// `plugins.callTool` requests are processed.
+///
+/// # Arguments
+///
+/// * `manager` - The ExtensionManager instance to use for plugin operations
+///
+/// # Returns
+///
+/// * `Ok(())` if initialization succeeded
+/// * `Err(manager)` if already initialized (returns the passed manager)
+pub fn init_extension_manager(
+    manager: Arc<ExtensionManager>,
+) -> Result<(), Arc<ExtensionManager>> {
+    EXTENSION_MANAGER.set(manager)
+}
+
+/// Get the extension manager.
+///
+/// Returns an error response if the manager hasn't been initialized.
+fn get_extension_manager() -> Result<&'static Arc<ExtensionManager>, JsonRpcResponse> {
+    EXTENSION_MANAGER.get().ok_or_else(|| {
+        JsonRpcResponse::error(
+            None,
+            INTERNAL_ERROR,
+            "Extension manager not initialized. Gateway startup may have failed.".to_string(),
+        )
+    })
+}
+
+/// Check if the extension manager has been initialized.
+pub fn is_extension_manager_initialized() -> bool {
+    EXTENSION_MANAGER.get().is_some()
+}
 
 /// Plugin info for JSON serialization
 #[derive(Debug, Clone, Serialize)]
@@ -387,7 +436,7 @@ pub struct CallToolParams {
 /// Call a tool on a loaded runtime plugin
 ///
 /// This handler invokes a tool handler registered by a Node.js or WASM plugin.
-/// The plugin must be loaded first.
+/// The plugin must be loaded first via `plugins.load`.
 ///
 /// # Params
 /// - `pluginId`: Plugin that provides the tool
@@ -396,6 +445,10 @@ pub struct CallToolParams {
 ///
 /// # Returns
 /// - `result`: The tool's return value
+///
+/// # Errors
+/// - `INTERNAL_ERROR`: Extension manager not initialized or tool call failed
+/// - `INVALID_PARAMS`: Missing or invalid parameters
 pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: CallToolParams = match request.params {
         Some(ref p) => match serde_json::from_value(p.clone()) {
@@ -417,16 +470,24 @@ pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     };
 
-    // Note: This is a placeholder. Full implementation requires
-    // passing ExtensionManager via shared state (Task 6)
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "error": "Not yet wired - requires ExtensionManager in handler context",
-            "pluginId": params.plugin_id,
-            "handler": params.handler
-        }),
-    )
+    // Get the extension manager from global state
+    let manager = match get_extension_manager() {
+        Ok(m) => m,
+        Err(e) => return e.with_id(request.id),
+    };
+
+    // Call the plugin tool
+    match manager
+        .call_plugin_tool(&params.plugin_id, &params.handler, params.args)
+        .await
+    {
+        Ok(result) => JsonRpcResponse::success(request.id, json!({ "result": result })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Tool call failed: {}", e),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -468,5 +529,79 @@ mod tests {
         });
         let params: CallToolParams = serde_json::from_value(json).unwrap();
         assert!(params.args.is_null());
+    }
+
+    #[tokio::test]
+    async fn test_handle_call_tool_missing_params() {
+        let request = JsonRpcRequest::new("plugins.callTool", None, Some(json!(1)));
+        let response = handle_call_tool(request).await;
+
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn test_handle_call_tool_invalid_params() {
+        let request = JsonRpcRequest::new(
+            "plugins.callTool",
+            Some(json!({"invalid": "params"})),
+            Some(json!(1)),
+        );
+        let response = handle_call_tool(request).await;
+
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn test_handle_call_tool_without_manager() {
+        // When extension manager is not initialized, should return INTERNAL_ERROR
+        // Note: This test only works if extension manager hasn't been initialized
+        // in other tests running in the same process.
+        if !is_extension_manager_initialized() {
+            let request = JsonRpcRequest::new(
+                "plugins.callTool",
+                Some(json!({
+                    "pluginId": "test-plugin",
+                    "handler": "testHandler",
+                    "args": {}
+                })),
+                Some(json!(1)),
+            );
+            let response = handle_call_tool(request).await;
+
+            assert!(response.is_error());
+            assert_eq!(response.error.as_ref().unwrap().code, INTERNAL_ERROR);
+            assert!(response
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("not initialized"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_call_tool_with_manager_plugin_not_found() {
+        // Initialize manager if not already done
+        if !is_extension_manager_initialized() {
+            let manager = ExtensionManager::with_defaults().await.unwrap();
+            let _ = init_extension_manager(Arc::new(manager));
+        }
+
+        let request = JsonRpcRequest::new(
+            "plugins.callTool",
+            Some(json!({
+                "pluginId": "nonexistent-plugin",
+                "handler": "testHandler",
+                "args": {}
+            })),
+            Some(json!(1)),
+        );
+        let response = handle_call_tool(request).await;
+
+        // Should return error because plugin doesn't exist
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INTERNAL_ERROR);
     }
 }

@@ -127,6 +127,8 @@ pub use handlers::auth::{AuthContext, handle_connect, handle_pairing_approve, ha
 #[cfg(feature = "gateway")]
 pub use handlers::events::{SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list};
 #[cfg(feature = "gateway")]
+pub use handlers::plugins::{init_extension_manager, is_extension_manager_initialized};
+#[cfg(feature = "gateway")]
 pub use event_bus::{TopicEvent, TopicFilter, topic_matches};
 #[cfg(feature = "gateway")]
 pub use hot_reload::{ConfigWatcher, ConfigWatcherConfig, ConfigEvent, ConfigWatcherError};

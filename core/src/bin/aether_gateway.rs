@@ -762,6 +762,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
+        // Initialize ExtensionManager for plugin system
+        match aethecore::extension::ExtensionManager::with_defaults().await {
+            Ok(extension_manager) => {
+                let manager = Arc::new(extension_manager);
+                if let Err(_existing) = aethecore::gateway::init_extension_manager(manager) {
+                    // Already initialized (shouldn't happen in normal flow)
+                    if !args.daemon {
+                        println!("Extension manager already initialized");
+                    }
+                } else if !args.daemon {
+                    println!("Extension manager initialized");
+                }
+            }
+            Err(e) => {
+                if !args.daemon {
+                    eprintln!("Warning: Failed to initialize extension manager: {}. Plugin tools will be unavailable.", e);
+                }
+            }
+        }
+
         // Set up agent.run handler with dependencies
         let event_bus = server.event_bus().clone();
         let router = Arc::new(AgentRouter::new());
