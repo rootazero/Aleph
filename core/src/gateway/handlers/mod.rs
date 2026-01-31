@@ -34,7 +34,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use super::protocol::{JsonRpcRequest, JsonRpcResponse, METHOD_NOT_FOUND};
+use super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, METHOD_NOT_FOUND};
 use crate::config::Config;
 
 /// Type alias for async handler functions
@@ -100,6 +100,36 @@ impl HandlerRegistry {
         registry.register("models.capabilities", move |req| {
             let config = cfg.clone();
             async move { models::handle_capabilities(req, config).await }
+        });
+
+        // Chat handlers (placeholders - actual handlers wired in Gateway::new())
+        registry.register("chat.send", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "chat.send requires Gateway runtime - use Gateway::new()".to_string(),
+            )
+        });
+        registry.register("chat.abort", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "chat.abort requires Gateway runtime - use Gateway::new()".to_string(),
+            )
+        });
+        registry.register("chat.history", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "chat.history requires Gateway runtime - use Gateway::new()".to_string(),
+            )
+        });
+        registry.register("chat.clear", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "chat.clear requires Gateway runtime - use Gateway::new()".to_string(),
+            )
         });
 
         registry
@@ -268,5 +298,14 @@ mod tests {
         assert!(registry.has_method("models.list"));
         assert!(registry.has_method("models.get"));
         assert!(registry.has_method("models.capabilities"));
+    }
+
+    #[test]
+    fn test_chat_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("chat.send"));
+        assert!(registry.has_method("chat.abort"));
+        assert!(registry.has_method("chat.history"));
+        assert!(registry.has_method("chat.clear"));
     }
 }
