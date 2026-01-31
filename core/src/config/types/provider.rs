@@ -25,6 +25,7 @@ pub struct ProviderConfigEntry {
 // =============================================================================
 
 /// Test connection result (for provider connection testing)
+#[allow(dead_code)] // Reserved for connection testing feature
 #[derive(Debug, Clone, JsonSchema)]
 pub struct TestConnectionResult {
     pub success: bool,

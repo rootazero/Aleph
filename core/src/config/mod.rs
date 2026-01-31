@@ -30,19 +30,17 @@ pub mod watcher;
 pub use structs::{Config, FullConfig};
 
 // Re-export schema generation functions
-pub use schema::{generate_config_schema, generate_config_schema_json};
+pub use schema::generate_config_schema_json;
 
 // Re-export UI hints
-pub use ui_hints::{build_ui_hints, ConfigUiHints, FieldHint, GroupMeta};
+pub use ui_hints::{build_ui_hints, ConfigUiHints};
 
 // Re-export types for backward compatibility
 pub use types::*;
 
 // Re-export diff utilities
-pub use diff::diff_config;
 
 // Re-export reload plan utilities
-pub use reload::{build_reload_plan, ReloadPlan};
 
 #[allow(unused_imports)]
 pub use watcher::ConfigWatcher;

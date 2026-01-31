@@ -6,8 +6,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 use super::manager::{ExecApprovalManager, ExecApprovalRecord};
 use super::socket::ApprovalDecisionType;
