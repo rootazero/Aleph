@@ -35,6 +35,16 @@
 //! runtime.load_plugin("file:///path/to/plugin.ts").await?;
 //! ```
 //!
+//! ## Node.js Runtime (Synchronous)
+//!
+//! ```rust,ignore
+//! use aethecore::extension::runtime::{NodeJsRuntime, JsonRpcRequest, JsonRpcResponse};
+//!
+//! let mut runtime = NodeJsRuntime::new("/usr/bin/node", "/path/to/host.js");
+//! let registrations = runtime.load_plugin(&manifest)?;
+//! let result = runtime.call_tool("plugin-id", "handler", serde_json::json!({"key": "value"}))?;
+//! ```
+//!
 //! ## WASM Runtime
 //!
 //! ```rust,ignore
@@ -50,10 +60,14 @@
 //! let output = runtime.call_tool("plugin-id", "handler", input)?;
 //! ```
 
+pub mod nodejs;
 pub mod wasm;
 
 // Re-export WASM runtime types
 pub use wasm::{PermissionChecker, WasmRuntime, WasmToolInput, WasmToolOutput};
+
+// Re-export Node.js runtime types
+pub use nodejs::{JsonRpcRequest, JsonRpcResponse, NodeJsRuntime, NodeProcess};
 
 use crate::extension::ExtensionError;
 use crate::runtimes::{get_runtimes_dir, FnmRuntime, RuntimeManager};
