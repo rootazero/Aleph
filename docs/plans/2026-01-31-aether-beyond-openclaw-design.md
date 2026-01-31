@@ -470,12 +470,12 @@ M6 (韧性执行) ──────────► 独立，可并行开发
 
 ### Milestone 4: 规格驱动开发闭环
 
-- [ ] SpecWriter (LLM 生成 .spiky 文件)
-- [ ] TestWriter (LLM 生成测试用例)
-- [ ] LlmJudge (运行测试，判断成功/失败)
-- [ ] 失败重试循环 (注入修复指令)
+- [x] SpecWriter (LLM 生成规格)
+- [x] TestWriter (LLM 生成测试用例)
+- [x] LlmJudge (评估实现，判断成功/失败)
+- [x] SpecDrivenWorkflow (迭代重试循环)
 
-**验收**: 输入需求 → 全自动生成可运行代码
+**验收**: ✅ 输入需求 → 全自动生成可运行代码
 
 ### Milestone 5: Skill 进化系统
 
