@@ -18,3 +18,4 @@ pub use types::{
     PoeTask, RuleResult, SoftMetric, SoftRuleResult, SolutionPath, StepLog, SuccessManifest,
     TaskPattern, ValidationRule, Verdict, WorkerOutput, WorkerState,
 };
+pub use validation::HardValidator;
