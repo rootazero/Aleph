@@ -164,6 +164,7 @@ impl ReplyEmitter {
             text: content.to_string(),
             attachments: vec![],
             reply_to: self.route.reply_to.clone(),
+            inline_keyboard: None,
             metadata: Default::default(),
         };
 

@@ -127,6 +127,46 @@ impl MessageId {
     }
 }
 
+/// Inline keyboard button
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineButton {
+    /// Button text
+    pub text: String,
+    /// Callback data (sent back when clicked)
+    pub callback_data: String,
+}
+
+/// Inline keyboard row (buttons in a row)
+pub type InlineKeyboardRow = Vec<InlineButton>;
+
+/// Inline keyboard markup
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InlineKeyboard {
+    /// Rows of buttons
+    pub rows: Vec<InlineKeyboardRow>,
+}
+
+impl InlineKeyboard {
+    /// Create empty keyboard
+    pub fn new() -> Self {
+        Self { rows: Vec::new() }
+    }
+
+    /// Add a row of buttons
+    pub fn row(mut self, buttons: Vec<InlineButton>) -> Self {
+        self.rows.push(buttons);
+        self
+    }
+
+    /// Add a single button as a new row
+    pub fn button(self, text: impl Into<String>, callback_data: impl Into<String>) -> Self {
+        self.row(vec![InlineButton {
+            text: text.into(),
+            callback_data: callback_data.into(),
+        }])
+    }
+}
+
 /// Attachment in a message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attachment {
@@ -185,6 +225,9 @@ pub struct OutboundMessage {
     pub attachments: Vec<Attachment>,
     /// Message to reply to (if any)
     pub reply_to: Option<MessageId>,
+    /// Optional inline keyboard (for platforms that support it)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_keyboard: Option<InlineKeyboard>,
     /// Additional metadata
     #[serde(default)]
     pub metadata: HashMap<String, String>,
@@ -198,6 +241,7 @@ impl OutboundMessage {
             text: text.into(),
             attachments: Vec::new(),
             reply_to: None,
+            inline_keyboard: None,
             metadata: HashMap::new(),
         }
     }
@@ -427,5 +471,19 @@ mod tests {
         assert!(!caps.attachments);
         assert!(!caps.reactions);
         assert_eq!(caps.max_message_length, 0);
+    }
+
+    #[test]
+    fn test_inline_keyboard_builder() {
+        let keyboard = InlineKeyboard::new()
+            .row(vec![
+                InlineButton { text: "Allow Once".into(), callback_data: "approve:abc:once".into() },
+                InlineButton { text: "Allow Always".into(), callback_data: "approve:abc:always".into() },
+            ])
+            .button("Deny", "approve:abc:deny");
+
+        assert_eq!(keyboard.rows.len(), 2);
+        assert_eq!(keyboard.rows[0].len(), 2);
+        assert_eq!(keyboard.rows[1].len(), 1);
     }
 }
