@@ -88,6 +88,7 @@ pub mod vision;
 pub mod wizard;
 pub mod spec_driven;
 pub mod skill_evolution;
+pub mod resilient;
 
 /// Unified initialization module (re-export for backward compatibility)
 pub mod initialization {
@@ -220,6 +221,15 @@ pub use crate::skill_evolution::{
     CommitResult, EvolutionTracker, ExecutionStatus, GenerationResult, GitCommitter,
     SkillExecution, SkillGenerator, SkillMetrics, SolidificationConfig, SolidificationDetector,
     SolidificationSuggestion,
+};
+
+// =============================================================================
+// Resilient Task Exports
+// =============================================================================
+
+pub use crate::resilient::{
+    classify_error, DegradationReason, DegradationStrategy, ErrorClass, ResilienceConfig,
+    TaskContext, TaskOutcome,
 };
 
 // =============================================================================
