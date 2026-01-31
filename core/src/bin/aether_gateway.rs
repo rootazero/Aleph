@@ -189,6 +189,11 @@ enum Command {
         #[command(subcommand)]
         action: ChannelsAction,
     },
+    /// Manage cron jobs
+    Cron {
+        #[command(subcommand)]
+        action: CronAction,
+    },
 }
 
 /// Pairing subcommands
@@ -344,6 +349,40 @@ enum ChannelsAction {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+    },
+}
+
+/// Cron subcommands
+#[derive(Subcommand, Debug)]
+enum CronAction {
+    /// List cron jobs
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+    },
+    /// Get cron service status
+    Status {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+    },
+    /// Trigger a cron job manually
+    Run {
+        /// Job ID to run
+        job_id: String,
 
         /// Gateway URL
         #[arg(long, default_value = "ws://127.0.0.1:18789")]
@@ -924,6 +963,31 @@ async fn handle_channels_command(action: ChannelsAction) -> Result<(), Box<dyn s
     Ok(())
 }
 
+/// Handle cron subcommands
+#[cfg(feature = "gateway")]
+async fn handle_cron_command(action: CronAction) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::cli::{cron, GatewayClient, OutputFormat};
+
+    match action {
+        CronAction::List { json, url } => {
+            let client = GatewayClient::new().with_url(&url);
+            let format = OutputFormat::from_json_flag(json);
+            cron::handle_list(&client, format).await?;
+        }
+        CronAction::Status { json, url } => {
+            let client = GatewayClient::new().with_url(&url);
+            let format = OutputFormat::from_json_flag(json);
+            cron::handle_status(&client, format).await?;
+        }
+        CronAction::Run { job_id, url } => {
+            let client = GatewayClient::new().with_url(&url);
+            cron::handle_run(&client, job_id).await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Daemonize the current process (Unix only)
 #[cfg(unix)]
 fn daemonize(pid_file: &str, log_file: Option<&PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
@@ -1055,8 +1119,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Channels { action }) => {
             return handle_channels_command(action).await;
         }
+        #[cfg(feature = "gateway")]
+        Some(Command::Cron { action }) => {
+            return handle_cron_command(action).await;
+        }
         #[cfg(not(feature = "gateway"))]
-        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) | Some(Command::Config { .. }) | Some(Command::Channels { .. }) => {
+        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) | Some(Command::Config { .. }) | Some(Command::Channels { .. }) | Some(Command::Cron { .. }) => {
             eprintln!("Error: Gateway feature is not enabled.");
             std::process::exit(1);
         }

@@ -3,6 +3,7 @@
 pub mod channels;
 pub mod client;
 pub mod config;
+pub mod cron;
 pub mod error;
 pub mod output;
 
