@@ -461,12 +461,12 @@ M6 (韧性执行) ──────────► 独立，可并行开发
 
 ### Milestone 3: Telegram 审批集成
 
-- [ ] TelegramAdapter 增强 (inline keyboard)
-- [ ] 审批请求消息模板
-- [ ] 回调处理 (approve/reject)
-- [ ] PtySupervisor ↔ Telegram 联动
+- [x] TelegramAdapter 增强 (inline keyboard)
+- [x] 审批请求消息模板
+- [x] 回调处理 (approve/reject)
+- [x] PtySupervisor ↔ Telegram 联动
 
-**验收**: Danger 命令触发 Telegram 弹窗，点击后放行
+**验收**: ✅ Danger 命令触发 Telegram 弹窗，点击后放行
 
 ### Milestone 4: 规格驱动开发闭环
 
