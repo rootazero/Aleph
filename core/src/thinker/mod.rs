@@ -32,6 +32,7 @@
 pub mod decision_parser;
 pub mod model_router;
 pub mod prompt_builder;
+pub mod streaming;
 pub mod tool_filter;
 
 use std::sync::Arc;

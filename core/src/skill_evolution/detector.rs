@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use tracing::info;
 
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
