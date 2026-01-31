@@ -19,3 +19,4 @@ pub use types::{
     TaskPattern, ValidationRule, Verdict, WorkerOutput, WorkerState,
 };
 pub use validation::HardValidator;
+pub use worker::{AgentLoopWorker, StateSnapshot, Worker};
