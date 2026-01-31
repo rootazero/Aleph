@@ -25,6 +25,8 @@ all-channels = ["telegram", "discord"]
 cron = ["dep:cron", "gateway"]
 # Browser control via CDP
 browser = ["dep:chromiumoxide", "gateway"]
+# CLI interactive prompts (inquire for rich user questions)
+cli = ["dep:inquire"]
 # Plugin system: WebAssembly runtime via Extism
 plugin-wasm = ["dep:extism"]
 # Plugin system: Node.js runtime (placeholder)
@@ -158,6 +160,9 @@ chromiumoxide = { version = "0.7", optional = true, default-features = false, fe
 
 # Plugin system dependencies (optional)
 extism = { version = "1.7", optional = true }
+
+# CLI interactive prompts
+inquire = { version = "0.7", optional = true }
 
 [build-dependencies]
 # csbindgen for Windows C# bindings (deprecated)
