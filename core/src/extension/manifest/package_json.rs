@@ -186,7 +186,7 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
     }
 
     // Determine plugin ID (aether.id > package name)
-    let id = aether.id.unwrap_or_else(|| sanitize_plugin_id(&pkg.name));
+    let id = aether.id.unwrap_or_else(|| sanitize_npm_package_name(&pkg.name));
 
     // Validate plugin ID
     super::aether_plugin::validate_plugin_id(&id).map_err(|e| {
@@ -228,36 +228,20 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
     Ok(manifest)
 }
 
-/// Sanitize a package name to a valid plugin ID
+/// Sanitize an npm package name to a valid plugin ID.
 ///
-/// Converts scoped packages (@org/name) and other formats to valid plugin IDs.
-fn sanitize_plugin_id(name: &str) -> String {
-    let mut id = name.to_lowercase();
+/// Handles scoped packages (@org/name) by stripping the scope prefix,
+/// then delegates to the shared `sanitize_plugin_id` function.
+fn sanitize_npm_package_name(name: &str) -> String {
+    let mut stripped = name.to_string();
 
     // Remove scope prefix (@org/)
-    if let Some(pos) = id.find('/') {
-        id = id[pos + 1..].to_string();
+    if let Some(pos) = stripped.find('/') {
+        stripped = stripped[pos + 1..].to_string();
     }
 
-    // Replace invalid characters with hyphens
-    id = id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-
-    // Remove consecutive hyphens
-    while id.contains("--") {
-        id = id.replace("--", "-");
-    }
-
-    // Remove leading/trailing hyphens
-    id.trim_matches('-').to_string()
+    // Use the shared sanitization logic
+    super::aether_plugin::sanitize_plugin_id(&stripped)
 }
 
 #[cfg(test)]
@@ -441,14 +425,17 @@ mod tests {
     }
 
     #[test]
-    fn test_sanitize_plugin_id() {
-        assert_eq!(sanitize_plugin_id("my-plugin"), "my-plugin");
-        assert_eq!(sanitize_plugin_id("@org/my-plugin"), "my-plugin");
-        assert_eq!(sanitize_plugin_id("MyPlugin"), "myplugin");
-        assert_eq!(sanitize_plugin_id("my_plugin"), "my-plugin");
-        assert_eq!(sanitize_plugin_id("my--plugin"), "my-plugin");
-        assert_eq!(sanitize_plugin_id("-my-plugin-"), "my-plugin");
-        assert_eq!(sanitize_plugin_id("@scope/pkg-name"), "pkg-name");
+    fn test_sanitize_npm_package_name() {
+        // Test npm-specific sanitization (scope stripping)
+        assert_eq!(sanitize_npm_package_name("my-plugin"), "my-plugin");
+        assert_eq!(sanitize_npm_package_name("@org/my-plugin"), "my-plugin");
+        assert_eq!(sanitize_npm_package_name("@scope/pkg-name"), "pkg-name");
+
+        // These also test the underlying sanitize_plugin_id behavior
+        assert_eq!(sanitize_npm_package_name("MyPlugin"), "myplugin");
+        assert_eq!(sanitize_npm_package_name("my_plugin"), "my-plugin");
+        assert_eq!(sanitize_npm_package_name("my--plugin"), "my-plugin");
+        assert_eq!(sanitize_npm_package_name("-my-plugin-"), "my-plugin");
     }
 
     #[test]
