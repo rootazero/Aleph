@@ -49,12 +49,14 @@
 //! ```
 
 // Submodules
+pub mod answer;
 pub mod callback;
 pub mod config;
 pub mod decision;
 pub mod guards;
 pub mod message_builder;
 pub mod overflow;
+pub mod question;
 pub mod session_sync;
 pub mod state;
 
@@ -64,9 +66,11 @@ mod traits;
 mod agent_loop;
 
 // Re-export public types
+pub use answer::UserAnswer;
 pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent, NoOpLoopCallback};
 pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig, ThinkRetryConfig};
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
+pub use question::{ChoiceOption, QuestionKind, TextValidation};
 pub use guards::{GuardViolation, LoopGuard};
 pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCall};
 pub use overflow::{ModelLimit, OverflowConfig, OverflowDetector};
