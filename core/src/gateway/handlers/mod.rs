@@ -63,6 +63,9 @@ pub mod cron;
 pub mod exec_approvals;
 pub mod wizard;
 pub mod supervisor;
+pub mod approval_bridge;
+
+pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 #[cfg(feature = "browser")]
 pub mod browser;
 
