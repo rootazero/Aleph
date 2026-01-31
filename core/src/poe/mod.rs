@@ -130,3 +130,7 @@ pub use validation::{CompositeValidator, HardValidator, SemanticValidator};
 
 // Worker abstraction
 pub use worker::{AgentLoopWorker, StateSnapshot, Worker};
+
+// Integration tests
+#[cfg(test)]
+mod tests;
