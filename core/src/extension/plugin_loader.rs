@@ -58,6 +58,22 @@ use crate::extension::types::PluginKind;
 /// - `NodeJs`: JavaScript/TypeScript plugins using Node.js subprocess
 /// - `Wasm`: WebAssembly plugins using Extism (feature-gated)
 /// - `Static`: Static content plugins (handled by ComponentLoader, not this loader)
+///
+/// # Thread Safety and Write Lock Requirement
+///
+/// Methods like [`call_tool`] and [`execute_hook`] require mutable access (`&mut self`)
+/// because Node.js IPC communication requires writing to stdin/stdout streams.
+/// These operations are inherently sequential - interleaving writes from multiple
+/// concurrent callers would corrupt the message framing and cause protocol errors.
+///
+/// When wrapping PluginLoader in an RwLock (as done in ExtensionManager), tool and
+/// hook calls must acquire a **write lock** to ensure sequential access to the IPC streams.
+///
+/// This is a fundamental constraint of the Node.js subprocess communication model,
+/// not a limitation of this implementation.
+///
+/// [`call_tool`]: #method.call_tool
+/// [`execute_hook`]: #method.execute_hook
 pub struct PluginLoader {
     /// Node.js runtime (lazy initialized)
     nodejs_runtime: Option<NodeJsRuntime>,

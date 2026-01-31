@@ -147,6 +147,12 @@ pub struct ExtensionManager {
 
     /// Cache state for lazy-loading
     cache_state: Arc<RwLock<CacheState>>,
+
+    /// Plugin loader for runtime plugins (Node.js, WASM)
+    plugin_loader: Arc<RwLock<PluginLoader>>,
+
+    /// Plugin registry for runtime registrations
+    plugin_registry: Arc<RwLock<PluginRegistry>>,
 }
 
 impl ExtensionManager {
@@ -158,6 +164,8 @@ impl ExtensionManager {
         let loader = ComponentLoader::new();
         let hook_executor = Arc::new(RwLock::new(HookExecutor::empty()));
         let cache_state = Arc::new(RwLock::new(CacheState::default()));
+        let plugin_loader = Arc::new(RwLock::new(PluginLoader::new()));
+        let plugin_registry = Arc::new(RwLock::new(PluginRegistry::new()));
 
         Ok(Self {
             config,
@@ -167,6 +175,8 @@ impl ExtensionManager {
             loader,
             hook_executor,
             cache_state,
+            plugin_loader,
+            plugin_registry,
         })
     }
 
@@ -261,6 +271,12 @@ impl ExtensionManager {
                 }
             }
         }
+
+        // 5. Load runtime plugins (Node.js, WASM)
+        // Note: Runtime plugins are discovered separately and loaded via PluginLoader.
+        // They register tools and hooks with the PluginRegistry (not ComponentRegistry).
+        // For now, runtime plugin discovery is handled via separate API calls.
+        // TODO: Add automatic discovery and loading of runtime plugins here.
 
         tracing::info!(
             "Extension loading complete: {} skills, {} commands, {} agents, {} plugins, {} hooks",
@@ -403,6 +419,103 @@ impl ExtensionManager {
     /// Get the number of registered hooks
     pub async fn hook_count(&self) -> usize {
         self.hook_executor.read().await.hook_count()
+    }
+
+    // =========================================================================
+    // Runtime Plugin Operations (Node.js, WASM)
+    // =========================================================================
+
+    /// Call a tool on a runtime plugin.
+    ///
+    /// This method calls a tool handler on a loaded runtime plugin (Node.js or WASM).
+    /// The plugin must have been loaded via the PluginLoader.
+    ///
+    /// # Lock Behavior
+    ///
+    /// This method acquires a **write lock** on the plugin loader because the underlying
+    /// IPC call requires mutable access to the Node.js process stdin/stdout streams.
+    /// Node.js IPC is inherently sequential - multiple concurrent writes to stdin would
+    /// corrupt the message framing.
+    ///
+    /// For high-throughput scenarios with many concurrent tool calls, consider:
+    /// - Running multiple instances of the same plugin (load-balanced)
+    /// - Using a bounded queue to throttle concurrent calls
+    /// - Implementing request batching to reduce the number of separate tool calls
+    ///
+    /// # Arguments
+    ///
+    /// * `plugin_id` - The ID of the plugin containing the tool
+    /// * `handler` - The handler function name to call
+    /// * `args` - The arguments to pass to the handler
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(serde_json::Value)` - The result from the tool handler
+    /// * `Err(ExtensionError::PluginNotFound)` - If the plugin is not loaded
+    pub async fn call_plugin_tool(
+        &self,
+        plugin_id: &str,
+        handler: &str,
+        args: serde_json::Value,
+    ) -> ExtensionResult<serde_json::Value> {
+        self.plugin_loader
+            .write()
+            .await
+            .call_tool(plugin_id, handler, args)
+    }
+
+    /// Execute a hook handler on a runtime plugin.
+    ///
+    /// This method executes a hook handler on a loaded runtime plugin (Node.js or WASM).
+    /// The plugin must have been loaded via the PluginLoader.
+    ///
+    /// # Lock Behavior
+    ///
+    /// This method acquires a **write lock** on the plugin loader because the underlying
+    /// IPC call requires mutable access to the Node.js process stdin/stdout streams.
+    /// Node.js IPC is inherently sequential - multiple concurrent writes to stdin would
+    /// corrupt the message framing.
+    ///
+    /// For high-throughput scenarios with many concurrent hook executions, consider:
+    /// - Running multiple instances of the same plugin (load-balanced)
+    /// - Using a bounded queue to throttle concurrent calls
+    /// - Implementing request batching for bulk event handling
+    ///
+    /// # Arguments
+    ///
+    /// * `plugin_id` - The ID of the plugin containing the hook
+    /// * `handler` - The handler function name to call
+    /// * `event_data` - The event data to pass to the handler
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(serde_json::Value)` - The result from the hook handler
+    /// * `Err(ExtensionError::PluginNotFound)` - If the plugin is not loaded
+    pub async fn execute_plugin_hook(
+        &self,
+        plugin_id: &str,
+        handler: &str,
+        event_data: serde_json::Value,
+    ) -> ExtensionResult<serde_json::Value> {
+        self.plugin_loader
+            .write()
+            .await
+            .execute_hook(plugin_id, handler, event_data)
+    }
+
+    /// Get the plugin registry for runtime plugins.
+    ///
+    /// This provides read access to the registry containing tools, hooks,
+    /// and other registrations from runtime plugins (Node.js, WASM).
+    pub async fn get_plugin_registry(&self) -> tokio::sync::RwLockReadGuard<'_, PluginRegistry> {
+        self.plugin_registry.read().await
+    }
+
+    /// Get the plugin loader for runtime plugins.
+    ///
+    /// This provides read access to the plugin loader for checking plugin status.
+    pub async fn get_plugin_loader(&self) -> tokio::sync::RwLockReadGuard<'_, PluginLoader> {
+        self.plugin_loader.read().await
     }
 
     // =========================================================================
@@ -680,4 +793,79 @@ pub fn is_valid_plugin_dir(path: &std::path::Path) -> bool {
 pub fn default_plugins_dir() -> std::path::PathBuf {
     crate::discovery::aether_plugins_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("~/.aether/plugins"))
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_extension_manager_has_plugin_loader() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Calling with nonexistent plugin should return PluginNotFound error
+        let result = manager
+            .call_plugin_tool("nonexistent", "handler", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+
+        // Verify the error is PluginNotFound
+        match result {
+            Err(ExtensionError::PluginNotFound(id)) => {
+                assert_eq!(id, "nonexistent");
+            }
+            other => {
+                panic!("Expected PluginNotFound error, got: {:?}", other);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extension_manager_has_plugin_registry() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Should be able to access the plugin registry
+        let registry = manager.get_plugin_registry().await;
+
+        // Registry should be empty initially
+        assert!(registry.list_plugins().is_empty());
+        assert!(registry.list_tools().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_extension_manager_execute_plugin_hook_nonexistent() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Calling with nonexistent plugin should return PluginNotFound error
+        let result = manager
+            .execute_plugin_hook("nonexistent", "onEvent", serde_json::json!({"test": true}))
+            .await;
+        assert!(result.is_err());
+
+        // Verify the error is PluginNotFound
+        match result {
+            Err(ExtensionError::PluginNotFound(id)) => {
+                assert_eq!(id, "nonexistent");
+            }
+            other => {
+                panic!("Expected PluginNotFound error, got: {:?}", other);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extension_manager_get_plugin_loader() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Should be able to access the plugin loader
+        let loader = manager.get_plugin_loader().await;
+
+        // No runtime should be active initially
+        assert!(!loader.is_any_runtime_active());
+        assert!(loader.loaded_plugin_ids().is_empty());
+    }
 }
