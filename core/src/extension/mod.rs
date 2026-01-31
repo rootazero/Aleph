@@ -51,8 +51,8 @@ pub mod sync_api;
 
 mod error;
 mod loader;
-mod manifest;
-mod registry;
+pub mod manifest;
+pub mod registry;
 mod skill_tool;
 mod template;
 mod types;
@@ -71,6 +71,12 @@ pub use config::{AetherConfig, ConfigManager};
 
 // Re-export sync API
 pub use sync_api::SyncExtensionManager;
+
+// Re-export new plugin system types (Phase 1)
+pub use discovery::{discover_all, DiscoveryConfig as PluginDiscoveryConfig, PluginCandidate};
+pub use manifest::PluginManifest;
+pub use registry::{HookRegistration, PluginHookEvent, PluginRegistry, ToolRegistration};
+pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use hooks::{HookContext, HookExecutor, HookResult};
