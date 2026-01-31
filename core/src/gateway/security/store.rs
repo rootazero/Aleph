@@ -64,6 +64,9 @@ impl SecurityStore {
 
             let conn = self.conn.lock().unwrap();
 
+            // Enable foreign key constraints
+            conn.execute("PRAGMA foreign_keys = ON", [])?;
+
             // Drop old tables (force re-pairing)
             conn.execute_batch(
                 r#"
@@ -102,8 +105,14 @@ impl SecurityStore {
     ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         let now = current_timestamp_ms();
-        let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|_| "[]".to_string());
+        let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|e| {
+            tracing::warn!("Failed to serialize device scopes: {}", e);
+            "[]".to_string()
+        });
 
+        // ON CONFLICT behavior: device_name is updated, but approved_at is preserved
+        // from the original INSERT. This means re-pairing a device keeps its original
+        // approval timestamp, while updating the name and refreshing last_seen_at.
         conn.execute(
             r#"INSERT INTO devices
                (device_id, device_name, device_type, public_key, fingerprint, role, scopes, created_at, approved_at)
@@ -216,7 +225,10 @@ impl SecurityStore {
     ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         let now = current_timestamp_ms();
-        let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|_| "[]".to_string());
+        let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|e| {
+            tracing::warn!("Failed to serialize token scopes: {}", e);
+            "[]".to_string()
+        });
 
         conn.execute(
             r#"INSERT INTO tokens (token_id, device_id, token_hash, role, scopes, issued_at, expires_at)
@@ -468,7 +480,10 @@ pub struct DeviceRow {
 impl DeviceRow {
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         let scopes_json: String = row.get(6)?;
-        let scopes: Vec<String> = serde_json::from_str(&scopes_json).unwrap_or_default();
+        let scopes: Vec<String> = serde_json::from_str(&scopes_json).unwrap_or_else(|e| {
+            tracing::warn!("Failed to deserialize device scopes: {}", e);
+            Vec::new()
+        });
 
         Ok(Self {
             device_id: row.get(0)?,
@@ -504,7 +519,10 @@ pub struct TokenRow {
 impl TokenRow {
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         let scopes_json: String = row.get(4)?;
-        let scopes: Vec<String> = serde_json::from_str(&scopes_json).unwrap_or_default();
+        let scopes: Vec<String> = serde_json::from_str(&scopes_json).unwrap_or_else(|e| {
+            tracing::warn!("Failed to deserialize token scopes: {}", e);
+            Vec::new()
+        });
 
         Ok(Self {
             token_id: row.get(0)?,
