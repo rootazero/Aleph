@@ -86,6 +86,7 @@ pub mod utils;
 pub mod video;
 pub mod vision;
 pub mod wizard;
+pub mod spec_driven;
 
 /// Unified initialization module (re-export for backward compatibility)
 pub mod initialization {
@@ -198,6 +199,15 @@ pub use crate::supervisor::{
 
 pub use crate::wizard::{
     WizardFlow, WizardPrompter, WizardSession, WizardSessionError, WizardStatus,
+};
+
+// =============================================================================
+// Spec-Driven Development Exports
+// =============================================================================
+
+pub use crate::spec_driven::{
+    AssertionType, EvaluationResult, Spec, SpecMetadata, SpecTarget, TestCase, TestResult,
+    TestType, WorkflowConfig, WorkflowResult,
 };
 
 // =============================================================================
