@@ -27,7 +27,9 @@ mod aether_plugin;
 mod package_json;
 mod types;
 
-pub use aether_plugin::{parse_aether_plugin, parse_aether_plugin_content, validate_plugin_id};
+pub use aether_plugin::{
+    parse_aether_plugin, parse_aether_plugin_content, sanitize_plugin_id, validate_plugin_id,
+};
 pub use package_json::{parse_package_json, parse_package_json_content};
 pub use types::{AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission};
 
@@ -318,7 +320,7 @@ fn parse_legacy_claude_manifest_content(
 
     // Convert legacy format to PluginManifest
     // Legacy plugins are treated as static content plugins
-    let id = sanitize_to_plugin_id(&legacy.name);
+    let id = sanitize_plugin_id(&legacy.name);
 
     validate_plugin_id(&id).map_err(|reason| ExtensionError::invalid_plugin_name(&id, reason))?;
 
@@ -328,29 +330,6 @@ fn parse_legacy_claude_manifest_content(
         crate::extension::types::PluginKind::Static,
         ".".into(),
     ))
-}
-
-/// Sanitize a name to a valid plugin ID
-fn sanitize_to_plugin_id(name: &str) -> String {
-    let mut id: String = name
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-
-    // Remove consecutive hyphens
-    while id.contains("--") {
-        id = id.replace("--", "-");
-    }
-
-    // Remove leading/trailing hyphens
-    id.trim_matches('-').to_string()
 }
 
 // =============================================================================
@@ -469,12 +448,13 @@ Body content."#;
     }
 
     #[test]
-    fn test_sanitize_to_plugin_id() {
-        assert_eq!(sanitize_to_plugin_id("My Plugin"), "my-plugin");
-        assert_eq!(sanitize_to_plugin_id("my_plugin"), "my-plugin");
-        assert_eq!(sanitize_to_plugin_id("my--plugin"), "my-plugin");
-        assert_eq!(sanitize_to_plugin_id("-my-plugin-"), "my-plugin");
-        assert_eq!(sanitize_to_plugin_id("Plugin 123"), "plugin-123");
+    fn test_sanitize_plugin_id() {
+        // Tests the consolidated sanitize_plugin_id from aether_plugin.rs
+        assert_eq!(sanitize_plugin_id("My Plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("my_plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("my--plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("-my-plugin-"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("Plugin 123"), "plugin-123");
     }
 
     #[test]

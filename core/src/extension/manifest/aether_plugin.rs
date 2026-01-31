@@ -106,8 +106,49 @@ impl From<AetherPluginAuthor> for AuthorInfo {
 }
 
 // =============================================================================
-// Plugin ID Validation
+// Plugin ID Validation and Sanitization
 // =============================================================================
+
+/// Sanitize a name to a valid plugin ID.
+///
+/// Converts the name to lowercase, replaces invalid characters with hyphens,
+/// removes consecutive hyphens, and trims leading/trailing hyphens.
+///
+/// # Arguments
+/// * `name` - The name to sanitize
+///
+/// # Returns
+/// A sanitized plugin ID string
+///
+/// # Example
+/// ```
+/// use aethecore::extension::manifest::sanitize_plugin_id;
+///
+/// assert_eq!(sanitize_plugin_id("My Plugin"), "my-plugin");
+/// assert_eq!(sanitize_plugin_id("my_plugin"), "my-plugin");
+/// assert_eq!(sanitize_plugin_id("Plugin 123"), "plugin-123");
+/// ```
+pub fn sanitize_plugin_id(name: &str) -> String {
+    let mut id: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    // Remove consecutive hyphens
+    while id.contains("--") {
+        id = id.replace("--", "-");
+    }
+
+    // Remove leading/trailing hyphens
+    id.trim_matches('-').to_string()
+}
 
 /// Validate a plugin ID
 ///
@@ -304,6 +345,58 @@ mod tests {
         let err = validate_plugin_id(&long_id).unwrap_err();
         assert!(err.contains("too long"));
     }
+
+    // =========================================================================
+    // sanitize_plugin_id tests
+    // =========================================================================
+
+    #[test]
+    fn test_sanitize_plugin_id_basic() {
+        assert_eq!(sanitize_plugin_id("my-plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("plugin123"), "plugin123");
+    }
+
+    #[test]
+    fn test_sanitize_plugin_id_uppercase() {
+        assert_eq!(sanitize_plugin_id("MyPlugin"), "myplugin");
+        assert_eq!(sanitize_plugin_id("MY-PLUGIN"), "my-plugin");
+    }
+
+    #[test]
+    fn test_sanitize_plugin_id_spaces() {
+        assert_eq!(sanitize_plugin_id("My Plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("my plugin name"), "my-plugin-name");
+    }
+
+    #[test]
+    fn test_sanitize_plugin_id_underscores() {
+        assert_eq!(sanitize_plugin_id("my_plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("my_awesome_plugin"), "my-awesome-plugin");
+    }
+
+    #[test]
+    fn test_sanitize_plugin_id_consecutive_hyphens() {
+        assert_eq!(sanitize_plugin_id("my--plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("my---plugin"), "my-plugin");
+    }
+
+    #[test]
+    fn test_sanitize_plugin_id_leading_trailing() {
+        assert_eq!(sanitize_plugin_id("-my-plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("my-plugin-"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("-my-plugin-"), "my-plugin");
+    }
+
+    #[test]
+    fn test_sanitize_plugin_id_special_chars() {
+        assert_eq!(sanitize_plugin_id("my@plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("my!plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("Plugin 123"), "plugin-123");
+    }
+
+    // =========================================================================
+    // parse_aether_plugin tests
+    // =========================================================================
 
     #[test]
     fn test_parse_aether_plugin_basic() {
