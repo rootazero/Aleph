@@ -207,7 +207,7 @@ pub use crate::wizard::{
 
 pub use crate::spec_driven::{
     AssertionType, EvaluationResult, Spec, SpecMetadata, SpecTarget, SpecWriter, TestCase,
-    TestResult, TestType, WorkflowConfig, WorkflowResult,
+    TestResult, TestType, TestWriter, WorkflowConfig, WorkflowResult,
 };
 
 // =============================================================================
