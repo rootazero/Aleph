@@ -70,6 +70,17 @@ impl HandlerRegistry {
         // Commands handlers
         registry.register("commands.list", commands::handle_list);
 
+        // Plugin handlers
+        registry.register("plugins.list", plugins::handle_list);
+        registry.register("plugins.install", plugins::handle_install);
+        registry.register("plugins.installFromZip", plugins::handle_install_from_zip);
+        registry.register("plugins.uninstall", plugins::handle_uninstall);
+        registry.register("plugins.enable", plugins::handle_enable);
+        registry.register("plugins.disable", plugins::handle_disable);
+        registry.register("plugins.load", plugins::handle_load);
+        registry.register("plugins.unload", plugins::handle_unload);
+        registry.register("plugins.callTool", plugins::handle_call_tool);
+
         registry
     }
 
@@ -214,5 +225,19 @@ mod tests {
         assert!(methods.contains(&"health".to_string()));
         assert!(methods.contains(&"echo".to_string()));
         assert!(methods.contains(&"version".to_string()));
+    }
+
+    #[test]
+    fn test_plugin_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("plugins.list"));
+        assert!(registry.has_method("plugins.install"));
+        assert!(registry.has_method("plugins.installFromZip"));
+        assert!(registry.has_method("plugins.uninstall"));
+        assert!(registry.has_method("plugins.enable"));
+        assert!(registry.has_method("plugins.disable"));
+        assert!(registry.has_method("plugins.load"));
+        assert!(registry.has_method("plugins.unload"));
+        assert!(registry.has_method("plugins.callTool"));
     }
 }
