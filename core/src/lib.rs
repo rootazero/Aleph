@@ -117,6 +117,12 @@ pub mod browser;
 pub mod permission; // Rule-based permission system
 pub mod question; // Structured user interaction
 
+// NEW: Wizard system for guided configuration flows
+pub mod wizard;
+
+// NEW: PTY-based process supervisor for Claude Code control
+pub mod supervisor;
+
 // Integration tests module
 #[cfg(test)]
 mod tests;
@@ -348,6 +354,10 @@ pub use crate::exec::{
     decide_exec_approval, ApprovalDecision, ApprovalRequest, ExecContext, DEFAULT_SAFE_BINS,
     // Socket
     ApprovalDecisionType, ApprovalRequestPayload, SegmentInfo, SocketMessage,
+    // Manager
+    ExecApprovalManager, ExecApprovalRecord, PendingApproval,
+    // Storage
+    ConfigWithHash, ExecApprovalsStorage, StorageError,
 };
 
 // Prompt exports (unified prompt management)
@@ -468,6 +478,18 @@ pub use crate::permission::{
 
 // Question system exports (structured user interaction)
 pub use crate::question::{QuestionError, QuestionManager, QuestionManagerConfig};
+
+// Wizard system exports (guided configuration flows)
+pub use crate::wizard::{
+    CliPrompter, ProgressHandle, RpcPrompter, WizardPrompter,
+    WizardFlow, WizardSession, WizardSessionError,
+    StepExecutor, StepType, WizardNextResult, WizardOption, WizardStatus, WizardStep,
+    // Flows
+    OnboardingFlow, OnboardingData, ProviderSetupFlow, QuickSetupFlow,
+};
+
+// Supervisor exports (PTY-based process control)
+pub use crate::supervisor::{PtySize, SupervisorConfig, SupervisorError, SupervisorEvent};
 
 // Tool system exports (unified tool traits replacing rig-core)
 pub use crate::tools::{AetherTool, AetherToolDyn, AetherToolServer, AetherToolServerHandle};
