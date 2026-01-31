@@ -10,10 +10,12 @@ pub mod judge;
 pub mod spec_writer;
 pub mod test_writer;
 pub mod types;
+pub mod workflow;
 
 pub use judge::LlmJudge;
 pub use spec_writer::SpecWriter;
 pub use test_writer::TestWriter;
+pub use workflow::{NoOpWorkflowCallback, SpecDrivenWorkflow, WorkflowCallback};
 pub use types::{
     AssertionType, EvaluationResult, Spec, SpecMetadata, SpecTarget, TestCase, TestResult,
     TestType, WorkflowConfig, WorkflowResult,

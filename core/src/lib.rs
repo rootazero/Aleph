@@ -206,8 +206,9 @@ pub use crate::wizard::{
 // =============================================================================
 
 pub use crate::spec_driven::{
-    AssertionType, EvaluationResult, LlmJudge, Spec, SpecMetadata, SpecTarget, SpecWriter,
-    TestCase, TestResult, TestType, TestWriter, WorkflowConfig, WorkflowResult,
+    AssertionType, EvaluationResult, LlmJudge, NoOpWorkflowCallback, Spec, SpecDrivenWorkflow,
+    SpecMetadata, SpecTarget, SpecWriter, TestCase, TestResult, TestType, TestWriter,
+    WorkflowCallback, WorkflowConfig, WorkflowResult,
 };
 
 // =============================================================================
