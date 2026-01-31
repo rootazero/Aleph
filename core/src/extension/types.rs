@@ -3,6 +3,7 @@
 //! Core data structures for skills, commands, agents, and plugins.
 
 use crate::discovery::DiscoverySource;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -158,7 +159,7 @@ pub enum AgentMode {
 }
 
 /// Permission rule for agent
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum PermissionRule {
     /// Simple action for all patterns
@@ -168,7 +169,7 @@ pub enum PermissionRule {
 }
 
 /// Permission action
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionAction {
     Allow,

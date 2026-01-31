@@ -3,6 +3,7 @@
 //! Defines configurable keyword patterns and fallback rules for inferring
 //! tool safety levels without hardcoding them in the mechanism code.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -10,7 +11,7 @@ use std::collections::HashSet;
 ///
 /// This policy allows users to customize which keywords trigger which safety
 /// classifications, and what fallback levels to use for each tool category.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolSafetyPolicy {
     /// Keywords indicating high-risk irreversible operations
     /// Default: ["delete", "remove", "drop", "shell", "execute", "run_command",

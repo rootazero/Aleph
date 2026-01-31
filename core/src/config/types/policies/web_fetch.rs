@@ -3,13 +3,14 @@
 //! Configurable parameters for web content fetching including
 //! content limits, timeouts, and user agent settings.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Policy for web fetch behavior
 ///
 /// Controls content size limits, request timeouts, and HTTP client settings
 /// for web scraping operations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WebFetchPolicy {
     /// Maximum content length in characters to return
     /// Default: 10000

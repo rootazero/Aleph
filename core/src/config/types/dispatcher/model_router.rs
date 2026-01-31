@@ -2,6 +2,7 @@
 //!
 //! Contains ModelRouterConfigToml for model routing with retry/failover/budget settings.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::budget::BudgetConfigToml;
@@ -47,7 +48,7 @@ use super::retry::RetryConfigToml;
 /// warning_thresholds = [0.5, 0.8, 0.95]
 /// ```
 #[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ModelRouterConfigToml {
     /// Whether the model router is enabled (default: true)
     #[serde(default = "default_model_router_enabled")]

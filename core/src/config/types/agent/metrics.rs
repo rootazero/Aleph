@@ -3,6 +3,7 @@
 //! Contains MetricsConfigToml, TimeWindowsConfigToml, and ScoringConfigToml
 //! for configuring runtime metrics collection for intelligent model routing.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatcher::model_router::ScoringConfig;
@@ -36,7 +37,7 @@ use crate::dispatcher::model_router::ScoringConfig;
 /// reliability_weight = 0.35
 /// quality_weight = 0.15
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MetricsConfigToml {
     /// Enable metrics collection
     #[serde(default = "default_metrics_enabled")]
@@ -135,7 +136,7 @@ impl MetricsConfigToml {
 // =============================================================================
 
 /// Time windows configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TimeWindowsConfigToml {
     /// Short-term window in seconds (default 5 minutes)
     #[serde(default = "default_short_term_secs")]
@@ -165,7 +166,7 @@ impl Default for TimeWindowsConfigToml {
 // =============================================================================
 
 /// Scoring weights configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScoringConfigToml {
     /// Weight for latency score (0.0-1.0)
     #[serde(default = "default_latency_weight")]

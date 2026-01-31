@@ -13,6 +13,7 @@
 //! Use `preferred_model` to override automatic model selection.
 
 use crate::dispatcher::model_router::TaskIntent;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -51,7 +52,7 @@ use serde::{Deserialize, Serialize};
 /// regex = "translate to English"
 /// system_prompt = "Translate the target language to English"
 /// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct RoutingRuleConfig {
     // ===== Rule Type (refactor-routing-rule-logic) =====
     /// Rule type: "command" or "keyword"

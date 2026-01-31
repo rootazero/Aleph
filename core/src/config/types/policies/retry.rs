@@ -4,13 +4,14 @@
 //! backoff strategy and retryable error conditions.
 
 use crate::dispatcher::DEFAULT_MAX_RETRIES;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Policy for retry behavior in network operations
 ///
 /// Controls retry attempts, backoff timing, and which errors should
 /// trigger retries.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RetryPolicy {
     /// Maximum retry attempts
     /// Default: 3

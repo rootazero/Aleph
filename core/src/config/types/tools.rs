@@ -9,6 +9,7 @@
 //! - Individual tool configs (Fs, Git, Shell, SystemInfo, etc.)
 //! - McpServerConfig: Unified MCP server settings
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -22,7 +23,7 @@ use super::search::default_true;
 ///
 /// System Tools are always available and run as native Rust code.
 /// They provide file system, git, shell, and system info capabilities.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolsConfig {
     /// Enable filesystem service
     #[serde(default = "default_true")]
@@ -88,7 +89,7 @@ impl Default for ToolsConfig {
 /// MCP (Model Context Protocol) configuration
 ///
 /// Controls external MCP server connections (Tier 2 Extensions)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpConfig {
     /// Enable MCP capability
     #[serde(default = "default_mcp_enabled")]
@@ -121,7 +122,7 @@ impl Default for McpConfig {
 // =============================================================================
 
 /// Configuration for external MCP servers
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpExternalServerConfig {
     /// Server name (unique identifier)
     pub name: String,
@@ -182,7 +183,7 @@ pub struct McpExternalServerConfig {
 /// args = ["~/.mcp/github/index.js"]
 /// requires_runtime = "node"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct UnifiedToolsConfig {
     /// Master switch for all tools (both native and MCP)
     #[serde(default = "default_true")]
@@ -342,7 +343,7 @@ impl UnifiedToolsConfig {
 // =============================================================================
 
 /// Configuration for native system tools (Tier 1)
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct NativeToolsConfig {
     /// Filesystem service configuration
     #[serde(default)]
@@ -378,7 +379,7 @@ pub struct NativeToolsConfig {
 // =============================================================================
 
 /// Filesystem tool configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FsToolConfig {
     /// Enable filesystem service
     #[serde(default = "default_true")]
@@ -400,7 +401,7 @@ impl Default for FsToolConfig {
 }
 
 /// Git tool configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GitToolConfig {
     /// Enable git service
     #[serde(default = "default_true")]
@@ -422,7 +423,7 @@ impl Default for GitToolConfig {
 }
 
 /// Shell tool configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ShellToolConfig {
     /// Enable shell service (disabled by default for security)
     #[serde(default)]
@@ -457,7 +458,7 @@ impl Default for ShellToolConfig {
 }
 
 /// System info tool configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SystemInfoToolConfig {
     /// Enable system info service
     #[serde(default = "default_true")]
@@ -471,7 +472,7 @@ impl Default for SystemInfoToolConfig {
 }
 
 /// Clipboard tool configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ClipboardToolConfig {
     /// Enable clipboard read service
     #[serde(default = "default_true")]
@@ -485,7 +486,7 @@ impl Default for ClipboardToolConfig {
 }
 
 /// Screen capture tool configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenCaptureToolConfig {
     /// Enable screen capture service
     #[serde(default = "default_true")]
@@ -519,7 +520,7 @@ impl Default for ScreenCaptureToolConfig {
 }
 
 /// Search tool configuration (wraps existing SearchRegistry as tool)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchToolConfig {
     /// Enable search tool
     #[serde(default = "default_true")]
@@ -560,7 +561,7 @@ impl Default for SearchToolConfig {
 ///
 /// This is similar to McpExternalServerConfig but with a cleaner structure
 /// where the server name is the TOML table key instead of a field.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpServerConfig {
     /// Command to execute
     pub command: String,

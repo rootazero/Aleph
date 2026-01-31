@@ -35,6 +35,7 @@ pub use model_profile::ModelProfileConfigToml;
 pub use model_routing::ModelRoutingConfigToml;
 pub use subagents::SubagentsConfigToml;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -61,7 +62,7 @@ use crate::dispatcher::{
 /// planner_model = "claude"
 /// auto_execute_threshold = 0.9
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CoworkConfigToml {
     /// Require user confirmation before executing task graphs
     /// (Legacy field, ignored - confirmation is always required)

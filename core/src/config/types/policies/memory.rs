@@ -2,10 +2,11 @@
 //!
 //! Configurable parameters for memory compression scheduling and AI-based retrieval.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Combined memory policies
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryPolicies {
     /// Compression scheduling policy
     #[serde(default)]
@@ -20,7 +21,7 @@ pub struct MemoryPolicies {
 ///
 /// Controls when memory compression is triggered based on idle time,
 /// conversation turns, and background intervals.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CompressionPolicy {
     /// Idle timeout in seconds before triggering compression
     /// Default: 300 (5 minutes)
@@ -64,7 +65,7 @@ fn default_background_interval_seconds() -> u32 {
 ///
 /// Controls timeouts, candidate limits, and fallback behavior when using
 /// AI to select relevant memories.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AiRetrievalPolicy {
     /// Timeout for AI selection in milliseconds
     /// Default: 3000

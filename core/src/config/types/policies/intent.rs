@@ -2,13 +2,14 @@
 //!
 //! Configurable thresholds and patterns for AI-based intent detection.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Policy for AI-based intent detection
 ///
 /// Controls confidence thresholds, timeouts, and URL pattern matching
 /// for intent classification.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IntentDetectionPolicy {
     /// Minimum confidence threshold for accepting an intent (0.0-1.0)
     /// Default: 0.7

@@ -3,6 +3,7 @@
 //! Contains the global GenerationConfig struct for media generation settings.
 
 use crate::generation::GenerationType;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -35,7 +36,7 @@ use super::provider::GenerationProviderConfig;
 /// color = "#10a37f"
 /// capabilities = ["image"]
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GenerationConfig {
     /// Default provider for image generation
     #[serde(default, skip_serializing_if = "Option::is_none")]

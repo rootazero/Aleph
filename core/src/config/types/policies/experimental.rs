@@ -12,13 +12,14 @@
 //! use_new_prompt_system = true
 //! ```
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Experimental feature configuration
 ///
 /// Controls experimental features that are still being tested.
 /// All flags default to `false` for backward compatibility.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExperimentalPolicy {
     /// Use the new unified ExecutionIntentDecider instead of legacy IntentClassifier.
     ///

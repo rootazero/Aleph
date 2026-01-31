@@ -2,6 +2,7 @@
 //!
 //! Contains BudgetConfigToml and BudgetLimitConfigToml for cost control.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -35,7 +36,7 @@ use tracing::warn;
 /// warning_thresholds = [0.8]
 /// enforcement = "warn_only"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BudgetConfigToml {
     /// Whether budget management is enabled (default: true)
     #[serde(default = "default_budget_enabled")]
@@ -122,7 +123,7 @@ impl BudgetConfigToml {
 /// warning_thresholds = [0.5, 0.8, 0.95]
 /// enforcement = "soft_block"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BudgetLimitConfigToml {
     /// Unique identifier for this limit
     pub id: String,

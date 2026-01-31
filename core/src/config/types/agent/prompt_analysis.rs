@@ -3,6 +3,7 @@
 //! Contains PromptAnalysisConfigToml for configuring the prompt analyzer
 //! for intelligent model routing based on prompt content features.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// low_complexity_threshold = 0.3
 /// mixed_language_threshold = 0.3
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PromptAnalysisConfigToml {
     /// Enable prompt analysis for routing
     #[serde(default = "default_prompt_analysis_enabled")]

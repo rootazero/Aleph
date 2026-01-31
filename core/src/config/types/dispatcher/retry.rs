@@ -2,6 +2,7 @@
 //!
 //! Contains RetryConfigToml for retry and failover behavior.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -30,7 +31,7 @@ use super::backoff::BackoffConfigToml;
 /// max_ms = 5000
 /// jitter_factor = 0.2
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RetryConfigToml {
     /// Whether retry is enabled (default: true)
     #[serde(default = "default_retry_enabled")]

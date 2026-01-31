@@ -1,11 +1,12 @@
 //! Configuration types for aether.jsonc
 
 use crate::extension::types::PermissionRule;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Aether configuration (from aether.jsonc)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct AetherConfig {
     /// JSON schema reference
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
@@ -65,7 +66,7 @@ pub struct AetherConfig {
 }
 
 /// Agent configuration override
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct AgentConfigOverride {
     /// Model to use (provider/model)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,7 +122,7 @@ pub struct AgentConfigOverride {
 }
 
 /// MCP server configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum McpConfig {
     /// Local MCP server (stdio)
@@ -162,13 +163,14 @@ fn default_true() -> bool {
 }
 
 /// OAuth configuration for MCP
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OAuthConfig {
     /// Client ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
     /// Client secret
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub client_secret: Option<String>,
     /// Scopes
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,10 +178,11 @@ pub struct OAuthConfig {
 }
 
 /// Provider configuration override
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderOverride {
     /// API key
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub api_key: Option<String>,
     /// Base URL
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,7 +199,7 @@ pub struct ProviderOverride {
 }
 
 /// Compaction settings
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct CompactionConfig {
     /// Enable automatic compaction
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -207,7 +210,7 @@ pub struct CompactionConfig {
 }
 
 /// Experimental features
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ExperimentalConfig {
     /// Chat max retries
     #[serde(rename = "chatMaxRetries", skip_serializing_if = "Option::is_none")]

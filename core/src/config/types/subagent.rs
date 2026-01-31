@@ -3,6 +3,7 @@
 //! Configuration for the sub-agent synchronization system including
 //! execution timeouts, concurrency limits, and result collection settings.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Sub-Agent Configuration
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// max_concurrent = 5
 /// progress_events_enabled = true
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SubAgentConfig {
     /// Maximum time to wait for a sub-agent to complete (in milliseconds)
     /// Default: 300000 (5 minutes)
