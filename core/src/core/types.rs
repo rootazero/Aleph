@@ -4,7 +4,7 @@
 //! - MediaAttachment: Multimodal content support
 //! - CapturedContext: Context from active application
 //! - CompressionStats: Memory compression statistics
-//! - MemoryEntryFFI: Memory entry for FFI
+//! - MemoryEntry: Memory entry for FFI
 //! - AppMemoryInfo: App memory info for UI
 
 use serde::{Deserialize, Serialize};
@@ -50,9 +50,9 @@ pub struct CompressionStats {
     pub facts_by_type: std::collections::HashMap<String, u64>,
 }
 
-/// Memory entry type for FFI (UniFFI-compatible)
+/// Memory entry for API responses
 #[derive(Debug, Clone)]
-pub struct MemoryEntryFFI {
+pub struct MemoryEntry {
     pub id: String,
     pub app_bundle_id: String,
     pub window_title: String,
@@ -62,7 +62,7 @@ pub struct MemoryEntryFFI {
     pub similarity_score: Option<f32>,
 }
 
-/// App memory info for UI filtering (UniFFI-compatible)
+/// App memory info for UI filtering
 #[derive(Debug, Clone)]
 pub struct AppMemoryInfo {
     pub app_bundle_id: String,

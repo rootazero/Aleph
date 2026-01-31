@@ -180,13 +180,13 @@ pub use crate::config::{
 // Internal types from core module
 pub use crate::core::{
     AppMemoryInfo, CapturedContext, CompressionStats, MediaAttachment,
-    MemoryEntryFFI as MemoryEntry,
+    MemoryEntry,
 };
 pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::memory::context::CompressionResult;
 // Event handler types
 pub use crate::event_handler::{
-    ErrorType, McpServerErrorFFI, McpStartupReportFFI, ProcessingState,
+    ErrorType, McpServerError, McpStartupReport, ProcessingState,
 };
 // Skills management exports (moved from old initialization module)
 pub use crate::skills::{
