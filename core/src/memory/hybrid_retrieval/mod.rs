@@ -15,8 +15,10 @@
 //! - `FactsFirst`: Default mode - facts first, fallback to memories if insufficient
 //! - `BothLayers`: Deep mode - search both layers simultaneously and merge results
 
+pub mod association;
 pub mod hybrid;
 pub mod strategy;
 
+pub use association::{AssociationCluster, AssociationConfig, AssociationRetriever};
 pub use hybrid::{HybridRetrieval, HybridSearchConfig};
 pub use strategy::RetrievalStrategy;
