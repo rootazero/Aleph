@@ -169,6 +169,11 @@ enum Command {
         #[command(subcommand)]
         action: DevicesAction,
     },
+    /// Manage plugins
+    Plugins {
+        #[command(subcommand)]
+        action: PluginsAction,
+    },
 }
 
 /// Pairing subcommands
@@ -197,6 +202,33 @@ enum DevicesAction {
     Revoke {
         /// The device ID to revoke
         device_id: String,
+    },
+}
+
+/// Plugins subcommands
+#[derive(Subcommand, Debug)]
+enum PluginsAction {
+    /// List installed plugins
+    List,
+    /// Install a plugin from Git URL
+    Install {
+        /// Git URL of the plugin repository
+        url: String,
+    },
+    /// Uninstall a plugin
+    Uninstall {
+        /// Plugin name
+        name: String,
+    },
+    /// Enable a plugin
+    Enable {
+        /// Plugin name
+        name: String,
+    },
+    /// Disable a plugin
+    Disable {
+        /// Plugin name
+        name: String,
     },
 }
 
@@ -502,6 +534,198 @@ fn handle_devices_revoke(device_id: &str) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+// ============================================================================
+// Plugin Management Commands
+// ============================================================================
+
+/// Handle plugins list command
+#[cfg(feature = "gateway")]
+async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::extension::ExtensionManager;
+
+    let manager = ExtensionManager::with_defaults().await?;
+
+    // Load all plugins
+    if let Err(e) = manager.load_all().await {
+        eprintln!("Warning: Some plugins failed to load: {}", e);
+    }
+
+    let plugins = manager.get_plugin_info().await;
+
+    if plugins.is_empty() {
+        println!("No plugins installed");
+    } else {
+        println!("Installed plugins:");
+        println!("{:<25} {:<12} {:<10} {:<40}", "NAME", "VERSION", "STATUS", "DESCRIPTION");
+        println!("{}", "-".repeat(90));
+        for plugin in &plugins {
+            let version = plugin.version.clone().unwrap_or_else(|| "-".to_string());
+            let status = if plugin.enabled { "enabled" } else { "disabled" };
+            let description = plugin.description.clone().unwrap_or_default();
+            // Truncate description if too long
+            let description = if description.len() > 38 {
+                format!("{}...", &description[..35])
+            } else {
+                description
+            };
+            println!(
+                "{:<25} {:<12} {:<10} {:<40}",
+                plugin.name, version, status, description
+            );
+        }
+        println!();
+        println!("Total: {} plugin(s)", plugins.len());
+    }
+    Ok(())
+}
+
+/// Handle plugins install command
+#[cfg(feature = "gateway")]
+async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::extension::{default_plugins_dir, ComponentLoader};
+
+    println!("Installing plugin from {}...", url);
+
+    let plugins_dir = default_plugins_dir();
+
+    // Ensure plugins directory exists
+    if !plugins_dir.exists() {
+        std::fs::create_dir_all(&plugins_dir)?;
+    }
+
+    // Extract repo name from URL
+    let repo_name = url
+        .split('/')
+        .last()
+        .unwrap_or("plugin")
+        .trim_end_matches(".git");
+    let dest_path = plugins_dir.join(repo_name);
+
+    if dest_path.exists() {
+        eprintln!("Error: Plugin already exists at: {}", dest_path.display());
+        std::process::exit(1);
+    }
+
+    // Clone the repository
+    println!("Cloning repository...");
+    match git2::Repository::clone(url, &dest_path) {
+        Ok(_) => {
+            println!("Repository cloned successfully.");
+
+            // Try to load the plugin to verify it's valid
+            let loader = ComponentLoader::new();
+
+            match loader.load_plugin(&dest_path).await {
+                Ok(plugin) => {
+                    let info = plugin.info();
+                    println!();
+                    println!("Plugin installed successfully!");
+                    println!("  Name:        {}", info.name);
+                    println!("  Version:     {}", info.version.unwrap_or_else(|| "-".to_string()));
+                    println!("  Description: {}", info.description.unwrap_or_else(|| "-".to_string()));
+                    println!("  Path:        {}", dest_path.display());
+                    println!("  Skills:      {}", info.skills_count);
+                    println!("  Agents:      {}", info.agents_count);
+                    println!("  Hooks:       {}", info.hooks_count);
+                }
+                Err(e) => {
+                    // Cleanup on failure
+                    eprintln!("Warning: Plugin cloned but failed to load: {}", e);
+                    eprintln!("The plugin directory has been kept at: {}", dest_path.display());
+                    eprintln!("You may need to check the plugin's manifest file.");
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: Failed to clone repository: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle plugins uninstall command
+#[cfg(feature = "gateway")]
+fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::extension::default_plugins_dir;
+
+    let plugins_dir = default_plugins_dir();
+    let plugin_path = plugins_dir.join(name);
+
+    if !plugin_path.exists() {
+        eprintln!("Error: Plugin not found: {}", name);
+        eprintln!("Plugin directory: {}", plugin_path.display());
+        std::process::exit(1);
+    }
+
+    // Confirm uninstall
+    println!("Uninstalling plugin: {}", name);
+    println!("Path: {}", plugin_path.display());
+
+    match std::fs::remove_dir_all(&plugin_path) {
+        Ok(()) => {
+            println!("Plugin uninstalled successfully.");
+        }
+        Err(e) => {
+            eprintln!("Error: Failed to remove plugin: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle plugins enable command
+#[cfg(feature = "gateway")]
+fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::extension::default_plugins_dir;
+
+    let plugins_dir = default_plugins_dir();
+    let plugin_path = plugins_dir.join(name);
+
+    if !plugin_path.exists() {
+        eprintln!("Error: Plugin not found: {}", name);
+        std::process::exit(1);
+    }
+
+    // Check for disabled marker file
+    let disabled_marker = plugin_path.join(".disabled");
+    if disabled_marker.exists() {
+        std::fs::remove_file(&disabled_marker)?;
+        println!("Plugin enabled: {}", name);
+    } else {
+        println!("Plugin is already enabled: {}", name);
+    }
+
+    Ok(())
+}
+
+/// Handle plugins disable command
+#[cfg(feature = "gateway")]
+fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::extension::default_plugins_dir;
+
+    let plugins_dir = default_plugins_dir();
+    let plugin_path = plugins_dir.join(name);
+
+    if !plugin_path.exists() {
+        eprintln!("Error: Plugin not found: {}", name);
+        std::process::exit(1);
+    }
+
+    // Create disabled marker file
+    let disabled_marker = plugin_path.join(".disabled");
+    if !disabled_marker.exists() {
+        std::fs::write(&disabled_marker, "")?;
+        println!("Plugin disabled: {}", name);
+    } else {
+        println!("Plugin is already disabled: {}", name);
+    }
+
+    Ok(())
+}
+
 /// Daemonize the current process (Unix only)
 #[cfg(unix)]
 fn daemonize(pid_file: &str, log_file: Option<&PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
@@ -611,8 +835,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 DevicesAction::Revoke { device_id } => handle_devices_revoke(&device_id),
             };
         }
+        #[cfg(feature = "gateway")]
+        Some(Command::Plugins { action }) => {
+            return match action {
+                PluginsAction::List => handle_plugins_list().await,
+                PluginsAction::Install { url } => handle_plugins_install(&url).await,
+                PluginsAction::Uninstall { name } => handle_plugins_uninstall(&name),
+                PluginsAction::Enable { name } => handle_plugins_enable(&name),
+                PluginsAction::Disable { name } => handle_plugins_disable(&name),
+            };
+        }
         #[cfg(not(feature = "gateway"))]
-        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) => {
+        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) => {
             eprintln!("Error: Gateway feature is not enabled.");
             std::process::exit(1);
         }
@@ -1534,4 +1768,100 @@ async fn serve_webchat(
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_cli_parses_plugins_list() {
+        let args = Args::try_parse_from(["aether-gateway", "plugins", "list"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Plugins { action }) => {
+                assert!(matches!(action, PluginsAction::List));
+            }
+            _ => panic!("Expected Plugins command with List action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_plugins_install() {
+        let args = Args::try_parse_from([
+            "aether-gateway",
+            "plugins",
+            "install",
+            "https://github.com/example/plugin.git",
+        ]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Plugins { action }) => {
+                if let PluginsAction::Install { url } = action {
+                    assert_eq!(url, "https://github.com/example/plugin.git");
+                } else {
+                    panic!("Expected PluginsAction::Install");
+                }
+            }
+            _ => panic!("Expected Plugins command with Install action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_plugins_uninstall() {
+        let args = Args::try_parse_from(["aether-gateway", "plugins", "uninstall", "my-plugin"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Plugins { action }) => {
+                if let PluginsAction::Uninstall { name } = action {
+                    assert_eq!(name, "my-plugin");
+                } else {
+                    panic!("Expected PluginsAction::Uninstall");
+                }
+            }
+            _ => panic!("Expected Plugins command with Uninstall action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_plugins_enable() {
+        let args = Args::try_parse_from(["aether-gateway", "plugins", "enable", "my-plugin"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Plugins { action }) => {
+                if let PluginsAction::Enable { name } = action {
+                    assert_eq!(name, "my-plugin");
+                } else {
+                    panic!("Expected PluginsAction::Enable");
+                }
+            }
+            _ => panic!("Expected Plugins command with Enable action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_plugins_disable() {
+        let args = Args::try_parse_from(["aether-gateway", "plugins", "disable", "my-plugin"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Plugins { action }) => {
+                if let PluginsAction::Disable { name } = action {
+                    assert_eq!(name, "my-plugin");
+                } else {
+                    panic!("Expected PluginsAction::Disable");
+                }
+            }
+            _ => panic!("Expected Plugins command with Disable action"),
+        }
+    }
 }
