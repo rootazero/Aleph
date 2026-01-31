@@ -167,6 +167,21 @@ impl InlineKeyboard {
     }
 }
 
+/// Callback query from inline keyboard button click
+#[derive(Debug, Clone)]
+pub struct CallbackQuery {
+    /// Unique query ID (use to answer the callback)
+    pub id: String,
+    /// User who clicked the button
+    pub user_id: UserId,
+    /// Chat where the button was clicked
+    pub chat_id: ConversationId,
+    /// Message containing the button
+    pub message_id: MessageId,
+    /// Callback data from the button
+    pub data: String,
+}
+
 /// Attachment in a message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attachment {
