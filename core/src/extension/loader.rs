@@ -1,7 +1,9 @@
 //! Component loader - loads skills, commands, agents, and plugins
 
 use super::error::*;
-use super::manifest::*;
+use super::manifest::{
+    parse_frontmatter, parse_plugin_manifest, validate_plugin_name, LegacyPluginManifest,
+};
 use super::types::*;
 use crate::discovery::{
     DiscoverySource, AGENTS_DIR, CLAUDE_HOME_DIR, COMMANDS_DIR, HOOKS_DIR, HOOKS_FILE,
@@ -173,7 +175,7 @@ impl ComponentLoader {
             ));
         }
 
-        let manifest = parse_plugin_manifest(&manifest_path).await?;
+        let manifest: LegacyPluginManifest = parse_plugin_manifest(&manifest_path).await?;
 
         // Validate plugin name
         validate_plugin_name(&manifest.name)?;
@@ -352,7 +354,7 @@ impl ComponentLoader {
     async fn load_hooks(
         &self,
         plugin_path: &Path,
-        manifest: &PluginManifest,
+        manifest: &LegacyPluginManifest,
         plugin_name: &str,
     ) -> ExtensionResult<Vec<HookConfig>> {
         let hooks_path = manifest
@@ -390,7 +392,7 @@ impl ComponentLoader {
     async fn load_mcp_servers(
         &self,
         plugin_path: &Path,
-        manifest: &PluginManifest,
+        manifest: &LegacyPluginManifest,
     ) -> ExtensionResult<HashMap<String, McpServerConfig>> {
         let mcp_path = manifest
             .mcp_servers
