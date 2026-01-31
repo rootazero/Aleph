@@ -1,24 +1,22 @@
-//! FFI Types (UniFFI Interop)
+//! Tool Info Types
 //!
-//! Simplified types for Swift/Kotlin interop via UniFFI.
-//! UniFFI doesn't support enums with associated data, so we use simple
-//! enum types with separate ID fields.
+//! Simplified types for Gateway JSON-RPC serialization.
+//! These types use simple enums with separate ID fields for easy JSON encoding.
 //!
 //! Contains:
-//! - ToolSourceType: Simplified source enum
-//! - UnifiedToolInfo: Simplified tool representation
+//! - ToolSourceType: Simplified source enum for JSON serialization
+//! - UnifiedToolInfo: Flattened tool representation for API responses
 
 use super::conflict::ToolSource;
 use super::unified::UnifiedTool;
 
 // =============================================================================
-// Tool Source Type (FFI)
+// Tool Source Type
 // =============================================================================
 
-/// Tool source type for FFI (simplified enum without associated data)
+/// Tool source type (simplified enum for JSON serialization)
 ///
-/// UniFFI doesn't support enums with associated data, so we use a simple
-/// enum type with a separate source_id field.
+/// Uses a simple enum with a separate source_id field for easy JSON encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSourceType {
     /// Built-in native capabilities (Search, YouTube)
@@ -70,12 +68,12 @@ impl ToolSourceType {
 }
 
 // =============================================================================
-// Unified Tool Info (FFI)
+// Unified Tool Info
 // =============================================================================
 
-/// Unified tool representation for FFI
+/// Unified tool representation for API responses
 ///
-/// This is a simplified version of UnifiedTool for Swift/Kotlin interop.
+/// This is a flattened version of UnifiedTool for Gateway JSON-RPC.
 #[derive(Debug, Clone)]
 pub struct UnifiedToolInfo {
     /// Unique identifier (e.g., "native:search")

@@ -14,12 +14,12 @@
 //! - `unified`: Unified tool representation
 //! - `routing`: Routing layer indicator
 //! - `index`: Tool index system for smart discovery
-//! - `ffi`: FFI types for Swift/Kotlin interop
+//! - `tool_info`: Simplified types for Gateway JSON-RPC
 
 mod category;
 mod conflict;
 mod definition;
-mod ffi;
+mod tool_info;
 mod index;
 mod result;
 mod routing;
@@ -54,5 +54,5 @@ pub use routing::RoutingLayer;
 // Tool Index System
 pub use index::{ToolIndex, ToolIndexCategory, ToolIndexEntry};
 
-// FFI Types
-pub use ffi::{ToolSourceType, UnifiedToolInfo};
+// Tool Info Types (for Gateway JSON-RPC)
+pub use tool_info::{ToolSourceType, UnifiedToolInfo};
