@@ -8,6 +8,7 @@
 //! - ContextRuleConfig: Context-aware matching rules
 //! - KeywordRuleConfig: Weighted keyword matching rules
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::search::{default_false, default_true};
@@ -20,7 +21,7 @@ use super::search::{default_false, default_true};
 ///
 /// Controls intelligent intent detection and AI suggestion parsing
 /// for a more natural conversation experience.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SmartFlowConfig {
     /// Enable/disable smart conversation flow
     #[serde(default = "default_true")]
@@ -52,7 +53,7 @@ impl Default for SmartFlowConfig {
 /// Controls AI-powered intent detection and capability invocation.
 /// AI analyzes user input and decides whether to invoke capabilities (search, video, etc.)
 /// or respond directly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IntentDetectionConfig {
     /// Enable intent detection globally
     #[serde(default = "default_true")]
@@ -116,7 +117,7 @@ impl Default for IntentDetectionConfig {
 // =============================================================================
 
 /// AI suggestion parsing configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SuggestionParsingConfig {
     /// Enable suggestion parsing from AI responses
     #[serde(default = "default_true")]
@@ -170,7 +171,7 @@ impl Default for SuggestionParsingConfig {
 /// action_type = "complete_param"
 /// use_input_as_value = true
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SmartMatchingConfig {
     /// Enable/disable smart matching system
     #[serde(default = "default_true")]
@@ -244,7 +245,7 @@ impl Default for SmartMatchingConfig {
 ///
 /// Defines conditions and actions for context-aware matching.
 /// Used for multi-turn conversation, app-specific behavior, and time-based rules.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContextRuleConfig {
     /// Unique rule identifier
     pub id: String,
@@ -328,7 +329,7 @@ impl Default for ContextRuleConfig {
 /// Keyword rule configuration for weighted keyword matching
 ///
 /// Alternative to regex-based rules, uses weighted scoring for intent detection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KeywordRuleConfig {
     /// Unique rule identifier
     pub id: String,

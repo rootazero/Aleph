@@ -3,13 +3,14 @@
 //! Configurable performance targets for monitoring and alerting
 //! across different pipeline stages.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Policy for performance monitoring and alerting
 ///
 /// Defines target latencies for each pipeline stage and the threshold
 /// multiplier for triggering warnings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MetricsPolicy {
     /// Target latency: hotkey press to clipboard read (ms)
     /// Default: 50

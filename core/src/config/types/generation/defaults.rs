@@ -2,6 +2,7 @@
 //!
 //! Contains the GenerationDefaults struct for default generation parameters.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// style = "vivid"
 /// n = 1
 /// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct GenerationDefaults {
     // === Image/Video parameters ===
     /// Default width in pixels

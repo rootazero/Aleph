@@ -4,11 +4,12 @@
 //! to specific model profiles.
 
 use super::Capability;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Cost optimization strategy for model selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CostStrategy {
     /// Always choose the cheapest model that can handle the task

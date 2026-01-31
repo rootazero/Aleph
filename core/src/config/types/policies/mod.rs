@@ -48,6 +48,7 @@ pub use text::TextFormatPolicy;
 pub use tool_safety::ToolSafetyPolicy;
 pub use web_fetch::WebFetchPolicy;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Root policies configuration
@@ -55,7 +56,7 @@ use serde::{Deserialize, Serialize};
 /// Aggregates all policy types. All fields are optional with defaults,
 /// ensuring backward compatibility with existing configs that don't
 /// have a `[policies]` section.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PoliciesConfig {
     /// Tool safety inference policy
     #[serde(default)]

@@ -7,6 +7,7 @@
 //! - SearchBackendEntry: Backend with name (for UniFFI)
 //! - PIIConfig: PII scrubbing settings
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -15,7 +16,7 @@ use std::collections::HashMap;
 // =============================================================================
 
 /// Search module configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchConfigInternal {
     /// Enable/disable search functionality
     #[serde(default)]
@@ -64,7 +65,7 @@ pub fn default_search_timeout() -> u64 {
 ///
 /// Migrated from behavior.pii_scrubbing_enabled to search.pii
 /// (integrate-search-registry proposal)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PIIConfig {
     /// Enable PII scrubbing (email, phone, SSN, etc.)
     #[serde(default)]
@@ -112,13 +113,14 @@ impl Default for PIIConfig {
 // =============================================================================
 
 /// Search backend configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchBackendConfig {
     /// Provider type: "tavily", "searxng", "brave", "google", "bing", "exa"
     pub provider_type: String,
 
     /// API key (required for most providers except SearXNG)
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub api_key: Option<String>,
 
     /// Base URL (required for SearXNG, optional for others)
@@ -135,7 +137,7 @@ pub struct SearchBackendConfig {
 // =============================================================================
 
 /// Search backend entry (name + config) - used for UniFFI serialization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchBackendEntry {
     pub name: String,
     pub config: SearchBackendConfig,
@@ -146,7 +148,7 @@ pub struct SearchBackendEntry {
 // =============================================================================
 
 /// Search configuration for UniFFI (backends as Vec instead of HashMap)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchConfig {
     pub enabled: bool,
     pub default_provider: String,

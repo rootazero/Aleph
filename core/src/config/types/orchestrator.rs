@@ -1,9 +1,10 @@
 //! Orchestrator configuration types
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the Three-Layer Orchestrator
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct OrchestratorConfig {
     /// Hard constraint guards
     #[serde(default)]
@@ -11,7 +12,7 @@ pub struct OrchestratorConfig {
 }
 
 /// Hard constraints for the orchestrator loop
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OrchestratorGuards {
     /// Maximum number of orchestrator rounds (default: 12)
     #[serde(default = "default_max_rounds")]

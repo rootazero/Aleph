@@ -3,6 +3,7 @@
 //! Contains Claude Agent Skills configuration:
 //! - SkillsConfig: Skills directory and auto-matching settings
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 // =============================================================================
 
 /// Skills configuration (Claude Agent Skills standard)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillsConfig {
     /// Enable skills capability
     #[serde(default = "default_skills_enabled")]

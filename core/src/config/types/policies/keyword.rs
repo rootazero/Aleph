@@ -5,10 +5,11 @@
 //! Note: Types are prefixed with "Policy" to avoid naming conflicts with
 //! similar types in the smart_flow module.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Single keyword with weight for policy-based matching
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PolicyWeightedKeyword {
     /// The keyword to match
     pub word: String,
@@ -25,7 +26,7 @@ fn default_weight() -> f32 {
 ///
 /// Different from `smart_flow::KeywordRuleConfig` - this is for the policies
 /// system and uses structured `PolicyWeightedKeyword` instead of string format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PolicyKeywordRule {
     /// Unique identifier for this rule
     pub id: String,
@@ -53,7 +54,7 @@ fn default_min_score() -> f32 {
 ///
 /// Controls keyword matching rules and scoring thresholds for
 /// fast intent classification without AI inference.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KeywordPolicy {
     /// Whether keyword matching is enabled
     #[serde(default = "default_enabled")]

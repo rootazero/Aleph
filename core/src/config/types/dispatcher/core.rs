@@ -2,6 +2,7 @@
 //!
 //! Contains DispatcherConfigToml and AgentConfigToml for the Dispatcher Layer (Aether Cortex).
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -37,7 +38,7 @@ use tracing::warn;
 /// plan_confirmation_required = true
 /// allow_irreversible_without_confirmation = false
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DispatcherConfigToml {
     /// Whether the dispatcher is enabled (default: true)
     #[serde(default = "default_dispatcher_enabled")]
@@ -191,7 +192,7 @@ impl DispatcherConfigToml {
 /// plan_confirmation_required = true
 /// allow_irreversible_without_confirmation = false
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AgentConfigToml {
     /// Whether agent mode is enabled (default: true)
     #[serde(default = "default_agent_enabled")]

@@ -3,13 +3,14 @@
 //! Configurable parameters for text truncation and formatting
 //! across different contexts.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Policy for text truncation and formatting
 ///
 /// Controls truncation lengths for different content types to ensure
 /// consistent behavior across the application.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TextFormatPolicy {
     /// Default text truncation length
     /// Default: 200

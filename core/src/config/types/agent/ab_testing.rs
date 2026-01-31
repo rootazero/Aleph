@@ -3,6 +3,7 @@
 //! Contains ABTestingConfigToml, ExperimentConfigToml, and VariantConfigToml
 //! for configuring A/B testing experiments for model routing decisions.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -33,7 +34,7 @@ use serde::{Deserialize, Serialize};
 /// model_override = "claude-sonnet"
 /// weight = 50
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ABTestingConfigToml {
     /// Enable A/B testing
     #[serde(default = "default_ab_testing_enabled")]
@@ -122,7 +123,7 @@ impl ABTestingConfigToml {
 // =============================================================================
 
 /// Experiment configuration from TOML
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExperimentConfigToml {
     /// Unique experiment identifier
     pub id: String,
@@ -229,7 +230,7 @@ impl ExperimentConfigToml {
 // =============================================================================
 
 /// Variant configuration from TOML
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VariantConfigToml {
     /// Unique variant identifier within experiment
     pub id: String,

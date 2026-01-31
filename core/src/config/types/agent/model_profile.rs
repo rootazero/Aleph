@@ -2,6 +2,7 @@
 //!
 //! Contains ModelProfileConfigToml for defining AI model capabilities and characteristics.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatcher::model_router::{Capability, CostTier, LatencyTier, ModelProfile};
@@ -32,7 +33,7 @@ use crate::dispatcher::model_router::{Capability, CostTier, LatencyTier, ModelPr
 /// cost_tier = "free"
 /// local = true
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ModelProfileConfigToml {
     /// Provider name (anthropic, openai, google, ollama)
     pub provider: String,

@@ -2,6 +2,7 @@
 //!
 //! Contains FileOpsConfigToml for configuring file system operations.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatcher::{
@@ -28,7 +29,7 @@ use crate::dispatcher::{
 /// require_confirmation_for_write = true
 /// require_confirmation_for_delete = true
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FileOpsConfigToml {
     /// Enable file operations executor
     #[serde(default = "default_file_ops_enabled")]

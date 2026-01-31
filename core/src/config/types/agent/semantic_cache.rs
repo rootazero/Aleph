@@ -3,6 +3,7 @@
 //! Contains SemanticCacheConfigToml for configuring the semantic cache
 //! for storing and retrieving responses based on prompt similarity.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -23,7 +24,7 @@ use serde::{Deserialize, Serialize};
 /// default_ttl_secs = 86400
 /// eviction_policy = "hybrid"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SemanticCacheConfigToml {
     /// Enable semantic caching
     #[serde(default = "default_semantic_cache_enabled")]

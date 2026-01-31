@@ -3,6 +3,7 @@
 //! Contains ModelRoutingConfigToml for defining how tasks are routed
 //! to different AI models based on task type, capabilities, and cost.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -40,7 +41,7 @@ use super::semantic_cache::SemanticCacheConfigToml;
 /// enable_pipelines = true
 /// default_model = "claude-sonnet"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ModelRoutingConfigToml {
     /// Model for code generation tasks
     #[serde(default, skip_serializing_if = "Option::is_none")]

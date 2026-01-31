@@ -11,9 +11,10 @@
 /// assert!(gen_type.supports_style());
 /// assert!(!gen_type.supports_voice());
 /// ```
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GenerationType {
     /// Image generation (DALL-E, Stable Diffusion, Midjourney, etc.)

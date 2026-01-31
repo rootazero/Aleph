@@ -5,6 +5,7 @@
 //! - ProviderConfigEntry: Provider with name (for UniFFI)
 //! - TestConnectionResult: Connection test result
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // =============================================================================
 
 /// Provider config entry with name (for UniFFI)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderConfigEntry {
     pub name: String,
     #[serde(flatten)]
@@ -24,7 +25,7 @@ pub struct ProviderConfigEntry {
 // =============================================================================
 
 /// Test connection result (for provider connection testing)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, JsonSchema)]
 pub struct TestConnectionResult {
     pub success: bool,
     pub message: String,
@@ -35,7 +36,7 @@ pub struct TestConnectionResult {
 // =============================================================================
 
 /// AI Provider configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderConfig {
     /// Provider type: "openai", "claude", "gemini", "ollama", or custom name
     /// If not specified, inferred from provider name in config
@@ -43,6 +44,7 @@ pub struct ProviderConfig {
     pub provider_type: Option<String>,
     /// API key for cloud providers (required for OpenAI, Claude, Gemini)
     #[serde(default)]
+    #[schemars(skip)]
     pub api_key: Option<String>,
     /// Model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022", "gemini-3-flash", "llama3.2")
     pub model: String,

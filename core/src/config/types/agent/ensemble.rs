@@ -3,6 +3,7 @@
 //! Contains EnsembleConfigToml, EnsembleStrategyConfigToml, and
 //! HighComplexityEnsembleConfigToml for configuring ensemble execution.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -27,7 +28,7 @@ use serde::{Deserialize, Serialize};
 /// models = ["claude-opus", "gpt-4o"]
 /// quality_threshold = 0.8
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EnsembleConfigToml {
     /// Enable ensemble execution
     #[serde(default = "default_ensemble_enabled")]
@@ -146,7 +147,7 @@ impl EnsembleConfigToml {
 // =============================================================================
 
 /// Per-intent ensemble strategy configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EnsembleStrategyConfigToml {
     /// Task intent to apply this strategy to
     pub intent: String,
@@ -238,7 +239,7 @@ impl EnsembleStrategyConfigToml {
 // =============================================================================
 
 /// High complexity automatic ensemble configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HighComplexityEnsembleConfigToml {
     /// Enable automatic ensemble for high complexity prompts
     #[serde(default)]

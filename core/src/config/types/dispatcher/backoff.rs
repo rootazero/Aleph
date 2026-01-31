@@ -2,6 +2,7 @@
 //!
 //! Contains BackoffConfigToml for backoff strategy settings.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -26,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// multiplier = 2.0
 /// jitter_factor = 0.2
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BackoffConfigToml {
     /// Backoff strategy (default: "exponential_jitter")
     /// Options: "constant", "exponential", "exponential_jitter", "rate_limit_aware"

@@ -3,6 +3,7 @@
 //! Contains HealthConfigToml, CircuitBreakerConfigToml, and ProbeConfigToml
 //! for configuring model health monitoring and circuit breaker behavior.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatcher::model_router::{CircuitBreakerConfig, HealthConfig, ProbeConfig};
@@ -32,7 +33,7 @@ use crate::dispatcher::model_router::{CircuitBreakerConfig, HealthConfig, ProbeC
 /// cooldown_secs = 30
 /// half_open_successes = 2
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HealthConfigToml {
     /// Enable health tracking
     #[serde(default = "default_health_enabled")]
@@ -148,7 +149,7 @@ impl HealthConfigToml {
 // =============================================================================
 
 /// Circuit breaker configuration from TOML
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CircuitBreakerConfigToml {
     /// Number of failures to open circuit
     #[serde(default = "default_cb_failure_threshold")]
@@ -212,7 +213,7 @@ impl CircuitBreakerConfigToml {
 // =============================================================================
 
 /// Probe configuration from TOML
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProbeConfigToml {
     /// Interval between probes in seconds
     #[serde(default = "default_probe_interval_secs")]

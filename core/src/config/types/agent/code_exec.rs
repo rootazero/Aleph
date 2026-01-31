@@ -2,6 +2,7 @@
 //!
 //! Contains CodeExecConfigToml for configuring code/script execution behavior.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatcher::{
@@ -31,7 +32,7 @@ use crate::dispatcher::{
 /// pass_env = ["PATH", "HOME"]
 /// blocked_commands = ["rm -rf /", "sudo"]
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CodeExecConfigToml {
     /// Enable code execution
     /// SECURITY: Disabled by default

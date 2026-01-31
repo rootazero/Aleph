@@ -3,6 +3,7 @@
 //! Contains video transcript extraction configuration:
 //! - VideoConfig: YouTube and other video platform settings
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Enables extracting transcripts from video platforms (currently YouTube)
 /// and injecting them into the AI context for analysis.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VideoConfig {
     /// Enable video transcript extraction
     #[serde(default = "default_video_enabled")]

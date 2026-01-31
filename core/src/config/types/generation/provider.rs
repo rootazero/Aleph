@@ -3,6 +3,7 @@
 //! Contains the GenerationProviderConfig struct for individual provider settings.
 
 use crate::generation::GenerationType;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -34,7 +35,7 @@ use super::defaults::GenerationDefaults;
 /// quality = "hd"
 /// style = "vivid"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GenerationProviderConfig {
     /// Provider type identifier (openai, stability, elevenlabs, etc.)
     pub provider_type: String,

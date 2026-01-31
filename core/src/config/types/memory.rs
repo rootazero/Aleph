@@ -3,6 +3,7 @@
 //! Contains Memory/RAG module configuration:
 //! - MemoryConfig: Vector database, embedding, and compression settings
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 // =============================================================================
 
 /// Memory module configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryConfig {
     /// Enable/disable memory module
     #[serde(default = "default_enabled")]
