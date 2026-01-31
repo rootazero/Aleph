@@ -42,7 +42,7 @@ use tokio::sync::{mpsc, oneshot, RwLock};
 #[cfg(feature = "telegram")]
 use teloxide::{
     prelude::*,
-    types::{ChatId, InputFile, MediaKind, MessageKind, ParseMode},
+    types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MediaKind, MessageKind, ParseMode},
 };
 
 /// Telegram channel implementation
@@ -440,6 +440,18 @@ impl Channel for TelegramChannel {
                         teloxide::types::MessageId(msg_id),
                     ));
                 }
+            }
+
+            // Add inline keyboard if present
+            if let Some(ref keyboard) = message.inline_keyboard {
+                let markup = InlineKeyboardMarkup::new(
+                    keyboard.rows.iter().map(|row| {
+                        row.iter().map(|btn| {
+                            InlineKeyboardButton::callback(&btn.text, &btn.callback_data)
+                        }).collect::<Vec<_>>()
+                    }).collect::<Vec<_>>()
+                );
+                request = request.reply_markup(markup);
             }
 
             // Send the message
