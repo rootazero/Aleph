@@ -311,19 +311,33 @@ fn get_device_store_path() -> PathBuf {
 /// Handle pairing list command
 #[cfg(feature = "gateway")]
 async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
-    use aethecore::gateway::security::PairingManager;
+    use aethecore::gateway::security::{PairingManager, PairingRequest, SecurityStore};
+    use std::sync::Arc;
 
-    let manager = PairingManager::new();
-    let pending = manager.list_pending().await;
+    let store_path = get_device_store_path()
+        .parent()
+        .map(|p| p.join("security.db"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/aether_security.db"));
+    let store = Arc::new(SecurityStore::open(&store_path)?);
+    let manager = PairingManager::new(store);
+    let pending = manager.list_pending()?;
 
     if pending.is_empty() {
         println!("No pending pairing requests");
     } else {
         println!("Pending pairing requests:");
-        println!("{:<8} {:<30} {:<10}", "CODE", "DEVICE NAME", "EXPIRES IN");
-        println!("{}", "-".repeat(50));
-        for (code, device_name, expires_in) in pending {
-            println!("{:<8} {:<30} {}s", code, device_name, expires_in);
+        println!("{:<10} {:<8} {:<30} {:<10}", "TYPE", "CODE", "NAME/CHANNEL", "EXPIRES IN");
+        println!("{}", "-".repeat(60));
+        for req in pending {
+            let remaining = req.remaining_secs();
+            match &req {
+                PairingRequest::Device { code, device_name, .. } => {
+                    println!("{:<10} {:<8} {:<30} {}s", "device", code, device_name, remaining);
+                }
+                PairingRequest::Channel { code, channel, sender_id, .. } => {
+                    println!("{:<10} {:<8} {:<30} {}s", "channel", code, format!("{}:{}", channel, sender_id), remaining);
+                }
+            }
         }
     }
     Ok(())
@@ -332,49 +346,55 @@ async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
 /// Handle pairing approve command
 #[cfg(feature = "gateway")]
 async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use aethecore::gateway::security::{DeviceRole, PairingManager, SecurityStore, TokenManager};
+    use aethecore::gateway::security::{DeviceRole, DeviceType, PairingManager, PairingRequest, SecurityStore, TokenManager};
     use aethecore::gateway::device_store::{DeviceStore, ApprovedDevice};
     use std::sync::Arc;
 
-    let pairing_manager = PairingManager::new();
-
-    // Get pairing info
-    let pairing_info = match pairing_manager.get_pairing_info(code).await {
-        Some(info) => info,
-        None => {
-            eprintln!("Error: Invalid or expired pairing code: {}", code);
-            std::process::exit(1);
-        }
-    };
-
-    // Confirm pairing
-    let device_name = match pairing_manager.confirm_pairing(code).await {
-        Some(name) => name,
-        None => {
-            eprintln!("Error: Failed to confirm pairing");
-            std::process::exit(1);
-        }
-    };
-
-    // Create device store and approve device
+    // Create device store path and security store
     let store_path = get_device_store_path();
     if let Some(parent) = store_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let security_store_path = store_path.parent().unwrap().join("security.db");
+    let security_store = Arc::new(SecurityStore::open(&security_store_path)?);
+
+    let pairing_manager = PairingManager::new(security_store.clone());
+
+    // Confirm pairing - this returns the full pairing request
+    let pairing_request = match pairing_manager.confirm_pairing(code) {
+        Ok(req) => req,
+        Err(e) => {
+            eprintln!("Error: Invalid or expired pairing code: {} ({})", code, e);
+            std::process::exit(1);
+        }
+    };
+
+    // Extract info based on pairing type
+    let (device_name, device_type): (String, Option<String>) = match &pairing_request {
+        PairingRequest::Device { device_name, device_type, .. } => {
+            (device_name.clone(), device_type.map(|t: DeviceType| t.as_str().to_string()))
+        }
+        PairingRequest::Channel { channel, sender_id, .. } => {
+            // Channel pairing - approve the sender
+            security_store.approve_sender(channel, sender_id)?;
+            println!("Channel sender approved successfully!");
+            println!("  Channel:   {}", channel);
+            println!("  Sender ID: {}", sender_id);
+            return Ok(());
+        }
+    };
+
+    // Create device store and approve device
     let device_store = DeviceStore::open(&store_path)?;
 
     let device_id = uuid::Uuid::new_v4().to_string();
     let device = ApprovedDevice::new(
         device_id.clone(),
         device_name.clone(),
-        pairing_info.device_type,
+        device_type,
     );
 
     device_store.approve_device(&device)?;
-
-    // Create security store for tokens
-    let security_store_path = store_path.parent().unwrap().join("security.db");
-    let security_store = Arc::new(SecurityStore::open(&security_store_path)?);
 
     // Register device in security store for token generation
     security_store.upsert_device(
@@ -408,14 +428,22 @@ async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error::Er
 /// Handle pairing reject command
 #[cfg(feature = "gateway")]
 async fn handle_pairing_reject(code: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use aethecore::gateway::security::PairingManager;
+    use aethecore::gateway::security::{PairingManager, SecurityStore};
+    use std::sync::Arc;
 
-    let manager = PairingManager::new();
-    if manager.cancel_pairing(code).await {
-        println!("Pairing request rejected: {}", code);
-    } else {
-        eprintln!("Error: Invalid or expired pairing code: {}", code);
-        std::process::exit(1);
+    let store_path = get_device_store_path()
+        .parent()
+        .map(|p| p.join("security.db"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/aether_security.db"));
+    let store = Arc::new(SecurityStore::open(&store_path)?);
+    let manager = PairingManager::new(store);
+
+    match manager.cancel_pairing(code) {
+        Ok(true) => println!("Pairing request rejected: {}", code),
+        Ok(false) | Err(_) => {
+            eprintln!("Error: Invalid or expired pairing code: {}", code);
+            std::process::exit(1);
+        }
     }
     Ok(())
 }
@@ -886,12 +914,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
         );
 
-        let token_manager = Arc::new(TokenManager::new(security_store));
-        let pairing_manager = Arc::new(PairingManager::new());
+        let token_manager = Arc::new(TokenManager::new(security_store.clone()));
+        let pairing_manager = Arc::new(PairingManager::new(security_store.clone()));
         let auth_ctx = Arc::new(auth_handlers::AuthContext::new(
             token_manager,
             pairing_manager,
             device_store,
+            security_store,
             full_config.gateway.require_auth,
         ));
 

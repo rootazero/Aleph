@@ -9,9 +9,8 @@ use tracing::{debug, info, warn};
 
 use crate::gateway::device_store::{ApprovedDevice, DeviceStore};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED, INVALID_PARAMS};
-use crate::gateway::security::{DeviceRole, PairingManager, TokenManager};
+use crate::gateway::security::{DeviceRole, DeviceType, PairingManager, PairingRequest, TokenManager};
 
-#[cfg(test)]
 use crate::gateway::security::SecurityStore;
 
 /// Parameters for the "hello" method (server -> client notification)
@@ -54,7 +53,7 @@ pub struct ConnectResult {
 /// Pairing required notification
 #[derive(Debug, Clone, Serialize)]
 pub struct PairingRequiredParams {
-    /// 6-digit pairing code
+    /// 8-character Base32 pairing code
     pub code: String,
     /// Seconds until code expires
     pub expires_in: u64,
@@ -67,6 +66,7 @@ pub struct AuthContext {
     pub token_manager: Arc<TokenManager>,
     pub pairing_manager: Arc<PairingManager>,
     pub device_store: Arc<DeviceStore>,
+    pub security_store: Arc<SecurityStore>,
     pub require_auth: bool,
 }
 
@@ -76,12 +76,14 @@ impl AuthContext {
         token_manager: Arc<TokenManager>,
         pairing_manager: Arc<PairingManager>,
         device_store: Arc<DeviceStore>,
+        security_store: Arc<SecurityStore>,
         require_auth: bool,
     ) -> Self {
         Self {
             token_manager,
             pairing_manager,
             device_store,
+            security_store,
             require_auth,
         }
     }
@@ -231,18 +233,30 @@ pub async fn handle_connect(
     let device_name = params
         .device_name
         .unwrap_or_else(|| "Unknown Device".to_string());
-    let device_type = params.device_type;
-    let device_id = params
+    let _device_type = params.device_type;
+    let _device_id = params
         .device_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // Check if there's already a pending pairing for this device
     // (to prevent spamming pairing requests)
-    let pending = ctx.pairing_manager.list_pending().await;
-    if let Some(existing) = pending.iter().find(|(_, name, _)| name == &device_name) {
+    let pending = match ctx.pairing_manager.list_pending() {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(error = %e, "Failed to list pending pairings");
+            return JsonRpcResponse::error(request.id, -32603, format!("Failed to list pending pairings: {}", e));
+        }
+    };
+
+    // Find existing device pairing by name
+    if let Some(existing) = pending.iter().find(|req| {
+        matches!(req, PairingRequest::Device { device_name: name, .. } if name == &device_name)
+    }) {
+        let code = existing.code();
+        let remaining = existing.remaining_secs();
         info!(
             device_name = %device_name,
-            code = %existing.0,
+            code = %code,
             "Returning existing pairing code"
         );
 
@@ -251,25 +265,36 @@ pub async fn handle_connect(
             AUTH_FAILED,
             "pairing_required",
             json!(PairingRequiredParams {
-                code: existing.0.clone(),
-                expires_in: existing.2,
+                code: code.to_string(),
+                expires_in: remaining,
                 message: format!(
                     "Enter code {} to approve this device, or run: aether-gateway pairing approve {}",
-                    existing.0, existing.0
+                    code, code
                 ),
             }),
         );
     }
 
-    // Initiate new pairing
-    let code = ctx
-        .pairing_manager
-        .initiate_pairing_with_info(device_name.clone(), device_type.clone(), Some(device_id.clone()))
-        .await;
+    // Initiate new pairing (device pairing without public key for now - legacy compatibility)
+    // In a full Ed25519 implementation, the client would provide a public key
+    let pairing_request = match ctx.pairing_manager.request_device_pairing(
+        device_name.clone(),
+        None, // device_type parsed as DeviceType
+        vec![0u8; 32], // placeholder public key for legacy API
+        None, // remote_addr
+    ) {
+        Ok(req) => req,
+        Err(e) => {
+            warn!(error = %e, "Failed to initiate pairing");
+            return JsonRpcResponse::error(request.id, -32603, format!("Failed to initiate pairing: {}", e));
+        }
+    };
+
+    let code = pairing_request.code().to_string();
+    let expires_in = pairing_request.remaining_secs();
 
     info!(
         device_name = %device_name,
-        device_id = %device_id,
         code = %code,
         "Pairing initiated"
     );
@@ -280,7 +305,7 @@ pub async fn handle_connect(
         "pairing_required",
         json!(PairingRequiredParams {
             code: code.clone(),
-            expires_in: 300, // 5 minutes
+            expires_in,
             message: format!(
                 "Enter code {} to approve this device, or run: aether-gateway pairing approve {}",
                 code, code
@@ -315,20 +340,32 @@ pub async fn handle_pairing_approve(
         }
     };
 
-    // Get pairing info
-    let pairing_info = match ctx.pairing_manager.get_pairing_info(&params.code).await {
-        Some(info) => info,
-        None => {
-            warn!(code = %params.code, "Invalid or expired pairing code");
+    // Confirm pairing (removes from pending and returns the request)
+    let pairing_request = match ctx.pairing_manager.confirm_pairing(&params.code) {
+        Ok(req) => req,
+        Err(e) => {
+            warn!(code = %params.code, error = %e, "Invalid or expired pairing code");
             return JsonRpcResponse::error(request.id, AUTH_FAILED, "Invalid or expired pairing code");
         }
     };
 
-    // Confirm pairing (removes from pending)
-    let device_name = match ctx.pairing_manager.confirm_pairing(&params.code).await {
-        Some(name) => name,
-        None => {
-            return JsonRpcResponse::error(request.id, AUTH_FAILED, "Failed to confirm pairing");
+    // Extract device info from pairing request
+    let (device_name, device_type): (String, Option<String>) = match &pairing_request {
+        PairingRequest::Device { device_name, device_type, .. } => {
+            (device_name.clone(), device_type.map(|t: DeviceType| t.as_str().to_string()))
+        }
+        PairingRequest::Channel { channel, sender_id, .. } => {
+            // Channel pairing approved - approve the sender via SecurityStore
+            if let Err(e) = ctx.security_store.approve_sender(&channel, &sender_id) {
+                warn!(error = %e, "Failed to approve sender");
+                return JsonRpcResponse::error(request.id, -32603, format!("Failed to approve sender: {}", e));
+            }
+            info!(channel = %channel, sender_id = %sender_id, "Channel sender approved");
+            return JsonRpcResponse::success(request.id, json!({
+                "channel": channel,
+                "sender_id": sender_id,
+                "approved": true,
+            }));
         }
     };
 
@@ -337,7 +374,7 @@ pub async fn handle_pairing_approve(
     let device = ApprovedDevice::new(
         device_id.clone(),
         device_name.clone(),
-        pairing_info.device_type,
+        device_type,
     );
 
     // Store in device store
@@ -347,6 +384,24 @@ pub async fn handle_pairing_approve(
             request.id,
             -32603,
             format!("Failed to store device: {}", e),
+        );
+    }
+
+    // Register device in SecurityStore for token FK constraint
+    if let Err(e) = ctx.security_store.upsert_device(
+        &device_id,
+        &device_name,
+        None,
+        &[0u8; 32], // placeholder public key
+        &device_id[..16], // use device_id prefix as fingerprint
+        "operator",
+        &["*".to_string()],
+    ) {
+        warn!(error = %e, "Failed to register device in security store");
+        return JsonRpcResponse::error(
+            request.id,
+            -32603,
+            format!("Failed to register device: {}", e),
         );
     }
 
@@ -405,13 +460,18 @@ pub async fn handle_pairing_reject(
         }
     };
 
-    let cancelled = ctx.pairing_manager.cancel_pairing(&params.code).await;
-
-    if cancelled {
-        info!(code = %params.code, "Pairing rejected");
-        JsonRpcResponse::success(request.id, json!({"rejected": true}))
-    } else {
-        JsonRpcResponse::error(request.id, AUTH_FAILED, "Invalid or expired pairing code")
+    match ctx.pairing_manager.cancel_pairing(&params.code) {
+        Ok(true) => {
+            info!(code = %params.code, "Pairing rejected");
+            JsonRpcResponse::success(request.id, json!({"rejected": true}))
+        }
+        Ok(false) => {
+            JsonRpcResponse::error(request.id, AUTH_FAILED, "Invalid or expired pairing code")
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to cancel pairing");
+            JsonRpcResponse::error(request.id, -32603, format!("Failed to cancel pairing: {}", e))
+        }
     }
 }
 
@@ -420,16 +480,63 @@ pub async fn handle_pairing_list(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
 ) -> JsonRpcResponse {
-    let pending = ctx.pairing_manager.list_pending().await;
+    let pending = match ctx.pairing_manager.list_pending() {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(error = %e, "Failed to list pending pairings");
+            return JsonRpcResponse::error(request.id, -32603, format!("Failed to list pending pairings: {}", e));
+        }
+    };
 
     let items: Vec<Value> = pending
         .into_iter()
-        .map(|(code, device_name, remaining_secs)| {
-            json!({
-                "code": code,
-                "device_name": device_name,
-                "expires_in": remaining_secs,
-            })
+        .map(|req| {
+            match req {
+                PairingRequest::Device { code, device_name, device_type, expires_at, created_at, .. } => {
+                    let remaining = if expires_at > created_at {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() as i64;
+                        if expires_at > now {
+                            ((expires_at - now) / 1000) as u64
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    };
+                    json!({
+                        "type": "device",
+                        "code": code,
+                        "device_name": device_name,
+                        "device_type": device_type.map(|t: DeviceType| t.as_str()),
+                        "expires_in": remaining,
+                    })
+                }
+                PairingRequest::Channel { code, channel, sender_id, expires_at, created_at, .. } => {
+                    let remaining = if expires_at > created_at {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() as i64;
+                        if expires_at > now {
+                            ((expires_at - now) / 1000) as u64
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    };
+                    json!({
+                        "type": "channel",
+                        "code": code,
+                        "channel": channel,
+                        "sender_id": sender_id,
+                        "expires_in": remaining,
+                    })
+                }
+            }
         })
         .collect();
 
@@ -529,9 +636,10 @@ mod tests {
             .upsert_device("test-dev", "Test", None, &[1u8; 32], "fp", "operator", &[])
             .unwrap();
         Arc::new(AuthContext::new(
-            Arc::new(TokenManager::new(store)),
-            Arc::new(PairingManager::new()),
+            Arc::new(TokenManager::new(store.clone())),
+            Arc::new(PairingManager::new(store.clone())),
             Arc::new(DeviceStore::in_memory().unwrap()),
+            store,
             true,
         ))
     }
@@ -544,9 +652,10 @@ mod tests {
             .upsert_device("test-dev", "Test", None, &[1u8; 32], "fp", "operator", &[])
             .unwrap();
         let ctx = Arc::new(AuthContext::new(
-            Arc::new(TokenManager::new(store)),
-            Arc::new(PairingManager::new()),
+            Arc::new(TokenManager::new(store.clone())),
+            Arc::new(PairingManager::new(store.clone())),
             Arc::new(DeviceStore::in_memory().unwrap()),
+            store,
             false, // Auth not required
         ));
 
