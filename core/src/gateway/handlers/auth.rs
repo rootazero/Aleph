@@ -9,7 +9,10 @@ use tracing::{debug, info, warn};
 
 use crate::gateway::device_store::{ApprovedDevice, DeviceStore};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED, INVALID_PARAMS};
-use crate::gateway::security::{PairingManager, TokenManager};
+use crate::gateway::security::{DeviceRole, PairingManager, TokenManager};
+
+#[cfg(test)]
+use crate::gateway::security::SecurityStore;
 
 /// Parameters for the "hello" method (server -> client notification)
 #[derive(Debug, Clone, Serialize)]
@@ -117,54 +120,69 @@ pub async fn handle_connect(
         let device_id = params
             .device_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let token = ctx
+
+        let signed_token = match ctx
             .token_manager
-            .generate_token_with_device(vec!["*".to_string()], Some(device_id.clone()))
-            .await;
+            .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
+        {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(error = %e, "Failed to issue token");
+                return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
+            }
+        };
 
         info!(device_id = %device_id, "Connection accepted (auth not required)");
 
         return JsonRpcResponse::success(
             request.id,
             json!(ConnectResult {
-                token,
+                token: format!("{}:{}", signed_token.token, signed_token.signature),
                 device_id,
                 permissions: vec!["*".to_string()],
-                expires_at: (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(),
+                expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
             }),
         );
     }
 
     // Case 1: Client has a token - validate it
-    if let Some(token) = &params.token {
-        if ctx.token_manager.validate_token(token).await {
-            // Token is valid, get permissions
-            let permissions = ctx
-                .token_manager
-                .get_permissions(token)
-                .await
-                .unwrap_or_default();
+    if let Some(token_str) = &params.token {
+        // Token format: "{token}:{signature}"
+        if let Some((token, signature)) = token_str.split_once(':') {
+            match ctx.token_manager.validate_token(token, signature) {
+                Ok(validation) => {
+                    let device_id = params
+                        .device_id
+                        .unwrap_or_else(|| validation.device_id.clone());
 
-            let device_id = params
-                .device_id
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                    // Update last seen time if device is in store
+                    let _ = ctx.device_store.update_last_seen(&device_id);
 
-            // Update last seen time if device is in store
-            let _ = ctx.device_store.update_last_seen(&device_id);
+                    info!(device_id = %device_id, "Connection authenticated via token");
 
-            info!(device_id = %device_id, "Connection authenticated via token");
-
-            return JsonRpcResponse::success(
-                request.id,
-                json!(ConnectResult {
-                    token: token.clone(),
-                    device_id,
-                    permissions,
-                    expires_at: (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(),
-                }),
-            );
+                    return JsonRpcResponse::success(
+                        request.id,
+                        json!(ConnectResult {
+                            token: token_str.clone(),
+                            device_id,
+                            permissions: validation.scopes,
+                            expires_at: chrono::DateTime::from_timestamp_millis(
+                                chrono::Utc::now().timestamp_millis() + validation.remaining_ms
+                            )
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
+                        }),
+                    );
+                }
+                Err(e) => {
+                    debug!(error = %e, "Invalid token provided");
+                    // Token invalid, fall through to pairing
+                }
+            }
         } else {
-            debug!("Invalid token provided");
+            debug!("Invalid token format (expected token:signature)");
             // Token invalid, fall through to pairing
         }
     }
@@ -179,10 +197,16 @@ pub async fn handle_connect(
                 .map(|d| d.permissions.clone())
                 .unwrap_or_else(|| vec!["*".to_string()]);
 
-            let token = ctx
+            let signed_token = match ctx
                 .token_manager
-                .generate_token_with_device(permissions.clone(), Some(device_id.clone()))
-                .await;
+                .issue_token(device_id, DeviceRole::Operator, permissions.clone())
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = %e, "Failed to issue token");
+                    return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
+                }
+            };
 
             // Update last seen
             let _ = ctx.device_store.update_last_seen(device_id);
@@ -192,10 +216,12 @@ pub async fn handle_connect(
             return JsonRpcResponse::success(
                 request.id,
                 json!(ConnectResult {
-                    token,
+                    token: format!("{}:{}", signed_token.token, signed_token.signature),
                     device_id: device_id.clone(),
                     permissions,
-                    expires_at: (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(),
+                    expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
                 }),
             );
         }
@@ -325,10 +351,16 @@ pub async fn handle_pairing_approve(
     }
 
     // Generate token for the new device
-    let token = ctx
+    let signed_token = match ctx
         .token_manager
-        .generate_token_with_device(vec!["*".to_string()], Some(device_id.clone()))
-        .await;
+        .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
+    {
+        Ok(t) => t,
+        Err(e) => {
+            warn!(error = %e, "Failed to issue token");
+            return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
+        }
+    };
 
     info!(
         device_id = %device_id,
@@ -341,7 +373,7 @@ pub async fn handle_pairing_approve(
         json!({
             "device_id": device_id,
             "device_name": device_name,
-            "token": token,
+            "token": format!("{}:{}", signed_token.token, signed_token.signature),
             "approved_at": device.approved_at,
         }),
     )
@@ -458,9 +490,9 @@ pub async fn handle_devices_revoke(
     match ctx.device_store.revoke_device(&params.device_id) {
         Ok(true) => {
             // Also revoke any tokens for this device
-            ctx.token_manager
-                .revoke_device_tokens(&params.device_id)
-                .await;
+            if let Err(e) = ctx.token_manager.revoke_device_tokens(&params.device_id) {
+                warn!(error = %e, "Failed to revoke device tokens");
+            }
 
             info!(device_id = %params.device_id, "Device revoked");
             JsonRpcResponse::success(request.id, json!({"revoked": true}))
@@ -491,8 +523,13 @@ mod tests {
     use super::*;
 
     fn create_test_context() -> Arc<AuthContext> {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        // Create a device for token tests
+        store
+            .upsert_device("test-dev", "Test", None, &[1u8; 32], "fp", "operator", &[])
+            .unwrap();
         Arc::new(AuthContext::new(
-            Arc::new(TokenManager::new()),
+            Arc::new(TokenManager::new(store)),
             Arc::new(PairingManager::new()),
             Arc::new(DeviceStore::in_memory().unwrap()),
             true,
@@ -501,8 +538,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_connect_no_auth_required() {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        // Create a device for token tests
+        store
+            .upsert_device("test-dev", "Test", None, &[1u8; 32], "fp", "operator", &[])
+            .unwrap();
         let ctx = Arc::new(AuthContext::new(
-            Arc::new(TokenManager::new()),
+            Arc::new(TokenManager::new(store)),
             Arc::new(PairingManager::new()),
             Arc::new(DeviceStore::in_memory().unwrap()),
             false, // Auth not required
