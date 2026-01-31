@@ -27,10 +27,12 @@
 //! }
 //! ```
 
+pub mod cron_integration;
 pub mod executor;
 pub mod task;
 pub mod types;
 
+pub use cron_integration::{PodcastResult, PodcastTask, ResilientCronJob};
 pub use executor::{execute_resilient, ResilientExecutor};
 pub use task::{FnTask, ResilientTask};
 pub use types::{
