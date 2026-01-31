@@ -443,12 +443,12 @@ M6 (韧性执行) ──────────► 独立，可并行开发
 
 ### Milestone 1: PtySupervisor 基础
 
-- [ ] 集成 portable-pty crate
-- [ ] 实现 ClaudeSupervisor::spawn()
-- [ ] ANSI 清洗层 (strip_ansi_escapes)
-- [ ] 基础 stdin/stdout 交互测试
+- [x] 集成 portable-pty crate
+- [x] 实现 ClaudeSupervisor::spawn()
+- [x] ANSI 清洗层 (strip_ansi_escapes)
+- [x] 基础 stdin/stdout 交互测试
 
-**验收**: Aether 能启动 Claude Code 并读取输出
+**验收**: ✅ Aether 能启动 Claude Code 并读取输出
 
 ### Milestone 2: SecurityKernel 规则引擎
 
