@@ -391,6 +391,99 @@ impl PluginKind {
     }
 }
 
+/// Plugin status - the runtime state of a plugin
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginStatus {
+    /// Plugin is loaded and active
+    Loaded,
+    /// Plugin is disabled by user
+    Disabled,
+    /// Plugin is overridden by a higher-priority plugin with the same name
+    Overridden,
+    /// Plugin failed to load with an error
+    Error(String),
+}
+
+impl PluginStatus {
+    /// Check if this plugin is actively running
+    pub fn is_active(&self) -> bool {
+        matches!(self, PluginStatus::Loaded)
+    }
+}
+
+/// Plugin record - comprehensive plugin information for registry tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginRecord {
+    /// Unique plugin identifier
+    pub id: String,
+    /// Human-readable name
+    pub name: String,
+    /// Version string (semver)
+    pub version: Option<String>,
+    /// Plugin description
+    pub description: Option<String>,
+    /// Plugin type/format
+    pub kind: PluginKind,
+    /// Discovery origin
+    pub origin: PluginOrigin,
+    /// Current status
+    pub status: PluginStatus,
+    /// Error message if status is Error
+    pub error: Option<String>,
+    /// Root directory of the plugin
+    pub root_dir: PathBuf,
+    // Registration tracking
+    /// Tool names registered by this plugin
+    pub tool_names: Vec<String>,
+    /// Number of hooks registered
+    pub hook_count: usize,
+    /// Channel IDs registered by this plugin
+    pub channel_ids: Vec<String>,
+    /// Provider IDs registered by this plugin
+    pub provider_ids: Vec<String>,
+    /// Gateway RPC methods registered by this plugin
+    pub gateway_methods: Vec<String>,
+    /// Service IDs registered by this plugin
+    pub service_ids: Vec<String>,
+}
+
+impl PluginRecord {
+    /// Create a new plugin record with default values
+    pub fn new(id: String, name: String, kind: PluginKind, origin: PluginOrigin) -> Self {
+        Self {
+            id,
+            name,
+            version: None,
+            description: None,
+            kind,
+            origin,
+            status: PluginStatus::Loaded,
+            error: None,
+            root_dir: PathBuf::new(),
+            tool_names: Vec::new(),
+            hook_count: 0,
+            channel_ids: Vec::new(),
+            provider_ids: Vec::new(),
+            gateway_methods: Vec::new(),
+            service_ids: Vec::new(),
+        }
+    }
+
+    /// Set an error status with message
+    pub fn with_error(mut self, error: String) -> Self {
+        self.status = PluginStatus::Error(error.clone());
+        self.error = Some(error);
+        self
+    }
+
+    /// Set the root directory
+    pub fn with_root_dir(mut self, path: PathBuf) -> Self {
+        self.root_dir = path;
+        self
+    }
+}
+
 // =============================================================================
 // Hook Types
 // =============================================================================
@@ -661,5 +754,89 @@ mod tests {
 
         let parsed: PluginKind = serde_json::from_str("\"nodejs\"").unwrap();
         assert_eq!(parsed, PluginKind::NodeJs);
+    }
+
+    #[test]
+    fn test_plugin_record_creation() {
+        let record = PluginRecord::new(
+            "test-plugin".to_string(),
+            "Test Plugin".to_string(),
+            PluginKind::Wasm,
+            PluginOrigin::Global,
+        );
+        assert_eq!(record.id, "test-plugin");
+        assert_eq!(record.name, "Test Plugin");
+        assert_eq!(record.kind, PluginKind::Wasm);
+        assert_eq!(record.origin, PluginOrigin::Global);
+        assert_eq!(record.status, PluginStatus::Loaded);
+        assert!(record.tool_names.is_empty());
+        assert!(record.channel_ids.is_empty());
+        assert!(record.provider_ids.is_empty());
+        assert!(record.gateway_methods.is_empty());
+        assert!(record.service_ids.is_empty());
+        assert_eq!(record.hook_count, 0);
+    }
+
+    #[test]
+    fn test_plugin_record_with_error() {
+        let record = PluginRecord::new(
+            "broken-plugin".to_string(),
+            "Broken Plugin".to_string(),
+            PluginKind::NodeJs,
+            PluginOrigin::Workspace,
+        )
+        .with_error("Failed to load".to_string());
+
+        assert_eq!(record.status, PluginStatus::Error("Failed to load".to_string()));
+        assert_eq!(record.error, Some("Failed to load".to_string()));
+    }
+
+    #[test]
+    fn test_plugin_record_with_root_dir() {
+        let record = PluginRecord::new(
+            "my-plugin".to_string(),
+            "My Plugin".to_string(),
+            PluginKind::Static,
+            PluginOrigin::Config,
+        )
+        .with_root_dir(PathBuf::from("/path/to/plugin"));
+
+        assert_eq!(record.root_dir, PathBuf::from("/path/to/plugin"));
+    }
+
+    #[test]
+    fn test_plugin_status_is_active() {
+        assert!(PluginStatus::Loaded.is_active());
+        assert!(!PluginStatus::Disabled.is_active());
+        assert!(!PluginStatus::Overridden.is_active());
+        assert!(!PluginStatus::Error("test".to_string()).is_active());
+    }
+
+    #[test]
+    fn test_plugin_status_serde() {
+        // Loaded
+        let status = PluginStatus::Loaded;
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(json, "\"loaded\"");
+
+        // Disabled
+        let status = PluginStatus::Disabled;
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(json, "\"disabled\"");
+
+        // Overridden
+        let status = PluginStatus::Overridden;
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(json, "\"overridden\"");
+
+        // Error with message
+        let status = PluginStatus::Error("something went wrong".to_string());
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("error"));
+        assert!(json.contains("something went wrong"));
+
+        // Parse back
+        let parsed: PluginStatus = serde_json::from_str("\"loaded\"").unwrap();
+        assert_eq!(parsed, PluginStatus::Loaded);
     }
 }
