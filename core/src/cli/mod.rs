@@ -1,5 +1,6 @@
 //! CLI utilities for Aether Gateway commands.
 
+pub mod channels;
 pub mod client;
 pub mod config;
 pub mod error;
