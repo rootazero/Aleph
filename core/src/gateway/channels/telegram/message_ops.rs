@@ -46,7 +46,7 @@ impl TelegramMessageOps {
     fn parse_chat_id(s: &str) -> Result<ChatId> {
         s.parse::<i64>()
             .map(ChatId)
-            .map_err(|e| crate::error::AetherError::InvalidInput(format!("Invalid chat ID: {}", e)))
+            .map_err(|e| crate::error::AetherError::invalid_input(format!("Invalid chat ID: {}", e)))
     }
 
     /// Parse message ID from string
@@ -55,7 +55,7 @@ impl TelegramMessageOps {
         s.parse::<i32>()
             .map(teloxide::types::MessageId)
             .map_err(|e| {
-                crate::error::AetherError::InvalidInput(format!("Invalid message ID: {}", e))
+                crate::error::AetherError::invalid_input(format!("Invalid message ID: {}", e))
             })
     }
 }

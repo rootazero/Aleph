@@ -4,7 +4,7 @@
 //! - MediaAttachment: Multimodal content support
 //! - CapturedContext: Context from active application
 //! - CompressionStats: Memory compression statistics
-//! - MemoryEntry: Memory entry for FFI
+//! - MemoryEntry: Memory entry for API responses
 //! - AppMemoryInfo: App memory info for UI
 
 use serde::{Deserialize, Serialize};
