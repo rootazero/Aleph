@@ -31,4 +31,4 @@ pub use crypto::{
 pub use device::{Device, DeviceRole, DeviceType};
 pub use pairing::PairingManager;
 pub use store::{DeviceRow, PairingRequestRow, SecurityStore, TokenRow};
-pub use token::TokenManager;
+pub use token::{SignedToken, TokenError, TokenManager, TokenValidation};

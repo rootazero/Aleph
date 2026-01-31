@@ -332,11 +332,11 @@ async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
 /// Handle pairing approve command
 #[cfg(feature = "gateway")]
 async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use aethecore::gateway::security::{PairingManager, TokenManager};
+    use aethecore::gateway::security::{DeviceRole, PairingManager, SecurityStore, TokenManager};
     use aethecore::gateway::device_store::{DeviceStore, ApprovedDevice};
+    use std::sync::Arc;
 
     let pairing_manager = PairingManager::new();
-    let token_manager = TokenManager::new();
 
     // Get pairing info
     let pairing_info = match pairing_manager.get_pairing_info(code).await {
@@ -372,10 +372,28 @@ async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error::Er
 
     device_store.approve_device(&device)?;
 
+    // Create security store for tokens
+    let security_store_path = store_path.parent().unwrap().join("security.db");
+    let security_store = Arc::new(SecurityStore::open(&security_store_path)?);
+
+    // Register device in security store for token generation
+    security_store.upsert_device(
+        &device_id,
+        &device_name,
+        None,
+        &[0u8; 32], // placeholder public key
+        &device_id[..16], // use device_id prefix as fingerprint
+        "operator",
+        &["*".to_string()],
+    )?;
+
     // Generate token
-    let token = token_manager
-        .generate_token_with_device(vec!["*".to_string()], Some(device_id.clone()))
-        .await;
+    let token_manager = TokenManager::new(security_store);
+    let signed_token = token_manager
+        .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
+        .map_err(|e| format!("Failed to issue token: {}", e))?;
+
+    let token = format!("{}:{}", signed_token.token, signed_token.signature);
 
     println!("Device approved successfully!");
     println!("  Device ID:   {}", device_id);
@@ -855,7 +873,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     DeviceStore::in_memory().expect("Failed to create in-memory device store")
                 })
         );
-        let token_manager = Arc::new(TokenManager::new());
+
+        // Initialize security store for tokens
+        let security_store_path = device_store_path.parent()
+            .map(|p| p.join("security.db"))
+            .unwrap_or_else(|| PathBuf::from("/tmp/aether_security.db"));
+        let security_store = Arc::new(
+            aethecore::gateway::security::SecurityStore::open(&security_store_path)
+                .unwrap_or_else(|e| {
+                    eprintln!("Warning: Failed to load security store from {:?}: {}. Using in-memory.", security_store_path, e);
+                    aethecore::gateway::security::SecurityStore::in_memory().expect("Failed to create in-memory security store")
+                })
+        );
+
+        let token_manager = Arc::new(TokenManager::new(security_store));
         let pairing_manager = Arc::new(PairingManager::new());
         let auth_ctx = Arc::new(auth_handlers::AuthContext::new(
             token_manager,
