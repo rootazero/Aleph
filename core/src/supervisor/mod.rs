@@ -10,5 +10,8 @@
 pub mod pty;
 pub mod types;
 
+#[cfg(test)]
+mod tests;
+
 pub use pty::ClaudeSupervisor;
 pub use types::{PtySize, SupervisorConfig, SupervisorError, SupervisorEvent};
