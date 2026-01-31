@@ -2,7 +2,7 @@
 //!
 //! This module provides the configuration system for Aether, including:
 //! - `Config`: The main configuration struct with load/save/validate methods
-//! - `FullConfig`: FFI-compatible version for UniFFI
+//! - `FullConfig`: Complete configuration for serialization
 //! - Type definitions in the `types` submodule
 //!
 //! Phase 1: Stub implementation with basic fields.

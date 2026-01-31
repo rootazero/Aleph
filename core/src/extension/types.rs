@@ -316,7 +316,7 @@ impl ExtensionPlugin {
     }
 }
 
-/// Plugin info for display/FFI
+/// Plugin info for display
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {
     pub name: String,

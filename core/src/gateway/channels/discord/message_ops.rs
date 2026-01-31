@@ -50,7 +50,7 @@ impl DiscordMessageOps {
         s.parse::<u64>()
             .map(SerenityChannelId::new)
             .map_err(|e| {
-                crate::error::AetherError::InvalidInput(format!("Invalid channel ID: {}", e))
+                crate::error::AetherError::invalid_input(format!("Invalid channel ID: {}", e))
             })
     }
 
@@ -60,7 +60,7 @@ impl DiscordMessageOps {
         s.parse::<u64>()
             .map(SerenityMessageId::new)
             .map_err(|e| {
-                crate::error::AetherError::InvalidInput(format!("Invalid message ID: {}", e))
+                crate::error::AetherError::invalid_input(format!("Invalid message ID: {}", e))
             })
     }
 }
@@ -204,7 +204,7 @@ impl MessageOperations for DiscordMessageOps {
             let reaction_type = if params.emoji.starts_with('<') {
                 // Custom emoji format: <:name:id> or <a:name:id>
                 serenity::all::ReactionType::try_from(params.emoji.as_str()).map_err(|e| {
-                    crate::error::AetherError::InvalidInput(format!("Invalid emoji format: {}", e))
+                    crate::error::AetherError::invalid_input(format!("Invalid emoji format: {}", e))
                 })?
             } else {
                 // Unicode emoji
@@ -311,7 +311,7 @@ impl MessageOperations for DiscordMessageOps {
                     .unwrap()
                     .parse()
                     .map_err(|e| {
-                        crate::error::AetherError::InvalidInput(format!("Invalid user ID: {}", e))
+                        crate::error::AetherError::invalid_input(format!("Invalid user ID: {}", e))
                     })?;
 
                 let user = serenity::all::UserId::new(user_id);

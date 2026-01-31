@@ -1,0 +1,43 @@
+[book]
+title = "Aether Documentation"
+authors = ["Aether Team"]
+description = "Comprehensive documentation for Aether - the Rust-based personal AI assistant"
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/anthropics/aether"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/anthropics/aether/edit/main/docs/book/{path}"
+site-url = "/aether/"
+no-section-label = false
+additional-css = ["theme/custom.css"]
+additional-js = ["theme/fuse.min.js", "theme/search-fuse.js"]
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+teaser-word-count = 30
+use-hierarchical-search = true
+
+[output.html.playground]
+editable = true
+copyable = true
+copy-js = true
+line-numbers = true
+runnable = false
+
+[preprocessor.index]
+
+[preprocessor.links]
