@@ -105,10 +105,7 @@ pub use parameters::{
 };
 
 // Re-export from types
-pub use types::{
-    AmbiguousTaskFFI, ConflictResolutionFFI, ExecutableTaskFFI, ExecutionIntentTypeFFI,
-    OrganizeMethodFFI, ParameterSourceFFI, TaskCategory, TaskCategoryFFI, TaskParametersFFI,
-};
+pub use types::TaskCategory;
 
 // Re-export from support
 pub use support::{
