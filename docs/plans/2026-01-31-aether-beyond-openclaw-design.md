@@ -479,12 +479,12 @@ M6 (韧性执行) ──────────► 独立，可并行开发
 
 ### Milestone 5: Skill 进化系统
 
-- [ ] Memory 经验验证追踪 (use_count, success_count)
-- [ ] 固化建议生成器 (阈值触发)
-- [ ] Skill 补丁生成 + diff 预览
-- [ ] Git 自动 Commit + Push
+- [x] Memory 经验验证追踪 (EvolutionTracker - use_count, success_count)
+- [x] 固化建议生成器 (SolidificationDetector - 阈值触发)
+- [x] Skill 补丁生成 + diff 预览 (SkillGenerator)
+- [x] Git 自动 Commit + Push (GitCommitter)
 
-**验收**: 重复解决同一问题 3 次后，AI 主动建议固化
+**验收**: ✅ 重复解决同一问题 3 次后，AI 主动建议固化
 
 ### Milestone 6: ResilientTask 韧性执行
 
