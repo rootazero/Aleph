@@ -18,8 +18,10 @@
 //!                                                  └─────────────────┘
 //! ```
 
+pub mod tracker;
 pub mod types;
 
+pub use tracker::EvolutionTracker;
 pub use types::{
     CommitResult, ExecutionStatus, GenerationResult, SkillExecution, SkillMetrics,
     SolidificationConfig, SolidificationSuggestion,
