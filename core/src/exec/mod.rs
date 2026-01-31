@@ -10,6 +10,7 @@
 
 pub mod allowlist;
 pub mod analysis;
+pub mod bridge;
 pub mod config;
 pub mod decision;
 pub mod forwarder;
@@ -24,6 +25,7 @@ pub mod storage;
 
 pub use allowlist::match_allowlist;
 pub use analysis::{CommandAnalysis, CommandResolution, CommandSegment};
+pub use bridge::{ApprovalBridge, SentApprovalMessage};
 pub use config::{
     AgentExecConfig, AllowlistEntry, ExecAsk, ExecApprovalsFile, ExecDefaults, ExecSecurity,
     ResolvedExecConfig, SocketConfig,
