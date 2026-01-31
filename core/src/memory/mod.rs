@@ -44,8 +44,8 @@ pub use compression::{
     CompressionTrigger, DetectionResult, FactExtractor, SignalDetector, SignalKeywords,
 };
 pub use context::{
-    CompressionResult, CompressionSession, ContextAnchor, FactStats, FactType, MemoryEntry,
-    MemoryFact,
+    CompressionResult, CompressionSession, ContextAnchor, FactSpecificity, FactStats, FactType,
+    MemoryEntry, MemoryFact, TemporalScope,
 };
 pub use database::VectorDatabase;
 #[deprecated(
