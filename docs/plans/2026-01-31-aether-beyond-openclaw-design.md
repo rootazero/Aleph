@@ -452,12 +452,12 @@ M6 (韧性执行) ──────────► 独立，可并行开发
 
 ### Milestone 2: SecurityKernel 规则引擎
 
-- [ ] 定义 RiskLevel 四级枚举
-- [ ] 实现 CommandPolicy (Regex 规则集)
-- [ ] SecurityKernel::assess() 零延迟判断
-- [ ] SecretMasker 敏感信息脱敏
+- [x] 定义 RiskLevel 四级枚举
+- [x] 实现 CommandPolicy (Regex 规则集)
+- [x] SecurityKernel::assess() 零延迟判断
+- [x] SecretMasker 敏感信息脱敏
 
-**验收**: rm -rf / 被 Blocked，ls 被 Safe
+**验收**: ✅ rm -rf / 被 Blocked，ls 被 Safe
 
 ### Milestone 3: Telegram 审批集成
 
