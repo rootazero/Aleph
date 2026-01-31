@@ -118,6 +118,10 @@ sha2 = "0.10"
 hmac = "0.12"
 subtle = "2.5"
 hex = "0.4"
+# Ed25519 signatures for device authentication
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+# Base32 encoding for pairing codes
+base32 = "0.5"
 # For consistent hashing (A/B testing traffic splitting)
 siphasher = "1.0"
 # For PDF generation
