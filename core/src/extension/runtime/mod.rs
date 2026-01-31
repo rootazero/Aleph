@@ -67,7 +67,7 @@ pub mod wasm;
 pub use wasm::{PermissionChecker, WasmRuntime, WasmToolInput, WasmToolOutput};
 
 // Re-export Node.js runtime types
-pub use nodejs::{JsonRpcRequest, JsonRpcResponse, NodeJsRuntime, NodeProcess};
+pub use nodejs::{HostScript, JsonRpcRequest, JsonRpcResponse, NodeJsRuntime, NodeProcess};
 
 use crate::extension::ExtensionError;
 use crate::runtimes::{get_runtimes_dir, FnmRuntime, RuntimeManager};
