@@ -134,6 +134,13 @@ impl<W: Worker> PoeManager<W> {
         }
     }
 
+    /// Get a reference to the worker.
+    ///
+    /// This is primarily useful for testing to verify worker execution counts.
+    pub fn worker(&self) -> &W {
+        &self.worker
+    }
+
     /// Execute a POE task.
     ///
     /// Runs the P->O->E cycle until:
@@ -527,6 +534,6 @@ mod tests {
         let _ = manager.execute(task).await.unwrap();
 
         // Worker should have been called multiple times
-        assert!(manager.worker.execution_count() > 1);
+        assert!(manager.worker().execution_count() > 1);
     }
 }
