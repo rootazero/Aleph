@@ -65,6 +65,7 @@ pub mod memory;
 pub mod metrics;
 pub mod payload;
 pub mod permission;
+pub mod poe;
 pub mod prompt;
 pub mod providers;
 pub mod question;
