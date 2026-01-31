@@ -18,7 +18,8 @@ use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillL
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 #[cfg(feature = "gateway")]
 use crate::gateway::context::GatewayContext;
-use crate::three_layer::{Capability, CapabilityGate};
+// TODO: Capability system will be reimplemented following OpenClaw's sandbox/tool-policy pattern
+// See: /Volumes/TBU4/Workspace/openclaw/src/agents/sandbox/
 use crate::tools::AetherTool;
 use tokio::sync::RwLock;
 
@@ -27,7 +28,8 @@ use super::{BuiltinToolConfig, ToolRegistry};
 /// Registry of builtin tools for Agent Loop
 ///
 /// Holds instances of builtin tools and provides direct invocation capabilities.
-/// Integrates with CapabilityGate for security enforcement.
+///
+/// TODO: Security enforcement will be reimplemented following OpenClaw's sandbox/tool-policy pattern.
 pub struct BuiltinToolRegistry {
     /// Search tool instance
     pub(crate) search_tool: SearchTool,
@@ -62,62 +64,24 @@ pub struct BuiltinToolRegistry {
     pub(crate) gateway_context: Option<Arc<GatewayContext>>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
-    /// Capability gate for security enforcement
-    capability_gate: CapabilityGate,
 }
 
 impl BuiltinToolRegistry {
     /// Create a new registry with default configuration
-    ///
-    /// Uses a permissive CapabilityGate that allows safe operations by default.
     pub fn new() -> Self {
         Self::with_config(BuiltinToolConfig::default())
     }
 
     /// Create a new registry with custom configuration
     ///
-    /// Uses a permissive CapabilityGate that allows full AI Agent operations.
     /// Aether is designed as a powerful AI Agent that needs to perform complex
     /// multi-step tasks including file operations and code execution.
-    ///
-    /// # Enabled Capabilities
-    /// - File operations: read, list, write, delete
-    /// - Network: web search, web fetch
-    /// - Code execution: shell commands, process spawning
-    /// - LLM calls
     ///
     /// # Safety Notes
     /// - Dangerous commands are still blocked by CommandChecker (rm -rf /, sudo, etc.)
     /// - File operations are sandboxed by PathPermissionChecker
+    /// - TODO: Tool policy will be reimplemented following OpenClaw's sandbox pattern
     pub fn with_config(config: BuiltinToolConfig) -> Self {
-        // Full AI Agent capabilities - Aether is a super-powered agent
-        let gate = CapabilityGate::new(vec![
-            // File system operations
-            Capability::FileRead,
-            Capability::FileList,
-            Capability::FileWrite,
-            Capability::FileDelete, // Enabled for cleanup operations
-            // Network operations
-            Capability::WebSearch,
-            Capability::WebFetch,
-            // Code execution
-            Capability::ShellExec,    // Enabled for code execution
-            Capability::ProcessSpawn, // Enabled for spawning processes
-            // LLM
-            Capability::LlmCall,
-        ]);
-        Self::with_config_and_gate(config, gate)
-    }
-
-    /// Create a new registry with custom capability gate
-    ///
-    /// Allows fine-grained control over which operations are permitted.
-    pub fn with_gate(gate: CapabilityGate) -> Self {
-        Self::with_config_and_gate(BuiltinToolConfig::default(), gate)
-    }
-
-    /// Create a new registry with custom configuration and capability gate
-    pub fn with_config_and_gate(config: BuiltinToolConfig, capability_gate: CapabilityGate) -> Self {
         let search_tool = SearchTool::with_api_key(config.tavily_api_key);
         let web_fetch_tool = WebFetchTool::new();
         let youtube_tool = YouTubeTool::new();
@@ -384,70 +348,20 @@ impl BuiltinToolRegistry {
             #[cfg(feature = "gateway")]
             gateway_context,
             tools,
-            capability_gate,
         }
     }
 
-    /// Get the required capability for a tool
-    pub(crate) fn required_capability(&self, tool_name: &str, arguments: &Value) -> Option<Capability> {
-        match tool_name {
-            "search" => Some(Capability::WebSearch),
-            "web_fetch" => Some(Capability::WebFetch),
-            "youtube" => Some(Capability::WebFetch), // YouTube fetches from web
-            "file_ops" => {
-                // Determine capability based on operation type
-                if let Some(op) = arguments.get("operation").and_then(|v| v.as_str()) {
-                    match op {
-                        "list" | "search" => Some(Capability::FileList),
-                        "read" => Some(Capability::FileRead),
-                        "write" | "move" | "copy" | "mkdir" | "organize" | "batch_move" => {
-                            Some(Capability::FileWrite)
-                        }
-                        "delete" => Some(Capability::FileDelete),
-                        _ => Some(Capability::FileRead), // Default to read for unknown ops
-                    }
-                } else {
-                    Some(Capability::FileRead)
-                }
-            }
-            "bash" => Some(Capability::ShellExec), // Bash execution requires shell capability
-            "code_exec" => Some(Capability::ShellExec), // Code execution requires shell capability
-            "pdf_generate" => Some(Capability::FileWrite), // PDF generation writes files
-            "generate_image" => Some(Capability::LlmCall), // Image generation uses LLM-like API
-            "generate_video" => Some(Capability::LlmCall), // Video generation uses LLM-like API
-            "generate_audio" => Some(Capability::LlmCall), // Audio generation uses LLM-like API
-            // Canvas tool - no special capability required (visual rendering)
-            "canvas" => None,
-            // Meta tools for smart tool discovery - no special capability required
-            "list_tools" | "get_tool_schema" => None,
-            // Delegate tool - no special capability required (sub-agents handle their own capabilities)
-            "delegate" => None,
-            // Skill reading tools - no special capability required (just reading skill files)
-            "read_skill" | "list_skills" => None,
-            // Sessions tools - no special capability required (policy checks are internal)
-            #[cfg(feature = "gateway")]
-            "sessions_list" | "sessions_send" => None,
-            _ => None,
-        }
-    }
-
-    /// Check if an operation is permitted by the capability gate
+    /// Check if an operation is permitted
+    ///
+    /// TODO: Implement tool policy following OpenClaw's sandbox/tool-policy pattern.
+    /// Currently all operations are permitted; safety is enforced by:
+    /// - CommandChecker (blocks dangerous shell commands)
+    /// - PathPermissionChecker (sandboxes file operations)
+    #[allow(unused_variables)]
     pub(crate) fn check_capability(&self, tool_name: &str, arguments: &Value) -> Result<()> {
-        if let Some(required) = self.required_capability(tool_name, arguments) {
-            self.capability_gate.check(&required).map_err(|denied| {
-                info!(
-                    tool = tool_name,
-                    capability = %denied.required,
-                    "Capability check failed"
-                );
-                AetherError::permission_denied(format!(
-                    "Operation requires '{}' capability which is not granted",
-                    denied.required
-                ))
-            })
-        } else {
-            Ok(())
-        }
+        // TODO: Implement OpenClaw-style tool policy
+        // See: /Volumes/TBU4/Workspace/openclaw/src/agents/pi-tools.policy.ts
+        Ok(())
     }
 }
 
