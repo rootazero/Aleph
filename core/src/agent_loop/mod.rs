@@ -65,6 +65,9 @@ mod loop_result;
 mod traits;
 mod agent_loop;
 
+#[cfg(feature = "cli")]
+pub mod callback_cli;
+
 // Re-export public types
 pub use answer::UserAnswer;
 pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent, NoOpLoopCallback};
@@ -88,3 +91,7 @@ pub use traits::{ActionExecutor, CompressedHistory, CompressorTrait, ThinkerTrai
 
 // Re-export main agent loop
 pub use agent_loop::AgentLoop;
+
+// Re-export CLI callback (when cli feature is enabled)
+#[cfg(feature = "cli")]
+pub use callback_cli::CliLoopCallback;
