@@ -488,28 +488,72 @@ impl PluginRecord {
 // Hook Types
 // =============================================================================
 
-/// Hook event types
+/// Hook event types for shell-based hooks (Claude Code compatible).
+///
+/// This enum is used by the shell hook system where external commands are
+/// executed in response to events. It uses **PascalCase** serialization for
+/// compatibility with Claude Code's hook configuration format.
+///
+/// # Difference from PluginHookEvent
+///
+/// **`HookEvent`** (this enum):
+/// - For shell command hooks configured in CLAUDE.md or config files
+/// - Uses PascalCase serialization (`"PreToolUse"`, `"SessionStart"`)
+/// - Oriented toward CLI/shell integration
+///
+/// **[`PluginHookEvent`](crate::extension::registry::PluginHookEvent)**:
+/// - For WASM/Node.js plugin hooks registered via Plugin API
+/// - Uses snake_case serialization (`"before_tool_call"`, `"session_start"`)
+/// - Oriented toward plugin lifecycle and inter-process communication
+///
+/// # Example (hooks config in CLAUDE.md)
+/// ```json
+/// {
+///   "hooks": {
+///     "PreToolUse": [{ "command": "my-hook.sh" }],
+///     "SessionStart": [{ "command": "setup.sh" }]
+///   }
+/// }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum HookEvent {
+    /// Before a tool is used
     PreToolUse,
+    /// After a tool completes successfully
     PostToolUse,
+    /// After a tool fails
     PostToolUseFailure,
+    /// When a session starts
     SessionStart,
+    /// When a session ends
     SessionEnd,
+    /// Before session compaction
     PreCompact,
+    /// When user submits a prompt
     UserPromptSubmit,
+    /// When a permission is requested
     PermissionRequest,
+    /// When a subagent starts
     SubagentStart,
+    /// When a subagent stops
     SubagentStop,
+    /// When processing stops
     Stop,
+    /// When a notification is sent
     Notification,
+    /// During initial setup
     Setup,
     // Enhanced events (for JS plugins)
+    /// When a chat message is received
     ChatMessage,
+    /// When chat parameters are configured
     ChatParams,
+    /// When a chat response is generated
     ChatResponse,
+    /// Before a command executes
     CommandExecuteBefore,
+    /// After a command executes
     CommandExecuteAfter,
 }
 
