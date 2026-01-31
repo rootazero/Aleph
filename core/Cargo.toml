@@ -124,6 +124,10 @@ ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 base32 = "0.5"
 # For consistent hashing (A/B testing traffic splitting)
 siphasher = "1.0"
+# PTY for process control (PtySupervisor)
+portable-pty = "0.8"
+# ANSI escape sequence stripping
+strip-ansi-escapes = "0.2"
 # For PDF generation
 printpdf = "0.7"
 # For Markdown parsing (PDF generation)
