@@ -1,0 +1,472 @@
+//! package.json parser for Node.js plugins
+//!
+//! This module parses npm `package.json` files that contain an "aether" field
+//! for plugin metadata. This allows Node.js packages to function as Aether plugins.
+
+use super::types::{AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission};
+use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::types::PluginKind;
+use serde::Deserialize;
+use serde_json::Value as JsonValue;
+use std::collections::HashMap;
+use std::path::Path;
+
+// =============================================================================
+// Package.json Types
+// =============================================================================
+
+/// npm package.json structure (partial)
+#[derive(Debug, Deserialize)]
+struct PackageJson {
+    /// Package name (required)
+    name: String,
+
+    /// Package version
+    #[serde(default)]
+    version: Option<String>,
+
+    /// Package description
+    #[serde(default)]
+    description: Option<String>,
+
+    /// Main entry point
+    #[serde(default)]
+    main: Option<String>,
+
+    /// Author (string or object)
+    #[serde(default)]
+    author: Option<PackageAuthor>,
+
+    /// Homepage URL
+    #[serde(default)]
+    homepage: Option<String>,
+
+    /// Repository (string or object)
+    #[serde(default)]
+    repository: Option<PackageRepository>,
+
+    /// License
+    #[serde(default)]
+    license: Option<String>,
+
+    /// Keywords
+    #[serde(default)]
+    keywords: Option<Vec<String>>,
+
+    /// Aether plugin configuration
+    #[serde(default)]
+    aether: Option<AetherConfig>,
+}
+
+/// Package author (supports string or object format)
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PackageAuthor {
+    /// String format: "Name <email> (url)"
+    String(String),
+    /// Object format: { name, email, url }
+    Object {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        email: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+    },
+}
+
+impl From<PackageAuthor> for AuthorInfo {
+    fn from(author: PackageAuthor) -> Self {
+        match author {
+            PackageAuthor::String(s) => AuthorInfo::from(s.as_str()),
+            PackageAuthor::Object { name, email, url } => AuthorInfo { name, email, url },
+        }
+    }
+}
+
+/// Package repository (supports string or object format)
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PackageRepository {
+    /// Simple URL string
+    String(String),
+    /// Object format: { type, url }
+    Object {
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(rename = "type", default)]
+        _repo_type: Option<String>,
+    },
+}
+
+impl PackageRepository {
+    fn url(&self) -> Option<String> {
+        match self {
+            PackageRepository::String(s) => Some(s.clone()),
+            PackageRepository::Object { url, .. } => url.clone(),
+        }
+    }
+}
+
+/// Aether-specific configuration in package.json
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AetherConfig {
+    /// Plugin ID override (defaults to package name)
+    #[serde(default)]
+    id: Option<String>,
+
+    /// Display name override
+    #[serde(default)]
+    name: Option<String>,
+
+    /// Entry point override (defaults to main)
+    #[serde(default)]
+    entry: Option<String>,
+
+    /// Plugin kind override (defaults to nodejs)
+    #[serde(default)]
+    kind: Option<PluginKind>,
+
+    /// Configuration schema (JSON Schema)
+    #[serde(default)]
+    config_schema: Option<JsonValue>,
+
+    /// UI hints for configuration
+    #[serde(default)]
+    config_ui_hints: Option<HashMap<String, ConfigUiHint>>,
+
+    /// Required permissions
+    #[serde(default)]
+    permissions: Option<Vec<PluginPermission>>,
+
+    /// File extensions this plugin handles
+    #[serde(default)]
+    extensions: Option<Vec<String>>,
+}
+
+// =============================================================================
+// Parser
+// =============================================================================
+
+/// Parse a package.json file into a PluginManifest
+///
+/// The package.json must have an "aether" field to be recognized as an Aether plugin.
+/// If no "aether" field is present, returns an error.
+///
+/// # Arguments
+/// * `path` - Path to the package.json file
+///
+/// # Returns
+/// * `Ok(PluginManifest)` - Parsed manifest
+/// * `Err(ExtensionError)` - If parsing fails or required fields are missing
+pub async fn parse_package_json(path: &Path) -> ExtensionResult<PluginManifest> {
+    let content = tokio::fs::read_to_string(path).await?;
+    parse_package_json_content(&content, path)
+}
+
+/// Parse package.json content into a PluginManifest
+///
+/// This is the sync version for use in tests and when content is already loaded.
+pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult<PluginManifest> {
+    let pkg: PackageJson = serde_json::from_str(content)
+        .map_err(|e| ExtensionError::invalid_manifest(path, format!("JSON parse error: {}", e)))?;
+
+    // Require aether field for plugin recognition
+    let aether = pkg.aether.ok_or_else(|| {
+        ExtensionError::invalid_manifest(
+            path,
+            "Missing 'aether' field - not an Aether plugin".to_string(),
+        )
+    })?;
+
+    // Validate package name
+    if pkg.name.is_empty() {
+        return Err(ExtensionError::missing_field(path, "name"));
+    }
+
+    // Determine plugin ID (aether.id > package name)
+    let id = aether.id.unwrap_or_else(|| sanitize_plugin_id(&pkg.name));
+
+    // Validate plugin ID
+    super::aether_plugin::validate_plugin_id(&id).map_err(|e| {
+        ExtensionError::invalid_manifest(path, format!("Invalid plugin ID '{}': {}", id, e))
+    })?;
+
+    // Determine display name
+    let name = aether.name.unwrap_or(pkg.name);
+
+    // Determine entry point
+    let entry = aether
+        .entry
+        .or(pkg.main)
+        .unwrap_or_else(|| "index.js".to_string());
+
+    // Determine plugin kind
+    let kind = aether.kind.unwrap_or(PluginKind::NodeJs);
+
+    // Build manifest
+    let manifest = PluginManifest {
+        id,
+        name,
+        version: pkg.version,
+        description: pkg.description,
+        kind,
+        entry: entry.into(),
+        root_dir: path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
+        config_schema: aether.config_schema,
+        config_ui_hints: aether.config_ui_hints.unwrap_or_default(),
+        permissions: aether.permissions.unwrap_or_default(),
+        author: pkg.author.map(AuthorInfo::from),
+        homepage: pkg.homepage,
+        repository: pkg.repository.and_then(|r| r.url()),
+        license: pkg.license,
+        keywords: pkg.keywords.unwrap_or_default(),
+        extensions: aether.extensions.unwrap_or_default(),
+    };
+
+    Ok(manifest)
+}
+
+/// Sanitize a package name to a valid plugin ID
+///
+/// Converts scoped packages (@org/name) and other formats to valid plugin IDs.
+fn sanitize_plugin_id(name: &str) -> String {
+    let mut id = name.to_lowercase();
+
+    // Remove scope prefix (@org/)
+    if let Some(pos) = id.find('/') {
+        id = id[pos + 1..].to_string();
+    }
+
+    // Replace invalid characters with hyphens
+    id = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    // Remove consecutive hyphens
+    while id.contains("--") {
+        id = id.replace("--", "-");
+    }
+
+    // Remove leading/trailing hyphens
+    id.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_package_json_basic() {
+        let content = r#"{
+            "name": "my-plugin",
+            "version": "1.0.0",
+            "description": "A test plugin",
+            "main": "dist/index.js",
+            "aether": {}
+        }"#;
+
+        let manifest =
+            parse_package_json_content(content, Path::new("/test/package.json")).unwrap();
+
+        assert_eq!(manifest.id, "my-plugin");
+        assert_eq!(manifest.name, "my-plugin");
+        assert_eq!(manifest.version, Some("1.0.0".to_string()));
+        assert_eq!(manifest.description, Some("A test plugin".to_string()));
+        assert_eq!(manifest.entry, PathBuf::from("dist/index.js"));
+        assert_eq!(manifest.kind, PluginKind::NodeJs);
+    }
+
+    #[test]
+    fn test_parse_package_json_with_aether_config() {
+        let content = r#"{
+            "name": "@org/my-plugin",
+            "version": "2.0.0",
+            "aether": {
+                "id": "custom-id",
+                "name": "Custom Plugin",
+                "entry": "src/main.js",
+                "permissions": ["network", "env"],
+                "extensions": [".txt", ".md"]
+            }
+        }"#;
+
+        let manifest =
+            parse_package_json_content(content, Path::new("/test/package.json")).unwrap();
+
+        assert_eq!(manifest.id, "custom-id");
+        assert_eq!(manifest.name, "Custom Plugin");
+        assert_eq!(manifest.entry, PathBuf::from("src/main.js"));
+        assert_eq!(manifest.permissions.len(), 2);
+        assert!(manifest.permissions.contains(&PluginPermission::Network));
+        assert!(manifest.permissions.contains(&PluginPermission::Env));
+        assert_eq!(manifest.extensions, vec![".txt", ".md"]);
+    }
+
+    #[test]
+    fn test_parse_package_json_author_string() {
+        let content = r#"{
+            "name": "test-plugin",
+            "author": "John Doe <john@example.com> (https://example.com)",
+            "aether": {}
+        }"#;
+
+        let manifest =
+            parse_package_json_content(content, Path::new("/test/package.json")).unwrap();
+
+        let author = manifest.author.unwrap();
+        assert_eq!(author.name, Some("John Doe".to_string()));
+        assert_eq!(author.email, Some("john@example.com".to_string()));
+        assert_eq!(author.url, Some("https://example.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_package_json_author_object() {
+        let content = r#"{
+            "name": "test-plugin",
+            "author": {
+                "name": "Jane Doe",
+                "email": "jane@example.com"
+            },
+            "aether": {}
+        }"#;
+
+        let manifest =
+            parse_package_json_content(content, Path::new("/test/package.json")).unwrap();
+
+        let author = manifest.author.unwrap();
+        assert_eq!(author.name, Some("Jane Doe".to_string()));
+        assert_eq!(author.email, Some("jane@example.com".to_string()));
+        assert_eq!(author.url, None);
+    }
+
+    #[test]
+    fn test_parse_package_json_repository_string() {
+        let content = r#"{
+            "name": "test-plugin",
+            "repository": "https://github.com/user/repo",
+            "aether": {}
+        }"#;
+
+        let manifest =
+            parse_package_json_content(content, Path::new("/test/package.json")).unwrap();
+
+        assert_eq!(
+            manifest.repository,
+            Some("https://github.com/user/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_package_json_repository_object() {
+        let content = r#"{
+            "name": "test-plugin",
+            "repository": {
+                "type": "git",
+                "url": "https://github.com/user/repo.git"
+            },
+            "aether": {}
+        }"#;
+
+        let manifest =
+            parse_package_json_content(content, Path::new("/test/package.json")).unwrap();
+
+        assert_eq!(
+            manifest.repository,
+            Some("https://github.com/user/repo.git".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_package_json_missing_aether() {
+        let content = r#"{
+            "name": "regular-package",
+            "version": "1.0.0"
+        }"#;
+
+        let result = parse_package_json_content(content, Path::new("/test/package.json"));
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert!(matches!(err, ExtensionError::InvalidManifest { .. }));
+    }
+
+    #[test]
+    fn test_parse_package_json_missing_name() {
+        let content = r#"{
+            "aether": {}
+        }"#;
+
+        let result = parse_package_json_content(content, Path::new("/test/package.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_package_json_config_schema() {
+        let content = r#"{
+            "name": "test-plugin",
+            "aether": {
+                "configSchema": {
+                    "type": "object",
+                    "properties": {
+                        "apiKey": { "type": "string" }
+                    }
+                },
+                "configUiHints": {
+                    "apiKey": {
+                        "label": "API Key",
+                        "sensitive": true
+                    }
+                }
+            }
+        }"#;
+
+        let manifest =
+            parse_package_json_content(content, Path::new("/test/package.json")).unwrap();
+
+        assert!(manifest.config_schema.is_some());
+        assert_eq!(manifest.config_ui_hints.len(), 1);
+
+        let hint = manifest.config_ui_hints.get("apiKey").unwrap();
+        assert_eq!(hint.label, Some("API Key".to_string()));
+        assert_eq!(hint.sensitive, Some(true));
+    }
+
+    #[test]
+    fn test_sanitize_plugin_id() {
+        assert_eq!(sanitize_plugin_id("my-plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("@org/my-plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("MyPlugin"), "myplugin");
+        assert_eq!(sanitize_plugin_id("my_plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("my--plugin"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("-my-plugin-"), "my-plugin");
+        assert_eq!(sanitize_plugin_id("@scope/pkg-name"), "pkg-name");
+    }
+
+    #[test]
+    fn test_parse_package_json_scoped_package() {
+        let content = r#"{
+            "name": "@myorg/awesome-plugin",
+            "version": "1.0.0",
+            "aether": {}
+        }"#;
+
+        let manifest =
+            parse_package_json_content(content, Path::new("/test/package.json")).unwrap();
+
+        // ID should be sanitized from scoped package name
+        assert_eq!(manifest.id, "awesome-plugin");
+        // Display name keeps the original
+        assert_eq!(manifest.name, "@myorg/awesome-plugin");
+    }
+
+    use std::path::PathBuf;
+}
