@@ -59,6 +59,9 @@ impl HandlerRegistry {
         registry.register("echo", echo::handle);
         registry.register("version", version::handle);
 
+        // Config handlers (schema is stateless)
+        registry.register("config.schema", config::handle_schema);
+
         // Logs handlers
         registry.register("logs.getLevel", logs::handle_get_level);
         registry.register("logs.setLevel", logs::handle_set_level);

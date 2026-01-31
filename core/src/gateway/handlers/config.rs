@@ -1,11 +1,13 @@
 //! Configuration Handlers
 //!
-//! RPC handlers for configuration operations: reload, get, validate.
+//! RPC handlers for configuration operations: reload, get, validate, schema.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info};
 
+use crate::config::{build_ui_hints, generate_config_schema_json, ConfigUiHints};
 use crate::gateway::hot_reload::ConfigWatcher;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
@@ -220,6 +222,101 @@ pub async fn handle_path(
     )
 }
 
+// ============================================================================
+// Schema Handler
+// ============================================================================
+
+/// Default value for include_plugins (true)
+fn default_true() -> bool {
+    true
+}
+
+/// Request params for config.schema
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConfigSchemaRequest {
+    /// Whether to include plugin schemas (reserved for future use)
+    #[serde(default = "default_true")]
+    #[allow(dead_code)]
+    pub include_plugins: bool,
+}
+
+/// Response for config.schema
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigSchemaResponse {
+    /// JSON Schema for the configuration
+    pub schema: serde_json::Value,
+    /// UI hints for rendering configuration forms
+    pub ui_hints: ConfigUiHints,
+    /// Schema version (crate version)
+    pub version: String,
+    /// Timestamp when the schema was generated
+    pub generated_at: String,
+}
+
+/// Handle config.schema RPC request
+///
+/// Returns the JSON Schema for the Aether configuration along with
+/// UI hints for rendering configuration forms.
+///
+/// # Request
+///
+/// ```json
+/// {
+///   "jsonrpc": "2.0",
+///   "method": "config.schema",
+///   "id": 1,
+///   "params": {
+///     "include_plugins": true  // optional, defaults to true
+///   }
+/// }
+/// ```
+///
+/// # Response
+///
+/// ```json
+/// {
+///   "jsonrpc": "2.0",
+///   "id": 1,
+///   "result": {
+///     "schema": { ... },      // JSON Schema
+///     "ui_hints": { ... },    // UI hints for form rendering
+///     "version": "0.1.0",
+///     "generated_at": "2024-01-15T10:30:00Z"
+///   }
+/// }
+/// ```
+pub async fn handle_schema(request: JsonRpcRequest) -> JsonRpcResponse {
+    debug!("Handling config.schema");
+
+    // Parse params (optional)
+    let _params: ConfigSchemaRequest = request
+        .params
+        .as_ref()
+        .map(|p| serde_json::from_value(p.clone()).unwrap_or_default())
+        .unwrap_or_default();
+
+    // Generate schema and hints
+    let schema = generate_config_schema_json();
+    let ui_hints = build_ui_hints();
+
+    let response = ConfigSchemaResponse {
+        schema,
+        ui_hints,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        generated_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    // Serialize response manually to ensure proper format
+    match serde_json::to_value(&response) {
+        Ok(value) => JsonRpcResponse::success(request.id, value),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize schema response: {}", e),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +426,52 @@ model = "claude-opus-4-5"
 
         let result = response.result.unwrap();
         assert_eq!(result["success"], true);
+    }
+
+    #[tokio::test]
+    async fn test_handle_schema() {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(serde_json::json!(1)),
+            method: "config.schema".to_string(),
+            params: None,
+        };
+
+        let response = handle_schema(request).await;
+        assert!(response.is_success());
+
+        let result = response.result.unwrap();
+
+        // Check schema is present and has expected structure
+        assert!(result.get("schema").is_some());
+        let schema = result.get("schema").unwrap();
+        assert!(schema.get("$schema").is_some());
+        assert!(schema.get("definitions").is_some());
+
+        // Check ui_hints is present
+        assert!(result.get("ui_hints").is_some());
+        let ui_hints = result.get("ui_hints").unwrap();
+        assert!(ui_hints.get("groups").is_some());
+        assert!(ui_hints.get("fields").is_some());
+
+        // Check metadata
+        assert!(result.get("version").is_some());
+        assert!(result.get("generated_at").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_schema_with_params() {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(serde_json::json!(2)),
+            method: "config.schema".to_string(),
+            params: Some(json!({ "include_plugins": false })),
+        };
+
+        let response = handle_schema(request).await;
+        assert!(response.is_success());
+
+        let result = response.result.unwrap();
+        assert!(result.get("schema").is_some());
     }
 }
