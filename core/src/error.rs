@@ -41,8 +41,8 @@ pub enum AetherError {
         suggestion: Option<String>,
     },
 
-    /// Error occurred when invoking FFI callbacks
-    #[error("FFI callback error: {message}")]
+    /// Error occurred when invoking callbacks
+    #[error("Callback error: {message}")]
     CallbackError {
         message: String,
         suggestion: Option<String>,
@@ -523,6 +523,16 @@ impl AetherError {
         }
     }
 
+    /// Create an invalid input error
+    ///
+    /// Used when user input (IDs, parameters, etc.) fails validation.
+    pub fn invalid_input<S: Into<String>>(msg: S) -> Self {
+        AetherError::InvalidConfig {
+            message: msg.into(),
+            suggestion: Some("Please check the input values and try again".to_string()),
+        }
+    }
+
     /// Create a cancelled error
     ///
     /// Used when an operation is cancelled by the user via CancellationToken.
@@ -623,7 +633,7 @@ mod tests {
     fn test_callback_error_creation() {
         let err = AetherError::callback("callback failed");
         assert!(matches!(err, AetherError::CallbackError { .. }));
-        assert_eq!(err.to_string(), "FFI callback error: callback failed");
+        assert_eq!(err.to_string(), "Callback error: callback failed");
         assert!(err.suggestion().is_some());
     }
 

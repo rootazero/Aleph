@@ -51,7 +51,7 @@ pub enum ErrorType {
 ///
 /// Contains details about a server that failed to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpServerErrorFFI {
+pub struct McpServerError {
     /// Name of the server that failed
     pub server_name: String,
     /// Human-readable error message
@@ -63,14 +63,14 @@ pub struct McpServerErrorFFI {
 /// Contains information about MCP server startup results,
 /// sent to Swift via `on_mcp_startup_complete` callback.
 #[derive(Debug, Clone, Default)]
-pub struct McpStartupReportFFI {
+pub struct McpStartupReport {
     /// Names of servers that started successfully
     pub succeeded_servers: Vec<String>,
     /// Servers that failed to start with error details
-    pub failed_servers: Vec<McpServerErrorFFI>,
+    pub failed_servers: Vec<McpServerError>,
 }
 
-impl McpStartupReportFFI {
+impl McpStartupReport {
     /// Create from internal McpStartupReport
     pub fn from_internal(report: &crate::mcp::McpStartupReport) -> Self {
         Self {
@@ -78,7 +78,7 @@ impl McpStartupReportFFI {
             failed_servers: report
                 .failed
                 .iter()
-                .map(|(name, error): &(String, String)| McpServerErrorFFI {
+                .map(|(name, error): &(String, String)| McpServerError {
                     server_name: name.clone(),
                     error_message: error.clone(),
                 })
@@ -236,7 +236,7 @@ pub trait InternalEventHandler: Send + Sync {
     ///
     /// # Arguments
     /// * `report` - Startup report with succeeded/failed server information
-    fn on_mcp_startup_complete(&self, report: McpStartupReportFFI);
+    fn on_mcp_startup_complete(&self, report: McpStartupReport);
 
     // ========================================================================
     // Agent Loop Callbacks (enhance-intent-routing-pipeline)
@@ -329,7 +329,7 @@ pub struct MockEventHandler {
     pub tools_changed: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
     pub tools_refresh_needed_count: std::sync::Arc<std::sync::Mutex<u32>>,
     // MCP startup tracking
-    pub mcp_startup_reports: std::sync::Arc<std::sync::Mutex<Vec<McpStartupReportFFI>>>,
+    pub mcp_startup_reports: std::sync::Arc<std::sync::Mutex<Vec<McpStartupReport>>>,
     // Agent loop tracking
     pub agent_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String)>>>, // (plan_id, total_steps, description)
     pub agent_tool_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, String)>>>, // (plan_id, step_index, tool_name, description)
@@ -406,7 +406,7 @@ impl MockEventHandler {
             .clone()
     }
 
-    pub fn get_mcp_startup_reports(&self) -> Vec<McpStartupReportFFI> {
+    pub fn get_mcp_startup_reports(&self) -> Vec<McpStartupReport> {
         self.mcp_startup_reports
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -688,7 +688,7 @@ impl InternalEventHandler for MockEventHandler {
         *count += 1;
     }
 
-    fn on_mcp_startup_complete(&self, report: McpStartupReportFFI) {
+    fn on_mcp_startup_complete(&self, report: McpStartupReport) {
         self.mcp_startup_reports
             .lock()
             .unwrap_or_else(|e| e.into_inner())
