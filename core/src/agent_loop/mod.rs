@@ -49,12 +49,14 @@
 //! ```
 
 // Submodules
+pub mod answer;
 pub mod callback;
 pub mod config;
 pub mod decision;
 pub mod guards;
 pub mod message_builder;
 pub mod overflow;
+pub mod question;
 pub mod session_sync;
 pub mod state;
 
@@ -63,10 +65,15 @@ mod loop_result;
 mod traits;
 mod agent_loop;
 
+#[cfg(feature = "cli")]
+pub mod callback_cli;
+
 // Re-export public types
+pub use answer::UserAnswer;
 pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent, NoOpLoopCallback};
 pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig, ThinkRetryConfig};
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
+pub use question::{ChoiceOption, QuestionKind, TextValidation};
 pub use guards::{GuardViolation, LoopGuard};
 pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCall};
 pub use overflow::{ModelLimit, OverflowConfig, OverflowDetector};
@@ -84,3 +91,7 @@ pub use traits::{ActionExecutor, CompressedHistory, CompressorTrait, ThinkerTrai
 
 // Re-export main agent loop
 pub use agent_loop::AgentLoop;
+
+// Re-export CLI callback (when cli feature is enabled)
+#[cfg(feature = "cli")]
+pub use callback_cli::CliLoopCallback;
