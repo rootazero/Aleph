@@ -224,6 +224,84 @@ impl SignalDetector {
 
         result
     }
+
+    /// Detect context switch based on embedding distance
+    ///
+    /// Returns Some(ContextSwitch) if the cosine distance exceeds the threshold.
+    /// The threshold is the minimum distance to consider as a context switch
+    /// (default 0.5 means topics should be at least 50% dissimilar).
+    ///
+    /// Note: `from_topic` and `to_topic` fields are initially empty and will be
+    /// filled by LLM during fact extraction based on conversation context.
+    pub fn detect_context_switch(
+        &self,
+        prev_embedding: &[f32],
+        current_embedding: &[f32],
+        threshold: f32,
+    ) -> Option<CompressionSignal> {
+        if prev_embedding.len() != current_embedding.len() || prev_embedding.is_empty() {
+            return None;
+        }
+
+        let distance = Self::cosine_distance(prev_embedding, current_embedding);
+
+        if distance > threshold {
+            Some(CompressionSignal::ContextSwitch {
+                from_topic: String::new(), // To be summarized by LLM
+                to_topic: String::new(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Calculate cosine distance between two vectors
+    ///
+    /// Returns 1.0 - cosine_similarity, so:
+    /// - 0.0 = identical vectors
+    /// - 1.0 = orthogonal vectors
+    /// - 2.0 = opposite vectors
+    fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        if norm_a == 0.0 || norm_b == 0.0 {
+            return 1.0; // Max distance for zero vectors
+        }
+
+        let similarity = dot / (norm_a * norm_b);
+        1.0 - similarity // Convert similarity to distance
+    }
+
+    /// Combined detection with context switch
+    ///
+    /// Detects keyword-based signals AND context switch based on embedding distance.
+    /// Use this when you have access to both the message text and embeddings.
+    pub fn detect_with_context(
+        &self,
+        message: &str,
+        prev_embedding: Option<&[f32]>,
+        current_embedding: Option<&[f32]>,
+        context_switch_threshold: f32,
+    ) -> DetectionResult {
+        let mut result = self.detect(message);
+
+        // Check for context switch if embeddings provided
+        if let (Some(prev), Some(curr)) = (prev_embedding, current_embedding) {
+            if let Some(switch_signal) =
+                self.detect_context_switch(prev, curr, context_switch_threshold)
+            {
+                result.signals.push(switch_signal);
+                if !result.should_compress {
+                    result.should_compress = true;
+                    result.priority = CompressionPriority::Batch;
+                }
+            }
+        }
+
+        result
+    }
 }
 
 impl Default for SignalDetector {
@@ -377,5 +455,66 @@ mod tests {
         // Should work the same as new()
         let result = detector.detect("记住这个");
         assert!(result.should_compress);
+    }
+
+    #[test]
+    fn test_context_switch_detection() {
+        let detector = SignalDetector::new();
+
+        // Simulate previous embedding (about programming)
+        let prev_embedding = vec![0.1, 0.2, 0.3, 0.4, 0.5];
+
+        // Current message about cooking (very different direction - opposite)
+        // Using opposite direction vectors to ensure high cosine distance
+        let current_embedding = vec![-0.1, -0.2, -0.3, -0.4, -0.5];
+
+        let result = detector.detect_context_switch(&prev_embedding, &current_embedding, 0.5);
+
+        assert!(result.is_some());
+        assert!(matches!(
+            result.unwrap(),
+            CompressionSignal::ContextSwitch { .. }
+        ));
+    }
+
+    #[test]
+    fn test_no_context_switch_for_similar_topics() {
+        let detector = SignalDetector::new();
+
+        // Similar embeddings (same topic)
+        let prev_embedding = vec![0.1, 0.2, 0.3, 0.4, 0.5];
+        let current_embedding = vec![0.15, 0.22, 0.28, 0.42, 0.48];
+
+        let result = detector.detect_context_switch(&prev_embedding, &current_embedding, 0.5);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_with_context_combines_signals() {
+        let detector = SignalDetector::new();
+
+        let prev_embedding = vec![0.1, 0.2, 0.3, 0.4, 0.5];
+        // Using opposite direction vectors to ensure high cosine distance
+        let current_embedding = vec![-0.1, -0.2, -0.3, -0.4, -0.5];
+
+        // Message with learning signal AND context switch
+        let result = detector.detect_with_context(
+            "记住，我喜欢用 Python",
+            Some(&prev_embedding),
+            Some(&current_embedding),
+            0.5,
+        );
+
+        assert!(result.should_compress);
+        // Should have both learning signal and context switch
+        assert!(result
+            .signals
+            .iter()
+            .any(|s| matches!(s, CompressionSignal::Learning { .. })));
+        assert!(result
+            .signals
+            .iter()
+            .any(|s| matches!(s, CompressionSignal::ContextSwitch { .. })));
     }
 }
