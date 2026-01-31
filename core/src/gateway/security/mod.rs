@@ -3,6 +3,7 @@
 //! Provides authentication and authorization for Gateway connections.
 
 pub mod crypto;
+pub mod store;
 pub mod token;
 pub mod pairing;
 
