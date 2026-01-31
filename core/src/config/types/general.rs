@@ -5,6 +5,7 @@
 //! - ShortcutsConfig: Keyboard shortcuts configuration
 //! - BehaviorConfig: Input/output behavior settings
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // =============================================================================
 
 /// General configuration settings
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct GeneralConfig {
     /// Default provider to use when no routing rule matches
     #[serde(default)]
@@ -33,7 +34,7 @@ pub struct GeneralConfig {
 // =============================================================================
 
 /// Shortcuts configuration (Phase 6 - Task 4.2)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ShortcutsConfig {
     /// Legacy summon hotkey - kept for backward compatibility with old config files
     #[serde(default = "default_summon_hotkey")]
@@ -86,7 +87,7 @@ impl Default for ShortcutsConfig {
 /// - pii_scrubbing_enabled: Migrated to search.pii.enabled
 /// - multi_turn_enabled: No longer used
 /// - keep_window_visible_during_processing: No longer used
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BehaviorConfig {
     /// Output mode: "typewriter" or "instant"
     #[serde(default = "default_output_mode")]
