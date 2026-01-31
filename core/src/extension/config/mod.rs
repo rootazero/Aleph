@@ -1,10 +1,15 @@
 //! Extension configuration system
 //!
 //! Handles aether.jsonc configuration with multi-level merging.
+//! Now also supports aether.toml as the preferred format.
 
 mod types;
+pub mod loader;
+pub mod migrate;
 
 pub use types::*;
+pub use loader::{find_config_file, load_config_file, load_extension_config};
+pub use migrate::{migrate_to_toml, needs_migration, MigrationResult};
 
 use crate::discovery::{DiscoveryManager, AETHER_CONFIG_FILE, AETHER_CONFIG_FILE_ALT};
 use crate::extension::ExtensionError;
