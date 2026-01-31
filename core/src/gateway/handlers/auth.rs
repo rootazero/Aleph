@@ -123,6 +123,21 @@ pub async fn handle_connect(
             .device_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+        // Register device in SecurityStore first (required for FK constraint on tokens)
+        let device_name = params.device_name.as_deref().unwrap_or("Auto-Device");
+        if let Err(e) = ctx.security_store.upsert_device(
+            &device_id,
+            device_name,
+            None,
+            &[0u8; 32], // Placeholder public key
+            &device_id[..16.min(device_id.len())], // Use prefix as fingerprint
+            DeviceRole::Operator.as_str(),
+            &["*".to_string()],
+        ) {
+            warn!(error = %e, "Failed to register device");
+            return JsonRpcResponse::error(request.id, -32603, format!("Failed to register device: {}", e));
+        }
+
         let signed_token = match ctx
             .token_manager
             .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
