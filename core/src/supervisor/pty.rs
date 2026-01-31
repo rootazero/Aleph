@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use crate::exec::SecretMasker;
 use crate::supervisor::types::{SupervisorConfig, SupervisorError, SupervisorEvent};
 
 /// PTY-based supervisor for controlling Claude Code and similar CLI tools.
@@ -34,6 +35,7 @@ pub struct ClaudeSupervisor {
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
     running: Arc<AtomicBool>,
+    masker: SecretMasker,
 }
 
 impl ClaudeSupervisor {
@@ -44,6 +46,7 @@ impl ClaudeSupervisor {
             master: None,
             writer: None,
             running: Arc::new(AtomicBool::new(false)),
+            masker: SecretMasker::new(),
         }
     }
 
@@ -98,6 +101,7 @@ impl ClaudeSupervisor {
         // Create event channel
         let (tx, rx) = mpsc::unbounded_channel();
         let running = self.running.clone();
+        let masker = self.masker.clone();
 
         // Spawn reader thread
         std::thread::spawn(move || {
@@ -107,9 +111,11 @@ impl ClaudeSupervisor {
                     Ok(text) => {
                         // Strip ANSI escape sequences
                         let clean = strip_ansi(&text);
+                        // Mask secrets in output
+                        let safe = masker.mask(&clean);
 
                         // Detect semantic events
-                        let event = detect_event(&clean);
+                        let event = detect_event(&safe);
                         if tx.send(event).is_err() {
                             break;
                         }
@@ -221,5 +227,15 @@ mod tests {
         let text = "Hello, world!";
         let event = detect_event(text);
         assert!(matches!(event, SupervisorEvent::Output(_)));
+    }
+
+    #[test]
+    fn test_secret_masking_in_output() {
+        // SecretMasker should be used in supervisor
+        let masker = crate::exec::SecretMasker::new();
+        let input = "API_KEY=sk-abcdefghijklmnopqrstuvwxyz12345678901234";
+        let masked = masker.mask(input);
+        assert!(masked.contains("***REDACTED***"));
+        assert!(!masked.contains("abcdefghijklmnopqrstuvwxyz"));
     }
 }
