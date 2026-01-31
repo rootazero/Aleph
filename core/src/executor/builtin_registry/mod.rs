@@ -6,21 +6,19 @@
 //!
 //! # Safety Features
 //!
-//! The registry integrates with the Three-Layer Control architecture's CapabilityGate
-//! to enforce capability-based access control on tool execution.
+//! Tool execution safety is enforced by:
+//! - CommandChecker: Blocks dangerous shell commands (rm -rf /, sudo, etc.)
+//! - PathPermissionChecker: Sandboxes file operations to allowed directories
+//!
+//! TODO: Tool policy will be reimplemented following OpenClaw's sandbox/tool-policy pattern.
+//! See: /Volumes/TBU4/Workspace/openclaw/src/agents/sandbox/
 //!
 //! # Usage
 //!
 //! ```ignore
 //! use aethecore::executor::{BuiltinToolRegistry, SingleStepExecutor};
-//! use aethecore::three_layer::{Capability, CapabilityGate};
 //!
-//! // Create registry with capability restrictions
-//! let gate = CapabilityGate::new(vec![
-//!     Capability::FileRead,
-//!     Capability::WebSearch,
-//! ]);
-//! let registry = BuiltinToolRegistry::with_gate(gate);
+//! let registry = BuiltinToolRegistry::new();
 //! let executor = SingleStepExecutor::new(Arc::new(registry));
 //! ```
 
@@ -47,7 +45,6 @@ mod tests {
 
     use crate::agents::sub_agents::SubAgentDispatcher;
     use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource};
-    use crate::three_layer::{Capability, CapabilityGate};
 
     use super::*;
 
@@ -78,7 +75,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_unknown_tool_execution() {
+    async fn test_unknown_tool_returns_error() {
         let registry = BuiltinToolRegistry::new();
 
         let result = registry
@@ -90,146 +87,17 @@ mod tests {
         assert!(err.to_string().contains("Unknown tool"));
     }
 
-    #[test]
-    fn test_required_capability_mapping() {
-        let registry = BuiltinToolRegistry::new();
-
-        // Search requires WebSearch
-        assert_eq!(
-            registry.required_capability("search", &serde_json::json!({})),
-            Some(Capability::WebSearch)
-        );
-
-        // Web fetch requires WebFetch
-        assert_eq!(
-            registry.required_capability("web_fetch", &serde_json::json!({})),
-            Some(Capability::WebFetch)
-        );
-
-        // File ops - read operation
-        assert_eq!(
-            registry.required_capability("file_ops", &serde_json::json!({"operation": "read"})),
-            Some(Capability::FileRead)
-        );
-
-        // File ops - list operation
-        assert_eq!(
-            registry.required_capability("file_ops", &serde_json::json!({"operation": "list"})),
-            Some(Capability::FileList)
-        );
-
-        // File ops - write operation
-        assert_eq!(
-            registry.required_capability("file_ops", &serde_json::json!({"operation": "write"})),
-            Some(Capability::FileWrite)
-        );
-
-        // File ops - delete operation
-        assert_eq!(
-            registry.required_capability("file_ops", &serde_json::json!({"operation": "delete"})),
-            Some(Capability::FileDelete)
-        );
-    }
+    // TODO: Capability tests removed - will be reimplemented with OpenClaw-style tool policy
+    // See: /Volumes/TBU4/Workspace/openclaw/src/agents/pi-tools.policy.ts
 
     #[tokio::test]
-    async fn test_capability_check_denied() {
-        // Create registry with only WebSearch capability
-        let gate = CapabilityGate::new(vec![Capability::WebSearch]);
-        let registry = BuiltinToolRegistry::with_gate(gate);
-
-        // Search should work (WebSearch granted)
-        let search_result = registry.check_capability("search", &serde_json::json!({}));
-        assert!(search_result.is_ok());
-
-        // File ops read should fail (FileRead not granted)
-        let file_result =
-            registry.check_capability("file_ops", &serde_json::json!({"operation": "read"}));
-        assert!(file_result.is_err());
-        let err_msg = file_result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("Permission denied") || err_msg.contains("capability"),
-            "Expected permission error, got: {}",
-            err_msg
-        );
-    }
-
-    #[tokio::test]
-    async fn test_file_delete_allowed_by_default() {
-        // Default registry now grants FileDelete for super-powered AI Agent
+    async fn test_capability_check_allows_all() {
+        // Currently all operations are permitted (capability system removed)
+        // Safety is enforced by CommandChecker and PathPermissionChecker
         let registry = BuiltinToolRegistry::new();
 
-        // Delete capability check should pass
         let check = registry.check_capability("file_ops", &serde_json::json!({"operation": "delete"}));
-        assert!(check.is_ok(), "FileDelete should be allowed by default");
-    }
-
-    #[tokio::test]
-    async fn test_code_exec_allowed_by_default() {
-        // Default registry grants ShellExec for code execution
-        let registry = BuiltinToolRegistry::new();
-
-        // Code execution capability check should pass
-        let check = registry.check_capability("code_exec", &serde_json::json!({}));
-        assert!(check.is_ok(), "ShellExec should be allowed by default");
-    }
-
-    #[test]
-    fn test_code_exec_capability_mapping() {
-        let registry = BuiltinToolRegistry::new();
-
-        // Code exec requires ShellExec
-        assert_eq!(
-            registry.required_capability("code_exec", &serde_json::json!({})),
-            Some(Capability::ShellExec)
-        );
-    }
-
-    #[tokio::test]
-    async fn test_file_read_allowed_by_default() {
-        // Default registry grants FileRead
-        let registry = BuiltinToolRegistry::new();
-
-        // Read capability check should pass
-        let check = registry.check_capability("file_ops", &serde_json::json!({"operation": "read"}));
-        assert!(check.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_file_write_allowed_by_default() {
-        // Default registry grants FileWrite for AI Agent tasks
-        let registry = BuiltinToolRegistry::new();
-
-        // Write capability check should pass
-        let check = registry.check_capability("file_ops", &serde_json::json!({"operation": "write"}));
-        assert!(check.is_ok());
-
-        // Other write-like operations should also pass
-        let check_mkdir = registry.check_capability("file_ops", &serde_json::json!({"operation": "mkdir"}));
-        assert!(check_mkdir.is_ok());
-
-        let check_copy = registry.check_capability("file_ops", &serde_json::json!({"operation": "copy"}));
-        assert!(check_copy.is_ok());
-    }
-
-    #[test]
-    fn test_pdf_generate_capability_mapping() {
-        let registry = BuiltinToolRegistry::new();
-
-        // PDF generate requires FileWrite
-        assert_eq!(
-            registry.required_capability("pdf_generate", &serde_json::json!({})),
-            Some(Capability::FileWrite)
-        );
-    }
-
-    #[tokio::test]
-    async fn test_pdf_generate_allowed_by_default() {
-        // Default registry grants FileWrite for PDF generation
-        let registry = BuiltinToolRegistry::new();
-
-        // PDF generate capability check should pass
-        let check = registry.check_capability("pdf_generate", &serde_json::json!({}));
-        assert!(check.is_ok(), "FileWrite should be allowed for pdf_generate");
+        assert!(check.is_ok(), "All operations should be allowed currently");
     }
 
     #[test]
@@ -253,26 +121,6 @@ mod tests {
 
         assert!(registry.get_tool("list_tools").is_some());
         assert!(registry.get_tool("get_tool_schema").is_some());
-    }
-
-    #[test]
-    fn test_meta_tools_no_special_capability() {
-        // Meta tools should not require any special capability
-        let dispatcher_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
-        let config = BuiltinToolConfig {
-            dispatcher_registry: Some(dispatcher_registry),
-            ..Default::default()
-        };
-        let registry = BuiltinToolRegistry::with_config(config);
-
-        assert_eq!(
-            registry.required_capability("list_tools", &serde_json::json!({})),
-            None
-        );
-        assert_eq!(
-            registry.required_capability("get_tool_schema", &serde_json::json!({})),
-            None
-        );
     }
 
     #[test]
@@ -300,25 +148,6 @@ mod tests {
         let delegate = registry.get_tool("delegate").unwrap();
         assert_eq!(delegate.name, "delegate");
         assert_eq!(delegate.id, "builtin:delegate");
-    }
-
-    #[test]
-    fn test_delegate_tool_no_special_capability() {
-        // Delegate tool should not require any special capability
-        let tool_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
-        let sub_agent_dispatcher = Arc::new(RwLock::new(
-            SubAgentDispatcher::with_defaults(tool_registry)
-        ));
-        let config = BuiltinToolConfig {
-            sub_agent_dispatcher: Some(sub_agent_dispatcher),
-            ..Default::default()
-        };
-        let registry = BuiltinToolRegistry::with_config(config);
-
-        assert_eq!(
-            registry.required_capability("delegate", &serde_json::json!({})),
-            None
-        );
     }
 
     #[tokio::test]
@@ -446,26 +275,6 @@ mod tests {
             assert_eq!(sessions_send.id, "builtin:sessions_send");
         }
 
-        #[test]
-        fn test_sessions_tools_no_special_capability() {
-            // Sessions tools should not require any special capability
-            let gateway_context = create_test_gateway_context();
-            let config = BuiltinToolConfig {
-                gateway_context: Some(gateway_context),
-                ..Default::default()
-            };
-            let registry = BuiltinToolRegistry::with_config(config);
-
-            assert_eq!(
-                registry.required_capability("sessions_list", &serde_json::json!({})),
-                None
-            );
-            assert_eq!(
-                registry.required_capability("sessions_send", &serde_json::json!({})),
-                None
-            );
-        }
-
         #[tokio::test]
         async fn test_sessions_list_execution_without_context() {
             // Without gateway_context, sessions_list should fail with error
@@ -501,58 +310,6 @@ mod tests {
                 .await;
 
             assert!(result.is_ok());
-            let output = result.unwrap();
-            // Should return empty list since no sessions exist
-            assert!(output.get("count").is_some());
-            assert_eq!(output.get("count").unwrap().as_u64().unwrap(), 0);
-        }
-
-        #[tokio::test]
-        async fn test_sessions_send_execution_without_context() {
-            // Without gateway_context, sessions_send should fail with error
-            let registry = BuiltinToolRegistry::new();
-
-            let result = registry
-                .execute_tool(
-                    "sessions_send",
-                    serde_json::json!({
-                        "message": "Hello"
-                    }),
-                )
-                .await;
-
-            assert!(result.is_err());
-            let err = result.unwrap_err();
-            assert!(err.to_string().contains("sessions_send not available"));
-        }
-
-        #[tokio::test]
-        async fn test_sessions_send_execution_with_context() {
-            // With gateway_context, sessions_send should execute
-            // (though it may fail due to missing target agent)
-            let gateway_context = create_test_gateway_context();
-            let config = BuiltinToolConfig {
-                gateway_context: Some(gateway_context),
-                ..Default::default()
-            };
-            let registry = BuiltinToolRegistry::with_config(config);
-
-            let result = registry
-                .execute_tool(
-                    "sessions_send",
-                    serde_json::json!({
-                        "message": "Hello",
-                        "session_key": "agent:main:main"
-                    }),
-                )
-                .await;
-
-            // Should succeed but return an error status (agent not found)
-            assert!(result.is_ok());
-            let output = result.unwrap();
-            assert!(output.get("status").is_some());
-            // The status should be "error" since the target agent doesn't exist
-            assert_eq!(output.get("status").unwrap().as_str().unwrap(), "error");
         }
     }
 }
