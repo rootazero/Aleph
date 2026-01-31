@@ -167,6 +167,82 @@ impl std::fmt::Display for FactType {
     }
 }
 
+/// Fact specificity level (prevents too vague or too detailed facts)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FactSpecificity {
+    /// Principle level: "User prefers functional programming"
+    Principle,
+    /// Pattern level: "User uses Result instead of panic for error handling"
+    #[default]
+    Pattern,
+    /// Instance level: "User used anyhow in 2025-01-15 project"
+    Instance,
+}
+
+impl FactSpecificity {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Principle => "principle",
+            Self::Pattern => "pattern",
+            Self::Instance => "instance",
+        }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "principle" => Self::Principle,
+            "instance" => Self::Instance,
+            _ => Self::Pattern,
+        }
+    }
+}
+
+impl std::fmt::Display for FactSpecificity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Temporal scope of a fact
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TemporalScope {
+    /// Long-term valid: "User's native language is Chinese"
+    Permanent,
+    /// Context-related: "User is working on Aether project"
+    #[default]
+    Contextual,
+    /// Short-term valid: "User wants to focus on docs today"
+    Ephemeral,
+}
+
+impl TemporalScope {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Permanent => "permanent",
+            Self::Contextual => "contextual",
+            Self::Ephemeral => "ephemeral",
+        }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "permanent" => Self::Permanent,
+            "ephemeral" => Self::Ephemeral,
+            _ => Self::Contextual,
+        }
+    }
+}
+
+impl std::fmt::Display for TemporalScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// A compressed memory fact extracted from conversations by LLM
 ///
 /// Facts are third-person statements about the user, such as:
@@ -195,6 +271,10 @@ pub struct MemoryFact {
     pub is_valid: bool,
     /// Reason for invalidation (if is_valid = false)
     pub invalidation_reason: Option<String>,
+    /// Fact specificity level
+    pub specificity: FactSpecificity,
+    /// Temporal scope
+    pub temporal_scope: TemporalScope,
     /// Similarity score (when retrieved from search)
     #[serde(skip)]
     pub similarity_score: Option<f32>,
@@ -219,6 +299,8 @@ impl MemoryFact {
             confidence: 1.0,
             is_valid: true,
             invalidation_reason: None,
+            specificity: FactSpecificity::default(),
+            temporal_scope: TemporalScope::default(),
             similarity_score: None,
         }
     }
@@ -241,6 +323,8 @@ impl MemoryFact {
             confidence: 1.0,
             is_valid: true,
             invalidation_reason: None,
+            specificity: FactSpecificity::default(),
+            temporal_scope: TemporalScope::default(),
             similarity_score: None,
         }
     }
@@ -260,6 +344,18 @@ impl MemoryFact {
     /// Set similarity score (used during retrieval)
     pub fn with_score(mut self, score: f32) -> Self {
         self.similarity_score = Some(score);
+        self
+    }
+
+    /// Set specificity level
+    pub fn with_specificity(mut self, specificity: FactSpecificity) -> Self {
+        self.specificity = specificity;
+        self
+    }
+
+    /// Set temporal scope
+    pub fn with_temporal_scope(mut self, scope: TemporalScope) -> Self {
+        self.temporal_scope = scope;
         self
     }
 
@@ -423,5 +519,85 @@ mod tests {
         let json = serde_json::to_string(&anchor).unwrap();
         let deserialized: ContextAnchor = serde_json::from_str(&json).unwrap();
         assert_eq!(anchor, deserialized);
+    }
+
+    #[test]
+    fn test_fact_specificity() {
+        let fact = MemoryFact::new(
+            "User prefers Rust".to_string(),
+            FactType::Preference,
+            vec!["mem-1".to_string()],
+        )
+        .with_specificity(FactSpecificity::Pattern)
+        .with_temporal_scope(TemporalScope::Permanent);
+
+        assert_eq!(fact.specificity, FactSpecificity::Pattern);
+        assert_eq!(fact.temporal_scope, TemporalScope::Permanent);
+    }
+
+    #[test]
+    fn test_specificity_from_str() {
+        assert_eq!(
+            FactSpecificity::from_str("principle"),
+            FactSpecificity::Principle
+        );
+        assert_eq!(
+            FactSpecificity::from_str("PATTERN"),
+            FactSpecificity::Pattern
+        );
+        assert_eq!(
+            FactSpecificity::from_str("instance"),
+            FactSpecificity::Instance
+        );
+        assert_eq!(
+            FactSpecificity::from_str("unknown"),
+            FactSpecificity::Pattern
+        ); // default
+    }
+
+    #[test]
+    fn test_temporal_scope_from_str() {
+        assert_eq!(
+            TemporalScope::from_str("permanent"),
+            TemporalScope::Permanent
+        );
+        assert_eq!(
+            TemporalScope::from_str("CONTEXTUAL"),
+            TemporalScope::Contextual
+        );
+        assert_eq!(
+            TemporalScope::from_str("ephemeral"),
+            TemporalScope::Ephemeral
+        );
+        assert_eq!(
+            TemporalScope::from_str("unknown"),
+            TemporalScope::Contextual
+        ); // default
+    }
+
+    #[test]
+    fn test_fact_specificity_default() {
+        let fact = MemoryFact::new(
+            "User likes coding".to_string(),
+            FactType::Preference,
+            vec![],
+        );
+        // Default should be Pattern and Contextual
+        assert_eq!(fact.specificity, FactSpecificity::Pattern);
+        assert_eq!(fact.temporal_scope, TemporalScope::Contextual);
+    }
+
+    #[test]
+    fn test_fact_specificity_as_str() {
+        assert_eq!(FactSpecificity::Principle.as_str(), "principle");
+        assert_eq!(FactSpecificity::Pattern.as_str(), "pattern");
+        assert_eq!(FactSpecificity::Instance.as_str(), "instance");
+    }
+
+    #[test]
+    fn test_temporal_scope_as_str() {
+        assert_eq!(TemporalScope::Permanent.as_str(), "permanent");
+        assert_eq!(TemporalScope::Contextual.as_str(), "contextual");
+        assert_eq!(TemporalScope::Ephemeral.as_str(), "ephemeral");
     }
 }

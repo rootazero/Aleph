@@ -101,7 +101,9 @@ impl VectorDatabase {
                 updated_at INTEGER NOT NULL,
                 confidence REAL NOT NULL DEFAULT 1.0,
                 is_valid INTEGER NOT NULL DEFAULT 1,
-                invalidation_reason TEXT
+                invalidation_reason TEXT,
+                specificity TEXT NOT NULL DEFAULT 'pattern',
+                temporal_scope TEXT NOT NULL DEFAULT 'contextual'
             );
 
             -- Index for fact type queries

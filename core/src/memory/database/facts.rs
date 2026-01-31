@@ -2,7 +2,7 @@
 ///
 /// Insert, search, and manage compressed memory facts.
 use crate::error::AetherError;
-use crate::memory::context::{FactStats, FactType, MemoryFact};
+use crate::memory::context::{FactSpecificity, FactStats, FactType, MemoryFact, TemporalScope};
 use rusqlite::params;
 
 use super::core::VectorDatabase;
@@ -23,8 +23,9 @@ impl VectorDatabase {
             r#"
             INSERT INTO memory_facts (
                 id, content, fact_type, embedding, source_memory_ids,
-                created_at, updated_at, confidence, is_valid, invalidation_reason
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                created_at, updated_at, confidence, is_valid, invalidation_reason,
+                specificity, temporal_scope
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             "#,
             params![
                 fact.id,
@@ -37,6 +38,8 @@ impl VectorDatabase {
                 fact.confidence,
                 fact.is_valid as i32,
                 fact.invalidation_reason,
+                fact.specificity.as_str(),
+                fact.temporal_scope.as_str(),
             ],
         )
         .map_err(|e| AetherError::config(format!("Failed to insert fact: {}", e)))?;
@@ -79,8 +82,9 @@ impl VectorDatabase {
                 r#"
                 INSERT INTO memory_facts (
                     id, content, fact_type, embedding, source_memory_ids,
-                    created_at, updated_at, confidence, is_valid, invalidation_reason
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                    created_at, updated_at, confidence, is_valid, invalidation_reason,
+                    specificity, temporal_scope
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                 "#,
                 params![
                     fact.id,
@@ -93,6 +97,8 @@ impl VectorDatabase {
                     fact.confidence,
                     fact.is_valid as i32,
                     fact.invalidation_reason,
+                    fact.specificity.as_str(),
+                    fact.temporal_scope.as_str(),
                 ],
             )
             .map_err(|e| AetherError::config(format!("Failed to insert fact: {}", e)))?;
@@ -142,6 +148,7 @@ impl VectorDatabase {
             SELECT
                 f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
                 f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
+                f.specificity, f.temporal_scope,
                 1.0 / (1.0 + vm.distance) as similarity
             FROM memory_facts f
             INNER JOIN vec_matches vm ON f.rowid = vm.rowid
@@ -159,6 +166,7 @@ impl VectorDatabase {
             SELECT
                 f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
                 f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
+                f.specificity, f.temporal_scope,
                 1.0 / (1.0 + vm.distance) as similarity
             FROM memory_facts f
             INNER JOIN vec_matches vm ON f.rowid = vm.rowid
@@ -183,7 +191,9 @@ impl VectorDatabase {
                 let confidence: f32 = row.get(7)?;
                 let is_valid: i32 = row.get(8)?;
                 let invalidation_reason: Option<String> = row.get(9)?;
-                let similarity: f64 = row.get(10)?;
+                let specificity_str: String = row.get(10)?;
+                let temporal_scope_str: String = row.get(11)?;
+                let similarity: f64 = row.get(12)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -200,6 +210,8 @@ impl VectorDatabase {
                     confidence,
                     is_valid: is_valid != 0,
                     invalidation_reason,
+                    specificity: FactSpecificity::from_str(&specificity_str),
+                    temporal_scope: TemporalScope::from_str(&temporal_scope_str),
                     similarity_score: Some(similarity as f32),
                 })
             })
@@ -222,7 +234,8 @@ impl VectorDatabase {
             .prepare(
                 r#"
                 SELECT id, content, fact_type, embedding, source_memory_ids,
-                       created_at, updated_at, confidence, is_valid, invalidation_reason
+                       created_at, updated_at, confidence, is_valid, invalidation_reason,
+                       specificity, temporal_scope
                 FROM memory_facts
                 WHERE fact_type = ?1 AND is_valid = 1
                 ORDER BY updated_at DESC
@@ -243,6 +256,8 @@ impl VectorDatabase {
                 let confidence: f32 = row.get(7)?;
                 let is_valid: i32 = row.get(8)?;
                 let invalidation_reason: Option<String> = row.get(9)?;
+                let specificity_str: String = row.get(10)?;
+                let temporal_scope_str: String = row.get(11)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -259,6 +274,8 @@ impl VectorDatabase {
                     confidence,
                     is_valid: is_valid != 0,
                     invalidation_reason,
+                    specificity: FactSpecificity::from_str(&specificity_str),
+                    temporal_scope: TemporalScope::from_str(&temporal_scope_str),
                     similarity_score: None,
                 })
             })
@@ -321,6 +338,7 @@ impl VectorDatabase {
                 SELECT
                     f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
                     f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
+                    f.specificity, f.temporal_scope,
                     1.0 / (1.0 + vm.distance) as similarity
                 FROM memory_facts f
                 INNER JOIN vec_matches vm ON f.rowid = vm.rowid
@@ -342,7 +360,9 @@ impl VectorDatabase {
                 let confidence: f32 = row.get(7)?;
                 let is_valid: i32 = row.get(8)?;
                 let invalidation_reason: Option<String> = row.get(9)?;
-                let similarity: f64 = row.get(10)?;
+                let specificity_str: String = row.get(10)?;
+                let temporal_scope_str: String = row.get(11)?;
+                let similarity: f64 = row.get(12)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -359,6 +379,8 @@ impl VectorDatabase {
                     confidence,
                     is_valid: is_valid != 0,
                     invalidation_reason,
+                    specificity: FactSpecificity::from_str(&specificity_str),
+                    temporal_scope: TemporalScope::from_str(&temporal_scope_str),
                     similarity_score: Some(similarity as f32),
                 })
             })
@@ -559,6 +581,7 @@ impl VectorDatabase {
             SELECT
                 f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
                 f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
+                f.specificity, f.temporal_scope,
                 1.0 / (1.0 + v.distance) as vec_score
             FROM memory_facts f
             INNER JOIN vec_hits v ON f.rowid = v.rowid
@@ -579,7 +602,9 @@ impl VectorDatabase {
                     let embedding_bytes: Option<Vec<u8>> = row.get(3)?;
                     let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
 
-                    let vec_score: f64 = row.get(10)?;
+                    let specificity_str: String = row.get(10)?;
+                    let temporal_scope_str: String = row.get(11)?;
+                    let vec_score: f64 = row.get(12)?;
 
                     Ok((id.clone(), MemoryFact {
                         id,
@@ -592,6 +617,8 @@ impl VectorDatabase {
                         confidence: row.get(7)?,
                         is_valid: row.get::<_, i32>(8)? == 1,
                         invalidation_reason: row.get(9)?,
+                        specificity: FactSpecificity::from_str(&specificity_str),
+                        temporal_scope: TemporalScope::from_str(&temporal_scope_str),
                         similarity_score: None, // Will be set after fusion
                     }, vec_score as f32))
                 },
@@ -678,6 +705,7 @@ impl VectorDatabase {
             SELECT
                 f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
                 f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
+                f.specificity, f.temporal_scope,
                 1.0 / (1.0 + vm.distance) as score
             FROM memory_facts f
             INNER JOIN vec_matches vm ON f.rowid = vm.rowid
@@ -697,7 +725,9 @@ impl VectorDatabase {
                     let embedding_bytes: Option<Vec<u8>> = row.get(3)?;
                     let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
 
-                    let score: f64 = row.get(10)?;
+                    let specificity_str: String = row.get(10)?;
+                    let temporal_scope_str: String = row.get(11)?;
+                    let score: f64 = row.get(12)?;
 
                     Ok(MemoryFact {
                         id: row.get(0)?,
@@ -710,6 +740,8 @@ impl VectorDatabase {
                         confidence: row.get(7)?,
                         is_valid: row.get::<_, i32>(8)? == 1,
                         invalidation_reason: row.get(9)?,
+                        specificity: FactSpecificity::from_str(&specificity_str),
+                        temporal_scope: TemporalScope::from_str(&temporal_scope_str),
                         similarity_score: Some(score as f32),
                     })
                 },
@@ -785,6 +817,8 @@ mod vec_tests {
             confidence: 0.9,
             is_valid: true,
             invalidation_reason: None,
+            specificity: FactSpecificity::default(),
+            temporal_scope: TemporalScope::default(),
             similarity_score: None,
         };
 
@@ -820,6 +854,8 @@ mod vec_tests {
                 confidence: 0.9,
                 is_valid: true,
                 invalidation_reason: None,
+                specificity: FactSpecificity::default(),
+                temporal_scope: TemporalScope::default(),
                 similarity_score: None,
             };
             db.insert_fact(fact).await.unwrap();
@@ -897,6 +933,8 @@ mod hybrid_tests {
             confidence: 0.9,
             is_valid: true,
             invalidation_reason: None,
+            specificity: FactSpecificity::default(),
+            temporal_scope: TemporalScope::default(),
             similarity_score: None,
         };
         db.insert_fact(fact).await.unwrap();
@@ -941,6 +979,8 @@ mod hybrid_tests {
                 confidence: 0.9,
                 is_valid: true,
                 invalidation_reason: None,
+                specificity: FactSpecificity::default(),
+                temporal_scope: TemporalScope::default(),
                 similarity_score: None,
             };
             db.insert_fact(fact).await.unwrap();
@@ -978,6 +1018,8 @@ mod hybrid_tests {
             confidence: 0.9,
             is_valid: true,
             invalidation_reason: None,
+            specificity: FactSpecificity::default(),
+            temporal_scope: TemporalScope::default(),
             similarity_score: None,
         };
         db.insert_fact(fact).await.unwrap();
@@ -1015,6 +1057,8 @@ mod hybrid_tests {
                 confidence: 0.9,
                 is_valid: true,
                 invalidation_reason: None,
+                specificity: FactSpecificity::default(),
+                temporal_scope: TemporalScope::default(),
                 similarity_score: None,
             };
             db.insert_fact(fact).await.unwrap();
@@ -1050,6 +1094,8 @@ mod hybrid_tests {
             confidence: 0.9,
             is_valid: true,
             invalidation_reason: None,
+            specificity: FactSpecificity::default(),
+            temporal_scope: TemporalScope::default(),
             similarity_score: None,
         };
         db.insert_fact(valid_fact).await.unwrap();
@@ -1066,6 +1112,8 @@ mod hybrid_tests {
             confidence: 0.9,
             is_valid: false,
             invalidation_reason: Some("Outdated".to_string()),
+            specificity: FactSpecificity::default(),
+            temporal_scope: TemporalScope::default(),
             similarity_score: None,
         };
         db.insert_fact(invalid_fact).await.unwrap();
