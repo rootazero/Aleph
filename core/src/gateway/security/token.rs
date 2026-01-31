@@ -1,290 +1,337 @@
-//! Bearer Token Management
+// core/src/gateway/security/token.rs
+
+//! HMAC-Signed Token Management
 //!
-//! Handles generation, validation, and revocation of bearer tokens
-//! for WebSocket authentication.
+//! Tokens are signed with HMAC-SHA256 and stored in SQLite.
+//! The original token value is never stored - only the hash.
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
-use rand::Rng;
+use thiserror::Error;
+use uuid::Uuid;
 
-/// Default token expiry time (24 hours)
-const DEFAULT_TOKEN_EXPIRY: Duration = Duration::from_secs(24 * 60 * 60);
+use super::crypto::{generate_secret, hmac_sign, hmac_verify};
+use super::device::DeviceRole;
+use super::store::SecurityStore;
 
-/// Information about an issued token
-struct TokenInfo {
-    /// When the token was created
-    created_at: Instant,
-    /// Token expiry duration
-    expiry: Duration,
-    /// Permissions granted to this token
-    permissions: Vec<String>,
-    /// Device or client identifier
-    device_id: Option<String>,
-    /// Last time the token was used
-    last_used: Instant,
+/// Default token expiry (24 hours in milliseconds)
+const DEFAULT_TOKEN_EXPIRY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Token-related errors
+#[derive(Debug, Error)]
+pub enum TokenError {
+    #[error("Invalid token")]
+    InvalidToken,
+    #[error("Token expired")]
+    TokenExpired,
+    #[error("Token revoked")]
+    TokenRevoked,
+    #[error("Signature verification failed")]
+    SignatureInvalid,
+    #[error("Database error: {0}")]
+    DatabaseError(String),
 }
 
-impl TokenInfo {
-    /// Check if the token has expired
-    fn is_expired(&self) -> bool {
-        self.created_at.elapsed() > self.expiry
-    }
+/// A signed token with its signature
+#[derive(Debug, Clone)]
+pub struct SignedToken {
+    pub token: String,
+    pub signature: String,
+    pub token_id: String,
+    pub expires_at: i64,
 }
 
-/// Token manager for handling bearer token authentication
-///
-/// Tokens are stored in memory and are lost on restart. For persistent
-/// tokens, consider storing them in a database.
-#[derive(Clone)]
+/// Token validation result
+#[derive(Debug, Clone)]
+pub struct TokenValidation {
+    pub token_id: String,
+    pub device_id: String,
+    pub role: DeviceRole,
+    pub scopes: Vec<String>,
+    pub remaining_ms: i64,
+}
+
+/// Token manager with HMAC signing
 pub struct TokenManager {
-    tokens: Arc<RwLock<HashMap<String, TokenInfo>>>,
-    default_expiry: Duration,
+    store: Arc<SecurityStore>,
+    secret: [u8; 32],
+    default_expiry_ms: i64,
 }
 
 impl TokenManager {
-    /// Create a new token manager with default settings
-    pub fn new() -> Self {
+    /// Create a new token manager
+    pub fn new(store: Arc<SecurityStore>) -> Self {
         Self {
-            tokens: Arc::new(RwLock::new(HashMap::new())),
-            default_expiry: DEFAULT_TOKEN_EXPIRY,
+            store,
+            secret: generate_secret(),
+            default_expiry_ms: DEFAULT_TOKEN_EXPIRY_MS,
         }
     }
 
-    /// Create a token manager with custom default expiry
-    pub fn with_expiry(expiry: Duration) -> Self {
+    /// Create with a specific secret (for testing or persistence)
+    pub fn with_secret(store: Arc<SecurityStore>, secret: [u8; 32]) -> Self {
         Self {
-            tokens: Arc::new(RwLock::new(HashMap::new())),
-            default_expiry: expiry,
+            store,
+            secret,
+            default_expiry_ms: DEFAULT_TOKEN_EXPIRY_MS,
         }
     }
 
-    /// Generate a new token with given permissions
-    ///
-    /// # Arguments
-    ///
-    /// * `permissions` - List of permission strings
-    ///
-    /// # Returns
-    ///
-    /// The generated token string
-    pub async fn generate_token(&self, permissions: Vec<String>) -> String {
-        self.generate_token_with_device(permissions, None).await
+    /// Create with custom expiry
+    pub fn with_expiry(store: Arc<SecurityStore>, expiry_ms: i64) -> Self {
+        Self {
+            store,
+            secret: generate_secret(),
+            default_expiry_ms: expiry_ms,
+        }
     }
 
-    /// Generate a new token with permissions and device ID
-    ///
-    /// # Arguments
-    ///
-    /// * `permissions` - List of permission strings
-    /// * `device_id` - Optional device identifier
-    ///
-    /// # Returns
-    ///
-    /// The generated token string
-    pub async fn generate_token_with_device(
+    /// Issue a new signed token for a device
+    pub fn issue_token(
         &self,
-        permissions: Vec<String>,
-        device_id: Option<String>,
-    ) -> String {
-        let token: String = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
-            .take(32)
-            .map(char::from)
-            .collect();
-
-        let now = Instant::now();
-        let mut tokens = self.tokens.write().await;
-        tokens.insert(
-            token.clone(),
-            TokenInfo {
-                created_at: now,
-                expiry: self.default_expiry,
-                permissions,
-                device_id,
-                last_used: now,
-            },
-        );
-
-        token
+        device_id: &str,
+        role: DeviceRole,
+        scopes: Vec<String>,
+    ) -> Result<SignedToken, TokenError> {
+        self.issue_token_with_expiry(device_id, role, scopes, self.default_expiry_ms)
     }
 
-    /// Generate a token with custom expiry
-    pub async fn generate_token_with_expiry(
+    /// Issue a token with custom expiry
+    pub fn issue_token_with_expiry(
         &self,
-        permissions: Vec<String>,
-        expiry: Duration,
-    ) -> String {
-        let token: String = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
-            .take(32)
-            .map(char::from)
-            .collect();
+        device_id: &str,
+        role: DeviceRole,
+        scopes: Vec<String>,
+        expiry_ms: i64,
+    ) -> Result<SignedToken, TokenError> {
+        let token_id = Uuid::new_v4().to_string();
+        let token = Uuid::new_v4().to_string();
+        let signature = hmac_sign(&self.secret, &token);
+        let token_hash = hmac_sign(&self.secret, &token); // Store hash, not token
 
-        let now = Instant::now();
-        let mut tokens = self.tokens.write().await;
-        tokens.insert(
-            token.clone(),
-            TokenInfo {
-                created_at: now,
-                expiry,
-                permissions: permissions.clone(),
-                device_id: None,
-                last_used: now,
-            },
-        );
+        let now = current_timestamp_ms();
+        let expires_at = now + expiry_ms;
 
-        token
+        self.store
+            .insert_token(&token_id, device_id, &token_hash, role.as_str(), &scopes, expires_at)
+            .map_err(|e| TokenError::DatabaseError(e.to_string()))?;
+
+        Ok(SignedToken {
+            token,
+            signature,
+            token_id,
+            expires_at,
+        })
     }
 
-    /// Validate a token
-    ///
-    /// # Arguments
-    ///
-    /// * `token` - The token to validate
-    ///
-    /// # Returns
-    ///
-    /// `true` if the token is valid and not expired
-    pub async fn validate_token(&self, token: &str) -> bool {
-        let mut tokens = self.tokens.write().await;
-        if let Some(info) = tokens.get_mut(token) {
-            if info.is_expired() {
-                tokens.remove(token);
-                return false;
-            }
-            // Update last used time
-            info.last_used = Instant::now();
-            return true;
+    /// Validate a token and its signature
+    pub fn validate_token(&self, token: &str, signature: &str) -> Result<TokenValidation, TokenError> {
+        // Verify HMAC signature
+        hmac_verify(&self.secret, token, signature).map_err(|_| TokenError::SignatureInvalid)?;
+
+        // Compute hash to look up in database
+        let token_hash = hmac_sign(&self.secret, token);
+
+        // Look up token in database
+        let token_row = self
+            .store
+            .get_token_by_hash(&token_hash)
+            .map_err(|e| TokenError::DatabaseError(e.to_string()))?
+            .ok_or(TokenError::InvalidToken)?;
+
+        // Check if revoked (shouldn't happen as query filters, but be safe)
+        if token_row.revoked_at.is_some() {
+            return Err(TokenError::TokenRevoked);
         }
-        false
-    }
 
-    /// Check if a token has a specific permission
-    ///
-    /// # Arguments
-    ///
-    /// * `token` - The token to check
-    /// * `permission` - The permission to verify
-    ///
-    /// # Returns
-    ///
-    /// `true` if the token is valid and has the permission
-    pub async fn has_permission(&self, token: &str, permission: &str) -> bool {
-        let tokens = self.tokens.read().await;
-        if let Some(info) = tokens.get(token) {
-            if info.is_expired() {
-                return false;
-            }
-            // Check for wildcard permission
-            if info.permissions.contains(&"*".to_string()) {
-                return true;
-            }
-            return info.permissions.iter().any(|p| p == permission);
+        // Check expiry
+        let now = current_timestamp_ms();
+        if token_row.expires_at <= now {
+            return Err(TokenError::TokenExpired);
         }
-        false
+
+        // Update last_used_at
+        let _ = self.store.touch_token(&token_row.token_id);
+
+        Ok(TokenValidation {
+            token_id: token_row.token_id,
+            device_id: token_row.device_id,
+            role: DeviceRole::from_str(&token_row.role).unwrap_or_default(),
+            scopes: token_row.scopes,
+            remaining_ms: token_row.expires_at - now,
+        })
     }
 
-    /// Get all permissions for a token
-    pub async fn get_permissions(&self, token: &str) -> Option<Vec<String>> {
-        let tokens = self.tokens.read().await;
-        tokens
-            .get(token)
-            .filter(|info| !info.is_expired())
-            .map(|info| info.permissions.clone())
+    /// Rotate a token (invalidate old, issue new)
+    pub fn rotate_token(&self, old_token: &str, old_signature: &str) -> Result<SignedToken, TokenError> {
+        // Validate the old token first
+        let validation = self.validate_token(old_token, old_signature)?;
+
+        // Revoke the old token
+        self.store
+            .revoke_token(&validation.token_id)
+            .map_err(|e| TokenError::DatabaseError(e.to_string()))?;
+
+        // Issue a new token with same permissions
+        self.issue_token(&validation.device_id, validation.role, validation.scopes)
     }
 
-    /// Revoke a token
-    pub async fn revoke_token(&self, token: &str) -> bool {
-        let mut tokens = self.tokens.write().await;
-        tokens.remove(token).is_some()
+    /// Revoke a specific token
+    pub fn revoke_token(&self, token_id: &str) -> Result<bool, TokenError> {
+        self.store
+            .revoke_token(token_id)
+            .map_err(|e| TokenError::DatabaseError(e.to_string()))
     }
 
     /// Revoke all tokens for a device
-    pub async fn revoke_device_tokens(&self, device_id: &str) {
-        let mut tokens = self.tokens.write().await;
-        tokens.retain(|_, info| {
-            info.device_id.as_ref().map(|id| id != device_id).unwrap_or(true)
-        });
+    pub fn revoke_device_tokens(&self, device_id: &str) -> Result<u64, TokenError> {
+        self.store
+            .revoke_device_tokens(device_id)
+            .map_err(|e| TokenError::DatabaseError(e.to_string()))
     }
 
     /// Clean up expired tokens
-    ///
-    /// This should be called periodically to free memory.
-    pub async fn cleanup_expired(&self) -> usize {
-        let mut tokens = self.tokens.write().await;
-        let before = tokens.len();
-        tokens.retain(|_, info| !info.is_expired());
-        before - tokens.len()
+    pub fn cleanup_expired(&self) -> Result<u64, TokenError> {
+        self.store
+            .delete_expired_tokens()
+            .map_err(|e| TokenError::DatabaseError(e.to_string()))
     }
 
-    /// Get the number of active tokens
-    pub async fn active_token_count(&self) -> usize {
-        let tokens = self.tokens.read().await;
-        tokens.values().filter(|info| !info.is_expired()).count()
+    /// Get the HMAC secret (for persistence)
+    pub fn secret(&self) -> &[u8; 32] {
+        &self.secret
     }
 }
 
-impl Default for TokenManager {
-    fn default() -> Self {
-        Self::new()
-    }
+fn current_timestamp_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_generate_and_validate() {
-        let manager = TokenManager::new();
-        let token = manager.generate_token(vec!["read".to_string()]).await;
-
-        assert!(manager.validate_token(&token).await);
-        assert!(!manager.validate_token("invalid").await);
+    fn create_test_manager() -> TokenManager {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        // Create a device for tokens
+        store
+            .upsert_device("dev-1", "Test", None, &[1u8; 32], "fp", "operator", &[])
+            .unwrap();
+        TokenManager::new(store)
     }
 
-    #[tokio::test]
-    async fn test_permissions() {
-        let manager = TokenManager::new();
-        let token = manager
-            .generate_token(vec!["read".to_string(), "write".to_string()])
-            .await;
+    #[test]
+    fn test_issue_and_validate() {
+        let manager = create_test_manager();
 
-        assert!(manager.has_permission(&token, "read").await);
-        assert!(manager.has_permission(&token, "write").await);
-        assert!(!manager.has_permission(&token, "admin").await);
+        let signed = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec!["*".into()])
+            .unwrap();
+
+        assert!(!signed.token.is_empty());
+        assert!(!signed.signature.is_empty());
+
+        let validation = manager.validate_token(&signed.token, &signed.signature).unwrap();
+        assert_eq!(validation.device_id, "dev-1");
+        assert_eq!(validation.role, DeviceRole::Operator);
     }
 
-    #[tokio::test]
-    async fn test_wildcard_permission() {
-        let manager = TokenManager::new();
-        let token = manager.generate_token(vec!["*".to_string()]).await;
+    #[test]
+    fn test_invalid_signature() {
+        let manager = create_test_manager();
 
-        assert!(manager.has_permission(&token, "anything").await);
-        assert!(manager.has_permission(&token, "read").await);
+        let signed = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec![])
+            .unwrap();
+
+        let result = manager.validate_token(&signed.token, "wrong-signature");
+        assert!(matches!(result, Err(TokenError::SignatureInvalid)));
     }
 
-    #[tokio::test]
-    async fn test_revoke() {
-        let manager = TokenManager::new();
-        let token = manager.generate_token(vec![]).await;
+    #[test]
+    fn test_token_rotation() {
+        let manager = create_test_manager();
 
-        assert!(manager.validate_token(&token).await);
-        assert!(manager.revoke_token(&token).await);
-        assert!(!manager.validate_token(&token).await);
+        let old_token = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec!["*".into()])
+            .unwrap();
+
+        let new_token = manager
+            .rotate_token(&old_token.token, &old_token.signature)
+            .unwrap();
+
+        // Old token should be invalid
+        let old_result = manager.validate_token(&old_token.token, &old_token.signature);
+        assert!(old_result.is_err());
+
+        // New token should be valid
+        let new_result = manager.validate_token(&new_token.token, &new_token.signature);
+        assert!(new_result.is_ok());
     }
 
-    #[tokio::test]
-    async fn test_expiry() {
-        let manager = TokenManager::with_expiry(Duration::from_millis(10));
-        let token = manager.generate_token(vec![]).await;
+    #[test]
+    fn test_revoke_token() {
+        let manager = create_test_manager();
 
-        assert!(manager.validate_token(&token).await);
+        let signed = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec![])
+            .unwrap();
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(manager.validate_token(&signed.token, &signed.signature).is_ok());
 
-        assert!(!manager.validate_token(&token).await);
+        manager.revoke_token(&signed.token_id).unwrap();
+
+        assert!(manager.validate_token(&signed.token, &signed.signature).is_err());
+    }
+
+    #[test]
+    fn test_revoke_device_tokens() {
+        let manager = create_test_manager();
+
+        // Issue multiple tokens
+        let t1 = manager.issue_token("dev-1", DeviceRole::Operator, vec![]).unwrap();
+        let t2 = manager.issue_token("dev-1", DeviceRole::Operator, vec![]).unwrap();
+
+        // Revoke all
+        let count = manager.revoke_device_tokens("dev-1").unwrap();
+        assert_eq!(count, 2);
+
+        // Both should be invalid
+        assert!(manager.validate_token(&t1.token, &t1.signature).is_err());
+        assert!(manager.validate_token(&t2.token, &t2.signature).is_err());
+    }
+
+    #[test]
+    fn test_token_expiry() {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        store
+            .upsert_device("dev-1", "Test", None, &[1u8; 32], "fp", "operator", &[])
+            .unwrap();
+
+        // Create manager with very short expiry (10ms)
+        let manager = TokenManager::with_expiry(store, 10);
+
+        let signed = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec![])
+            .unwrap();
+
+        // Wait for expiry (50ms should be enough)
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let result = manager.validate_token(&signed.token, &signed.signature);
+        // Token should fail validation - either expired or not found (database query filters expired)
+        assert!(
+            result.is_err(),
+            "Expected error but got: {:?}",
+            result
+        );
+        match result {
+            Err(TokenError::TokenExpired) | Err(TokenError::InvalidToken) => {
+                // Both are acceptable - database query may filter expired tokens
+            }
+            other => panic!("Unexpected result: {:?}", other),
+        }
     }
 }
