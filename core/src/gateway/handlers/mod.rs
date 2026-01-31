@@ -29,6 +29,7 @@
 //! | memory | Memory search |
 //! | models | Model discovery |
 //! | chat | Chat control |
+//! | cron | Cron job management |
 //! | browser | Browser/CDP (feature-gated) |
 
 pub mod health;
@@ -55,6 +56,7 @@ pub mod pairing;
 pub mod runs;
 pub mod models;
 pub mod chat;
+pub mod cron;
 #[cfg(feature = "browser")]
 pub mod browser;
 
@@ -130,6 +132,11 @@ impl HandlerRegistry {
             let config = cfg.clone();
             async move { models::handle_capabilities(req, config).await }
         });
+
+        // Cron handlers
+        registry.register("cron.list", cron::handle_list);
+        registry.register("cron.status", cron::handle_status);
+        registry.register("cron.run", cron::handle_run);
 
         // Chat handlers (placeholders - actual handlers wired in Gateway::new())
         registry.register("chat.send", |req| async move {
@@ -336,5 +343,13 @@ mod tests {
         assert!(registry.has_method("chat.abort"));
         assert!(registry.has_method("chat.history"));
         assert!(registry.has_method("chat.clear"));
+    }
+
+    #[test]
+    fn test_cron_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("cron.list"));
+        assert!(registry.has_method("cron.status"));
+        assert!(registry.has_method("cron.run"));
     }
 }
