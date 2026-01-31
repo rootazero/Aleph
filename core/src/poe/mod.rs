@@ -11,4 +11,10 @@ pub mod types;
 pub mod validation;
 pub mod worker;
 
-// Re-exports will be added after implementing each module
+// Re-exports for convenient access
+pub use budget::{BudgetStatus, PoeBudget};
+pub use types::{
+    Artifact, ChangeType, Experience, ExperienceOutcome, JudgeTarget, ModelTier, PoeOutcome,
+    PoeTask, RuleResult, SoftMetric, SoftRuleResult, SolutionPath, StepLog, SuccessManifest,
+    TaskPattern, ValidationRule, Verdict, WorkerOutput, WorkerState,
+};
