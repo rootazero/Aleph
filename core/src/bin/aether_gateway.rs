@@ -184,6 +184,11 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Manage channels
+    Channels {
+        #[command(subcommand)]
+        action: ChannelsAction,
+    },
 }
 
 /// Pairing subcommands
@@ -311,6 +316,34 @@ enum ConfigAction {
         /// Output file path
         #[arg(long, short = 'o')]
         output: Option<String>,
+
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+    },
+}
+
+/// Channels subcommands
+#[derive(Subcommand, Debug)]
+enum ChannelsAction {
+    /// List all channels
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+    },
+    /// Get channel status
+    Status {
+        /// Channel name (optional, all if not specified)
+        name: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
 
         /// Gateway URL
         #[arg(long, default_value = "ws://127.0.0.1:18789")]
@@ -870,6 +903,27 @@ async fn handle_config_command(action: ConfigAction) -> Result<(), Box<dyn std::
     Ok(())
 }
 
+/// Handle channels subcommands
+#[cfg(feature = "gateway")]
+async fn handle_channels_command(action: ChannelsAction) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::cli::{channels, GatewayClient, OutputFormat};
+
+    match action {
+        ChannelsAction::List { json, url } => {
+            let client = GatewayClient::new().with_url(&url);
+            let format = OutputFormat::from_json_flag(json);
+            channels::handle_list(&client, format).await?;
+        }
+        ChannelsAction::Status { name, json, url } => {
+            let client = GatewayClient::new().with_url(&url);
+            let format = OutputFormat::from_json_flag(json);
+            channels::handle_status(&client, name, format).await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Daemonize the current process (Unix only)
 #[cfg(unix)]
 fn daemonize(pid_file: &str, log_file: Option<&PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
@@ -997,8 +1051,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Config { action }) => {
             return handle_config_command(action).await;
         }
+        #[cfg(feature = "gateway")]
+        Some(Command::Channels { action }) => {
+            return handle_channels_command(action).await;
+        }
         #[cfg(not(feature = "gateway"))]
-        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) | Some(Command::Config { .. }) => {
+        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) | Some(Command::Config { .. }) | Some(Command::Channels { .. }) => {
             eprintln!("Error: Gateway feature is not enabled.");
             std::process::exit(1);
         }
