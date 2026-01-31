@@ -44,6 +44,7 @@
 //! ```
 
 pub mod config;
+pub mod discovery;
 pub mod hooks;
 pub mod runtime;
 pub mod sync_api;
