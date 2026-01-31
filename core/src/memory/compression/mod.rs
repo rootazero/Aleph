@@ -20,7 +20,7 @@ mod scheduler;
 mod service;
 pub mod signal_detector;
 
-pub use conflict::{ConflictConfig, ConflictDetector, ConflictResolution};
+pub use conflict::{ConflictConfig, ConflictDetector, ConflictResolution, MergeStrategy};
 pub use extractor::{ExtractedFact, FactExtractor};
 pub use scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
 pub use service::{CompressionConfig, CompressionService};

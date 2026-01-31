@@ -1,19 +1,61 @@
 //! Conflict Detection and Resolution
 //!
 //! Detects conflicting facts using vector similarity and resolves them
-//! by invalidating older facts (new facts always win).
+//! using three strategies: Override, Reject, or Merge.
 
 use crate::error::AetherError;
 use crate::memory::context::MemoryFact;
 use crate::memory::database::VectorDatabase;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// Strategy for merging facts
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MergeStrategy {
+    /// Generalize: "likes Rust" + "likes Go" → "likes systems languages"
+    Generalize,
+    /// Specialize: "likes coffee" + "likes dark roast" → "likes dark roast coffee"
+    Specialize,
+    /// Enumerate: "likes Rust, Go, and Zig"
+    Enumerate,
+}
+
+impl Default for MergeStrategy {
+    fn default() -> Self {
+        Self::Enumerate
+    }
+}
 
 /// Result of conflict resolution
 #[derive(Debug, Clone)]
 pub enum ConflictResolution {
     /// No conflict detected
     NoConflict,
-    /// Old fact should be invalidated
+    /// Override: new fact replaces old (default for correction signals)
+    Override {
+        /// ID of the old fact to invalidate
+        invalidated_id: String,
+        /// Reason for override
+        reason: String,
+    },
+    /// Reject: keep old fact, discard new (confidence comparison)
+    Reject {
+        /// Content that was rejected
+        rejected_content: String,
+        /// Reason for rejection
+        reason: String,
+    },
+    /// Merge: combine into more precise statement
+    Merge {
+        /// ID of the old fact to merge with
+        old_id: String,
+        /// New merged content
+        new_content: String,
+        /// Strategy used for merging
+        merge_strategy: MergeStrategy,
+    },
+    /// Old fact should be invalidated (legacy, kept for backward compatibility)
+    #[deprecated(since = "0.2.0", note = "Use Override instead")]
     InvalidateOld {
         /// ID of the old fact to invalidate
         old_fact_id: String,
@@ -80,7 +122,7 @@ impl ConflictDetector {
             return Ok(vec![ConflictResolution::NoConflict]);
         }
 
-        // For each similar fact, create an invalidation resolution
+        // For each similar fact, create an override resolution
         // New facts always win (user-confirmed design decision)
         let resolutions: Vec<ConflictResolution> = similar_facts
             .into_iter()
@@ -92,11 +134,11 @@ impl ConflictDetector {
                     old_content = %old_fact.content,
                     new_content = %new_fact.content,
                     similarity = similarity,
-                    "Detected conflicting fact, will invalidate old"
+                    "Detected conflicting fact, will override old"
                 );
 
-                ConflictResolution::InvalidateOld {
-                    old_fact_id: old_fact.id.clone(),
+                ConflictResolution::Override {
+                    invalidated_id: old_fact.id.clone(),
                     reason: format!(
                         "Superseded by newer fact (similarity: {:.2}): {}",
                         similarity,
@@ -117,23 +159,34 @@ impl ConflictDetector {
         let mut invalidated_count = 0;
 
         for resolution in resolutions {
-            if let ConflictResolution::InvalidateOld {
-                old_fact_id,
-                reason,
-            } = resolution
-            {
-                match self.database.invalidate_fact(old_fact_id, reason).await {
-                    Ok(_) => {
-                        invalidated_count += 1;
-                        tracing::debug!(fact_id = %old_fact_id, "Invalidated conflicting fact");
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            fact_id = %old_fact_id,
-                            error = %e,
-                            "Failed to invalidate fact"
-                        );
-                    }
+            // Handle Override (new) and InvalidateOld (legacy) for invalidation
+            let (fact_id, reason) = match resolution {
+                ConflictResolution::Override {
+                    invalidated_id,
+                    reason,
+                } => (invalidated_id, reason),
+                #[allow(deprecated)]
+                ConflictResolution::InvalidateOld {
+                    old_fact_id,
+                    reason,
+                } => (old_fact_id, reason),
+                // Skip other resolution types for now
+                ConflictResolution::NoConflict
+                | ConflictResolution::Reject { .. }
+                | ConflictResolution::Merge { .. } => continue,
+            };
+
+            match self.database.invalidate_fact(fact_id, reason).await {
+                Ok(_) => {
+                    invalidated_count += 1;
+                    tracing::debug!(fact_id = %fact_id, "Invalidated conflicting fact");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        fact_id = %fact_id,
+                        error = %e,
+                        "Failed to invalidate fact"
+                    );
                 }
             }
         }
@@ -213,7 +266,7 @@ mod tests {
         assert!(!resolutions.is_empty());
         assert!(matches!(
             resolutions[0],
-            ConflictResolution::InvalidateOld { .. }
+            ConflictResolution::Override { .. }
         ));
     }
 
@@ -221,5 +274,42 @@ mod tests {
     fn test_config_default() {
         let config = ConflictConfig::default();
         assert!((config.similarity_threshold - 0.85).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_merge_strategy() {
+        let resolution = ConflictResolution::Merge {
+            old_id: "fact-1".to_string(),
+            new_content: "User likes Rust and Go".to_string(),
+            merge_strategy: MergeStrategy::Enumerate,
+        };
+
+        assert!(matches!(resolution, ConflictResolution::Merge { .. }));
+    }
+
+    #[test]
+    fn test_reject_strategy() {
+        let resolution = ConflictResolution::Reject {
+            rejected_content: "User dislikes Rust".to_string(),
+            reason: "Contradicts high-confidence fact".to_string(),
+        };
+
+        assert!(matches!(resolution, ConflictResolution::Reject { .. }));
+    }
+
+    #[test]
+    fn test_merge_strategy_default() {
+        let strategy = MergeStrategy::default();
+        assert_eq!(strategy, MergeStrategy::Enumerate);
+    }
+
+    #[test]
+    fn test_override_strategy() {
+        let resolution = ConflictResolution::Override {
+            invalidated_id: "fact-old".to_string(),
+            reason: "User explicitly corrected this fact".to_string(),
+        };
+
+        assert!(matches!(resolution, ConflictResolution::Override { .. }));
     }
 }
