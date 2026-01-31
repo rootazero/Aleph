@@ -10,7 +10,7 @@ pub mod ipc;
 pub mod process;
 
 pub use ipc::*;
-pub use process::{NodeProcess, DEFAULT_IPC_TIMEOUT};
+pub use process::{HostScript, NodeProcess, DEFAULT_IPC_TIMEOUT};
 
 use std::collections::HashMap;
 use tracing::{error, info};
@@ -25,17 +25,33 @@ pub struct NodeJsRuntime {
     processes: HashMap<String, NodeProcess>,
     /// Path to Node.js binary
     node_path: String,
-    /// Path to plugin host script
+    /// Path to plugin host script (empty when using embedded)
     host_script_path: String,
+    /// Whether to use embedded plugin-host.js
+    use_embedded_host: bool,
 }
 
 impl NodeJsRuntime {
-    /// Create a new Node.js runtime
+    /// Create a new Node.js runtime with external host script
     pub fn new(node_path: impl Into<String>, host_script_path: impl Into<String>) -> Self {
         Self {
             processes: HashMap::new(),
             node_path: node_path.into(),
             host_script_path: host_script_path.into(),
+            use_embedded_host: false,
+        }
+    }
+
+    /// Create runtime with embedded plugin-host.js
+    ///
+    /// This is the recommended way to create the runtime as it uses the
+    /// bundled plugin-host.js script without requiring an external file.
+    pub fn with_embedded_host(node_path: impl Into<String>) -> Self {
+        Self {
+            processes: HashMap::new(),
+            node_path: node_path.into(),
+            host_script_path: String::new(), // Not used when embedded
+            use_embedded_host: true,
         }
     }
 
@@ -58,9 +74,16 @@ impl NodeJsRuntime {
             manifest.id, entry_path
         );
 
+        // Choose host script source
+        let host_script = if self.use_embedded_host {
+            HostScript::Embedded(include_str!("plugin-host.js"))
+        } else {
+            HostScript::Path(self.host_script_path.clone())
+        };
+
         let mut process = NodeProcess::start(
             &self.node_path,
-            &self.host_script_path,
+            host_script,
             entry_path.to_str().unwrap_or(""),
             &manifest.id,
         )?;
@@ -234,11 +257,26 @@ mod tests {
     fn test_nodejs_runtime_new() {
         let runtime = NodeJsRuntime::new("/usr/bin/node", "/path/to/host.js");
         assert!(runtime.loaded_plugins().is_empty());
+        assert!(!runtime.use_embedded_host);
+    }
+
+    #[test]
+    fn test_nodejs_runtime_with_embedded_host() {
+        let runtime = NodeJsRuntime::with_embedded_host("/usr/bin/node");
+        assert!(runtime.loaded_plugins().is_empty());
+        assert!(runtime.use_embedded_host);
+        assert!(runtime.host_script_path.is_empty());
     }
 
     #[test]
     fn test_is_loaded_false() {
         let runtime = NodeJsRuntime::new("/usr/bin/node", "/path/to/host.js");
+        assert!(!runtime.is_loaded("nonexistent"));
+    }
+
+    #[test]
+    fn test_is_loaded_false_embedded() {
+        let runtime = NodeJsRuntime::with_embedded_host("/usr/bin/node");
         assert!(!runtime.is_loaded("nonexistent"));
     }
 
