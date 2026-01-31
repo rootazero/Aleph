@@ -1,6 +1,35 @@
 //! Request Handlers
 //!
 //! Handlers for processing JSON-RPC 2.0 method calls.
+//!
+//! ## Handler Domains
+//!
+//! | Domain | Description |
+//! |--------|-------------|
+//! | health | Health checks, ping |
+//! | echo | Echo/test |
+//! | version | Version info |
+//! | config | Configuration management |
+//! | logs | Log level control |
+//! | commands | Command listing |
+//! | plugins | Plugin lifecycle |
+//! | skills | Skills management |
+//! | mcp | MCP integration |
+//! | providers | AI provider management |
+//! | profiles | Auth profile management |
+//! | generation | Content generation |
+//! | pairing | Device pairing |
+//! | runs | Run wait/queue |
+//! | auth | Authentication |
+//! | agent | Agent execution |
+//! | session | Session management |
+//! | channel | Channel status |
+//! | events | Event subscription |
+//! | ocr | OCR operations |
+//! | memory | Memory search |
+//! | models | Model discovery |
+//! | chat | Chat control |
+//! | browser | Browser/CDP (feature-gated) |
 
 pub mod health;
 pub mod echo;
