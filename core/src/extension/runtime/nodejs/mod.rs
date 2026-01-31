@@ -311,4 +311,12 @@ mod tests {
             assert_eq!(reg.unwrap().event, expected_event);
         }
     }
+
+    #[test]
+    fn test_plugin_host_script_exists() {
+        let script = include_str!("plugin-host.js");
+        assert!(script.contains("jsonrpc"));
+        assert!(script.contains("load"));
+        assert!(script.contains("plugin.call"));
+    }
 }
