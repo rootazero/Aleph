@@ -223,7 +223,6 @@ pub use crate::intent::{
     AggregatorConfig,
     AiIntentDetector,
     AiIntentResult,
-    AmbiguousTaskFFI,
     // Context types
     AppContext,
     // Cache types
@@ -236,13 +235,10 @@ pub use crate::intent::{
     CalibratorConfig,
     ConfidenceCalibrator,
     ConflictResolution,
-    ConflictResolutionFFI,
     ConversationContext,
     DefaultsResolver,
     ExecutableTask,
-    ExecutableTaskFFI,
     ExecutionIntent,
-    ExecutionIntentTypeFFI,
     InputFeatures,
     IntentAction,
     IntentAggregator,
@@ -253,9 +249,7 @@ pub use crate::intent::{
     MatchingContextBuilder,
     MissingParameter,
     OrganizeMethod,
-    OrganizeMethodFFI,
     ParameterSource,
-    ParameterSourceFFI,
     PendingParam,
     PresetRegistry,
     // Rollback types
@@ -267,9 +261,7 @@ pub use crate::intent::{
     RoutingLayer,
     ScenarioPreset,
     TaskCategory,
-    TaskCategoryFFI,
     TaskParameters,
-    TaskParametersFFI,
     TimeContext,
     // New unified execution decider
     ContextSignals,

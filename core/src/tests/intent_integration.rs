@@ -136,21 +136,3 @@ async fn test_short_input() {
         "Short input should be conversational"
     );
 }
-
-/// Test FFI conversion
-#[test]
-fn test_executable_task_ffi_conversion() {
-    use crate::intent::ExecutableTaskFFI;
-
-    let task = ExecutableTask {
-        category: TaskCategory::FileOrganize,
-        action: "整理文件".to_string(),
-        target: Some("/Downloads".to_string()),
-        confidence: 0.95,
-    };
-
-    let ffi: ExecutableTaskFFI = (&task).into();
-    assert_eq!(ffi.action, "整理文件");
-    assert_eq!(ffi.target, Some("/Downloads".to_string()));
-    assert_eq!(ffi.confidence, 0.95);
-}
