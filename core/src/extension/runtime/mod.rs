@@ -1,19 +1,24 @@
-//! Node.js Plugin Runtime
+//! Plugin Runtime Systems
 //!
-//! Provides JavaScript/TypeScript plugin execution via Aether's fnm/Node.js runtime.
+//! Provides execution environments for different plugin types:
+//! - WASM (Extism) - Sandboxed WebAssembly execution
+//! - Node.js (IPC) - JavaScript/TypeScript via subprocess
+//! - Static - Markdown-based skills/commands/agents
 //!
 //! # Architecture
 //!
 //! ```text
 //! ┌─────────────────┐    ┌─────────────────┐    ┌────────────────┐
-//! │  NpmInstaller   │    │  JsPluginHost   │    │  PluginBridge  │
+//! │  WasmRuntime    │    │  NpmInstaller   │    │  PluginRuntime │
 //! │                 │    │                 │    │                │
-//! │  - fnm/node     │    │  - Load .ts/.js │    │  Rust ↔ Node   │
-//! │  - npm install  │    │  - Execute hooks│    │  IPC (JSON-RPC)│
+//! │  - Extism       │    │  - fnm/node     │    │  - Load .ts/.js│
+//! │  - Sandboxed    │    │  - npm install  │    │  - IPC (JSON)  │
 //! └─────────────────┘    └─────────────────┘    └────────────────┘
 //! ```
 //!
 //! # Usage
+//!
+//! ## Node.js Runtime
 //!
 //! ```rust,ignore
 //! use aethecore::extension::runtime::{NpmInstaller, PluginRuntime};
@@ -29,6 +34,26 @@
 //! let runtime = PluginRuntime::new(&registry)?;
 //! runtime.load_plugin("file:///path/to/plugin.ts").await?;
 //! ```
+//!
+//! ## WASM Runtime
+//!
+//! ```rust,ignore
+//! use aethecore::extension::runtime::{WasmRuntime, WasmToolInput};
+//!
+//! let mut runtime = WasmRuntime::new();
+//! runtime.load_plugin(&manifest)?;
+//!
+//! let input = WasmToolInput {
+//!     name: "my_tool".to_string(),
+//!     arguments: serde_json::json!({"key": "value"}),
+//! };
+//! let output = runtime.call_tool("plugin-id", "handler", input)?;
+//! ```
+
+pub mod wasm;
+
+// Re-export WASM runtime types
+pub use wasm::{PermissionChecker, WasmRuntime, WasmToolInput, WasmToolOutput};
 
 use crate::extension::ExtensionError;
 use crate::runtimes::{get_runtimes_dir, FnmRuntime, RuntimeManager};
