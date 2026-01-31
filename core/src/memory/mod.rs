@@ -23,6 +23,7 @@ pub mod cleanup;
 pub mod compression;
 pub mod context;
 pub mod database;
+pub mod decay;
 pub mod embedding;
 pub mod fact_retrieval;
 pub mod hybrid_retrieval;
@@ -48,6 +49,7 @@ pub use context::{
     MemoryEntry, MemoryFact, TemporalScope,
 };
 pub use database::VectorDatabase;
+pub use decay::{DecayConfig, MemoryStrength};
 #[deprecated(
     since = "0.1.0",
     note = "Use SmartEmbedder for TTL-based lazy loading with multilingual-e5-small"
