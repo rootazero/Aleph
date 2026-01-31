@@ -14,7 +14,7 @@
 //! - `Batch`: Milestones and default - batched with regular compression
 
 /// Compression signal types detected from user messages
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CompressionSignal {
     /// User is teaching a preference, rule, or habit
     Learning {
@@ -37,7 +37,7 @@ pub enum CompressionSignal {
 }
 
 /// Priority level for compression
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CompressionPriority {
     /// Compress immediately (corrections)
     Immediate,
@@ -180,6 +180,8 @@ impl SignalDetector {
         // Check correction keywords first (highest priority)
         for keyword in &self.keywords.correction {
             if message_lower.contains(&keyword.to_lowercase()) {
+                // Note: original_understanding is initially empty, to be filled by LLM
+                // during fact extraction based on conversation context
                 result.signals.push(CompressionSignal::Correction {
                     original_understanding: String::new(),
                     corrected_to: message.to_string(),
