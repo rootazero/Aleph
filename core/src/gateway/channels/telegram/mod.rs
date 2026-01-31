@@ -32,7 +32,7 @@ pub use message_ops::TelegramMessageOps;
 use crate::gateway::channel::{
     Attachment, CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory,
     ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage,
-    MessageId, OutboundMessage, SendResult, UserId,
+    InlineKeyboard, MessageId, OutboundMessage, SendResult, UserId,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
@@ -665,6 +665,104 @@ impl TelegramChannel {
         }
 
         Ok(())
+    }
+
+    /// Edit a message's text and/or inline keyboard
+    ///
+    /// # Arguments
+    /// * `chat_id` - The chat containing the message
+    /// * `message_id` - The message to edit
+    /// * `new_text` - Optional new text (if None, text is not changed)
+    /// * `keyboard` - Optional new keyboard (if None, keyboard is removed)
+    #[cfg(feature = "telegram")]
+    pub async fn edit_message(
+        &self,
+        chat_id: &ConversationId,
+        message_id: &MessageId,
+        new_text: Option<&str>,
+        keyboard: Option<&InlineKeyboard>,
+    ) -> ChannelResult<()> {
+        let bot = self
+            .bot
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
+
+        let chat = ChatId(chat_id.as_str().parse().map_err(|_| {
+            ChannelError::SendFailed(format!("Invalid chat ID: {}", chat_id.as_str()))
+        })?);
+
+        let msg_id = teloxide::types::MessageId(message_id.as_str().parse().map_err(|_| {
+            ChannelError::SendFailed("Invalid message ID".into())
+        })?);
+
+        if let Some(text) = new_text {
+            // Edit text (and optionally keyboard)
+            let mut request = bot.edit_message_text(chat, msg_id, text);
+
+            // Set keyboard or remove it
+            if let Some(kb) = keyboard {
+                let markup = InlineKeyboardMarkup::new(
+                    kb.rows
+                        .iter()
+                        .map(|row| {
+                            row.iter()
+                                .map(|btn| {
+                                    InlineKeyboardButton::callback(&btn.text, &btn.callback_data)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                request = request.reply_markup(markup);
+            } else {
+                // Remove keyboard by setting empty markup
+                request = request.reply_markup(InlineKeyboardMarkup::default());
+            }
+
+            request
+                .await
+                .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+        } else if let Some(kb) = keyboard {
+            // Edit only the keyboard (need to use edit_message_reply_markup)
+            let markup = InlineKeyboardMarkup::new(
+                kb.rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|btn| {
+                                InlineKeyboardButton::callback(&btn.text, &btn.callback_data)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
+            );
+
+            bot.edit_message_reply_markup(chat, msg_id)
+                .reply_markup(markup)
+                .await
+                .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+        } else {
+            // Remove keyboard only
+            bot.edit_message_reply_markup(chat, msg_id)
+                .await
+                .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    /// Edit a message's text and/or inline keyboard (stub for non-telegram builds)
+    #[cfg(not(feature = "telegram"))]
+    pub async fn edit_message(
+        &self,
+        _chat_id: &ConversationId,
+        _message_id: &MessageId,
+        _new_text: Option<&str>,
+        _keyboard: Option<&InlineKeyboard>,
+    ) -> ChannelResult<()> {
+        Err(ChannelError::UnsupportedFeature(
+            "Telegram support not compiled".to_string(),
+        ))
     }
 }
 
