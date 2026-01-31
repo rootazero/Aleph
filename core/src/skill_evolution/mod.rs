@@ -20,11 +20,13 @@
 
 pub mod detector;
 pub mod generator;
+pub mod git;
 pub mod tracker;
 pub mod types;
 
 pub use detector::SolidificationDetector;
 pub use generator::SkillGenerator;
+pub use git::GitCommitter;
 pub use tracker::EvolutionTracker;
 pub use types::{
     CommitResult, ExecutionStatus, GenerationResult, SkillExecution, SkillMetrics,
