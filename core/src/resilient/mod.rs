@@ -27,9 +27,11 @@
 //! }
 //! ```
 
+pub mod executor;
 pub mod task;
 pub mod types;
 
+pub use executor::{execute_resilient, ResilientExecutor};
 pub use task::{FnTask, ResilientTask};
 pub use types::{
     classify_error, DegradationReason, DegradationStrategy, ErrorClass, ResilienceConfig,
