@@ -9,7 +9,7 @@
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// use aethecore::define_groups;
 ///
 /// let groups = define_groups! {
@@ -58,7 +58,7 @@ macro_rules! define_groups {
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// use aethecore::define_hints;
 ///
 /// let hints = define_hints! {

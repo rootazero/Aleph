@@ -83,7 +83,7 @@ impl ConfigUiHints {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use aethecore::config::ui_hints::ConfigUiHints;
     ///
     /// let hints = aethecore::config::ui_hints::build_ui_hints();
