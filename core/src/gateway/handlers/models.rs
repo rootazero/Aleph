@@ -71,7 +71,7 @@ pub fn infer_capabilities(provider_type: &str, model: &str) -> Vec<String> {
             let has_vision = model_lower.contains("gpt-4")
                 && (model_lower.contains("vision")
                     || model_lower.contains("turbo")
-                    || model_lower.contains("o") // gpt-4o has vision
+                    || model_lower.ends_with("o") || model_lower.contains("-o-") // gpt-4o has vision
                     || !model_lower.contains("0314") && !model_lower.contains("0613"));
 
             // o1/o3 reasoning models have thinking
@@ -175,7 +175,7 @@ pub fn infer_capabilities(provider_type: &str, model: &str) -> Vec<String> {
 ///       "provider_type": "openai",
 ///       "enabled": true,
 ///       "is_default": true,
-///       "capabilities": { "text": true, "vision": true, ... }
+///       "capabilities": ["chat", "vision", "tools"]
 ///     }
 ///   ]
 /// }
@@ -248,7 +248,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<Config>) -> JsonRp
 ///     "provider_type": "openai",
 ///     "enabled": true,
 ///     "is_default": true,
-///     "capabilities": { ... }
+///     "capabilities": ["chat", "vision", "tools"]
 ///   }
 /// }
 /// ```
@@ -309,14 +309,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpc
 /// # Returns
 /// ```json
 /// {
-///   "capabilities": {
-///     "text": true,
-///     "vision": true,
-///     "tools": true,
-///     "streaming": true,
-///     "thinking": false,
-///     "json_mode": true
-///   }
+///   "capabilities": ["chat", "vision", "tools", "thinking"]
 /// }
 /// ```
 pub async fn handle_capabilities(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpcResponse {
