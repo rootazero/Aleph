@@ -87,6 +87,7 @@ pub mod video;
 pub mod vision;
 pub mod wizard;
 pub mod spec_driven;
+pub mod skill_evolution;
 
 /// Unified initialization module (re-export for backward compatibility)
 pub mod initialization {
@@ -209,6 +210,15 @@ pub use crate::spec_driven::{
     AssertionType, EvaluationResult, LlmJudge, NoOpWorkflowCallback, Spec, SpecDrivenWorkflow,
     SpecMetadata, SpecTarget, SpecWriter, TestCase, TestResult, TestType, TestWriter,
     WorkflowCallback, WorkflowConfig, WorkflowResult,
+};
+
+// =============================================================================
+// Skill Evolution Exports
+// =============================================================================
+
+pub use crate::skill_evolution::{
+    CommitResult, ExecutionStatus, GenerationResult, SkillExecution, SkillMetrics,
+    SolidificationConfig, SolidificationSuggestion,
 };
 
 // =============================================================================
