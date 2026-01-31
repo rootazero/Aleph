@@ -7,6 +7,8 @@
 //! - Inject input (commands, approvals)
 //! - Detect semantic events (approval requests, errors)
 
+pub mod pty;
 pub mod types;
 
+pub use pty::ClaudeSupervisor;
 pub use types::{PtySize, SupervisorConfig, SupervisorError, SupervisorEvent};

@@ -489,7 +489,9 @@ pub use crate::wizard::{
 };
 
 // Supervisor exports (PTY-based process control)
-pub use crate::supervisor::{PtySize, SupervisorConfig, SupervisorError, SupervisorEvent};
+pub use crate::supervisor::{
+    ClaudeSupervisor, PtySize, SupervisorConfig, SupervisorError, SupervisorEvent,
+};
 
 // Tool system exports (unified tool traits replacing rig-core)
 pub use crate::tools::{AetherTool, AetherToolDyn, AetherToolServer, AetherToolServerHandle};
