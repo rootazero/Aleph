@@ -358,6 +358,12 @@ pub use crate::exec::{
     ExecApprovalManager, ExecApprovalRecord, PendingApproval,
     // Storage
     ConfigWithHash, ExecApprovalsStorage, StorageError,
+    // Risk (SecurityKernel)
+    RiskLevel, BLOCKED_PATTERNS, DANGER_PATTERNS, SAFE_PATTERNS,
+    // Kernel
+    RiskAssessment, SecurityKernel,
+    // Masker
+    SecretMasker,
 };
 
 // Prompt exports (unified prompt management)
