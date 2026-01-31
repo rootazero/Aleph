@@ -16,6 +16,7 @@ pub mod forwarder;
 pub mod ipc;
 pub mod kernel;
 pub mod manager;
+pub mod masker;
 pub mod parser;
 pub mod risk;
 pub mod socket;
@@ -37,6 +38,7 @@ pub use forwarder::{
 pub use ipc::{IpcClient, IpcConnection, IpcError, IpcMessage, IpcServer, PendingInfo};
 pub use kernel::{RiskAssessment, SecurityKernel};
 pub use manager::{ExecApprovalManager, ExecApprovalRecord, PendingApproval};
+pub use masker::SecretMasker;
 pub use parser::{analyze_shell_command, tokenize_segment};
 pub use risk::{RiskLevel, BLOCKED_PATTERNS, DANGER_PATTERNS, SAFE_PATTERNS};
 pub use socket::{ApprovalDecisionType, ApprovalRequestPayload, SegmentInfo, SocketMessage};
