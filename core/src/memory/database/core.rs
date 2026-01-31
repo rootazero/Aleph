@@ -139,6 +139,52 @@ impl VectorDatabase {
             CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
                 embedding float[384]
             );
+
+            -- ================================================================
+            -- FTS5 Full-Text Search Tables (Hybrid Search)
+            -- ================================================================
+
+            -- Full-text index for memories
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                user_input,
+                ai_output,
+                id UNINDEXED,
+                content='memories',
+                content_rowid='rowid'
+            );
+
+            -- Full-text index for facts
+            CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+                content,
+                fact_type UNINDEXED,
+                id UNINDEXED,
+                content='memory_facts',
+                content_rowid='rowid'
+            );
+
+            -- Sync trigger: memories insert
+            CREATE TRIGGER IF NOT EXISTS memories_fts_insert AFTER INSERT ON memories BEGIN
+                INSERT INTO memories_fts(rowid, user_input, ai_output, id)
+                VALUES (new.rowid, new.user_input, new.ai_output, new.id);
+            END;
+
+            -- Sync trigger: memories delete
+            CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, user_input, ai_output, id)
+                VALUES ('delete', old.rowid, old.user_input, old.ai_output, old.id);
+            END;
+
+            -- Sync trigger: facts insert
+            CREATE TRIGGER IF NOT EXISTS facts_fts_insert AFTER INSERT ON memory_facts BEGIN
+                INSERT INTO facts_fts(rowid, content, fact_type, id)
+                VALUES (new.rowid, new.content, new.fact_type, new.id);
+            END;
+
+            -- Sync trigger: facts delete
+            CREATE TRIGGER IF NOT EXISTS facts_fts_delete AFTER DELETE ON memory_facts BEGIN
+                INSERT INTO facts_fts(facts_fts, rowid, content, fact_type, id)
+                VALUES ('delete', old.rowid, old.content, old.fact_type, old.id);
+            END;
             "#,
         )
         .map_err(|e| AetherError::config(format!("Failed to create schema: {}", e)))?;
@@ -374,5 +420,63 @@ mod tests {
 
         assert_eq!(memories_count, 0);
         assert_eq!(vec_count, 0);
+    }
+
+    #[test]
+    fn test_fts5_tables_created() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        let conn = db.conn.lock().unwrap();
+
+        // Check memories_fts table exists
+        let memories_fts_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memories_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(memories_fts_exists, "memories_fts table should exist");
+
+        // Check facts_fts table exists
+        let facts_fts_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='facts_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(facts_fts_exists, "facts_fts table should exist");
+    }
+
+    #[test]
+    fn test_fts5_sync_triggers_exist() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+
+        let conn = db.conn.lock().unwrap();
+
+        // Check insert trigger exists for memories
+        let memories_trigger: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='trigger' AND name='memories_fts_insert'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(memories_trigger, "memories_fts_insert trigger should exist");
+
+        // Check insert trigger exists for facts
+        let facts_trigger: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='trigger' AND name='facts_fts_insert'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(facts_trigger, "facts_fts_insert trigger should exist");
     }
 }
