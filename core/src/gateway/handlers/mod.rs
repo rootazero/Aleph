@@ -34,6 +34,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use super::protocol::{JsonRpcRequest, JsonRpcResponse, METHOD_NOT_FOUND};
+use crate::config::Config;
 
 /// Type alias for async handler functions
 pub type HandlerFn = Arc<
@@ -81,6 +82,24 @@ impl HandlerRegistry {
         registry.register("plugins.load", plugins::handle_load);
         registry.register("plugins.unload", plugins::handle_unload);
         registry.register("plugins.callTool", plugins::handle_call_tool);
+
+        // Models handlers (use default config as placeholder)
+        let models_config = Arc::new(Config::default());
+        let cfg = models_config.clone();
+        registry.register("models.list", move |req| {
+            let config = cfg.clone();
+            async move { models::handle_list(req, config).await }
+        });
+        let cfg = models_config.clone();
+        registry.register("models.get", move |req| {
+            let config = cfg.clone();
+            async move { models::handle_get(req, config).await }
+        });
+        let cfg = models_config.clone();
+        registry.register("models.capabilities", move |req| {
+            let config = cfg.clone();
+            async move { models::handle_capabilities(req, config).await }
+        });
 
         registry
     }
@@ -240,5 +259,13 @@ mod tests {
         assert!(registry.has_method("plugins.load"));
         assert!(registry.has_method("plugins.unload"));
         assert!(registry.has_method("plugins.callTool"));
+    }
+
+    #[test]
+    fn test_models_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("models.list"));
+        assert!(registry.has_method("models.get"));
+        assert!(registry.has_method("models.capabilities"));
     }
 }
