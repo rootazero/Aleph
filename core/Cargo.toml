@@ -25,6 +25,12 @@ all-channels = ["telegram", "discord"]
 cron = ["dep:cron", "gateway"]
 # Browser control via CDP
 browser = ["dep:chromiumoxide", "gateway"]
+# Plugin system: WebAssembly runtime via Extism
+plugin-wasm = ["dep:extism"]
+# Plugin system: Node.js runtime (placeholder)
+plugin-nodejs = []
+# Plugin system: All runtimes
+plugin-all = ["plugin-wasm", "plugin-nodejs"]
 
 [dependencies]
 # REMOVED: UniFFI - using Gateway WebSocket architecture
@@ -141,6 +147,9 @@ cron = { version = "0.13", optional = true }
 
 # Browser control dependencies (optional)
 chromiumoxide = { version = "0.7", optional = true, default-features = false, features = ["tokio-runtime"] }
+
+# Plugin system dependencies (optional)
+extism = { version = "1.7", optional = true }
 
 [build-dependencies]
 # csbindgen for Windows C# bindings (deprecated)
