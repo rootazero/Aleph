@@ -3,11 +3,15 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use super::ipc::{JsonRpcRequest, JsonRpcResponse};
 use crate::extension::error::ExtensionError;
+
+/// Default timeout for IPC calls (30 seconds)
+pub const DEFAULT_IPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -20,15 +24,28 @@ fn next_request_id() -> String {
 pub struct NodeProcess {
     child: Child,
     plugin_id: String,
+    /// Timeout for IPC calls
+    timeout: Duration,
 }
 
 impl NodeProcess {
-    /// Start a new Node.js plugin host process
+    /// Start a new Node.js plugin host process with default timeout
     pub fn start(
         node_path: &str,
         host_script: &str,
         plugin_path: &str,
         plugin_id: &str,
+    ) -> Result<Self, ExtensionError> {
+        Self::start_with_timeout(node_path, host_script, plugin_path, plugin_id, DEFAULT_IPC_TIMEOUT)
+    }
+
+    /// Start a new Node.js plugin host process with custom timeout
+    pub fn start_with_timeout(
+        node_path: &str,
+        host_script: &str,
+        plugin_path: &str,
+        plugin_id: &str,
+        timeout: Duration,
     ) -> Result<Self, ExtensionError> {
         info!("Starting Node.js plugin host for: {}", plugin_id);
 
@@ -45,14 +62,30 @@ impl NodeProcess {
         Ok(Self {
             child,
             plugin_id: plugin_id.to_string(),
+            timeout,
         })
     }
 
-    /// Send a request and wait for response
+    /// Set the timeout for IPC calls
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
+
+    /// Send a request and wait for response with timeout
     pub fn call(
         &mut self,
         method: &str,
         params: serde_json::Value,
+    ) -> Result<JsonRpcResponse, ExtensionError> {
+        self.call_with_timeout(method, params, self.timeout)
+    }
+
+    /// Send a request and wait for response with custom timeout
+    pub fn call_with_timeout(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
     ) -> Result<JsonRpcResponse, ExtensionError> {
         let id = next_request_id();
         let request = JsonRpcRequest::new(&id, method, params);
@@ -75,19 +108,38 @@ impl NodeProcess {
             .flush()
             .map_err(|e| ExtensionError::Runtime(format!("Flush error: {}", e)))?;
 
-        // Read response
+        // Read response with timeout using a channel
         let stdout = self
             .child
             .stdout
-            .as_mut()
+            .take()
             .ok_or_else(|| ExtensionError::Runtime("No stdout".to_string()))?;
 
-        let mut reader = BufReader::new(stdout);
-        let mut response_line = String::new();
+        let (tx, rx) = mpsc::channel();
+        let plugin_id = self.plugin_id.clone();
 
-        reader
-            .read_line(&mut response_line)
-            .map_err(|e| ExtensionError::Runtime(format!("Read error: {}", e)))?;
+        // Spawn thread to read response
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut response_line = String::new();
+            let result = reader.read_line(&mut response_line);
+            // Send both the result and the stdout back
+            let _ = tx.send((result, response_line, reader.into_inner()));
+        });
+
+        // Wait for response with timeout
+        let (read_result, response_line, stdout) = rx
+            .recv_timeout(timeout)
+            .map_err(|_| ExtensionError::Runtime(format!(
+                "Plugin '{}' timed out after {:?}",
+                plugin_id, timeout
+            )))?;
+
+        // Restore stdout for future calls
+        self.child.stdout = Some(stdout);
+
+        // Check read result
+        read_result.map_err(|e| ExtensionError::Runtime(format!("Read error: {}", e)))?;
 
         debug!(
             "Received from plugin {}: {}",
@@ -162,6 +214,25 @@ mod tests {
             "/nonexistent/host.js",
             "/nonexistent/plugin",
             "test-plugin",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_default_ipc_timeout() {
+        assert_eq!(DEFAULT_IPC_TIMEOUT, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_start_with_custom_timeout() {
+        // This will fail to start (invalid path) but tests the API
+        let custom_timeout = Duration::from_secs(60);
+        let result = NodeProcess::start_with_timeout(
+            "/nonexistent/node",
+            "/nonexistent/host.js",
+            "/nonexistent/plugin",
+            "test-plugin",
+            custom_timeout,
         );
         assert!(result.is_err());
     }
