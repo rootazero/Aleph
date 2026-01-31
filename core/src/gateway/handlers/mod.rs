@@ -30,6 +30,9 @@
 //! | models | Model discovery |
 //! | chat | Chat control |
 //! | cron | Cron job management |
+//! | exec_approvals | Exec approval management |
+//! | wizard | Wizard session management |
+//! | supervisor | Process supervision via PTY |
 //! | browser | Browser/CDP (feature-gated) |
 
 pub mod health;
@@ -57,6 +60,9 @@ pub mod runs;
 pub mod models;
 pub mod chat;
 pub mod cron;
+pub mod exec_approvals;
+pub mod wizard;
+pub mod supervisor;
 #[cfg(feature = "browser")]
 pub mod browser;
 
