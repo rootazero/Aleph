@@ -179,6 +179,11 @@ enum Command {
         #[command(subcommand)]
         action: GatewayAction,
     },
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
 }
 
 /// Pairing subcommands
@@ -256,6 +261,60 @@ enum GatewayAction {
         /// Timeout in milliseconds
         #[arg(long, default_value = "30000")]
         timeout: u64,
+    },
+}
+
+/// Config subcommands
+#[derive(Subcommand, Debug)]
+enum ConfigAction {
+    /// Get configuration (all or specific path)
+    Get {
+        /// Config path (e.g., "general.language")
+        path: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+    },
+    /// Set a configuration value
+    Set {
+        /// Config path (e.g., "general.language")
+        path: String,
+
+        /// Value to set (JSON or string)
+        value: String,
+
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+    },
+    /// Edit configuration in editor
+    Edit,
+    /// Validate configuration
+    Validate {
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+    },
+    /// Reload configuration
+    Reload {
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+    },
+    /// Output JSON Schema
+    Schema {
+        /// Output file path
+        #[arg(long, short = 'o')]
+        output: Option<String>,
+
+        /// Gateway URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
     },
 }
 
@@ -776,6 +835,41 @@ async fn handle_gateway_command(action: GatewayAction) -> Result<(), Box<dyn std
     Ok(())
 }
 
+/// Handle config subcommands
+#[cfg(feature = "gateway")]
+async fn handle_config_command(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::cli::{GatewayClient, OutputFormat, config};
+
+    match action {
+        ConfigAction::Get { path, json, url } => {
+            let client = GatewayClient::new().with_url(&url);
+            let format = OutputFormat::from_json_flag(json);
+            config::handle_get(&client, path, format).await?;
+        }
+        ConfigAction::Set { path, value, url } => {
+            let client = GatewayClient::new().with_url(&url);
+            config::handle_set(&client, path, value).await?;
+        }
+        ConfigAction::Edit => {
+            config::handle_edit().await?;
+        }
+        ConfigAction::Validate { url } => {
+            let client = GatewayClient::new().with_url(&url);
+            config::handle_validate(&client).await?;
+        }
+        ConfigAction::Reload { url } => {
+            let client = GatewayClient::new().with_url(&url);
+            config::handle_reload(&client).await?;
+        }
+        ConfigAction::Schema { output, url } => {
+            let client = GatewayClient::new().with_url(&url);
+            config::handle_schema(&client, output).await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Daemonize the current process (Unix only)
 #[cfg(unix)]
 fn daemonize(pid_file: &str, log_file: Option<&PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
@@ -899,8 +993,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Gateway { action }) => {
             return handle_gateway_command(action).await;
         }
+        #[cfg(feature = "gateway")]
+        Some(Command::Config { action }) => {
+            return handle_config_command(action).await;
+        }
         #[cfg(not(feature = "gateway"))]
-        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) => {
+        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) | Some(Command::Config { .. }) => {
             eprintln!("Error: Gateway feature is not enabled.");
             std::process::exit(1);
         }
@@ -1916,6 +2014,116 @@ mod tests {
                 }
             }
             _ => panic!("Expected Plugins command with Disable action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_get() {
+        let args = Args::try_parse_from(["aether-gateway", "config", "get"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Config { action }) => {
+                if let ConfigAction::Get { path, json, .. } = action {
+                    assert!(path.is_none());
+                    assert!(!json);
+                } else {
+                    panic!("Expected ConfigAction::Get");
+                }
+            }
+            _ => panic!("Expected Config command with Get action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_get_with_path() {
+        let args = Args::try_parse_from(["aether-gateway", "config", "get", "general.language", "--json"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Config { action }) => {
+                if let ConfigAction::Get { path, json, .. } = action {
+                    assert_eq!(path, Some("general.language".to_string()));
+                    assert!(json);
+                } else {
+                    panic!("Expected ConfigAction::Get");
+                }
+            }
+            _ => panic!("Expected Config command with Get action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_set() {
+        let args = Args::try_parse_from(["aether-gateway", "config", "set", "general.language", "zh-Hans"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Config { action }) => {
+                if let ConfigAction::Set { path, value, .. } = action {
+                    assert_eq!(path, "general.language");
+                    assert_eq!(value, "zh-Hans");
+                } else {
+                    panic!("Expected ConfigAction::Set");
+                }
+            }
+            _ => panic!("Expected Config command with Set action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_edit() {
+        let args = Args::try_parse_from(["aether-gateway", "config", "edit"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Config { action }) => {
+                assert!(matches!(action, ConfigAction::Edit));
+            }
+            _ => panic!("Expected Config command with Edit action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_validate() {
+        let args = Args::try_parse_from(["aether-gateway", "config", "validate"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Config { action }) => {
+                assert!(matches!(action, ConfigAction::Validate { .. }));
+            }
+            _ => panic!("Expected Config command with Validate action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_reload() {
+        let args = Args::try_parse_from(["aether-gateway", "config", "reload"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Config { action }) => {
+                assert!(matches!(action, ConfigAction::Reload { .. }));
+            }
+            _ => panic!("Expected Config command with Reload action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_schema() {
+        let args = Args::try_parse_from(["aether-gateway", "config", "schema", "-o", "schema.json"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Config { action }) => {
+                if let ConfigAction::Schema { output, .. } = action {
+                    assert_eq!(output, Some("schema.json".to_string()));
+                } else {
+                    panic!("Expected ConfigAction::Schema");
+                }
+            }
+            _ => panic!("Expected Config command with Schema action"),
         }
     }
 }
