@@ -19,10 +19,12 @@
 //! ```
 
 pub mod detector;
+pub mod generator;
 pub mod tracker;
 pub mod types;
 
 pub use detector::SolidificationDetector;
+pub use generator::SkillGenerator;
 pub use tracker::EvolutionTracker;
 pub use types::{
     CommitResult, ExecutionStatus, GenerationResult, SkillExecution, SkillMetrics,
