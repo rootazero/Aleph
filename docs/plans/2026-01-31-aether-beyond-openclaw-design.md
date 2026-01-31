@@ -488,12 +488,12 @@ M6 (韧性执行) ──────────► 独立，可并行开发
 
 ### Milestone 6: ResilientTask 韧性执行
 
-- [ ] ResilientTask trait 定义
-- [ ] 重试策略 (指数退避)
-- [ ] 降级逻辑 (fallback 方法)
-- [ ] 与 Cron 系统集成
+- [x] ResilientTask trait 定义 (execute/fallback/has_fallback/config)
+- [x] 重试策略 (指数退避 + Jitter)
+- [x] 降级逻辑 (Skip/Fallback/PartialResult/UseCached/NotifyAndFail)
+- [x] 与 Cron 系统集成 (ResilientCronJob + PodcastTask)
 
-**验收**: 播客 TTS 失败时自动降级为 Markdown 摘要
+**验收**: ✅ 播客 TTS 失败时自动降级为 Markdown 摘要
 
 ---
 
@@ -523,4 +523,4 @@ M6 (韧性执行) ──────────► 独立，可并行开发
 ---
 
 *文档生成时间: 2026-01-31*
-*状态: 已验证，待实现*
+*状态: 六大里程碑全部完成 ✅*
