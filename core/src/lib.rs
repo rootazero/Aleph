@@ -97,6 +97,7 @@ pub mod exec; // Command execution security
 pub mod routing; // Channel-aware routing and session key system
 // uniffi_core removed - using Gateway WebSocket architecture
 pub mod utils; // NEW: Capability executor for enriching payloads
+pub mod cli; // CLI utilities for Gateway commands
 pub mod video; // NEW: Video transcript extraction (YouTube)
 pub mod vision; // NEW: Vision capability (screen OCR, image understanding) // NEW: Media generation providers (image, video, audio, speech)
 
