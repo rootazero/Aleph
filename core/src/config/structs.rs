@@ -3,6 +3,7 @@
 //! This module defines the core configuration structures for Aether.
 
 use crate::config::types::*;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -11,7 +12,7 @@ use std::collections::HashMap;
 // =============================================================================
 
 /// Application configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Config {
     /// Legacy hotkey field (deprecated, use trigger.replace_hotkey/append_hotkey instead)
     /// Kept for backward compatibility with old config files
@@ -89,7 +90,7 @@ pub struct Config {
 
 /// Full configuration exposed through UniFFI
 /// This wraps Config with a flattened provider list
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FullConfig {
     pub default_hotkey: String,
     pub general: GeneralConfig,
