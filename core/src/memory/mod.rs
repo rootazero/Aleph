@@ -39,7 +39,8 @@ pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, Memor
 pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
 pub use compression::{
-    CompressionScheduler, CompressionService, CompressionTrigger, FactExtractor,
+    CompressionPriority, CompressionScheduler, CompressionService, CompressionSignal,
+    CompressionTrigger, DetectionResult, FactExtractor, SignalDetector, SignalKeywords,
 };
 pub use context::{
     CompressionResult, CompressionSession, ContextAnchor, FactStats, FactType, MemoryEntry,
