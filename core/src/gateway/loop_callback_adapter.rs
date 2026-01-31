@@ -227,6 +227,7 @@ impl<E: EventEmitter + Send + Sync + 'static> LoopCallback for EventEmittingCall
                 ActionResult::ToolSuccess { output, .. } => ToolResult::success(output.to_string()),
                 ActionResult::ToolError { error, .. } => ToolResult::error(error),
                 ActionResult::UserResponse { response } => ToolResult::success(response),
+                ActionResult::UserResponseRich { response } => ToolResult::success(response.to_llm_feedback()),
                 ActionResult::Completed => ToolResult::success("Completed"),
                 ActionResult::Failed => ToolResult::error("Failed"),
             };

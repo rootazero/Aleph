@@ -544,6 +544,15 @@ impl DecisionParser {
                 }
                 Ok(())
             }
+            Decision::AskUserRich { question, .. } => {
+                if question.is_empty() {
+                    return Err(AetherError::Other {
+                        message: "Question cannot be empty".to_string(),
+                        suggestion: Some("Provide a question for the user".to_string()),
+                    });
+                }
+                Ok(())
+            }
             Decision::Complete { summary } => {
                 if summary.is_empty() {
                     return Err(AetherError::Other {
