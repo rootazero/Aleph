@@ -174,6 +174,11 @@ enum Command {
         #[command(subcommand)]
         action: PluginsAction,
     },
+    /// Gateway RPC tools
+    Gateway {
+        #[command(subcommand)]
+        action: GatewayAction,
+    },
 }
 
 /// Pairing subcommands
@@ -229,6 +234,28 @@ enum PluginsAction {
     Disable {
         /// Plugin name
         name: String,
+    },
+}
+
+/// Gateway subcommands
+#[derive(Subcommand, Debug)]
+enum GatewayAction {
+    /// Call an RPC method on the Gateway
+    Call {
+        /// RPC method name (e.g., "health", "config.get")
+        method: String,
+
+        /// JSON parameters
+        #[arg(long, short = 'p')]
+        params: Option<String>,
+
+        /// Gateway WebSocket URL
+        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        url: String,
+
+        /// Timeout in milliseconds
+        #[arg(long, default_value = "30000")]
+        timeout: u64,
     },
 }
 
@@ -726,6 +753,29 @@ fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
+/// Handle gateway subcommands
+#[cfg(feature = "gateway")]
+async fn handle_gateway_command(action: GatewayAction) -> Result<(), Box<dyn std::error::Error>> {
+    use aethecore::cli::{GatewayClient, print_json};
+
+    match action {
+        GatewayAction::Call { method, params, url, timeout } => {
+            let client = GatewayClient::new()
+                .with_url(&url)
+                .with_timeout(timeout);
+
+            let params_value: Option<serde_json::Value> = params
+                .map(|p| serde_json::from_str(&p))
+                .transpose()?;
+
+            let result: serde_json::Value = client.call_raw(&method, params_value).await?;
+            print_json(&result)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Daemonize the current process (Unix only)
 #[cfg(unix)]
 fn daemonize(pid_file: &str, log_file: Option<&PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
@@ -845,8 +895,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PluginsAction::Disable { name } => handle_plugins_disable(&name),
             };
         }
+        #[cfg(feature = "gateway")]
+        Some(Command::Gateway { action }) => {
+            return handle_gateway_command(action).await;
+        }
         #[cfg(not(feature = "gateway"))]
-        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) => {
+        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) => {
             eprintln!("Error: Gateway feature is not enabled.");
             std::process::exit(1);
         }
