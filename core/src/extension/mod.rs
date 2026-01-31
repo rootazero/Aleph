@@ -46,6 +46,7 @@
 pub mod config;
 pub mod discovery;
 pub mod hooks;
+mod plugin_loader;
 pub mod runtime;
 pub mod sync_api;
 
@@ -61,6 +62,7 @@ pub mod watcher;
 pub use error::*;
 pub use loader::*;
 pub use manifest::*;
+pub use plugin_loader::PluginLoader;
 pub use registry::*;
 pub use skill_tool::{build_skill_tool_description, check_skill_permission, request_skill_permission_async};
 pub use template::SkillTemplate;
