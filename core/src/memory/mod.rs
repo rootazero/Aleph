@@ -25,6 +25,7 @@ pub mod context;
 pub mod database;
 pub mod embedding;
 pub mod fact_retrieval;
+pub mod hybrid_retrieval;
 pub mod ingestion;
 pub mod reranker;
 pub mod retrieval;
@@ -53,6 +54,7 @@ pub use database::VectorDatabase;
 )]
 pub use embedding::EmbeddingModel;
 pub use fact_retrieval::{FactRetrieval, FactRetrievalConfig, RetrievalResult};
+pub use hybrid_retrieval::{HybridRetrieval, HybridSearchConfig, RetrievalStrategy};
 pub use ingestion::MemoryIngestion;
 pub use reranker::{NoOpReranker, Reranker, RerankResult};
 pub use retrieval::MemoryRetrieval;
