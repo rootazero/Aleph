@@ -14,6 +14,7 @@ pub mod config;
 pub mod decision;
 pub mod forwarder;
 pub mod ipc;
+pub mod kernel;
 pub mod manager;
 pub mod parser;
 pub mod risk;
@@ -34,8 +35,9 @@ pub use forwarder::{
     ForwarderEvent,
 };
 pub use ipc::{IpcClient, IpcConnection, IpcError, IpcMessage, IpcServer, PendingInfo};
+pub use kernel::{RiskAssessment, SecurityKernel};
 pub use manager::{ExecApprovalManager, ExecApprovalRecord, PendingApproval};
 pub use parser::{analyze_shell_command, tokenize_segment};
-pub use socket::{ApprovalDecisionType, ApprovalRequestPayload, SegmentInfo, SocketMessage};
 pub use risk::{RiskLevel, BLOCKED_PATTERNS, DANGER_PATTERNS, SAFE_PATTERNS};
+pub use socket::{ApprovalDecisionType, ApprovalRequestPayload, SegmentInfo, SocketMessage};
 pub use storage::{ConfigWithHash, ExecApprovalsStorage, StorageError};
