@@ -3,15 +3,25 @@
 //! This module defines the Worker trait and its implementations:
 //! - `Worker`: Async trait for executing instructions with snapshot/restore
 //! - `StateSnapshot`: Captures workspace state for rollback
-//! - `AgentLoopWorker`: Placeholder implementation that will integrate with AgentLoop
+//! - `AgentLoopWorker`: Real implementation that integrates with AgentLoop
 //! - `MockWorker`: Test implementation with configurable behavior
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::{watch, RwLock};
 
+use crate::agent_loop::{
+    Action, ActionExecutor, ActionResult, AgentLoop, CompressorTrait, GuardViolation,
+    LoopCallback, LoopConfig, LoopResult, LoopState, RequestContext, ThinkerTrait, Thinking,
+};
+use crate::agent_loop::decision::QuestionGroup;
+use crate::dispatcher::UnifiedTool;
 use crate::error::Result;
-use crate::poe::types::WorkerOutput;
+use crate::poe::types::{Artifact, ChangeType, StepLog, WorkerOutput};
 
 // ============================================================================
 // StateSnapshot
@@ -129,109 +139,479 @@ pub trait Worker: Send + Sync {
 }
 
 // ============================================================================
+// PoeLoopCallback - Artifact Tracking Callback
+// ============================================================================
+
+/// Callback implementation for POE worker execution.
+///
+/// This callback tracks file artifacts created or modified during execution
+/// by monitoring tool calls for file operations.
+struct PoeLoopCallback {
+    /// Artifacts produced during execution
+    artifacts: Arc<RwLock<Vec<Artifact>>>,
+    /// Execution logs
+    execution_log: Arc<RwLock<Vec<StepLog>>>,
+    /// Workspace root for relative path calculation
+    /// Reserved for future use: converting absolute paths to workspace-relative paths
+    #[allow(dead_code)]
+    workspace: PathBuf,
+    /// Step counter for logging
+    step_counter: Arc<RwLock<u32>>,
+}
+
+impl PoeLoopCallback {
+    /// Create a new PoeLoopCallback.
+    fn new(
+        artifacts: Arc<RwLock<Vec<Artifact>>>,
+        execution_log: Arc<RwLock<Vec<StepLog>>>,
+        workspace: PathBuf,
+    ) -> Self {
+        Self {
+            artifacts,
+            execution_log,
+            workspace,
+            step_counter: Arc::new(RwLock::new(0)),
+        }
+    }
+
+    /// Extract file path from tool arguments.
+    fn extract_file_path(arguments: &Value) -> Option<PathBuf> {
+        // Try common argument names for file paths
+        arguments
+            .get("path")
+            .or_else(|| arguments.get("file_path"))
+            .or_else(|| arguments.get("file"))
+            .or_else(|| arguments.get("target"))
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+    }
+
+    /// Compute SHA-256 hash of content.
+    fn compute_hash(content: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Determine change type from tool name.
+    fn change_type_from_tool(tool_name: &str, arguments: &Value) -> ChangeType {
+        let tool_lower = tool_name.to_lowercase();
+
+        // Check for explicit operation field
+        if let Some(op) = arguments.get("operation").and_then(|v| v.as_str()) {
+            let op_lower = op.to_lowercase();
+            if op_lower.contains("delete") || op_lower.contains("remove") {
+                return ChangeType::Deleted;
+            }
+            if op_lower.contains("create") || op_lower.contains("mkdir") {
+                return ChangeType::Created;
+            }
+        }
+
+        // Infer from tool name
+        if tool_lower.contains("write") || tool_lower.contains("create") {
+            ChangeType::Created
+        } else if tool_lower.contains("edit") || tool_lower.contains("modify") || tool_lower.contains("update") {
+            ChangeType::Modified
+        } else if tool_lower.contains("delete") || tool_lower.contains("remove") {
+            ChangeType::Deleted
+        } else {
+            ChangeType::Modified
+        }
+    }
+}
+
+#[async_trait]
+impl LoopCallback for PoeLoopCallback {
+    async fn on_loop_start(&self, _state: &LoopState) {
+        // Reset step counter
+        *self.step_counter.write().await = 0;
+    }
+
+    async fn on_step_start(&self, _step: usize) {}
+
+    async fn on_thinking_start(&self, _step: usize) {}
+
+    async fn on_thinking_done(&self, _thinking: &Thinking) {}
+
+    async fn on_action_start(&self, _action: &Action) {}
+
+    async fn on_action_done(&self, action: &Action, result: &ActionResult) {
+        // Track file artifacts from write/edit tool calls
+        if let Action::ToolCall {
+            tool_name,
+            arguments,
+        } = action
+        {
+            // Check if this is a file operation tool
+            let is_file_op = matches!(
+                tool_name.to_lowercase().as_str(),
+                "write_file" | "edit_file" | "write" | "edit" | "create_file"
+                    | "file_ops" | "delete_file" | "remove_file"
+            );
+
+            if is_file_op {
+                if let Some(path) = Self::extract_file_path(arguments) {
+                    // Determine change type
+                    let change_type = Self::change_type_from_tool(tool_name, arguments);
+
+                    // Compute content hash if available
+                    let content_hash = if let ActionResult::ToolSuccess { output, .. } = result {
+                        // Try to get content from result or arguments
+                        let content = arguments
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if !content.is_empty() {
+                            Self::compute_hash(content)
+                        } else {
+                            // Hash the output as fallback
+                            Self::compute_hash(&output.to_string())
+                        }
+                    } else {
+                        "unknown".to_string()
+                    };
+
+                    // Create artifact
+                    let artifact = Artifact::new(path, change_type, content_hash);
+
+                    // Add to artifacts list
+                    self.artifacts.write().await.push(artifact);
+                }
+            }
+        }
+
+        // Log the step
+        let mut step_id = self.step_counter.write().await;
+        let log_entry = StepLog::new(
+            *step_id,
+            action.action_type(),
+            result.summary(),
+            0, // Duration tracked elsewhere
+        );
+        self.execution_log.write().await.push(log_entry);
+        *step_id += 1;
+    }
+
+    async fn on_confirmation_required(&self, _tool_name: &str, _arguments: &Value) -> bool {
+        // POE worker auto-confirms (the POE framework handles validation)
+        true
+    }
+
+    async fn on_user_input_required(
+        &self,
+        _question: &str,
+        _options: Option<&[String]>,
+    ) -> String {
+        // POE worker returns a default response
+        // Real user interaction should be handled by the orchestrator
+        "continue".to_string()
+    }
+
+    async fn on_user_multigroup_required(
+        &self,
+        _question: &str,
+        _groups: &[QuestionGroup],
+    ) -> String {
+        "{\"default\":\"ok\"}".to_string()
+    }
+
+    async fn on_guard_triggered(&self, _violation: &GuardViolation) {}
+
+    async fn on_complete(&self, _summary: &str) {}
+
+    async fn on_failed(&self, _reason: &str) {}
+}
+
+// ============================================================================
 // AgentLoopWorker
 // ============================================================================
 
 /// Worker implementation that integrates with the Aether AgentLoop.
 ///
-/// This is a placeholder implementation. The actual integration with AgentLoop
-/// will be implemented when the POE orchestrator is connected to the agent system.
+/// This worker executes instructions through the real AgentLoop, tracking
+/// artifacts and supporting abort/cancellation via watch channels.
 ///
-/// # Future Implementation
+/// # Example
 ///
-/// The real implementation will:
-/// 1. Create an AgentLoop instance with appropriate tools
-/// 2. Execute the instruction through the agent loop
-/// 3. Track token usage and execution steps
-/// 4. Support cancellation via abort tokens
-/// 5. Compute file hashes for snapshots
-pub struct AgentLoopWorker {
+/// ```rust,ignore
+/// use aethecore::poe::AgentLoopWorker;
+/// use std::sync::Arc;
+///
+/// let worker = AgentLoopWorker::new(
+///     PathBuf::from("/workspace"),
+///     thinker,
+///     executor,
+///     compressor,
+///     tools,
+///     LoopConfig::default(),
+/// );
+///
+/// let output = worker.execute("Create a new file", None).await?;
+/// ```
+pub struct AgentLoopWorker<T, E, C>
+where
+    T: ThinkerTrait + 'static,
+    E: ActionExecutor + 'static,
+    C: CompressorTrait + 'static,
+{
     /// Workspace directory where the worker operates
     workspace: PathBuf,
+
+    /// The thinker for LLM decisions
+    thinker: Arc<T>,
+
+    /// The action executor
+    executor: Arc<E>,
+
+    /// The context compressor
+    compressor: Arc<C>,
+
+    /// Available tools for execution
+    tools: Vec<UnifiedTool>,
+
+    /// Loop configuration
+    config: LoopConfig,
+
+    /// Abort signal sender
+    abort_tx: watch::Sender<bool>,
+
+    /// Abort signal receiver (cloned for each execution)
+    abort_rx: watch::Receiver<bool>,
 }
 
-impl AgentLoopWorker {
-    /// Create a new AgentLoopWorker with the given workspace.
-    pub fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+impl<T, E, C> AgentLoopWorker<T, E, C>
+where
+    T: ThinkerTrait + 'static,
+    E: ActionExecutor + 'static,
+    C: CompressorTrait + 'static,
+{
+    /// Create a new AgentLoopWorker with all required components.
+    pub fn new(
+        workspace: PathBuf,
+        thinker: Arc<T>,
+        executor: Arc<E>,
+        compressor: Arc<C>,
+        tools: Vec<UnifiedTool>,
+        config: LoopConfig,
+    ) -> Self {
+        let (abort_tx, abort_rx) = watch::channel(false);
+        Self {
+            workspace,
+            thinker,
+            executor,
+            compressor,
+            tools,
+            config,
+            abort_tx,
+            abort_rx,
+        }
     }
 
     /// Get the workspace path.
     pub fn workspace(&self) -> &PathBuf {
         &self.workspace
     }
+
+    /// Convert LoopResult to WorkerOutput.
+    fn loop_result_to_output(
+        &self,
+        result: LoopResult,
+        artifacts: Vec<Artifact>,
+        execution_log: Vec<StepLog>,
+    ) -> WorkerOutput {
+        let mut output = match result {
+            LoopResult::Completed {
+                summary,
+                steps,
+                total_tokens,
+            } => {
+                let mut out = WorkerOutput::completed(summary);
+                out.tokens_consumed = total_tokens as u32;
+                out.steps_taken = steps as u32;
+                out
+            }
+            LoopResult::Failed { reason, steps } => {
+                let mut out = WorkerOutput::failed(reason);
+                out.steps_taken = steps as u32;
+                out
+            }
+            LoopResult::GuardTriggered(violation) => {
+                let reason = format!("Guard triggered: {}", violation.description());
+                WorkerOutput::failed(reason)
+            }
+            LoopResult::UserAborted => {
+                WorkerOutput::failed("Execution aborted by user")
+            }
+        };
+
+        output.artifacts = artifacts;
+        output.execution_log = execution_log;
+        output
+    }
+
+    /// Compute SHA-256 hash of file contents.
+    async fn hash_file(path: &std::path::Path) -> std::io::Result<String> {
+        let content = tokio::fs::read(path).await?;
+        let mut hasher = Sha256::new();
+        hasher.update(&content);
+        Ok(format!("{:x}", hasher.finalize()))
+    }
 }
 
 #[async_trait]
-impl Worker for AgentLoopWorker {
+impl<T, E, C> Worker for AgentLoopWorker<T, E, C>
+where
+    T: ThinkerTrait + 'static,
+    E: ActionExecutor + 'static,
+    C: CompressorTrait + 'static,
+{
     async fn execute(
         &self,
         instruction: &str,
         previous_failure: Option<&str>,
     ) -> Result<WorkerOutput> {
-        // TODO: Integrate with actual AgentLoop
-        //
-        // Implementation plan:
-        // 1. Create AgentLoop with workspace-scoped tools
-        // 2. Build prompt with instruction and optional failure context
-        // 3. Execute agent loop with token budget
-        // 4. Collect artifacts from file system changes
-        // 5. Return WorkerOutput with execution details
+        // Reset abort signal
+        let _ = self.abort_tx.send(false);
 
-        // For now, return a stub completed output
-        let mut output = WorkerOutput::completed(format!(
-            "Placeholder execution of: {}{}",
-            instruction,
-            previous_failure
-                .map(|f| format!(" (retry after: {})", f))
-                .unwrap_or_default()
-        ));
+        // Build prompt with optional failure context
+        let prompt = match previous_failure {
+            Some(feedback) => format!(
+                "{}\n\n## Previous Attempt Feedback\n\nThe previous attempt failed with the following feedback:\n\n{}",
+                instruction, feedback
+            ),
+            None => instruction.to_string(),
+        };
 
-        // Stub values
-        output.tokens_consumed = 100;
-        output.steps_taken = 1;
+        // Create shared storage for artifacts and logs
+        let artifacts = Arc::new(RwLock::new(Vec::new()));
+        let execution_log = Arc::new(RwLock::new(Vec::new()));
 
-        Ok(output)
+        // Create POE callback for artifact tracking
+        let callback = PoeLoopCallback::new(
+            artifacts.clone(),
+            execution_log.clone(),
+            self.workspace.clone(),
+        );
+
+        // Create AgentLoop with our components
+        let agent_loop = AgentLoop::new(
+            self.thinker.clone(),
+            self.executor.clone(),
+            self.compressor.clone(),
+            self.config.clone(),
+        );
+
+        // Build request context with workspace
+        let mut context = RequestContext::default();
+        context.working_directory = Some(self.workspace.to_string_lossy().to_string());
+
+        // Execute via AgentLoop
+        let result = agent_loop
+            .run(
+                prompt,
+                context,
+                self.tools.clone(),
+                callback,
+                Some(self.abort_rx.clone()),
+                None,
+            )
+            .await;
+
+        // Collect artifacts and logs
+        let collected_artifacts = artifacts.read().await.clone();
+        let collected_logs = execution_log.read().await.clone();
+
+        // Convert to WorkerOutput
+        Ok(self.loop_result_to_output(result, collected_artifacts, collected_logs))
     }
 
     async fn abort(&self) -> Result<()> {
-        // TODO: Implement abort signal to AgentLoop
-        //
-        // Implementation plan:
-        // 1. Set abort flag on the agent loop
-        // 2. Wait for graceful shutdown with timeout
-        // 3. Force terminate if needed
-
+        self.abort_tx
+            .send(true)
+            .map_err(|_| crate::error::AetherError::other("Abort channel closed"))?;
         Ok(())
     }
 
     async fn snapshot(&self) -> Result<StateSnapshot> {
-        // TODO: Implement actual workspace snapshot
-        //
-        // Implementation plan:
-        // 1. Walk the workspace directory
-        // 2. Compute SHA-256 hash of each file
-        // 3. Record file paths and hashes
+        let mut file_hashes = Vec::new();
 
-        Ok(StateSnapshot::new(self.workspace.clone()))
+        // Walk the workspace directory (limit depth to avoid huge scans)
+        let walker = walkdir::WalkDir::new(&self.workspace)
+            .max_depth(5)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                // Skip hidden directories (like .git)
+                !e.file_name()
+                    .to_str()
+                    .map(|s| s.starts_with('.'))
+                    .unwrap_or(false)
+            });
+
+        for entry in walker {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue, // Skip entries we can't read
+            };
+
+            if entry.file_type().is_file() {
+                match Self::hash_file(entry.path()).await {
+                    Ok(hash) => {
+                        file_hashes.push((entry.path().to_path_buf(), hash));
+                    }
+                    Err(_) => {
+                        // Skip files we can't read
+                        continue;
+                    }
+                }
+            }
+        }
+
+        Ok(StateSnapshot::with_files(self.workspace.clone(), file_hashes))
     }
 
     async fn restore(&self, snapshot: &StateSnapshot) -> Result<()> {
-        // TODO: Implement actual workspace restoration
-        //
-        // Implementation plan:
-        // 1. Compare current state with snapshot
-        // 2. Delete files not in snapshot
-        // 3. Restore modified files from backup or git
-        // 4. Verify final state matches snapshot hashes
-
-        // For now, just verify workspace matches
+        // Verify workspace matches
         if snapshot.workspace != self.workspace {
             return Err(crate::error::AetherError::other(format!(
                 "Snapshot workspace {} does not match worker workspace {}",
                 snapshot.workspace.display(),
                 self.workspace.display()
             )));
+        }
+
+        // For now, we only verify the state matches
+        // Full restoration would require storing file contents or using git
+        //
+        // TODO: Implement full restoration via:
+        // 1. Git-based restoration (git checkout)
+        // 2. Backup file storage
+        // 3. Copy-on-write snapshots
+
+        let current_snapshot = self.snapshot().await?;
+
+        // Check for files that have been modified
+        for (path, expected_hash) in &snapshot.file_hashes {
+            if let Some(current_hash) = current_snapshot.get_file_hash(path) {
+                if current_hash != expected_hash {
+                    tracing::warn!(
+                        "File {} has been modified (expected {}, got {})",
+                        path.display(),
+                        expected_hash,
+                        current_hash
+                    );
+                }
+            } else {
+                tracing::warn!("File {} no longer exists", path.display());
+            }
+        }
+
+        // Check for new files created after snapshot
+        for (path, _) in &current_snapshot.file_hashes {
+            if !snapshot.contains_file(path) {
+                tracing::info!("New file created after snapshot: {}", path.display());
+            }
         }
 
         Ok(())
@@ -341,10 +721,7 @@ impl Worker for MockWorker {
             output.steps_taken = 1;
             Ok(output)
         } else {
-            let mut output = WorkerOutput::failed(format!(
-                "Mock failure for: {}",
-                instruction
-            ));
+            let mut output = WorkerOutput::failed(format!("Mock failure for: {}", instruction));
             output.tokens_consumed = self.tokens_per_call;
             output.steps_taken = 1;
             Ok(output)
@@ -407,65 +784,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_agent_loop_worker_stub() {
-        let worker = AgentLoopWorker::new(PathBuf::from("/workspace"));
-
-        let output = worker.execute("test instruction", None).await.unwrap();
-
-        assert!(matches!(
-            output.final_state,
-            crate::poe::types::WorkerState::Completed { .. }
-        ));
-        assert_eq!(output.tokens_consumed, 100);
-        assert_eq!(output.steps_taken, 1);
-    }
-
-    #[tokio::test]
-    async fn test_agent_loop_worker_with_previous_failure() {
-        let worker = AgentLoopWorker::new(PathBuf::from("/workspace"));
-
-        let output = worker
-            .execute("retry instruction", Some("previous error"))
-            .await
-            .unwrap();
-
-        match &output.final_state {
-            crate::poe::types::WorkerState::Completed { summary } => {
-                assert!(summary.contains("retry instruction"));
-                assert!(summary.contains("previous error"));
-            }
-            _ => panic!("Expected Completed state"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_agent_loop_worker_snapshot() {
-        let worker = AgentLoopWorker::new(PathBuf::from("/workspace"));
-
-        let snapshot = worker.snapshot().await.unwrap();
-
-        assert_eq!(snapshot.workspace, PathBuf::from("/workspace"));
-    }
-
-    #[tokio::test]
-    async fn test_agent_loop_worker_restore_matching_workspace() {
-        let worker = AgentLoopWorker::new(PathBuf::from("/workspace"));
-        let snapshot = StateSnapshot::new(PathBuf::from("/workspace"));
-
-        // Should succeed when workspace matches
-        assert!(worker.restore(&snapshot).await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_agent_loop_worker_restore_mismatched_workspace() {
-        let worker = AgentLoopWorker::new(PathBuf::from("/workspace"));
-        let snapshot = StateSnapshot::new(PathBuf::from("/different-workspace"));
-
-        // Should fail when workspace doesn't match
-        assert!(worker.restore(&snapshot).await.is_err());
-    }
-
-    #[tokio::test]
     async fn test_mock_worker_success() {
         let worker = MockWorker::new().with_tokens(200);
 
@@ -517,5 +835,66 @@ mod tests {
 
         let snapshot = worker.snapshot().await.unwrap();
         assert!(worker.restore(&snapshot).await.is_ok());
+    }
+
+    #[test]
+    fn test_poe_callback_extract_file_path() {
+        let args = serde_json::json!({
+            "path": "/tmp/test.txt"
+        });
+        assert_eq!(
+            PoeLoopCallback::extract_file_path(&args),
+            Some(PathBuf::from("/tmp/test.txt"))
+        );
+
+        let args2 = serde_json::json!({
+            "file_path": "/tmp/other.rs"
+        });
+        assert_eq!(
+            PoeLoopCallback::extract_file_path(&args2),
+            Some(PathBuf::from("/tmp/other.rs"))
+        );
+
+        let args3 = serde_json::json!({
+            "unrelated": "value"
+        });
+        assert_eq!(PoeLoopCallback::extract_file_path(&args3), None);
+    }
+
+    #[test]
+    fn test_poe_callback_change_type_from_tool() {
+        let args = serde_json::json!({});
+
+        assert!(matches!(
+            PoeLoopCallback::change_type_from_tool("write_file", &args),
+            ChangeType::Created
+        ));
+        assert!(matches!(
+            PoeLoopCallback::change_type_from_tool("edit_file", &args),
+            ChangeType::Modified
+        ));
+        assert!(matches!(
+            PoeLoopCallback::change_type_from_tool("delete_file", &args),
+            ChangeType::Deleted
+        ));
+
+        // With operation field
+        let args_delete = serde_json::json!({
+            "operation": "delete"
+        });
+        assert!(matches!(
+            PoeLoopCallback::change_type_from_tool("file_ops", &args_delete),
+            ChangeType::Deleted
+        ));
+    }
+
+    #[test]
+    fn test_poe_callback_compute_hash() {
+        let hash = PoeLoopCallback::compute_hash("hello world");
+        // SHA-256 of "hello world"
+        assert_eq!(
+            hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
     }
 }
