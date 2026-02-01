@@ -15,17 +15,14 @@
 
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::Arc;
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::dispatcher::ToolDefinition;
 use crate::error::{AetherError, Result};
-use crate::tools::server::AetherToolServer;
-use crate::tools::traits::AetherToolDyn;
+use crate::tools::{AetherToolDyn, AetherToolServer};
 
 use super::tool_generator::{GeneratedToolDefinition, ToolGenerator};
 
@@ -274,7 +271,7 @@ impl ToolTester {
             "Executing tool for self-test"
         );
 
-        let child = tokio::process::Command::new(cmd)
+        let mut child = tokio::process::Command::new(cmd)
             .args(&args)
             .current_dir(package_dir)
             .stdin(Stdio::piped())
@@ -284,7 +281,7 @@ impl ToolTester {
             .map_err(|e| format!("Failed to spawn process: {}", e))?;
 
         // Write input to stdin
-        let mut stdin = child.stdin.ok_or("Failed to get stdin")?;
+        let mut stdin = child.stdin.take().ok_or("Failed to get stdin")?;
         tokio::io::AsyncWriteExt::write_all(&mut stdin, input_json.as_bytes())
             .await
             .map_err(|e| format!("Failed to write to stdin: {}", e))?;
@@ -400,7 +397,7 @@ impl AetherToolDyn for SubprocessTool {
                 }
             };
 
-            let child = tokio::process::Command::new(cmd)
+            let mut child = tokio::process::Command::new(cmd)
                 .args(&cmd_args)
                 .current_dir(&self.package_dir)
                 .stdin(Stdio::piped())
@@ -412,7 +409,7 @@ impl AetherToolDyn for SubprocessTool {
                     suggestion: None,
                 })?;
 
-            let mut stdin = child.stdin.ok_or_else(|| AetherError::Other {
+            let mut stdin = child.stdin.take().ok_or_else(|| AetherError::Other {
                 message: "Failed to get stdin".to_string(),
                 suggestion: None,
             })?;

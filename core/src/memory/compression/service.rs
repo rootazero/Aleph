@@ -13,6 +13,7 @@ use super::signal_detector::{CompressionPriority, SignalDetector};
 use crate::error::AetherError;
 use crate::memory::context::{CompressionResult, CompressionSession};
 use crate::memory::database::VectorDatabase;
+use crate::memory::graph::GraphStore;
 use crate::memory::smart_embedder::SmartEmbedder;
 use crate::providers::AiProvider;
 use std::sync::Arc;
@@ -53,6 +54,7 @@ pub struct CompressionService {
     config: CompressionConfig,
     provider_name: String,
     signal_detector: SignalDetector,
+    graph_store: GraphStore,
 }
 
 impl CompressionService {
@@ -74,6 +76,8 @@ impl CompressionService {
 
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
 
+        let graph_store = GraphStore::new(Arc::clone(&database));
+
         Self {
             database,
             extractor,
@@ -82,6 +86,7 @@ impl CompressionService {
             config,
             provider_name,
             signal_detector: SignalDetector::new(),
+            graph_store,
         }
     }
 
@@ -151,6 +156,9 @@ impl CompressionService {
                         content = %fact.content,
                         "Stored compressed fact"
                     );
+                    if let Err(e) = self.graph_store.update_from_fact(&fact, &memories).await {
+                        tracing::warn!(error = %e, fact_id = %fact.id, "Failed to update graph from fact");
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
