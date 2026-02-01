@@ -532,6 +532,10 @@ impl UnifiedTool {
                 let id = format!("custom:{}", def.name);
                 (ToolSource::Custom { rule_index: 0 }, id)
             }
+            ToolCategory::GeneratedSkill => {
+                let id = format!("generated:{}", def.name);
+                (ToolSource::Custom { rule_index: 0 }, id)
+            }
         };
 
         let icon = Self::icon_for_category(def.category);
@@ -616,6 +620,7 @@ impl UnifiedTool {
             ToolCategory::Skills => &policy.skill_fallback,
             ToolCategory::Mcp => &policy.mcp_fallback,
             ToolCategory::Custom => &policy.custom_fallback,
+            ToolCategory::GeneratedSkill => &policy.custom_fallback,
         };
 
         // Convert fallback string to ToolSafetyLevel

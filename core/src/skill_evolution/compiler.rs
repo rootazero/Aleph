@@ -142,9 +142,9 @@ impl SkillCompiler {
 
         // Configure git if auto-commit is enabled
         if config.auto_commit {
-            let mut git = GitCommitter::new(&skills_dir);
+            let mut git = GitCommitter::new(skills_dir.to_string_lossy().to_string());
             if config.auto_push {
-                git = git.with_auto_push();
+                git = git.with_auto_push(true);
                 if !config.remote.is_empty() {
                     git = git.with_remote(&config.remote);
                 }
@@ -167,7 +167,7 @@ impl SkillCompiler {
     /// Enable git auto-commit.
     pub fn with_auto_commit(mut self) -> Self {
         let skills_dir = self.generator.skills_dir();
-        self.git = Some(GitCommitter::new(skills_dir));
+        self.git = Some(GitCommitter::new(skills_dir.to_string_lossy().to_string()));
         self
     }
 
@@ -261,7 +261,7 @@ impl SkillCompiler {
 
         // Step 3: Git commit (if configured)
         let (committed, commit_hash) = if let Some(ref git) = self.git {
-            match git.commit_skill(&skill_id) {
+            match git.commit_skill(&file_path, &skill_id) {
                 Ok(CommitResult::Committed { commit_hash, .. }) => (true, Some(commit_hash)),
                 Ok(CommitResult::NothingToCommit) => (false, None),
                 Ok(CommitResult::Failed { reason }) => {
@@ -352,7 +352,7 @@ impl SkillCompiler {
 
         // Git commit
         let (committed, commit_hash) = if let Some(ref git) = self.git {
-            match git.commit_skill(&skill_id) {
+            match git.commit_skill(&file_path, &skill_id) {
                 Ok(CommitResult::Committed { commit_hash, .. }) => (true, Some(commit_hash)),
                 _ => (false, None),
             }
