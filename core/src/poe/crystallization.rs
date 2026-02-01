@@ -304,12 +304,15 @@ pub struct CrystallizerWorker {
 impl CrystallizerWorker {
     /// Run the worker, processing records until the channel is closed.
     ///
-    /// This should be spawned on a dedicated task:
+    /// Because `EvolutionTracker` contains `rusqlite::Connection` which is not `Send`,
+    /// this method is synchronous and should be spawned with `spawn_blocking`:
+    ///
     /// ```rust,ignore
-    /// tokio::spawn(worker.run(tracker));
+    /// tokio::task::spawn_blocking(move || worker.run_blocking(tracker));
     /// ```
-    pub async fn run(mut self, tracker: EvolutionTracker) {
-        while let Some(record) = self.receiver.recv().await {
+    pub fn run_blocking(mut self, tracker: EvolutionTracker) {
+        // Use blocking recv since we're in a blocking context
+        while let Some(record) = self.receiver.blocking_recv() {
             if let Err(e) = tracker.log_execution(&record.execution) {
                 error!(
                     skill_id = %record.execution.skill_id,
@@ -794,11 +797,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_channel_crystallizer_with_worker() {
-        let tracker = EvolutionTracker::in_memory().expect("Failed to create tracker");
         let (crystallizer, worker) = ChannelCrystallizer::new();
 
-        // Spawn the worker
-        let worker_handle = tokio::spawn(worker.run(tracker));
+        // Spawn the worker using spawn_blocking
+        // EvolutionTracker must be created inside the spawn_blocking closure
+        // because rusqlite::Connection is !Send + !Sync
+        let worker_handle = tokio::task::spawn_blocking(move || {
+            let tracker = EvolutionTracker::in_memory().expect("Failed to create tracker");
+            worker.run_blocking(tracker);
+        });
 
         // Record some experiences
         let task = create_test_task();
