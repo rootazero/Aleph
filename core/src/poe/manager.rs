@@ -18,12 +18,15 @@
 //!    f. Otherwise -> retry with failure feedback
 //! 3. If loop exits -> return BudgetExhausted
 
+use std::sync::Arc;
+use std::time::Instant;
+
 use crate::error::Result;
 use crate::poe::budget::PoeBudget;
+use crate::poe::crystallization::ExperienceRecorder;
 use crate::poe::types::{PoeOutcome, PoeTask, Verdict, WorkerOutput, WorkerState};
 use crate::poe::validation::CompositeValidator;
 use crate::poe::worker::Worker;
-use std::sync::Arc;
 
 // ============================================================================
 // Validation Callback
@@ -139,6 +142,8 @@ pub struct PoeManager<W: Worker> {
     config: PoeConfig,
     /// Optional callback for validation events
     validation_callback: Option<ValidationCallback>,
+    /// Optional recorder for crystallizing experiences
+    recorder: Option<Arc<dyn ExperienceRecorder>>,
 }
 
 impl<W: Worker> PoeManager<W> {
@@ -155,7 +160,25 @@ impl<W: Worker> PoeManager<W> {
             validator,
             config,
             validation_callback: None,
+            recorder: None,
         }
+    }
+
+    /// Set the experience recorder for crystallizing POE executions.
+    ///
+    /// When a recorder is configured, all POE outcomes (success, failure,
+    /// and strategy switches) are recorded to the skill evolution system for
+    /// future learning and pattern recognition.
+    ///
+    /// Use `ChannelCrystallizer` for async-safe recording, or `NoOpRecorder`
+    /// to disable recording.
+    ///
+    /// # Arguments
+    ///
+    /// * `recorder` - The recorder to use for crystallizing experiences
+    pub fn with_recorder(mut self, recorder: Arc<dyn ExperienceRecorder>) -> Self {
+        self.recorder = Some(recorder);
+        self
     }
 
     /// Set a callback to receive validation events during execution.
@@ -195,12 +218,16 @@ impl<W: Worker> PoeManager<W> {
     /// * `PoeOutcome::StrategySwitch` - Stuck detected, suggesting alternative approach
     /// * `PoeOutcome::BudgetExhausted` - All retries consumed without success
     pub async fn execute(&self, task: PoeTask) -> Result<PoeOutcome> {
+        // Track execution start time for crystallization
+        let start_time = Instant::now();
+
         // Create budget from task manifest and config
         let mut budget = PoeBudget::new(task.manifest.max_attempts, self.config.max_tokens);
 
         // Track the last failure for retry feedback
         let mut previous_failure: Option<String> = None;
         let mut last_verdict: Option<Verdict> = None;
+        let mut last_output: Option<WorkerOutput> = None;
 
         // Main P->O->E loop
         while !budget.exhausted() {
@@ -234,7 +261,9 @@ impl<W: Worker> PoeManager<W> {
 
             // Check for success
             if verdict.passed {
-                return Ok(PoeOutcome::Success(verdict));
+                let outcome = PoeOutcome::Success(verdict);
+                self.record_experience(&task, &outcome, &output, start_time);
+                return Ok(outcome);
             }
 
             // Check for stuck (no progress over window)
@@ -244,19 +273,22 @@ impl<W: Worker> PoeManager<W> {
                     .clone()
                     .unwrap_or_else(|| "Try a different approach or break down the task".into());
 
-                return Ok(PoeOutcome::StrategySwitch {
+                let outcome = PoeOutcome::StrategySwitch {
                     reason: format!(
                         "No progress over {} attempts. Best distance score: {:.2}",
                         self.config.stuck_window,
                         budget.best_score().unwrap_or(1.0)
                     ),
                     suggestion,
-                });
+                };
+                self.record_experience(&task, &outcome, &output, start_time);
+                return Ok(outcome);
             }
 
             // Prepare for retry
             previous_failure = Some(self.build_failure_feedback(&verdict, &output));
             last_verdict = Some(verdict);
+            last_output = Some(output);
         }
 
         // Budget exhausted
@@ -264,10 +296,34 @@ impl<W: Worker> PoeManager<W> {
             .map(|v| v.reason)
             .unwrap_or_else(|| "No attempts were made".to_string());
 
-        Ok(PoeOutcome::BudgetExhausted {
+        let outcome = PoeOutcome::BudgetExhausted {
             attempts: budget.current_attempt,
             last_error,
-        })
+        };
+
+        // Record even budget exhaustion as a learning experience
+        if let Some(ref output) = last_output {
+            self.record_experience(&task, &outcome, output, start_time);
+        }
+
+        Ok(outcome)
+    }
+
+    /// Record an experience to the skill evolution system.
+    ///
+    /// This is called after every POE execution to enable learning from
+    /// both successes and failures. The recorder handles the actual
+    /// storage asynchronously.
+    fn record_experience(
+        &self,
+        task: &PoeTask,
+        outcome: &PoeOutcome,
+        output: &WorkerOutput,
+        start_time: Instant,
+    ) {
+        if let Some(ref recorder) = self.recorder {
+            recorder.record_with_timing(task, outcome, output, start_time);
+        }
     }
 
     /// Build a retry prompt that incorporates the original instruction and failure feedback.

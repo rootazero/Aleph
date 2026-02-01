@@ -51,7 +51,14 @@
 //! - [`AgentLoopWorker`]: Worker that integrates with AgentLoop
 //! - [`StateSnapshot`]: Workspace state for rollback
 //!
-//! ### Experience (Future)
+//! ### Experience Crystallization
+//! - [`ExperienceRecorder`]: Trait for recording execution experiences
+//! - [`ChannelCrystallizer`]: Send+Sync crystallizer using channels for async safety
+//! - [`CrystallizerWorker`]: Background worker that writes to EvolutionTracker
+//! - [`NoOpRecorder`]: No-op implementation for when crystallization is disabled
+//! - [`ExperienceCrystallizer`]: Direct crystallizer (not Send, use ChannelCrystallizer in async)
+//!
+//! ### Experience Types
 //! - [`Experience`]: Crystallized experience from past execution
 //! - [`TaskPattern`]: Pattern that matches similar tasks
 //! - [`SolutionPath`]: Solution path that worked
@@ -97,6 +104,7 @@
 //! ```
 
 pub mod budget;
+pub mod crystallization;
 pub mod manager;
 pub mod types;
 pub mod validation;
@@ -130,6 +138,12 @@ pub use validation::{CompositeValidator, HardValidator, SemanticValidator};
 
 // Worker abstraction
 pub use worker::{AgentLoopWorker, StateSnapshot, Worker};
+
+// Experience crystallization
+pub use crystallization::{
+    ChannelCrystallizer, CrystallizerWorker, ExperienceCrystallizer,
+    ExperienceRecorder, NoOpRecorder,
+};
 
 // Integration tests
 #[cfg(test)]
