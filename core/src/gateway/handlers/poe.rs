@@ -26,7 +26,8 @@ use tracing::{debug, error, info, warn};
 use super::super::event_bus::GatewayEventBus;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::poe::{
-    CompositeValidator, PoeConfig, PoeManager, PoeOutcome, PoeTask, SuccessManifest, Worker,
+    CompositeValidator, PoeConfig, PoeManager, PoeOutcome, PoeTask, SuccessManifest,
+    ValidationCallback, ValidationEvent, Worker,
 };
 
 // ============================================================================
@@ -191,7 +192,6 @@ struct PoeStepEvent {
 }
 
 /// Event emitted after validation
-#[allow(dead_code)] // Reserved for future step-level event emission
 #[derive(Debug, Clone, Serialize)]
 struct PoeValidationEvent {
     pub task_id: String,
@@ -535,8 +535,37 @@ async fn execute_poe_task<W: Worker + 'static>(
         }),
     );
 
-    // Create manager and execute
-    let manager = PoeManager::new(worker, validator, config);
+    // Create validation callback for emitting poe.validation events
+    let validation_callback: ValidationCallback = {
+        let event_bus = event_bus.clone();
+        let task_id = task_id.clone();
+        Arc::new(move |event: ValidationEvent| {
+            if stream {
+                let validation_event = PoeValidationEvent {
+                    task_id: task_id.clone(),
+                    attempt: event.attempt,
+                    passed: event.passed,
+                    distance_score: event.distance_score,
+                    reason: event.reason,
+                };
+                let notification = JsonRpcRequest::notification(
+                    "poe.validation",
+                    Some(json!({
+                        "topic": "poe.validation",
+                        "data": validation_event,
+                        "timestamp": Utc::now().timestamp_millis()
+                    })),
+                );
+                if let Ok(json) = serde_json::to_string(&notification) {
+                    event_bus.publish(json);
+                }
+            }
+        })
+    };
+
+    // Create manager with validation callback and execute
+    let manager = PoeManager::new(worker, validator, config)
+        .with_validation_callback(validation_callback);
 
     // Execute with abort check
     let outcome = tokio::select! {

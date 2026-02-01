@@ -23,6 +23,27 @@ use crate::poe::budget::PoeBudget;
 use crate::poe::types::{PoeOutcome, PoeTask, Verdict, WorkerOutput, WorkerState};
 use crate::poe::validation::CompositeValidator;
 use crate::poe::worker::Worker;
+use std::sync::Arc;
+
+// ============================================================================
+// Validation Callback
+// ============================================================================
+
+/// Data passed to validation callback after each validation attempt.
+#[derive(Debug, Clone)]
+pub struct ValidationEvent {
+    /// Current attempt number (1-indexed)
+    pub attempt: u8,
+    /// Whether validation passed
+    pub passed: bool,
+    /// Distance score (0.0 = perfect, 1.0 = complete failure)
+    pub distance_score: f32,
+    /// Reason for the verdict
+    pub reason: String,
+}
+
+/// Callback type for receiving validation events during POE execution.
+pub type ValidationCallback = Arc<dyn Fn(ValidationEvent) + Send + Sync>;
 
 // ============================================================================
 // PoeConfig
@@ -116,6 +137,8 @@ pub struct PoeManager<W: Worker> {
     validator: CompositeValidator,
     /// Configuration for budget and stuck detection
     config: PoeConfig,
+    /// Optional callback for validation events
+    validation_callback: Option<ValidationCallback>,
 }
 
 impl<W: Worker> PoeManager<W> {
@@ -131,7 +154,21 @@ impl<W: Worker> PoeManager<W> {
             worker,
             validator,
             config,
+            validation_callback: None,
         }
+    }
+
+    /// Set a callback to receive validation events during execution.
+    ///
+    /// The callback is invoked after each validation attempt with details
+    /// about the attempt number, pass/fail status, and distance score.
+    ///
+    /// # Arguments
+    ///
+    /// * `callback` - Function to call after each validation
+    pub fn with_validation_callback(mut self, callback: ValidationCallback) -> Self {
+        self.validation_callback = Some(callback);
+        self
     }
 
     /// Get a reference to the worker.
@@ -184,6 +221,16 @@ impl<W: Worker> PoeManager<W> {
 
             // Record attempt in budget
             budget.record_attempt(output.tokens_consumed, verdict.distance_score);
+
+            // Emit validation event via callback
+            if let Some(callback) = &self.validation_callback {
+                callback(ValidationEvent {
+                    attempt: budget.current_attempt,
+                    passed: verdict.passed,
+                    distance_score: verdict.distance_score,
+                    reason: verdict.reason.clone(),
+                });
+            }
 
             // Check for success
             if verdict.passed {

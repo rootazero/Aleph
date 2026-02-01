@@ -107,7 +107,7 @@ pub mod worker;
 pub use budget::{BudgetStatus, PoeBudget};
 
 // Manager and configuration
-pub use manager::{PoeConfig, PoeManager};
+pub use manager::{PoeConfig, PoeManager, ValidationCallback, ValidationEvent};
 
 // Core types
 pub use types::{
