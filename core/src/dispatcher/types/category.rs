@@ -7,12 +7,13 @@ use std::fmt;
 
 /// Tool category for UI grouping and filtering
 ///
-/// Tools are classified into 5 categories based on their source:
+/// Tools are classified into 6 categories based on their source:
 /// - **Builtin**: Built-in rig-core tools (search, web_fetch, youtube)
 /// - **Native**: Legacy native tools (deprecated)
 /// - **Skills**: User-configured skills (instruction injection)
 /// - **Mcp**: MCP server tools (dynamically loaded)
 /// - **Custom**: User-defined custom tools
+/// - **GeneratedSkill**: Auto-generated from skill evolution (Skill Compiler)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolCategory {
@@ -27,6 +28,8 @@ pub enum ToolCategory {
     Mcp,
     /// User-defined custom tools (via UI settings)
     Custom,
+    /// Auto-generated tools from skill evolution (Skill Compiler)
+    GeneratedSkill,
 }
 
 impl ToolCategory {
@@ -39,6 +42,7 @@ impl ToolCategory {
             ToolCategory::Skills => "Skills",
             ToolCategory::Mcp => "MCP",
             ToolCategory::Custom => "Custom",
+            ToolCategory::GeneratedSkill => "Generated",
         }
     }
 
@@ -51,6 +55,7 @@ impl ToolCategory {
             ToolCategory::Skills => "sparkles",
             ToolCategory::Mcp => "server.rack",
             ToolCategory::Custom => "slider.horizontal.3",
+            ToolCategory::GeneratedSkill => "gearshape.2.fill",
         }
     }
 }

@@ -1,12 +1,12 @@
 ## 1. Implementation
-- [ ] 1.1 Add compiler config section (thresholds, enable flags, tool generation)
-- [ ] 1.2 Wire POE crystallization to log executions into EvolutionTracker
-- [ ] 1.3 Implement candidate detection and suggestion generation pipeline
-- [ ] 1.4 Implement user approval workflow (Suggestion/Question) with preview
-- [ ] 1.5 Generate SKILL.md on approval and reload SkillsRegistry
-- [ ] 1.6 Implement tool-backed skill generation (tool_definition + script)
-- [ ] 1.7 Add tool self-test and registration in ToolServer
-- [ ] 1.8 Add safety gating and first-run confirmation for generated tools
-- [ ] 1.9 Persist compiler status (last_run, last_suggestion)
-- [ ] 1.10 Add unit tests and manual test checklist
-- [ ] 1.11 Update docs (skills + POE + config)
+- [x] 1.1 Add compiler config section (thresholds, enable flags, tool generation)
+- [x] 1.2 Wire POE crystallization to log executions into EvolutionTracker
+- [x] 1.3 Implement candidate detection and suggestion generation pipeline
+- [x] 1.4 Implement user approval workflow (Suggestion/Question) with preview
+- [x] 1.5 Generate SKILL.md on approval and reload SkillsRegistry
+- [x] 1.6 Implement tool-backed skill generation (tool_definition + script)
+- [x] 1.7 Add tool self-test and registration in ToolServer
+- [x] 1.8 Add safety gating and first-run confirmation for generated tools
+- [x] 1.9 Persist compiler status (last_run, last_suggestion)
+- [x] 1.10 Add unit tests and manual test checklist
+- [x] 1.11 Update docs (skills + POE + config)

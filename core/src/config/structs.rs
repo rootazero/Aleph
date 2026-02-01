@@ -82,6 +82,9 @@ pub struct Config {
     /// Sub-agent synchronization configuration
     #[serde(default)]
     pub subagent: SubAgentConfig,
+    /// Skill evolution configuration (Skill Compiler - Phase 10)
+    #[serde(default)]
+    pub evolution: EvolutionConfig,
 }
 
 // =============================================================================
@@ -166,6 +169,7 @@ impl Default for Config {
             generation: GenerationConfig::default(),
             orchestrator: OrchestratorConfig::default(),
             subagent: SubAgentConfig::default(),
+            evolution: EvolutionConfig::default(),
         }
     }
 }
