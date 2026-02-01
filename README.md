@@ -79,6 +79,16 @@ It connects through a unified Gateway to multiple messaging channels (WhatsApp, 
 - **Native-First**: 100% native code — Rust core with Swift UI, zero webviews
 - **Polymorphic**: One soul, infinite forms — adapts to any task, any channel, any device
 
+### Agent Design: POE Architecture
+
+Aether's Agent core implements the **POE (Principle-Operation-Evaluation)** architecture with a dual-system cognitive model:
+
+- **First Principles** — Define success contracts before execution
+- **Heuristic Thinking** — System 1 (fast intuition) + System 2 (deep reasoning)
+- **Self-Learning** — Crystallize successful experiences for future reuse
+
+See: [Agent Design Philosophy](docs/AGENT_DESIGN_PHILOSOPHY.md)
+
 ## Features
 
 ### Core Capabilities

@@ -30,7 +30,7 @@ pub enum ExecAsk {
 }
 
 /// Root configuration file for exec approvals
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecApprovalsFile {
     /// Config version (currently 1)
     #[serde(default = "default_version")]
@@ -51,6 +51,17 @@ pub struct ExecApprovalsFile {
 
 fn default_version() -> u8 {
     1
+}
+
+impl Default for ExecApprovalsFile {
+    fn default() -> Self {
+        Self {
+            version: default_version(),
+            socket: None,
+            defaults: None,
+            agents: HashMap::new(),
+        }
+    }
 }
 
 /// Socket configuration for approval communication
