@@ -282,7 +282,7 @@ mod tests {
         fn execute<'a>(
             &'a self,
             _ctx: &'a TaskContext,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Output>> + Send + 'a>>
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<Self::Output>> + Send + 'a>>
         {
             let attempts = self.attempts.clone();
             let fail_until = self.fail_until;
@@ -302,7 +302,7 @@ mod tests {
         fn fallback<'a>(
             &'a self,
             _ctx: &'a TaskContext,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Output>> + Send + 'a>>
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<Self::Output>> + Send + 'a>>
         {
             Box::pin(async { Ok("Fallback result".to_string()) })
         }

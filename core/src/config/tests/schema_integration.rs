@@ -408,7 +408,7 @@ fn test_schema_definitions_not_empty() {
     );
 
     // Each definition should have content
-    for (name, _def) in &schema.definitions {
+    for (name, _def) in schema.definitions.iter() {
         assert!(
             !name.is_empty(),
             "Definition name should not be empty"
