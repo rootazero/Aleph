@@ -170,7 +170,7 @@ csbindgen = "1.9"
 
 [[bin]]
 name = "aether-gateway"
-path = "src/bin/aether_gateway.rs"
+path = "src/bin/aether_gateway/main.rs"
 required-features = ["gateway"]
 
 [dev-dependencies]

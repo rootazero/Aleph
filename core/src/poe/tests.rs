@@ -475,14 +475,12 @@ async fn test_json_schema_validation_passes() {
     .await
     .unwrap();
 
+    // Note: This validator uses a simplified schema format, not standard JSON Schema.
+    // Keys are field names, values are expected types.
     let schema = r#"{
-        "type": "object",
-        "required": ["name", "version"],
-        "properties": {
-            "name": {"type": "string"},
-            "version": {"type": "string"},
-            "count": {"type": "integer"}
-        }
+        "name": "string",
+        "version": "string",
+        "count": "number"
     }"#;
 
     let manifest = SuccessManifest::new("json-task", "Validate JSON config")
@@ -512,12 +510,14 @@ async fn test_json_schema_validation_fails() {
     let dir = tempdir().unwrap();
     let json_path = dir.path().join("bad.json");
 
-    // Missing required "version" field
+    // Missing required "version" field - validator expects both fields
     fs::write(&json_path, r#"{"name": "test"}"#).await.unwrap();
 
+    // Note: This validator uses a simplified schema format where keys are required field names
+    // and values are expected types. Missing keys will cause validation to fail.
     let schema = r#"{
-        "type": "object",
-        "required": ["name", "version"]
+        "name": "string",
+        "version": "string"
     }"#;
 
     let manifest = SuccessManifest::new("invalid-json-task", "Validate invalid JSON")
