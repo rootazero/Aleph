@@ -182,7 +182,7 @@ mod tests {
             &self,
             input: &str,
             system_prompt: Option<&str>,
-            _level: crate::thinking::ThinkLevel,
+            _level: crate::agents::thinking::ThinkLevel,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
         {
             self.process(input, system_prompt)
