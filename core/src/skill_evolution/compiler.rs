@@ -366,6 +366,12 @@ impl SkillCompiler {
         // Update stats
         self.total_compiled
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        self.last_compilation
+            .store(now, std::sync::atomic::Ordering::Relaxed);
 
         Ok(CompilationResult {
             skill_id,

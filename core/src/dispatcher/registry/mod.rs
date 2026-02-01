@@ -361,12 +361,12 @@ mod tests {
         let registry = ToolRegistry::new();
         registry.register_builtin_tools().await;
 
-        // Should register 4 builtin tools (2 generation + 2 skill reading)
-        assert_eq!(registry.count().await, 4);
+        // Should register 5 builtin tools (2 generation + 2 skill reading + snapshot)
+        assert_eq!(registry.count().await, 5);
 
         // Builtins should include generation tools
         let builtins = registry.list_builtin_tools().await;
-        assert_eq!(builtins.len(), 4);
+        assert_eq!(builtins.len(), 5);
 
         // Verify tool names
         let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
@@ -374,6 +374,7 @@ mod tests {
         assert!(names.contains(&"generate_speech"));
         assert!(names.contains(&"read_skill"));
         assert!(names.contains(&"list_skills"));
+        assert!(names.contains(&"snapshot_capture"));
     }
 
     #[tokio::test]
@@ -390,8 +391,8 @@ mod tests {
         registry.register_custom_commands(&rules).await;
 
         let roots = registry.list_root_commands().await;
-        // 4 builtin tools + 1 custom = 5
-        assert_eq!(roots.len(), 5);
+        // 5 builtin tools + 1 custom = 6
+        assert_eq!(roots.len(), 6);
 
         // First should be builtins (sorted by priority)
         assert!(roots.iter().any(|t| t.name == "generate_image"));
@@ -482,7 +483,7 @@ mod tests {
         registry.register_skills(&skills).await;
 
         let builtin = registry.list_by_source_type("Builtin").await;
-        assert_eq!(builtin.len(), 4); // 4 builtin tools
+        assert_eq!(builtin.len(), 5); // 5 builtin tools (2 generation + 2 skill reading + snapshot)
 
         let skill = registry.list_by_source_type("Skill").await;
         assert_eq!(skill.len(), 1);
