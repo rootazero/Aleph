@@ -750,6 +750,7 @@ mod tests {
 
         let preview = generator.preview(&suggestion);
         assert!(preview.contains("python"));
-        assert!(preview.contains("text_processor"));
+        // Preview shows the original suggested name (with hyphen)
+        assert!(preview.contains("text-processor"));
     }
 }
