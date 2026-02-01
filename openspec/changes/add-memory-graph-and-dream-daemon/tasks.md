@@ -1,0 +1,12 @@
+## 1. Implementation
+- [ ] 1.1 Define graph tables and migrations in memory.db (nodes, edges, aliases, memory_entities)
+- [ ] 1.2 Implement GraphStore API (upsert node/edge, alias resolution, context query)
+- [ ] 1.3 Integrate entity/relation extraction with existing memory ingestion/compression pipeline
+- [ ] 1.4 Add graph-assisted memory retrieval (entity disambiguation + filtering)
+- [ ] 1.5 Implement DreamDaemon scheduler (idle + daily window) with cancellation and budgets
+- [ ] 1.6 Implement Dream pipeline: clustering, summarization, graph update, decay
+- [ ] 1.7 Add Daily Insight storage + retrieval API/tool
+- [ ] 1.8 Add Dream status tracking (last_run_at, last_status, last_duration_ms)
+- [ ] 1.9 Add config fields for dreaming + decay policies
+- [ ] 1.10 Add unit tests and a manual test checklist
+- [ ] 1.11 Update docs (memory system + config reference)
