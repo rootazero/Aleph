@@ -188,13 +188,30 @@ impl PoeBudget {
             return false;
         }
 
-        // Calculate trend over the window
+        // Get the last `window` entropy values
+        let recent: Vec<f32> = self.entropy_history
+            .iter()
+            .rev()
+            .take(window)
+            .copied()
+            .collect();
+
+        // Calculate variance to detect oscillation/plateau
+        let mean: f32 = recent.iter().sum::<f32>() / recent.len() as f32;
+        let variance: f32 = recent.iter()
+            .map(|x| (x - mean).powi(2))
+            .sum::<f32>() / recent.len() as f32;
+
+        // Also check that we're not clearly improving
         let trend = self.entropy_trend(window);
 
-        // Stuck if trend is non-negative (not improving)
-        // A small epsilon accounts for floating-point precision
-        const EPSILON: f32 = 0.001;
-        trend >= -EPSILON
+        // Stuck if:
+        // 1. Low variance (oscillating around same value), AND
+        // 2. Not clearly improving (trend not significantly negative)
+        const VARIANCE_THRESHOLD: f32 = 0.01; // Low variance = stuck
+        const IMPROVING_THRESHOLD: f32 = -0.05; // Clear improvement threshold
+
+        variance < VARIANCE_THRESHOLD && trend >= IMPROVING_THRESHOLD
     }
 
     /// Record an attempt with its token consumption and distance score.
@@ -505,11 +522,13 @@ mod tests {
         budget.record_attempt(1000, 0.5);
         assert!(budget.is_stuck(3));
 
-        // Test with increasing entropy (also stuck - not improving)
+        // Test with slight oscillation (stuck - not making meaningful progress)
+        // Note: Increasing entropy is "Degrading", not "Stuck"
+        // "Stuck" specifically means oscillating without progress
         let mut budget2 = PoeBudget::new(10, 100_000);
-        budget2.record_attempt(1000, 0.3);
-        budget2.record_attempt(1000, 0.5);
-        budget2.record_attempt(1000, 0.7);
+        budget2.record_attempt(1000, 0.50);
+        budget2.record_attempt(1000, 0.51);
+        budget2.record_attempt(1000, 0.49);
         assert!(budget2.is_stuck(3));
     }
 
