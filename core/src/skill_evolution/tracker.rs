@@ -42,6 +42,28 @@ CREATE TABLE IF NOT EXISTS skill_metrics (
     first_used INTEGER NOT NULL,
     context_frequency TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS compiler_status (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pending_suggestions (
+    id TEXT PRIMARY KEY,
+    pattern_id TEXT NOT NULL,
+    suggested_name TEXT NOT NULL,
+    suggested_description TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    instructions_preview TEXT NOT NULL,
+    sample_contexts TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_suggestions_status ON pending_suggestions(status);
 "#;
 
 /// Tracker for skill executions and metrics
@@ -390,6 +412,215 @@ impl EvolutionTracker {
         cache.insert(skill_id.to_string(), metrics);
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Compiler Status Methods
+    // =========================================================================
+
+    /// Save a compiler status value
+    pub fn save_status(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.write().map_err(|_| AetherError::Other {
+            message: "Failed to acquire database lock".to_string(),
+            suggestion: None,
+        })?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        conn.execute(
+            "INSERT INTO compiler_status (key, value, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3",
+            params![key, value, now],
+        )
+        .map_err(|e| AetherError::ConfigError {
+            message: format!("Failed to save status: {}", e),
+            suggestion: None,
+        })?;
+
+        Ok(())
+    }
+
+    /// Get a compiler status value
+    pub fn get_status(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.read().map_err(|_| AetherError::Other {
+            message: "Failed to acquire database lock".to_string(),
+            suggestion: None,
+        })?;
+
+        let result: Option<String> = conn
+            .query_row(
+                "SELECT value FROM compiler_status WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AetherError::ConfigError {
+                message: format!("Failed to get status: {}", e),
+                suggestion: None,
+            })?;
+
+        Ok(result)
+    }
+
+    /// Save the last run timestamp
+    pub fn save_last_run(&self) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.save_status("last_run", &now.to_string())
+    }
+
+    /// Get the last run timestamp
+    pub fn get_last_run(&self) -> Result<Option<i64>> {
+        match self.get_status("last_run")? {
+            Some(s) => Ok(s.parse().ok()),
+            None => Ok(None),
+        }
+    }
+
+    /// Save the total compiled count
+    pub fn save_total_compiled(&self, count: usize) -> Result<()> {
+        self.save_status("total_compiled", &count.to_string())
+    }
+
+    /// Get the total compiled count
+    pub fn get_total_compiled(&self) -> Result<usize> {
+        match self.get_status("total_compiled")? {
+            Some(s) => Ok(s.parse().unwrap_or(0)),
+            None => Ok(0),
+        }
+    }
+
+    /// Increment the total compiled count
+    pub fn increment_compiled(&self) -> Result<usize> {
+        let current = self.get_total_compiled()?;
+        let new_count = current + 1;
+        self.save_total_compiled(new_count)?;
+        Ok(new_count)
+    }
+
+    // =========================================================================
+    // Pending Suggestions Methods
+    // =========================================================================
+
+    /// Save a pending suggestion
+    pub fn save_suggestion(
+        &self,
+        id: &str,
+        suggestion: &super::types::SolidificationSuggestion,
+        status: &str,
+    ) -> Result<()> {
+        let conn = self.conn.write().map_err(|_| AetherError::Other {
+            message: "Failed to acquire database lock".to_string(),
+            suggestion: None,
+        })?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let sample_contexts_json =
+            serde_json::to_string(&suggestion.sample_contexts).unwrap_or_else(|_| "[]".to_string());
+
+        conn.execute(
+            "INSERT INTO pending_suggestions (id, pattern_id, suggested_name, suggested_description, confidence, instructions_preview, sample_contexts, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+             ON CONFLICT(id) DO UPDATE SET status = ?8, updated_at = ?9",
+            params![
+                id,
+                suggestion.pattern_id,
+                suggestion.suggested_name,
+                suggestion.suggested_description,
+                suggestion.confidence,
+                suggestion.instructions_preview,
+                sample_contexts_json,
+                status,
+                now,
+            ],
+        )
+        .map_err(|e| AetherError::ConfigError {
+            message: format!("Failed to save suggestion: {}", e),
+            suggestion: None,
+        })?;
+
+        Ok(())
+    }
+
+    /// Update suggestion status
+    pub fn update_suggestion_status(&self, id: &str, status: &str, notes: Option<&str>) -> Result<()> {
+        let conn = self.conn.write().map_err(|_| AetherError::Other {
+            message: "Failed to acquire database lock".to_string(),
+            suggestion: None,
+        })?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        conn.execute(
+            "UPDATE pending_suggestions SET status = ?2, updated_at = ?3, notes = ?4 WHERE id = ?1",
+            params![id, status, now, notes],
+        )
+        .map_err(|e| AetherError::ConfigError {
+            message: format!("Failed to update suggestion: {}", e),
+            suggestion: None,
+        })?;
+
+        Ok(())
+    }
+
+    /// Get pending suggestions count
+    pub fn get_pending_count(&self) -> Result<usize> {
+        let conn = self.conn.read().map_err(|_| AetherError::Other {
+            message: "Failed to acquire database lock".to_string(),
+            suggestion: None,
+        })?;
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pending_suggestions WHERE status = 'pending'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| AetherError::ConfigError {
+                message: format!("Failed to count suggestions: {}", e),
+                suggestion: None,
+            })?;
+
+        Ok(count as usize)
+    }
+
+    /// Delete old resolved suggestions (cleanup)
+    pub fn cleanup_old_suggestions(&self, max_age_days: u32) -> Result<usize> {
+        let conn = self.conn.write().map_err(|_| AetherError::Other {
+            message: "Failed to acquire database lock".to_string(),
+            suggestion: None,
+        })?;
+
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - (max_age_days as i64 * 86400);
+
+        let deleted = conn
+            .execute(
+                "DELETE FROM pending_suggestions WHERE status != 'pending' AND updated_at < ?1",
+                params![cutoff],
+            )
+            .map_err(|e| AetherError::ConfigError {
+                message: format!("Failed to cleanup suggestions: {}", e),
+                suggestion: None,
+            })?;
+
+        Ok(deleted)
     }
 }
 

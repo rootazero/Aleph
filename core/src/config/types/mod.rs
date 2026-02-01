@@ -15,9 +15,11 @@
 //! - `dispatcher`: Dispatcher Layer settings (DispatcherConfigToml)
 //! - `agent`: Agent task orchestration settings (AgentConfigToml)
 //! - `orchestrator`: Three-Layer Control orchestrator settings (OrchestratorConfig, OrchestratorGuards)
+//! - `evolution`: Skill compiler settings (EvolutionConfig, SolidificationThresholds)
 
 pub mod agent;
 pub mod dispatcher;
+pub mod evolution;
 pub mod general;
 pub mod generation;
 pub mod memory;
@@ -36,6 +38,7 @@ pub mod video;
 // Users can still use `use crate::config::XXX` instead of `use crate::config::types::XXX`
 pub use agent::*;
 pub use dispatcher::*;
+pub use evolution::*;
 pub use general::*;
 pub use generation::*;
 pub use memory::*;
