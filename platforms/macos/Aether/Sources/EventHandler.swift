@@ -38,14 +38,12 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     // Accumulated text for streaming responses
     private var accumulatedText: String = ""
 
+    // Screen Recording permission toast cooldown
+    private var lastScreenRecordingToastAt: Date?
+    private let screenRecordingToastCooldown: TimeInterval = 600
+
     // Current tool being executed (for UI feedback)
     private var currentToolName: String?
-
-    // Check for multi-turn conversation mode
-    // Uses global function for thread-safe access from FFI callbacks
-    private var isInMultiTurnMode: Bool {
-        isMultiTurnModeActive()
-    }
 
     /// Check whether to use Gateway WebSocket instead of FFI
     /// Must be called from MainActor context
@@ -101,15 +99,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-
-            // Forward to MultiTurnCoordinator in multi-turn mode
-            if self.isInMultiTurnMode {
-                if MultiTurnCoordinator.shared.isProcessingPending {
-                    MultiTurnCoordinator.shared.handleThinking()
-                }
-                return
-            }
-
             self.haloWindow?.updateState(.processingWithAI(providerName: nil))
             self.haloWindow?.showAtCurrentPosition()
         }
@@ -123,15 +112,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-
-            // Forward to MultiTurnCoordinator in multi-turn mode
-            if self.isInMultiTurnMode {
-                if MultiTurnCoordinator.shared.isProcessingPending {
-                    MultiTurnCoordinator.shared.handleToolStart(toolName: toolName)
-                }
-                return
-            }
-
             // Show processing state with tool name
             self.haloWindow?.updateState(.processing(streamingText: "Using \(toolName)..."))
             self.haloWindow?.showAtCurrentPosition()
@@ -145,21 +125,36 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     func onToolResult(toolName: String, result: String) {
         print("[EventHandler] Tool result: \(toolName) - \(result.prefix(100))...")
         currentToolName = nil
+        handleSnapshotPermissionToast(toolName: toolName, result: result)
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-
-            // Forward to MultiTurnCoordinator in multi-turn mode
-            if self.isInMultiTurnMode {
-                if MultiTurnCoordinator.shared.isProcessingPending {
-                    MultiTurnCoordinator.shared.handleToolResult(toolName: toolName, result: result)
-                }
-                return
-            }
-
             // Update state to show tool completed
             self.haloWindow?.updateState(.processing(streamingText: "Completed: \(toolName)"))
         }
+    }
+
+    private func handleSnapshotPermissionToast(toolName: String, result: String) {
+        guard toolName == "snapshot_capture" else { return }
+        guard result.contains("SCREEN_RECORDING_REQUIRED") else { return }
+
+        let now = Date()
+        if let lastShown = lastScreenRecordingToastAt,
+           now.timeIntervalSince(lastShown) < screenRecordingToastCooldown {
+            return
+        }
+        lastScreenRecordingToastAt = now
+
+        showToast(
+            type: .warning,
+            title: L("permission.screen_recording.title"),
+            message: L("permission.screen_recording.description"),
+            autoDismiss: false,
+            actionTitle: L("permission.open_settings"),
+            onAction: {
+                PermissionChecker.openSystemSettings(for: .screenRecording)
+            }
+        )
     }
 
     /// Called for each streaming response chunk
@@ -169,24 +164,14 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         // Accumulate the incremental text
         accumulatedText += text
 
-        // Log in multi-turn mode for debugging
+        // Log for debugging on large chunks
         let isFirstOrLargeChange = text.count > 50
-        if isFirstOrLargeChange || isInMultiTurnMode {
-            print("[EventHandler] Stream chunk (delta): \(text.prefix(80))... (delta: \(text.count) chars, total: \(accumulatedText.count) chars, multiTurn: \(isInMultiTurnMode))")
+        if isFirstOrLargeChange {
+            print("[EventHandler] Stream chunk (delta): \(text.prefix(80))... (delta: \(text.count) chars, total: \(accumulatedText.count) chars)")
         }
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-
-            // Forward to MultiTurnCoordinator in multi-turn mode
-            if self.isInMultiTurnMode {
-                let isPending = MultiTurnCoordinator.shared.isProcessingPending
-                if isPending {
-                    MultiTurnCoordinator.shared.handleStreamChunk(text: self.accumulatedText)
-                }
-                return
-            }
-
             self.haloWindow?.updateState(.processing(streamingText: self.accumulatedText))
         }
     }
@@ -202,18 +187,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-
-            // Notify MultiTurnCoordinator if processing is pending
-            if MultiTurnCoordinator.shared.isProcessingPending {
-                MultiTurnCoordinator.shared.handleCompletion(response: response)
-                return
-            }
-
-            // Skip halo in multi-turn mode - conversation UI handles it
-            guard !self.isInMultiTurnMode else {
-                print("[EventHandler] Skipping completion state (multi-turn mode)")
-                return
-            }
 
             // Show success state then auto-hide
             self.haloWindow?.updateState(.success(message: nil))
@@ -235,15 +208,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-
-            // Notify MultiTurnCoordinator if processing is pending
-            if MultiTurnCoordinator.shared.isProcessingPending {
-                MultiTurnCoordinator.shared.handleError(message: message)
-                // Multi-turn mode shows error in conversation UI, no halo notification
-                return
-            }
-
-            // Show error notification even in multi-turn mode
+            // Show error notification
             self.showErrorNotification(message: message)
         }
     }
@@ -264,15 +229,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     func onAgentModeDetected(task: ExecutableTaskFfi) {
         print("[EventHandler] Agent mode detected: category=\(task.category), action=\(task.action), confidence=\(task.confidence)")
 
-        Task { @MainActor [weak self] in
-            guard let self = self else { return }
-            // Skip agent mode notification in multi-turn mode for now
-            // (multi-turn conversation UI will handle agent plans separately)
-            guard !self.isInMultiTurnMode else {
-                print("[EventHandler] Skipping agent mode notification (multi-turn mode)")
-                return
-            }
-
+        Task { @MainActor in
             // Log the detection for now
             // TODO: Integrate with AgentPlanView when AI returns __agent_plan__ JSON
             print("[EventHandler] Executable task: \(task.category) - \(task.action)")
@@ -376,9 +333,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 userInfo: ["sessionId": sessionId]
             )
 
-            // Skip Halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
-
             // Show processing state
             self.haloWindow?.updateState(.processingWithAI(providerName: L("halo.agentic_session")))
             self.haloWindow?.showAtCurrentPosition()
@@ -408,9 +362,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                     "toolName": toolName
                 ]
             )
-
-            // Skip Halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
 
             // Update Halo to show tool execution
             if self.isInAgenticSession {
@@ -442,6 +393,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         completedStepCount += 1
         let toolName = currentToolName ?? "tool"
         currentToolName = nil
+        handleSnapshotPermissionToast(toolName: toolName, result: output)
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
@@ -456,9 +408,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                     "output": String(output.prefix(500))
                 ]
             )
-
-            // Skip Halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
 
             // Update progress
             if self.isInAgenticSession && !self.currentPlanSteps.isEmpty {
@@ -501,9 +450,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Skip Halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
-
             // Show error in progress (if retryable, indicate retry)
             if self.isInAgenticSession {
                 let statusText = isRetryable ? "⟳ \(toolName) (retrying...)" : "✗ \(toolName)"
@@ -543,9 +489,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                     "status": status
                 ]
             )
-
-            // Skip Halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
 
             // Update Halo with iteration info
             if self.isInAgenticSession {
@@ -587,9 +530,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                     "steps": steps
                 ]
             )
-
-            // Skip Halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
 
             // Show plan progress view
             let stepProgress = steps.enumerated().map { index, description in
@@ -644,9 +584,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Skip Halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
-
             // Show success toast if we were tracking this session
             if wasInSession {
                 self.haloWindow?.updateState(.success(message: summary))
@@ -678,9 +615,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                     "agentId": agentId
                 ]
             )
-
-            // Skip Halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
 
             // Show sub-agent indicator in progress
             if self.isInAgenticSession {
@@ -718,9 +652,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Skip Halo in multi-turn mode
-            guard !self.isInMultiTurnMode else { return }
-
             // Update progress with sub-agent result
             if self.isInAgenticSession {
                 let statusIcon = success ? "✓" : "✗"
@@ -757,22 +688,19 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 return
             }
 
-            // Check if we're in multi-turn mode
-            if self.isInMultiTurnMode {
-                // In multi-turn mode, post notification for conversation UI to handle
-                NotificationCenter.default.post(
-                    name: .dagPlanConfirmationRequired,
-                    object: nil,
-                    userInfo: [
-                        "planId": planId,
-                        "planInfo": planInfo,
-                        "core": core
-                    ]
-                )
-            } else {
-                // In halo mode, show confirmation dialog
-                self.showPlanConfirmationDialogWithInfo(planId: planId, planInfo: planInfo, core: core)
-            }
+            // Post notification for UI components
+            NotificationCenter.default.post(
+                name: .dagPlanConfirmationRequired,
+                object: nil,
+                userInfo: [
+                    "planId": planId,
+                    "planInfo": planInfo,
+                    "core": core
+                ]
+            )
+
+            // Show confirmation dialog
+            self.showPlanConfirmationDialogWithInfo(planId: planId, planInfo: planInfo, core: core)
         }
     }
 
@@ -872,23 +800,20 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 return
             }
 
-            // Check if we're in multi-turn mode
-            if self.isInMultiTurnMode {
-                // In multi-turn mode, post notification for conversation UI to handle
-                NotificationCenter.default.post(
-                    name: .userInputRequested,
-                    object: nil,
-                    userInfo: [
-                        "requestId": requestId,
-                        "question": question,
-                        "options": options,
-                        "core": core
-                    ]
-                )
-            } else {
-                // In halo mode, show input dialog
-                self.showUserInputDialog(requestId: requestId, question: question, options: options, core: core)
-            }
+            // Post notification for UI components
+            NotificationCenter.default.post(
+                name: .userInputRequested,
+                object: nil,
+                userInfo: [
+                    "requestId": requestId,
+                    "question": question,
+                    "options": options,
+                    "core": core
+                ]
+            )
+
+            // Show input dialog
+            self.showUserInputDialog(requestId: requestId, question: question, options: options, core: core)
         }
     }
 
@@ -972,13 +897,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     // MARK: - Error Notification
 
     private func showErrorNotification(message: String) {
-        // Skip halo in multi-turn mode - just show notification
-        guard !isInMultiTurnMode else {
-            print("[EventHandler] Showing error notification (multi-turn mode)")
-            // Could show system notification here
-            return
-        }
-
         // Use toast notification in Halo
         Task { @MainActor [weak self] in
             guard let self = self else { return }
@@ -986,7 +904,8 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 type: .error,
                 title: L("error.aether"),
                 message: message,
-                autoDismiss: false
+                autoDismiss: false,
+                actionTitle: nil
             ))
 
             // Set dismiss callback
@@ -995,6 +914,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                     self?.haloWindow?.hide()
                 }
             }
+            self.haloWindow?.viewModel.callbacks.toastOnAction = nil
 
             // Show at screen center
             self.haloWindow?.showToastCentered()
@@ -1050,9 +970,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         let delta = event.delta
         let timestamp = event.timestamp
 
-        Task { @MainActor [weak self] in
-            guard let self = self else { return }
-
+        Task { @MainActor in
             let eventType = stringToEventType(eventTypeString)
 
             // Post notification for UI components
@@ -1069,21 +987,6 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                     "timestamp": timestamp
                 ]
             )
-
-            // Forward to MultiTurnCoordinator in multi-turn mode
-            if self.isInMultiTurnMode {
-                // Create a new event struct with copied data
-                let copiedEvent = PartUpdateEventFfi(
-                    sessionId: sessionId,
-                    partId: partId,
-                    partType: partType,
-                    eventType: eventType,
-                    partJson: partJson,
-                    delta: delta,
-                    timestamp: timestamp
-                )
-                MultiTurnCoordinator.shared.handlePartUpdate(event: copiedEvent)
-            }
         }
     }
 
@@ -1117,7 +1020,14 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     ///   - title: Toast title
     ///   - message: Toast message
     ///   - autoDismiss: Whether to auto-dismiss (default: true for info)
-    func showToast(type: ToastType, title: String, message: String, autoDismiss: Bool = true) {
+    func showToast(
+        type: ToastType,
+        title: String,
+        message: String,
+        autoDismiss: Bool = true,
+        actionTitle: String? = nil,
+        onAction: (() -> Void)? = nil
+    ) {
         print("[EventHandler] Showing toast: \(type) - \(title)")
 
         // Cancel any existing dismiss timer
@@ -1127,17 +1037,26 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             // Update Halo state to toast
-            let shouldAutoDismiss = autoDismiss && type == .info
+            let shouldAutoDismiss = autoDismiss && type == .info && actionTitle == nil
             self.haloWindow?.updateState(.toast(
                 type: type,
                 title: title,
                 message: message,
-                autoDismiss: shouldAutoDismiss
+                autoDismiss: shouldAutoDismiss,
+                actionTitle: actionTitle
             ))
 
             // Set dismiss callback
             self.haloWindow?.viewModel.callbacks.toastOnDismiss = { [weak self] in
                 self?.dismissToast()
+            }
+            if let onAction = onAction, actionTitle != nil {
+                self.haloWindow?.viewModel.callbacks.toastOnAction = { [weak self] in
+                    onAction()
+                    self?.dismissToast()
+                }
+            } else {
+                self.haloWindow?.viewModel.callbacks.toastOnAction = nil
             }
 
             // Show at screen center
