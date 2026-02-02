@@ -375,6 +375,90 @@ impl VectorDatabase {
         Ok(memories)
     }
 
+    /// Search memories by context, embedding similarity, and entity filter.
+    pub async fn search_memories_for_entity(
+        &self,
+        app_bundle_id: &str,
+        window_title: &str,
+        query_embedding: &[f32],
+        limit: u32,
+        node_id: &str,
+    ) -> Result<Vec<MemoryEntry>, AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let query_bytes = Self::serialize_embedding(query_embedding);
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                WITH vec_matches AS (
+                    SELECT rowid, distance
+                    FROM memories_vec
+                    WHERE embedding MATCH ?1
+                    ORDER BY distance
+                    LIMIT ?2
+                )
+                SELECT
+                    m.id, m.app_bundle_id, m.window_title, m.user_input, m.ai_output,
+                    m.embedding, m.timestamp, m.topic_id,
+                    1.0 / (1.0 + vm.distance) as similarity
+                FROM memories m
+                INNER JOIN vec_matches vm ON m.rowid = vm.rowid
+                INNER JOIN memory_entities me ON me.memory_id = m.id
+                WHERE me.node_id = ?3
+                  AND (?4 = '' OR m.app_bundle_id = ?4)
+                  AND (?5 = '' OR m.window_title = ?5)
+                ORDER BY vm.distance
+                LIMIT ?6
+                "#,
+            )
+            .map_err(|e| AetherError::config(format!("Failed to prepare entity query: {}", e)))?;
+
+        let fetch_limit = limit * 3;
+        let memories = stmt
+            .query_map(
+                rusqlite::params![
+                    query_bytes,
+                    fetch_limit,
+                    node_id,
+                    app_bundle_id,
+                    window_title,
+                    limit
+                ],
+                |row| {
+                    let id: String = row.get(0)?;
+                    let app_id: String = row.get(1)?;
+                    let window: String = row.get(2)?;
+                    let user_input: String = row.get(3)?;
+                    let ai_output: String = row.get(4)?;
+                    let embedding_bytes: Vec<u8> = row.get(5)?;
+                    let timestamp: i64 = row.get(6)?;
+                    let topic_id: String = row.get(7)?;
+                    let similarity: f64 = row.get(8)?;
+
+                    let embedding = Self::deserialize_embedding(&embedding_bytes);
+
+                    Ok(MemoryEntry {
+                        id,
+                        context: ContextAnchor {
+                            app_bundle_id: app_id,
+                            window_title: window,
+                            timestamp,
+                            topic_id,
+                        },
+                        user_input,
+                        ai_output,
+                        embedding: Some(embedding),
+                        similarity_score: Some(similarity as f32),
+                    })
+                },
+            )
+            .map_err(|e| AetherError::config(format!("Failed to query entity memories: {}", e)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AetherError::config(format!("Failed to parse entity memories: {}", e)))?;
+
+        Ok(memories)
+    }
+
     /// Get recent memories without embedding similarity search
     ///
     /// Used for AI-based memory retrieval where the AI selects relevant memories

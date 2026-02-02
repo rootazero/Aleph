@@ -13,6 +13,7 @@
 
 mod compression;
 mod core;
+mod dreaming;
 mod facts;
 mod memory_ops;
 mod retention;

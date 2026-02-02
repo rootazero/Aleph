@@ -129,6 +129,81 @@ impl VectorDatabase {
             CREATE INDEX IF NOT EXISTS idx_compression_time ON compression_sessions(compressed_at);
 
             -- ================================================================
+            -- Memory Graph Tables (Phase 9 - The Brain)
+            -- ================================================================
+
+            -- Graph nodes (entities)
+            CREATE TABLE IF NOT EXISTS graph_nodes (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                aliases_json TEXT NOT NULL DEFAULT '[]',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                decay_score REAL NOT NULL DEFAULT 1.0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_graph_nodes_kind_name ON graph_nodes(kind, name);
+            CREATE INDEX IF NOT EXISTS idx_graph_nodes_updated ON graph_nodes(updated_at);
+
+            -- Graph edges (relationships)
+            CREATE TABLE IF NOT EXISTS graph_edges (
+                id TEXT PRIMARY KEY,
+                from_id TEXT NOT NULL,
+                to_id TEXT NOT NULL,
+                relation TEXT NOT NULL,
+                weight REAL NOT NULL,
+                confidence REAL NOT NULL,
+                context_key TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_seen_at INTEGER NOT NULL,
+                decay_score REAL NOT NULL DEFAULT 1.0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_id);
+            CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_id);
+            CREATE INDEX IF NOT EXISTS idx_graph_edges_context ON graph_edges(context_key);
+
+            -- Graph aliases
+            CREATE TABLE IF NOT EXISTS graph_aliases (
+                alias TEXT NOT NULL,
+                normalized_alias TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                PRIMARY KEY (normalized_alias, node_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_graph_aliases_norm ON graph_aliases(normalized_alias);
+
+            -- Memory-to-entity links
+            CREATE TABLE IF NOT EXISTS memory_entities (
+                memory_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                weight REAL NOT NULL DEFAULT 1.0,
+                source TEXT NOT NULL,
+                PRIMARY KEY (memory_id, node_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_memory_entities_node ON memory_entities(node_id);
+
+            -- Daily insight summaries
+            CREATE TABLE IF NOT EXISTS daily_insights (
+                date TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                source_memory_count INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+
+            -- DreamDaemon status tracking
+            CREATE TABLE IF NOT EXISTS dream_status (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_run_at INTEGER,
+                last_status TEXT,
+                last_duration_ms INTEGER
+            );
+
+            -- ================================================================
             -- sqlite-vec Virtual Tables for Vector Search
             -- ================================================================
 
