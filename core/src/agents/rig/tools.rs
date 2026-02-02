@@ -21,6 +21,7 @@ pub const BUILTIN_TOOLS: &[&str] = &[
     "code_exec",
     "generate_image",
     "pdf_generate",
+    "snapshot_capture",
 ];
 
 /// Configuration for built-in tools

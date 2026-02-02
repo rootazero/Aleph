@@ -47,6 +47,7 @@ pub mod pdf_generate;
 pub mod search;
 pub mod sessions;
 pub mod skill_reader;
+pub mod snapshot_capture;
 pub mod web_fetch;
 pub mod youtube;
 
@@ -67,6 +68,7 @@ pub use skill_reader::{
     ListSkillsArgs, ListSkillsOutput, ListSkillsTool, ReadSkillArgs, ReadSkillOutput,
     ReadSkillTool, SkillSummary,
 };
+pub use snapshot_capture::SnapshotCaptureTool;
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
 pub use youtube::{YouTubeArgs, YouTubeTool};
 
