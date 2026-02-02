@@ -35,6 +35,8 @@ pub mod tool_display;
 #[cfg(feature = "gateway")]
 pub mod stream_buffer;
 #[cfg(feature = "gateway")]
+pub mod message_dedup;
+#[cfg(feature = "gateway")]
 pub mod router;
 #[cfg(feature = "gateway")]
 pub mod security;
@@ -101,6 +103,8 @@ pub use event_emitter::{EventEmitter, StreamEvent, GatewayEventEmitter, NoOpEven
 pub use tool_display::{ToolDisplay, get_tool_display, format_tool_meta, format_tool_summary, group_paths};
 #[cfg(feature = "gateway")]
 pub use stream_buffer::StreamBuffer;
+#[cfg(feature = "gateway")]
+pub use message_dedup::{normalize_text, is_text_duplicate, SentMessageTracker, SentRecord};
 #[cfg(feature = "gateway")]
 pub use router::AgentRouter;
 
