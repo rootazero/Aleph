@@ -144,7 +144,7 @@ pub use types::{
 pub use validation::{CompositeValidator, HardValidator, SemanticValidator};
 
 // Worker abstraction
-pub use worker::{AgentLoopWorker, StateSnapshot, Worker};
+pub use worker::{AgentLoopWorker, PlaceholderWorker, StateSnapshot, Worker};
 
 // Experience crystallization
 pub use crystallization::{

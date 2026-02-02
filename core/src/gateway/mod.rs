@@ -120,7 +120,10 @@ pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, R
 #[cfg(feature = "gateway")]
 pub use loop_callback_adapter::{EventEmittingCallback, ResponseChunkEmitter, UserQuestion};
 #[cfg(feature = "gateway")]
-pub use provider_factory::{create_provider_registry_from_env, can_create_provider_from_env, ProviderFactoryError};
+pub use provider_factory::{
+    create_provider_registry_from_env, create_claude_provider_from_env,
+    can_create_provider_from_env, ProviderFactoryError
+};
 #[cfg(feature = "gateway")]
 pub use session_storage::{SessionStorage, LoadedSession, SessionMeta};
 #[cfg(feature = "gateway")]
