@@ -90,6 +90,27 @@ struct HaloViewV2: View {
                         viewModel.callbacks.onDismiss?()
                     }
                 )
+
+            case .commandList(let context):
+                HaloCommandListView(
+                    context: Binding(
+                        get: {
+                            if case .commandList(let ctx) = viewModel.state {
+                                return ctx
+                            }
+                            return context
+                        },
+                        set: { newContext in
+                            viewModel.updateCommandContext(newContext)
+                        }
+                    ),
+                    onSelect: { command in
+                        viewModel.callbacks.onCommandSelect?(command)
+                    },
+                    onDismiss: {
+                        viewModel.callbacks.onDismiss?()
+                    }
+                )
             }
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.stateIdentifier)
@@ -125,6 +146,8 @@ class HaloViewModelV2: ObservableObject {
             return "error-\(ctx.runId ?? "unknown")"
         case .historyList:
             return "historyList"
+        case .commandList:
+            return "commandList"
         }
     }
 
@@ -132,6 +155,13 @@ class HaloViewModelV2: ObservableObject {
     func updateHistoryContext(_ context: HistoryListContext) {
         if case .historyList = state {
             state = .historyList(context)
+        }
+    }
+
+    /// Update command context (for search query and selection changes)
+    func updateCommandContext(_ context: CommandListContext) {
+        if case .commandList = state {
+            state = .commandList(context)
         }
     }
 
@@ -167,6 +197,9 @@ class HaloCallbacksV2 {
     /// Called when user selects a history topic
     var onHistorySelect: ((HistoryTopic) -> Void)?
 
+    /// Called when user selects a command from command list
+    var onCommandSelect: ((CommandItem) -> Void)?
+
     /// Reset all callbacks to nil
     func reset() {
         onConfirm = nil
@@ -175,6 +208,7 @@ class HaloCallbacksV2 {
         onDismiss = nil
         onCopy = nil
         onHistorySelect = nil
+        onCommandSelect = nil
     }
 }
 
