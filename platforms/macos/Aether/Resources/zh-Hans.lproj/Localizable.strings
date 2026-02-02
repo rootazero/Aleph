@@ -290,9 +290,6 @@
 "settings.behavior.pii_example_phone" = "例如：(555) 123-4567";
 "settings.behavior.pii_example_ssn" = "例如：123-45-6789";
 "settings.behavior.pii_example_credit_card" = "例如：1234-5678-9012-3456";
-"settings.behavior.multi_turn" = "对话模式";
-"settings.behavior.multi_turn_enabled" = "默认开启多轮对话";
-"settings.behavior.multi_turn_description" = "开启后，每次对话自动支持追问。关闭后，可使用 /chat 命令手动开启多轮对话。";
 "settings.behavior.window_visibility" = "窗口显示";
 "settings.behavior.keep_window_visible" = "处理时保持窗口可见";
 "settings.behavior.keep_window_visible_description" = "开启后，AI处理时对话窗口保持可见；关闭后窗口会暂时隐藏，显示处理指示器。";
@@ -1033,3 +1030,11 @@
 "history.yesterday" = "昨天";
 "history.this_week" = "本周";
 "history.earlier" = "更早";
+
+// MARK: - Result Detail Popover
+"result.partial" = "部分完成";
+"result.success" = "已完成";
+"result.tools" = "工具";
+"result.errors" = "错误";
+"result.reasoning" = "推理";
+"button.close" = "关闭";
