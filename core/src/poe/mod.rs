@@ -104,9 +104,12 @@
 //! ```
 
 pub mod budget;
+pub mod contract;
+pub mod contract_store;
 pub mod crystallization;
 pub mod manager;
 pub mod manifest;
+pub mod trust;
 pub mod types;
 pub mod validation;
 pub mod worker;
@@ -147,6 +150,19 @@ pub use worker::{AgentLoopWorker, StateSnapshot, Worker};
 pub use crystallization::{
     ChannelCrystallizer, CrystallizerWorker, ExperienceCrystallizer,
     ExperienceRecorder, NoOpRecorder,
+};
+
+// Contract signing workflow
+pub use contract::{
+    ContractContext, ContractSummary, PendingContract, PendingResult,
+    PrepareResult, RejectRequest, RejectResult, SignRequest, SignResult,
+};
+pub use contract_store::PendingContractStore;
+
+// Trust evaluation (progressive auto-approval)
+pub use trust::{
+    AlwaysRequireSignature, AutoApprovalDecision, ExperienceTrustEvaluator,
+    TrustContext, TrustEvaluator, WhitelistTrustEvaluator,
 };
 
 // Integration tests

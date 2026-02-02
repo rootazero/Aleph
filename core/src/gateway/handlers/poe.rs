@@ -1,13 +1,32 @@
 //! POE (Principle-Operation-Evaluation) RPC Handlers
 //!
-//! RPC handlers for POE task execution: run, status, cancel.
+//! RPC handlers for POE task execution and contract signing workflow.
+//!
+//! ## Contract Signing Workflow
+//!
+//! | Method | Description |
+//! |--------|-------------|
+//! | `poe.prepare` | Generate a contract from instruction, await signature |
+//! | `poe.sign` | Sign a contract and start execution |
+//! | `poe.reject` | Reject a pending contract |
+//! | `poe.pending` | List all pending contracts |
+//!
+//! ## Direct Execution (Legacy)
+//!
+//! | Method | Description |
+//! |--------|-------------|
+//! | `poe.run` | Execute with pre-built manifest (no signing) |
+//! | `poe.status` | Query task status |
+//! | `poe.cancel` | Cancel a running task |
+//! | `poe.list` | List all active tasks |
 //!
 //! ## Events Emitted
 //!
-//! During execution, the following events are published to the event bus:
-//!
 //! | Event | Description |
 //! |-------|-------------|
+//! | `poe.contract_generated` | Contract generated, awaiting signature |
+//! | `poe.signed` | Contract signed, execution starting |
+//! | `poe.rejected` | Contract rejected by user |
 //! | `poe.accepted` | Task accepted and queued for execution |
 //! | `poe.step` | Each P->O->E iteration |
 //! | `poe.validation` | Validation result after each attempt |
@@ -25,9 +44,14 @@ use tracing::{debug, error, info, warn};
 
 use super::super::event_bus::GatewayEventBus;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::error::AetherError;
 use crate::poe::{
+    // Core types
     CompositeValidator, PoeConfig, PoeManager, PoeOutcome, PoeTask, SuccessManifest,
     ValidationCallback, ValidationEvent, Worker,
+    // Contract signing types
+    ContractContext, ContractSummary, ManifestBuilder, PendingContract, PendingContractStore,
+    PendingResult, PrepareResult, RejectResult, SignRequest, SignResult,
 };
 
 // ============================================================================
@@ -775,6 +799,419 @@ pub async fn handle_list<W: Worker + 'static>(
             "count": task_summaries.len(),
         }),
     )
+}
+
+// ============================================================================
+// Contract Signing Workflow
+// ============================================================================
+
+/// Parameters for poe.prepare request
+#[derive(Debug, Clone, Deserialize)]
+pub struct PrepareParams {
+    /// Natural language instruction
+    pub instruction: String,
+    /// Optional context for manifest generation
+    #[serde(default)]
+    pub context: Option<PrepareContext>,
+}
+
+/// Context for poe.prepare request
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PrepareContext {
+    /// Working directory
+    #[serde(default)]
+    pub working_dir: Option<String>,
+    /// Related files
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Session key for events
+    #[serde(default)]
+    pub session_key: Option<String>,
+}
+
+impl From<PrepareContext> for ContractContext {
+    fn from(ctx: PrepareContext) -> Self {
+        ContractContext {
+            working_dir: ctx.working_dir,
+            files: ctx.files,
+            session_key: ctx.session_key,
+        }
+    }
+}
+
+/// Parameters for poe.reject request
+#[derive(Debug, Clone, Deserialize)]
+pub struct RejectParams {
+    /// Contract ID to reject
+    pub contract_id: String,
+    /// Optional rejection reason
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+// ============================================================================
+// PoeContractService
+// ============================================================================
+
+/// Service for managing POE contract signing workflow.
+///
+/// Handles the full lifecycle: prepare → sign/reject → execute
+pub struct PoeContractService<W: Worker + 'static> {
+    /// Manifest builder for generating contracts
+    manifest_builder: Arc<ManifestBuilder>,
+    /// Store for pending contracts
+    contract_store: Arc<PendingContractStore>,
+    /// Run manager for executing signed contracts
+    run_manager: Arc<PoeRunManager<W>>,
+    /// Event bus for publishing events
+    event_bus: Arc<GatewayEventBus>,
+}
+
+impl<W: Worker + 'static> PoeContractService<W> {
+    /// Create a new contract service.
+    pub fn new(
+        manifest_builder: Arc<ManifestBuilder>,
+        run_manager: Arc<PoeRunManager<W>>,
+        event_bus: Arc<GatewayEventBus>,
+    ) -> Self {
+        Self {
+            manifest_builder,
+            contract_store: Arc::new(PendingContractStore::new()),
+            run_manager,
+            event_bus,
+        }
+    }
+
+    /// Get access to the contract store.
+    pub fn contract_store(&self) -> &Arc<PendingContractStore> {
+        &self.contract_store
+    }
+
+    /// Get access to the run manager.
+    pub fn run_manager(&self) -> &Arc<PoeRunManager<W>> {
+        &self.run_manager
+    }
+
+    /// Prepare a new contract from instruction.
+    ///
+    /// Generates a SuccessManifest using ManifestBuilder and stores it
+    /// in the pending contracts store awaiting signature.
+    pub async fn prepare(&self, params: PrepareParams) -> Result<PrepareResult, AetherError> {
+        // 1. Build context string for ManifestBuilder
+        let context_str = params.context.as_ref().and_then(|ctx| {
+            let contract_ctx: ContractContext = ctx.clone().into();
+            contract_ctx.to_context_string()
+        });
+
+        // 2. Generate manifest using ManifestBuilder
+        let manifest = self
+            .manifest_builder
+            .build(&params.instruction, context_str.as_deref())
+            .await?;
+
+        // 3. Generate contract ID
+        let contract_id = format!(
+            "contract-{}",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        );
+
+        // 4. Create pending contract
+        let mut contract = PendingContract::new(
+            contract_id.clone(),
+            params.instruction.clone(),
+            manifest.clone(),
+        );
+
+        if let Some(ctx) = params.context {
+            contract = contract.with_context(ctx.into());
+        }
+
+        // 5. Store in pending contracts
+        self.contract_store.insert(contract).await;
+
+        info!(contract_id = %contract_id, "Contract prepared, awaiting signature");
+
+        // 6. Emit event
+        self.emit_event(
+            "poe.contract_generated",
+            &json!({
+                "contract_id": contract_id,
+                "objective": manifest.objective,
+                "constraint_count": manifest.hard_constraints.len(),
+                "metric_count": manifest.soft_metrics.len(),
+            }),
+        );
+
+        Ok(PrepareResult {
+            contract_id,
+            manifest,
+            created_at: Utc::now().to_rfc3339(),
+            instruction: params.instruction,
+        })
+    }
+
+    /// Sign a pending contract and start execution.
+    ///
+    /// Optionally applies amendments before execution.
+    pub async fn sign(&self, params: SignRequest) -> Result<SignResult, AetherError> {
+        // 1. Take contract from store (atomic remove + return)
+        let contract = self
+            .contract_store
+            .take(&params.contract_id)
+            .await
+            .ok_or_else(|| {
+                AetherError::NotFound(format!(
+                    "Contract {} not found or already signed",
+                    params.contract_id
+                ))
+            })?;
+
+        // 2. Apply amendments if provided
+        let final_manifest = match (&params.amendments, &params.manifest_override) {
+            // Natural language amendment
+            (Some(amendment), None) => {
+                self.manifest_builder
+                    .amend(&contract.manifest, amendment)
+                    .await?
+            }
+            // JSON override
+            (None, Some(override_manifest)) => {
+                ManifestBuilder::merge_override(&contract.manifest, override_manifest)
+            }
+            // Both: merge first, then amend
+            (Some(amendment), Some(override_manifest)) => {
+                let merged = ManifestBuilder::merge_override(&contract.manifest, override_manifest);
+                self.manifest_builder.amend(&merged, amendment).await?
+            }
+            // No modifications
+            (None, None) => contract.manifest.clone(),
+        };
+
+        info!(
+            contract_id = %params.contract_id,
+            task_id = %final_manifest.task_id,
+            amendments = params.amendments.is_some(),
+            "Contract signed, starting execution"
+        );
+
+        // 3. Emit signed event
+        self.emit_event(
+            "poe.signed",
+            &json!({
+                "contract_id": params.contract_id,
+                "task_id": final_manifest.task_id,
+                "amendments_applied": params.amendments.is_some() || params.manifest_override.is_some(),
+                "signed_at": Utc::now().to_rfc3339(),
+            }),
+        );
+
+        // 4. Start POE execution via run manager
+        let run_params = PoeRunParams {
+            manifest: final_manifest.clone(),
+            instruction: contract.instruction,
+            stream: params.stream,
+            config: None,
+        };
+
+        let run_result = self
+            .run_manager
+            .start_run(run_params)
+            .await
+            .map_err(|e| AetherError::other(e))?;
+
+        Ok(SignResult {
+            task_id: run_result.task_id,
+            session_key: run_result.session_key,
+            signed_at: Utc::now().to_rfc3339(),
+            final_manifest,
+        })
+    }
+
+    /// Reject a pending contract.
+    pub async fn reject(&self, params: RejectParams) -> RejectResult {
+        let removed = self.contract_store.remove(&params.contract_id).await;
+
+        if removed {
+            info!(
+                contract_id = %params.contract_id,
+                reason = ?params.reason,
+                "Contract rejected"
+            );
+
+            self.emit_event(
+                "poe.rejected",
+                &json!({
+                    "contract_id": params.contract_id,
+                    "reason": params.reason.as_deref().unwrap_or("User cancelled"),
+                    "rejected_at": Utc::now().to_rfc3339(),
+                }),
+            );
+        }
+
+        RejectResult {
+            contract_id: params.contract_id,
+            rejected: removed,
+        }
+    }
+
+    /// List all pending contracts.
+    pub async fn pending(&self) -> PendingResult {
+        let contracts = self.contract_store.list().await;
+        let count = contracts.len();
+
+        PendingResult {
+            contracts: contracts.into_iter().map(ContractSummary::from).collect(),
+            count,
+        }
+    }
+
+    /// Emit an event to the event bus.
+    fn emit_event<T: Serialize>(&self, topic: &str, data: &T) {
+        if let Ok(data_value) = serde_json::to_value(data) {
+            let notification = JsonRpcRequest::notification(
+                topic,
+                Some(json!({
+                    "topic": topic,
+                    "data": data_value,
+                    "timestamp": Utc::now().timestamp_millis()
+                })),
+            );
+            if let Ok(json) = serde_json::to_string(&notification) {
+                self.event_bus.publish(json);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Contract Signing RPC Handlers
+// ============================================================================
+
+/// Handle poe.prepare RPC request
+pub async fn handle_prepare<W: Worker + 'static>(
+    request: JsonRpcRequest,
+    service: Arc<PoeContractService<W>>,
+) -> JsonRpcResponse {
+    // Parse params
+    let params: PrepareParams = match &request.params {
+        Some(Value::Object(map)) => {
+            match serde_json::from_value(Value::Object(map.clone())) {
+                Ok(p) => p,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        format!("Invalid params: {}", e),
+                    );
+                }
+            }
+        }
+        _ => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing or invalid params object",
+            );
+        }
+    };
+
+    // Validate instruction
+    if params.instruction.trim().is_empty() {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "instruction cannot be empty");
+    }
+
+    // Prepare the contract
+    match service.prepare(params).await {
+        Ok(result) => JsonRpcResponse::success(request.id, json!(result)),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+    }
+}
+
+/// Handle poe.sign RPC request
+pub async fn handle_sign<W: Worker + 'static>(
+    request: JsonRpcRequest,
+    service: Arc<PoeContractService<W>>,
+) -> JsonRpcResponse {
+    // Parse params
+    let params: SignRequest = match &request.params {
+        Some(Value::Object(map)) => {
+            match serde_json::from_value(Value::Object(map.clone())) {
+                Ok(p) => p,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        format!("Invalid params: {}", e),
+                    );
+                }
+            }
+        }
+        _ => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing or invalid params object",
+            );
+        }
+    };
+
+    // Validate contract_id
+    if params.contract_id.trim().is_empty() {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "contract_id cannot be empty");
+    }
+
+    // Sign the contract
+    match service.sign(params).await {
+        Ok(result) => JsonRpcResponse::success(request.id, json!(result)),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+    }
+}
+
+/// Handle poe.reject RPC request
+pub async fn handle_reject<W: Worker + 'static>(
+    request: JsonRpcRequest,
+    service: Arc<PoeContractService<W>>,
+) -> JsonRpcResponse {
+    // Parse params
+    let params: RejectParams = match &request.params {
+        Some(Value::Object(map)) => {
+            match serde_json::from_value(Value::Object(map.clone())) {
+                Ok(p) => p,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        format!("Invalid params: {}", e),
+                    );
+                }
+            }
+        }
+        _ => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing or invalid params object",
+            );
+        }
+    };
+
+    // Validate contract_id
+    if params.contract_id.trim().is_empty() {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "contract_id cannot be empty");
+    }
+
+    // Reject the contract
+    let result = service.reject(params).await;
+    JsonRpcResponse::success(request.id, json!(result))
+}
+
+/// Handle poe.pending RPC request
+pub async fn handle_pending<W: Worker + 'static>(
+    request: JsonRpcRequest,
+    service: Arc<PoeContractService<W>>,
+) -> JsonRpcResponse {
+    let result = service.pending().await;
+    JsonRpcResponse::success(request.id, json!(result))
 }
 
 // ============================================================================
