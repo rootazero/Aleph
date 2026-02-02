@@ -301,7 +301,7 @@ final class DependencyContainer: ObservableObject {
             eventHandler.setHaloWindow(_haloWindow)
         }
 
-        // Single-turn coordinators removed - use MultiTurnCoordinator for conversations
+        // Single-turn coordinators removed - use HaloInputCoordinator for conversations
 
         areCoordinatorsInitialized = true
         print("[DependencyContainer] Coordinators initialized successfully")
