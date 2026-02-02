@@ -676,6 +676,8 @@
 "multiturn.attachment.remove" = "Remove attachment";
 
 // MARK: - Command/Topic Lists
+"commands.title" = "Commands";
+"commands.search" = "Search commands...";
 "commands.empty" = "No matching commands";
 "topics.empty" = "No topics found";
 

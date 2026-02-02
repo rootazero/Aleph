@@ -676,6 +676,8 @@
 "multiturn.attachment.remove" = "删除附件";
 
 // MARK: - Command/Topic Lists
+"commands.title" = "命令";
+"commands.search" = "搜索命令...";
 "commands.empty" = "无匹配命令";
 "topics.empty" = "未找到话题";
 
