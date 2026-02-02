@@ -209,6 +209,36 @@ impl HandlerRegistry {
             )
         });
 
+        // POE Contract Signing handlers (placeholders - actual handlers wired with PoeContractService)
+        registry.register("poe.prepare", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "poe.prepare requires POE runtime - wire PoeContractService first".to_string(),
+            )
+        });
+        registry.register("poe.sign", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "poe.sign requires POE runtime - wire PoeContractService first".to_string(),
+            )
+        });
+        registry.register("poe.reject", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "poe.reject requires POE runtime - wire PoeContractService first".to_string(),
+            )
+        });
+        registry.register("poe.pending", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "poe.pending requires POE runtime - wire PoeContractService first".to_string(),
+            )
+        });
+
         registry
     }
 
@@ -397,9 +427,15 @@ mod tests {
     #[test]
     fn test_poe_handlers_registered() {
         let registry = HandlerRegistry::new();
+        // Direct execution methods
         assert!(registry.has_method("poe.run"));
         assert!(registry.has_method("poe.status"));
         assert!(registry.has_method("poe.cancel"));
         assert!(registry.has_method("poe.list"));
+        // Contract signing methods
+        assert!(registry.has_method("poe.prepare"));
+        assert!(registry.has_method("poe.sign"));
+        assert!(registry.has_method("poe.reject"));
+        assert!(registry.has_method("poe.pending"));
     }
 }

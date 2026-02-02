@@ -106,6 +106,32 @@ You must output ONLY valid JSON matching this structure:
 
 Output ONLY JSON. No markdown."#;
 
+/// System prompt for amending an existing manifest.
+const MANIFEST_AMEND_SYSTEM_PROMPT: &str = r#"You are modifying an existing Success Manifest based on user feedback.
+
+## Your Task
+1. Understand what the user wants to add, remove, or modify
+2. Output a COMPLETE updated manifest (not just the changes)
+3. Preserve all existing constraints unless explicitly asked to remove them
+4. Keep the same task_id and objective unless the user explicitly wants to change them
+
+## Output Format
+Output ONLY valid JSON matching the SuccessManifest structure. No markdown.
+The structure is:
+{
+  "task_id": "string",
+  "objective": "string",
+  "hard_constraints": [...],
+  "soft_metrics": [...],
+  "max_attempts": number
+}
+
+## Important
+- If the user asks to "add" something, ADD it to existing constraints
+- If the user asks to "remove" something, REMOVE it from existing constraints
+- If the user asks to "change" something, MODIFY the specific constraint
+- Always output the COMPLETE manifest, not just changes"#;
+
 /// Builder for generating SuccessManifests from instructions.
 pub struct ManifestBuilder {
     /// AI provider for generating the manifest
@@ -241,7 +267,7 @@ Generate a Success Manifest for this task.",
     /// Extract JSON from potential markdown wrappers.
     fn extract_json(&self, response: &str) -> String {
         let trimmed = response.trim();
-        
+
         // Handle markdown code blocks
         if let Some(start) = trimmed.find("```") {
             if let Some(end) = trimmed.rfind("```") {
@@ -254,7 +280,7 @@ Generate a Success Manifest for this task.",
                 }
             }
         }
-        
+
         // Handle raw JSON (find outer braces)
         if let Some(start) = trimmed.find('{') {
             if let Some(end) = trimmed.rfind('}') {
@@ -263,8 +289,114 @@ Generate a Success Manifest for this task.",
                 }
             }
         }
-        
+
         trimmed.to_string()
+    }
+
+    // ========================================================================
+    // Amendment Methods (Contract Signing Workflow)
+    // ========================================================================
+
+    /// Amend an existing manifest based on natural language feedback.
+    ///
+    /// Uses LLM to interpret the user's amendment request and merge it
+    /// with the existing manifest.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let amended = builder.amend(
+    ///     &existing_manifest,
+    ///     "also check that cargo clippy passes"
+    /// ).await?;
+    /// ```
+    pub async fn amend(
+        &self,
+        current: &SuccessManifest,
+        amendment: &str,
+    ) -> Result<SuccessManifest> {
+        // 1. Serialize current manifest
+        let current_json = serde_json::to_string_pretty(current)
+            .map_err(|e| crate::error::AetherError::other(
+                format!("Failed to serialize manifest: {}", e)
+            ))?;
+
+        // 2. Build the prompt
+        let user_prompt = format!(
+            "## Current Manifest\n\n```json\n{}\n```\n\n## Amendment Request\n\n{}\n\nPlease output the updated manifest.",
+            current_json,
+            amendment
+        );
+
+        // 3. Call LLM
+        let response = self
+            .provider
+            .process_with_thinking(
+                &user_prompt,
+                Some(MANIFEST_AMEND_SYSTEM_PROMPT),
+                ThinkLevel::Low,
+            )
+            .await?;
+
+        // 4. Parse response
+        self.parse_manifest(&response)
+    }
+
+    /// Merge a manifest override with the current manifest.
+    ///
+    /// This is a pure Rust operation (no LLM) for advanced users who
+    /// provide JSON overrides directly.
+    ///
+    /// # Merge Strategy
+    ///
+    /// - `task_id`: Override wins if non-empty
+    /// - `objective`: Override wins if non-empty
+    /// - `hard_constraints`: **Appended** (not replaced)
+    /// - `soft_metrics`: **Appended** (not replaced)
+    /// - `max_attempts`: Override wins if not default (5)
+    /// - `rollback_snapshot`: Override wins if Some
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let merged = ManifestBuilder::merge_override(&current, &override_manifest);
+    /// ```
+    pub fn merge_override(
+        current: &SuccessManifest,
+        override_manifest: &SuccessManifest,
+    ) -> SuccessManifest {
+        SuccessManifest {
+            task_id: if override_manifest.task_id.is_empty() {
+                current.task_id.clone()
+            } else {
+                override_manifest.task_id.clone()
+            },
+            objective: if override_manifest.objective.is_empty() {
+                current.objective.clone()
+            } else {
+                override_manifest.objective.clone()
+            },
+            // Constraints are APPENDED (not replaced) to prevent accidental removal
+            hard_constraints: [
+                current.hard_constraints.clone(),
+                override_manifest.hard_constraints.clone(),
+            ].concat(),
+            soft_metrics: [
+                current.soft_metrics.clone(),
+                override_manifest.soft_metrics.clone(),
+            ].concat(),
+            // Use override's max_attempts only if it's not the default
+            max_attempts: if override_manifest.max_attempts == 5 {
+                current.max_attempts
+            } else {
+                override_manifest.max_attempts
+            },
+            // Override's rollback_snapshot takes precedence if set
+            rollback_snapshot: override_manifest
+                .rollback_snapshot
+                .clone()
+                .or_else(|| current.rollback_snapshot.clone()),
+        }
     }
 }
 
@@ -364,5 +496,90 @@ mod tests {
         let metric = &manifest.soft_metrics[0];
         assert_eq!(metric.weight, 1.0);
         assert_eq!(metric.threshold, 0.8);
+    }
+
+    #[tokio::test]
+    async fn test_amend_manifest() {
+        // Mock LLM returns an amended manifest
+        let mock_json = r#"{
+            "task_id": "test-task",
+            "objective": "Test objective",
+            "hard_constraints": [
+                { "type": "FileExists", "params": { "path": "test.txt" } },
+                { "type": "CommandPasses", "params": { "cmd": "cargo", "args": ["clippy"], "timeout_ms": 60000 } }
+            ],
+            "soft_metrics": [],
+            "max_attempts": 3
+        }"#;
+
+        let builder = create_mock_builder(mock_json);
+
+        // Original manifest with one constraint
+        let original = SuccessManifest::new("test-task", "Test objective")
+            .with_hard_constraint(crate::poe::ValidationRule::FileExists {
+                path: std::path::PathBuf::from("test.txt"),
+            });
+
+        let amended = builder.amend(&original, "also run cargo clippy").await.unwrap();
+
+        // Should have both constraints in the mock response
+        assert_eq!(amended.hard_constraints.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_override_appends_constraints() {
+        use crate::poe::ValidationRule;
+        use std::path::PathBuf;
+
+        let current = SuccessManifest::new("task-1", "Original objective")
+            .with_hard_constraint(ValidationRule::FileExists {
+                path: PathBuf::from("file1.txt"),
+            });
+
+        let override_manifest = SuccessManifest::new("", "") // Empty task_id/objective = keep current
+            .with_hard_constraint(ValidationRule::FileExists {
+                path: PathBuf::from("file2.txt"),
+            });
+
+        let merged = ManifestBuilder::merge_override(&current, &override_manifest);
+
+        // Should preserve original task_id and objective
+        assert_eq!(merged.task_id, "task-1");
+        assert_eq!(merged.objective, "Original objective");
+
+        // Should have BOTH constraints (appended)
+        assert_eq!(merged.hard_constraints.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_override_preserves_max_attempts() {
+        let current = SuccessManifest::new("task-1", "Test")
+            .with_max_attempts(10);
+
+        // Override with default max_attempts (5) should keep current
+        let override_manifest = SuccessManifest::new("", "");
+
+        let merged = ManifestBuilder::merge_override(&current, &override_manifest);
+        assert_eq!(merged.max_attempts, 10);
+
+        // Override with explicit max_attempts should win
+        let override_with_attempts = SuccessManifest::new("", "")
+            .with_max_attempts(3);
+
+        let merged2 = ManifestBuilder::merge_override(&current, &override_with_attempts);
+        assert_eq!(merged2.max_attempts, 3);
+    }
+
+    #[test]
+    fn test_merge_override_with_rollback_snapshot() {
+        use std::path::PathBuf;
+
+        let current = SuccessManifest::new("task-1", "Test");
+
+        let override_manifest = SuccessManifest::new("", "")
+            .with_rollback_snapshot(PathBuf::from("/snapshot/path"));
+
+        let merged = ManifestBuilder::merge_override(&current, &override_manifest);
+        assert_eq!(merged.rollback_snapshot, Some(PathBuf::from("/snapshot/path")));
     }
 }
