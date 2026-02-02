@@ -25,6 +25,12 @@ fn test_memory_config_defaults() {
     assert_eq!(mem_config.vector_db, "sqlite-vec");
     assert_eq!(mem_config.similarity_threshold, 0.7);
     assert!(!mem_config.excluded_apps.is_empty());
+    assert!(mem_config.dreaming.enabled);
+    assert_eq!(mem_config.dreaming.window_start_local, "02:00");
+    assert_eq!(mem_config.dreaming.window_end_local, "05:00");
+    assert_eq!(mem_config.graph_decay.node_decay_per_day, 0.02);
+    assert_eq!(mem_config.graph_decay.edge_decay_per_day, 0.03);
+    assert_eq!(mem_config.memory_decay.half_life_days, 30.0);
 }
 
 #[test]

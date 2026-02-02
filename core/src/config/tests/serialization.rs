@@ -25,6 +25,7 @@ fn test_memory_config_serialization() {
     let json = serde_json::to_string(&mem_config).unwrap();
     assert!(json.contains("bge-small-zh-v1.5"));
     assert!(json.contains("sqlite-vec"));
+    assert!(json.contains("dreaming"));
 }
 
 #[test]
@@ -36,7 +37,25 @@ fn test_memory_config_deserialization() {
         "retention_days": 30,
         "vector_db": "lancedb",
         "similarity_threshold": 0.8,
-        "excluded_apps": ["com.example.app"]
+        "excluded_apps": ["com.example.app"],
+        "dreaming": {
+            "enabled": false,
+            "idle_threshold_seconds": 120,
+            "window_start_local": "01:00",
+            "window_end_local": "03:00",
+            "max_duration_seconds": 300
+        },
+        "graph_decay": {
+            "node_decay_per_day": 0.05,
+            "edge_decay_per_day": 0.06,
+            "min_score": 0.2
+        },
+        "memory_decay": {
+            "half_life_days": 20.0,
+            "access_boost": 0.1,
+            "min_strength": 0.2,
+            "protected_types": ["personal", "project"]
+        }
     }"#;
     let config: MemoryConfig = serde_json::from_str(json).unwrap();
     assert!(!config.enabled);
@@ -46,6 +65,10 @@ fn test_memory_config_deserialization() {
     assert_eq!(config.vector_db, "lancedb");
     assert_eq!(config.similarity_threshold, 0.8);
     assert_eq!(config.excluded_apps, vec!["com.example.app"]);
+    assert!(!config.dreaming.enabled);
+    assert_eq!(config.dreaming.window_start_local, "01:00");
+    assert_eq!(config.graph_decay.min_score, 0.2);
+    assert_eq!(config.memory_decay.protected_types.len(), 2);
 }
 
 #[test]

@@ -127,6 +127,32 @@ fn test_config_validation_memory_invalid_similarity() {
 }
 
 #[test]
+fn test_config_validation_dreaming_invalid_window() {
+    let mut config = Config::default();
+    config.memory.dreaming.window_start_local = "25:00".to_string();
+
+    let result = config.validate();
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("window_start_local must be HH:MM"));
+}
+
+#[test]
+fn test_config_validation_graph_decay_invalid() {
+    let mut config = Config::default();
+    config.memory.graph_decay.node_decay_per_day = 1.5;
+
+    let result = config.validate();
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("graph_decay.node_decay_per_day"));
+}
+
+#[test]
 fn test_config_ollama_no_api_key() {
     let mut config = Config::default();
 

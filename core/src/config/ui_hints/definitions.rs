@@ -166,6 +166,83 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             group: "memory",
             advanced: true,
         },
+        "memory.dreaming.enabled" => {
+            label: "DreamDaemon Enabled",
+            help: "Enable idle-time memory consolidation",
+            group: "memory",
+            order: 5,
+            advanced: true,
+        },
+        "memory.dreaming.idle_threshold_seconds" => {
+            label: "Dreaming Idle Threshold",
+            help: "Seconds of idle time before dreaming starts",
+            group: "memory",
+            order: 6,
+            advanced: true,
+        },
+        "memory.dreaming.window_start_local" => {
+            label: "Dreaming Window Start",
+            help: "Local time (HH:MM) when dreaming can start",
+            group: "memory",
+            order: 7,
+            advanced: true,
+        },
+        "memory.dreaming.window_end_local" => {
+            label: "Dreaming Window End",
+            help: "Local time (HH:MM) when dreaming ends",
+            group: "memory",
+            order: 8,
+            advanced: true,
+        },
+        "memory.dreaming.max_duration_seconds" => {
+            label: "Dreaming Max Duration",
+            help: "Maximum seconds per DreamDaemon run",
+            group: "memory",
+            order: 9,
+            advanced: true,
+        },
+        "memory.graph_decay.node_decay_per_day" => {
+            label: "Graph Node Decay/Day",
+            help: "Daily decay multiplier for graph nodes",
+            group: "memory",
+            advanced: true,
+        },
+        "memory.graph_decay.edge_decay_per_day" => {
+            label: "Graph Edge Decay/Day",
+            help: "Daily decay multiplier for graph edges",
+            group: "memory",
+            advanced: true,
+        },
+        "memory.graph_decay.min_score" => {
+            label: "Graph Min Score",
+            help: "Minimum graph score before pruning",
+            group: "memory",
+            advanced: true,
+        },
+        "memory.memory_decay.half_life_days" => {
+            label: "Fact Half-Life (Days)",
+            help: "Half-life for memory fact decay",
+            group: "memory",
+            advanced: true,
+        },
+        "memory.memory_decay.access_boost" => {
+            label: "Fact Access Boost",
+            help: "Boost per access for memory decay",
+            group: "memory",
+            advanced: true,
+        },
+        "memory.memory_decay.min_strength" => {
+            label: "Fact Min Strength",
+            help: "Minimum strength before pruning facts",
+            group: "memory",
+            advanced: true,
+        },
+        "memory.memory_decay.protected_types" => {
+            label: "Fact Protected Types",
+            help: "Fact types protected from decay",
+            group: "memory",
+            advanced: true,
+        },
 
         // === Shortcuts ===
         "shortcuts.summon" => {
