@@ -620,6 +620,8 @@
 "halo.state.error" = "错误";
 "halo.responding" = "回复中...";
 "halo.thinking" = "思考中...";
+"halo.completed" = "已完成";
+"halo.partial_complete" = "部分完成";
 
 // MARK: - Halo Agentic Session (Phase 5)
 "halo.agentic_session" = "智能体会话";
@@ -749,6 +751,7 @@
 "plan.warning.irreversible" = "此计划包含不可逆操作";
 "plan.button.execute" = "执行";
 "button.cancel" = "取消";
+"button.copy" = "拷贝";
 
 // Plan Progress
 "plan.progress.title" = "正在执行计划";
