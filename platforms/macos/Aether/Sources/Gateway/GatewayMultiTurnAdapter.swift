@@ -2,8 +2,8 @@
 //  GatewayMultiTurnAdapter.swift
 //  Aether
 //
-//  Adapter that bridges Gateway WebSocket events to MultiTurnCoordinator callbacks.
-//  Enables MultiTurn conversations via the Gateway control plane.
+//  Adapter that bridges Gateway WebSocket events to Halo UI callbacks.
+//  Enables conversations via the Gateway control plane.
 //
 
 import Foundation
@@ -54,9 +54,9 @@ enum ToolPartStatus: Equatable {
     case error
 }
 
-/// Adapter that translates Gateway StreamEvents to MultiTurnCoordinator callback methods
+/// Adapter that translates Gateway StreamEvents to Halo UI callbacks
 ///
-/// This adapter enables the MultiTurn conversation UI to work with the Gateway
+/// This adapter enables the Halo conversation UI to work with the Gateway
 /// WebSocket interface instead of FFI. It handles:
 /// - Reasoning events -> thinking/stream updates
 /// - Tool events -> tool start/end callbacks
@@ -118,13 +118,13 @@ final class GatewayMultiTurnAdapter: ObservableObject {
 
     /// Handle a StreamEvent from the Gateway
     ///
-    /// Maps Gateway events to MultiTurnCoordinator callbacks:
-    /// - reasoning -> handleThinkingStream / handleThinking
-    /// - toolStart -> handleToolStart
-    /// - toolEnd -> handleToolResult
-    /// - responseChunk -> handleStreamChunk
-    /// - runComplete -> handleCompletion
-    /// - runError -> handleError
+    /// Maps Gateway events to adapter callbacks and @Published properties:
+    /// - reasoning -> updates parts array
+    /// - toolStart -> adds tool part
+    /// - toolEnd -> updates tool part
+    /// - responseChunk -> updates text part
+    /// - runComplete -> finalizes parts
+    /// - runError -> handles error
     func handleStreamEvent(_ event: StreamEvent) {
         switch event {
         case .runAccepted(let e):
