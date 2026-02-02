@@ -79,8 +79,7 @@ final class GatewayMultiTurnAdapter: ObservableObject {
 
     // MARK: - Properties
 
-    /// Weak reference to the coordinator to avoid retain cycles
-    weak var coordinator: MultiTurnCoordinator?
+    // Coordinator reference removed - using event-based callbacks instead
 
     /// Callback for user questions (alternative to @Published)
     var onAskUser: AskUserCallback?
@@ -110,10 +109,9 @@ final class GatewayMultiTurnAdapter: ObservableObject {
 
     init() {}
 
-    /// Configure with coordinator reference
-    func configure(coordinator: MultiTurnCoordinator) {
-        self.coordinator = coordinator
-        print("[GatewayMultiTurnAdapter] Configured with coordinator")
+    /// Configure adapter (coordinator dependency removed)
+    func configure() {
+        print("[GatewayMultiTurnAdapter] Configured")
     }
 
     // MARK: - Event Handling
@@ -175,8 +173,7 @@ final class GatewayMultiTurnAdapter: ObservableObject {
         pendingQuestion = nil
         partIdCounter = 0
 
-        // Notify coordinator that processing has started
-        coordinator?.handleThinking()
+        // Thinking state handled via events
     }
 
     private func handleReasoning(_ event: ReasoningEvent) {
@@ -206,7 +203,7 @@ final class GatewayMultiTurnAdapter: ObservableObject {
         activeToolCalls[event.toolId] = (name: event.toolName, partId: partId)
         addPart(.toolCall(id: partId, toolName: event.toolName, status: .running, result: nil, durationMs: nil))
 
-        coordinator?.handleToolStart(toolName: event.toolName)
+        // Tool start handled via events
     }
 
     private func handleToolUpdate(_ event: ToolUpdateEvent) {
@@ -246,7 +243,7 @@ final class GatewayMultiTurnAdapter: ObservableObject {
             activeToolCalls.removeValue(forKey: event.toolId)
         }
 
-        coordinator?.handleToolResult(toolName: "", result: resultString)
+        // Tool result handled via events
     }
 
     private func handleResponseChunk(_ event: ResponseChunkEvent) {
@@ -261,7 +258,7 @@ final class GatewayMultiTurnAdapter: ObservableObject {
             let partId = "text-\(currentRunId ?? "unknown")"
             updateOrAddPart(.text(id: partId, content: accumulatedText, isStreaming: !event.isFinal))
 
-            coordinator?.handleStreamChunk(text: accumulatedText)
+            // Stream chunk handled via events
         }
 
         // Final chunk signals completion
@@ -287,7 +284,7 @@ final class GatewayMultiTurnAdapter: ObservableObject {
             updateOrAddPart(.text(id: partId, content: accumulatedText, isStreaming: false))
         }
 
-        coordinator?.handleCompletion(response: response)
+        // Completion handled via events
 
         // Reset state (but keep parts and summary for display)
         currentRunId = nil
@@ -303,7 +300,7 @@ final class GatewayMultiTurnAdapter: ObservableObject {
         let errorMessage = event.errorCode.map { "[\($0)] \(event.error)" } ?? event.error
         print("[GatewayMultiTurnAdapter] Run error: \(errorMessage)")
 
-        coordinator?.handleError(message: errorMessage)
+        // Error handled via events
 
         // Reset state
         currentRunId = nil
