@@ -1022,3 +1022,12 @@
 "dag.tasks_header" = "待执行任务";
 "dag.high_risk_warning" = "⚠️ 此计划包含高风险操作，可能会修改文件或执行代码。";
 "dag.confirm_message" = "是否继续执行此任务计划？";
+
+// MARK: - History List (// command)
+"history.title" = "对话历史";
+"history.search" = "搜索...";
+"history.empty" = "暂无对话";
+"history.today" = "今天";
+"history.yesterday" = "昨天";
+"history.this_week" = "本周";
+"history.earlier" = "更早";
