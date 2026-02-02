@@ -13,6 +13,8 @@ struct HaloToastView: View {
     let type: ToastType
     let title: String
     let message: String
+    let actionTitle: String?
+    let onAction: (() -> Void)?
     let onDismiss: (() -> Void)?
 
     @State private var isAppearing = false
@@ -60,7 +62,7 @@ struct HaloToastView: View {
     }
 
     private var textContent: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(Color.primary)
@@ -72,6 +74,21 @@ struct HaloToastView: View {
                     .foregroundColor(Color.secondary)
                     .lineLimit(5)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let actionTitle = actionTitle, let onAction = onAction {
+                Button(action: onAction) {
+                    Text(actionTitle)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(type.accentColor)
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(type.accentColor.opacity(0.4), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: 300, alignment: .leading)
@@ -135,6 +152,8 @@ struct HaloToastView: View {
             type: .info,
             title: "Export Successful",
             message: "Your routing rules have been exported to routing-rules.json",
+            actionTitle: nil,
+            onAction: nil,
             onDismiss: { print("Dismissed") }
         )
 
@@ -142,6 +161,8 @@ struct HaloToastView: View {
             type: .warning,
             title: "Provider Not Set",
             message: "Could not set 'openai' as default provider.",
+            actionTitle: nil,
+            onAction: nil,
             onDismiss: { print("Dismissed") }
         )
 
@@ -149,6 +170,8 @@ struct HaloToastView: View {
             type: .error,
             title: "Initialization Failed",
             message: "Failed to initialize Aether core.",
+            actionTitle: nil,
+            onAction: nil,
             onDismiss: { print("Dismissed") }
         )
 
@@ -156,6 +179,8 @@ struct HaloToastView: View {
             type: .info,
             title: "Saved",
             message: "",
+            actionTitle: nil,
+            onAction: nil,
             onDismiss: { print("Dismissed") }
         )
     }

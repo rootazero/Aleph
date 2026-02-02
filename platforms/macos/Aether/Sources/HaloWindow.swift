@@ -82,8 +82,8 @@ final class HaloWindow: NSWindow {
 
     // MARK: - State Management
 
-    /// Update the Halo state (V2)
-    func updateState(_ state: HaloStateV2) {
+    /// Update the Halo state
+    func updateState(_ state: HaloState) {
         Task { @MainActor [weak self] in
             self?.viewModel.state = state
             self?.updateWindowSize()
@@ -236,6 +236,128 @@ final class HaloWindow: NSWindow {
         viewModel.callbacks.onCopy = onCopy
         updateState(.result(context))
         showAtCurrentPosition()
+    }
+
+    // MARK: - Legacy State Bridge (for EventHandler compatibility)
+    // TODO: Migrate EventHandler to use new state model directly
+
+    /// Legacy: Show processing with AI state (maps to streaming.thinking)
+    @available(*, deprecated, message: "Use updateState(.streaming) directly")
+    func showProcessingWithAI(providerName: String?) {
+        let context = StreamingContext(
+            runId: UUID().uuidString,
+            text: "",
+            reasoning: providerName,
+            phase: .thinking
+        )
+        updateState(.streaming(context))
+    }
+
+    /// Legacy: Show processing state (maps to streaming.responding)
+    @available(*, deprecated, message: "Use updateState(.streaming) directly")
+    func showProcessing(streamingText: String?) {
+        let context = StreamingContext(
+            runId: UUID().uuidString,
+            text: streamingText ?? "",
+            phase: .responding
+        )
+        updateState(.streaming(context))
+    }
+
+    /// Legacy: Show success state (maps to result.success)
+    @available(*, deprecated, message: "Use showResult() directly")
+    func showSuccess(message: String?) {
+        let summary = ResultSummary.success(
+            message: message,
+            durationMs: 0,
+            finalResponse: message ?? ""
+        )
+        let context = ResultContext(runId: UUID().uuidString, summary: summary)
+        updateState(.result(context))
+    }
+
+    /// Legacy: Show agent progress state (maps to streaming.toolExecuting)
+    @available(*, deprecated, message: "Use updateState(.streaming) directly")
+    func showAgentProgress(
+        planId: String,
+        progress: Float,
+        currentOperation: String,
+        completedCount: Int,
+        totalCount: Int
+    ) {
+        let context = StreamingContext(
+            runId: planId,
+            text: "\(completedCount)/\(totalCount)",
+            toolCalls: [ToolCallInfo(
+                id: "current",
+                name: currentOperation,
+                status: .running
+            )],
+            phase: .toolExecuting
+        )
+        updateState(.streaming(context))
+    }
+
+    /// Legacy: Show plan progress state (maps to streaming.toolExecuting)
+    @available(*, deprecated, message: "Use updateState(.streaming) directly")
+    func showPlanProgress(progressInfo: PlanProgressInfo) {
+        var toolCalls = progressInfo.stepProgress.map { step in
+            let status: ToolStatus
+            switch step.status {
+            case .pending: status = .pending
+            case .running: status = .running
+            case .completed: status = .completed
+            case .failed: status = .failed
+            case .skipped: status = .completed
+            }
+            return ToolCallInfo(
+                id: "\(step.index)",
+                name: step.toolName.isEmpty ? step.description : step.toolName,
+                status: status,
+                progressText: step.resultPreview ?? step.errorMessage
+            )
+        }
+        // Limit tool calls displayed
+        if toolCalls.count > StreamingContext.maxToolCalls {
+            toolCalls = Array(toolCalls.suffix(StreamingContext.maxToolCalls))
+        }
+        let context = StreamingContext(
+            runId: progressInfo.planId,
+            text: progressInfo.description,
+            toolCalls: toolCalls,
+            phase: .toolExecuting
+        )
+        updateState(.streaming(context))
+    }
+
+    /// Legacy: Show toast state (maps to error or result based on type)
+    @available(*, deprecated, message: "Use showError() or showResult() directly")
+    func showToast(
+        type: ToastType,
+        title: String,
+        message: String,
+        autoDismiss: Bool,
+        actionTitle: String?
+    ) {
+        if type == .error {
+            let context = ErrorContext(
+                type: .unknown,
+                message: message
+            )
+            updateState(.error(context))
+        } else {
+            let status: ResultStatus = type == .warning ? .partial : .success
+            let summary = ResultSummary(
+                status: status,
+                message: message,
+                toolsExecuted: 0,
+                tokensUsed: nil,
+                durationMs: 0,
+                finalResponse: message
+            )
+            let context = ResultContext(runId: UUID().uuidString, summary: summary)
+            updateState(.result(context))
+        }
     }
 
     // MARK: - Positioning
