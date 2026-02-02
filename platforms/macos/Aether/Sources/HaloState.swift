@@ -35,7 +35,7 @@ enum HaloState {
     case error(type: ErrorType, message: String, suggestion: String?)
 
     /// Toast notification
-    case toast(type: ToastType, title: String, message: String, autoDismiss: Bool)
+    case toast(type: ToastType, title: String, message: String, autoDismiss: Bool, actionTitle: String?)
 
     /// Clarification needed (phantom flow)
     case clarification(request: ClarificationRequest)
@@ -229,8 +229,9 @@ extension HaloState: Equatable {
             return lMsg == rMsg
         case (.error(let lType, let lMsg, let lSug), .error(let rType, let rMsg, let rSug)):
             return lType == rType && lMsg == rMsg && lSug == rSug
-        case (.toast(let lType, let lTitle, let lMsg, let lAuto), .toast(let rType, let rTitle, let rMsg, let rAuto)):
-            return lType == rType && lTitle == rTitle && lMsg == rMsg && lAuto == rAuto
+        case (.toast(let lType, let lTitle, let lMsg, let lAuto, let lAction),
+              .toast(let rType, let rTitle, let rMsg, let rAuto, let rAction)):
+            return lType == rType && lTitle == rTitle && lMsg == rMsg && lAuto == rAuto && lAction == rAction
         case (.clarification(let lReq), .clarification(let rReq)):
             return lReq == rReq
         case (.conversationInput(let lSid, let lCount), .conversationInput(let rSid, let rCount)):
@@ -298,6 +299,7 @@ enum ToastType: Equatable {
 /// Halo state callbacks (stored separately for Equatable synthesis)
 class HaloStateCallbacks {
     var toastOnDismiss: (() -> Void)?
+    var toastOnAction: (() -> Void)?
     var toolConfirmationOnExecute: (() -> Void)?
     var toolConfirmationOnCancel: (() -> Void)?
     var planConfirmationOnExecute: (() -> Void)?
@@ -318,6 +320,7 @@ class HaloStateCallbacks {
 
     func reset() {
         toastOnDismiss = nil
+        toastOnAction = nil
         toolConfirmationOnExecute = nil
         toolConfirmationOnCancel = nil
         planConfirmationOnExecute = nil
@@ -465,4 +468,358 @@ enum PlanStepStatus: Equatable {
     case completed
     case failed
     case skipped
+}
+
+// MARK: - ========================================
+// MARK: - HaloStateV2 (New Simplified State Model)
+// MARK: - ========================================
+
+/// Simplified Halo overlay states (V2)
+/// Reduces 16+ states to 7 unified states for cleaner state management.
+enum HaloStateV2: Equatable {
+    /// Hidden - Halo is not visible
+    case idle
+
+    /// Listening for clipboard/input
+    case listening
+
+    /// AI streaming response (covers: processingWithAI, processing, retrievingMemory, planProgress)
+    case streaming(StreamingContext)
+
+    /// User confirmation required (covers: toolConfirmation, planConfirmation, taskGraphConfirmation, agentPlan, agentConflict)
+    case confirmation(ConfirmationContext)
+
+    /// Operation completed (covers: success, typewriting)
+    case result(ResultContext)
+
+    /// Error state (covers: error, toast[error type])
+    case error(ErrorContext)
+
+    /// History list view (// command)
+    case historyList(HistoryListContext)
+}
+
+// MARK: - HaloStateV2 State Query Helpers
+
+extension HaloStateV2 {
+    /// Check if state is idle
+    var isIdle: Bool {
+        if case .idle = self { return true }
+        return false
+    }
+
+    /// Check if state is listening
+    var isListening: Bool {
+        if case .listening = self { return true }
+        return false
+    }
+
+    /// Check if state is streaming
+    var isStreaming: Bool {
+        if case .streaming = self { return true }
+        return false
+    }
+
+    /// Check if state is confirmation
+    var isConfirmation: Bool {
+        if case .confirmation = self { return true }
+        return false
+    }
+
+    /// Check if state is result
+    var isResult: Bool {
+        if case .result = self { return true }
+        return false
+    }
+
+    /// Check if state is error
+    var isError: Bool {
+        if case .error = self { return true }
+        return false
+    }
+
+    /// Check if state is history list
+    var isHistoryList: Bool {
+        if case .historyList = self { return true }
+        return false
+    }
+
+    /// Check if state requires user interaction
+    var isInteractive: Bool {
+        switch self {
+        case .confirmation, .error, .historyList:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+// MARK: - HaloStateV2 Window Size
+
+extension HaloStateV2 {
+    /// Computed window size based on current state
+    var windowSize: NSSize {
+        switch self {
+        case .idle:
+            return NSSize(width: 0, height: 0)
+        case .listening:
+            return NSSize(width: 80, height: 60)
+        case .streaming(let ctx):
+            switch ctx.phase {
+            case .thinking:
+                return NSSize(width: 80, height: 60)
+            case .responding:
+                return NSSize(width: 320, height: 100)
+            case .toolExecuting:
+                return NSSize(width: 280, height: 120)
+            }
+        case .confirmation:
+            return NSSize(width: 340, height: 280)
+        case .result:
+            return NSSize(width: 280, height: 80)
+        case .error:
+            return NSSize(width: 320, height: 200)
+        case .historyList:
+            return NSSize(width: 380, height: 420)
+        }
+    }
+}
+
+// MARK: - HaloState Migration Helper
+
+extension HaloState {
+    /// Convert old HaloState to new HaloStateV2
+    /// This helper enables gradual migration from the old state model to the new one.
+    func toV2() -> HaloStateV2 {
+        switch self {
+        case .idle:
+            return .idle
+
+        case .listening:
+            return .listening
+
+        case .retrievingMemory:
+            return .streaming(StreamingContext(
+                runId: UUID().uuidString,
+                text: "",
+                phase: .thinking
+            ))
+
+        case .processingWithAI(let providerName):
+            return .streaming(StreamingContext(
+                runId: UUID().uuidString,
+                text: "",
+                reasoning: providerName != nil ? "Using \(providerName!)" : nil,
+                phase: .thinking
+            ))
+
+        case .processing(let streamingText):
+            return .streaming(StreamingContext(
+                runId: UUID().uuidString,
+                text: streamingText ?? "",
+                phase: .responding
+            ))
+
+        case .typewriting(let progress):
+            let summary = ResultSummary.success(
+                message: String(format: "%.0f%% complete", progress * 100),
+                durationMs: 0,
+                finalResponse: ""
+            )
+            return .result(ResultContext(
+                runId: UUID().uuidString,
+                summary: summary
+            ))
+
+        case .success(let message):
+            let summary = ResultSummary.success(
+                message: message,
+                durationMs: 0,
+                finalResponse: message ?? ""
+            )
+            return .result(ResultContext(
+                runId: UUID().uuidString,
+                summary: summary
+            ))
+
+        case .error(let type, let message, let suggestion):
+            return .error(ErrorContext(
+                type: type.toHaloErrorType(),
+                message: message,
+                suggestion: suggestion
+            ))
+
+        case .toast(let type, _, let message, _, _):
+            // Map error toasts to error state, others to result
+            if type == .error {
+                return .error(ErrorContext(
+                    type: .unknown,
+                    message: message
+                ))
+            } else {
+                let status: ResultStatus = type == .warning ? .partial : .success
+                let summary = ResultSummary(
+                    status: status,
+                    message: message,
+                    toolsExecuted: 0,
+                    tokensUsed: nil,
+                    durationMs: 0,
+                    finalResponse: message
+                )
+                return .result(ResultContext(
+                    runId: UUID().uuidString,
+                    summary: summary
+                ))
+            }
+
+        case .clarification(let request):
+            return .confirmation(ConfirmationContext(
+                runId: UUID().uuidString,
+                type: .userQuestion,
+                title: L("clarification.title"),
+                description: request.question,
+                options: ConfirmationContext.defaultOptions(for: .userQuestion)
+            ))
+
+        case .conversationInput(let sessionId, _):
+            // Map to listening since it's waiting for input
+            // Note: Conversation context is tracked elsewhere
+            return .streaming(StreamingContext(
+                runId: sessionId,
+                text: "",
+                phase: .thinking
+            ))
+
+        case .toolConfirmation(let confirmationId, let toolName, let toolDescription, let reason, _):
+            return .confirmation(ConfirmationContext(
+                runId: confirmationId,
+                type: .toolExecution,
+                title: toolName,
+                description: "\(toolDescription)\n\n\(reason)",
+                options: ConfirmationContext.defaultOptions(for: .toolExecution)
+            ))
+
+        case .planConfirmation(let planInfo):
+            let stepsDescription = planInfo.steps.map { step in
+                "\(step.index). \(step.toolName): \(step.description)"
+            }.joined(separator: "\n")
+            return .confirmation(ConfirmationContext(
+                runId: planInfo.planId,
+                type: .planApproval,
+                title: L("plan.confirmation.title"),
+                description: "\(planInfo.description)\n\n\(stepsDescription)",
+                options: ConfirmationContext.defaultOptions(for: .planApproval)
+            ))
+
+        case .planProgress(let progressInfo):
+            var toolCalls = progressInfo.stepProgress.map { step in
+                let status: ToolStatus
+                switch step.status {
+                case .pending: status = .pending
+                case .running: status = .running
+                case .completed: status = .completed
+                case .failed: status = .failed
+                case .skipped: status = .completed
+                }
+                return ToolCallInfo(
+                    id: "\(step.index)",
+                    name: step.toolName,
+                    status: status,
+                    progressText: step.resultPreview ?? step.errorMessage
+                )
+            }
+            // Limit tool calls displayed
+            if toolCalls.count > StreamingContext.maxToolCalls {
+                toolCalls = Array(toolCalls.suffix(StreamingContext.maxToolCalls))
+            }
+            return .streaming(StreamingContext(
+                runId: progressInfo.planId,
+                text: progressInfo.description,
+                toolCalls: toolCalls,
+                phase: .toolExecuting
+            ))
+
+        case .taskGraphConfirmation(let taskGraph):
+            let tasksDescription = taskGraph.tasks.map { task in
+                "- \(task.description)"
+            }.joined(separator: "\n")
+            return .confirmation(ConfirmationContext(
+                runId: taskGraph.id,
+                type: .planApproval,
+                title: L("taskGraph.confirmation.title"),
+                description: tasksDescription,
+                options: ConfirmationContext.defaultOptions(for: .planApproval)
+            ))
+
+        case .taskGraphProgress(let taskGraph, _):
+            let toolCalls = taskGraph.tasks.prefix(StreamingContext.maxToolCalls).map { task in
+                ToolCallInfo(
+                    id: task.id,
+                    name: task.toolName ?? "Task",
+                    status: .running,
+                    progressText: task.description
+                )
+            }
+            return .streaming(StreamingContext(
+                runId: taskGraph.id,
+                text: "",
+                toolCalls: Array(toolCalls),
+                phase: .toolExecuting
+            ))
+
+        case .agentPlan(let planId, let title, let operations, _):
+            let opsDescription = operations.map { op in
+                "- \(op.actionDescription): \(op.target)"
+            }.joined(separator: "\n")
+            return .confirmation(ConfirmationContext(
+                runId: planId,
+                type: .planApproval,
+                title: title,
+                description: opsDescription,
+                options: ConfirmationContext.defaultOptions(for: .planApproval)
+            ))
+
+        case .agentProgress(let planId, _, let currentOperation, let completedCount, let totalCount):
+            return .streaming(StreamingContext(
+                runId: planId,
+                text: "\(completedCount)/\(totalCount)",
+                toolCalls: [ToolCallInfo(
+                    id: "current",
+                    name: currentOperation,
+                    status: .running
+                )],
+                phase: .toolExecuting
+            ))
+
+        case .agentConflict(let planId, let fileName, _, _):
+            return .confirmation(ConfirmationContext(
+                runId: planId,
+                type: .fileConflict,
+                title: L("conflict.title"),
+                description: fileName,
+                options: ConfirmationContext.defaultOptions(for: .fileConflict)
+            ))
+        }
+    }
+}
+
+// MARK: - ErrorType to HaloErrorType Conversion
+
+extension ErrorType {
+    /// Convert FFI ErrorType to HaloErrorType
+    func toHaloErrorType() -> HaloErrorType {
+        switch self {
+        case .network:
+            return .network
+        case .permission:
+            return .provider  // Map permission to provider (closest match)
+        case .quota:
+            return .provider  // Map quota to provider (closest match)
+        case .timeout:
+            return .timeout
+        case .unknown:
+            return .unknown
+        }
+    }
 }
