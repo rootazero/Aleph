@@ -177,51 +177,6 @@ struct StoredAttachment: Identifiable, Codable, FetchableRecord, PersistableReco
     }
 }
 
-// MARK: - Conversion from PendingAttachment
-
-extension StoredAttachment {
-
-    /// Create StoredAttachment from PendingAttachment
-    /// - Parameters:
-    ///   - pending: The pending attachment to convert
-    ///   - messageId: The message ID to link to
-    ///   - localPath: The relative local path where file is stored
-    init(from pending: PendingAttachment, messageId: String, localPath: String) {
-        let mimeType: String
-        switch pending.fileType {
-        case .image:
-            let ext = pending.url.pathExtension.lowercased()
-            switch ext {
-            case "png": mimeType = "image/png"
-            case "jpg", "jpeg": mimeType = "image/jpeg"
-            case "gif": mimeType = "image/gif"
-            case "webp": mimeType = "image/webp"
-            default: mimeType = "image/png"
-            }
-        case .document:
-            let ext = pending.url.pathExtension.lowercased()
-            switch ext {
-            case "pdf": mimeType = "application/pdf"
-            case "txt", "md": mimeType = "text/plain"
-            default: mimeType = "application/octet-stream"
-            }
-        case .other:
-            mimeType = "application/octet-stream"
-        }
-
-        self.init(
-            messageId: messageId,
-            attachmentType: .userUpload,
-            mediaType: AttachmentMediaType.from(mimeType: mimeType),
-            mimeType: mimeType,
-            filename: pending.fileName,
-            localPath: localPath,
-            remoteUrl: nil,
-            sizeBytes: Int64(pending.data.count)
-        )
-    }
-}
-
 // MARK: - Conversion for Tool Output
 
 extension StoredAttachment {

@@ -11,7 +11,7 @@ import SwiftUI
 // MARK: - HaloState (Simplified State Model)
 
 /// Simplified Halo overlay states
-/// Reduces complex state variants to 7 unified states for cleaner state management.
+/// Reduces complex state variants to 9 unified states for cleaner state management.
 enum HaloState: Equatable {
     /// Hidden - Halo is not visible
     case idle
@@ -24,6 +24,9 @@ enum HaloState: Equatable {
 
     /// User confirmation required (covers: toolConfirmation, planConfirmation, taskGraphConfirmation)
     case confirmation(ConfirmationContext)
+
+    /// Clarification request from AI (Phantom Flow)
+    case clarification(request: ClarificationRequest)
 
     /// Operation completed (covers: success, typewriting)
     case result(ResultContext)
@@ -65,6 +68,12 @@ extension HaloState {
         return false
     }
 
+    /// Check if state is clarification
+    var isClarification: Bool {
+        if case .clarification = self { return true }
+        return false
+    }
+
     /// Check if state is result
     var isResult: Bool {
         if case .result = self { return true }
@@ -92,7 +101,7 @@ extension HaloState {
     /// Check if state requires user interaction
     var isInteractive: Bool {
         switch self {
-        case .confirmation, .error, .historyList, .commandList:
+        case .confirmation, .clarification, .error, .historyList, .commandList:
             return true
         default:
             return false
@@ -121,6 +130,11 @@ extension HaloState {
             }
         case .confirmation:
             return NSSize(width: 340, height: 280)
+        case .clarification(let request):
+            // Dynamic height based on options count
+            let optionsCount = request.options?.count ?? 0
+            let height = CGFloat(80 + max(optionsCount, 2) * 48)
+            return NSSize(width: 320, height: min(height, 400))
         case .result:
             return NSSize(width: 280, height: 80)
         case .error:

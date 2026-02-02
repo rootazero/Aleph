@@ -3,7 +3,7 @@
 //  Aether
 //
 //  Main Halo overlay view (V2) that integrates all state-specific components.
-//  Uses the simplified 7-state HaloState model.
+//  Uses the simplified 9-state HaloState model.
 //
 
 import SwiftUI
@@ -14,7 +14,7 @@ import Combine
 /// Main Halo overlay view (V2) with simplified state model
 ///
 /// Features:
-/// - 7 unified states: idle, listening, streaming, confirmation, result, error, historyList
+/// - 9 unified states: idle, listening, streaming, confirmation, clarification, result, error, historyList, commandList
 /// - Integrated components for each state
 /// - Smooth state transitions with animations
 ///
@@ -47,6 +47,9 @@ struct HaloViewV2: View {
                         viewModel.callbacks.onCancel?()
                     }
                 )
+
+            case .clarification(let request):
+                ClarificationView(request: request)
 
             case .result(let context):
                 HaloResultView(
@@ -140,6 +143,8 @@ class HaloViewModelV2: ObservableObject {
             return "streaming-\(ctx.runId)"
         case .confirmation(let ctx):
             return "confirmation-\(ctx.runId)"
+        case .clarification(let request):
+            return "clarification-\(request.id)"
         case .result(let ctx):
             return "result-\(ctx.runId)"
         case .error(let ctx):

@@ -128,15 +128,6 @@ final class AttachmentFileManager: @unchecked Sendable {
         }
     }
 
-    /// Save user-uploaded attachment from PendingAttachment
-    /// - Parameters:
-    ///   - pending: The pending attachment
-    ///   - messageId: Associated message ID
-    /// - Returns: Relative path for database storage
-    func saveUserUpload(from pending: PendingAttachment, messageId: String) -> String? {
-        return saveUserUpload(data: pending.data, filename: pending.fileName, messageId: messageId)
-    }
-
     /// Cache remote URL locally
     /// - Parameters:
     ///   - url: Remote URL
