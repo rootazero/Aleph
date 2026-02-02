@@ -105,11 +105,15 @@ struct HaloStreamingView: View {
     }
 
     private func toolCallRow(_ toolCall: ToolCallInfo) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             toolStatusIcon(toolCall.status)
                 .frame(width: 16, height: 16)
 
-            Text(toolCall.name)
+            // Emoji prefix for tool type
+            Text(toolEmoji(for: toolCall.name))
+                .font(.system(size: 12))
+
+            Text(toolDisplayName(toolCall.name))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.primary)
                 .lineLimit(1)
@@ -124,6 +128,52 @@ struct HaloStreamingView: View {
             }
         }
         .frame(maxWidth: 260)
+    }
+
+    /// Get emoji for tool name (matches Rust side mapping)
+    private func toolEmoji(for toolName: String) -> String {
+        switch toolName.lowercased() {
+        case "exec", "shell", "bash", "run_command":
+            return "🔨"
+        case "read", "read_file", "cat":
+            return "📄"
+        case "write", "write_file":
+            return "✏️"
+        case "edit", "edit_file", "patch":
+            return "📝"
+        case "web_fetch", "fetch", "http":
+            return "🌐"
+        case "search", "grep", "find":
+            return "🔍"
+        case "list", "ls", "dir":
+            return "📁"
+        default:
+            return "⚙️"
+        }
+    }
+
+    /// Get display name for tool (capitalize first letter)
+    private func toolDisplayName(_ toolName: String) -> String {
+        // Use a friendly display name if available
+        switch toolName.lowercased() {
+        case "exec", "shell", "bash", "run_command":
+            return "Exec"
+        case "read", "read_file", "cat":
+            return "Read"
+        case "write", "write_file":
+            return "Write"
+        case "edit", "edit_file", "patch":
+            return "Edit"
+        case "web_fetch", "fetch", "http":
+            return "Fetch"
+        case "search", "grep", "find":
+            return "Search"
+        case "list", "ls", "dir":
+            return "List"
+        default:
+            // Capitalize first letter of original name
+            return toolName.prefix(1).uppercased() + toolName.dropFirst()
+        }
     }
 
     // MARK: - Helper Views
@@ -225,7 +275,7 @@ struct HaloStreamingView: View {
                 runId: "preview-4",
                 toolCalls: [
                     ToolCallInfo(id: "1", name: "read_file", status: .completed, progressText: nil),
-                    ToolCallInfo(id: "2", name: "search_code", status: .running, progressText: "Searching..."),
+                    ToolCallInfo(id: "2", name: "grep", status: .running, progressText: "Searching..."),
                     ToolCallInfo(id: "3", name: "write_file", status: .pending, progressText: nil)
                 ],
                 phase: .toolExecuting
@@ -243,8 +293,8 @@ struct HaloStreamingView: View {
                 runId: "preview-5",
                 toolCalls: [
                     ToolCallInfo(id: "1", name: "read_file", status: .completed, progressText: nil),
-                    ToolCallInfo(id: "2", name: "execute_code", status: .failed, progressText: "Timeout"),
-                    ToolCallInfo(id: "3", name: "retry_operation", status: .running, progressText: "Retrying...")
+                    ToolCallInfo(id: "2", name: "exec", status: .failed, progressText: "Timeout"),
+                    ToolCallInfo(id: "3", name: "bash", status: .running, progressText: "Retrying...")
                 ],
                 phase: .toolExecuting
             )
@@ -283,8 +333,8 @@ struct HaloStreamingView: View {
                 context: StreamingContext(
                     runId: "all-3",
                     toolCalls: [
-                        ToolCallInfo(id: "1", name: "search", status: .completed),
-                        ToolCallInfo(id: "2", name: "analyze", status: .running, progressText: "Processing...")
+                        ToolCallInfo(id: "1", name: "grep", status: .completed),
+                        ToolCallInfo(id: "2", name: "edit_file", status: .running, progressText: "Processing...")
                     ],
                     phase: .toolExecuting
                 )

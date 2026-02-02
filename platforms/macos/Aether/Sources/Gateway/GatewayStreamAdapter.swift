@@ -295,9 +295,6 @@ final class GatewayStreamAdapter: ObservableObject {
         // Build enhanced summary
         enhancedRunSummary = EnhancedRunSummary(from: event.summary, durationMs: event.totalDurationMs)
 
-        // Use final response from summary if available, otherwise use accumulated text
-        let response = event.summary.finalResponse ?? accumulatedText
-
         // Finalize text part
         if !accumulatedText.isEmpty {
             let partId = "text-\(currentRunId ?? "unknown")"
