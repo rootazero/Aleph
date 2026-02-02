@@ -4,6 +4,7 @@
 
 use crate::config::Config;
 use crate::error::{AetherError, Result};
+use chrono::NaiveTime;
 use tracing::{debug, error, info, warn};
 
 impl Config {
@@ -281,6 +282,128 @@ impl Config {
                 "memory.similarity_threshold must be between 0.0 and 1.0, got {}",
                 self.memory.similarity_threshold
             )));
+        }
+
+        if self.memory.dreaming.enabled {
+            if self.memory.dreaming.idle_threshold_seconds == 0 {
+                error!("Dreaming idle_threshold_seconds is zero");
+                return Err(AetherError::invalid_config(
+                    "memory.dreaming.idle_threshold_seconds must be greater than 0",
+                ));
+            }
+
+            if self.memory.dreaming.max_duration_seconds == 0 {
+                error!("Dreaming max_duration_seconds is zero");
+                return Err(AetherError::invalid_config(
+                    "memory.dreaming.max_duration_seconds must be greater than 0",
+                ));
+            }
+
+            if NaiveTime::parse_from_str(
+                &self.memory.dreaming.window_start_local,
+                "%H:%M",
+            )
+            .is_err()
+            {
+                error!(
+                    window_start = %self.memory.dreaming.window_start_local,
+                    "Invalid dreaming window_start_local"
+                );
+                return Err(AetherError::invalid_config(format!(
+                    "memory.dreaming.window_start_local must be HH:MM, got {}",
+                    self.memory.dreaming.window_start_local
+                )));
+            }
+
+            if NaiveTime::parse_from_str(&self.memory.dreaming.window_end_local, "%H:%M")
+                .is_err()
+            {
+                error!(
+                    window_end = %self.memory.dreaming.window_end_local,
+                    "Invalid dreaming window_end_local"
+                );
+                return Err(AetherError::invalid_config(format!(
+                    "memory.dreaming.window_end_local must be HH:MM, got {}",
+                    self.memory.dreaming.window_end_local
+                )));
+            }
+        }
+
+        if !(0.0..=1.0).contains(&self.memory.graph_decay.node_decay_per_day) {
+            error!(
+                value = self.memory.graph_decay.node_decay_per_day,
+                "Invalid graph node_decay_per_day"
+            );
+            return Err(AetherError::invalid_config(format!(
+                "memory.graph_decay.node_decay_per_day must be between 0.0 and 1.0, got {}",
+                self.memory.graph_decay.node_decay_per_day
+            )));
+        }
+
+        if !(0.0..=1.0).contains(&self.memory.graph_decay.edge_decay_per_day) {
+            error!(
+                value = self.memory.graph_decay.edge_decay_per_day,
+                "Invalid graph edge_decay_per_day"
+            );
+            return Err(AetherError::invalid_config(format!(
+                "memory.graph_decay.edge_decay_per_day must be between 0.0 and 1.0, got {}",
+                self.memory.graph_decay.edge_decay_per_day
+            )));
+        }
+
+        if !(0.0..=1.0).contains(&self.memory.graph_decay.min_score) {
+            error!(
+                value = self.memory.graph_decay.min_score,
+                "Invalid graph min_score"
+            );
+            return Err(AetherError::invalid_config(format!(
+                "memory.graph_decay.min_score must be between 0.0 and 1.0, got {}",
+                self.memory.graph_decay.min_score
+            )));
+        }
+
+        if self.memory.memory_decay.half_life_days <= 0.0 {
+            error!(
+                value = self.memory.memory_decay.half_life_days,
+                "Invalid memory decay half_life_days"
+            );
+            return Err(AetherError::invalid_config(format!(
+                "memory.memory_decay.half_life_days must be greater than 0, got {}",
+                self.memory.memory_decay.half_life_days
+            )));
+        }
+
+        if self.memory.memory_decay.access_boost < 0.0 {
+            error!(
+                value = self.memory.memory_decay.access_boost,
+                "Invalid memory decay access_boost"
+            );
+            return Err(AetherError::invalid_config(format!(
+                "memory.memory_decay.access_boost must be >= 0, got {}",
+                self.memory.memory_decay.access_boost
+            )));
+        }
+
+        if !(0.0..=1.0).contains(&self.memory.memory_decay.min_strength) {
+            error!(
+                value = self.memory.memory_decay.min_strength,
+                "Invalid memory decay min_strength"
+            );
+            return Err(AetherError::invalid_config(format!(
+                "memory.memory_decay.min_strength must be between 0.0 and 1.0, got {}",
+                self.memory.memory_decay.min_strength
+            )));
+        }
+
+        let allowed_types = ["preference", "plan", "learning", "project", "personal", "other"];
+        for entry in &self.memory.memory_decay.protected_types {
+            let lower = entry.to_lowercase();
+            if !allowed_types.contains(&lower.as_str()) {
+                warn!(
+                    protected_type = %entry,
+                    "Unknown memory_decay protected_type"
+                );
+            }
         }
 
         debug!(
