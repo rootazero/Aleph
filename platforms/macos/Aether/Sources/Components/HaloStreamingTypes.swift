@@ -352,3 +352,52 @@ struct HistoryListContext: Equatable {
         self.selectedIndex = selectedIndex
     }
 }
+
+// MARK: - Command List Types
+
+/// A command/skill item in the command list
+struct CommandItem: Identifiable, Equatable {
+    /// Unique identifier for this command
+    let id: String
+    /// Display name of the command
+    let name: String
+    /// Description of what the command does
+    let description: String
+    /// SF Symbol icon name
+    let icon: String
+
+    init(id: String, name: String, description: String, icon: String = "command.circle.fill") {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.icon = icon
+    }
+}
+
+/// Context for command list (/ command)
+struct CommandListContext: Equatable {
+    /// All available commands
+    let commands: [CommandItem]
+    /// Current search query
+    var searchQuery: String
+    /// Currently selected command index
+    var selectedIndex: Int?
+
+    /// Commands filtered by search query
+    var filteredCommands: [CommandItem] {
+        if searchQuery.isEmpty {
+            return commands
+        }
+        let query = searchQuery.lowercased()
+        return commands.filter { command in
+            command.name.lowercased().contains(query) ||
+            command.description.lowercased().contains(query)
+        }
+    }
+
+    init(commands: [CommandItem], searchQuery: String = "", selectedIndex: Int? = nil) {
+        self.commands = commands
+        self.searchQuery = searchQuery
+        self.selectedIndex = selectedIndex
+    }
+}
