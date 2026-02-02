@@ -299,7 +299,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Show or bring conversation window to front
     /// Called from menu bar item
     @objc private func showConversation() {
-        MultiTurnCoordinator.shared.showOrBringToFront()
+        HaloInputCoordinator.shared.showOrBringToFront()
     }
 
     @objc private func showSettings() {
@@ -597,8 +597,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 eventHandler.setCore(coreInstance)
             }
 
-            // Configure MultiTurnCoordinator with dependencies
-            MultiTurnCoordinator.shared.configure(core: core)
+            // Configure HaloInputCoordinator with dependencies
+            HaloInputCoordinator.shared.configure(haloWindow: haloWindow, core: core)
 
             print("[Aether] coordinators configured")
 
