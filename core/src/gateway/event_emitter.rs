@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::Mutex;
 
 use super::event_bus::GatewayEventBus;
 use super::protocol::JsonRpcRequest;
@@ -260,17 +262,80 @@ pub enum EventEmitError {
 /// Gateway-based event emitter
 ///
 /// Broadcasts events to all connected WebSocket clients via the event bus.
+/// Supports throttled response chunk emission (150ms) for smoother streaming.
 pub struct GatewayEventEmitter {
     event_bus: Arc<GatewayEventBus>,
     seq_counter: AtomicU64,
+    // Throttling state for response chunks
+    delta_buffer: Mutex<String>,
+    last_delta_at: Mutex<Instant>,
 }
 
 impl GatewayEventEmitter {
+    /// Delta event throttle interval (150ms like OpenClaw)
+    const DELTA_THROTTLE_MS: u64 = 150;
+
     pub fn new(event_bus: Arc<GatewayEventBus>) -> Self {
         Self {
             event_bus,
             seq_counter: AtomicU64::new(0),
+            delta_buffer: Mutex::new(String::new()),
+            last_delta_at: Mutex::new(Instant::now()),
         }
+    }
+
+    /// Emit response chunk with 150ms throttling
+    ///
+    /// Buffers chunks within the throttle window, sends accumulated content on boundary.
+    /// Final chunks are always sent immediately with any buffered content.
+    pub async fn emit_response_chunk_throttled(
+        &self,
+        run_id: &str,
+        content: &str,
+        chunk_index: u32,
+        is_final: bool,
+    ) {
+        if is_final {
+            // Always send final chunk immediately with any buffered content
+            let mut buffer = self.delta_buffer.lock().await;
+            let full_content = if buffer.is_empty() {
+                content.to_string()
+            } else {
+                let buffered = std::mem::take(&mut *buffer);
+                format!("{}{}", buffered, content)
+            };
+            drop(buffer);
+
+            self.emit_response_chunk(run_id, &full_content, chunk_index, true)
+                .await;
+            return;
+        }
+
+        let now = Instant::now();
+        let mut last_at = self.last_delta_at.lock().await;
+        let elapsed = now.duration_since(*last_at).as_millis() as u64;
+
+        if elapsed < Self::DELTA_THROTTLE_MS {
+            // Buffer the content, don't send yet
+            self.delta_buffer.lock().await.push_str(content);
+            return;
+        }
+
+        // Send buffered + new content
+        let mut buffer = self.delta_buffer.lock().await;
+        let full_content = if buffer.is_empty() {
+            content.to_string()
+        } else {
+            let buffered = std::mem::take(&mut *buffer);
+            format!("{}{}", buffered, content)
+        };
+        drop(buffer);
+
+        *last_at = now;
+        drop(last_at);
+
+        self.emit_response_chunk(run_id, &full_content, chunk_index, false)
+            .await;
     }
 }
 
@@ -489,5 +554,75 @@ mod tests {
             params: serde_json::json!({}),
         };
         assert_eq!(event_method(&event), "stream.tool_start");
+    }
+
+    #[tokio::test]
+    async fn test_throttled_response_chunk_buffering() {
+        use super::super::event_bus::GatewayEventBus;
+
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let emitter = GatewayEventEmitter::new(event_bus);
+
+        // First chunk should be sent (enough time elapsed from initialization)
+        emitter
+            .emit_response_chunk_throttled("run-1", "Hello ", 0, false)
+            .await;
+
+        // These should be buffered (within 150ms window)
+        emitter
+            .emit_response_chunk_throttled("run-1", "World", 1, false)
+            .await;
+        emitter
+            .emit_response_chunk_throttled("run-1", "!", 2, false)
+            .await;
+
+        // Check that content is buffered
+        let buffer = emitter.delta_buffer.lock().await;
+        assert!(
+            buffer.contains("World") || buffer.contains("!"),
+            "Buffer should contain throttled content"
+        );
+        drop(buffer);
+
+        // Final chunk should flush everything
+        emitter
+            .emit_response_chunk_throttled("run-1", " Done", 3, true)
+            .await;
+
+        // Buffer should be empty after final
+        let buffer = emitter.delta_buffer.lock().await;
+        assert!(buffer.is_empty(), "Buffer should be empty after final chunk");
+    }
+
+    #[tokio::test]
+    async fn test_throttled_response_chunk_final_always_sends() {
+        use super::super::event_bus::GatewayEventBus;
+
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let emitter = GatewayEventEmitter::new(event_bus);
+
+        // Add some content to buffer
+        {
+            let mut buffer = emitter.delta_buffer.lock().await;
+            buffer.push_str("buffered content ");
+        }
+
+        // Final should include buffered content
+        emitter
+            .emit_response_chunk_throttled("run-1", "final", 0, true)
+            .await;
+
+        // Buffer should be cleared
+        let buffer = emitter.delta_buffer.lock().await;
+        assert!(buffer.is_empty(), "Buffer should be empty after final");
+    }
+
+    #[test]
+    fn test_throttle_constant() {
+        assert_eq!(
+            GatewayEventEmitter::DELTA_THROTTLE_MS,
+            150,
+            "Throttle interval should be 150ms"
+        );
     }
 }
