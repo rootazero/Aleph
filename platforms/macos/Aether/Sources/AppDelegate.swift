@@ -641,7 +641,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             let options = ProcessOptions(
                 appContext: appContext,
                 windowTitle: windowTitle,
-                topicId: nil,  // Will be set by MultiTurnCoordinator for conversations
+                topicId: nil,  // Will be set by HaloInputCoordinator for conversations
                 stream: stream,
                 attachments: nil,  // No attachments for direct process calls
                 preferredLanguage: LocalizationManager.shared.currentLanguage
@@ -964,7 +964,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 }
             }
             if modifiersMatch && event.keyCode == self.multiTurnHotkeyKeyCode {
-                MultiTurnCoordinator.shared.handleHotkey()
+                HaloInputCoordinator.shared.handleHotkey()
                 return true  // Event handled
             }
             return false
