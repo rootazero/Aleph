@@ -84,9 +84,9 @@ final class HotkeyService {
             }
 
             if modifiersMatch && event.keyCode == self.multiTurnKeyCode {
-                // Dispatch to MainActor since MultiTurnCoordinator is @MainActor isolated
+                // Dispatch to MainActor since HaloInputCoordinator is @MainActor isolated
                 Task { @MainActor in
-                    MultiTurnCoordinator.shared.handleHotkey()
+                    HaloInputCoordinator.shared.handleHotkey()
                 }
                 return true
             }
