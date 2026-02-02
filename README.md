@@ -146,6 +146,10 @@ See: [Agent Design Philosophy](docs/AGENT_DESIGN_PHILOSOPHY.md)
 - Image and video generation
 - Provider-specific prompt optimization
 
+**Holographic Perception (Phase 8.5)**:
+- SnapshotTool captures AX tree + optional OCR for system-level context
+- Focus hint inference to surface user attention
+
 ### Memory System (Local RAG)
 
 - **Dual-Layer Architecture**:
@@ -411,6 +415,10 @@ Aether requires Accessibility permission to:
 - Detect global hotkeys
 - Simulate keyboard input (Cmd+C, Cmd+V)
 - Query active window title for memory context
+
+### Screen Recording Permission (On-Demand)
+
+SnapshotTool and OCR-based perception require Screen Recording permission to capture window/region images.
 
 **Why this is safe:**
 - Open source code (you can audit everything)

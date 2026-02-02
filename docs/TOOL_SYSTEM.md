@@ -108,6 +108,12 @@ impl<T: AetherTool> AetherToolDyn for T { ... }
 | `image_generate` | Generate image | `prompt`, `provider?`, `size?` |
 | `pdf_generate` | Generate PDF | `content`, `template?` |
 
+### Perception
+
+| Tool | Description | Args |
+|------|-------------|------|
+| `snapshot_capture` | Capture AX tree + optional OCR | `target`, `region?`, `include_ax?`, `include_vision?`, `include_image?` |
+
 ### Session Tools
 
 | Tool | Description | Args |

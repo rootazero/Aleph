@@ -380,35 +380,90 @@ pub struct RetentionPolicy {
 
 ---
 
+## Memory Graph
+
+**Location**: `core/src/memory/graph.rs`
+
+The memory graph maintains lightweight entity nodes and relations used for disambiguation and
+graph-assisted filtering. Entities are extracted from compressed facts and DreamDaemon summaries,
+then stored in the shared `memory.db` alongside memories.
+
+Key tables:
+- `graph_nodes` (entities)
+- `graph_edges` (relations)
+- `graph_aliases` (name/alias lookup)
+- `memory_entities` (memory to entity links)
+
+---
+
+## DreamDaemon
+
+**Location**: `core/src/memory/dreaming.rs`
+
+DreamDaemon runs during idle windows to:
+- Cluster recent memories (default lookback: 24h)
+- Produce a daily insight summary
+- Update graph nodes/edges from the summary
+- Apply decay to memory facts and graph scores
+
+Daily insights are stored in `daily_insights` and can be queried by date.
+
+---
+
 ## Configuration
 
-```json5
-{
-  "memory": {
-    "database": "~/.aether/memory.db",
-    "embedding": {
-      "model": "bge-small-zh-v1.5",
-      "batchSize": 32
-    },
-    "retrieval": {
-      "strategy": "hybrid",
-      "vectorWeight": 0.7,
-      "maxResults": 10,
-      "minScore": 0.5
-    },
-    "compression": {
-      "thresholdTokens": 8000,
-      "targetTokens": 4000,
-      "keepRecent": 10
-    },
-    "retention": {
-      "sessionMaxAgeDays": 30,
-      "toolMaxAgeDays": 7,
-      "maxTotalFacts": 100000
-    }
-  }
-}
+```toml
+[memory]
+enabled = true
+embedding_model = "bge-small-zh-v1.5"
+max_context_items = 5
+retention_days = 90
+vector_db = "sqlite-vec"
+similarity_threshold = 0.7
+excluded_apps = ["com.apple.keychainaccess", "com.agilebits.onepassword7"]
+
+ai_retrieval_enabled = true
+ai_retrieval_timeout_ms = 3000
+ai_retrieval_max_candidates = 20
+ai_retrieval_fallback_count = 3
+
+compression_enabled = true
+compression_idle_timeout_seconds = 300
+compression_turn_threshold = 20
+compression_interval_seconds = 3600
+compression_batch_size = 50
+conflict_similarity_threshold = 0.85
+max_facts_in_context = 5
+raw_memory_fallback_count = 3
+
+[memory.dreaming]
+enabled = true
+idle_threshold_seconds = 900
+window_start_local = "02:00"
+window_end_local = "05:00"
+max_duration_seconds = 600
+
+[memory.graph_decay]
+node_decay_per_day = 0.02
+edge_decay_per_day = 0.03
+min_score = 0.1
+
+[memory.memory_decay]
+half_life_days = 30.0
+access_boost = 0.2
+min_strength = 0.1
+protected_types = ["personal"]
 ```
+
+---
+
+## Manual Test Checklist
+
+- Set `memory.dreaming.enabled = true` and adjust the window to include the current time.
+- Set `memory.dreaming.idle_threshold_seconds = 5`, wait for idle, and confirm a daily insight appears in `daily_insights`.
+- Trigger user activity during a dream run and confirm `dream_status.last_status = cancelled`.
+- Verify `graph_nodes`/`graph_edges` are updated after a successful run.
+- Raise `memory.memory_decay.min_strength` temporarily and confirm older facts are pruned.
 
 ---
 
