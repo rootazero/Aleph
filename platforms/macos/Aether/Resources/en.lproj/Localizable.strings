@@ -290,9 +290,6 @@
 "settings.behavior.pii_example_phone" = "e.g., (555) 123-4567";
 "settings.behavior.pii_example_ssn" = "e.g., 123-45-6789";
 "settings.behavior.pii_example_credit_card" = "e.g., 1234-5678-9012-3456";
-"settings.behavior.multi_turn" = "Conversation Mode";
-"settings.behavior.multi_turn_enabled" = "Enable Multi-turn by Default";
-"settings.behavior.multi_turn_description" = "When enabled, every conversation automatically supports follow-up questions. When disabled, use /chat command to start multi-turn mode.";
 "settings.behavior.window_visibility" = "Window Visibility";
 "settings.behavior.keep_window_visible" = "Keep Window Visible During Processing";
 "settings.behavior.keep_window_visible_description" = "When enabled, the conversation window stays visible during AI processing. When disabled, the window hides and a processing indicator appears instead.";
@@ -1003,3 +1000,11 @@
 "history.yesterday" = "Yesterday";
 "history.this_week" = "This Week";
 "history.earlier" = "Earlier";
+
+// MARK: - Result Detail Popover
+"result.partial" = "Partially Complete";
+"result.success" = "Completed";
+"result.tools" = "Tools";
+"result.errors" = "Errors";
+"result.reasoning" = "Reasoning";
+"button.close" = "Close";
