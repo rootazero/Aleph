@@ -130,6 +130,41 @@ struct HaloResultView: View {
     }
 }
 
+// MARK: - HaloResultViewV2
+
+/// Enhanced result view with detail popover
+struct HaloResultViewV2: View {
+    let context: ResultContext
+    let enhancedSummary: EnhancedRunSummary?
+    let onDismiss: (() -> Void)?
+    let onCopy: (() -> Void)?
+
+    @State private var showingDetail = false
+
+    var body: some View {
+        HaloResultView(
+            context: context,
+            onDismiss: {
+                if enhancedSummary != nil {
+                    showingDetail = true
+                } else {
+                    onDismiss?()
+                }
+            },
+            onCopy: onCopy
+        )
+        .popover(isPresented: $showingDetail, arrowEdge: .bottom) {
+            if let summary = enhancedSummary {
+                HaloResultDetailPopover(
+                    summary: summary,
+                    onCopy: { onCopy?() },
+                    onDismiss: { showingDetail = false }
+                )
+            }
+        }
+    }
+}
+
 // MARK: - Previews
 
 #if DEBUG
@@ -295,5 +330,35 @@ struct HaloResultView: View {
     .padding(20)
     .background(Color.black.opacity(0.8))
     .frame(width: 360, height: 400)
+}
+
+#Preview("Result V2 with Enhanced Summary") {
+    ZStack {
+        Color.black.opacity(0.8)
+        HaloResultViewV2(
+            context: ResultContext(
+                runId: "preview-v2",
+                summary: .success(
+                    message: "Task completed",
+                    toolsExecuted: 3,
+                    durationMs: 2500,
+                    finalResponse: "Done"
+                )
+            ),
+            enhancedSummary: EnhancedRunSummary(
+                from: RunSummary(
+                    totalTokens: 1500,
+                    toolCalls: 3,
+                    loops: 1,
+                    finalResponse: "Done"
+                ),
+                durationMs: 2500
+            ),
+            onDismiss: { print("Dismissed") },
+            onCopy: { print("Copied") }
+        )
+        .frame(maxWidth: 300)
+    }
+    .frame(width: 360, height: 100)
 }
 #endif
