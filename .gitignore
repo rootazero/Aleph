@@ -61,9 +61,10 @@ platforms/macos/build/
 # XcodeGen backup
 *.xcodeproj.backup
 
-# .NET / Windows
-bin/
-obj/
+# .NET / Windows (exclude Rust source bin directories)
+/bin/
+**/obj/
+!core/src/bin/
 *.user
 *.suo
 *.userosscache

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use tracing::{debug, info};
@@ -68,7 +68,8 @@ CREATE INDEX IF NOT EXISTS idx_suggestions_status ON pending_suggestions(status)
 
 /// Tracker for skill executions and metrics
 pub struct EvolutionTracker {
-    conn: Arc<RwLock<Connection>>,
+    /// Database connection wrapped in Mutex (Connection is Send but not Sync)
+    conn: Arc<Mutex<Connection>>,
     /// In-memory cache for hot metrics
     metrics_cache: Arc<RwLock<HashMap<String, SkillMetrics>>>,
 }
@@ -90,7 +91,7 @@ impl EvolutionTracker {
         info!(path = %db_path.as_ref().display(), "Evolution tracker initialized");
 
         Ok(Self {
-            conn: Arc::new(RwLock::new(conn)),
+            conn: Arc::new(Mutex::new(conn)),
             metrics_cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
@@ -109,14 +110,14 @@ impl EvolutionTracker {
             })?;
 
         Ok(Self {
-            conn: Arc::new(RwLock::new(conn)),
+            conn: Arc::new(Mutex::new(conn)),
             metrics_cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
     /// Log a skill execution
     pub fn log_execution(&self, execution: &SkillExecution) -> Result<()> {
-        let conn = self.conn.write().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -171,7 +172,7 @@ impl EvolutionTracker {
         }
 
         // Load from database
-        let conn = self.conn.read().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -234,7 +235,7 @@ impl EvolutionTracker {
         &self,
         config: &SolidificationConfig,
     ) -> Result<Vec<SkillMetrics>> {
-        let conn = self.conn.read().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -299,7 +300,7 @@ impl EvolutionTracker {
 
     /// Update metrics for a skill based on all executions
     fn update_metrics(&self, skill_id: &str) -> Result<()> {
-        let conn = self.conn.write().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -420,7 +421,7 @@ impl EvolutionTracker {
 
     /// Save a compiler status value
     pub fn save_status(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn.write().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -446,7 +447,7 @@ impl EvolutionTracker {
 
     /// Get a compiler status value
     pub fn get_status(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn.read().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -515,7 +516,7 @@ impl EvolutionTracker {
         suggestion: &super::types::SolidificationSuggestion,
         status: &str,
     ) -> Result<()> {
-        let conn = self.conn.write().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -554,7 +555,7 @@ impl EvolutionTracker {
 
     /// Update suggestion status
     pub fn update_suggestion_status(&self, id: &str, status: &str, notes: Option<&str>) -> Result<()> {
-        let conn = self.conn.write().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -578,7 +579,7 @@ impl EvolutionTracker {
 
     /// Get pending suggestions count
     pub fn get_pending_count(&self) -> Result<usize> {
-        let conn = self.conn.read().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -599,7 +600,7 @@ impl EvolutionTracker {
 
     /// Delete old resolved suggestions (cleanup)
     pub fn cleanup_old_suggestions(&self, max_age_days: u32) -> Result<usize> {
-        let conn = self.conn.write().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AetherError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
