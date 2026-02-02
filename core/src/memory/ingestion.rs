@@ -6,6 +6,7 @@ use crate::config::MemoryConfig;
 use crate::error::AetherError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::database::VectorDatabase;
+use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
 use crate::memory::smart_embedder::SmartEmbedder;
 use crate::utils::pii::scrub_pii;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ impl MemoryIngestion {
         embedder: Arc<SmartEmbedder>,
         config: Arc<MemoryConfig>,
     ) -> Self {
+        ensure_dream_daemon(Arc::clone(&database), Arc::clone(&config));
         Self {
             database,
             embedder,
@@ -56,6 +58,7 @@ impl MemoryIngestion {
         user_input: &str,
         ai_output: &str,
     ) -> Result<String, AetherError> {
+        record_activity();
         debug!(
             app = %context.app_bundle_id,
             window = %context.window_title,

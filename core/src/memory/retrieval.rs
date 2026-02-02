@@ -6,6 +6,8 @@ use crate::config::MemoryConfig;
 use crate::error::AetherError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::database::VectorDatabase;
+use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
+use crate::memory::graph::GraphStore;
 use crate::memory::smart_embedder::SmartEmbedder;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -16,6 +18,7 @@ pub struct MemoryRetrieval {
     database: Arc<VectorDatabase>,
     embedder: Arc<SmartEmbedder>,
     config: Arc<MemoryConfig>,
+    graph_store: Option<GraphStore>,
 }
 
 impl MemoryRetrieval {
@@ -25,11 +28,47 @@ impl MemoryRetrieval {
         embedder: Arc<SmartEmbedder>,
         config: Arc<MemoryConfig>,
     ) -> Self {
+        ensure_dream_daemon(Arc::clone(&database), Arc::clone(&config));
+        let graph_store = if config.enabled {
+            Some(GraphStore::new(Arc::clone(&database)))
+        } else {
+            None
+        };
         Self {
             database,
             embedder,
             config,
+            graph_store,
         }
+    }
+
+    async fn resolve_entity_filter(
+        &self,
+        context: &ContextAnchor,
+        query: &str,
+    ) -> Option<String> {
+        let graph_store = self.graph_store.as_ref()?;
+        let hints = GraphStore::extract_query_hints(query);
+        if hints.is_empty() {
+            return None;
+        }
+
+        let context_key = format!(
+            "app:{}|window:{}",
+            context.app_bundle_id, context.window_title
+        );
+
+        for hint in hints {
+            if let Ok(resolved) = graph_store.resolve_entity(&hint, Some(&context_key)).await {
+                if let Some(best) = resolved.first() {
+                    if !best.ambiguous {
+                        return Some(best.node_id.clone());
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Retrieve memories for current context
@@ -52,6 +91,7 @@ impl MemoryRetrieval {
         context: &ContextAnchor,
         query: &str,
     ) -> Result<Vec<MemoryEntry>, AetherError> {
+        record_activity();
         debug!(
             app = %context.app_bundle_id,
             window = %context.window_title,
@@ -78,16 +118,42 @@ impl MemoryRetrieval {
             "Query embedding generated"
         );
 
-        // 3. Search database with context filter
-        let mut memories = self
-            .database
-            .search_memories(
-                &context.app_bundle_id,
-                &context.window_title,
-                &query_embedding,
-                self.config.max_context_items,
-            )
-            .await?;
+        // 3. Search database with optional graph entity filter
+        let mut memories = if let Some(entity_id) =
+            self.resolve_entity_filter(context, query).await
+        {
+            let filtered = self
+                .database
+                .search_memories_for_entity(
+                    &context.app_bundle_id,
+                    &context.window_title,
+                    &query_embedding,
+                    self.config.max_context_items,
+                    &entity_id,
+                )
+                .await?;
+            if filtered.is_empty() {
+                self.database
+                    .search_memories(
+                        &context.app_bundle_id,
+                        &context.window_title,
+                        &query_embedding,
+                        self.config.max_context_items,
+                    )
+                    .await?
+            } else {
+                filtered
+            }
+        } else {
+            self.database
+                .search_memories(
+                    &context.app_bundle_id,
+                    &context.window_title,
+                    &query_embedding,
+                    self.config.max_context_items,
+                )
+                .await?
+        };
 
         debug!(memories_found = memories.len(), "Database search completed");
 
@@ -135,6 +201,7 @@ impl MemoryRetrieval {
         query: &str,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>, AetherError> {
+        record_activity();
         debug!(
             app = %context.app_bundle_id,
             window = %context.window_title,
@@ -161,16 +228,42 @@ impl MemoryRetrieval {
             "Query embedding generated"
         );
 
-        // 3. Search database with context filter and custom limit
-        let mut memories = self
-            .database
-            .search_memories(
-                &context.app_bundle_id,
-                &context.window_title,
-                &query_embedding,
-                limit as u32,
-            )
-            .await?;
+        // 3. Search database with optional graph entity filter and custom limit
+        let mut memories = if let Some(entity_id) =
+            self.resolve_entity_filter(context, query).await
+        {
+            let filtered = self
+                .database
+                .search_memories_for_entity(
+                    &context.app_bundle_id,
+                    &context.window_title,
+                    &query_embedding,
+                    limit as u32,
+                    &entity_id,
+                )
+                .await?;
+            if filtered.is_empty() {
+                self.database
+                    .search_memories(
+                        &context.app_bundle_id,
+                        &context.window_title,
+                        &query_embedding,
+                        limit as u32,
+                    )
+                    .await?
+            } else {
+                filtered
+            }
+        } else {
+            self.database
+                .search_memories(
+                    &context.app_bundle_id,
+                    &context.window_title,
+                    &query_embedding,
+                    limit as u32,
+                )
+                .await?
+        };
 
         debug!(memories_found = memories.len(), "Database search completed");
 
