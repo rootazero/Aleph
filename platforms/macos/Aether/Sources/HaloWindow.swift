@@ -11,13 +11,13 @@ import SwiftUI
 
 // MARK: - HaloWindow
 
-/// Floating overlay window for Halo UI (simplified, no themes)
+/// Floating overlay window for Halo UI (V2 simplified state model)
 final class HaloWindow: NSWindow {
 
     // MARK: - Properties
 
-    /// View model for HaloView state
-    let viewModel = HaloViewModel()
+    /// View model for HaloViewV2 state
+    let viewModel = HaloViewModelV2()
 
     /// Time when window was shown (for minimum display time calculations)
     private(set) var showTime: Date?
@@ -26,7 +26,7 @@ final class HaloWindow: NSWindow {
     private var hideSequence: Int = 0
 
     /// Hosting view for SwiftUI content
-    private var hostingView: NSHostingView<HaloView>?
+    private var hostingView: NSHostingView<HaloViewV2>?
 
     // MARK: - Initialization
 
@@ -62,7 +62,7 @@ final class HaloWindow: NSWindow {
     }
 
     private func setupHostingView() {
-        let haloView = HaloView(viewModel: viewModel)
+        let haloView = HaloViewV2(viewModel: viewModel)
         hostingView = NSHostingView(rootView: haloView)
 
         if let hostingView = hostingView {
@@ -75,21 +75,15 @@ final class HaloWindow: NSWindow {
     // MARK: - Focus Prevention
 
     override var canBecomeKey: Bool {
-        // Allow key status for interactive states (error buttons, toast dismiss)
-        switch viewModel.state {
-        case .error, .toast, .clarification, .toolConfirmation, .planConfirmation, .planProgress:
-            return true
-        default:
-            return false
-        }
+        viewModel.state.isInteractive
     }
 
     override var canBecomeMain: Bool { false }
 
     // MARK: - State Management
 
-    /// Update the Halo state
-    func updateState(_ state: HaloState) {
+    /// Update the Halo state (V2)
+    func updateState(_ state: HaloStateV2) {
         Task { @MainActor [weak self] in
             self?.viewModel.state = state
             self?.updateWindowSize()
@@ -97,55 +91,13 @@ final class HaloWindow: NSWindow {
         }
     }
 
-    /// Update typewriter progress
-    func updateTypewriterProgress(_ progress: Float) {
-        Task { @MainActor [weak self] in
-            self?.viewModel.state = .typewriting(progress: progress)
-        }
-    }
-
     private func updateWindowSize() {
-        // Size based on state
-        let size: NSSize
-        switch viewModel.state {
-        case .idle:
-            size = NSSize(width: 0, height: 0)
-        case .listening, .processing, .processingWithAI, .retrievingMemory, .success:
-            size = NSSize(width: 80, height: 60)
-        case .typewriting:
-            size = NSSize(width: 100, height: 60)
-        case .error, .toast, .clarification, .toolConfirmation:
-            size = NSSize(width: 320, height: 200)
-        case .planConfirmation:
-            size = NSSize(width: 360, height: 400)  // Plan confirmation needs more space
-        case .planProgress:
-            size = NSSize(width: 380, height: 420)  // Plan progress needs most space
-        case .conversationInput:
-            size = NSSize(width: 0, height: 0)  // Handled by UnifiedConversationWindow
-        case .taskGraphConfirmation:
-            size = NSSize(width: 400, height: 450)  // Task graph confirmation with DAG view
-        case .taskGraphProgress:
-            size = NSSize(width: 400, height: 480)  // Task graph progress with task list
-        case .agentPlan:
-            size = NSSize(width: 340, height: 360)  // Agent plan confirmation
-        case .agentProgress:
-            size = NSSize(width: 340, height: 180)  // Agent progress view
-        case .agentConflict:
-            size = NSSize(width: 320, height: 200)  // Agent conflict resolution
-        }
-
+        let size = viewModel.state.windowSize
         setContentSize(size)
     }
 
     private func updateInteractivity() {
-        // Enable mouse events for interactive states
-        switch viewModel.state {
-        case .error, .toast, .clarification, .toolConfirmation, .planConfirmation, .planProgress,
-             .taskGraphConfirmation, .taskGraphProgress, .agentPlan, .agentProgress, .agentConflict:
-            ignoresMouseEvents = false
-        default:
-            ignoresMouseEvents = true
-        }
+        ignoresMouseEvents = !viewModel.state.isInteractive
     }
 
     // MARK: - Show Methods
@@ -198,17 +150,17 @@ final class HaloWindow: NSWindow {
         showCentered()
     }
 
-    /// Show toast notification (convenience method)
-    func showToast(type: ToastType, title: String, message: String, autoDismiss: Bool) {
-        updateState(.toast(type: type, title: title, message: message, autoDismiss: autoDismiss))
-        showToastCentered()
-    }
-
     /// Show below a specific position
     func showBelow(at position: NSPoint) {
         // Show 20 points below the specified position
         let belowPosition = NSPoint(x: position.x, y: position.y - 20)
         show(at: belowPosition)
+    }
+
+    /// Show streaming state at current position (convenience method)
+    func showStreaming(_ context: StreamingContext) {
+        updateState(.streaming(context))
+        showAtCurrentPosition()
     }
 
     // MARK: - Hide Methods
@@ -244,30 +196,46 @@ final class HaloWindow: NSWindow {
         viewModel.state = .idle
     }
 
-    // MARK: - Tool Confirmation
+    // MARK: - Confirmation
 
-    /// Show tool confirmation dialog
-    func showToolConfirmation(
-        confirmationId: String,
-        toolName: String,
-        toolDescription: String,
-        reason: String,
-        confidence: Float,
-        onExecute: @escaping () -> Void,
+    /// Show confirmation dialog (V2)
+    func showConfirmation(
+        _ context: ConfirmationContext,
+        onConfirm: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
-        viewModel.callbacks.toolConfirmationOnExecute = onExecute
-        viewModel.callbacks.toolConfirmationOnCancel = onCancel
-
-        updateState(.toolConfirmation(
-            confirmationId: confirmationId,
-            toolName: toolName,
-            toolDescription: toolDescription,
-            reason: reason,
-            confidence: confidence
-        ))
-
+        viewModel.callbacks.onConfirm = onConfirm
+        viewModel.callbacks.onCancel = onCancel
+        updateState(.confirmation(context))
         showCentered()
+    }
+
+    // MARK: - Error
+
+    /// Show error state (V2)
+    func showError(
+        _ context: ErrorContext,
+        onRetry: (() -> Void)? = nil,
+        onDismiss: @escaping () -> Void
+    ) {
+        viewModel.callbacks.onRetry = onRetry
+        viewModel.callbacks.onDismiss = onDismiss
+        updateState(.error(context))
+        showCentered()
+    }
+
+    // MARK: - Result
+
+    /// Show result state (V2)
+    func showResult(
+        _ context: ResultContext,
+        onDismiss: (() -> Void)? = nil,
+        onCopy: (() -> Void)? = nil
+    ) {
+        viewModel.callbacks.onDismiss = onDismiss
+        viewModel.callbacks.onCopy = onCopy
+        updateState(.result(context))
+        showAtCurrentPosition()
     }
 
     // MARK: - Positioning
