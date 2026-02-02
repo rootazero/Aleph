@@ -1,0 +1,368 @@
+//! Manifest Builder for POE architecture.
+//!
+//! This module implements the "First Principles" engine that converts raw user
+//! instructions into structured `SuccessManifest` contracts.
+//!
+//! It uses LLM reasoning (System 2) to:
+//! 1. Analyze the user's intent
+//! 2. Retrieve similar successful experiences (if available)
+//! 3. Define hard constraints (what MUST be true)
+//! 4. Define soft metrics (what represents quality)
+//!
+//! ## Example
+//!
+//! ```rust,ignore
+//! use aethecore::poe::manifest::ManifestBuilder;
+//! use aethecore::providers::AiProvider;
+//!
+//! let builder = ManifestBuilder::new(provider)
+//!     .with_experience_tracker(tracker);
+//!
+//! let manifest = builder.build(
+//!     "Create a new Rust CLI tool called 'echo-cli'",
+//!     Some("Current dir is /workspace")
+//! ).await?;
+//! ```
+
+use std::sync::Arc;
+
+use crate::agents::thinking::ThinkLevel;
+use crate::error::Result;
+use crate::poe::types::SuccessManifest;
+use crate::providers::AiProvider;
+use crate::skill_evolution::EvolutionTracker;
+
+/// System prompt for the Manifest Builder.
+const MANIFEST_BUILDER_SYSTEM_PROMPT: &str = r#"You are the "First Principles" engine of an advanced AI agent.
+Your goal is to translate a vague user instruction into a rigorous Success Manifest (contract).
+
+## The Philosophy
+Do not just execute. First, define what "done" looks like.
+- **Hard Constraints**: Binary conditions that MUST be met. If these fail, the task failed.
+- **Soft Metrics**: Quality indicators. These are weighted and contribute to a score.
+
+## Output Format
+You must output ONLY valid JSON matching this structure:
+
+```json
+{
+  "task_id": "unique-id-derived-from-instruction",
+  "objective": "Clear, concise statement of the goal",
+  "hard_constraints": [
+    {
+      "type": "FileExists",
+      "params": { "path": "path/to/file" }
+    },
+    {
+      "type": "CommandPasses",
+      "params": { "cmd": "cargo", "args": ["test"], "timeout_ms": 60000 }
+    }
+  ],
+  "soft_metrics": [
+    {
+      "rule": {
+        "type": "SemanticCheck",
+        "params": {
+          "target": { "type": "File", "value": "src/main.rs" },
+          "prompt": "Is the code idiomatic and well-commented?",
+          "passing_criteria": "Uses idiomatic Rust patterns, clear comments",
+          "model_tier": "CloudSmart"
+        }
+      },
+      "weight": 0.8,
+      "threshold": 0.7
+    }
+  ],
+  "max_attempts": 5
+}
+```
+
+## Available Constraint Types
+
+### File System
+- `FileExists { path }`
+- `FileNotExists { path }`
+- `FileContains { path, pattern }` (pattern is regex)
+- `FileNotContains { path, pattern }`
+- `DirStructureMatch { root, expected }` (expected is "src/, Cargo.toml, ...")
+
+### Execution
+- `CommandPasses { cmd, args, timeout_ms }`
+- `CommandOutputContains { cmd, args, pattern, timeout_ms }`
+
+### Data
+- `JsonSchemaValid { path, schema }`
+
+### Semantic (LLM Judge)
+- `SemanticCheck { target, prompt, passing_criteria, model_tier }`
+  - target: `File(path)` or `Content(string)` or `CommandOutput { cmd, args }`
+  - model_tier: `LocalFast`, `CloudFast`, `CloudSmart`, `CloudDeep`
+
+## Guidelines
+1. **Be Specific**: Prefer `CommandPasses` (e.g., `cargo test`) over vague semantic checks.
+2. **Be Realistic**: Don't set `max_attempts` too low (default 3-5).
+3. **Use Semantic Checks for Quality**: Use LLM judges for code style, documentation quality, or complex logic that regex can't catch.
+4. **Context Matters**: Use the provided context to resolve relative paths.
+
+Output ONLY JSON. No markdown."#;
+
+/// Builder for generating SuccessManifests from instructions.
+pub struct ManifestBuilder {
+    /// AI provider for generating the manifest
+    provider: Arc<dyn AiProvider>,
+    /// Optional tracker for retrieving similar experiences
+    tracker: Option<Arc<EvolutionTracker>>,
+}
+
+impl ManifestBuilder {
+    /// Create a new ManifestBuilder.
+    pub fn new(provider: Arc<dyn AiProvider>) -> Self {
+        Self {
+            provider,
+            tracker: None,
+        }
+    }
+
+    /// Attach an evolution tracker to enable experience-based learning.
+    pub fn with_experience_tracker(mut self, tracker: Arc<EvolutionTracker>) -> Self {
+        self.tracker = Some(tracker);
+        self
+    }
+
+    /// Build a SuccessManifest from a user instruction.
+    ///
+    /// This method:
+    /// 1. Searches for similar past experiences (if tracker available)
+    /// 2. Constructs a prompt with instruction, context, and experiences
+    /// 3. Calls the LLM to generate the manifest JSON
+    /// 4. Parses and validates the result
+    pub async fn build(&self, instruction: &str, context: Option<&str>) -> Result<SuccessManifest> {
+        // 1. Retrieve similar experiences
+        let experiences_context = self.retrieve_relevant_experiences(instruction).await;
+
+        // 2. Build the prompt
+        let prompt = self.build_prompt(instruction, context, &experiences_context);
+
+        // 3. Call LLM
+        // We use CloudSmart (e.g., GPT-4o) for this planning task as it requires strong reasoning
+        let response = self
+            .provider
+            .process_with_thinking(
+                &prompt,
+                Some(MANIFEST_BUILDER_SYSTEM_PROMPT),
+                ThinkLevel::Low,
+            )
+            .await?;
+
+        // 4. Parse response
+        self.parse_manifest(&response)
+    }
+
+    /// Retrieve relevant experiences from the evolution tracker.
+    async fn retrieve_relevant_experiences(&self, instruction: &str) -> String {
+        if let Some(tracker) = &self.tracker {
+            // Generate a pattern ID from the instruction (simple heuristic for now)
+            // In a real implementation, we'd use vector search
+            let pattern_id = self.generate_pattern_id(instruction);
+            
+            // Try to get metrics for this pattern
+            if let Ok(Some(metrics)) = tracker.get_metrics(&pattern_id) {
+                if metrics.successful_executions > 0 {
+                    return format!(
+                        "## Similar Experiences\n\nI have successfully completed similar tasks (pattern: {}) {} times.\nSuccess rate: {:.1}%.",
+                        pattern_id,
+                        metrics.successful_executions,
+                        metrics.success_rate() * 100.0
+                    );
+                }
+            }
+        }
+        
+        String::new()
+    }
+
+    /// Generate a simple pattern ID from instruction (consistent with Crystallizer).
+    fn generate_pattern_id(&self, instruction: &str) -> String {
+        // This duplicates logic from Crystallizer to avoid circular deps or public exposure
+        // Ideally this should be in a shared utility
+        let lowercase = instruction.to_lowercase();
+        let keywords: Vec<String> = lowercase
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() > 3)
+            .take(3)
+            .map(String::from)
+            .collect();
+            
+        if keywords.is_empty() {
+            "poe-generic-task".to_string()
+        } else {
+            format!("poe-{}", keywords.join("-"))
+        }
+    }
+
+    /// Build the full prompt for the LLM.
+    fn build_prompt(
+        &self, 
+        instruction: &str, 
+        context: Option<&str>, 
+        experiences: &str
+    ) -> String {
+        let context_section = if let Some(ctx) = context {
+            format!("## Context\n{}\n", ctx)
+        } else {
+            String::new()
+        };
+
+        format!(
+            "## User Instruction\n\n{}
+
+{}
+{}
+Generate a Success Manifest for this task.",
+            instruction,
+            context_section,
+            experiences
+        )
+    }
+
+    /// Parse the JSON response from the LLM.
+    fn parse_manifest(&self, response: &str) -> Result<SuccessManifest> {
+        let json_str = self.extract_json(response);
+        
+        serde_json::from_str(&json_str).map_err(|e| {
+            crate::error::AetherError::other(format!(
+                "Failed to parse generated manifest: {}. Raw: {}", 
+                e, 
+                truncate_string(&json_str, 200)
+            ))
+        })
+    }
+
+    /// Extract JSON from potential markdown wrappers.
+    fn extract_json(&self, response: &str) -> String {
+        let trimmed = response.trim();
+        
+        // Handle markdown code blocks
+        if let Some(start) = trimmed.find("```") {
+            if let Some(end) = trimmed.rfind("```") {
+                if end > start {
+                    let inner = &trimmed[start..end];
+                    // Skip the first line (e.g. ```json)
+                    if let Some(newline) = inner.find('\n') {
+                        return inner[newline+1..].trim().to_string();
+                    }
+                }
+            }
+        }
+        
+        // Handle raw JSON (find outer braces)
+        if let Some(start) = trimmed.find('{') {
+            if let Some(end) = trimmed.rfind('}') {
+                if end > start {
+                    return trimmed[start..=end].to_string();
+                }
+            }
+        }
+        
+        trimmed.to_string()
+    }
+}
+
+/// Truncate a string to a maximum length.
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len])
+    }
+}
+
+// ============================================================================ 
+// Tests
+// ============================================================================ 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::MockProvider;
+
+    fn create_mock_builder(response: &str) -> ManifestBuilder {
+        let provider = Arc::new(MockProvider::new(response));
+        ManifestBuilder::new(provider)
+    }
+
+    #[test]
+    fn test_extract_json() {
+        let builder = create_mock_builder("");
+
+        // Pure JSON
+        assert_eq!(builder.extract_json(r#"{"a":1}"#), r#"{"a":1}"#);
+
+        // Markdown
+        assert_eq!(
+            builder.extract_json("```json\n{\"a\":1}\n```"),
+            r#"{"a":1}"#
+        );
+
+        // Surrounded text
+        assert_eq!(
+            builder.extract_json("Here is JSON:\n{\"a\":1}\nThanks"),
+            r#"{"a":1}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_manifest_success() {
+        let mock_json = r#"{
+            "task_id": "test-task",
+            "objective": "Test objective",
+            "hard_constraints": [
+                {
+                    "type": "FileExists",
+                    "params": { "path": "test.txt" }
+                }
+            ],
+            "soft_metrics": [],
+            "max_attempts": 3
+        }"#;
+
+        let builder = create_mock_builder(mock_json);
+        let manifest = builder.build("Create test.txt", None).await.unwrap();
+
+        assert_eq!(manifest.task_id, "test-task");
+        assert_eq!(manifest.objective, "Test objective");
+        assert_eq!(manifest.hard_constraints.len(), 1);
+    }
+    
+    #[tokio::test]
+    async fn test_build_manifest_with_semantic_check() {
+        let mock_json = r#"{
+            "task_id": "code-task",
+            "objective": "Write code",
+            "hard_constraints": [],
+            "soft_metrics": [
+                {
+                    "rule": {
+                        "type": "SemanticCheck",
+                        "params": {
+                            "target": { "type": "Content", "value": "code" },
+                            "prompt": "Is good?",
+                            "passing_criteria": "Yes",
+                            "model_tier": "CloudFast"
+                        }
+                    },
+                    "weight": 1.0,
+                    "threshold": 0.8
+                }
+            ]
+        }"#;
+
+        let builder = create_mock_builder(mock_json);
+        let manifest = builder.build("Write good code", None).await.unwrap();
+
+        assert_eq!(manifest.soft_metrics.len(), 1);
+        let metric = &manifest.soft_metrics[0];
+        assert_eq!(metric.weight, 1.0);
+        assert_eq!(metric.threshold, 0.8);
+    }
+}
