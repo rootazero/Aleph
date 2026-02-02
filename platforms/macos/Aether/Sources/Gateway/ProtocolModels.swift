@@ -299,6 +299,105 @@ struct RunSummary: Codable, Equatable, Sendable {
     }
 }
 
+/// Enhanced run summary with tool details
+struct EnhancedRunSummary: Codable, Equatable, Sendable {
+    let totalTokens: UInt64
+    let toolCalls: UInt32
+    let loops: UInt32
+    let durationMs: UInt64
+    let finalResponse: String?
+    let toolSummaries: [ToolSummaryItem]
+    let reasoning: String?
+    let errors: [ToolErrorItem]
+
+    enum CodingKeys: String, CodingKey {
+        case totalTokens = "total_tokens"
+        case toolCalls = "tool_calls"
+        case loops
+        case durationMs = "duration_ms"
+        case finalResponse = "final_response"
+        case toolSummaries = "tool_summaries"
+        case reasoning
+        case errors
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        totalTokens = try container.decode(UInt64.self, forKey: .totalTokens)
+        toolCalls = try container.decode(UInt32.self, forKey: .toolCalls)
+        loops = try container.decode(UInt32.self, forKey: .loops)
+        durationMs = try container.decodeIfPresent(UInt64.self, forKey: .durationMs) ?? 0
+        finalResponse = try container.decodeIfPresent(String.self, forKey: .finalResponse)
+        toolSummaries = try container.decodeIfPresent([ToolSummaryItem].self, forKey: .toolSummaries) ?? []
+        reasoning = try container.decodeIfPresent(String.self, forKey: .reasoning)
+        errors = try container.decodeIfPresent([ToolErrorItem].self, forKey: .errors) ?? []
+    }
+
+    /// Create from basic RunSummary for backwards compatibility
+    init(from basic: RunSummary, durationMs: UInt64) {
+        self.totalTokens = basic.totalTokens
+        self.toolCalls = basic.toolCalls
+        self.loops = basic.loops
+        self.durationMs = durationMs
+        self.finalResponse = basic.finalResponse
+        self.toolSummaries = []
+        self.reasoning = nil
+        self.errors = []
+    }
+
+    var hasErrors: Bool { !errors.isEmpty }
+}
+
+/// Tool execution summary item
+struct ToolSummaryItem: Codable, Equatable, Identifiable, Sendable {
+    let toolId: String
+    let toolName: String
+    let emoji: String
+    let displayMeta: String
+    let durationMs: UInt64
+    let success: Bool
+
+    var id: String { toolId }
+
+    enum CodingKeys: String, CodingKey {
+        case toolId = "tool_id"
+        case toolName = "tool_name"
+        case emoji
+        case displayMeta = "display_meta"
+        case durationMs = "duration_ms"
+        case success
+    }
+
+    /// Formatted display string: "🔨 Exec: mkdir -p /tmp"
+    var formatted: String {
+        if displayMeta.isEmpty {
+            return "\(emoji) \(toolName)"
+        }
+        return "\(emoji) \(toolName): \(displayMeta)"
+    }
+
+    /// Short format for list view
+    var shortFormatted: String {
+        if displayMeta.isEmpty {
+            return toolName
+        }
+        return displayMeta
+    }
+}
+
+/// Tool error item
+struct ToolErrorItem: Codable, Equatable, Sendable {
+    let toolName: String
+    let error: String
+    let toolId: String
+
+    enum CodingKeys: String, CodingKey {
+        case toolName = "tool_name"
+        case error
+        case toolId = "tool_id"
+    }
+}
+
 struct RunErrorEvent: Codable, Sendable {
     let runId: String
     let seq: UInt64
