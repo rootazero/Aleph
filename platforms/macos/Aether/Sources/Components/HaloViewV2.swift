@@ -3,7 +3,7 @@
 //  Aether
 //
 //  Main Halo overlay view (V2) that integrates all state-specific components.
-//  Uses the simplified 7-state HaloStateV2 model.
+//  Uses the simplified 7-state HaloState model.
 //
 
 import SwiftUI
@@ -105,7 +105,7 @@ struct HaloViewV2: View {
 /// - Centralized callbacks for all user interactions
 /// - State identifier for animation coordination
 class HaloViewModelV2: ObservableObject {
-    @Published var state: HaloStateV2 = .idle
+    @Published var state: HaloState = .idle
     let callbacks = HaloCallbacksV2()
 
     /// Unique string identifier for current state (for animation)

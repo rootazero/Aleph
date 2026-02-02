@@ -99,7 +99,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            self.haloWindow?.updateState(.processingWithAI(providerName: nil))
+            self.haloWindow?.showProcessingWithAI(providerName: nil)
             self.haloWindow?.showAtCurrentPosition()
         }
     }
@@ -113,7 +113,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             // Show processing state with tool name
-            self.haloWindow?.updateState(.processing(streamingText: "Using \(toolName)..."))
+            self.haloWindow?.showProcessing(streamingText: "Using \(toolName)...")
             self.haloWindow?.showAtCurrentPosition()
         }
     }
@@ -130,7 +130,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             // Update state to show tool completed
-            self.haloWindow?.updateState(.processing(streamingText: "Completed: \(toolName)"))
+            self.haloWindow?.showProcessing(streamingText: "Completed: \(toolName)")
         }
     }
 
@@ -172,7 +172,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            self.haloWindow?.updateState(.processing(streamingText: self.accumulatedText))
+            self.haloWindow?.showProcessing(streamingText: self.accumulatedText)
         }
     }
 
@@ -189,7 +189,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
             guard let self = self else { return }
 
             // Show success state then auto-hide
-            self.haloWindow?.updateState(.success(message: nil))
+            self.haloWindow?.showSuccess(message: nil)
 
             // Auto-hide after brief display
             try? await Task.sleep(seconds: 0.8)
@@ -334,7 +334,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
             )
 
             // Show processing state
-            self.haloWindow?.updateState(.processingWithAI(providerName: L("halo.agentic_session")))
+            self.haloWindow?.showProcessingWithAI(providerName: L("halo.agentic_session"))
             self.haloWindow?.showAtCurrentPosition()
         }
     }
@@ -368,15 +368,15 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 // Show agent progress with current tool
                 let progress = self.currentPlanSteps.isEmpty ? 0.0 :
                     Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.updateState(.agentProgress(
+                self.haloWindow?.showAgentProgress(
                     planId: self.currentAgenticSessionId ?? "",
                     progress: progress,
                     currentOperation: toolName,
                     completedCount: self.completedStepCount,
                     totalCount: self.currentPlanSteps.count
-                ))
+                )
             } else {
-                self.haloWindow?.updateState(.processing(streamingText: "🔧 \(toolName)"))
+                self.haloWindow?.showProcessing(streamingText: "🔧 \(toolName)")
             }
         }
     }
@@ -412,13 +412,13 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
             // Update progress
             if self.isInAgenticSession && !self.currentPlanSteps.isEmpty {
                 let progress = Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.updateState(.agentProgress(
+                self.haloWindow?.showAgentProgress(
                     planId: self.currentAgenticSessionId ?? "",
                     progress: progress,
                     currentOperation: "✓ \(toolName)",
                     completedCount: self.completedStepCount,
                     totalCount: self.currentPlanSteps.count
-                ))
+                )
             }
         }
     }
@@ -455,13 +455,13 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 let statusText = isRetryable ? "⟳ \(toolName) (retrying...)" : "✗ \(toolName)"
                 let progress = self.currentPlanSteps.isEmpty ? 0.0 :
                     Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.updateState(.agentProgress(
+                self.haloWindow?.showAgentProgress(
                     planId: self.currentAgenticSessionId ?? "",
                     progress: progress,
                     currentOperation: statusText,
                     completedCount: self.completedStepCount,
                     totalCount: self.currentPlanSteps.count
-                ))
+                )
             }
         }
     }
@@ -494,13 +494,13 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
             if self.isInAgenticSession {
                 let progress = self.currentPlanSteps.isEmpty ? 0.0 :
                     Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.updateState(.agentProgress(
+                self.haloWindow?.showAgentProgress(
                     planId: sessionId,
                     progress: progress,
                     currentOperation: status,
                     completedCount: self.completedStepCount,
                     totalCount: self.currentPlanSteps.count
-                ))
+                )
             }
         }
     }
@@ -543,7 +543,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 )
             }
 
-            self.haloWindow?.updateState(.planProgress(progressInfo: PlanProgressInfo(
+            self.haloWindow?.showPlanProgress(progressInfo: PlanProgressInfo(
                 planId: sessionId,
                 description: L("halo.executing_plan"),
                 totalSteps: UInt32(steps.count),
@@ -552,7 +552,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 stepProgress: stepProgress,
                 status: .running,
                 errorMessage: nil
-            )))
+            ))
             self.haloWindow?.showAtCurrentPosition()
         }
     }
@@ -586,7 +586,7 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
             // Show success toast if we were tracking this session
             if wasInSession {
-                self.haloWindow?.updateState(.success(message: summary))
+                self.haloWindow?.showSuccess(message: summary)
 
                 // Auto-hide after brief display
                 try? await Task.sleep(seconds: 1.5)
@@ -620,13 +620,13 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
             if self.isInAgenticSession {
                 let progress = self.currentPlanSteps.isEmpty ? 0.0 :
                     Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.updateState(.agentProgress(
+                self.haloWindow?.showAgentProgress(
                     planId: parentSessionId,
                     progress: progress,
                     currentOperation: "🤖 \(agentId)",
                     completedCount: self.completedStepCount,
                     totalCount: self.currentPlanSteps.count
-                ))
+                )
             }
         }
     }
@@ -658,13 +658,13 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
                 let truncatedSummary = summary.count > 30 ? String(summary.prefix(30)) + "..." : summary
                 let progress = self.currentPlanSteps.isEmpty ? 0.0 :
                     Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.updateState(.agentProgress(
+                self.haloWindow?.showAgentProgress(
                     planId: self.currentAgenticSessionId ?? "",
                     progress: progress,
                     currentOperation: "\(statusIcon) \(truncatedSummary)",
                     completedCount: self.completedStepCount,
                     totalCount: self.currentPlanSteps.count
-                ))
+                )
             }
         }
     }
@@ -897,27 +897,21 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
     // MARK: - Error Notification
 
     private func showErrorNotification(message: String) {
-        // Use toast notification in Halo
+        // Use error state in Halo
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            self.haloWindow?.updateState(.toast(
-                type: .error,
-                title: L("error.aether"),
-                message: message,
-                autoDismiss: false,
-                actionTitle: nil
-            ))
-
-            // Set dismiss callback
-            self.haloWindow?.viewModel.callbacks.toastOnDismiss = { [weak self] in
-                Task { @MainActor in
-                    self?.haloWindow?.hide()
+            self.haloWindow?.showError(
+                ErrorContext(
+                    type: .unknown,
+                    message: message
+                ),
+                onRetry: nil,
+                onDismiss: { [weak self] in
+                    Task { @MainActor in
+                        self?.haloWindow?.hide()
+                    }
                 }
-            }
-            self.haloWindow?.viewModel.callbacks.toastOnAction = nil
-
-            // Show at screen center
-            self.haloWindow?.showToastCentered()
+            )
         }
     }
 
@@ -1036,31 +1030,25 @@ class EventHandler: AetherEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Update Halo state to toast
+            // Update Halo state using legacy bridge
             let shouldAutoDismiss = autoDismiss && type == .info && actionTitle == nil
-            self.haloWindow?.updateState(.toast(
+            self.haloWindow?.showToast(
                 type: type,
                 title: title,
                 message: message,
                 autoDismiss: shouldAutoDismiss,
                 actionTitle: actionTitle
-            ))
+            )
 
             // Set dismiss callback
-            self.haloWindow?.viewModel.callbacks.toastOnDismiss = { [weak self] in
+            self.haloWindow?.viewModel.callbacks.onDismiss = { [weak self] in
                 self?.dismissToast()
             }
-            if let onAction = onAction, actionTitle != nil {
-                self.haloWindow?.viewModel.callbacks.toastOnAction = { [weak self] in
-                    onAction()
-                    self?.dismissToast()
-                }
-            } else {
-                self.haloWindow?.viewModel.callbacks.toastOnAction = nil
-            }
+            // Note: Action handling simplified for V2 model
+            // TODO: Add proper action support in V2 if needed
 
             // Show at screen center
-            self.haloWindow?.showToastCentered()
+            self.haloWindow?.showCentered()
 
             // Set auto-dismiss timer for info toasts
             if shouldAutoDismiss {
