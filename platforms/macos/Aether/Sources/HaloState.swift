@@ -3,7 +3,7 @@
 //  Aether
 //
 //  Simplified Halo state enum (V2 refactored).
-//  7 unified states for cleaner state management.
+//  8 unified states for cleaner state management.
 //
 
 import SwiftUI
@@ -33,6 +33,9 @@ enum HaloState: Equatable {
 
     /// History list view (// command)
     case historyList(HistoryListContext)
+
+    /// Command list view (/ command)
+    case commandList(CommandListContext)
 }
 
 // MARK: - HaloState State Query Helpers
@@ -80,10 +83,16 @@ extension HaloState {
         return false
     }
 
+    /// Check if state is command list
+    var isCommandList: Bool {
+        if case .commandList = self { return true }
+        return false
+    }
+
     /// Check if state requires user interaction
     var isInteractive: Bool {
         switch self {
-        case .confirmation, .error, .historyList:
+        case .confirmation, .error, .historyList, .commandList:
             return true
         default:
             return false
@@ -117,6 +126,8 @@ extension HaloState {
         case .error:
             return NSSize(width: 320, height: 200)
         case .historyList:
+            return NSSize(width: 380, height: 420)
+        case .commandList:
             return NSSize(width: 380, height: 420)
         }
     }
