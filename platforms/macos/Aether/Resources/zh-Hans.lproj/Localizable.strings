@@ -618,6 +618,8 @@
 "halo.state.processing" = "处理中...";
 "halo.state.success" = "成功";
 "halo.state.error" = "错误";
+"halo.responding" = "回复中...";
+"halo.thinking" = "思考中...";
 
 // MARK: - Halo Agentic Session (Phase 5)
 "halo.agentic_session" = "智能体会话";
@@ -735,6 +737,11 @@
 "tool.chat.description" = "多轮对话 - 开始支持追问的对话会话";
 "tool.chat.hint" = "对话";
 "tool.chat.usage" = "/chat <消息>";
+
+// /snapshot_capture tool
+"tool.snapshot_capture.description" = "快照捕获 - 结合辅助功能与 OCR 构建系统上下文";
+"tool.snapshot_capture.hint" = "快照捕获";
+"tool.snapshot_capture.usage" = "/snapshot_capture [参数]";
 
 // MARK: - Plan Confirmation (enhance-l3-agent-planning)
 "plan.confirmation.title" = "确认执行计划";

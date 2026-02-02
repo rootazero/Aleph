@@ -618,6 +618,8 @@
 "halo.state.processing" = "Processing...";
 "halo.state.success" = "Success";
 "halo.state.error" = "Error";
+"halo.responding" = "Responding...";
+"halo.thinking" = "Thinking...";
 
 // MARK: - Halo Agentic Session (Phase 5)
 "halo.agentic_session" = "Agentic Session";
@@ -735,6 +737,11 @@
 "tool.chat.description" = "Multi-turn Conversation - Start a conversation session with follow-up questions";
 "tool.chat.hint" = "Conversation";
 "tool.chat.usage" = "/chat <message>";
+
+// /snapshot_capture tool
+"tool.snapshot_capture.description" = "Snapshot capture - Combine Accessibility and OCR for structured system context";
+"tool.snapshot_capture.hint" = "Snapshot Capture";
+"tool.snapshot_capture.usage" = "/snapshot_capture [options]";
 
 // MARK: - Plan Confirmation (enhance-l3-agent-planning)
 "plan.confirmation.title" = "Confirm Plan";
