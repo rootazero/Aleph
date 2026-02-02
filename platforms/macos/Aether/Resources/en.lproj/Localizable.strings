@@ -620,6 +620,8 @@
 "halo.state.error" = "Error";
 "halo.responding" = "Responding...";
 "halo.thinking" = "Thinking...";
+"halo.completed" = "Completed";
+"halo.partial_complete" = "Partially completed";
 
 // MARK: - Halo Agentic Session (Phase 5)
 "halo.agentic_session" = "Agentic Session";
@@ -749,6 +751,7 @@
 "plan.warning.irreversible" = "This plan contains irreversible operations";
 "plan.button.execute" = "Execute";
 "button.cancel" = "Cancel";
+"button.copy" = "Copy";
 
 // Plan Progress
 "plan.progress.title" = "Executing Plan";
