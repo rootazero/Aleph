@@ -136,6 +136,8 @@ printpdf = "0.7"
 pulldown-cmark = "0.12"
 # For HTTP date parsing (Retry-After header)
 httpdate = "1.0"
+# For concurrent hash maps (per-runId sequence counters)
+dashmap = "5.5"
 
 # Gateway dependencies (optional)
 tokio-tungstenite = { version = "0.26", optional = true }
@@ -178,6 +180,10 @@ criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 tempfile = "3.8"
 filetime = "0.2"
 serial_test = "3.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accessibility-sys = "0.1"
+core-foundation = "0.9"
 
 [[bench]]
 name = "memory_benchmarks_simple"

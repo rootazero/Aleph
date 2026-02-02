@@ -4,6 +4,7 @@
 //! from the agent loop to connected WebSocket clients.
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -131,6 +132,105 @@ pub struct RunSummary {
     pub loops: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_response: Option<String>,
+}
+
+/// Enhanced summary with tool details and errors
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhancedRunSummary {
+    pub total_tokens: u64,
+    pub tool_calls: u32,
+    pub loops: u32,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_response: Option<String>,
+    #[serde(default)]
+    pub tool_summaries: Vec<ToolSummaryItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<ToolErrorItem>,
+}
+
+/// Tool execution summary item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSummaryItem {
+    pub tool_id: String,
+    pub tool_name: String,
+    pub emoji: String,
+    pub display_meta: String,
+    pub duration_ms: u64,
+    pub success: bool,
+}
+
+/// Tool error item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolErrorItem {
+    pub tool_name: String,
+    pub error: String,
+    pub tool_id: String,
+}
+
+impl EnhancedRunSummary {
+    /// Create from basic RunSummary
+    pub fn from_basic(basic: &RunSummary, duration_ms: u64) -> Self {
+        Self {
+            total_tokens: basic.total_tokens,
+            tool_calls: basic.tool_calls,
+            loops: basic.loops,
+            duration_ms,
+            final_response: basic.final_response.clone(),
+            tool_summaries: Vec::new(),
+            reasoning: None,
+            errors: Vec::new(),
+        }
+    }
+
+    /// Add a tool summary
+    pub fn add_tool(&mut self, item: ToolSummaryItem) {
+        self.tool_summaries.push(item);
+    }
+
+    /// Add an error
+    pub fn add_error(&mut self, error: ToolErrorItem) {
+        self.errors.push(error);
+    }
+
+    /// Check if there are any errors
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+}
+
+/// Per-RunId sequence counter manager
+pub struct RunSequenceManager {
+    sequences: DashMap<String, AtomicU64>,
+}
+
+impl RunSequenceManager {
+    pub fn new() -> Self {
+        Self {
+            sequences: DashMap::new(),
+        }
+    }
+
+    /// Get next sequence number for a run
+    pub fn next_seq(&self, run_id: &str) -> u64 {
+        self.sequences
+            .entry(run_id.to_string())
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::SeqCst)
+    }
+
+    /// Cleanup sequences for completed run
+    pub fn cleanup(&self, run_id: &str) {
+        self.sequences.remove(run_id);
+    }
+}
+
+impl Default for RunSequenceManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Trait for emitting streaming events
