@@ -94,7 +94,22 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(list_skills)
             .await;
 
-        info!("Registered 4 builtin tools (2 generation + 2 skill reading)");
+        let snapshot_capture = UnifiedTool::new(
+            "builtin:snapshot_capture",
+            "snapshot_capture",
+            "Capture a system snapshot with AX tree and optional vision OCR",
+            ToolSource::Builtin,
+        )
+        .with_icon("camera")
+        .with_usage("/snapshot_capture {\"include_ax\": true, \"include_vision\": false}")
+        .with_localization_key("tool.snapshot_capture")
+        .with_sort_order(72);
+
+        conflict_resolver
+            .register_with_conflict_resolution(snapshot_capture)
+            .await;
+
+        info!("Registered 5 builtin tools (2 generation + 2 skill reading + snapshot)");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)

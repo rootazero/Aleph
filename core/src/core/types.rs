@@ -8,6 +8,7 @@
 //! - AppMemoryInfo: App memory info for UI
 
 use serde::{Deserialize, Serialize};
+use crate::perception::FocusHint;
 
 /// Media attachment for multimodal content (add-multimodal-content-support)
 /// Supports images, videos, and documents from clipboard
@@ -33,6 +34,14 @@ pub struct CapturedContext {
     pub window_title: Option<String>,
     pub attachments: Option<Vec<MediaAttachment>>, // Multimodal content support
     pub topic_id: Option<String>,                  // Topic ID for multi-turn conversations
+    pub perception: Option<PerceptionRef>,         // Optional perception snapshot reference
+}
+
+/// Reference to a perception snapshot.
+#[derive(Debug, Clone)]
+pub struct PerceptionRef {
+    pub snapshot_id: String,
+    pub focus_hint: Option<FocusHint>,
 }
 
 /// Statistics about memory compression state

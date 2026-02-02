@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::builtin_tools::{
     BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool,
-    ReadSkillTool, SearchTool, WebFetchTool, YouTubeTool,
+    ReadSkillTool, SearchTool, SnapshotCaptureTool, WebFetchTool, YouTubeTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::tools::AetherToolDyn;
@@ -95,6 +95,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "List all installed skills",
         requires_config: false,
     },
+    BuiltinToolDefinition {
+        name: "snapshot_capture",
+        description: "Capture a system snapshot with AX tree and optional vision OCR",
+        requires_config: false,
+    },
     #[cfg(feature = "gateway")]
     BuiltinToolDefinition {
         name: "sessions_list",
@@ -150,6 +155,7 @@ pub fn create_tool_boxed(
         }
         "read_skill" => Some(Box::new(ReadSkillTool::default())),
         "list_skills" => Some(Box::new(SkillListTool::default())),
+        "snapshot_capture" => Some(Box::new(SnapshotCaptureTool::default())),
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
@@ -193,6 +199,7 @@ mod tests {
         assert!(names.contains(&"generate_image".to_string()));
         assert!(names.contains(&"read_skill".to_string()));
         assert!(names.contains(&"list_skills".to_string()));
+        assert!(names.contains(&"snapshot_capture".to_string()));
     }
 
     #[cfg(feature = "gateway")]
