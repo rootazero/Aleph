@@ -318,7 +318,8 @@ struct ShortcutsView: View {
             let shortcutsConfig = ShortcutsConfig(
                 summon: "Command+Grave",  // Legacy, not used
                 cancel: "Escape",
-                commandPrompt: commandPromptConfigString
+                commandPrompt: commandPromptConfigString,
+                ocrCapture: "Command+Shift+O"  // Default OCR capture shortcut
             )
             try core.updateShortcuts(shortcuts: shortcutsConfig)
 

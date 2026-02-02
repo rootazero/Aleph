@@ -3,7 +3,7 @@
 //  Aether
 //
 //  Unified hotkey management service that coordinates hotkey systems:
-//  - Multi-turn hotkey: Command prompt hotkey (Option+Space)
+//  - Conversation hotkey: Command prompt hotkey (Option+Space)
 //
 //  Extracted from AppDelegate to improve separation of concerns.
 //
@@ -17,18 +17,18 @@ import Combine
 ///
 /// This service consolidates hotkey management that was previously scattered
 /// across AppDelegate, providing a single point of control for:
-/// - Multi-turn conversation hotkey (inline implementation)
+/// - Conversation hotkey (inline implementation)
 final class HotkeyService {
 
     // MARK: - Properties
 
-    /// Multi-turn hotkey monitors
-    private var multiTurnGlobalMonitor: Any?
-    private var multiTurnLocalMonitor: Any?
+    /// Conversation hotkey monitors
+    private var conversationGlobalMonitor: Any?
+    private var conversationLocalMonitor: Any?
 
-    /// Multi-turn hotkey configuration
-    private var multiTurnModifiers: NSEvent.ModifierFlags = [.option]
-    private var multiTurnKeyCode: UInt16 = 49 // Space key
+    /// Conversation hotkey configuration
+    private var conversationModifiers: NSEvent.ModifierFlags = [.option]
+    private var conversationKeyCode: UInt16 = 49 // Space key
 
     /// Reference to core for loading config
     private weak var core: AetherCore?
@@ -51,22 +51,22 @@ final class HotkeyService {
 
     /// Start all hotkey monitoring
     func startAllHotkeys() {
-        startMultiTurnHotkey()
+        startConversationHotkey()
         print("[HotkeyService] All hotkey systems started")
     }
 
     /// Stop all hotkey monitoring
     func stopAllHotkeys() {
-        stopMultiTurnHotkey()
+        stopConversationHotkey()
         print("[HotkeyService] All hotkey systems stopped")
     }
 
-    // MARK: - Multi-Turn Hotkey (Command Prompt)
+    // MARK: - Conversation Hotkey (Command Prompt)
 
-    /// Start multi-turn conversation hotkey monitoring
-    private func startMultiTurnHotkey() {
+    /// Start conversation hotkey monitoring
+    private func startConversationHotkey() {
         // Load configuration from core
-        loadMultiTurnConfig()
+        loadConversationConfig()
 
         // Create hotkey handler
         let hotkeyHandler: (NSEvent) -> Bool = { [weak self] event in
@@ -75,7 +75,7 @@ final class HotkeyService {
             // Check modifier match
             var modifiersMatch = true
             for modifier in [NSEvent.ModifierFlags.command, .option, .control, .shift] {
-                if self.multiTurnModifiers.contains(modifier) {
+                if self.conversationModifiers.contains(modifier) {
                     if !event.modifierFlags.contains(modifier) {
                         modifiersMatch = false
                         break
@@ -83,7 +83,7 @@ final class HotkeyService {
                 }
             }
 
-            if modifiersMatch && event.keyCode == self.multiTurnKeyCode {
+            if modifiersMatch && event.keyCode == self.conversationKeyCode {
                 // Dispatch to MainActor since HaloInputCoordinator is @MainActor isolated
                 Task { @MainActor in
                     HaloInputCoordinator.shared.handleHotkey()
@@ -94,37 +94,37 @@ final class HotkeyService {
         }
 
         // Global monitor - when OTHER apps are active
-        multiTurnGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+        conversationGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
             _ = hotkeyHandler(event)
         }
 
         // Local monitor - when AETHER is active
-        multiTurnLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        conversationLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if hotkeyHandler(event) {
                 return nil // Consume event
             }
             return event // Pass through
         }
 
-        print("[HotkeyService] Multi-turn hotkey started (keyCode: \(multiTurnKeyCode), modifiers: \(multiTurnModifiers))")
+        print("[HotkeyService] Conversation hotkey started (keyCode: \(conversationKeyCode), modifiers: \(conversationModifiers))")
     }
 
-    /// Stop multi-turn hotkey monitoring
-    private func stopMultiTurnHotkey() {
-        if let monitor = multiTurnGlobalMonitor {
+    /// Stop conversation hotkey monitoring
+    private func stopConversationHotkey() {
+        if let monitor = conversationGlobalMonitor {
             NSEvent.removeMonitor(monitor)
-            multiTurnGlobalMonitor = nil
+            conversationGlobalMonitor = nil
         }
-        if let monitor = multiTurnLocalMonitor {
+        if let monitor = conversationLocalMonitor {
             NSEvent.removeMonitor(monitor)
-            multiTurnLocalMonitor = nil
+            conversationLocalMonitor = nil
         }
     }
 
-    /// Load multi-turn hotkey configuration from core
-    private func loadMultiTurnConfig() {
+    /// Load conversation hotkey configuration from core
+    private func loadConversationConfig() {
         guard let core = core else {
-            print("[HotkeyService] WARNING: Core is nil, cannot load multi-turn hotkey config")
+            print("[HotkeyService] WARNING: Core is nil, cannot load hotkey config")
             print("[HotkeyService] Using default: Option+Space")
             return
         }
@@ -132,21 +132,21 @@ final class HotkeyService {
         do {
             let config = try core.loadConfig()
             if let shortcuts = config.shortcuts {
-                print("[HotkeyService] Loading multi-turn hotkey from config: \(shortcuts.commandPrompt)")
-                parseMultiTurnHotkey(shortcuts.commandPrompt)
+                print("[HotkeyService] Loading conversation hotkey from config: \(shortcuts.commandPrompt)")
+                parseConversationHotkey(shortcuts.commandPrompt)
             } else {
                 print("[HotkeyService] No shortcuts section in config, using default")
             }
         } catch {
-            print("[HotkeyService] Failed to load multi-turn hotkey config: \(error)")
+            print("[HotkeyService] Failed to load hotkey config: \(error)")
         }
     }
 
-    /// Parse multi-turn hotkey config string (e.g., "Option+Space")
-    private func parseMultiTurnHotkey(_ configString: String) {
+    /// Parse conversation hotkey config string (e.g., "Option+Space")
+    private func parseConversationHotkey(_ configString: String) {
         let parts = configString.split(separator: "+").map { String($0) }
         guard parts.count >= 2 else {
-            print("[HotkeyService] Invalid multi-turn hotkey config: \(configString)")
+            print("[HotkeyService] Invalid hotkey config: \(configString)")
             return
         }
 
@@ -177,22 +177,22 @@ final class HotkeyService {
         default: keyCode = 44 // Default to /
         }
 
-        multiTurnModifiers = modifiers
-        multiTurnKeyCode = keyCode
-        print("[HotkeyService] Multi-turn hotkey configured: \(configString)")
+        conversationModifiers = modifiers
+        conversationKeyCode = keyCode
+        print("[HotkeyService] Conversation hotkey configured: \(configString)")
     }
 
-    /// Update multi-turn hotkey at runtime
+    /// Update conversation hotkey at runtime
     ///
     /// - Parameter shortcuts: New shortcuts configuration
-    func updateMultiTurnHotkey(shortcuts: ShortcutsConfig) {
-        parseMultiTurnHotkey(shortcuts.commandPrompt)
+    func updateConversationHotkey(shortcuts: ShortcutsConfig) {
+        parseConversationHotkey(shortcuts.commandPrompt)
 
         // Reinstall monitors with new settings
-        stopMultiTurnHotkey()
-        startMultiTurnHotkey()
+        stopConversationHotkey()
+        startConversationHotkey()
 
-        print("[HotkeyService] Multi-turn hotkey updated and monitors reinstalled")
+        print("[HotkeyService] Conversation hotkey updated and monitors reinstalled")
     }
 
     // MARK: - Cleanup

@@ -460,7 +460,7 @@ final class ScreenCaptureCoordinator: ObservableObject {
         }
 
         debugLog("[Halo] Showing processing spinner")
-        haloWindow.updateState(.processing(streamingText: nil))
+        haloWindow.updateState(.streaming(StreamingContext(runId: "ocr-processing", phase: .thinking)))
         haloWindow.showCentered()
     }
 
@@ -474,7 +474,10 @@ final class ScreenCaptureCoordinator: ObservableObject {
         }
 
         debugLog("[Halo] Showing success checkmark")
-        haloWindow.updateState(.success(message: nil))
+        haloWindow.updateState(.result(ResultContext(
+            runId: "ocr-success",
+            summary: .success(message: L("ocr.success"), toolsExecuted: 1, durationMs: 0, finalResponse: "")
+        )))
 
         // Auto-hide after 0.8 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
@@ -510,7 +513,8 @@ final class ScreenCaptureCoordinator: ObservableObject {
             type: .error,
             title: L("ocr.permission_required_title"),
             message: L("ocr.permission_required_message"),
-            autoDismiss: false  // Keep visible so user can read
+            autoDismiss: false,  // Keep visible so user can read
+            actionTitle: nil
         )
 
         // Open System Settings to Screen Recording permission page

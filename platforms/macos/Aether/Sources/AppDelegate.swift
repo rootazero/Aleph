@@ -42,11 +42,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Unified hotkey service (manages all hotkey systems)
     private var hotkeyService: HotkeyService?
 
-    // Multi-turn conversation hotkey monitors (legacy - now managed by HotkeyService)
+    // Conversation hotkey monitors (legacy - now managed by HotkeyService)
     // Global monitor for when other apps are active
-    private var multiTurnHotkeyGlobalMonitor: Any?
+    private var hotkeyGlobalMonitor: Any?
     // Local monitor for when Aether is active
-    private var multiTurnHotkeyLocalMonitor: Any?
+    private var hotkeyLocalMonitor: Any?
 
     // MARK: - Managers (via DependencyContainer)
 
@@ -125,13 +125,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         hotkeyService?.stopAllHotkeys()
 
         // Legacy cleanup (in case HotkeyService wasn't used)
-        if let monitor = multiTurnHotkeyGlobalMonitor {
+        if let monitor = hotkeyGlobalMonitor {
             NSEvent.removeMonitor(monitor)
-            multiTurnHotkeyGlobalMonitor = nil
+            hotkeyGlobalMonitor = nil
         }
-        if let monitor = multiTurnHotkeyLocalMonitor {
+        if let monitor = hotkeyLocalMonitor {
             NSEvent.removeMonitor(monitor)
-            multiTurnHotkeyLocalMonitor = nil
+            hotkeyLocalMonitor = nil
         }
 
         // Stop clipboard monitoring
@@ -517,7 +517,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// This is called after core is initialized
     private func initializeRustCore() {
         // Show Halo animation immediately on startup (better UX feedback)
-        haloWindow?.updateState(.processing(streamingText: nil))
+        haloWindow?.updateState(.streaming(StreamingContext(runId: "startup", phase: .thinking)))
         haloWindow?.showCentered()
         print("[Aether] Showing Halo startup animation")
 
@@ -928,7 +928,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Update unified input hotkey at runtime (called from ShortcutsView)
     func updateCommandPromptHotkey(_ shortcuts: ShortcutsConfig) {
         // Delegate to HotkeyService
-        hotkeyService?.updateMultiTurnHotkey(shortcuts: shortcuts)
+        hotkeyService?.updateConversationHotkey(shortcuts: shortcuts)
     }
 
     /// Get HaloWindow for external components
@@ -936,18 +936,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return haloWindow
     }
 
-    // MARK: - Multi-Turn Hotkey Configuration
+    // MARK: - Legacy Hotkey Configuration (managed by HotkeyService)
 
-    /// Multi-turn hotkey modifiers (default: Option)
-    private var multiTurnHotkeyModifiers: NSEvent.ModifierFlags = [.option]
+    /// Legacy hotkey modifiers (default: Option)
+    private var legacyHotkeyModifiers: NSEvent.ModifierFlags = [.option]
 
-    /// Multi-turn hotkey key code (default: Space = 49)
-    private var multiTurnHotkeyKeyCode: UInt16 = 49
+    /// Legacy hotkey key code (default: Space = 49)
+    private var legacyHotkeyKeyCode: UInt16 = 49
 
-    /// Setup global hotkey for multi-turn conversation (configurable, default: Option+Space)
-    private func setupMultiTurnHotkey() {
+    /// Setup global hotkey for conversation (configurable, default: Option+Space)
+    private func setupLegacyHotkey() {
         // Load hotkey configuration from config
-        loadMultiTurnHotkeyConfig()
+        loadLegacyHotkeyConfig()
 
         // Hotkey handler closure - shared between global and local monitors
         let hotkeyHandler: (NSEvent) -> Bool = { [weak self] event in
@@ -956,14 +956,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Check for configured hotkey
             var modifiersMatch = true
             for modifier in [NSEvent.ModifierFlags.command, .option, .control, .shift] {
-                if self.multiTurnHotkeyModifiers.contains(modifier) {
+                if self.legacyHotkeyModifiers.contains(modifier) {
                     if !event.modifierFlags.contains(modifier) {
                         modifiersMatch = false
                         break
                     }
                 }
             }
-            if modifiersMatch && event.keyCode == self.multiTurnHotkeyKeyCode {
+            if modifiersMatch && event.keyCode == self.legacyHotkeyKeyCode {
                 HaloInputCoordinator.shared.handleHotkey()
                 return true  // Event handled
             }
@@ -971,23 +971,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // Global monitor - captures hotkey when OTHER apps are active
-        multiTurnHotkeyGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+        hotkeyGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
             _ = hotkeyHandler(event)
         }
 
         // Local monitor - captures hotkey when AETHER is active
-        multiTurnHotkeyLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        hotkeyLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if hotkeyHandler(event) {
                 return nil  // Consume the event
             }
             return event  // Pass through
         }
 
-        print("[AppDelegate] Multi-turn hotkey monitors installed (keyCode: \(multiTurnHotkeyKeyCode), modifiers: \(multiTurnHotkeyModifiers))")
+        print("[AppDelegate] Legacy hotkey monitors installed (keyCode: \(legacyHotkeyKeyCode), modifiers: \(legacyHotkeyModifiers))")
     }
 
-    /// Load multi-turn hotkey configuration from config
-    private func loadMultiTurnHotkeyConfig() {
+    /// Load legacy hotkey configuration from config
+    private func loadLegacyHotkeyConfig() {
         guard let core = core else {
             return
         }
@@ -995,18 +995,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         do {
             let config = try core.loadConfig()
             if let shortcuts = config.shortcuts {
-                parseAndApplyMultiTurnHotkey(shortcuts.commandPrompt)
+                parseAndApplyLegacyHotkey(shortcuts.commandPrompt)
             }
         } catch {
-            print("[AppDelegate] Failed to load multi-turn hotkey config: \(error)")
+            print("[AppDelegate] Failed to load hotkey config: \(error)")
         }
     }
 
-    /// Parse multi-turn hotkey config string (e.g., "Option+Space") and apply it
-    private func parseAndApplyMultiTurnHotkey(_ configString: String) {
+    /// Parse hotkey config string (e.g., "Option+Space") and apply it
+    private func parseAndApplyLegacyHotkey(_ configString: String) {
         let parts = configString.split(separator: "+").map { String($0) }
         guard parts.count >= 2 else {
-            print("[AppDelegate] Invalid multi-turn hotkey config: \(configString)")
+            print("[AppDelegate] Invalid hotkey config: \(configString)")
             return
         }
 
@@ -1036,26 +1036,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         default: keyCode = 44  // Default to /
         }
 
-        multiTurnHotkeyModifiers = modifiers
-        multiTurnHotkeyKeyCode = keyCode
-        print("[AppDelegate] Multi-turn hotkey configured: \(configString) (keyCode: \(keyCode), modifiers: \(modifiers))")
+        legacyHotkeyModifiers = modifiers
+        legacyHotkeyKeyCode = keyCode
+        print("[AppDelegate] Legacy hotkey configured: \(configString) (keyCode: \(keyCode), modifiers: \(modifiers))")
     }
 
-    /// Update multi-turn hotkey at runtime (called from ShortcutsView)
-    private func updateMultiTurnHotkeyConfig(_ shortcuts: ShortcutsConfig) {
-        parseAndApplyMultiTurnHotkey(shortcuts.commandPrompt)
+    /// Update legacy hotkey at runtime (called from ShortcutsView)
+    private func updateLegacyHotkeyConfig(_ shortcuts: ShortcutsConfig) {
+        parseAndApplyLegacyHotkey(shortcuts.commandPrompt)
 
         // Reinstall the monitors with new settings
-        if let monitor = multiTurnHotkeyGlobalMonitor {
+        if let monitor = hotkeyGlobalMonitor {
             NSEvent.removeMonitor(monitor)
-            multiTurnHotkeyGlobalMonitor = nil
+            hotkeyGlobalMonitor = nil
         }
-        if let monitor = multiTurnHotkeyLocalMonitor {
+        if let monitor = hotkeyLocalMonitor {
             NSEvent.removeMonitor(monitor)
-            multiTurnHotkeyLocalMonitor = nil
+            hotkeyLocalMonitor = nil
         }
-        setupMultiTurnHotkey()
-        print("[AppDelegate] Multi-turn hotkey updated and monitors reinstalled")
+        setupLegacyHotkey()
+        print("[AppDelegate] Legacy hotkey updated and monitors reinstalled")
     }
 
     // MARK: - Language Preference

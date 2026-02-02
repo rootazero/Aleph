@@ -3,7 +3,7 @@
 //  Aether
 //
 //  Lightweight coordinator for Halo input handling.
-//  Replaces the deleted MultiTurnCoordinator with simpler command-based routing.
+//  Routes input based on prefix for command-based interaction.
 //
 //  Routes input based on prefix:
 //  - "//" -> History list
@@ -13,61 +13,6 @@
 
 import AppKit
 import SwiftUI
-
-// MARK: - Command Item (Forward Declaration)
-
-/// Represents a command/skill item in the command list
-/// Used by HaloCommandListView to display available skills
-struct CommandItem: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let description: String?
-    let source: String?
-
-    init(id: String, name: String, description: String? = nil, source: String? = nil) {
-        self.id = id
-        self.name = name
-        self.description = description
-        self.source = source
-    }
-
-    /// Create from Gateway skill info
-    init(from skillInfo: GWSkillInfo) {
-        self.id = skillInfo.id
-        self.name = skillInfo.name
-        self.description = skillInfo.description
-        self.source = skillInfo.source
-    }
-}
-
-// MARK: - Command List Context (Forward Declaration)
-
-/// Context for command list state (/ command)
-struct CommandListContext: Equatable {
-    /// All available commands/skills
-    let commands: [CommandItem]
-    /// Current search query (text after /)
-    var searchQuery: String
-    /// Currently selected command index
-    var selectedIndex: Int?
-
-    /// Commands filtered by search query
-    var filteredCommands: [CommandItem] {
-        if searchQuery.isEmpty {
-            return commands
-        }
-        return commands.filter { command in
-            command.name.localizedCaseInsensitiveContains(searchQuery) ||
-            (command.description?.localizedCaseInsensitiveContains(searchQuery) ?? false)
-        }
-    }
-
-    init(commands: [CommandItem], searchQuery: String = "", selectedIndex: Int? = nil) {
-        self.commands = commands
-        self.searchQuery = searchQuery
-        self.selectedIndex = selectedIndex
-    }
-}
 
 // MARK: - HaloInputCoordinator
 
@@ -249,7 +194,14 @@ final class HaloInputCoordinator {
         if GatewayManager.shared.isReady {
             do {
                 let skills = try await GatewayManager.shared.client.skillsList()
-                return skills.map { CommandItem(from: $0) }
+                return skills.map { skill in
+                    CommandItem(
+                        id: skill.id,
+                        name: skill.name,
+                        description: skill.description ?? "",
+                        icon: "command.circle.fill"
+                    )
+                }
             } catch {
                 print("[HaloInputCoordinator] Gateway skills fetch failed: \(error)")
             }
@@ -262,7 +214,7 @@ final class HaloInputCoordinator {
                     id: tool.name,
                     name: tool.name,
                     description: tool.description,
-                    source: "builtin"
+                    icon: "wrench.and.screwdriver.fill"
                 )
             }
         }
