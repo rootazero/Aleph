@@ -20,7 +20,7 @@ use crate::supervisor::types::{SupervisorConfig, SupervisorError, SupervisorEven
 /// let mut supervisor = ClaudeSupervisor::new(config);
 ///
 /// // Spawn the process
-/// let rx = supervisor.spawn().unwrap();
+/// let mut rx = supervisor.spawn().unwrap();
 ///
 /// // Send input
 /// supervisor.write("Hello\n").unwrap();

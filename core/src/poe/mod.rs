@@ -106,6 +106,7 @@
 pub mod budget;
 pub mod crystallization;
 pub mod manager;
+pub mod manifest;
 pub mod types;
 pub mod validation;
 pub mod worker;
@@ -113,6 +114,9 @@ pub mod worker;
 // Re-exports for convenient access
 // Budget management
 pub use budget::{BudgetStatus, PoeBudget};
+
+// Manifest generation
+pub use manifest::ManifestBuilder;
 
 // Manager and configuration
 pub use manager::{PoeConfig, PoeManager, ValidationCallback, ValidationEvent};
