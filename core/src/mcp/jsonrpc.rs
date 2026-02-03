@@ -659,6 +659,96 @@ pub mod mcp {
             }
         }
     }
+
+    // ===== Approval Types (Human-in-the-Loop) =====
+
+    /// Request for human approval of an action
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ApprovalRequest {
+        /// Unique request ID
+        pub request_id: String,
+        /// Description of the action requiring approval
+        pub action: String,
+        /// Server requesting approval
+        pub server_name: String,
+        /// Details for the user to review
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub details: Option<serde_json::Value>,
+        /// Timeout for response (seconds)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub timeout_seconds: Option<u32>,
+    }
+
+    impl ApprovalRequest {
+        /// Create a new approval request
+        pub fn new(
+            request_id: impl Into<String>,
+            action: impl Into<String>,
+            server_name: impl Into<String>,
+        ) -> Self {
+            Self {
+                request_id: request_id.into(),
+                action: action.into(),
+                server_name: server_name.into(),
+                details: None,
+                timeout_seconds: None,
+            }
+        }
+
+        /// Set details for the request
+        pub fn with_details(mut self, details: serde_json::Value) -> Self {
+            self.details = Some(details);
+            self
+        }
+
+        /// Set timeout
+        pub fn with_timeout(mut self, seconds: u32) -> Self {
+            self.timeout_seconds = Some(seconds);
+            self
+        }
+    }
+
+    /// Response to an approval request
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ApprovalResponse {
+        /// Whether the action was approved
+        pub approved: bool,
+        /// Optional reason for rejection
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub reason: Option<String>,
+    }
+
+    impl ApprovalResponse {
+        /// Create an approved response
+        pub fn approved() -> Self {
+            Self {
+                approved: true,
+                reason: None,
+            }
+        }
+
+        /// Create a rejected response with optional reason
+        pub fn rejected(reason: Option<String>) -> Self {
+            Self {
+                approved: false,
+                reason,
+            }
+        }
+    }
+
+    /// Approval decision
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ApprovalDecision {
+        /// User approved the action
+        Approved,
+        /// User rejected the action
+        Rejected,
+        /// Request timed out
+        Timeout,
+    }
 }
 
 #[cfg(test)]
