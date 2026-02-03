@@ -35,6 +35,11 @@
 
 pub mod error;
 pub mod parser;
+pub mod security;
 
 pub use error::{CortexError, RecoveryHint, SecuritySeverity};
 pub use parser::{JsonFragment, JsonStreamDetector};
+pub use security::{
+    Locale, PipelineResult, SanitizeAction, SanitizeContext, SanitizeResult, SanitizerRule,
+    SecurityConfig, SecurityPipeline, TrustLevel,
+};
