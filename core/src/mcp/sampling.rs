@@ -9,6 +9,8 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 
 use crate::error::{AetherError, Result};
+use crate::mcp::client::McpClient;
+use crate::mcp::context_injector::ContextInjector;
 use crate::mcp::jsonrpc::mcp::{
     PromptRole, SamplingContent, SamplingMessage, SamplingRequest, SamplingResponse, StopReason,
 };
@@ -26,6 +28,8 @@ pub type SamplingCallback = Box<
 pub struct SamplingHandler {
     /// Callback to invoke for sampling requests
     callback: Arc<RwLock<Option<SamplingCallback>>>,
+    /// Optional MCP client for context injection
+    client: Arc<RwLock<Option<Arc<McpClient>>>>,
 }
 
 impl SamplingHandler {
@@ -33,7 +37,14 @@ impl SamplingHandler {
     pub fn new() -> Self {
         Self {
             callback: Arc::new(RwLock::new(None)),
+            client: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set the MCP client for context injection
+    pub async fn set_client(&self, client: Arc<McpClient>) {
+        let mut c = self.client.write().await;
+        *c = Some(client);
     }
 
     /// Set the callback for handling sampling requests
@@ -57,9 +68,20 @@ impl SamplingHandler {
     /// Handle an incoming sampling request from server
     ///
     /// This is called when we receive a `sampling/createMessage` request via SSE.
-    pub async fn handle_request(&self, request_id: u64, params: Value) -> Result<SamplingResponse> {
+    ///
+    /// # Arguments
+    ///
+    /// * `request_id` - The JSON-RPC request ID
+    /// * `params` - The sampling request parameters
+    /// * `requesting_server` - The name of the server making the request
+    pub async fn handle_request(
+        &self,
+        request_id: u64,
+        params: Value,
+        requesting_server: &str,
+    ) -> Result<SamplingResponse> {
         // Parse the request
-        let request: SamplingRequest = serde_json::from_value(params).map_err(|e| {
+        let mut request: SamplingRequest = serde_json::from_value(params).map_err(|e| {
             AetherError::IoError(format!("Failed to parse sampling request: {}", e))
         })?;
 
@@ -68,6 +90,24 @@ impl SamplingHandler {
             message_count = request.messages.len(),
             "Processing sampling request"
         );
+
+        // Inject context if requested
+        if let Some(ref mode) = request.include_context {
+            if let Some(ref client) = *self.client.read().await {
+                let contexts =
+                    ContextInjector::gather_context(client, mode, requesting_server).await;
+                if let Some(context_msg) = ContextInjector::format_as_system_message(&contexts) {
+                    // Prepend context message to messages
+                    request.messages.insert(0, context_msg);
+                    tracing::debug!(
+                        request_id = request_id,
+                        mode = ?mode,
+                        context_count = contexts.len(),
+                        "Injected context into sampling request"
+                    );
+                }
+            }
+        }
 
         // Get callback
         let callback = self.callback.read().await;
