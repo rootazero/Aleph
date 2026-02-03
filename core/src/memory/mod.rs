@@ -32,6 +32,7 @@ pub mod hybrid_retrieval;
 pub mod ingestion;
 pub mod reranker;
 pub mod retrieval;
+pub mod scratchpad;
 pub mod smart_embedder;
 
 // Integration tests (compiled only in test mode)
@@ -64,4 +65,5 @@ pub use hybrid_retrieval::{HybridRetrieval, HybridSearchConfig, RetrievalStrateg
 pub use ingestion::MemoryIngestion;
 pub use reranker::{NoOpReranker, Reranker, RerankResult};
 pub use retrieval::MemoryRetrieval;
+pub use scratchpad::{ScratchpadManager, SessionHistory};
 pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};
