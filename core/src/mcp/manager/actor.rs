@@ -544,8 +544,9 @@ impl McpManagerActor {
             // Get tool/resource/prompt counts from active clients
             let (tool_count, resource_count, prompt_count) = if let Some(client) = self.clients.get(id) {
                 let tools = client.list_tools().await.len();
-                // Resources and prompts not yet fully implemented
-                (tools, 0, 0)
+                let resources = client.list_resources().await.len();
+                let prompts = client.list_prompts().await.len();
+                (tools, resources, prompts)
             } else {
                 (0, 0, 0)
             };
@@ -576,8 +577,9 @@ impl McpManagerActor {
 
         let (tools, resources, prompts) = if let Some(client) = self.clients.get(server_id) {
             let tools = client.list_tools().await;
-            // Resources and prompts not yet fully implemented
-            (tools, Vec::new(), Vec::new())
+            let resources = client.list_resources().await;
+            let prompts = client.list_prompts().await;
+            (tools, resources, prompts)
         } else {
             (Vec::new(), Vec::new(), Vec::new())
         };
@@ -616,19 +618,41 @@ impl McpManagerActor {
     }
 
     /// Aggregate resources from all healthy servers
-    ///
-    /// TODO: Implement when resource support is added to McpClient
     async fn aggregate_resources(&self) -> Vec<McpResource> {
-        // Resources not yet implemented in McpClient
-        Vec::new()
+        let mut all_resources = Vec::new();
+
+        for (server_id, client) in &self.clients {
+            // Check health - only aggregate from healthy servers
+            if let Some(health) = self.health_states.get(server_id) {
+                if !matches!(health.status, HealthStatus::Healthy | HealthStatus::Degraded { .. }) {
+                    continue;
+                }
+            }
+
+            let resources = client.list_resources().await;
+            all_resources.extend(resources);
+        }
+
+        all_resources
     }
 
     /// Aggregate prompts from all healthy servers
-    ///
-    /// TODO: Implement when prompt support is added to McpClient
     async fn aggregate_prompts(&self) -> Vec<McpPrompt> {
-        // Prompts not yet implemented in McpClient
-        Vec::new()
+        let mut all_prompts = Vec::new();
+
+        for (server_id, client) in &self.clients {
+            // Check health - only aggregate from healthy servers
+            if let Some(health) = self.health_states.get(server_id) {
+                if !matches!(health.status, HealthStatus::Healthy | HealthStatus::Degraded { .. }) {
+                    continue;
+                }
+            }
+
+            let prompts = client.list_prompts().await;
+            all_prompts.extend(prompts);
+        }
+
+        all_prompts
     }
 
     // ===== Config Methods =====
