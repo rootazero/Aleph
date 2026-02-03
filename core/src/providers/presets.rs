@@ -112,6 +112,24 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // Google Gemini
+    m.insert(
+        "gemini",
+        ProviderPreset {
+            base_url: "https://generativelanguage.googleapis.com",
+            protocol: "gemini",
+            color: "#4285f4",
+        },
+    );
+    m.insert(
+        "google",
+        ProviderPreset {
+            base_url: "https://generativelanguage.googleapis.com",
+            protocol: "gemini",
+            color: "#4285f4",
+        },
+    );
+
     m
 });
 

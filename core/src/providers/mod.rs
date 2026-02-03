@@ -10,15 +10,21 @@
 ///   - Supports: OpenAI, DeepSeek, Moonshot, Doubao, T8Star, and any OpenAI-compatible API
 ///   - Configuration: Use presets (e.g., `deepseek`) or provide custom `base_url`
 ///
+/// - **Anthropic Protocol**: Handled by `HttpProvider` + `AnthropicProtocol` adapter
+///   - Supports: Claude (all models)
+///   - Configuration: Use presets (`claude`, `anthropic`)
+///
+/// - **Gemini Protocol**: Handled by `HttpProvider` + `GeminiProtocol` adapter
+///   - Supports: Google Gemini (all models)
+///   - Configuration: Use presets (`gemini`, `google`)
+///
 /// - **Native Protocols**: Have dedicated implementations
-///   - `ClaudeProvider` - Anthropic Claude API
-///   - `GeminiProvider` - Google Gemini API
 ///   - `OllamaProvider` - Local Ollama models
 ///
-/// # Adding New OpenAI-Compatible Providers
+/// # Adding New Protocol-Compatible Providers
 ///
-/// To add a new provider that uses OpenAI protocol:
-/// 1. Add a preset to `presets.rs` with base_url and color
+/// To add a new provider that uses an existing protocol:
+/// 1. Add a preset to `presets.rs` with base_url, protocol, and color
 /// 2. That's it! The factory will automatically route to `HttpProvider`
 ///
 /// # Example
@@ -170,7 +176,16 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
             Ok(Arc::new(provider))
         }
         "gemini" => {
-            let provider = GeminiProvider::new(name.to_string(), config)?;
+            // Use HttpProvider + GeminiProtocol
+            use std::time::Duration;
+
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(config.timeout_seconds))
+                .build()
+                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
+
+            let adapter = Arc::new(protocols::GeminiProtocol::new(client));
+            let provider = HttpProvider::new(name.to_string(), config, adapter)?;
             Ok(Arc::new(provider))
         }
         "ollama" => {
