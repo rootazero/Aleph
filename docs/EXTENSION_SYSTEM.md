@@ -413,6 +413,179 @@ impl AetherToolDyn for SkillTool {
 
 ---
 
+## Extension SDK V2
+
+The V2 SDK introduces enhanced manifest format, hook system, and prompt scopes for building powerful extensions.
+
+### Manifest Format (aether_plugin.toml)
+
+V2 plugins use TOML format for better readability and Rust ecosystem alignment. The manifest priority order is:
+
+1. `aether_plugin.toml` (V2 TOML format) - **Preferred**
+2. `aether_plugin.json` (V2 JSON format)
+3. `package.json` with `aetherPlugin` section
+4. Legacy manifest formats
+
+#### Complete Example
+
+```toml
+[plugin]
+id = "my-plugin"                    # Unique identifier
+name = "My Plugin"                  # Display name
+version = "1.0.0"                   # SemVer version
+description = "Does something useful"
+author = "Your Name"
+kind = "nodejs"                     # nodejs | wasm | static
+entry = "dist/index.js"             # Entry point for nodejs/wasm
+
+[permissions]
+network = ["connect:https://*"]     # Network permissions
+filesystem = ["read:./data", "write:./output"]
+env = ["API_KEY", "DEBUG"]          # Environment variables
+
+[prompt]
+file = "SKILL.md"                   # Prompt file path
+scope = "system"                    # system | tool | standalone | disabled
+
+[[tools]]
+name = "my_tool"
+description = "Performs a specific task"
+handler = "handleMyTool"            # Function name in entry
+instruction_file = "docs/INSTRUCTIONS.md"  # Tool-specific instructions
+
+[[tools]]
+name = "another_tool"
+description = "Another useful tool"
+handler = "handleAnotherTool"
+
+[[hooks]]
+event = "before_tool_call"
+kind = "interceptor"                # interceptor | observer | resolver
+priority = "normal"                 # system | high | normal | low
+handler = "onBeforeTool"
+
+[[hooks]]
+event = "after_tool_call"
+kind = "observer"
+priority = "low"
+handler = "onAfterTool"
+```
+
+### Hook Types
+
+Hooks allow plugins to intercept and respond to system events.
+
+| Type | Execution | Behavior |
+|------|-----------|----------|
+| **Interceptor** | Sequential | Can modify context or block execution. Each hook receives the result of the previous one. |
+| **Observer** | Parallel | Fire-and-forget. Errors are logged but don't affect execution. Used for telemetry/logging. |
+| **Resolver** | Sequential | First-win competition. Execution stops when a hook returns a non-null result. |
+
+#### Available Hook Events
+
+| Event | Description |
+|-------|-------------|
+| `before_tool_call` | Before any tool is invoked |
+| `after_tool_call` | After tool execution completes |
+| `on_message` | When a user message is received |
+| `on_response` | Before response is sent to user |
+| `on_error` | When an error occurs |
+
+#### Hook Example
+
+```typescript
+// Interceptor: Can modify or block
+async function onBeforeTool(context: HookContext): Promise<HookContext> {
+  if (context.toolName === 'dangerous_tool') {
+    throw new Error('Tool blocked by security policy');
+  }
+  // Modify context
+  context.args.timestamp = Date.now();
+  return context;
+}
+
+// Observer: Fire-and-forget
+async function onAfterTool(context: HookContext): Promise<void> {
+  console.log(`Tool ${context.toolName} executed in ${context.duration}ms`);
+}
+
+// Resolver: First-win
+async function resolveConfig(context: HookContext): Promise<Config | null> {
+  if (context.key in myConfigs) {
+    return myConfigs[context.key];  // Wins, stops chain
+  }
+  return null;  // Continue to next resolver
+}
+```
+
+### Hook Priorities
+
+Priorities determine execution order for interceptors and resolvers.
+
+| Priority | Value | Use Case |
+|----------|-------|----------|
+| **System** | -1000 | Core system hooks, runs first |
+| **High** | -100 | Security checks, validation |
+| **Normal** | 0 | Default priority |
+| **Low** | 100 | Logging, telemetry, cleanup |
+
+Lower values execute first. Within the same priority, hooks execute in registration order.
+
+### Prompt Scopes
+
+Prompt scopes control when plugin prompts are injected into the agent context.
+
+| Scope | Behavior |
+|-------|----------|
+| **system** | Always injected when the plugin is active. Use for core functionality. |
+| **tool** | Injected when the bound tool is available in the current context. |
+| **standalone** | User must explicitly invoke (e.g., `/my-plugin`). Not auto-injected. |
+| **disabled** | Never injected. Useful for temporarily disabling prompts. |
+
+#### Prompt File Example (SKILL.md)
+
+```markdown
+# My Plugin Instructions
+
+You have access to the my_tool function which can...
+
+## Usage Guidelines
+- Always validate input before calling
+- Handle errors gracefully
+
+## Examples
+User: Do something with X
+Assistant: I'll use my_tool to process X...
+```
+
+### Static Plugins
+
+Static plugins (`kind = "static"`) contain only prompts and configuration, with no executable code:
+
+```toml
+[plugin]
+id = "coding-standards"
+name = "Coding Standards"
+version = "1.0.0"
+kind = "static"               # No entry point needed
+
+[prompt]
+file = "STANDARDS.md"
+scope = "system"
+```
+
+### Migration from V1
+
+To migrate from V1 manifest format:
+
+1. Rename `package.json` or `aether_plugin.json` to `aether_plugin.toml`
+2. Convert JSON structure to TOML
+3. Add `kind` field (`nodejs`, `wasm`, or `static`)
+4. Update `runtime.type` to `kind` and `runtime.entry` to `entry`
+5. Add optional hook and prompt configurations
+
+---
+
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) - System overview
