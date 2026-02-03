@@ -885,6 +885,62 @@ event = "SessionStart"
 // Test 14: Config Schema and UI Hints
 // =============================================================================
 
+// =============================================================================
+// Test 14.5: Direct Commands with Handler
+// =============================================================================
+
+#[test]
+fn test_v2_commands_with_handler() {
+    let content = r#"
+[plugin]
+id = "test-commands"
+kind = "nodejs"
+entry = "dist/index.js"
+
+[[commands]]
+name = "status"
+description = "Show status"
+handler = "handleStatus"
+
+[[commands]]
+name = "clear"
+description = "Clear screen"
+handler = "handleClear"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+
+    let commands = manifest.commands_v2.unwrap();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[0].name, "status");
+    assert_eq!(commands[0].handler, Some("handleStatus".to_string()));
+    assert_eq!(commands[1].name, "clear");
+    assert_eq!(commands[1].handler, Some("handleClear".to_string()));
+}
+
+#[test]
+fn test_direct_command_result() {
+    use aethecore::extension::DirectCommandResult;
+
+    let success = DirectCommandResult::success("Done!");
+    assert!(success.success);
+    assert_eq!(success.content, "Done!");
+    assert!(success.data.is_none());
+
+    let with_data = DirectCommandResult::with_data("Result", serde_json::json!({"count": 42}));
+    assert!(with_data.success);
+    assert!(with_data.data.is_some());
+    assert_eq!(with_data.data.unwrap()["count"], 42);
+
+    let error = DirectCommandResult::error("Failed");
+    assert!(!error.success);
+    assert_eq!(error.content, "Failed");
+}
+
+// =============================================================================
+// Test 15: Config Schema and UI Hints
+// =============================================================================
+
 #[test]
 fn test_v2_config_schema() {
     let content = r#"
