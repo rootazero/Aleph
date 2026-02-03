@@ -773,6 +773,72 @@ pub struct McpServerConfig {
 }
 
 // =============================================================================
+// Service Types (V2 Background Services)
+// =============================================================================
+
+/// Service state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceState {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+    Failed,
+}
+
+impl Default for ServiceState {
+    fn default() -> Self {
+        ServiceState::Stopped
+    }
+}
+
+/// Running service information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceInfo {
+    pub id: String,
+    pub plugin_id: String,
+    pub name: String,
+    pub state: ServiceState,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub error: Option<String>,
+}
+
+/// Service lifecycle result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceResult {
+    pub success: bool,
+    pub message: Option<String>,
+    pub data: Option<serde_json::Value>,
+}
+
+impl ServiceResult {
+    pub fn ok() -> Self {
+        Self {
+            success: true,
+            message: None,
+            data: None,
+        }
+    }
+
+    pub fn ok_with_message(msg: impl Into<String>) -> Self {
+        Self {
+            success: true,
+            message: Some(msg.into()),
+            data: None,
+        }
+    }
+
+    pub fn error(msg: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            message: Some(msg.into()),
+            data: None,
+        }
+    }
+}
+
+// =============================================================================
 // Frontmatter Types
 // =============================================================================
 
@@ -1100,5 +1166,104 @@ mod tests {
         assert_eq!(parsed.content, "Test output");
         assert!(parsed.success);
         assert!(parsed.data.is_some());
+    }
+
+    // =========================================================================
+    // Service Types Tests
+    // =========================================================================
+
+    #[test]
+    fn test_service_state_default() {
+        let state = ServiceState::default();
+        assert_eq!(state, ServiceState::Stopped);
+    }
+
+    #[test]
+    fn test_service_state_serde() {
+        // All states serialize to lowercase
+        assert_eq!(serde_json::to_string(&ServiceState::Stopped).unwrap(), "\"stopped\"");
+        assert_eq!(serde_json::to_string(&ServiceState::Starting).unwrap(), "\"starting\"");
+        assert_eq!(serde_json::to_string(&ServiceState::Running).unwrap(), "\"running\"");
+        assert_eq!(serde_json::to_string(&ServiceState::Stopping).unwrap(), "\"stopping\"");
+        assert_eq!(serde_json::to_string(&ServiceState::Failed).unwrap(), "\"failed\"");
+
+        // Parse back
+        let parsed: ServiceState = serde_json::from_str("\"running\"").unwrap();
+        assert_eq!(parsed, ServiceState::Running);
+    }
+
+    #[test]
+    fn test_service_info_serde() {
+        let info = ServiceInfo {
+            id: "svc-123".to_string(),
+            plugin_id: "my-plugin".to_string(),
+            name: "background-worker".to_string(),
+            state: ServiceState::Running,
+            started_at: Some(chrono::Utc::now()),
+            error: None,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: ServiceInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.id, "svc-123");
+        assert_eq!(parsed.plugin_id, "my-plugin");
+        assert_eq!(parsed.name, "background-worker");
+        assert_eq!(parsed.state, ServiceState::Running);
+        assert!(parsed.started_at.is_some());
+        assert!(parsed.error.is_none());
+    }
+
+    #[test]
+    fn test_service_info_with_error() {
+        let info = ServiceInfo {
+            id: "svc-456".to_string(),
+            plugin_id: "broken-plugin".to_string(),
+            name: "failing-service".to_string(),
+            state: ServiceState::Failed,
+            started_at: None,
+            error: Some("Connection refused".to_string()),
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("Connection refused"));
+
+        let parsed: ServiceInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.state, ServiceState::Failed);
+        assert_eq!(parsed.error, Some("Connection refused".to_string()));
+    }
+
+    #[test]
+    fn test_service_result_ok() {
+        let result = ServiceResult::ok();
+        assert!(result.success);
+        assert!(result.message.is_none());
+        assert!(result.data.is_none());
+    }
+
+    #[test]
+    fn test_service_result_ok_with_message() {
+        let result = ServiceResult::ok_with_message("Service started successfully");
+        assert!(result.success);
+        assert_eq!(result.message, Some("Service started successfully".to_string()));
+        assert!(result.data.is_none());
+    }
+
+    #[test]
+    fn test_service_result_error() {
+        let result = ServiceResult::error("Failed to start service");
+        assert!(!result.success);
+        assert_eq!(result.message, Some("Failed to start service".to_string()));
+        assert!(result.data.is_none());
+    }
+
+    #[test]
+    fn test_service_result_serde() {
+        let result = ServiceResult::ok_with_message("Done");
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: ServiceResult = serde_json::from_str(&json).unwrap();
+
+        assert!(parsed.success);
+        assert_eq!(parsed.message, Some("Done".to_string()));
     }
 }
