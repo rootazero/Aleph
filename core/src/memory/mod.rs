@@ -18,6 +18,7 @@
 
 // Public submodules
 pub mod ai_retrieval;
+pub mod audit;
 pub mod augmentation;
 pub mod cleanup;
 pub mod compression;
@@ -35,6 +36,7 @@ pub mod reranker;
 pub mod retrieval;
 pub mod scratchpad;
 pub mod smart_embedder;
+pub mod cli;
 
 // Integration tests (compiled only in test mode)
 #[cfg(test)]
@@ -42,6 +44,7 @@ mod integration_tests;
 
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
+pub use audit::{AuditAction, AuditActor, AuditDetails, AuditEntry};
 pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
 pub use compression::{
@@ -69,3 +72,4 @@ pub use reranker::{NoOpReranker, Reranker, RerankResult};
 pub use retrieval::MemoryRetrieval;
 pub use scratchpad::{ScratchpadManager, ScratchpadConfig, SessionHistory};
 pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};
+pub use cli::{LockError, LockMode, MemoryLock};
