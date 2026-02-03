@@ -13,6 +13,7 @@
 //! | logs | Log level control |
 //! | commands | Command listing |
 //! | plugins | Plugin lifecycle |
+//! | services | Background service lifecycle |
 //! | skills | Skills management |
 //! | mcp | MCP integration |
 //! | providers | AI provider management |
@@ -51,6 +52,7 @@ pub mod commands;
 pub mod ocr;
 pub mod memory;
 pub mod plugins;
+pub mod services;
 pub mod skills;
 pub mod mcp;
 pub mod providers;
@@ -126,6 +128,12 @@ impl HandlerRegistry {
         registry.register("plugins.unload", plugins::handle_unload);
         registry.register("plugins.callTool", plugins::handle_call_tool);
         registry.register("plugins.executeCommand", plugins::handle_execute_command);
+
+        // Service handlers
+        registry.register("services.start", services::handle_start);
+        registry.register("services.stop", services::handle_stop);
+        registry.register("services.list", services::handle_list);
+        registry.register("services.status", services::handle_status);
 
         // Models handlers (use default config as placeholder)
         let models_config = Arc::new(Config::default());
@@ -439,5 +447,14 @@ mod tests {
         assert!(registry.has_method("poe.sign"));
         assert!(registry.has_method("poe.reject"));
         assert!(registry.has_method("poe.pending"));
+    }
+
+    #[test]
+    fn test_services_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("services.start"));
+        assert!(registry.has_method("services.stop"));
+        assert!(registry.has_method("services.list"));
+        assert!(registry.has_method("services.status"));
     }
 }
