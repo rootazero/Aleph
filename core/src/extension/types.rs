@@ -638,22 +638,38 @@ pub enum HookAction {
     Agent { agent: String },
 }
 
-/// Hook configuration
+/// Hook configuration - defines when and how a hook executes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookConfig {
     /// Event to hook
     pub event: HookEvent,
+
+    /// Hook execution kind (V2)
+    #[serde(default)]
+    pub kind: HookKind,
+
+    /// Hook priority (V2)
+    #[serde(default)]
+    pub priority: HookPriority,
+
     /// Regex pattern to match (for tool-based events)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
+
     /// Actions to execute
     pub actions: Vec<HookAction>,
+
     /// Plugin name (for logging)
     #[serde(default)]
     pub plugin_name: String,
+
     /// Plugin root (for variable substitution)
     #[serde(skip)]
     pub plugin_root: PathBuf,
+
+    /// Handler function name (for runtime plugins)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handler: Option<String>,
 }
 
 // =============================================================================
