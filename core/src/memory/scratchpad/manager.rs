@@ -222,18 +222,16 @@ impl ScratchpadManager {
         let mut content = self.read().await?;
 
         // Find and replace the nth "- [ ]" with "- [x]"
-        let mut count = 0;
         let mut new_content = String::new();
         let mut last_end = 0;
 
-        for (start, _) in content.match_indices("- [ ]") {
+        for (count, (start, _)) in content.match_indices("- [ ]").enumerate() {
             if count == item_index {
                 new_content.push_str(&content[last_end..start]);
                 new_content.push_str("- [x]");
                 last_end = start + 5;
                 break;
             }
-            count += 1;
         }
 
         if last_end > 0 {
