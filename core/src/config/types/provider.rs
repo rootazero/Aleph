@@ -43,6 +43,10 @@ pub struct ProviderConfig {
     /// If not specified, inferred from provider name in config
     #[serde(default)]
     pub provider_type: Option<String>,
+    /// Protocol to use: "openai", "anthropic", "gemini", "ollama"
+    /// If not specified, inferred from provider_type or provider name
+    #[serde(default)]
+    pub protocol: Option<String>,
     /// API key for cloud providers (required for OpenAI, Claude, Gemini)
     #[serde(default)]
     #[schemars(skip)]
@@ -152,6 +156,25 @@ impl ProviderConfig {
         }
     }
 
+    /// Get the effective protocol name
+    ///
+    /// Priority: protocol > provider_type > default "openai"
+    pub fn protocol(&self) -> String {
+        if let Some(ref p) = self.protocol {
+            return p.clone();
+        }
+
+        if let Some(ref t) = self.provider_type {
+            let t_lower = t.to_lowercase();
+            return match t_lower.as_str() {
+                "claude" => "anthropic".to_string(),
+                _ => t_lower,
+            };
+        }
+
+        "openai".to_string()
+    }
+
     /// Create a minimal test configuration with only required fields
     ///
     /// This is a helper for tests to avoid specifying all optional fields.
@@ -159,6 +182,7 @@ impl ProviderConfig {
     pub fn test_config(model: impl Into<String>) -> Self {
         Self {
             provider_type: None,
+            protocol: None,
             api_key: Some("test-key".to_string()),
             model: model.into(),
             base_url: None,
@@ -177,5 +201,39 @@ impl ProviderConfig {
             repeat_penalty: None,
             system_prompt_mode: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_protocol_default() {
+        let config = ProviderConfig::test_config("gpt-4o");
+        assert_eq!(config.protocol(), "openai");
+    }
+
+    #[test]
+    fn test_protocol_explicit() {
+        let mut config = ProviderConfig::test_config("model");
+        config.protocol = Some("anthropic".to_string());
+        assert_eq!(config.protocol(), "anthropic");
+    }
+
+    #[test]
+    fn test_protocol_from_provider_type() {
+        let mut config = ProviderConfig::test_config("model");
+        config.provider_type = Some("claude".to_string());
+        assert_eq!(config.protocol(), "anthropic");
+    }
+
+    #[test]
+    fn test_protocol_precedence() {
+        let mut config = ProviderConfig::test_config("model");
+        config.protocol = Some("gemini".to_string());
+        config.provider_type = Some("openai".to_string());
+        // protocol takes precedence
+        assert_eq!(config.protocol(), "gemini");
     }
 }
