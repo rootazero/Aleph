@@ -49,6 +49,7 @@ pub mod manager;
 mod notifications;
 mod prompts;
 mod resources;
+pub mod sampling;
 pub mod transport;
 pub mod types;
 
@@ -64,6 +65,7 @@ pub use jsonrpc::{
 pub use notifications::{McpEvent, McpEventHandler, McpNotificationRouter};
 pub use prompts::{McpPrompt, McpPromptArgument, McpPromptManager, PromptContent, PromptMessage, PromptResult};
 pub use resources::{McpResourceManager, ResourceContent};
+pub use sampling::{SamplingCallback, SamplingHandler, sampling_messages_to_chat, extract_system_prompt};
 pub use transport::{
     HttpTransport, HttpTransportConfig, McpTransport, NotificationCallback, SseTransport,
     SseTransportConfig, StdioTransport,
