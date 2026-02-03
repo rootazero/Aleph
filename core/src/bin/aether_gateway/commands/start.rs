@@ -57,7 +57,8 @@ use aethecore::gateway::handlers::poe::{
 };
 #[cfg(feature = "gateway")]
 use aethecore::poe::{
-    CompositeValidator, ManifestBuilder, PlaceholderWorker, PoeConfig,
+    CompositeValidator, GatewayAgentLoopWorker, ManifestBuilder, PoeConfig,
+    create_gateway_worker,
 };
 #[cfg(feature = "gateway")]
 use aethecore::gateway::create_claude_provider_from_env;
@@ -357,9 +358,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let manifest_builder = Arc::new(ManifestBuilder::new(poe_provider_arc.clone()));
 
         // Create factories for PoeRunManager
-        // WorkerFactory creates a PlaceholderWorker for each run (later: AgentLoopWorker)
-        let worker_factory: WorkerFactory<PlaceholderWorker> = Arc::new(|| {
-            PlaceholderWorker::with_default_workspace()
+        // WorkerFactory creates a GatewayAgentLoopWorker for each run
+        let provider_for_worker = poe_provider_arc.clone();
+        let worker_factory: WorkerFactory<GatewayAgentLoopWorker> = Arc::new(move || {
+            create_gateway_worker(
+                provider_for_worker.clone(),
+                PathBuf::from("/tmp/poe-workspace"),
+            )
         });
 
         // ValidatorFactory creates a CompositeValidator for each run
