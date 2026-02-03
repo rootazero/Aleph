@@ -50,6 +50,7 @@ pub mod skill_reader;
 pub mod snapshot_capture;
 pub mod web_fetch;
 pub mod youtube;
+pub mod mcp_resource;
 
 pub use bash_exec::{BashExecArgs, BashExecTool};
 pub use code_exec::{CodeExecArgs, CodeExecTool};
@@ -71,6 +72,7 @@ pub use skill_reader::{
 pub use snapshot_capture::SnapshotCaptureTool;
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
 pub use youtube::{YouTubeArgs, YouTubeTool};
+pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
 
 // Message tool re-exports
 pub use message::{
