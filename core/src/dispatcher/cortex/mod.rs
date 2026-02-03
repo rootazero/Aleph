@@ -33,10 +33,15 @@
 //! }
 //! ```
 
+pub mod decision;
 pub mod error;
 pub mod parser;
 pub mod security;
 
+pub use decision::{
+    merge_config, ConfirmationConfig, ConfirmationOverride, DecisionAction, DecisionConfig,
+    ExecutionConfig, RoutingConfig, RoutingOverride, SessionOverride,
+};
 pub use error::{CortexError, RecoveryHint, SecuritySeverity};
 pub use parser::{JsonFragment, JsonStreamDetector};
 pub use security::{
