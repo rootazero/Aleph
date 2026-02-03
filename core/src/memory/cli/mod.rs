@@ -6,5 +6,8 @@
 mod commands;
 mod lock;
 
-pub use commands::{FactSummary, ListFilter, MemoryCommands, OutputFormat};
+pub use commands::{
+    ExportedFact, FactExport, FactSummary, GcResult, ImportResult, ListFilter, MemoryCommands,
+    MemoryStats, OutputFormat, WriteAction, WriteResult,
+};
 pub use lock::{LockError, LockMode, MemoryLock};

@@ -1,10 +1,11 @@
 //! CLI Commands for Memory Management
 //!
-//! Provides command implementations for listing, showing, and searching facts.
+//! Provides command implementations for listing, showing, adding, editing, and managing facts.
 
 use crate::error::AetherError;
-use crate::memory::context::{FactType, MemoryFact};
+use crate::memory::context::{FactType, MemoryFact, FactSpecificity, TemporalScope};
 use crate::memory::database::VectorDatabase;
+use crate::memory::smart_embedder::SmartEmbedder;
 use std::sync::Arc;
 
 /// Filter options for listing facts
@@ -318,6 +319,323 @@ impl MemoryCommands {
             OutputFormat::Csv => summary.to_csv_row(),
         }
     }
+
+    /// Add a new fact manually
+    pub async fn add(
+        &self,
+        content: &str,
+        fact_type: FactType,
+        embedder: Option<&SmartEmbedder>,
+    ) -> Result<String, AetherError> {
+        // Generate embedding if embedder is available
+        let embedding = if let Some(emb) = embedder {
+            Some(emb.embed(content).await?)
+        } else {
+            None
+        };
+
+        // Create fact
+        let mut fact = MemoryFact::new(content.to_string(), fact_type, vec![]);
+        if let Some(emb) = embedding {
+            fact = fact.with_embedding(emb);
+        }
+        fact.specificity = FactSpecificity::Pattern;
+        fact.temporal_scope = TemporalScope::Contextual;
+
+        let fact_id = fact.id.clone();
+
+        // Insert into database
+        self.db.insert_fact(fact).await?;
+
+        Ok(fact_id)
+    }
+
+    /// Edit an existing fact's content
+    pub async fn edit(
+        &self,
+        id: &str,
+        new_content: &str,
+        embedder: Option<&SmartEmbedder>,
+    ) -> Result<String, AetherError> {
+        // Resolve ID (support prefix match)
+        let full_id = self.resolve_fact_id(id).await?;
+
+        // Generate new embedding if embedder is available
+        let embedding = if let Some(emb) = embedder {
+            Some(emb.embed(new_content).await?)
+        } else {
+            None
+        };
+
+        // Update in database
+        self.db
+            .update_fact_content(&full_id, new_content, embedding.as_deref())
+            .await?;
+
+        Ok(full_id)
+    }
+
+    /// Soft-delete (forget) a fact
+    pub async fn forget(&self, id: &str, reason: Option<&str>) -> Result<String, AetherError> {
+        // Resolve ID (support prefix match)
+        let full_id = self.resolve_fact_id(id).await?;
+
+        let reason_str = reason.unwrap_or("User requested deletion");
+        self.db.invalidate_fact(&full_id, reason_str).await?;
+
+        Ok(full_id)
+    }
+
+    /// Restore a fact from recycle bin
+    pub async fn restore(&self, id: &str) -> Result<String, AetherError> {
+        // Resolve ID (support prefix match)
+        let full_id = self.resolve_fact_id(id).await?;
+
+        self.db.restore_fact(&full_id).await?;
+
+        Ok(full_id)
+    }
+
+    /// Resolve a fact ID (supports prefix matching)
+    async fn resolve_fact_id(&self, id: &str) -> Result<String, AetherError> {
+        // Try exact match first
+        if let Some(fact) = self.db.get_fact(id).await? {
+            return Ok(fact.id);
+        }
+
+        // Try prefix match
+        let facts = self.db.get_all_facts(true).await?;
+        let matches: Vec<_> = facts.iter().filter(|f| f.id.starts_with(id)).collect();
+
+        match matches.len() {
+            0 => Err(AetherError::other(format!("Fact not found: {}", id))),
+            1 => Ok(matches[0].id.clone()),
+            _ => Err(AetherError::other(format!(
+                "Ambiguous ID '{}' matches {} facts. Use more characters.",
+                id,
+                matches.len()
+            ))),
+        }
+    }
+
+    /// Run garbage collection to permanently delete old invalidated facts
+    ///
+    /// Returns GC statistics
+    pub async fn gc(&self, retention_days: u32) -> Result<GcResult, AetherError> {
+        let deleted = self.db.purge_old_invalidated_facts(retention_days).await?;
+        let (valid_facts, remaining_invalid) = self.db.count_facts(true).await?;
+
+        Ok(GcResult {
+            deleted_count: deleted,
+            valid_facts,
+            remaining_invalid,
+            retention_days,
+        })
+    }
+
+    /// Export all facts to JSON format
+    pub async fn dump(&self, include_invalid: bool) -> Result<String, AetherError> {
+        let facts = self.db.get_all_facts(include_invalid).await?;
+
+        let export = FactExport {
+            version: 1,
+            exported_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+            facts: facts.into_iter().map(ExportedFact::from).collect(),
+        };
+
+        serde_json::to_string_pretty(&export)
+            .map_err(|e| AetherError::other(format!("Failed to serialize: {}", e)))
+    }
+
+    /// Import facts from JSON format
+    ///
+    /// Returns import statistics
+    pub async fn import(
+        &self,
+        json: &str,
+        embedder: Option<&SmartEmbedder>,
+    ) -> Result<ImportResult, AetherError> {
+        let export: FactExport = serde_json::from_str(json)
+            .map_err(|e| AetherError::other(format!("Failed to parse JSON: {}", e)))?;
+
+        let mut imported = 0;
+        let mut skipped = 0;
+        let mut errors = Vec::new();
+
+        for exported in export.facts {
+            // Check if fact already exists
+            if self.db.get_fact(&exported.id).await?.is_some() {
+                skipped += 1;
+                continue;
+            }
+
+            // Reconstruct fact
+            let mut fact = MemoryFact::with_id(
+                exported.id.clone(),
+                exported.content.clone(),
+                FactType::from_str(&exported.fact_type),
+            );
+            fact.created_at = exported.created_at;
+            fact.updated_at = exported.updated_at;
+            fact.confidence = exported.confidence;
+            fact.is_valid = exported.is_valid;
+            fact.invalidation_reason = exported.invalidation_reason;
+            fact.specificity = FactSpecificity::from_str(&exported.specificity);
+            fact.temporal_scope = TemporalScope::from_str(&exported.temporal_scope);
+
+            // Generate embedding if embedder is available
+            if let Some(emb) = embedder {
+                match emb.embed(&fact.content).await {
+                    Ok(embedding) => {
+                        fact = fact.with_embedding(embedding);
+                    }
+                    Err(e) => {
+                        errors.push(format!("{}: embedding failed - {}", exported.id, e));
+                    }
+                }
+            }
+
+            // Insert fact
+            match self.db.insert_fact(fact).await {
+                Ok(_) => imported += 1,
+                Err(e) => errors.push(format!("{}: {}", exported.id, e)),
+            }
+        }
+
+        Ok(ImportResult {
+            imported,
+            skipped,
+            errors,
+        })
+    }
+
+    /// Get statistics about the memory database
+    pub async fn stats(&self) -> Result<MemoryStats, AetherError> {
+        let (valid, invalid) = self.db.count_facts(true).await?;
+
+        Ok(MemoryStats {
+            total_facts: valid + invalid,
+            valid_facts: valid,
+            invalid_facts: invalid,
+        })
+    }
+}
+
+/// Result of a write operation
+#[derive(Debug, Clone)]
+pub struct WriteResult {
+    /// The affected fact ID
+    pub fact_id: String,
+    /// Action performed
+    pub action: WriteAction,
+    /// Previous content (for edit operations)
+    pub previous_content: Option<String>,
+}
+
+/// Type of write action
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteAction {
+    Added,
+    Edited,
+    Forgotten,
+    Restored,
+}
+
+/// Result of garbage collection
+#[derive(Debug, Clone)]
+pub struct GcResult {
+    /// Number of facts permanently deleted
+    pub deleted_count: usize,
+    /// Number of valid facts remaining
+    pub valid_facts: usize,
+    /// Number of invalid facts remaining (within retention period)
+    pub remaining_invalid: usize,
+    /// Retention period used
+    pub retention_days: u32,
+}
+
+impl std::fmt::Display for GcResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "GC complete: {} deleted, {} valid, {} in recycle bin (retention: {} days)",
+            self.deleted_count, self.valid_facts, self.remaining_invalid, self.retention_days
+        )
+    }
+}
+
+/// Exported fact structure for JSON export/import
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ExportedFact {
+    pub id: String,
+    pub content: String,
+    pub fact_type: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub confidence: f32,
+    pub is_valid: bool,
+    pub invalidation_reason: Option<String>,
+    pub specificity: String,
+    pub temporal_scope: String,
+}
+
+impl From<MemoryFact> for ExportedFact {
+    fn from(fact: MemoryFact) -> Self {
+        Self {
+            id: fact.id,
+            content: fact.content,
+            fact_type: fact.fact_type.as_str().to_string(),
+            created_at: fact.created_at,
+            updated_at: fact.updated_at,
+            confidence: fact.confidence,
+            is_valid: fact.is_valid,
+            invalidation_reason: fact.invalidation_reason,
+            specificity: fact.specificity.as_str().to_string(),
+            temporal_scope: fact.temporal_scope.as_str().to_string(),
+        }
+    }
+}
+
+/// Export file format
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FactExport {
+    pub version: u32,
+    pub exported_at: i64,
+    pub facts: Vec<ExportedFact>,
+}
+
+/// Result of import operation
+#[derive(Debug, Clone)]
+pub struct ImportResult {
+    /// Number of facts successfully imported
+    pub imported: usize,
+    /// Number of facts skipped (already exist)
+    pub skipped: usize,
+    /// Errors encountered
+    pub errors: Vec<String>,
+}
+
+impl std::fmt::Display for ImportResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Import complete: {} imported, {} skipped, {} errors",
+            self.imported,
+            self.skipped,
+            self.errors.len()
+        )
+    }
+}
+
+/// Memory database statistics
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemoryStats {
+    pub total_facts: usize,
+    pub valid_facts: usize,
+    pub invalid_facts: usize,
 }
 
 #[cfg(test)]
@@ -382,5 +700,112 @@ mod tests {
         let csv = summary.to_csv_row();
         assert!(csv.contains("abc12345-6789"));
         assert!(csv.contains("\"\"quotes\"\"")); // Escaped quotes
+    }
+
+    #[test]
+    fn test_write_action_enum() {
+        assert_ne!(WriteAction::Added, WriteAction::Edited);
+        assert_ne!(WriteAction::Forgotten, WriteAction::Restored);
+    }
+
+    #[test]
+    fn test_write_result() {
+        let result = WriteResult {
+            fact_id: "test-123".to_string(),
+            action: WriteAction::Added,
+            previous_content: None,
+        };
+
+        assert_eq!(result.fact_id, "test-123");
+        assert_eq!(result.action, WriteAction::Added);
+        assert!(result.previous_content.is_none());
+    }
+
+    #[test]
+    fn test_gc_result_display() {
+        let result = GcResult {
+            deleted_count: 5,
+            valid_facts: 100,
+            remaining_invalid: 3,
+            retention_days: 30,
+        };
+
+        let display = format!("{}", result);
+        assert!(display.contains("5 deleted"));
+        assert!(display.contains("100 valid"));
+        assert!(display.contains("3 in recycle bin"));
+        assert!(display.contains("30 days"));
+    }
+
+    #[test]
+    fn test_import_result_display() {
+        let result = ImportResult {
+            imported: 10,
+            skipped: 2,
+            errors: vec!["error1".to_string()],
+        };
+
+        let display = format!("{}", result);
+        assert!(display.contains("10 imported"));
+        assert!(display.contains("2 skipped"));
+        assert!(display.contains("1 errors"));
+    }
+
+    #[test]
+    fn test_exported_fact_from_memory_fact() {
+        let fact = MemoryFact::new(
+            "User prefers Rust".to_string(),
+            FactType::Preference,
+            vec!["source-1".to_string()],
+        );
+
+        let exported = ExportedFact::from(fact.clone());
+
+        assert_eq!(exported.id, fact.id);
+        assert_eq!(exported.content, "User prefers Rust");
+        assert_eq!(exported.fact_type, "preference");
+        assert!(exported.is_valid);
+    }
+
+    #[test]
+    fn test_fact_export_serialization() {
+        let export = FactExport {
+            version: 1,
+            exported_at: 1234567890,
+            facts: vec![ExportedFact {
+                id: "test-123".to_string(),
+                content: "Test content".to_string(),
+                fact_type: "preference".to_string(),
+                created_at: 1234567890,
+                updated_at: 1234567890,
+                confidence: 0.9,
+                is_valid: true,
+                invalidation_reason: None,
+                specificity: "pattern".to_string(),
+                temporal_scope: "contextual".to_string(),
+            }],
+        };
+
+        let json = serde_json::to_string(&export).unwrap();
+        assert!(json.contains("test-123"));
+        assert!(json.contains("Test content"));
+
+        let parsed: FactExport = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.version, 1);
+        assert_eq!(parsed.facts.len(), 1);
+    }
+
+    #[test]
+    fn test_memory_stats() {
+        let stats = MemoryStats {
+            total_facts: 100,
+            valid_facts: 95,
+            invalid_facts: 5,
+        };
+
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("100"));
+        assert!(json.contains("95"));
+        assert!(json.contains("5"));
     }
 }

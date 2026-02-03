@@ -44,7 +44,10 @@ mod integration_tests;
 
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
-pub use audit::{AuditAction, AuditActor, AuditDetails, AuditEntry, AuditLogger};
+pub use audit::{
+    AuditAction, AuditActor, AuditDetails, AuditEntry, AuditLogger,
+    ExplainedEvent, FactExplanation, ForgettingExplanation,
+};
 pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
 pub use compression::{
