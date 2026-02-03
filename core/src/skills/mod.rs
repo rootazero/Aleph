@@ -52,6 +52,24 @@ pub struct SkillFrontmatter {
     /// When user input contains any of these keywords, this skill may be auto-invoked.
     #[serde(default)]
     pub triggers: Vec<String>,
+
+    // === New fields (all optional for backwards compatibility) ===
+
+    /// UI icon emoji (e.g., "🐙")
+    #[serde(default)]
+    pub emoji: Option<String>,
+
+    /// Category tag (e.g., "developer", "media", "productivity")
+    #[serde(default)]
+    pub category: Option<String>,
+
+    /// Whether this skill is a CLI wrapper
+    #[serde(default, rename = "cli-wrapper")]
+    pub cli_wrapper: bool,
+
+    /// Dependency requirements
+    #[serde(default)]
+    pub requirements: Option<types::SkillRequirements>,
 }
 
 /// A parsed Skill from SKILL.md
@@ -511,5 +529,53 @@ Instructions here.
             "Improve and polish writing. Use when asked to refine text."
         );
         assert_eq!(skill.allowed_tools(), &["Read", "Edit"]);
+    }
+
+    #[test]
+    fn test_parse_skill_with_requirements() {
+        let content = r#"---
+name: github
+description: GitHub CLI operations
+emoji: "🐙"
+category: developer
+cli-wrapper: true
+requirements:
+  binaries:
+    - gh
+  platforms:
+    - macos
+    - linux
+  install:
+    - manager: brew
+      package: gh
+---
+
+# GitHub Skill
+"#;
+        let skill = Skill::parse("github", content).unwrap();
+
+        assert_eq!(skill.frontmatter.emoji, Some("🐙".to_string()));
+        assert_eq!(skill.frontmatter.category, Some("developer".to_string()));
+        assert!(skill.frontmatter.cli_wrapper);
+
+        let req = skill.frontmatter.requirements.unwrap();
+        assert_eq!(req.binaries, vec!["gh"]);
+        assert_eq!(
+            req.platforms,
+            Some(vec!["macos".to_string(), "linux".to_string()])
+        );
+        assert_eq!(req.install.len(), 1);
+        assert_eq!(req.install[0].package, "gh");
+    }
+
+    #[test]
+    fn test_parse_skill_without_requirements_backwards_compat() {
+        // Existing skills without new fields should still parse
+        let skill = Skill::parse("refine-text", VALID_SKILL_MD).unwrap();
+
+        assert!(skill.frontmatter.emoji.is_none());
+        assert!(skill.frontmatter.category.is_none());
+        assert!(!skill.frontmatter.cli_wrapper);
+        assert!(skill.frontmatter.requirements.is_none());
     }
 }
