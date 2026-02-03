@@ -115,6 +115,10 @@ pub struct AgentExecConfig {
     /// Command allowlist for this agent
     #[serde(default)]
     pub allowlist: Option<Vec<AllowlistEntry>>,
+
+    /// Skills that are pre-approved for CLI execution
+    #[serde(default)]
+    pub skill_allowlist: Option<Vec<String>>,
 }
 
 /// An entry in the command allowlist
@@ -170,12 +174,17 @@ impl ExecApprovalsFile {
             .and_then(|a| a.allowlist.clone())
             .unwrap_or_default();
 
+        let skill_allowlist = agent
+            .and_then(|a| a.skill_allowlist.clone())
+            .unwrap_or_default();
+
         ResolvedExecConfig {
             security,
             ask,
             ask_fallback,
             auto_allow_skills,
             allowlist,
+            skill_allowlist,
         }
     }
 }
@@ -188,6 +197,8 @@ pub struct ResolvedExecConfig {
     pub ask_fallback: ExecSecurity,
     pub auto_allow_skills: bool,
     pub allowlist: Vec<AllowlistEntry>,
+    /// Skills that are pre-approved for CLI execution
+    pub skill_allowlist: Vec<String>,
 }
 
 #[cfg(test)]
@@ -245,5 +256,24 @@ mod tests {
         // Agent override
         let work_resolved = config.resolve_for_agent("work");
         assert_eq!(work_resolved.security, ExecSecurity::Full);
+    }
+
+    #[test]
+    fn test_exec_config_with_skill_allowlist() {
+        let toml_str = r#"
+            version = 1
+
+            [agents.main]
+            security = "allowlist"
+            skill_allowlist = ["github", "ffmpeg"]
+        "#;
+
+        let config: ExecApprovalsFile = toml::from_str(toml_str).unwrap();
+        let resolved = config.resolve_for_agent("main");
+
+        assert_eq!(
+            resolved.skill_allowlist,
+            vec!["github".to_string(), "ffmpeg".to_string()]
+        );
     }
 }

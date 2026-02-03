@@ -202,6 +202,7 @@ mod tests {
             ask_fallback: ExecSecurity::Deny,
             auto_allow_skills: false,
             allowlist: vec![],
+            skill_allowlist: vec![],
         }
     }
 
