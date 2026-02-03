@@ -309,9 +309,9 @@ impl OAuthProvider {
         Ok(tokens)
     }
 
-    /// Refresh an expired access token
+    /// Refresh an expired access token using stored refresh token
     ///
-    /// Uses the refresh token to obtain a new access token.
+    /// Uses the refresh token from storage to obtain a new access token.
     pub async fn refresh_token(
         &self,
         metadata: &OAuthServerMetadata,
@@ -327,10 +327,24 @@ impl OAuthProvider {
             AetherError::IoError("No refresh token available".to_string())
         })?;
 
+        self.refresh_token_with(&metadata, client_id, &refresh_token)
+            .await
+    }
+
+    /// Refresh an expired access token
+    ///
+    /// Uses the refresh_token grant to obtain a new access token.
+    /// Automatically saves the new tokens to storage.
+    pub async fn refresh_token_with(
+        &self,
+        metadata: &OAuthServerMetadata,
+        client_id: &str,
+        refresh_token: &str,
+    ) -> Result<OAuthTokens> {
         let params = [
             ("grant_type", "refresh_token"),
             ("client_id", client_id),
-            ("refresh_token", &refresh_token),
+            ("refresh_token", refresh_token),
         ];
 
         let response = self
@@ -355,6 +369,11 @@ impl OAuthProvider {
         self.storage
             .save_tokens(&self.server_name, &tokens)
             .await?;
+
+        tracing::info!(
+            server = %self.server_name,
+            "OAuth tokens refreshed successfully"
+        );
 
         Ok(tokens)
     }
@@ -390,6 +409,47 @@ impl OAuthProvider {
         }
 
         // Tokens expired and can't refresh
+        Ok(None)
+    }
+
+    /// Check if tokens need refresh and refresh if possible
+    ///
+    /// Returns new tokens if refreshed, or existing tokens if still valid.
+    /// Returns None if no tokens exist or refresh failed without refresh_token.
+    pub async fn ensure_valid_token(
+        &self,
+        metadata: &OAuthServerMetadata,
+        client_id: &str,
+    ) -> Result<Option<OAuthTokens>> {
+        let tokens = match self.storage.get_tokens(&self.server_name).await? {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        if !tokens.is_expired() {
+            return Ok(Some(tokens));
+        }
+
+        // Token is expired, try to refresh
+        if let Some(ref refresh) = tokens.refresh_token {
+            match self.refresh_token_with(metadata, client_id, refresh).await {
+                Ok(new_tokens) => return Ok(Some(new_tokens)),
+                Err(e) => {
+                    tracing::warn!(
+                        server = %self.server_name,
+                        error = %e,
+                        "Failed to refresh token, will need re-authorization"
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+
+        // No refresh token, need re-authorization
+        tracing::warn!(
+            server = %self.server_name,
+            "Token expired and no refresh token available"
+        );
         Ok(None)
     }
 }
@@ -491,5 +551,132 @@ mod tests {
 
         let deserialized: OAuthServerMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.authorization_endpoint, metadata.authorization_endpoint);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_valid_token_not_expired() {
+        use tempfile::tempdir;
+
+        // Create temporary storage
+        let dir = tempdir().unwrap();
+        let storage = Arc::new(OAuthStorage::new(dir.path().join("mcp-auth.json")));
+
+        // Create a non-expired token (expires far in the future)
+        let tokens = OAuthTokens {
+            access_token: "valid_token".to_string(),
+            refresh_token: Some("refresh_token".to_string()),
+            expires_at: Some(9999999999), // Far in the future
+            scope: Some("read write".to_string()),
+        };
+
+        // Save the token
+        storage.save_tokens("test-server", &tokens).await.unwrap();
+
+        // Create the provider
+        let provider = OAuthProvider::new(
+            storage,
+            "test-server",
+            "https://example.com",
+            "http://localhost:8080/callback",
+        );
+
+        // Create metadata (not actually used since token is valid)
+        let metadata = OAuthServerMetadata {
+            authorization_endpoint: "https://example.com/authorize".to_string(),
+            token_endpoint: "https://example.com/token".to_string(),
+            registration_endpoint: None,
+            response_types_supported: vec!["code".to_string()],
+            grant_types_supported: vec!["authorization_code".to_string()],
+            code_challenge_methods_supported: vec!["S256".to_string()],
+        };
+
+        // Call ensure_valid_token - should return existing token without refresh
+        let result = provider
+            .ensure_valid_token(&metadata, "client_id")
+            .await
+            .unwrap();
+
+        assert!(result.is_some());
+        let returned_tokens = result.unwrap();
+        assert_eq!(returned_tokens.access_token, "valid_token");
+    }
+
+    #[tokio::test]
+    async fn test_ensure_valid_token_no_tokens() {
+        use tempfile::tempdir;
+
+        // Create temporary storage with no tokens
+        let dir = tempdir().unwrap();
+        let storage = Arc::new(OAuthStorage::new(dir.path().join("mcp-auth.json")));
+
+        // Create the provider
+        let provider = OAuthProvider::new(
+            storage,
+            "test-server",
+            "https://example.com",
+            "http://localhost:8080/callback",
+        );
+
+        let metadata = OAuthServerMetadata {
+            authorization_endpoint: "https://example.com/authorize".to_string(),
+            token_endpoint: "https://example.com/token".to_string(),
+            registration_endpoint: None,
+            response_types_supported: vec!["code".to_string()],
+            grant_types_supported: vec!["authorization_code".to_string()],
+            code_challenge_methods_supported: vec!["S256".to_string()],
+        };
+
+        // Call ensure_valid_token - should return None since no tokens exist
+        let result = provider
+            .ensure_valid_token(&metadata, "client_id")
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_valid_token_expired_no_refresh() {
+        use tempfile::tempdir;
+
+        // Create temporary storage
+        let dir = tempdir().unwrap();
+        let storage = Arc::new(OAuthStorage::new(dir.path().join("mcp-auth.json")));
+
+        // Create an expired token without refresh token
+        let tokens = OAuthTokens {
+            access_token: "expired_token".to_string(),
+            refresh_token: None, // No refresh token
+            expires_at: Some(0), // Already expired (Unix epoch)
+            scope: None,
+        };
+
+        // Save the token
+        storage.save_tokens("test-server", &tokens).await.unwrap();
+
+        // Create the provider
+        let provider = OAuthProvider::new(
+            storage,
+            "test-server",
+            "https://example.com",
+            "http://localhost:8080/callback",
+        );
+
+        let metadata = OAuthServerMetadata {
+            authorization_endpoint: "https://example.com/authorize".to_string(),
+            token_endpoint: "https://example.com/token".to_string(),
+            registration_endpoint: None,
+            response_types_supported: vec!["code".to_string()],
+            grant_types_supported: vec!["authorization_code".to_string()],
+            code_challenge_methods_supported: vec!["S256".to_string()],
+        };
+
+        // Call ensure_valid_token - should return None since token is expired and no refresh token
+        let result = provider
+            .ensure_valid_token(&metadata, "client_id")
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
     }
 }
