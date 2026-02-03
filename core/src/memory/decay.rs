@@ -4,7 +4,7 @@
 //! Facts that haven't been accessed in a long time decay in strength,
 //! while frequently accessed facts remain strong.
 
-use crate::memory::context::FactType;
+use crate::memory::context::{FactType, TemporalScope};
 use serde::{Deserialize, Serialize};
 
 /// Memory strength tracking
@@ -57,6 +57,32 @@ impl MemoryStrength {
     /// Check if this memory should be considered for cleanup
     pub fn should_cleanup(&self, config: &DecayConfig, now: i64) -> bool {
         self.calculate_strength(config, now) < config.min_strength
+    }
+
+    /// Calculate strength with type-specific half-life
+    pub fn calculate_strength_for_type(
+        &self,
+        config: &DecayConfig,
+        now: i64,
+        fact_type: &FactType,
+    ) -> f32 {
+        // Protected types never decay
+        if config.is_protected(fact_type) {
+            return 1.0;
+        }
+
+        let effective_half_life = config.effective_half_life(fact_type);
+        let days_since_access = (now - self.last_accessed) as f32 / 86400.0;
+
+        // Handle infinite half-life
+        if effective_half_life.is_infinite() {
+            return 1.0;
+        }
+
+        let base_decay = 0.5_f32.powf(days_since_access / effective_half_life);
+        let access_boost = (self.access_count as f32 * config.access_boost).min(2.0);
+
+        (base_decay * (1.0 + access_boost)).min(1.0)
     }
 }
 
@@ -134,6 +160,25 @@ impl DecayConfig {
             self.protected_types.push(fact_type);
         }
         self
+    }
+
+    /// Get effective half-life considering temporal scope
+    pub fn effective_half_life_with_scope(
+        &self,
+        fact_type: &FactType,
+        temporal_scope: &TemporalScope,
+    ) -> f32 {
+        let base = self.effective_half_life(fact_type);
+
+        if base.is_infinite() {
+            return base;
+        }
+
+        match temporal_scope {
+            TemporalScope::Ephemeral => base * 0.5,  // Decays 2x faster
+            TemporalScope::Permanent => base * 3.0,  // Lasts 3x longer
+            TemporalScope::Contextual => base,       // Normal decay
+        }
     }
 }
 
@@ -235,5 +280,29 @@ mod tests {
 
         // After 1 year with no access, should be very weak
         assert!(old_strength.should_cleanup(&config, now));
+    }
+
+    #[test]
+    fn test_ephemeral_decays_faster() {
+        let config = DecayConfig::default();
+        let now = 1000000;
+        let fifteen_days_ago = now - (15 * 86400);
+
+        let strength = MemoryStrength {
+            access_count: 0,
+            last_accessed: fifteen_days_ago,
+            creation_time: fifteen_days_ago,
+        };
+
+        // Normal type: ~0.71 after 15 days (half of half-life)
+        let normal_score = strength.calculate_strength_for_type(&config, now, &FactType::Other);
+
+        // Check that ephemeral scope gives faster decay
+        let ephemeral_half_life = config.effective_half_life_with_scope(&FactType::Other, &TemporalScope::Ephemeral);
+        assert!(ephemeral_half_life < config.half_life_days);
+
+        // Ephemeral: 15 days (half-life with 0.5x multiplier = 15 days half-life)
+        // So after 15 days, score should be ~0.5
+        assert!(normal_score > 0.5); // Normal should be above 0.5 after half the half-life
     }
 }
