@@ -210,6 +210,28 @@ impl VectorDatabase {
             );
 
             -- ================================================================
+            -- Audit Log for Memory Operations (Explainability)
+            -- ================================================================
+
+            -- Audit log for memory operations (explainability)
+            CREATE TABLE IF NOT EXISTS memory_audit_log (
+                id TEXT PRIMARY KEY,
+                fact_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                reason TEXT,
+                actor TEXT NOT NULL,
+                details TEXT,
+                created_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_fact
+                ON memory_audit_log(fact_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_time
+                ON memory_audit_log(created_at);
+            CREATE INDEX IF NOT EXISTS idx_audit_action
+                ON memory_audit_log(action);
+
+            -- ================================================================
             -- sqlite-vec Virtual Tables for Vector Search
             -- ================================================================
 
