@@ -839,6 +839,86 @@ impl ServiceResult {
 }
 
 // =============================================================================
+// Channel Types (V2 Plugin Channels)
+// =============================================================================
+
+/// Channel message from external platform
+///
+/// Represents an incoming message from a plugin-provided messaging channel
+/// (e.g., Telegram, Discord, Slack, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelMessage {
+    /// Unique channel identifier (e.g., "telegram", "discord")
+    pub channel_id: String,
+    /// Conversation/chat identifier within the channel
+    pub conversation_id: String,
+    /// Sender identifier (user ID on the platform)
+    pub sender_id: String,
+    /// Message content
+    pub content: String,
+    /// When the message was sent
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Platform-specific metadata (e.g., message_id, attachments)
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Channel send request
+///
+/// Request to send a message through a plugin-provided channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelSendRequest {
+    /// Conversation/chat identifier to send to
+    pub conversation_id: String,
+    /// Message content to send
+    pub content: String,
+    /// Optional message ID to reply to
+    pub reply_to: Option<String>,
+    /// Platform-specific options (e.g., parse_mode, disable_notification)
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Channel connection state
+///
+/// Represents the current connection status of a plugin channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChannelState {
+    /// Channel is not connected
+    Disconnected,
+    /// Channel is attempting to connect
+    Connecting,
+    /// Channel is connected and operational
+    Connected,
+    /// Channel lost connection and is attempting to reconnect
+    Reconnecting,
+    /// Channel connection failed
+    Failed,
+}
+
+impl Default for ChannelState {
+    fn default() -> Self {
+        ChannelState::Disconnected
+    }
+}
+
+/// Channel info
+///
+/// Describes a plugin-provided messaging channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelInfo {
+    /// Unique channel identifier
+    pub id: String,
+    /// Plugin that provides this channel
+    pub plugin_id: String,
+    /// Human-readable label (e.g., "Telegram Bot")
+    pub label: String,
+    /// Current connection state
+    pub state: ChannelState,
+    /// Error message if state is Failed
+    pub error: Option<String>,
+}
+
+// =============================================================================
 // Frontmatter Types
 // =============================================================================
 
@@ -1265,5 +1345,142 @@ mod tests {
 
         assert!(parsed.success);
         assert_eq!(parsed.message, Some("Done".to_string()));
+    }
+
+    // =========================================================================
+    // Channel Types Tests
+    // =========================================================================
+
+    #[test]
+    fn test_channel_state_default() {
+        let state = ChannelState::default();
+        assert_eq!(state, ChannelState::Disconnected);
+    }
+
+    #[test]
+    fn test_channel_state_serde() {
+        // All states serialize to lowercase
+        assert_eq!(serde_json::to_string(&ChannelState::Disconnected).unwrap(), "\"disconnected\"");
+        assert_eq!(serde_json::to_string(&ChannelState::Connecting).unwrap(), "\"connecting\"");
+        assert_eq!(serde_json::to_string(&ChannelState::Connected).unwrap(), "\"connected\"");
+        assert_eq!(serde_json::to_string(&ChannelState::Reconnecting).unwrap(), "\"reconnecting\"");
+        assert_eq!(serde_json::to_string(&ChannelState::Failed).unwrap(), "\"failed\"");
+
+        // Parse back
+        let parsed: ChannelState = serde_json::from_str("\"connected\"").unwrap();
+        assert_eq!(parsed, ChannelState::Connected);
+    }
+
+    #[test]
+    fn test_channel_message_serde() {
+        let msg = ChannelMessage {
+            channel_id: "telegram".to_string(),
+            conversation_id: "chat-12345".to_string(),
+            sender_id: "user-67890".to_string(),
+            content: "Hello, Aether!".to_string(),
+            timestamp: chrono::Utc::now(),
+            metadata: Some(serde_json::json!({"message_id": 42})),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: ChannelMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.channel_id, "telegram");
+        assert_eq!(parsed.conversation_id, "chat-12345");
+        assert_eq!(parsed.sender_id, "user-67890");
+        assert_eq!(parsed.content, "Hello, Aether!");
+        assert!(parsed.metadata.is_some());
+    }
+
+    #[test]
+    fn test_channel_message_without_metadata() {
+        let msg = ChannelMessage {
+            channel_id: "discord".to_string(),
+            conversation_id: "guild-123#channel-456".to_string(),
+            sender_id: "user-789".to_string(),
+            content: "Test message".to_string(),
+            timestamp: chrono::Utc::now(),
+            metadata: None,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: ChannelMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.channel_id, "discord");
+        assert!(parsed.metadata.is_none());
+    }
+
+    #[test]
+    fn test_channel_send_request_serde() {
+        let req = ChannelSendRequest {
+            conversation_id: "chat-12345".to_string(),
+            content: "Hello back!".to_string(),
+            reply_to: Some("msg-999".to_string()),
+            metadata: Some(serde_json::json!({"parse_mode": "HTML"})),
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: ChannelSendRequest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.conversation_id, "chat-12345");
+        assert_eq!(parsed.content, "Hello back!");
+        assert_eq!(parsed.reply_to, Some("msg-999".to_string()));
+        assert!(parsed.metadata.is_some());
+    }
+
+    #[test]
+    fn test_channel_send_request_minimal() {
+        let req = ChannelSendRequest {
+            conversation_id: "chat-abc".to_string(),
+            content: "Simple message".to_string(),
+            reply_to: None,
+            metadata: None,
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: ChannelSendRequest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.conversation_id, "chat-abc");
+        assert_eq!(parsed.content, "Simple message");
+        assert!(parsed.reply_to.is_none());
+        assert!(parsed.metadata.is_none());
+    }
+
+    #[test]
+    fn test_channel_info_serde() {
+        let info = ChannelInfo {
+            id: "telegram-bot".to_string(),
+            plugin_id: "telegram-plugin".to_string(),
+            label: "Telegram Bot".to_string(),
+            state: ChannelState::Connected,
+            error: None,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: ChannelInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.id, "telegram-bot");
+        assert_eq!(parsed.plugin_id, "telegram-plugin");
+        assert_eq!(parsed.label, "Telegram Bot");
+        assert_eq!(parsed.state, ChannelState::Connected);
+        assert!(parsed.error.is_none());
+    }
+
+    #[test]
+    fn test_channel_info_with_error() {
+        let info = ChannelInfo {
+            id: "discord-bot".to_string(),
+            plugin_id: "discord-plugin".to_string(),
+            label: "Discord Bot".to_string(),
+            state: ChannelState::Failed,
+            error: Some("Invalid bot token".to_string()),
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("Invalid bot token"));
+
+        let parsed: ChannelInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.state, ChannelState::Failed);
+        assert_eq!(parsed.error, Some("Invalid bot token".to_string()));
     }
 }
