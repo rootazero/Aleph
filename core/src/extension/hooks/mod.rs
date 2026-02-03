@@ -170,6 +170,57 @@ impl HookResult {
     }
 }
 
+/// Result from an interceptor hook
+#[derive(Debug, Clone, Default)]
+pub struct InterceptorResult {
+    /// Whether the request should pass through
+    pub pass: bool,
+    /// Modified context (if the interceptor modified the request)
+    pub modified_context: Option<HookContext>,
+    /// Reason for blocking (if pass is false)
+    pub block_reason: Option<String>,
+    /// Whether to suppress the block message from the user
+    pub silent: bool,
+}
+
+impl InterceptorResult {
+    /// Create a passing result
+    pub fn pass() -> Self {
+        Self {
+            pass: true,
+            ..Default::default()
+        }
+    }
+
+    /// Create a blocking result with a reason
+    pub fn block(reason: impl Into<String>) -> Self {
+        Self {
+            pass: false,
+            block_reason: Some(reason.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a silent blocking result (no message shown to user)
+    pub fn block_silent(reason: impl Into<String>) -> Self {
+        Self {
+            pass: false,
+            block_reason: Some(reason.into()),
+            silent: true,
+            ..Default::default()
+        }
+    }
+
+    /// Create a passing result with modified context
+    pub fn modified(ctx: HookContext) -> Self {
+        Self {
+            pass: true,
+            modified_context: Some(ctx),
+            ..Default::default()
+        }
+    }
+}
+
 /// Hook executor - runs hook actions based on events
 pub struct HookExecutor {
     hooks: Vec<HookConfig>,
@@ -447,6 +498,182 @@ impl HookExecutor {
             error: None,
             exit_code: None,
         })
+    }
+
+    /// Execute interceptor hooks for an event
+    ///
+    /// Interceptors run sequentially in priority order and can:
+    /// - Block execution (short-circuit)
+    /// - Modify the context for downstream processing
+    ///
+    /// Returns the (possibly modified) context and an optional block reason.
+    pub async fn execute_interceptors(
+        &self,
+        event: HookEvent,
+        context: HookContext,
+    ) -> Result<(HookContext, Option<String>), ExtensionError> {
+        // Filter hooks by event and kind == Interceptor
+        let mut interceptors: Vec<_> = self
+            .hooks
+            .iter()
+            .filter(|h| h.event == event && h.kind == HookKind::Interceptor)
+            .collect();
+
+        // Sort by priority (lower value = earlier execution)
+        interceptors.sort_by_key(|h| h.priority.as_i32());
+
+        let current_context = context;
+
+        for hook in interceptors {
+            // Check matcher pattern
+            if !self.matches_pattern(hook, &current_context) {
+                continue;
+            }
+
+            debug!(
+                "Executing interceptor hook from plugin '{}' for event {:?}",
+                hook.plugin_name, event
+            );
+
+            // Execute all actions for this hook
+            for action in &hook.actions {
+                let action_result = self
+                    .execute_action(action, &current_context, &hook.plugin_root)
+                    .await;
+
+                match action_result {
+                    Ok(ar) => {
+                        // Check for block signal in command output
+                        if let HookAction::Command { .. } = action {
+                            if let Some(ref output) = ar.output {
+                                if output.trim().to_lowercase().starts_with("block:") {
+                                    let reason = output.trim()[6..].trim().to_string();
+                                    return Ok((current_context, Some(reason)));
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Interceptor hook action failed: {}", e);
+                        // Interceptor failures block by default for safety
+                        return Ok((
+                            current_context,
+                            Some(format!("Interceptor hook failed: {}", e)),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok((current_context, None))
+    }
+
+    /// Execute observer hooks for an event
+    ///
+    /// Observers run in parallel and cannot block or modify the context.
+    /// Errors are logged but do not propagate.
+    pub async fn execute_observers(&self, event: HookEvent, context: &HookContext) {
+        // Filter hooks by event and kind == Observer
+        let observers: Vec<_> = self
+            .hooks
+            .iter()
+            .filter(|h| h.event == event && h.kind == HookKind::Observer)
+            .filter(|h| self.matches_pattern(h, context))
+            .collect();
+
+        if observers.is_empty() {
+            return;
+        }
+
+        debug!(
+            "Executing {} observer hooks for event {:?}",
+            observers.len(),
+            event
+        );
+
+        // Execute all observers in parallel
+        let futures: Vec<_> = observers
+            .into_iter()
+            .map(|hook| async move {
+                for action in &hook.actions {
+                    if let Err(e) = self
+                        .execute_action(action, context, &hook.plugin_root)
+                        .await
+                    {
+                        warn!(
+                            "Observer hook action from plugin '{}' failed: {}",
+                            hook.plugin_name, e
+                        );
+                    }
+                }
+            })
+            .collect();
+
+        futures::future::join_all(futures).await;
+    }
+
+    /// Execute resolver hooks for an event
+    ///
+    /// Resolvers run sequentially in priority order and stop when one returns a value.
+    /// The `resolver_fn` is called with each hook's action results to extract the value.
+    ///
+    /// # Type Parameters
+    /// - `T`: The type of value being resolved
+    /// - `F`: A function that takes action results and returns `Option<T>`
+    pub async fn execute_resolvers<T, F>(
+        &self,
+        event: HookEvent,
+        context: &HookContext,
+        resolver_fn: F,
+    ) -> Option<T>
+    where
+        F: Fn(&[ActionResult]) -> Option<T>,
+    {
+        // Filter hooks by event and kind == Resolver
+        let mut resolvers: Vec<_> = self
+            .hooks
+            .iter()
+            .filter(|h| h.event == event && h.kind == HookKind::Resolver)
+            .collect();
+
+        // Sort by priority (lower value = earlier execution)
+        resolvers.sort_by_key(|h| h.priority.as_i32());
+
+        for hook in resolvers {
+            // Check matcher pattern
+            if !self.matches_pattern(hook, context) {
+                continue;
+            }
+
+            debug!(
+                "Executing resolver hook from plugin '{}' for event {:?}",
+                hook.plugin_name, event
+            );
+
+            // Execute all actions for this hook and collect results
+            let mut action_results = Vec::new();
+            for action in &hook.actions {
+                match self
+                    .execute_action(action, context, &hook.plugin_root)
+                    .await
+                {
+                    Ok(ar) => action_results.push(ar),
+                    Err(e) => {
+                        warn!(
+                            "Resolver hook action from plugin '{}' failed: {}",
+                            hook.plugin_name, e
+                        );
+                    }
+                }
+            }
+
+            // Try to resolve using the provided function
+            if let Some(value) = resolver_fn(&action_results) {
+                return Some(value);
+            }
+        }
+
+        None
     }
 }
 
