@@ -157,9 +157,17 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
             Ok(Arc::new(provider))
         }
 
-        // Native providers (Phase 1: keep as-is)
         "claude" | "anthropic" => {
-            let provider = ClaudeProvider::new(name.to_string(), config)?;
+            // Use HttpProvider + AnthropicProtocol
+            use std::time::Duration;
+
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(config.timeout_seconds))
+                .build()
+                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
+
+            let adapter = Arc::new(protocols::AnthropicProtocol::new(client));
+            let provider = HttpProvider::new(name.to_string(), config, adapter)?;
             Ok(Arc::new(provider))
         }
         "gemini" => {
