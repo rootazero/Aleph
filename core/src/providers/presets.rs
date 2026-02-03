@@ -130,6 +130,46 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // Groq - Ultra-fast inference
+    m.insert(
+        "groq",
+        ProviderPreset {
+            base_url: "https://api.groq.com/openai/v1",
+            protocol: "openai",
+            color: "#f55036",
+        },
+    );
+
+    // Together.ai - Open source models
+    m.insert(
+        "together",
+        ProviderPreset {
+            base_url: "https://api.together.xyz/v1",
+            protocol: "openai",
+            color: "#6366f1",
+        },
+    );
+
+    // Perplexity - Search-augmented LLMs
+    m.insert(
+        "perplexity",
+        ProviderPreset {
+            base_url: "https://api.perplexity.ai",
+            protocol: "openai",
+            color: "#20808d",
+        },
+    );
+
+    // Mistral AI - European AI leader
+    m.insert(
+        "mistral",
+        ProviderPreset {
+            base_url: "https://api.mistral.ai/v1",
+            protocol: "openai",
+            color: "#ff7000",
+        },
+    );
+
     m
 });
 
@@ -144,10 +184,23 @@ mod tests {
 
     #[test]
     fn test_presets_contain_known_vendors() {
+        // OpenAI-compatible (original)
         assert!(PRESETS.contains_key("deepseek"));
         assert!(PRESETS.contains_key("moonshot"));
         assert!(PRESETS.contains_key("doubao"));
         assert!(PRESETS.contains_key("openai"));
+
+        // Native protocols
+        assert!(PRESETS.contains_key("claude"));
+        assert!(PRESETS.contains_key("anthropic"));
+        assert!(PRESETS.contains_key("gemini"));
+        assert!(PRESETS.contains_key("google"));
+
+        // Tier 1: High-priority OpenAI-compatible
+        assert!(PRESETS.contains_key("groq"));
+        assert!(PRESETS.contains_key("together"));
+        assert!(PRESETS.contains_key("perplexity"));
+        assert!(PRESETS.contains_key("mistral"));
     }
 
     #[test]
