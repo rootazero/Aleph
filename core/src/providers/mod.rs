@@ -77,7 +77,6 @@ pub use auth_profiles::{
 pub use failover::{FailoverConfig, FailoverProvider, ProviderEntry};
 pub use mock::{MockError, MockProvider};
 pub use ollama::OllamaProvider;
-pub use openai::OpenAiProvider;
 pub use profile_config::{
     ProfileConfig, ProfileConfigError, ProfileConfigResult, ProfilesConfig, ProfileTier,
 };
