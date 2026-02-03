@@ -273,6 +273,13 @@ pub fn parse_aether_plugin_content(content: &str, path: &Path) -> ExtensionResul
         license: plugin.license,
         keywords: plugin.keywords.unwrap_or_default(),
         extensions: plugin.extensions.unwrap_or_default(),
+        // V2 fields not available in JSON format
+        tools_v2: None,
+        hooks_v2: None,
+        commands_v2: None,
+        services_v2: None,
+        prompt_v2: None,
+        capabilities_v2: None,
     };
 
     Ok(manifest)

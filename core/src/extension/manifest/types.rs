@@ -9,6 +9,11 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+// V2 field types from aether_plugin_toml module
+use super::aether_plugin_toml::{
+    CapabilitiesSection, CommandSection, HookSection, PromptSection, ServiceSection, ToolSection,
+};
+
 // =============================================================================
 // Config UI Hints
 // =============================================================================
@@ -221,6 +226,34 @@ pub struct PluginManifest {
     /// Supported file extensions (for static plugins)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<String>,
+
+    // ═══════════════════════════════════════════
+    // V2 Extension fields (from aether_plugin.toml)
+    // ═══════════════════════════════════════════
+
+    /// V2: Static tool declarations from TOML
+    #[serde(skip)]
+    pub tools_v2: Option<Vec<ToolSection>>,
+
+    /// V2: Typed hook declarations from TOML
+    #[serde(skip)]
+    pub hooks_v2: Option<Vec<HookSection>>,
+
+    /// V2: Direct command declarations from TOML
+    #[serde(skip)]
+    pub commands_v2: Option<Vec<CommandSection>>,
+
+    /// V2: Background service declarations from TOML
+    #[serde(skip)]
+    pub services_v2: Option<Vec<ServiceSection>>,
+
+    /// V2: Global prompt configuration
+    #[serde(skip)]
+    pub prompt_v2: Option<PromptSection>,
+
+    /// V2: Dynamic capability declarations
+    #[serde(skip)]
+    pub capabilities_v2: Option<CapabilitiesSection>,
 }
 
 impl PluginManifest {
@@ -243,6 +276,13 @@ impl PluginManifest {
             license: None,
             keywords: Vec::new(),
             extensions: Vec::new(),
+            // V2 fields
+            tools_v2: None,
+            hooks_v2: None,
+            commands_v2: None,
+            services_v2: None,
+            prompt_v2: None,
+            capabilities_v2: None,
         }
     }
 
