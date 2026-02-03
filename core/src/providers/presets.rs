@@ -94,6 +94,24 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // Anthropic Claude
+    m.insert(
+        "claude",
+        ProviderPreset {
+            base_url: "https://api.anthropic.com",
+            protocol: "anthropic",
+            color: "#d97757",
+        },
+    );
+    m.insert(
+        "anthropic",
+        ProviderPreset {
+            base_url: "https://api.anthropic.com",
+            protocol: "anthropic",
+            color: "#d97757",
+        },
+    );
+
     m
 });
 
@@ -115,12 +133,14 @@ mod tests {
     }
 
     #[test]
-    fn test_all_presets_use_openai_protocol() {
+    fn test_presets_have_valid_protocol() {
+        let valid_protocols = ["openai", "anthropic", "gemini"];
         for (name, preset) in PRESETS.iter() {
-            assert_eq!(
-                preset.protocol, "openai",
-                "Preset '{}' should use openai protocol",
-                name
+            assert!(
+                valid_protocols.contains(&preset.protocol),
+                "Preset '{}' uses invalid protocol '{}'",
+                name,
+                preset.protocol
             );
         }
     }
