@@ -348,6 +348,10 @@ impl McpTransport for StdioTransport {
         // Delegate to existing name() method
         self.name()
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl Drop for StdioTransport {

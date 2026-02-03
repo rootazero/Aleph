@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 
 use crate::error::{AetherError, Result};
 use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
+use crate::mcp::sampling::SamplingHandler;
 use crate::mcp::transport::{HttpTransport, HttpTransportConfig, McpTransport, SseTransport, SseTransportConfig};
 use crate::mcp::types::{McpRemoteServerConfig, McpTool, McpToolResult, TransportPreference};
 
@@ -77,6 +78,8 @@ pub struct McpClient {
     tool_location_map: RwLock<HashMap<String, ToolLocation>>,
     /// External server connections
     external_servers: RwLock<HashMap<String, Arc<McpServerConnection>>>,
+    /// Handler for sampling requests from servers
+    sampling_handler: Arc<SamplingHandler>,
 }
 
 impl McpClient {
@@ -85,7 +88,22 @@ impl McpClient {
         Self {
             tool_location_map: RwLock::new(HashMap::new()),
             external_servers: RwLock::new(HashMap::new()),
+            sampling_handler: Arc::new(SamplingHandler::new()),
         }
+    }
+
+    /// Get the sampling handler
+    pub fn sampling_handler(&self) -> &Arc<SamplingHandler> {
+        &self.sampling_handler
+    }
+
+    /// Set callback for sampling requests
+    pub async fn set_sampling_callback<F, Fut>(&self, callback: F)
+    where
+        F: Fn(crate::mcp::jsonrpc::mcp::SamplingRequest) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<crate::mcp::jsonrpc::mcp::SamplingResponse>> + Send + 'static,
+    {
+        self.sampling_handler.set_callback(callback).await;
     }
 
     /// Start external MCP servers concurrently
@@ -423,6 +441,53 @@ impl McpClient {
                         timeout,
                     },
                 );
+
+                // Set up sampling request handler for server-initiated sampling/createMessage
+                let sampling_handler = Arc::clone(&self.sampling_handler);
+                let server_name = config.name.clone();
+                transport.set_request_handler(Box::new(move |request_id, method, params| {
+                    if method == "sampling/createMessage" {
+                        let handler = Arc::clone(&sampling_handler);
+                        let server = server_name.clone();
+                        let params_value = params.unwrap_or(serde_json::Value::Null);
+
+                        tokio::spawn(async move {
+                            tracing::debug!(
+                                server = %server,
+                                request_id = request_id,
+                                "Processing sampling/createMessage request"
+                            );
+
+                            match handler.handle_request(request_id, params_value).await {
+                                Ok(response) => {
+                                    tracing::debug!(
+                                        server = %server,
+                                        request_id = request_id,
+                                        "Sampling request completed successfully"
+                                    );
+                                    // Note: Response sending will be handled by Task 22
+                                    // For now, just log the response
+                                    let _ = response;
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        server = %server,
+                                        request_id = request_id,
+                                        error = %e,
+                                        "Sampling request failed"
+                                    );
+                                }
+                            }
+                        });
+                    } else {
+                        tracing::warn!(
+                            method = %method,
+                            request_id = request_id,
+                            "Received unknown server-initiated request"
+                        );
+                    }
+                }));
+
                 // Start the SSE event listener for server-initiated notifications
                 transport.start_event_listener().await?;
                 Box::new(transport)

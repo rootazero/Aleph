@@ -26,7 +26,7 @@ pub type NotificationCallback = Box<dyn Fn(JsonRpcNotification) + Send + Sync>;
 /// - `HttpTransport` - Communicates with remote MCP servers via HTTP POST (planned)
 /// - `SseTransport` - Communicates with remote MCP servers via HTTP + SSE (planned)
 #[async_trait]
-pub trait McpTransport: Send + Sync {
+pub trait McpTransport: Send + Sync + std::any::Any {
     /// Send a JSON-RPC request and wait for the response
     ///
     /// This method sends a request to the MCP server and blocks until
@@ -94,6 +94,12 @@ pub trait McpTransport: Send + Sync {
         // Default no-op implementation
         // Transports that support notifications should override this
     }
+
+    /// Get a reference to the transport as Any for downcasting
+    ///
+    /// This enables type-specific operations on transports when needed,
+    /// such as setting SSE-specific request handlers for sampling.
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[cfg(test)]
@@ -211,6 +217,10 @@ mod tests {
 
         fn server_name(&self) -> &str {
             &self.name
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 

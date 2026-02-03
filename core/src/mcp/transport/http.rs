@@ -213,6 +213,10 @@ impl McpTransport for HttpTransport {
         // Could implement polling here in the future
         let _ = handler; // Acknowledge but don't use
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[cfg(test)]
