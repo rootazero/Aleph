@@ -501,6 +501,100 @@ pub mod mcp {
         pub messages: Vec<PromptMessage>,
     }
 
+    // ===== Sampling RPC Types (P2) =====
+
+    /// Content types for sampling messages
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(tag = "type")]
+    pub enum SamplingContent {
+        /// Text content
+        #[serde(rename = "text")]
+        Text { text: String },
+        /// Image content (base64)
+        #[serde(rename = "image")]
+        Image { data: String, mime_type: String },
+    }
+
+    /// Message in a sampling request
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SamplingMessage {
+        /// Message role
+        pub role: PromptRole,
+        /// Message content
+        pub content: SamplingContent,
+    }
+
+    /// Sampling/createMessage request from server
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SamplingRequest {
+        /// Messages to send to client LLM
+        pub messages: Vec<SamplingMessage>,
+        /// Optional model hint (client may ignore)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub model_preferences: Option<ModelPreferences>,
+        /// System prompt override
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub system_prompt: Option<String>,
+        /// Include context from MCP servers
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub include_context: Option<String>,
+        /// Max tokens for response
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_tokens: Option<u32>,
+    }
+
+    /// Model preferences for sampling
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ModelPreferences {
+        /// Hints for model selection
+        #[serde(default)]
+        pub hints: Vec<ModelHint>,
+        /// Cost priority (0-1)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub cost_priority: Option<f32>,
+        /// Speed priority (0-1)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub speed_priority: Option<f32>,
+        /// Intelligence priority (0-1)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub intelligence_priority: Option<f32>,
+    }
+
+    /// Model hint
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ModelHint {
+        /// Model name hint
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub name: Option<String>,
+    }
+
+    /// Stop reason for sampling response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum StopReason {
+        EndTurn,
+        StopSequence,
+        MaxTokens,
+    }
+
+    /// Sampling/createMessage response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SamplingResponse {
+        /// Response role (usually "assistant")
+        pub role: PromptRole,
+        /// Response content
+        pub content: SamplingContent,
+        /// Model that generated the response
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub model: Option<String>,
+        /// Stop reason
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub stop_reason: Option<StopReason>,
+    }
+
     impl InitializeParams {
         /// Create default initialize params for Aether
         pub fn aether_default() -> Self {
@@ -689,5 +783,43 @@ mod tests {
         let json = r#"{"role": "user", "content": {"type": "text", "text": "Hello"}}"#;
         let msg: mcp::PromptMessage = serde_json::from_str(json).unwrap();
         assert!(matches!(msg.role, mcp::PromptRole::User));
+    }
+
+    #[test]
+    fn test_sampling_request_deserialization() {
+        let json = r#"{
+            "messages": [
+                {"role": "user", "content": {"type": "text", "text": "Hello"}}
+            ],
+            "maxTokens": 1000
+        }"#;
+        let req: mcp::SamplingRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.max_tokens, Some(1000));
+    }
+
+    #[test]
+    fn test_sampling_response_serialization() {
+        let resp = mcp::SamplingResponse {
+            role: mcp::PromptRole::Assistant,
+            content: mcp::SamplingContent::Text { text: "Hello back!".to_string() },
+            model: Some("claude-3".to_string()),
+            stop_reason: Some(mcp::StopReason::EndTurn),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("assistant"));
+        assert!(json.contains("Hello back!"));
+    }
+
+    #[test]
+    fn test_sampling_content_variants() {
+        let text = mcp::SamplingContent::Text { text: "Hello".to_string() };
+        assert!(matches!(text, mcp::SamplingContent::Text { .. }));
+
+        let image = mcp::SamplingContent::Image {
+            data: "base64data".to_string(),
+            mime_type: "image/png".to_string()
+        };
+        assert!(matches!(image, mcp::SamplingContent::Image { .. }));
     }
 }
