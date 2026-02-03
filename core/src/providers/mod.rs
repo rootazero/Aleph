@@ -34,21 +34,16 @@ use std::pin::Pin;
 pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod claude;
-pub mod deepseek;
-pub mod doubao;
 pub mod failover;
 pub mod gemini;
 pub mod mock;
-pub mod moonshot;
 pub mod ollama;
 pub mod openai;
-pub mod openai_compatible;
 pub mod profile_config;
 pub mod profile_manager;
 pub mod registry;
 pub mod retry;
 pub mod shared;
-pub mod t8star;
 pub mod adapter;
 pub mod http_provider;
 pub mod presets;
@@ -64,15 +59,11 @@ pub use auth_profiles::{
     mark_profile_used, normalize_provider_id, resolve_profile_order,
 };
 pub use claude::ClaudeProvider;
-pub use deepseek::DeepSeekProvider;
-pub use doubao::DoubaoProvider;
 pub use failover::{FailoverConfig, FailoverProvider, ProviderEntry};
 pub use gemini::GeminiProvider;
 pub use mock::{MockError, MockProvider};
-pub use moonshot::MoonshotProvider;
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
-pub use openai_compatible::OpenAiCompatibleProvider;
 pub use profile_config::{
     ProfileConfig, ProfileConfigError, ProfileConfigResult, ProfilesConfig, ProfileTier,
 };
@@ -82,7 +73,6 @@ pub use profile_manager::{
 };
 pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
-pub use t8star::T8StarProvider;
 pub use adapter::{ProtocolAdapter, RequestPayload};
 pub use http_provider::HttpProvider;
 pub use presets::{get_preset, ProviderPreset, PRESETS};
