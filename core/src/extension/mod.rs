@@ -50,6 +50,7 @@ mod plugin_loader;
 pub mod runtime;
 pub mod sync_api;
 
+mod channel_manager;
 mod error;
 mod loader;
 pub mod manifest;
@@ -60,6 +61,7 @@ mod template;
 mod types;
 pub mod watcher;
 
+pub use channel_manager::{ChannelHandle, ChannelManager};
 pub use error::*;
 pub use loader::*;
 pub use manifest::*;
