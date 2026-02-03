@@ -138,6 +138,8 @@ pulldown-cmark = "0.12"
 httpdate = "1.0"
 # For concurrent hash maps (per-runId sequence counters)
 dashmap = "5.5"
+# For SSE (Server-Sent Events) client in MCP transport
+reqwest-eventsource = "0.6"
 
 # Gateway dependencies (optional)
 tokio-tungstenite = { version = "0.26", optional = true }
