@@ -179,6 +179,10 @@ pub enum AetherError {
     /// Data corruption or integrity error
     #[error("Data corruption: {0}")]
     CorruptData(String),
+
+    /// Channel closed error (internal communication failure)
+    #[error("Channel closed: {0}")]
+    ChannelClosed(String),
 }
 
 impl AetherError {
@@ -346,7 +350,8 @@ impl AetherError {
             | AetherError::McpTimeout
             | AetherError::Cancelled
             | AetherError::MissingInput { .. }
-            | AetherError::CorruptData(_) => None,
+            | AetherError::CorruptData(_)
+            | AetherError::ChannelClosed(_) => None,
         }
     }
 
@@ -493,6 +498,9 @@ impl AetherError {
             AetherError::CorruptData(msg) => {
                 format!("Data corruption detected: {}. Please try again or restore from backup.", msg)
             }
+            AetherError::ChannelClosed(msg) => {
+                format!("Internal communication failed: {}. Please restart the application.", msg)
+            }
         }
     }
 
@@ -560,6 +568,13 @@ impl AetherError {
             runtime_id: runtime_id.into(),
             suggestion: Some(suggestion.into()),
         }
+    }
+
+    /// Create a channel closed error
+    ///
+    /// Used when an internal communication channel is unexpectedly closed.
+    pub fn channel_closed<S: Into<String>>(msg: S) -> Self {
+        AetherError::ChannelClosed(msg.into())
     }
 }
 
