@@ -103,7 +103,8 @@ impl VectorDatabase {
                 is_valid INTEGER NOT NULL DEFAULT 1,
                 invalidation_reason TEXT,
                 specificity TEXT NOT NULL DEFAULT 'pattern',
-                temporal_scope TEXT NOT NULL DEFAULT 'contextual'
+                temporal_scope TEXT NOT NULL DEFAULT 'contextual',
+                decay_invalidated_at INTEGER
             );
 
             -- Index for fact type queries
@@ -114,6 +115,11 @@ impl VectorDatabase {
 
             -- Index for timestamp-based queries
             CREATE INDEX IF NOT EXISTS idx_facts_updated ON memory_facts(updated_at);
+
+            -- Index for decay invalidation queries (recycle bin)
+            CREATE INDEX IF NOT EXISTS idx_facts_decay_invalidated
+                ON memory_facts(decay_invalidated_at)
+                WHERE decay_invalidated_at IS NOT NULL;
 
             -- Compression session audit table
             CREATE TABLE IF NOT EXISTS compression_sessions (

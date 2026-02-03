@@ -22,8 +22,8 @@ impl VectorDatabase {
             INSERT INTO memory_facts (
                 id, content, fact_type, embedding, source_memory_ids,
                 created_at, updated_at, confidence, is_valid, invalidation_reason,
-                specificity, temporal_scope
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                specificity, temporal_scope, decay_invalidated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             "#,
             params![
                 fact.id,
@@ -38,6 +38,7 @@ impl VectorDatabase {
                 fact.invalidation_reason,
                 fact.specificity.as_str(),
                 fact.temporal_scope.as_str(),
+                fact.decay_invalidated_at,
             ],
         )
         .map_err(|e| AetherError::config(format!("Failed to insert fact: {}", e)))?;
@@ -81,8 +82,8 @@ impl VectorDatabase {
                 INSERT INTO memory_facts (
                     id, content, fact_type, embedding, source_memory_ids,
                     created_at, updated_at, confidence, is_valid, invalidation_reason,
-                    specificity, temporal_scope
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    specificity, temporal_scope, decay_invalidated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 "#,
                 params![
                     fact.id,
@@ -97,6 +98,7 @@ impl VectorDatabase {
                     fact.invalidation_reason,
                     fact.specificity.as_str(),
                     fact.temporal_scope.as_str(),
+                    fact.decay_invalidated_at,
                 ],
             )
             .map_err(|e| AetherError::config(format!("Failed to insert fact: {}", e)))?;
@@ -146,6 +148,38 @@ impl VectorDatabase {
         if rows_affected == 0 {
             return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
         }
+
+        Ok(())
+    }
+
+    /// Soft delete a fact with optional decay timestamp
+    ///
+    /// This method is used by the decay engine to mark facts as invalid
+    /// while preserving them for the recycle bin retention period.
+    pub async fn soft_delete_fact(
+        &self,
+        fact_id: &str,
+        reason: &str,
+        decay_timestamp: Option<i64>,
+    ) -> Result<(), AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        conn.execute(
+            r#"
+            UPDATE memory_facts
+            SET is_valid = 0,
+                invalidation_reason = ?2,
+                updated_at = ?3,
+                decay_invalidated_at = ?4
+            WHERE id = ?1
+            "#,
+            params![fact_id, reason, now, decay_timestamp],
+        )
+        .map_err(|e| AetherError::config(format!("Failed to soft delete fact: {}", e)))?;
 
         Ok(())
     }

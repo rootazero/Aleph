@@ -128,6 +128,7 @@ impl VectorDatabase {
                         confidence: row.get(7)?,
                         is_valid: row.get::<_, i32>(8)? == 1,
                         invalidation_reason: row.get(9)?,
+                        decay_invalidated_at: None,
                         specificity: FactSpecificity::from_str(&specificity_str),
                         temporal_scope: TemporalScope::from_str(&temporal_scope_str),
                         similarity_score: None, // Will be set after fusion
@@ -251,6 +252,7 @@ impl VectorDatabase {
                         confidence: row.get(7)?,
                         is_valid: row.get::<_, i32>(8)? == 1,
                         invalidation_reason: row.get(9)?,
+                        decay_invalidated_at: None,
                         specificity: FactSpecificity::from_str(&specificity_str),
                         temporal_scope: TemporalScope::from_str(&temporal_scope_str),
                         similarity_score: Some(score as f32),
