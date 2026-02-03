@@ -507,6 +507,118 @@ pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
 }
 
 // ============================================================================
+// Execute Command
+// ============================================================================
+
+/// Parameters for plugins.executeCommand
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteCommandParams {
+    /// ID of the plugin providing the command
+    pub plugin_id: String,
+    /// Name of the command to execute
+    pub command_name: String,
+    /// Arguments to pass to the command handler
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+/// Execute a direct command registered by a plugin
+///
+/// This handler executes a direct command (e.g., `/status`, `/clear`) that was
+/// registered by a runtime plugin. Direct commands execute immediately without
+/// LLM involvement and return a result to display to the user.
+///
+/// # Params
+/// - `pluginId`: ID of the plugin that registered the command
+/// - `commandName`: Name of the command to execute (without leading slash)
+/// - `args`: JSON arguments to pass to the command handler
+///
+/// # Returns
+/// - `result`: The command's DirectCommandResult containing content, data, and success flag
+///
+/// # Errors
+/// - `INTERNAL_ERROR`: Extension manager not initialized or command execution failed
+/// - `INVALID_PARAMS`: Missing or invalid parameters
+/// - `-32001`: Command not found in plugin
+pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: ExecuteCommandParams = match request.params {
+        Some(ref p) => match serde_json::from_value(p.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing params: pluginId, commandName required".to_string(),
+            );
+        }
+    };
+
+    // Get the extension manager from global state
+    let manager = match get_extension_manager() {
+        Ok(m) => m,
+        Err(e) => return e.with_id(request.id),
+    };
+
+    // Look up the command in the plugin registry
+    let command_handler = {
+        let registry = manager.get_plugin_registry().await;
+        registry.get_command(&params.command_name).map(|cmd| {
+            (cmd.plugin_id.clone(), cmd.handler.clone())
+        })
+    };
+
+    let (registered_plugin_id, handler) = match command_handler {
+        Some((pid, h)) => (pid, h),
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                -32001, // Custom error code for "command not found"
+                format!(
+                    "Command '{}' not found in registry",
+                    params.command_name
+                ),
+            );
+        }
+    };
+
+    // Validate that the command belongs to the specified plugin
+    if registered_plugin_id != params.plugin_id {
+        return JsonRpcResponse::error(
+            request.id,
+            -32001,
+            format!(
+                "Command '{}' belongs to plugin '{}', not '{}'",
+                params.command_name, registered_plugin_id, params.plugin_id
+            ),
+        );
+    }
+
+    // Execute the command via the extension manager
+    match manager
+        .execute_plugin_command(&params.plugin_id, &handler, params.args)
+        .await
+    {
+        Ok(cmd_result) => {
+            JsonRpcResponse::success(request.id, serde_json::to_value(cmd_result).unwrap())
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Command execution failed: {}", e),
+        ),
+    }
+}
+
+// ============================================================================
 // Load Plugin
 // ============================================================================
 
@@ -878,5 +990,88 @@ mod tests {
             .unwrap()
             .message
             .contains("Failed to unload plugin"));
+    }
+
+    #[test]
+    fn test_execute_command_params() {
+        let json = json!({
+            "pluginId": "my-plugin",
+            "commandName": "status",
+            "args": {"verbose": true}
+        });
+        let params: ExecuteCommandParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.plugin_id, "my-plugin");
+        assert_eq!(params.command_name, "status");
+        assert_eq!(params.args["verbose"], true);
+    }
+
+    #[test]
+    fn test_execute_command_params_default_args() {
+        let json = json!({
+            "pluginId": "test-plugin",
+            "commandName": "clear"
+        });
+        let params: ExecuteCommandParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.plugin_id, "test-plugin");
+        assert_eq!(params.command_name, "clear");
+        assert!(params.args.is_null());
+    }
+
+    #[tokio::test]
+    async fn test_handle_execute_command_missing_params() {
+        let request = JsonRpcRequest::new("plugins.executeCommand", None, Some(json!(1)));
+        let response = handle_execute_command(request).await;
+
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
+        assert!(response
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("pluginId, commandName required"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_execute_command_invalid_params() {
+        let request = JsonRpcRequest::new(
+            "plugins.executeCommand",
+            Some(json!({"invalid": "params"})),
+            Some(json!(1)),
+        );
+        let response = handle_execute_command(request).await;
+
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn test_handle_execute_command_not_found() {
+        // Initialize manager if not already done
+        if !is_extension_manager_initialized() {
+            let manager = ExtensionManager::with_defaults().await.unwrap();
+            let _ = init_extension_manager(Arc::new(manager));
+        }
+
+        let request = JsonRpcRequest::new(
+            "plugins.executeCommand",
+            Some(json!({
+                "pluginId": "test-plugin",
+                "commandName": "nonexistent-command",
+                "args": {}
+            })),
+            Some(json!(1)),
+        );
+        let response = handle_execute_command(request).await;
+
+        // Should return custom error -32001 because command doesn't exist
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, -32001);
+        assert!(response
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("not found"));
     }
 }
