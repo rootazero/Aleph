@@ -40,6 +40,9 @@ pub enum ExtensionError {
     #[error("Agent not found: {0}")]
     AgentNotFound(String),
 
+    #[error("Service not found: {0}")]
+    ServiceNotFound(String),
+
     #[error("Already registered: {0}")]
     AlreadyRegistered(String),
 

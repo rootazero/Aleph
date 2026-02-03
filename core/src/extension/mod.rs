@@ -155,6 +155,9 @@ pub struct ExtensionManager {
 
     /// Plugin registry for runtime registrations
     plugin_registry: Arc<RwLock<PluginRegistry>>,
+
+    /// Service lifecycle manager
+    service_manager: Arc<RwLock<ServiceManager>>,
 }
 
 impl ExtensionManager {
@@ -168,6 +171,7 @@ impl ExtensionManager {
         let cache_state = Arc::new(RwLock::new(CacheState::default()));
         let plugin_loader = Arc::new(RwLock::new(PluginLoader::new()));
         let plugin_registry = Arc::new(RwLock::new(PluginRegistry::new()));
+        let service_manager = Arc::new(RwLock::new(ServiceManager::new()));
 
         Ok(Self {
             config,
@@ -179,6 +183,7 @@ impl ExtensionManager {
             cache_state,
             plugin_loader,
             plugin_registry,
+            service_manager,
         })
     }
 
@@ -650,6 +655,143 @@ impl ExtensionManager {
     }
 
     // =========================================================================
+    // Service Lifecycle
+    // =========================================================================
+
+    /// Start a background service.
+    ///
+    /// This method starts a service registered by a plugin. The service must be
+    /// registered in the plugin registry before it can be started.
+    ///
+    /// # Arguments
+    ///
+    /// * `plugin_id` - The ID of the plugin that registered the service
+    /// * `service_id` - The ID of the service to start
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ServiceInfo)` - The service info after starting
+    /// * `Err(ExtensionError)` - If the service was not found or failed to start
+    pub async fn start_service(
+        &self,
+        plugin_id: &str,
+        service_id: &str,
+    ) -> ExtensionResult<ServiceInfo> {
+        // Find the service registration in the plugin registry
+        let registration = {
+            let registry = self.plugin_registry.read().await;
+            // Look through all services to find one matching both plugin_id and service_id
+            registry
+                .list_services()
+                .into_iter()
+                .find(|s| s.plugin_id == plugin_id && s.id == service_id)
+                .cloned()
+                .ok_or_else(|| {
+                    ExtensionError::ServiceNotFound(format!(
+                        "{}:{}", plugin_id, service_id
+                    ))
+                })?
+        };
+
+        // Start the service using the service manager
+        let mut service_manager = self.service_manager.write().await;
+        let mut loader = self.plugin_loader.write().await;
+        service_manager.start_service(&registration, &mut loader)
+    }
+
+    /// Stop a background service.
+    ///
+    /// This method stops a running service. The service must be registered in
+    /// the plugin registry.
+    ///
+    /// # Arguments
+    ///
+    /// * `plugin_id` - The ID of the plugin that registered the service
+    /// * `service_id` - The ID of the service to stop
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ServiceInfo)` - The service info after stopping
+    /// * `Err(ExtensionError)` - If the service was not found or failed to stop
+    pub async fn stop_service(
+        &self,
+        plugin_id: &str,
+        service_id: &str,
+    ) -> ExtensionResult<ServiceInfo> {
+        // Find the service registration in the plugin registry
+        let registration = {
+            let registry = self.plugin_registry.read().await;
+            // Look through all services to find one matching both plugin_id and service_id
+            registry
+                .list_services()
+                .into_iter()
+                .find(|s| s.plugin_id == plugin_id && s.id == service_id)
+                .cloned()
+                .ok_or_else(|| {
+                    ExtensionError::ServiceNotFound(format!(
+                        "{}:{}", plugin_id, service_id
+                    ))
+                })?
+        };
+
+        // Stop the service using the service manager
+        let mut service_manager = self.service_manager.write().await;
+        let mut loader = self.plugin_loader.write().await;
+        service_manager.stop_service(&registration, &mut loader)
+    }
+
+    /// Get service status.
+    ///
+    /// Returns the current state of a service if it has been started at least once.
+    ///
+    /// # Arguments
+    ///
+    /// * `plugin_id` - The ID of the plugin that registered the service
+    /// * `service_id` - The ID of the service
+    ///
+    /// # Returns
+    ///
+    /// * `Some(ServiceInfo)` - If the service has been tracked
+    /// * `None` - If the service has never been started
+    pub async fn get_service_status(
+        &self,
+        plugin_id: &str,
+        service_id: &str,
+    ) -> Option<ServiceInfo> {
+        self.service_manager
+            .read()
+            .await
+            .get_service(plugin_id, service_id)
+            .cloned()
+    }
+
+    /// List all services tracked by the service manager.
+    ///
+    /// Returns information about all services that have been started at least once,
+    /// regardless of their current state.
+    pub async fn list_services(&self) -> Vec<ServiceInfo> {
+        self.service_manager
+            .read()
+            .await
+            .list_services()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Get the count of running services.
+    pub async fn running_service_count(&self) -> usize {
+        self.service_manager.read().await.running_count()
+    }
+
+    /// Get the service manager for direct access.
+    ///
+    /// This provides read access to the service manager for advanced use cases.
+    pub async fn get_service_manager(&self) -> tokio::sync::RwLockReadGuard<'_, ServiceManager> {
+        self.service_manager.read().await
+    }
+
+    // =========================================================================
     // Skill/Command Execution
     // =========================================================================
 
@@ -998,5 +1140,79 @@ mod tests {
         // No runtime should be active initially
         assert!(!loader.is_any_runtime_active());
         assert!(loader.loaded_plugin_ids().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_extension_manager_has_service_manager() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Should be able to access the service manager
+        let service_manager = manager.get_service_manager().await;
+
+        // No services should be running initially
+        assert_eq!(service_manager.running_count(), 0);
+        assert_eq!(service_manager.total_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_extension_manager_list_services_empty() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Should return empty list when no services have been started
+        let services = manager.list_services().await;
+        assert!(services.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_extension_manager_running_service_count() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Should be 0 when no services are running
+        assert_eq!(manager.running_service_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_extension_manager_get_service_status_not_found() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Should return None for nonexistent service
+        let status = manager.get_service_status("nonexistent-plugin", "nonexistent-service").await;
+        assert!(status.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_extension_manager_start_service_not_registered() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Starting a service that is not registered should return ServiceNotFound
+        let result = manager.start_service("nonexistent-plugin", "nonexistent-service").await;
+        assert!(result.is_err());
+
+        match result {
+            Err(ExtensionError::ServiceNotFound(id)) => {
+                assert_eq!(id, "nonexistent-plugin:nonexistent-service");
+            }
+            other => {
+                panic!("Expected ServiceNotFound error, got: {:?}", other);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extension_manager_stop_service_not_registered() {
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+
+        // Stopping a service that is not registered should return ServiceNotFound
+        let result = manager.stop_service("nonexistent-plugin", "nonexistent-service").await;
+        assert!(result.is_err());
+
+        match result {
+            Err(ExtensionError::ServiceNotFound(id)) => {
+                assert_eq!(id, "nonexistent-plugin:nonexistent-service");
+            }
+            other => {
+                panic!("Expected ServiceNotFound error, got: {:?}", other);
+            }
+        }
     }
 }
