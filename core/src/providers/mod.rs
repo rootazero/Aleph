@@ -43,7 +43,6 @@ use std::pin::Pin;
 // Sub-modules
 pub mod auth_profile_registry;
 pub mod auth_profiles;
-pub mod claude;
 pub mod failover;
 pub mod gemini;
 pub mod mock;
@@ -69,7 +68,6 @@ pub use auth_profiles::{
     clear_profile_cooldown, mark_profile_failure, mark_profile_good,
     mark_profile_used, normalize_provider_id, resolve_profile_order,
 };
-pub use claude::ClaudeProvider;
 pub use failover::{FailoverConfig, FailoverProvider, ProviderEntry};
 pub use gemini::GeminiProvider;
 pub use mock::{MockError, MockProvider};
