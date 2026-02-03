@@ -524,6 +524,16 @@ pub mod mcp {
         pub content: SamplingContent,
     }
 
+    /// Context inclusion mode for sampling requests
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase")]
+    pub enum IncludeContext {
+        /// Include context from the requesting server only
+        ThisServer,
+        /// Include context from all connected MCP servers
+        AllServers,
+    }
+
     /// Sampling/createMessage request from server
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -537,8 +547,10 @@ pub mod mcp {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub system_prompt: Option<String>,
         /// Include context from MCP servers
+        /// - "thisServer": Include context from the requesting server only
+        /// - "allServers": Include context from all connected servers
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub include_context: Option<String>,
+        pub include_context: Option<IncludeContext>,
         /// Max tokens for response
         #[serde(skip_serializing_if = "Option::is_none")]
         pub max_tokens: Option<u32>,
@@ -821,5 +833,37 @@ mod tests {
             mime_type: "image/png".to_string()
         };
         assert!(matches!(image, mcp::SamplingContent::Image { .. }));
+    }
+
+    #[test]
+    fn test_include_context_serialization() {
+        // Test serialization to camelCase as per MCP spec
+        let this_server = mcp::IncludeContext::ThisServer;
+        let json = serde_json::to_string(&this_server).unwrap();
+        assert_eq!(json, "\"thisServer\"");
+
+        let all_servers = mcp::IncludeContext::AllServers;
+        let json = serde_json::to_string(&all_servers).unwrap();
+        assert_eq!(json, "\"allServers\"");
+
+        // Test deserialization
+        let parsed: mcp::IncludeContext = serde_json::from_str("\"thisServer\"").unwrap();
+        assert_eq!(parsed, mcp::IncludeContext::ThisServer);
+
+        let parsed: mcp::IncludeContext = serde_json::from_str("\"allServers\"").unwrap();
+        assert_eq!(parsed, mcp::IncludeContext::AllServers);
+    }
+
+    #[test]
+    fn test_sampling_request_with_include_context() {
+        let json = r#"{
+            "messages": [
+                {"role": "user", "content": {"type": "text", "text": "Hello"}}
+            ],
+            "includeContext": "allServers",
+            "maxTokens": 1000
+        }"#;
+        let req: mcp::SamplingRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.include_context, Some(mcp::IncludeContext::AllServers));
     }
 }
