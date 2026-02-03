@@ -183,4 +183,19 @@ impl VectorDatabase {
 
         Ok(())
     }
+
+    /// Update fact access timestamp
+    ///
+    /// Used by the lazy decay engine to record when a fact was last accessed.
+    pub async fn update_fact_access(&self, fact_id: &str, timestamp: i64) -> Result<(), AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        conn.execute(
+            "UPDATE memory_facts SET updated_at = ?2 WHERE id = ?1",
+            params![fact_id, timestamp],
+        )
+        .map_err(|e| AetherError::config(format!("Failed to update fact access: {}", e)))?;
+
+        Ok(())
+    }
 }
