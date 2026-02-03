@@ -919,6 +919,98 @@ pub struct ChannelInfo {
 }
 
 // =============================================================================
+// Provider Types (V2 Plugin Providers)
+// =============================================================================
+
+/// Provider chat request
+///
+/// Represents a chat completion request to a plugin-provided AI model provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderChatRequest {
+    /// Model identifier (e.g., "gpt-4", "claude-3-opus")
+    pub model: String,
+    /// Conversation messages
+    pub messages: Vec<ProviderMessage>,
+    /// Sampling temperature (0.0 - 2.0)
+    pub temperature: Option<f32>,
+    /// Maximum tokens to generate
+    pub max_tokens: Option<u32>,
+    /// Whether to stream the response
+    pub stream: bool,
+}
+
+/// Provider message
+///
+/// A single message in a chat conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderMessage {
+    /// Message role (e.g., "system", "user", "assistant")
+    pub role: String,
+    /// Message content
+    pub content: String,
+}
+
+/// Provider chat response (non-streaming)
+///
+/// Complete response from a chat completion request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderChatResponse {
+    /// Generated response content
+    pub content: String,
+    /// Reason the generation stopped (e.g., "stop", "length", "tool_calls")
+    pub finish_reason: Option<String>,
+    /// Token usage statistics
+    pub usage: Option<ProviderUsage>,
+}
+
+/// Provider usage info
+///
+/// Token usage statistics for a completion request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderUsage {
+    /// Number of tokens in the prompt
+    pub prompt_tokens: u32,
+    /// Number of tokens in the completion
+    pub completion_tokens: u32,
+    /// Total tokens used (prompt + completion)
+    pub total_tokens: u32,
+}
+
+/// Provider streaming chunk
+///
+/// A chunk of data in a streaming response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ProviderStreamChunk {
+    /// Content delta - partial response text
+    #[serde(rename = "delta")]
+    Delta { content: String },
+    /// Stream completed
+    #[serde(rename = "done")]
+    Done { usage: Option<ProviderUsage> },
+    /// Error occurred during streaming
+    #[serde(rename = "error")]
+    Error { message: String },
+}
+
+/// Provider model info
+///
+/// Describes a model available from a plugin-provided AI provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderModelInfo {
+    /// Model identifier
+    pub id: String,
+    /// Human-readable display name
+    pub display_name: String,
+    /// Context window size in tokens
+    pub context_window: Option<u32>,
+    /// Whether the model supports tool/function calling
+    pub supports_tools: bool,
+    /// Whether the model supports vision/image inputs
+    pub supports_vision: bool,
+}
+
+// =============================================================================
 // Frontmatter Types
 // =============================================================================
 
@@ -1482,5 +1574,244 @@ mod tests {
         let parsed: ChannelInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.state, ChannelState::Failed);
         assert_eq!(parsed.error, Some("Invalid bot token".to_string()));
+    }
+
+    // =========================================================================
+    // Provider Types Tests
+    // =========================================================================
+
+    #[test]
+    fn test_provider_message_serde() {
+        let msg = ProviderMessage {
+            role: "user".to_string(),
+            content: "Hello, AI!".to_string(),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: ProviderMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.role, "user");
+        assert_eq!(parsed.content, "Hello, AI!");
+    }
+
+    #[test]
+    fn test_provider_chat_request_serde() {
+        let req = ProviderChatRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![
+                ProviderMessage {
+                    role: "system".to_string(),
+                    content: "You are a helpful assistant.".to_string(),
+                },
+                ProviderMessage {
+                    role: "user".to_string(),
+                    content: "Hello!".to_string(),
+                },
+            ],
+            temperature: Some(0.7),
+            max_tokens: Some(1000),
+            stream: false,
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: ProviderChatRequest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.model, "gpt-4");
+        assert_eq!(parsed.messages.len(), 2);
+        assert_eq!(parsed.temperature, Some(0.7));
+        assert_eq!(parsed.max_tokens, Some(1000));
+        assert!(!parsed.stream);
+    }
+
+    #[test]
+    fn test_provider_chat_request_minimal() {
+        let req = ProviderChatRequest {
+            model: "claude-3".to_string(),
+            messages: vec![ProviderMessage {
+                role: "user".to_string(),
+                content: "Hi".to_string(),
+            }],
+            temperature: None,
+            max_tokens: None,
+            stream: true,
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: ProviderChatRequest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.model, "claude-3");
+        assert_eq!(parsed.messages.len(), 1);
+        assert!(parsed.temperature.is_none());
+        assert!(parsed.max_tokens.is_none());
+        assert!(parsed.stream);
+    }
+
+    #[test]
+    fn test_provider_usage_serde() {
+        let usage = ProviderUsage {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+        };
+
+        let json = serde_json::to_string(&usage).unwrap();
+        let parsed: ProviderUsage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.prompt_tokens, 100);
+        assert_eq!(parsed.completion_tokens, 50);
+        assert_eq!(parsed.total_tokens, 150);
+    }
+
+    #[test]
+    fn test_provider_chat_response_serde() {
+        let resp = ProviderChatResponse {
+            content: "Hello! How can I help you?".to_string(),
+            finish_reason: Some("stop".to_string()),
+            usage: Some(ProviderUsage {
+                prompt_tokens: 10,
+                completion_tokens: 8,
+                total_tokens: 18,
+            }),
+        };
+
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: ProviderChatResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.content, "Hello! How can I help you?");
+        assert_eq!(parsed.finish_reason, Some("stop".to_string()));
+        assert!(parsed.usage.is_some());
+        assert_eq!(parsed.usage.unwrap().total_tokens, 18);
+    }
+
+    #[test]
+    fn test_provider_chat_response_minimal() {
+        let resp = ProviderChatResponse {
+            content: "Response text".to_string(),
+            finish_reason: None,
+            usage: None,
+        };
+
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: ProviderChatResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.content, "Response text");
+        assert!(parsed.finish_reason.is_none());
+        assert!(parsed.usage.is_none());
+    }
+
+    #[test]
+    fn test_provider_stream_chunk_delta() {
+        let chunk = ProviderStreamChunk::Delta {
+            content: "Hello".to_string(),
+        };
+
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"type\":\"delta\""));
+        assert!(json.contains("\"content\":\"Hello\""));
+
+        let parsed: ProviderStreamChunk = serde_json::from_str(&json).unwrap();
+        match parsed {
+            ProviderStreamChunk::Delta { content } => {
+                assert_eq!(content, "Hello");
+            }
+            _ => panic!("Expected Delta variant"),
+        }
+    }
+
+    #[test]
+    fn test_provider_stream_chunk_done() {
+        let chunk = ProviderStreamChunk::Done {
+            usage: Some(ProviderUsage {
+                prompt_tokens: 50,
+                completion_tokens: 25,
+                total_tokens: 75,
+            }),
+        };
+
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"type\":\"done\""));
+
+        let parsed: ProviderStreamChunk = serde_json::from_str(&json).unwrap();
+        match parsed {
+            ProviderStreamChunk::Done { usage } => {
+                assert!(usage.is_some());
+                assert_eq!(usage.unwrap().total_tokens, 75);
+            }
+            _ => panic!("Expected Done variant"),
+        }
+    }
+
+    #[test]
+    fn test_provider_stream_chunk_done_without_usage() {
+        let chunk = ProviderStreamChunk::Done { usage: None };
+
+        let json = serde_json::to_string(&chunk).unwrap();
+        let parsed: ProviderStreamChunk = serde_json::from_str(&json).unwrap();
+
+        match parsed {
+            ProviderStreamChunk::Done { usage } => {
+                assert!(usage.is_none());
+            }
+            _ => panic!("Expected Done variant"),
+        }
+    }
+
+    #[test]
+    fn test_provider_stream_chunk_error() {
+        let chunk = ProviderStreamChunk::Error {
+            message: "Rate limit exceeded".to_string(),
+        };
+
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"type\":\"error\""));
+        assert!(json.contains("Rate limit exceeded"));
+
+        let parsed: ProviderStreamChunk = serde_json::from_str(&json).unwrap();
+        match parsed {
+            ProviderStreamChunk::Error { message } => {
+                assert_eq!(message, "Rate limit exceeded");
+            }
+            _ => panic!("Expected Error variant"),
+        }
+    }
+
+    #[test]
+    fn test_provider_model_info_serde() {
+        let info = ProviderModelInfo {
+            id: "gpt-4-turbo".to_string(),
+            display_name: "GPT-4 Turbo".to_string(),
+            context_window: Some(128000),
+            supports_tools: true,
+            supports_vision: true,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: ProviderModelInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.id, "gpt-4-turbo");
+        assert_eq!(parsed.display_name, "GPT-4 Turbo");
+        assert_eq!(parsed.context_window, Some(128000));
+        assert!(parsed.supports_tools);
+        assert!(parsed.supports_vision);
+    }
+
+    #[test]
+    fn test_provider_model_info_minimal() {
+        let info = ProviderModelInfo {
+            id: "llama-7b".to_string(),
+            display_name: "Llama 7B".to_string(),
+            context_window: None,
+            supports_tools: false,
+            supports_vision: false,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: ProviderModelInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.id, "llama-7b");
+        assert_eq!(parsed.display_name, "Llama 7B");
+        assert!(parsed.context_window.is_none());
+        assert!(!parsed.supports_tools);
+        assert!(!parsed.supports_vision);
     }
 }
