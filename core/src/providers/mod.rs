@@ -50,6 +50,7 @@ pub mod retry;
 pub mod shared;
 pub mod t8star;
 pub mod adapter;
+pub mod http_provider;
 pub mod protocols;
 
 // Re-exports
@@ -82,6 +83,7 @@ pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
 pub use t8star::T8StarProvider;
 pub use adapter::{ProtocolAdapter, RequestPayload};
+pub use http_provider::HttpProvider;
 pub use protocols::OpenAiProtocol;
 
 use crate::agents::thinking::ThinkLevel;
