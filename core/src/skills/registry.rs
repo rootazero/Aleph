@@ -17,6 +17,8 @@
 //! - **Level 3 (Resources)**: Additional files - loaded on-demand via file_name parameter
 
 use crate::error::{AetherError, Result};
+use crate::skills::health::HealthChecker;
+use crate::skills::types::SkillHealth;
 use crate::skills::Skill;
 use crate::utils::paths::get_all_skills_dirs;
 use serde::Serialize;
@@ -59,6 +61,17 @@ pub enum SkillSource {
     Project,
     /// Global user-level skill (~/.aether/skills or ~/.claude/skills)
     Global,
+}
+
+// ============================================================================
+// Skill with Health
+// ============================================================================
+
+/// Skill with its health status
+#[derive(Debug, Clone)]
+pub struct SkillWithHealth {
+    pub skill: Skill,
+    pub health: SkillHealth,
 }
 
 // ============================================================================
@@ -483,6 +496,38 @@ impl SkillsRegistry {
         };
         skills.len()
     }
+
+    /// Load all skills and check their health
+    pub fn load_all_with_health(&self) -> Vec<SkillWithHealth> {
+        let skills = self.list_skills();
+        skills
+            .into_iter()
+            .map(|skill| {
+                let health = HealthChecker::check_skill(&skill);
+                SkillWithHealth { skill, health }
+            })
+            .collect()
+    }
+
+    /// List only healthy skills
+    pub fn list_healthy_skills(&self) -> Vec<Skill> {
+        self.load_all_with_health()
+            .into_iter()
+            .filter(|s| s.health == SkillHealth::Healthy)
+            .map(|s| s.skill)
+            .collect()
+    }
+
+    /// List degraded skills with their missing dependencies
+    pub fn list_degraded_skills(&self) -> Vec<(Skill, Vec<String>)> {
+        self.load_all_with_health()
+            .into_iter()
+            .filter_map(|s| match s.health {
+                SkillHealth::Degraded { missing } => Some((s.skill, missing)),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -647,5 +692,68 @@ Some instructions here.
         // Reload
         registry.reload().unwrap();
         assert_eq!(registry.count(), 2);
+    }
+
+    #[test]
+    fn test_load_all_with_health() {
+        use crate::skills::types::SkillHealth;
+
+        let temp_dir = TempDir::new().unwrap();
+        let skills_dir = temp_dir.path().to_path_buf();
+
+        // Create a skill with requirements for 'ls' (should exist)
+        let skill_dir = skills_dir.join("test-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: test-skill
+description: Test skill
+requirements:
+  binaries:
+    - ls
+---
+Instructions
+"#,
+        )
+        .unwrap();
+
+        let registry = SkillsRegistry::new(skills_dir);
+        registry.load_all().unwrap();
+
+        let with_health = registry.load_all_with_health();
+        assert_eq!(with_health.len(), 1);
+        assert_eq!(with_health[0].health, SkillHealth::Healthy);
+    }
+
+    #[test]
+    fn test_list_degraded_skills() {
+        let temp_dir = TempDir::new().unwrap();
+        let skills_dir = temp_dir.path().to_path_buf();
+
+        // Create a skill with nonexistent binary
+        let skill_dir = skills_dir.join("broken-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: broken-skill
+description: Broken skill
+requirements:
+  binaries:
+    - nonexistent_binary_12345
+---
+Instructions
+"#,
+        )
+        .unwrap();
+
+        let registry = SkillsRegistry::new(skills_dir);
+        registry.load_all().unwrap();
+
+        let degraded = registry.list_degraded_skills();
+        assert_eq!(degraded.len(), 1);
+        assert_eq!(degraded[0].0.id, "broken-skill");
+        assert_eq!(degraded[0].1, vec!["nonexistent_binary_12345"]);
     }
 }
