@@ -327,4 +327,196 @@ impl VectorDatabase {
 
         Ok(())
     }
+
+    /// Restore a fact from recycle bin (un-invalidate)
+    ///
+    /// Clears invalidation status and decay timestamp.
+    pub async fn restore_fact(&self, fact_id: &str) -> Result<(), AetherError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let rows_affected = conn
+            .execute(
+                r#"
+                UPDATE memory_facts
+                SET is_valid = 1,
+                    invalidation_reason = NULL,
+                    decay_invalidated_at = NULL,
+                    updated_at = ?2
+                WHERE id = ?1
+                "#,
+                params![fact_id, now],
+            )
+            .map_err(|e| AetherError::config(format!("Failed to restore fact: {}", e)))?;
+
+        if rows_affected == 0 {
+            return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
+        }
+
+        Ok(())
+    }
+
+    /// Update fact content (for user edits)
+    ///
+    /// Updates content and optionally embedding if provided.
+    pub async fn update_fact_content(
+        &self,
+        fact_id: &str,
+        new_content: &str,
+        new_embedding: Option<&[f32]>,
+    ) -> Result<(), AetherError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        if let Some(embedding) = new_embedding {
+            // Update both content and embedding
+            let embedding_bytes: Vec<u8> = embedding
+                .iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect();
+
+            let rows_affected = conn
+                .execute(
+                    r#"
+                    UPDATE memory_facts
+                    SET content = ?2, embedding = ?3, updated_at = ?4
+                    WHERE id = ?1
+                    "#,
+                    params![fact_id, new_content, embedding_bytes, now],
+                )
+                .map_err(|e| AetherError::config(format!("Failed to update fact: {}", e)))?;
+
+            if rows_affected == 0 {
+                return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
+            }
+
+            // Also update vec table
+            conn.execute(
+                r#"
+                UPDATE facts_vec SET embedding = vec_f32(?2) WHERE id = ?1
+                "#,
+                params![fact_id, embedding_bytes],
+            )
+            .map_err(|e| AetherError::config(format!("Failed to update fact vector: {}", e)))?;
+        } else {
+            // Update content only
+            let rows_affected = conn
+                .execute(
+                    r#"
+                    UPDATE memory_facts
+                    SET content = ?2, updated_at = ?3
+                    WHERE id = ?1
+                    "#,
+                    params![fact_id, new_content, now],
+                )
+                .map_err(|e| AetherError::config(format!("Failed to update fact: {}", e)))?;
+
+            if rows_affected == 0 {
+                return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Permanently delete invalidated facts older than retention period
+    ///
+    /// Returns the number of facts deleted.
+    pub async fn purge_old_invalidated_facts(&self, retention_days: u32) -> Result<usize, AetherError> {
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - (retention_days as i64 * 86400);
+
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // First get IDs to delete (for vec table cleanup)
+        let ids_to_delete: Vec<String> = conn
+            .prepare(
+                r#"
+                SELECT id FROM memory_facts
+                WHERE is_valid = 0 AND decay_invalidated_at IS NOT NULL AND decay_invalidated_at < ?1
+                "#,
+            )
+            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?
+            .query_map(params![cutoff], |row| row.get(0))
+            .map_err(|e| AetherError::config(format!("Failed to query: {}", e)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AetherError::config(format!("Failed to collect: {}", e)))?;
+
+        if ids_to_delete.is_empty() {
+            return Ok(0);
+        }
+
+        // Delete from vec table first
+        for id in &ids_to_delete {
+            let _ = conn.execute("DELETE FROM facts_vec WHERE id = ?1", params![id]);
+        }
+
+        // Delete from main table
+        let deleted = conn
+            .execute(
+                r#"
+                DELETE FROM memory_facts
+                WHERE is_valid = 0 AND decay_invalidated_at IS NOT NULL AND decay_invalidated_at < ?1
+                "#,
+                params![cutoff],
+            )
+            .map_err(|e| AetherError::config(format!("Failed to delete facts: {}", e)))?;
+
+        Ok(deleted)
+    }
+
+    /// Get count of facts by validity status
+    pub async fn count_facts(&self, include_invalid: bool) -> Result<(usize, usize), AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        let valid_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_facts WHERE is_valid = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| AetherError::config(format!("Failed to count valid facts: {}", e)))?;
+
+        let invalid_count: i64 = if include_invalid {
+            conn.query_row(
+                "SELECT COUNT(*) FROM memory_facts WHERE is_valid = 0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| AetherError::config(format!("Failed to count invalid facts: {}", e)))?
+        } else {
+            0
+        };
+
+        Ok((valid_count as usize, invalid_count as usize))
+    }
+
+    /// Permanently delete a specific fact by ID
+    pub async fn delete_fact_permanent(&self, fact_id: &str) -> Result<(), AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Delete from vec table first
+        let _ = conn.execute("DELETE FROM facts_vec WHERE id = ?1", params![fact_id]);
+
+        // Delete from main table
+        let rows_affected = conn
+            .execute("DELETE FROM memory_facts WHERE id = ?1", params![fact_id])
+            .map_err(|e| AetherError::config(format!("Failed to delete fact: {}", e)))?;
+
+        if rows_affected == 0 {
+            return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
+        }
+
+        Ok(())
+    }
 }
