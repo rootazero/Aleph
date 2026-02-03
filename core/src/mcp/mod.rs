@@ -45,6 +45,7 @@ pub mod auth;
 mod client;
 pub mod external;
 pub mod jsonrpc;
+pub mod manager;
 mod notifications;
 mod prompts;
 mod resources;
@@ -71,4 +72,10 @@ pub use types::{
     McpEnvVar, McpRemoteServerConfig, McpResource, McpServerConfig, McpServerPermissions,
     McpServerStatus, McpServerStatusInfo, McpServerType, McpServiceInfo, McpSettingsConfig,
     McpTool, McpToolCall, McpToolInfo, McpToolResult, TransportPreference,
+};
+
+// Manager types (MCP orchestration layer)
+pub use manager::{
+    HealthStatus, McpCommand, McpManagerConfig, McpManagerEvent, McpServerInfo,
+    McpServerStatusDetail, McpTransportType, ServerHealth,
 };
