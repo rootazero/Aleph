@@ -51,6 +51,7 @@ pub mod snapshot_capture;
 pub mod web_fetch;
 pub mod youtube;
 pub mod mcp_resource;
+pub mod mcp_prompt;
 
 pub use bash_exec::{BashExecArgs, BashExecTool};
 pub use code_exec::{CodeExecArgs, CodeExecTool};
@@ -73,6 +74,7 @@ pub use snapshot_capture::SnapshotCaptureTool;
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
 pub use youtube::{YouTubeArgs, YouTubeTool};
 pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
+pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, PromptOutputMessage};
 
 // Message tool re-exports
 pub use message::{
