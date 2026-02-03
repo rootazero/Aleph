@@ -346,6 +346,161 @@ pub mod mcp {
         pub is_error: Option<bool>,
     }
 
+    // ===== Resources RPC Types =====
+
+    /// Resource definition from server
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ResourceDefinition {
+        /// Resource URI
+        pub uri: String,
+        /// Human-readable name
+        pub name: String,
+        /// Resource description
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub description: Option<String>,
+        /// MIME type
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub mime_type: Option<String>,
+    }
+
+    /// Resources list response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ResourcesListResult {
+        /// Available resources
+        pub resources: Vec<ResourceDefinition>,
+    }
+
+    /// Resource read request parameters
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ResourceReadParams {
+        /// Resource URI to read
+        pub uri: String,
+    }
+
+    /// Resource content in read response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(tag = "type")]
+    pub enum ResourceContentItem {
+        /// Text content
+        #[serde(rename = "text")]
+        Text {
+            uri: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            mime_type: Option<String>,
+            text: String,
+        },
+        /// Binary/blob content (base64)
+        #[serde(rename = "blob")]
+        Blob {
+            uri: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            mime_type: Option<String>,
+            blob: String,
+        },
+    }
+
+    /// Resource read response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ResourceReadResult {
+        /// Resource contents
+        pub contents: Vec<ResourceContentItem>,
+    }
+
+    // ===== Prompts RPC Types =====
+
+    /// Prompt argument definition
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct PromptArgument {
+        /// Argument name
+        pub name: String,
+        /// Argument description
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub description: Option<String>,
+        /// Whether required
+        #[serde(default)]
+        pub required: bool,
+    }
+
+    /// Prompt definition from server
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct PromptDefinition {
+        /// Prompt name
+        pub name: String,
+        /// Prompt description
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub description: Option<String>,
+        /// Prompt arguments
+        #[serde(default)]
+        pub arguments: Vec<PromptArgument>,
+    }
+
+    /// Prompts list response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct PromptsListResult {
+        /// Available prompts
+        pub prompts: Vec<PromptDefinition>,
+    }
+
+    /// Prompt get request parameters
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct PromptGetParams {
+        /// Prompt name
+        pub name: String,
+        /// Prompt arguments
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub arguments: Option<std::collections::HashMap<String, serde_json::Value>>,
+    }
+
+    /// Message role in prompt response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum PromptRole {
+        User,
+        Assistant,
+        System,
+    }
+
+    /// Content in a prompt message
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(tag = "type")]
+    pub enum PromptContentItem {
+        /// Text content
+        #[serde(rename = "text")]
+        Text { text: String },
+        /// Image content
+        #[serde(rename = "image")]
+        Image { data: String, mime_type: String },
+        /// Resource reference
+        #[serde(rename = "resource")]
+        Resource {
+            uri: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            text: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            mime_type: Option<String>,
+        },
+    }
+
+    /// Message in prompt response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct PromptMessage {
+        /// Message role
+        pub role: PromptRole,
+        /// Message content
+        pub content: PromptContentItem,
+    }
+
+    /// Prompt get response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct PromptGetResult {
+        /// Optional description
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub description: Option<String>,
+        /// Prompt messages
+        pub messages: Vec<PromptMessage>,
+    }
+
     impl InitializeParams {
         /// Create default initialize params for Aether
         pub fn aether_default() -> Self {
@@ -492,5 +647,47 @@ mod tests {
         let line = notif.to_json_line().unwrap();
         assert!(line.ends_with('\n'));
         assert!(!line.contains("\"id\""));
+    }
+
+    #[test]
+    fn test_resource_definition_deserialization() {
+        let json = r#"{
+            "uri": "file:///test.txt",
+            "name": "test.txt",
+            "description": "A test file",
+            "mimeType": "text/plain"
+        }"#;
+        let resource: mcp::ResourceDefinition = serde_json::from_str(json).unwrap();
+        assert_eq!(resource.uri, "file:///test.txt");
+        assert_eq!(resource.mime_type, Some("text/plain".to_string()));
+    }
+
+    #[test]
+    fn test_prompt_definition_deserialization() {
+        let json = r#"{
+            "name": "code_review",
+            "description": "Review code changes",
+            "arguments": [
+                {"name": "code", "description": "Code to review", "required": true}
+            ]
+        }"#;
+        let prompt: mcp::PromptDefinition = serde_json::from_str(json).unwrap();
+        assert_eq!(prompt.name, "code_review");
+        assert_eq!(prompt.arguments.len(), 1);
+        assert!(prompt.arguments[0].required);
+    }
+
+    #[test]
+    fn test_resource_content_text() {
+        let json = r#"{"type": "text", "uri": "file:///test.txt", "text": "Hello"}"#;
+        let content: mcp::ResourceContentItem = serde_json::from_str(json).unwrap();
+        assert!(matches!(content, mcp::ResourceContentItem::Text { .. }));
+    }
+
+    #[test]
+    fn test_prompt_message_deserialization() {
+        let json = r#"{"role": "user", "content": {"type": "text", "text": "Hello"}}"#;
+        let msg: mcp::PromptMessage = serde_json::from_str(json).unwrap();
+        assert!(matches!(msg.role, mcp::PromptRole::User));
     }
 }
