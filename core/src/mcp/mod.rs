@@ -60,7 +60,8 @@ pub use auth::{
 pub use client::{ExternalServerConfig, McpClient, McpClientBuilder, McpStartupReport};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{
-    IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+    mcp::IncludeContext, IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse,
 };
 pub use notifications::{McpEvent, McpEventHandler, McpNotificationRouter};
 pub use prompts::{McpPrompt, McpPromptArgument, McpPromptManager, PromptContent, PromptMessage, PromptResult};
