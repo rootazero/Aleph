@@ -223,6 +223,13 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
         license: pkg.license,
         keywords: pkg.keywords.unwrap_or_default(),
         extensions: aether.extensions.unwrap_or_default(),
+        // V2 fields not available in package.json format
+        tools_v2: None,
+        hooks_v2: None,
+        commands_v2: None,
+        services_v2: None,
+        prompt_v2: None,
+        capabilities_v2: None,
     };
 
     Ok(manifest)

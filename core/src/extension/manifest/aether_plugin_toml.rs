@@ -483,9 +483,29 @@ pub fn parse_aether_plugin_toml_content(
         license: toml.plugin.license,
         keywords: toml.plugin.keywords.unwrap_or_default(),
         extensions: toml.plugin.extensions.unwrap_or_default(),
-        // Note: V2 fields (tools_v2, hooks_v2, commands_v2, services_v2, prompt_v2, capabilities_v2)
-        // will be added to PluginManifest in Task 1.3. For now, the TOML data is parsed but
-        // the V2 fields are not yet stored in PluginManifest.
+        // V2 fields from TOML
+        tools_v2: if toml.tools.is_empty() {
+            None
+        } else {
+            Some(toml.tools)
+        },
+        hooks_v2: if toml.hooks.is_empty() {
+            None
+        } else {
+            Some(toml.hooks)
+        },
+        commands_v2: if toml.commands.is_empty() {
+            None
+        } else {
+            Some(toml.commands)
+        },
+        services_v2: if toml.services.is_empty() {
+            None
+        } else {
+            Some(toml.services)
+        },
+        prompt_v2: toml.prompt,
+        capabilities_v2: Some(toml.capabilities),
     };
 
     Ok(manifest)
