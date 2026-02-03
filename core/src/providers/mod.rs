@@ -104,99 +104,60 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 /// Create a provider instance from configuration
 ///
 /// This factory function instantiates the appropriate provider based on
-/// the `provider_type` field in the configuration.
+/// the protocol and preset configuration.
 ///
-/// # Arguments
+/// # Provider Resolution Order
 ///
-/// * `name` - Provider name (e.g., "openai", "deepseek", "claude")
-/// * `config` - Provider configuration
+/// 1. Check for preset providers by name (deepseek, moonshot, etc.)
+/// 2. Apply preset defaults (base_url, protocol)
+/// 3. Route to appropriate provider based on protocol
 ///
-/// # Returns
+/// # Supported Protocols
 ///
-/// * `Ok(Arc<dyn AiProvider>)` - Successfully created provider
-/// * `Err(AetherError)` - Invalid configuration or unknown provider type
-///
-/// # Supported Provider Types
-///
-/// - `"openai"` - OpenAI and OpenAI-compatible APIs (DeepSeek, Moonshot, etc.)
-/// - `"claude"` - Anthropic Claude API
-/// - `"ollama"` - Local Ollama models
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use aethecore::config::ProviderConfig;
-/// use aethecore::providers::create_provider;
-///
-/// # fn example() -> aethecore::error::Result<()> {
-/// // Create OpenAI provider
-/// let openai_config = ProviderConfig {
-///     provider_type: Some("openai".to_string()),
-///     api_key: Some("sk-...".to_string()),
-///     model: "gpt-4o".to_string(),
-///     base_url: None,
-///     color: "#10a37f".to_string(),
-///     timeout_seconds: 300,
-///     max_tokens: Some(4096),
-///     temperature: Some(0.7),
-/// };
-/// let provider = create_provider("openai", openai_config)?;
-///
-/// // Create custom OpenAI-compatible provider (DeepSeek)
-/// let deepseek_config = ProviderConfig {
-///     provider_type: Some("openai".to_string()),
-///     api_key: Some("sk-...".to_string()),
-///     model: "deepseek-chat".to_string(),
-///     base_url: Some("https://api.deepseek.com".to_string()),
-///     color: "#0066cc".to_string(),
-///     timeout_seconds: 300,
-///     max_tokens: Some(4096),
-///     temperature: Some(0.7),
-/// };
-/// let deepseek = create_provider("deepseek", deepseek_config)?;
-/// # Ok(())
-/// # }
-/// ```
-pub fn create_provider(name: &str, config: ProviderConfig) -> Result<Arc<dyn AiProvider>> {
-    // First check for preset providers by name (case-insensitive)
-    // Preset providers have auto-configured endpoints
+/// - `"openai"` - OpenAI and OpenAI-compatible APIs (via HttpProvider)
+/// - `"claude"` / `"anthropic"` - Anthropic Claude API (native)
+/// - `"gemini"` - Google Gemini API (native)
+/// - `"ollama"` - Local Ollama models (native)
+pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn AiProvider>> {
     let name_lower = name.to_lowercase();
-    match name_lower.as_str() {
-        // OpenAI-compatible preset providers (with specialized wrappers)
-        "deepseek" => {
-            let provider = DeepSeekProvider::new(name.to_string(), config)?;
-            return Ok(Arc::new(provider));
+
+    // 1. Apply preset configuration if available
+    if let Some(preset) = presets::get_preset(&name_lower) {
+        // Set base_url if not provided
+        if config.base_url.is_none() || config.base_url.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            config.base_url = Some(preset.base_url.to_string());
         }
-        "doubao" | "volcengine" | "ark" => {
-            let provider = DoubaoProvider::new(name.to_string(), config)?;
-            return Ok(Arc::new(provider));
+        // Set protocol if not provided
+        if config.protocol.is_none() && config.provider_type.is_none() {
+            config.protocol = Some(preset.protocol.to_string());
         }
-        "moonshot" | "kimi" => {
-            let provider = MoonshotProvider::new(name.to_string(), config)?;
-            return Ok(Arc::new(provider));
+        // Set color if default
+        if config.color == "#808080" {
+            config.color = preset.color.to_string();
         }
-        "t8star" => {
-            let provider = T8StarProvider::new(name.to_string(), config)?;
-            return Ok(Arc::new(provider));
-        }
-        "openai" => {
-            // Official OpenAI API
-            let provider = OpenAiProvider::new(name.to_string(), config)?;
-            return Ok(Arc::new(provider));
-        }
-        _ => {} // Fall through to provider_type check
     }
 
-    // Then check provider_type for non-preset providers
-    let provider_type = config.infer_provider_type(name);
+    // 2. Determine protocol
+    let protocol = config.protocol();
 
-    match provider_type.as_str() {
+    // 3. Route based on protocol
+    match protocol.as_str() {
         "openai" => {
-            // Custom OpenAI-compatible provider (requires base_url)
-            let provider = OpenAiCompatibleProvider::new(name.to_string(), config)?;
+            // Use new HttpProvider + OpenAiProtocol
+            use std::time::Duration;
+
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(config.timeout_seconds))
+                .build()
+                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
+
+            let adapter = Arc::new(protocols::OpenAiProtocol::new(client));
+            let provider = HttpProvider::new(name.to_string(), config, adapter)?;
             Ok(Arc::new(provider))
         }
-        "claude" => {
+
+        // Native providers (Phase 1: keep as-is)
+        "claude" | "anthropic" => {
             let provider = ClaudeProvider::new(name.to_string(), config)?;
             Ok(Arc::new(provider))
         }
@@ -209,13 +170,12 @@ pub fn create_provider(name: &str, config: ProviderConfig) -> Result<Arc<dyn AiP
             Ok(Arc::new(provider))
         }
         "mock" => {
-            // Mock provider for testing
             let provider = MockProvider::new("Mock response".to_string());
             Ok(Arc::new(provider))
         }
+
         unknown => Err(AetherError::invalid_config(format!(
-            "Unknown provider type: '{}'. Supported types: openai, claude, gemini, ollama, mock.\n\
-             For OpenAI-compatible APIs, use provider_type='openai' and set base_url.",
+            "Unknown protocol: '{}'. Supported: openai, claude, anthropic, gemini, ollama, mock.",
             unknown
         ))),
     }
