@@ -43,7 +43,7 @@ pub fn init_extension_manager(
 /// Get the extension manager.
 ///
 /// Returns an error response if the manager hasn't been initialized.
-fn get_extension_manager() -> Result<&'static Arc<ExtensionManager>, JsonRpcResponse> {
+pub fn get_extension_manager() -> Result<&'static Arc<ExtensionManager>, JsonRpcResponse> {
     EXTENSION_MANAGER.get().ok_or_else(|| {
         JsonRpcResponse::error(
             None,
