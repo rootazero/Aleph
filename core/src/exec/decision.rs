@@ -48,6 +48,10 @@ pub struct ExecContext {
     pub command: String,
     /// Whether this command is from a skill
     pub from_skill: bool,
+    /// Skill ID if from a CLI Wrapper skill
+    pub skill_id: Option<String>,
+    /// Skill name if from a CLI Wrapper skill
+    pub skill_name: Option<String>,
 }
 
 /// Decide whether to allow command execution
@@ -208,6 +212,8 @@ mod tests {
             cwd: None,
             command: command.into(),
             from_skill: false,
+            skill_id: None,
+            skill_name: None,
         }
     }
 
@@ -295,5 +301,22 @@ mod tests {
         assert!(is_safe_bin_usage("ls", &["ls".into(), "-la".into()]));
         assert!(!is_safe_bin_usage("cat", &["cat".into(), "/etc/passwd".into()]));
         assert!(!is_safe_bin_usage("npm", &["npm".into(), "install".into()]));
+    }
+
+    #[test]
+    fn test_context_with_skill_info() {
+        let ctx = ExecContext {
+            agent_id: "main".into(),
+            session_key: "agent:main:main".into(),
+            cwd: None,
+            command: "gh pr list".into(),
+            from_skill: true,
+            skill_id: Some("github".into()),
+            skill_name: Some("GitHub CLI".into()),
+        };
+
+        assert!(ctx.from_skill);
+        assert_eq!(ctx.skill_id, Some("github".into()));
+        assert_eq!(ctx.skill_name, Some("GitHub CLI".into()));
     }
 }
