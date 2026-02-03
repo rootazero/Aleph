@@ -59,13 +59,11 @@ impl SessionHistory {
 
     /// Read recent history entries
     pub async fn read_recent(&self, max_entries: usize) -> Result<Vec<HistoryEntry>, AetherError> {
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let content = fs::read_to_string(&self.path)
-            .await
-            .map_err(|e| AetherError::other(format!("Failed to read history: {}", e)))?;
+        let content = match fs::read_to_string(&self.path).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(AetherError::other(format!("Failed to read history: {}", e))),
+        };
 
         let entries: Vec<HistoryEntry> = content
             .split("\n--- Archived:")
@@ -105,15 +103,11 @@ impl SessionHistory {
 
     /// Get total size of history file
     pub async fn size_bytes(&self) -> Result<u64, AetherError> {
-        if !self.path.exists() {
-            return Ok(0);
+        match fs::metadata(&self.path).await {
+            Ok(metadata) => Ok(metadata.len()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(AetherError::other(format!("Failed to get history metadata: {}", e))),
         }
-
-        let metadata = fs::metadata(&self.path)
-            .await
-            .map_err(|e| AetherError::other(format!("Failed to get history metadata: {}", e)))?;
-
-        Ok(metadata.len())
     }
 
     /// Rotate history if it exceeds max size
@@ -126,10 +120,11 @@ impl SessionHistory {
 
         // Rename current file to .old
         let old_path = self.path.with_extension("log.old");
-        if old_path.exists() {
-            fs::remove_file(&old_path)
-                .await
-                .map_err(|e| AetherError::other(format!("Failed to remove old history: {}", e)))?;
+        // Try to remove old file if it exists (EAFP pattern - handle NotFound gracefully)
+        if let Err(e) = fs::remove_file(&old_path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(AetherError::other(format!("Failed to remove old history: {}", e)));
+            }
         }
 
         fs::rename(&self.path, &old_path)
