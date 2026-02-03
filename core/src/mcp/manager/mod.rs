@@ -17,9 +17,36 @@
 //! - **Tool Aggregation**: Unified view of tools from all servers
 //! - **Configuration Persistence**: Save/load server configurations
 //! - **Event Broadcasting**: Notify subscribers of state changes
+//!
+//! # Example
+//!
+//! ```ignore
+//! use aethecore::mcp::manager::{McpManagerHandle, McpManagerConfig};
+//!
+//! // Get a handle to the manager
+//! let handle = manager.handle();
+//!
+//! // Add a server
+//! let config = McpManagerConfig::stdio("my-server", "My Server", "npx")
+//!     .with_args(vec!["@modelcontextprotocol/server-filesystem".to_string()])
+//!     .with_runtime("node");
+//!
+//! handle.add_server(config).await?;
+//!
+//! // List all servers
+//! let servers = handle.list_servers().await?;
+//!
+//! // Subscribe to events
+//! let mut events = handle.subscribe();
+//! while let Ok(event) = events.recv().await {
+//!     println!("Event: {:?}", event);
+//! }
+//! ```
 
+mod handle;
 mod types;
 
+pub use handle::McpManagerHandle;
 pub use types::{
     HealthStatus, McpCommand, McpManagerConfig, McpManagerEvent, McpServerInfo,
     McpServerStatusDetail, McpTransportType, ServerHealth,
