@@ -19,7 +19,7 @@ use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::{mpsc, RwLock};
 
 use crate::error::{AetherError, Result};
-use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use crate::mcp::jsonrpc::{JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
 
 use super::sse_events::SseEvent;
@@ -467,6 +467,82 @@ impl SseTransport {
             *h = Some(handler);
         });
     }
+
+    /// Send a response to a server-initiated request
+    ///
+    /// Used for responding to sampling/createMessage and other server-initiated RPCs.
+    pub async fn send_response(&self, request_id: u64, result: serde_json::Value) -> Result<()> {
+        let response = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(request_id),
+            result: Some(result),
+            error: None,
+        };
+
+        self.send_json_rpc_response(&response).await?;
+
+        tracing::debug!(
+            server = %self.server_name,
+            request_id = request_id,
+            "Sent response to server-initiated request"
+        );
+
+        Ok(())
+    }
+
+    /// Send an error response to a server-initiated request
+    pub async fn send_error_response(
+        &self,
+        request_id: u64,
+        code: i32,
+        message: &str,
+    ) -> Result<()> {
+        let response = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(request_id),
+            result: None,
+            error: Some(JsonRpcError {
+                code,
+                message: message.to_string(),
+                data: None,
+            }),
+        };
+
+        self.send_json_rpc_response(&response).await?;
+
+        tracing::debug!(
+            server = %self.server_name,
+            request_id = request_id,
+            code = code,
+            "Sent error response to server-initiated request"
+        );
+
+        Ok(())
+    }
+
+    /// Internal helper to send a JSON-RPC response via HTTP POST
+    async fn send_json_rpc_response(&self, response: &JsonRpcResponse) -> Result<()> {
+        let response_json = serde_json::to_string(response).map_err(|e| {
+            AetherError::IoError(format!("Failed to serialize response: {}", e))
+        })?;
+
+        let http_response = self
+            .build_request(response_json)
+            .send()
+            .await
+            .map_err(|e| {
+                AetherError::IoError(format!("Failed to send response: {}", e))
+            })?;
+
+        if !http_response.status().is_success() {
+            return Err(AetherError::IoError(format!(
+                "Server returned error status: {}",
+                http_response.status()
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -581,5 +657,97 @@ mod tests {
 
         // Transport should still work
         assert!(transport.is_alive().await);
+    }
+
+    #[tokio::test]
+    async fn test_sse_transport_set_request_handler() {
+        let config = SseTransportConfig::default();
+        let transport = SseTransport::new("test", config);
+
+        // Should not panic when setting request handler
+        transport.set_request_handler(Box::new(|id, method, _params| {
+            tracing::info!(id = id, method = method, "Received request");
+        }));
+
+        // Transport should still work
+        assert!(transport.is_alive().await);
+    }
+
+    #[test]
+    fn test_json_rpc_response_construction_success() {
+        // Test that we can construct a success response
+        let response = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(42),
+            result: Some(serde_json::json!({"text": "Hello"})),
+            error: None,
+        };
+
+        assert!(response.is_success());
+        assert!(!response.is_error());
+        assert_eq!(response.id, Some(42));
+    }
+
+    #[test]
+    fn test_json_rpc_response_construction_error() {
+        // Test that we can construct an error response
+        let response = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(42),
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32600,
+                message: "Invalid request".to_string(),
+                data: None,
+            }),
+        };
+
+        assert!(!response.is_success());
+        assert!(response.is_error());
+        assert_eq!(response.error.as_ref().unwrap().code, -32600);
+    }
+
+    #[test]
+    fn test_json_rpc_response_serialization() {
+        // Test that response serializes correctly for server-initiated request responses
+        let response = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(123),
+            result: Some(serde_json::json!({
+                "role": "assistant",
+                "content": {"type": "text", "text": "Hello from Aether!"}
+            })),
+            error: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"jsonrpc\":\"2.0\""));
+        assert!(json.contains("\"id\":123"));
+        assert!(json.contains("\"result\""));
+        assert!(json.contains("Hello from Aether!"));
+        assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn test_json_rpc_error_response_serialization() {
+        // Test that error response serializes correctly
+        let response = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(456),
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32001,
+                message: "Sampling not supported".to_string(),
+                data: None,
+            }),
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"jsonrpc\":\"2.0\""));
+        assert!(json.contains("\"id\":456"));
+        assert!(json.contains("\"error\""));
+        assert!(json.contains("-32001"));
+        assert!(json.contains("Sampling not supported"));
+        assert!(!json.contains("\"result\""));
     }
 }
