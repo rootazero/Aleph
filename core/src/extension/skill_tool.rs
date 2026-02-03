@@ -282,6 +282,8 @@ mod tests {
             description: "A test skill".to_string(),
             content: "Hello $ARGUMENTS!".to_string(),
             disable_model_invocation: false,
+            scope: crate::extension::PromptScope::System,
+            bound_tool: None,
             source_path: PathBuf::from("/test/skill/SKILL.md"),
             source: DiscoverySource::AetherGlobal,
         }
