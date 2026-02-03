@@ -6,6 +6,7 @@
 //! - Local ZIP file upload
 
 use crate::error::{AetherError, Result};
+use crate::skills::types::{PackageManager, SkillRequirements};
 use crate::skills::Skill;
 use std::io::Read;
 use std::path::PathBuf;
@@ -324,6 +325,70 @@ impl SkillsInstaller {
 
         Skill::parse(skill_id, &content)
     }
+
+    /// Generate install command string for a specific InstallCommand
+    fn format_install_command(cmd: &crate::skills::types::InstallCommand) -> Option<String> {
+        let os = std::env::consts::OS;
+
+        // Check if this command matches current platform
+        let matches_platform = match (&cmd.manager, os) {
+            (PackageManager::Brew, "macos") => true,
+            (PackageManager::Apt, "linux") => true,
+            (PackageManager::Winget, "windows") => true,
+            (PackageManager::Cargo, _) => true, // Cross-platform
+            (PackageManager::Pip, _) => true,   // Cross-platform
+            _ => false,                         // Platform mismatch
+        };
+
+        if !matches_platform {
+            return None;
+        }
+
+        let base = match cmd.manager {
+            PackageManager::Brew => "brew install",
+            PackageManager::Apt => "sudo apt install -y",
+            PackageManager::Winget => "winget install",
+            PackageManager::Cargo => "cargo install",
+            PackageManager::Pip => "pip install",
+        };
+
+        Some(match &cmd.args {
+            Some(args) => format!("{} {} {}", base, args, cmd.package),
+            None => format!("{} {}", base, cmd.package),
+        })
+    }
+
+    /// Suggest an install command for the current platform
+    ///
+    /// Returns the appropriate install command based on the current OS.
+    pub fn suggest_install_command(req: &SkillRequirements) -> Option<String> {
+        let os = std::env::consts::OS;
+
+        req.install
+            .iter()
+            .find(|cmd| match (&cmd.manager, os) {
+                (PackageManager::Brew, "macos") => true,
+                (PackageManager::Apt, "linux") => true,
+                (PackageManager::Winget, "windows") => true,
+                (PackageManager::Cargo, _) => true,
+                (PackageManager::Pip, _) => true,
+                _ => false,
+            })
+            .and_then(Self::format_install_command)
+    }
+
+    /// Generate install commands for all missing binaries
+    pub fn suggest_install_plan(req: &SkillRequirements, missing: &[String]) -> Vec<String> {
+        missing
+            .iter()
+            .filter_map(|bin| {
+                req.install
+                    .iter()
+                    .find(|cmd| cmd.package == *bin)
+                    .and_then(Self::format_install_command)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -488,5 +553,47 @@ Instructions here.
 
         assert_eq!(installed, vec!["test-skill"]);
         assert!(skills_dir.join("test-skill/SKILL.md").exists());
+    }
+
+    #[test]
+    fn test_suggest_install_command_brew() {
+        use crate::skills::types::{InstallCommand, PackageManager, SkillRequirements};
+
+        let req = SkillRequirements {
+            binaries: vec!["gh".to_string()],
+            platforms: None,
+            install: vec![InstallCommand {
+                manager: PackageManager::Brew,
+                package: "gh".to_string(),
+                args: None,
+            }],
+        };
+
+        #[cfg(target_os = "macos")]
+        {
+            let cmd = SkillsInstaller::suggest_install_command(&req);
+            assert_eq!(cmd, Some("brew install gh".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_suggest_install_command_with_args() {
+        use crate::skills::types::{InstallCommand, PackageManager, SkillRequirements};
+
+        let req = SkillRequirements {
+            binaries: vec!["docker".to_string()],
+            platforms: None,
+            install: vec![InstallCommand {
+                manager: PackageManager::Brew,
+                package: "docker".to_string(),
+                args: Some("--cask".to_string()),
+            }],
+        };
+
+        #[cfg(target_os = "macos")]
+        {
+            let cmd = SkillsInstaller::suggest_install_command(&req);
+            assert_eq!(cmd, Some("brew install --cask docker".to_string()));
+        }
     }
 }
