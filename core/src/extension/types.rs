@@ -1011,6 +1011,88 @@ pub struct ProviderModelInfo {
 }
 
 // =============================================================================
+// HTTP Route Types (V2 Plugin HTTP Endpoints)
+// =============================================================================
+
+/// HTTP request from plugin route
+///
+/// Represents an incoming HTTP request to a plugin-provided endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpRequest {
+    /// HTTP method (e.g., "GET", "POST", "PUT", "DELETE")
+    pub method: String,
+    /// Request path (e.g., "/api/webhook")
+    pub path: String,
+    /// HTTP headers as key-value pairs
+    pub headers: HashMap<String, String>,
+    /// Query string parameters
+    pub query: HashMap<String, String>,
+    /// Request body (for POST/PUT/PATCH requests)
+    pub body: Option<serde_json::Value>,
+    /// Path parameters extracted from route patterns (e.g., ":id" -> "123")
+    pub path_params: HashMap<String, String>,
+}
+
+/// HTTP response from plugin handler
+///
+/// Response to send back to the HTTP client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpResponse {
+    /// HTTP status code (e.g., 200, 404, 500)
+    pub status: u16,
+    /// HTTP response headers
+    pub headers: HashMap<String, String>,
+    /// Response body
+    pub body: Option<serde_json::Value>,
+}
+
+impl HttpResponse {
+    /// Create a 200 OK response with no body
+    pub fn ok() -> Self {
+        Self {
+            status: 200,
+            headers: HashMap::new(),
+            body: None,
+        }
+    }
+
+    /// Create a 200 OK response with JSON body
+    pub fn json(data: serde_json::Value) -> Self {
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        Self {
+            status: 200,
+            headers,
+            body: Some(data),
+        }
+    }
+
+    /// Create an error response with the given status code and message
+    pub fn error(status: u16, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            headers: HashMap::new(),
+            body: Some(serde_json::json!({"error": message.into()})),
+        }
+    }
+
+    /// Create a 404 Not Found response
+    pub fn not_found() -> Self {
+        Self::error(404, "Not Found")
+    }
+
+    /// Create a 400 Bad Request response
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::error(400, message)
+    }
+
+    /// Create a 500 Internal Server Error response
+    pub fn internal_error(message: impl Into<String>) -> Self {
+        Self::error(500, message)
+    }
+}
+
+// =============================================================================
 // Frontmatter Types
 // =============================================================================
 
@@ -1813,5 +1895,152 @@ mod tests {
         assert!(parsed.context_window.is_none());
         assert!(!parsed.supports_tools);
         assert!(!parsed.supports_vision);
+    }
+
+    // =========================================================================
+    // HTTP Route Types Tests
+    // =========================================================================
+
+    #[test]
+    fn test_http_request_serde() {
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+
+        let mut query = HashMap::new();
+        query.insert("page".to_string(), "1".to_string());
+        query.insert("limit".to_string(), "10".to_string());
+
+        let mut path_params = HashMap::new();
+        path_params.insert("id".to_string(), "42".to_string());
+
+        let req = HttpRequest {
+            method: "POST".to_string(),
+            path: "/api/users/42".to_string(),
+            headers,
+            query,
+            body: Some(serde_json::json!({"name": "Alice", "email": "alice@example.com"})),
+            path_params,
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: HttpRequest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.method, "POST");
+        assert_eq!(parsed.path, "/api/users/42");
+        assert_eq!(parsed.headers.get("Content-Type"), Some(&"application/json".to_string()));
+        assert_eq!(parsed.query.get("page"), Some(&"1".to_string()));
+        assert_eq!(parsed.path_params.get("id"), Some(&"42".to_string()));
+        assert!(parsed.body.is_some());
+    }
+
+    #[test]
+    fn test_http_request_minimal() {
+        let req = HttpRequest {
+            method: "GET".to_string(),
+            path: "/health".to_string(),
+            headers: HashMap::new(),
+            query: HashMap::new(),
+            body: None,
+            path_params: HashMap::new(),
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: HttpRequest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.method, "GET");
+        assert_eq!(parsed.path, "/health");
+        assert!(parsed.headers.is_empty());
+        assert!(parsed.query.is_empty());
+        assert!(parsed.body.is_none());
+        assert!(parsed.path_params.is_empty());
+    }
+
+    #[test]
+    fn test_http_response_ok() {
+        let resp = HttpResponse::ok();
+        assert_eq!(resp.status, 200);
+        assert!(resp.headers.is_empty());
+        assert!(resp.body.is_none());
+    }
+
+    #[test]
+    fn test_http_response_json() {
+        let data = serde_json::json!({"id": 1, "name": "Test"});
+        let resp = HttpResponse::json(data.clone());
+
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.headers.get("Content-Type"), Some(&"application/json".to_string()));
+        assert_eq!(resp.body, Some(data));
+    }
+
+    #[test]
+    fn test_http_response_error() {
+        let resp = HttpResponse::error(403, "Access denied");
+
+        assert_eq!(resp.status, 403);
+        assert!(resp.body.is_some());
+        let body = resp.body.unwrap();
+        assert_eq!(body.get("error"), Some(&serde_json::json!("Access denied")));
+    }
+
+    #[test]
+    fn test_http_response_not_found() {
+        let resp = HttpResponse::not_found();
+
+        assert_eq!(resp.status, 404);
+        assert!(resp.body.is_some());
+        let body = resp.body.unwrap();
+        assert_eq!(body.get("error"), Some(&serde_json::json!("Not Found")));
+    }
+
+    #[test]
+    fn test_http_response_bad_request() {
+        let resp = HttpResponse::bad_request("Invalid input");
+
+        assert_eq!(resp.status, 400);
+        assert!(resp.body.is_some());
+        let body = resp.body.unwrap();
+        assert_eq!(body.get("error"), Some(&serde_json::json!("Invalid input")));
+    }
+
+    #[test]
+    fn test_http_response_internal_error() {
+        let resp = HttpResponse::internal_error("Database connection failed");
+
+        assert_eq!(resp.status, 500);
+        assert!(resp.body.is_some());
+        let body = resp.body.unwrap();
+        assert_eq!(body.get("error"), Some(&serde_json::json!("Database connection failed")));
+    }
+
+    #[test]
+    fn test_http_response_serde() {
+        let mut headers = HashMap::new();
+        headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
+
+        let resp = HttpResponse {
+            status: 201,
+            headers,
+            body: Some(serde_json::json!({"created": true})),
+        };
+
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: HttpResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.status, 201);
+        assert_eq!(parsed.headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
+        assert!(parsed.body.is_some());
+    }
+
+    #[test]
+    fn test_http_response_from_json_string() {
+        // Test parsing from a JSON string (as would come from a plugin)
+        let json = r#"{"status": 200, "headers": {"Content-Type": "text/plain"}, "body": "Hello, World!"}"#;
+        let parsed: HttpResponse = serde_json::from_str(json).unwrap();
+
+        assert_eq!(parsed.status, 200);
+        assert_eq!(parsed.headers.get("Content-Type"), Some(&"text/plain".to_string()));
+        assert_eq!(parsed.body, Some(serde_json::json!("Hello, World!")));
     }
 }
