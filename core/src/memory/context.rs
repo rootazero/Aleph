@@ -271,6 +271,9 @@ pub struct MemoryFact {
     pub is_valid: bool,
     /// Reason for invalidation (if is_valid = false)
     pub invalidation_reason: Option<String>,
+    /// Timestamp when fact was invalidated due to decay (Unix seconds)
+    /// Used for recycle bin retention period
+    pub decay_invalidated_at: Option<i64>,
     /// Fact specificity level
     pub specificity: FactSpecificity,
     /// Temporal scope
@@ -299,6 +302,7 @@ impl MemoryFact {
             confidence: 1.0,
             is_valid: true,
             invalidation_reason: None,
+            decay_invalidated_at: None,
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
             similarity_score: None,
@@ -323,6 +327,7 @@ impl MemoryFact {
             confidence: 1.0,
             is_valid: true,
             invalidation_reason: None,
+            decay_invalidated_at: None,
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
             similarity_score: None,
