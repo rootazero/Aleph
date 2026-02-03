@@ -248,6 +248,11 @@ impl HandlerRegistry {
             )
         });
 
+        // MCP Approval handlers
+        registry.register("mcp.list_pending_approvals", mcp::handle_list_pending_approvals);
+        registry.register("mcp.respond_approval", mcp::handle_respond_approval);
+        registry.register("mcp.cancel_approval", mcp::handle_cancel_approval);
+
         registry
     }
 
@@ -456,5 +461,13 @@ mod tests {
         assert!(registry.has_method("services.stop"));
         assert!(registry.has_method("services.list"));
         assert!(registry.has_method("services.status"));
+    }
+
+    #[test]
+    fn test_mcp_approval_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("mcp.list_pending_approvals"));
+        assert!(registry.has_method("mcp.respond_approval"));
+        assert!(registry.has_method("mcp.cancel_approval"));
     }
 }
