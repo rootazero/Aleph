@@ -24,7 +24,7 @@
 //! }
 //! ```
 
-use crate::extension::types::{HookAction, HookConfig, HookEvent};
+use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
 use crate::extension::ExtensionError;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -631,12 +631,15 @@ mod tests {
     async fn test_hook_executor_with_prompt() {
         let hooks = vec![HookConfig {
             event: HookEvent::PreToolUse,
+            kind: HookKind::default(),
+            priority: HookPriority::default(),
             matcher: Some("Write".to_string()),
             actions: vec![HookAction::Prompt {
                 prompt: "Checking ${TOOL_NAME} operation".to_string(),
             }],
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/plugin"),
+            handler: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -653,12 +656,15 @@ mod tests {
     async fn test_hook_executor_pattern_mismatch() {
         let hooks = vec![HookConfig {
             event: HookEvent::PreToolUse,
+            kind: HookKind::default(),
+            priority: HookPriority::default(),
             matcher: Some("Write".to_string()),
             actions: vec![HookAction::Prompt {
                 prompt: "test".to_string(),
             }],
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/plugin"),
+            handler: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -674,12 +680,15 @@ mod tests {
     async fn test_hook_executor_regex_pattern() {
         let hooks = vec![HookConfig {
             event: HookEvent::PreToolUse,
+            kind: HookKind::default(),
+            priority: HookPriority::default(),
             matcher: Some("Write|Edit".to_string()),
             actions: vec![HookAction::Prompt {
                 prompt: "Modifying file".to_string(),
             }],
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/plugin"),
+            handler: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -704,12 +713,15 @@ mod tests {
     async fn test_hook_executor_with_agent() {
         let hooks = vec![HookConfig {
             event: HookEvent::PostToolUse,
+            kind: HookKind::default(),
+            priority: HookPriority::default(),
             matcher: None, // Matches all
             actions: vec![HookAction::Agent {
                 agent: "review-agent".to_string(),
             }],
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/plugin"),
+            handler: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -725,12 +737,15 @@ mod tests {
     async fn test_hook_executor_command() {
         let hooks = vec![HookConfig {
             event: HookEvent::PreToolUse,
+            kind: HookKind::default(),
+            priority: HookPriority::default(),
             matcher: None,
             actions: vec![HookAction::Command {
                 command: "echo 'test output'".to_string(),
             }],
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/tmp"),
+            handler: None,
         }];
 
         let executor = HookExecutor::new(hooks);

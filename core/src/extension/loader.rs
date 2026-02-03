@@ -377,10 +377,13 @@ impl ComponentLoader {
             for matcher in matchers {
                 hooks.push(HookConfig {
                     event,
+                    kind: HookKind::default(),
+                    priority: HookPriority::default(),
                     matcher: matcher.matcher,
                     actions: matcher.hooks,
                     plugin_name: plugin_name.to_string(),
                     plugin_root: plugin_path.to_path_buf(),
+                    handler: None,
                 });
             }
         }
