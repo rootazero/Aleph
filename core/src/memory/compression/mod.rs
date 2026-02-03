@@ -19,6 +19,7 @@ mod extractor;
 mod scheduler;
 mod service;
 pub mod signal_detector;
+mod trigger;
 
 pub use conflict::{ConflictConfig, ConflictDetector, ConflictResolution, MergeStrategy};
 pub use extractor::{ExtractedFact, FactExtractor};
@@ -27,3 +28,4 @@ pub use service::{CompressionConfig, CompressionService};
 pub use signal_detector::{
     CompressionPriority, CompressionSignal, DetectionResult, SignalDetector, SignalKeywords,
 };
+pub use trigger::{CompressionAggressiveness, HybridTrigger, TriggerConfig, TriggerReason};
