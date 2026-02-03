@@ -49,6 +49,7 @@ pub mod gemini;
 pub mod mock;
 pub mod ollama;
 pub mod openai;
+pub mod anthropic;
 pub mod profile_config;
 pub mod profile_manager;
 pub mod registry;
