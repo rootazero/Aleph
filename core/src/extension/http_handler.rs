@@ -226,7 +226,16 @@ impl PluginHttpHandler {
 ///
 /// * `Some(HashMap)` - If the pattern matches, with captured parameters
 /// * `None` - If the pattern does not match
-fn match_path(pattern: &str, path: &str) -> Option<HashMap<String, String>> {
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use aethecore::extension::match_path;
+///
+/// let params = match_path("/api/users/{id}", "/api/users/123").unwrap();
+/// assert_eq!(params.get("id"), Some(&"123".to_string()));
+/// ```
+pub fn match_path(pattern: &str, path: &str) -> Option<HashMap<String, String>> {
     let pattern_segments: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
     let path_segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 

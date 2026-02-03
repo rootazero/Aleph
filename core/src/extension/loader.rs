@@ -689,6 +689,10 @@ You are a helpful assistant."#,
                 scope: "system".to_string(),
             }),
             capabilities_v2: None,
+            // P2 fields
+            channels_v2: None,
+            providers_v2: None,
+            http_routes_v2: None,
         };
 
         let loader = ComponentLoader::new();
@@ -738,6 +742,10 @@ You are a helpful assistant."#,
                 scope: "disabled".to_string(),
             }),
             capabilities_v2: None,
+            // P2 fields
+            channels_v2: None,
+            providers_v2: None,
+            http_routes_v2: None,
         };
 
         let loader = ComponentLoader::new();
@@ -788,6 +796,10 @@ You are a helpful assistant."#,
                 scope: "user".to_string(),
             }),
             capabilities_v2: None,
+            // P2 fields
+            channels_v2: None,
+            providers_v2: None,
+            http_routes_v2: None,
         };
 
         let loader = ComponentLoader::new();
@@ -869,6 +881,10 @@ You are a helpful assistant."#,
             services_v2: None,
             prompt_v2: None,
             capabilities_v2: None,
+            // P2 fields
+            channels_v2: None,
+            providers_v2: None,
+            http_routes_v2: None,
         };
 
         let loader = ComponentLoader::new();
@@ -930,6 +946,10 @@ You are a helpful assistant."#,
             services_v2: None,
             prompt_v2: None,
             capabilities_v2: None,
+            // P2 fields
+            channels_v2: None,
+            providers_v2: None,
+            http_routes_v2: None,
         };
 
         let loader = ComponentLoader::new();

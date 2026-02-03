@@ -280,6 +280,10 @@ pub fn parse_aether_plugin_content(content: &str, path: &Path) -> ExtensionResul
         services_v2: None,
         prompt_v2: None,
         capabilities_v2: None,
+        // P2 fields not available in JSON format
+        channels_v2: None,
+        providers_v2: None,
+        http_routes_v2: None,
     };
 
     Ok(manifest)
