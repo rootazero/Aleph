@@ -294,6 +294,35 @@ impl McpManagerHandle {
             .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))
     }
 
+    // ===== Sampling Methods =====
+
+    /// Set callback for handling sampling requests from MCP servers
+    ///
+    /// This callback will be invoked when any MCP server sends a
+    /// sampling/createMessage request to use the host's LLM.
+    pub async fn set_sampling_callback<F, Fut>(
+        &self,
+        callback: F,
+    ) -> std::result::Result<(), String>
+    where
+        F: Fn(crate::mcp::jsonrpc::mcp::SamplingRequest) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = crate::error::Result<crate::mcp::jsonrpc::mcp::SamplingResponse>>
+            + Send
+            + 'static,
+    {
+        let boxed: crate::mcp::sampling::SamplingCallback =
+            Box::new(move |req| Box::pin(callback(req)));
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(McpCommand::SetSamplingCallback {
+                callback: Arc::new(boxed),
+                respond_to: tx,
+            })
+            .await
+            .map_err(|_| "Manager not running".to_string())?;
+        rx.await.map_err(|_| "Failed to set callback".to_string())
+    }
+
     // ===== Event Subscription =====
 
     /// Subscribe to manager events

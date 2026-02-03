@@ -483,6 +483,12 @@ pub enum McpCommand {
         /// Response channel (sent when shutdown complete)
         respond_to: oneshot::Sender<()>,
     },
+
+    /// Set sampling callback for all servers
+    SetSamplingCallback {
+        callback: Arc<crate::mcp::sampling::SamplingCallback>,
+        respond_to: oneshot::Sender<()>,
+    },
 }
 
 impl std::fmt::Debug for McpCommand {
@@ -522,6 +528,7 @@ impl std::fmt::Debug for McpCommand {
             Self::AggregatePrompts { .. } => f.debug_struct("AggregatePrompts").finish(),
             Self::ReloadConfig { .. } => f.debug_struct("ReloadConfig").finish(),
             Self::Shutdown { .. } => f.debug_struct("Shutdown").finish(),
+            Self::SetSamplingCallback { .. } => f.debug_struct("SetSamplingCallback").finish(),
         }
     }
 }
