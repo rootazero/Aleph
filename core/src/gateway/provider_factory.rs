@@ -63,6 +63,7 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
 
     let config = ProviderConfig {
         provider_type: Some("claude".to_string()),
+        protocol: None,
         api_key: Some(api_key),
         model,
         base_url,
