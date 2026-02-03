@@ -30,6 +30,7 @@
 //!
 pub mod installer;
 pub mod registry;
+pub mod types;
 
 use crate::error::{AetherError, Result};
 use serde::{Deserialize, Serialize};
@@ -173,6 +174,7 @@ pub struct SkillInfo {
 // Re-exports
 pub use installer::SkillsInstaller;
 pub use registry::SkillsRegistry;
+pub use types::{InstallCommand, PackageManager, SkillHealth, SkillRequirements};
 
 use crate::utils::paths::get_skills_dir;
 use std::fs;
