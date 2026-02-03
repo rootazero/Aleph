@@ -120,10 +120,13 @@ impl McpPromptManager {
     ///
     /// A list of prompts available from the server
     pub async fn list(&self, server: &str) -> Result<Vec<McpPrompt>> {
-        // TODO: Implement prompts/list call to specific server
-        // This requires adding prompts/list support to McpServerConnection
-        tracing::debug!(server = %server, "Listing prompts (stub - not yet implemented)");
-        Ok(Vec::new())
+        let all_prompts = self.client.list_prompts().await;
+        let prefix = format!("{}:", server);
+
+        Ok(all_prompts
+            .into_iter()
+            .filter(|p| p.name.starts_with(&prefix))
+            .collect())
     }
 
     /// Get a prompt by name with optional arguments
@@ -143,18 +146,14 @@ impl McpPromptManager {
         name: &str,
         arguments: Option<HashMap<String, Value>>,
     ) -> Result<PromptResult> {
-        // TODO: Implement prompts/get call
-        // This requires adding prompts/get support to McpServerConnection
-        tracing::debug!(
-            server = %server,
-            name = %name,
-            has_args = arguments.is_some(),
-            "Getting prompt (stub - not yet implemented)"
-        );
-        Ok(PromptResult {
-            description: None,
-            messages: Vec::new(),
-        })
+        // Ensure name has server prefix
+        let full_name = if name.starts_with(&format!("{}:", server)) {
+            name.to_string()
+        } else {
+            format!("{}:{}", server, name)
+        };
+
+        self.client.get_prompt(&full_name, arguments).await
     }
 
     /// List all prompts from all connected servers
@@ -239,14 +238,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_prompt_manager_get_stub() {
+    async fn test_prompt_manager_get_not_found() {
         let client = Arc::new(McpClient::new());
         let manager = McpPromptManager::new(client);
 
+        // With no servers, getting a prompt should return NotFound
         let result = manager.get("server", "test-prompt", None).await;
-        assert!(result.is_ok());
-        let prompt_result = result.unwrap();
-        assert!(prompt_result.messages.is_empty());
+        assert!(result.is_err());
     }
 
     #[tokio::test]
