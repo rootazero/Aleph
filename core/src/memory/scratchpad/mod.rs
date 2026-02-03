@@ -9,6 +9,6 @@ pub mod template;
 mod manager;
 mod history;
 
-pub use manager::ScratchpadManager;
-pub use history::SessionHistory;
+pub use manager::{ScratchpadManager, ScratchpadConfig};
+pub use history::{SessionHistory, HistoryEntry};
 pub use template::{DEFAULT_TEMPLATE, generate_scratchpad};

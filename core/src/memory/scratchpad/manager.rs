@@ -83,13 +83,13 @@ impl ScratchpadManager {
     }
 
     /// Check if scratchpad file exists
-    pub async fn exists(&self) -> bool {
+    pub fn exists(&self) -> bool {
         self.scratchpad_path().exists()
     }
 
     /// Check if scratchpad has meaningful content (not just template)
     pub async fn has_content(&self) -> Result<bool, AetherError> {
-        if !self.exists().await {
+        if !self.exists() {
             return Ok(false);
         }
 
@@ -128,7 +128,7 @@ impl ScratchpadManager {
         self.ensure_dir().await?;
 
         // Backup existing file if configured
-        if self.config.backup_on_write && self.exists().await {
+        if self.config.backup_on_write && self.exists() {
             let backup_path = self.scratchpad_path().with_extension("md.bak");
             if let Ok(existing) = fs::read_to_string(self.scratchpad_path()).await {
                 let _ = fs::write(&backup_path, existing).await;
@@ -148,7 +148,7 @@ impl ScratchpadManager {
 
     /// Append a note to the Notes section
     pub async fn append_note(&self, note: &str) -> Result<(), AetherError> {
-        let mut content = if self.exists().await {
+        let mut content = if self.exists() {
             self.read().await?
         } else {
             generate_scratchpad(None, &self.session_id)
@@ -170,7 +170,7 @@ impl ScratchpadManager {
 
     /// Update the objective
     pub async fn set_objective(&self, objective: &str) -> Result<(), AetherError> {
-        let mut content = if self.exists().await {
+        let mut content = if self.exists() {
             self.read().await?
         } else {
             generate_scratchpad(Some(objective), &self.session_id)
@@ -191,7 +191,7 @@ impl ScratchpadManager {
 
     /// Update plan items
     pub async fn set_plan(&self, items: &[&str]) -> Result<(), AetherError> {
-        let mut content = if self.exists().await {
+        let mut content = if self.exists() {
             self.read().await?
         } else {
             generate_scratchpad(None, &self.session_id)
@@ -289,7 +289,7 @@ mod tests {
 
         manager.initialize(Some("Test objective")).await.unwrap();
 
-        assert!(manager.exists().await);
+        assert!(manager.exists());
         let content = manager.read().await.unwrap();
         assert!(content.contains("Test objective"));
         assert!(content.contains("sess-123"));
