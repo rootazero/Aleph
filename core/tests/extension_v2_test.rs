@@ -846,6 +846,126 @@ id = "no-prompt"
 }
 
 // =============================================================================
+// Test 12.5: Services Full Lifecycle (P1.5)
+// =============================================================================
+
+#[test]
+fn test_v2_services_full() {
+    let content = r#"
+[plugin]
+id = "test-services"
+kind = "nodejs"
+entry = "dist/index.js"
+
+[[services]]
+name = "file-watcher"
+description = "Watches files for changes"
+start_handler = "startWatcher"
+stop_handler = "stopWatcher"
+
+[[services]]
+name = "sync-daemon"
+start_handler = "startSync"
+stop_handler = "stopSync"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+
+    let services = manifest.services_v2.unwrap();
+    assert_eq!(services.len(), 2);
+    assert_eq!(services[0].name, "file-watcher");
+    assert_eq!(services[0].start_handler, Some("startWatcher".to_string()));
+    assert_eq!(services[0].stop_handler, Some("stopWatcher".to_string()));
+    assert_eq!(services[0].description, Some("Watches files for changes".to_string()));
+
+    assert_eq!(services[1].name, "sync-daemon");
+    assert_eq!(services[1].start_handler, Some("startSync".to_string()));
+    assert_eq!(services[1].stop_handler, Some("stopSync".to_string()));
+    assert!(services[1].description.is_none());
+}
+
+#[test]
+fn test_service_state_serialization() {
+    use aethecore::extension::ServiceState;
+
+    // Test serialization
+    let running = ServiceState::Running;
+    let json = serde_json::to_string(&running).unwrap();
+    assert_eq!(json, "\"running\"");
+
+    let stopped_json = serde_json::to_string(&ServiceState::Stopped).unwrap();
+    assert_eq!(stopped_json, "\"stopped\"");
+
+    let starting_json = serde_json::to_string(&ServiceState::Starting).unwrap();
+    assert_eq!(starting_json, "\"starting\"");
+
+    let stopping_json = serde_json::to_string(&ServiceState::Stopping).unwrap();
+    assert_eq!(stopping_json, "\"stopping\"");
+
+    let failed_json = serde_json::to_string(&ServiceState::Failed).unwrap();
+    assert_eq!(failed_json, "\"failed\"");
+
+    // Test deserialization
+    let stopped: ServiceState = serde_json::from_str("\"stopped\"").unwrap();
+    assert_eq!(stopped, ServiceState::Stopped);
+
+    let running_parsed: ServiceState = serde_json::from_str("\"running\"").unwrap();
+    assert_eq!(running_parsed, ServiceState::Running);
+
+    let failed_parsed: ServiceState = serde_json::from_str("\"failed\"").unwrap();
+    assert_eq!(failed_parsed, ServiceState::Failed);
+}
+
+#[test]
+fn test_service_info_serialization() {
+    use aethecore::extension::{ServiceInfo, ServiceState};
+
+    let info = ServiceInfo {
+        id: "svc-test-123".to_string(),
+        plugin_id: "test-services".to_string(),
+        name: "file-watcher".to_string(),
+        state: ServiceState::Running,
+        started_at: None,
+        error: None,
+    };
+
+    let json = serde_json::to_string(&info).unwrap();
+    assert!(json.contains("svc-test-123"));
+    assert!(json.contains("test-services"));
+    assert!(json.contains("file-watcher"));
+    assert!(json.contains("running"));
+
+    let parsed: ServiceInfo = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.id, "svc-test-123");
+    assert_eq!(parsed.plugin_id, "test-services");
+    assert_eq!(parsed.name, "file-watcher");
+    assert_eq!(parsed.state, ServiceState::Running);
+}
+
+#[test]
+fn test_service_result_serialization() {
+    use aethecore::extension::ServiceResult;
+
+    let ok_result = ServiceResult::ok();
+    assert!(ok_result.success);
+    assert!(ok_result.message.is_none());
+
+    let ok_with_msg = ServiceResult::ok_with_message("Service started");
+    assert!(ok_with_msg.success);
+    assert_eq!(ok_with_msg.message, Some("Service started".to_string()));
+
+    let error_result = ServiceResult::error("Connection refused");
+    assert!(!error_result.success);
+    assert_eq!(error_result.message, Some("Connection refused".to_string()));
+
+    // Test serialization round-trip
+    let json = serde_json::to_string(&ok_with_msg).unwrap();
+    let parsed: ServiceResult = serde_json::from_str(&json).unwrap();
+    assert!(parsed.success);
+    assert_eq!(parsed.message, Some("Service started".to_string()));
+}
+
+// =============================================================================
 // Test 13: Directory-based Parsing
 // =============================================================================
 
