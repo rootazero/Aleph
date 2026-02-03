@@ -1,30 +1,40 @@
 /// AI Provider abstraction for Aether
 ///
-/// This module defines the `AiProvider` trait which provides a unified interface
-/// for different AI backends (OpenAI, Claude, Ollama, etc.).
+/// This module provides a unified interface for different AI backends.
 ///
 /// # Architecture
 ///
-/// All AI providers implement the `AiProvider` trait, which defines:
-/// - `process()`: Async method to process input and return AI response
-/// - `name()`: Provider identifier (e.g., "openai", "claude")
-/// - `color()`: Provider brand color for UI (e.g., "#10a37f")
+/// Providers are organized by **protocol** (not vendor):
+///
+/// - **OpenAI Protocol**: Handled by `HttpProvider` + `OpenAiProtocol` adapter
+///   - Supports: OpenAI, DeepSeek, Moonshot, Doubao, T8Star, and any OpenAI-compatible API
+///   - Configuration: Use presets (e.g., `deepseek`) or provide custom `base_url`
+///
+/// - **Native Protocols**: Have dedicated implementations
+///   - `ClaudeProvider` - Anthropic Claude API
+///   - `GeminiProvider` - Google Gemini API
+///   - `OllamaProvider` - Local Ollama models
+///
+/// # Adding New OpenAI-Compatible Providers
+///
+/// To add a new provider that uses OpenAI protocol:
+/// 1. Add a preset to `presets.rs` with base_url and color
+/// 2. That's it! The factory will automatically route to `HttpProvider`
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::providers::AiProvider;
-/// use std::sync::Arc;
+/// use aethecore::providers::{create_provider, AiProvider};
+/// use aethecore::config::ProviderConfig;
 ///
-/// async fn example(provider: Arc<dyn AiProvider>) {
-///     let response = provider.process(
-///         "Hello, AI!",
-///         Some("You are a helpful assistant")
-///     ).await.unwrap();
+/// // Create via preset (base_url auto-configured)
+/// let config = ProviderConfig::test_config("deepseek-chat");
+/// let provider = create_provider("deepseek", config)?;
 ///
-///     println!("Provider: {}", provider.name());
-///     println!("Response: {}", response);
-/// }
+/// // Or with custom base_url
+/// let mut config = ProviderConfig::test_config("custom-model");
+/// config.base_url = Some("https://my-api.example.com/v1".to_string());
+/// let provider = create_provider("my-provider", config)?;
 /// ```
 use crate::error::Result;
 use std::future::Future;
