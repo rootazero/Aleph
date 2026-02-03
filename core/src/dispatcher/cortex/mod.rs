@@ -34,5 +34,7 @@
 //! ```
 
 pub mod error;
+pub mod parser;
 
 pub use error::{CortexError, RecoveryHint, SecuritySeverity};
+pub use parser::{JsonFragment, JsonStreamDetector};
