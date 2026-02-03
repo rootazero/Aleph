@@ -11,6 +11,7 @@
 /// - `retention`: Retention policy operations (delete old data)
 /// - `compression`: Compression session tracking
 
+mod audit;
 mod compression;
 mod core;
 mod dreaming;
