@@ -41,6 +41,7 @@
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 
+mod approval;
 pub mod auth;
 mod client;
 mod context_injector;
@@ -54,6 +55,7 @@ pub mod sampling;
 pub mod transport;
 pub mod types;
 
+pub use approval::{ApprovalHandler, ApprovalPresentCallback};
 pub use auth::{
     AuthorizationRequest, CallbackResult, CallbackServer, ClientInfo, OAuthEntry, OAuthProvider,
     OAuthServerMetadata, OAuthStorage, OAuthTokens, DEFAULT_CALLBACK_PORT,
