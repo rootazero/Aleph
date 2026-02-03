@@ -78,6 +78,9 @@ pub mod tool_filter;
 pub mod smart_filter;
 pub mod content_category;
 
+// === Cortex 2.0: Robust dispatcher internals ===
+pub mod cortex;
+
 // === Re-exports: Tool Management ===
 pub use async_confirmation::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
