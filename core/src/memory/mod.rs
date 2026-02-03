@@ -65,5 +65,5 @@ pub use hybrid_retrieval::{HybridRetrieval, HybridSearchConfig, RetrievalStrateg
 pub use ingestion::MemoryIngestion;
 pub use reranker::{NoOpReranker, Reranker, RerankResult};
 pub use retrieval::MemoryRetrieval;
-pub use scratchpad::{ScratchpadManager, SessionHistory};
+pub use scratchpad::{ScratchpadManager, ScratchpadConfig, SessionHistory};
 pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};
