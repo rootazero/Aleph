@@ -88,6 +88,15 @@ pub fn decide_exec_approval(
         return ApprovalDecision::Allow;
     }
 
+    // 3.5. Check skill allowlist
+    if context.from_skill {
+        if let Some(skill_id) = &context.skill_id {
+            if config.skill_allowlist.contains(skill_id) {
+                return ApprovalDecision::Allow;
+            }
+        }
+    }
+
     // 4. Check all segments
     for segment in &analysis.segments {
         match check_segment(config, segment) {
@@ -319,5 +328,55 @@ mod tests {
         assert!(ctx.from_skill);
         assert_eq!(ctx.skill_id, Some("github".into()));
         assert_eq!(ctx.skill_name, Some("GitHub CLI".into()));
+    }
+
+    #[test]
+    fn test_skill_allowlist_auto_approve() {
+        let config = ResolvedExecConfig {
+            security: ExecSecurity::Allowlist,
+            ask: ExecAsk::OnMiss,
+            ask_fallback: ExecSecurity::Deny,
+            auto_allow_skills: false,
+            allowlist: vec![],
+            skill_allowlist: vec!["github".to_string()],
+        };
+        let analysis = analyze_shell_command("gh pr list", None, None);
+        let ctx = ExecContext {
+            agent_id: "main".into(),
+            session_key: "agent:main:main".into(),
+            cwd: None,
+            command: "gh pr list".into(),
+            from_skill: true,
+            skill_id: Some("github".into()),
+            skill_name: Some("GitHub CLI".into()),
+        };
+
+        let decision = decide_exec_approval(&config, &analysis, &ctx);
+        assert!(matches!(decision, ApprovalDecision::Allow));
+    }
+
+    #[test]
+    fn test_skill_not_in_allowlist_needs_approval() {
+        let config = ResolvedExecConfig {
+            security: ExecSecurity::Allowlist,
+            ask: ExecAsk::OnMiss,
+            ask_fallback: ExecSecurity::Deny,
+            auto_allow_skills: false,
+            allowlist: vec![],
+            skill_allowlist: vec!["other-skill".to_string()],
+        };
+        let analysis = analyze_shell_command("gh pr list", None, None);
+        let ctx = ExecContext {
+            agent_id: "main".into(),
+            session_key: "agent:main:main".into(),
+            cwd: None,
+            command: "gh pr list".into(),
+            from_skill: true,
+            skill_id: Some("github".into()),
+            skill_name: Some("GitHub CLI".into()),
+        };
+
+        let decision = decide_exec_approval(&config, &analysis, &ctx);
+        assert!(matches!(decision, ApprovalDecision::NeedApproval { .. }));
     }
 }
