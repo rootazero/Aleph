@@ -193,7 +193,7 @@ pub struct SkillInfo {
 // Re-exports
 pub use health::HealthChecker;
 pub use installer::SkillsInstaller;
-pub use registry::SkillsRegistry;
+pub use registry::{SkillWithHealth, SkillsRegistry};
 pub use types::{InstallCommand, PackageManager, SkillHealth, SkillRequirements};
 
 use crate::utils::paths::get_skills_dir;
