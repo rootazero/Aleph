@@ -76,6 +76,7 @@ pub use types::{
 
 // Manager types (MCP orchestration layer)
 pub use manager::{
-    HealthStatus, McpCommand, McpManagerConfig, McpManagerEvent, McpManagerHandle, McpServerInfo,
-    McpServerStatusDetail, McpTransportType, ServerHealth,
+    HealthCheckConfig, HealthStatus, McpCommand, McpManagerActor, McpManagerConfig,
+    McpManagerEvent, McpManagerHandle, McpPersistentConfig, McpServerInfo, McpServerStatusDetail,
+    McpTransportType, ServerHealth,
 };
