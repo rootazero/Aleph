@@ -2,14 +2,16 @@
 //!
 //! This module provides unified manifest parsing for Aether plugins from multiple formats:
 //!
-//! 1. **package.json** (Node.js plugins) - Standard npm package with "aether" field
-//! 2. **aether.plugin.json** (WASM/Static plugins) - Native Aether plugin manifest
-//! 3. **.claude-plugin/plugin.json** (Legacy) - Claude Code plugin format
+//! 1. **aether.plugin.toml** (V2 preferred) - TOML format with rich section-based config
+//! 2. **aether.plugin.json** (V1 JSON) - Native Aether plugin manifest
+//! 3. **package.json** (Node.js plugins) - Standard npm package with "aether" field
+//! 4. **.claude-plugin/plugin.json** (Legacy) - Claude Code plugin format
 //!
 //! # Auto-Detection
 //!
 //! The `parse_manifest_from_dir()` function automatically detects the manifest format:
-//! - If `aether.plugin.json` exists, parse it as an Aether native manifest
+//! - If `aether.plugin.toml` exists, parse it as V2 TOML manifest (preferred)
+//! - Otherwise, if `aether.plugin.json` exists, parse it as V1 JSON manifest
 //! - Otherwise, if `package.json` exists with "aether" field, parse it as Node.js plugin
 //! - Otherwise, if `.claude-plugin/plugin.json` exists, parse it as legacy Claude plugin
 //!
@@ -185,9 +187,10 @@ pub const CLAUDE_PLUGIN_MANIFEST: &str = ".claude-plugin/plugin.json";
 /// Parse a plugin manifest from a directory
 ///
 /// This function auto-detects the manifest format by checking for:
-/// 1. `aether.plugin.json` - Native Aether manifest (preferred)
-/// 2. `package.json` with "aether" field - Node.js plugin
-/// 3. `.claude-plugin/plugin.json` - Legacy Claude plugin format
+/// 1. `aether.plugin.toml` - V2 TOML format (preferred)
+/// 2. `aether.plugin.json` - V1 JSON manifest
+/// 3. `package.json` with "aether" field - Node.js plugin
+/// 4. `.claude-plugin/plugin.json` - Legacy Claude plugin format
 ///
 /// The returned manifest will have `root_dir` set to the directory path.
 ///
@@ -205,7 +208,13 @@ pub const CLAUDE_PLUGIN_MANIFEST: &str = ".claude-plugin/plugin.json";
 /// assert_eq!(manifest.root_dir, PathBuf::from("/plugins/my-plugin"));
 /// ```
 pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManifest> {
-    // 1. Check for aether.plugin.json (preferred)
+    // 1. Check for aether.plugin.toml (V2 preferred)
+    let toml_path = dir.join(AETHER_PLUGIN_TOML);
+    if toml_path.exists() {
+        return parse_aether_plugin_toml(dir).await;
+    }
+
+    // 2. Check for aether.plugin.json (V1)
     let aether_manifest_path = dir.join(AETHER_PLUGIN_MANIFEST);
     if aether_manifest_path.exists() {
         let mut manifest = parse_aether_plugin(&aether_manifest_path).await?;
@@ -213,7 +222,7 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManife
         return Ok(manifest);
     }
 
-    // 2. Check for package.json with aether field
+    // 3. Check for package.json with aether field
     let package_json_path = dir.join(PACKAGE_JSON);
     if package_json_path.exists() {
         // Try to parse - will fail if no "aether" field
@@ -231,7 +240,7 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManife
         }
     }
 
-    // 3. Check for legacy .claude-plugin/plugin.json
+    // 4. Check for legacy .claude-plugin/plugin.json
     let claude_manifest_path = dir.join(CLAUDE_PLUGIN_MANIFEST);
     if claude_manifest_path.exists() {
         let manifest = parse_legacy_claude_manifest(&claude_manifest_path).await?;
@@ -242,8 +251,8 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManife
     Err(ExtensionError::invalid_manifest(
         dir,
         format!(
-            "No plugin manifest found. Expected {} or {} with 'aether' field",
-            AETHER_PLUGIN_MANIFEST, PACKAGE_JSON
+            "No plugin manifest found. Expected {}, {}, or {} with 'aether' field",
+            AETHER_PLUGIN_TOML, AETHER_PLUGIN_MANIFEST, PACKAGE_JSON
         ),
     ))
 }
@@ -252,7 +261,13 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManife
 ///
 /// Useful for tests and non-async contexts.
 pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
-    // 1. Check for aether.plugin.json
+    // 1. Check for aether.plugin.toml (V2 preferred)
+    let toml_path = dir.join(AETHER_PLUGIN_TOML);
+    if toml_path.exists() {
+        return parse_aether_plugin_toml_sync(dir);
+    }
+
+    // 2. Check for aether.plugin.json (V1)
     let aether_manifest_path = dir.join(AETHER_PLUGIN_MANIFEST);
     if aether_manifest_path.exists() {
         let content = std::fs::read_to_string(&aether_manifest_path)?;
@@ -261,7 +276,7 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
         return Ok(manifest);
     }
 
-    // 2. Check for package.json
+    // 3. Check for package.json
     let package_json_path = dir.join(PACKAGE_JSON);
     if package_json_path.exists() {
         let content = std::fs::read_to_string(&package_json_path)?;
@@ -279,7 +294,7 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
         }
     }
 
-    // 3. Check for legacy .claude-plugin/plugin.json
+    // 4. Check for legacy .claude-plugin/plugin.json
     let claude_manifest_path = dir.join(CLAUDE_PLUGIN_MANIFEST);
     if claude_manifest_path.exists() {
         let content = std::fs::read_to_string(&claude_manifest_path)?;
@@ -290,8 +305,8 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
     Err(ExtensionError::invalid_manifest(
         dir,
         format!(
-            "No plugin manifest found. Expected {} or {} with 'aether' field",
-            AETHER_PLUGIN_MANIFEST, PACKAGE_JSON
+            "No plugin manifest found. Expected {}, {}, or {} with 'aether' field",
+            AETHER_PLUGIN_TOML, AETHER_PLUGIN_MANIFEST, PACKAGE_JSON
         ),
     ))
 }
@@ -602,5 +617,133 @@ Body content."#;
 
         let manifest = parse_manifest_from_dir(temp_dir.path()).await.unwrap();
         assert_eq!(manifest.id, "async-test");
+    }
+
+    #[test]
+    fn test_parse_manifest_from_dir_toml() {
+        let temp_dir = TempDir::new().unwrap();
+
+        std::fs::write(
+            temp_dir.path().join("aether.plugin.toml"),
+            r#"
+[plugin]
+id = "toml-plugin"
+name = "TOML Plugin"
+version = "1.0.0"
+"#,
+        )
+        .unwrap();
+
+        let manifest = parse_manifest_from_dir_sync(temp_dir.path()).unwrap();
+
+        assert_eq!(manifest.id, "toml-plugin");
+        assert_eq!(manifest.name, "TOML Plugin");
+        assert_eq!(manifest.version, Some("1.0.0".to_string()));
+        assert_eq!(manifest.root_dir, temp_dir.path());
+    }
+
+    #[test]
+    fn test_parse_manifest_from_dir_prefers_toml_over_json() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create both TOML and JSON manifests
+        std::fs::write(
+            temp_dir.path().join("aether.plugin.toml"),
+            r#"
+[plugin]
+id = "toml-version"
+name = "TOML Version"
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            temp_dir.path().join("aether.plugin.json"),
+            r#"{"id": "json-version"}"#,
+        )
+        .unwrap();
+
+        let manifest = parse_manifest_from_dir_sync(temp_dir.path()).unwrap();
+
+        // Should prefer TOML over JSON
+        assert_eq!(manifest.id, "toml-version");
+    }
+
+    #[test]
+    fn test_parse_manifest_from_dir_prefers_toml_over_all() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create all manifest types
+        std::fs::write(
+            temp_dir.path().join("aether.plugin.toml"),
+            r#"
+[plugin]
+id = "toml-version"
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            temp_dir.path().join("aether.plugin.json"),
+            r#"{"id": "json-version"}"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            temp_dir.path().join("package.json"),
+            r#"{
+                "name": "npm-version",
+                "aether": {"id": "npm-version"}
+            }"#,
+        )
+        .unwrap();
+
+        let manifest = parse_manifest_from_dir_sync(temp_dir.path()).unwrap();
+
+        // Should prefer TOML over all others
+        assert_eq!(manifest.id, "toml-version");
+    }
+
+    #[tokio::test]
+    async fn test_parse_manifest_from_dir_async_toml() {
+        let temp_dir = TempDir::new().unwrap();
+
+        std::fs::write(
+            temp_dir.path().join("aether.plugin.toml"),
+            r#"
+[plugin]
+id = "async-toml-test"
+"#,
+        )
+        .unwrap();
+
+        let manifest = parse_manifest_from_dir(temp_dir.path()).await.unwrap();
+        assert_eq!(manifest.id, "async-toml-test");
+    }
+
+    #[tokio::test]
+    async fn test_parse_manifest_from_dir_async_prefers_toml() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create both TOML and JSON
+        std::fs::write(
+            temp_dir.path().join("aether.plugin.toml"),
+            r#"
+[plugin]
+id = "async-toml-version"
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            temp_dir.path().join("aether.plugin.json"),
+            r#"{"id": "async-json-version"}"#,
+        )
+        .unwrap();
+
+        let manifest = parse_manifest_from_dir(temp_dir.path()).await.unwrap();
+
+        // Should prefer TOML
+        assert_eq!(manifest.id, "async-toml-version");
     }
 }
