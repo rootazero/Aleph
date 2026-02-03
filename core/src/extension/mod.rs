@@ -83,7 +83,7 @@ pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use hooks::{HookContext, HookExecutor, HookResult};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -419,6 +419,66 @@ impl ExtensionManager {
     /// Get the number of registered hooks
     pub async fn hook_count(&self) -> usize {
         self.hook_executor.read().await.hook_count()
+    }
+
+    /// Convert V2 TOML hook declarations to HookConfig
+    ///
+    /// This method transforms hook definitions from `aether.plugin.toml` manifests
+    /// into `HookConfig` objects that can be executed by the hook system.
+    ///
+    /// # Event Mapping
+    ///
+    /// TOML event strings are mapped to `HookEvent` variants:
+    /// - `"before_agent_start"` / `"session_start"` -> `SessionStart`
+    /// - `"before_tool_call"` -> `PreToolUse`
+    /// - `"after_tool_call"` -> `PostToolUse`
+    /// - `"before_message_send"` -> `ChatMessage`
+    /// - `"after_message_send"` -> `ChatResponse`
+    /// - `"on_error"` -> `PostToolUseFailure`
+    /// - `"session_end"` -> `SessionEnd`
+    ///
+    /// # Arguments
+    ///
+    /// * `hooks` - Slice of TOML hook sections from the plugin manifest
+    /// * `plugin_name` - Name of the plugin (for logging and identification)
+    /// * `plugin_root` - Root directory of the plugin (for variable substitution)
+    ///
+    /// # Returns
+    ///
+    /// A vector of `HookConfig` objects ready for registration with the hook executor.
+    fn convert_v2_hooks(
+        &self,
+        hooks: &[crate::extension::manifest::HookSection],
+        plugin_name: &str,
+        plugin_root: &Path,
+    ) -> Vec<HookConfig> {
+        hooks
+            .iter()
+            .map(|h| {
+                let event = match h.event.as_str() {
+                    "before_agent_start" => HookEvent::SessionStart,
+                    "before_tool_call" => HookEvent::PreToolUse,
+                    "after_tool_call" => HookEvent::PostToolUse,
+                    "before_message_send" => HookEvent::ChatMessage,
+                    "after_message_send" => HookEvent::ChatResponse,
+                    "on_error" => HookEvent::PostToolUseFailure,
+                    "session_start" => HookEvent::SessionStart,
+                    "session_end" => HookEvent::SessionEnd,
+                    _ => HookEvent::PreToolUse, // Default fallback
+                };
+
+                HookConfig {
+                    event,
+                    kind: HookKind::from_str(&h.kind),
+                    priority: HookPriority::from_str(&h.priority),
+                    matcher: h.filter.clone(),
+                    actions: vec![], // Runtime hooks use handler, not actions
+                    plugin_name: plugin_name.to_string(),
+                    plugin_root: plugin_root.to_path_buf(),
+                    handler: h.handler.clone(),
+                }
+            })
+            .collect()
     }
 
     // =========================================================================
