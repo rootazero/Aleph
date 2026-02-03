@@ -62,8 +62,8 @@ pub use client::{ExternalServerConfig, McpClient, McpClientBuilder, McpStartupRe
 pub use context_injector::{ContextInjector, InjectedContext, ResourceContext, ToolContext};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{
-    mcp::IncludeContext, IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse,
+    mcp::IncludeContext, mcp::SamplingChunk, IdGenerator, JsonRpcError, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse,
 };
 pub use notifications::{McpEvent, McpEventHandler, McpNotificationRouter};
 pub use prompts::{McpPrompt, McpPromptArgument, McpPromptManager, PromptContent, PromptMessage, PromptResult};

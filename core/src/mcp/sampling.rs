@@ -3,8 +3,10 @@
 //! Handles server-initiated sampling/createMessage requests,
 //! allowing MCP servers to call the host's LLM.
 
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures::Stream;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
@@ -12,7 +14,8 @@ use crate::error::{AetherError, Result};
 use crate::mcp::client::McpClient;
 use crate::mcp::context_injector::ContextInjector;
 use crate::mcp::jsonrpc::mcp::{
-    PromptRole, SamplingContent, SamplingMessage, SamplingRequest, SamplingResponse, StopReason,
+    PromptRole, SamplingChunk, SamplingContent, SamplingMessage, SamplingRequest, SamplingResponse,
+    StopReason,
 };
 
 /// Callback for handling sampling requests
@@ -24,10 +27,19 @@ pub type SamplingCallback = Box<
         + Sync,
 >;
 
+/// Callback for streaming sampling requests
+pub type StreamingSamplingCallback = Box<
+    dyn Fn(SamplingRequest) -> Pin<Box<dyn Stream<Item = Result<SamplingChunk>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Manages sampling requests from MCP servers
 pub struct SamplingHandler {
     /// Callback to invoke for sampling requests
     callback: Arc<RwLock<Option<SamplingCallback>>>,
+    /// Streaming callback (optional, for streaming responses)
+    streaming_callback: Arc<RwLock<Option<StreamingSamplingCallback>>>,
     /// Optional MCP client for context injection
     client: Arc<RwLock<Option<Arc<McpClient>>>>,
 }
@@ -37,6 +49,7 @@ impl SamplingHandler {
     pub fn new() -> Self {
         Self {
             callback: Arc::new(RwLock::new(None)),
+            streaming_callback: Arc::new(RwLock::new(None)),
             client: Arc::new(RwLock::new(None)),
         }
     }
@@ -63,6 +76,21 @@ impl SamplingHandler {
     /// Check if a callback is registered
     pub async fn has_callback(&self) -> bool {
         self.callback.read().await.is_some()
+    }
+
+    /// Set streaming callback for streaming responses
+    pub async fn set_streaming_callback<F, S>(&self, callback: F)
+    where
+        F: Fn(SamplingRequest) -> S + Send + Sync + 'static,
+        S: Stream<Item = Result<SamplingChunk>> + Send + 'static,
+    {
+        let mut cb = self.streaming_callback.write().await;
+        *cb = Some(Box::new(move |req| Box::pin(callback(req))));
+    }
+
+    /// Check if streaming is available
+    pub async fn has_streaming(&self) -> bool {
+        self.streaming_callback.read().await.is_some()
     }
 
     /// Handle an incoming sampling request from server
