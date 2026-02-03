@@ -12,12 +12,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use reqwest::Client;
+use reqwest_eventsource::{Event, EventSource};
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::{mpsc, RwLock};
 
 use crate::error::{AetherError, Result};
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
+
+use super::sse_events::SseEvent;
+
+/// Callback type for server-initiated requests (sampling, etc.)
+pub type RequestCallback = Box<dyn Fn(u64, &str, Option<serde_json::Value>) + Send + Sync>;
 
 /// SSE transport configuration
 #[derive(Debug, Clone)]
@@ -82,6 +90,8 @@ pub struct SseTransport {
     alive: Arc<RwLock<bool>>,
     /// Notification handler
     notification_handler: Arc<RwLock<Option<NotificationCallback>>>,
+    /// Handler for server-initiated requests (sampling, etc.)
+    request_handler: Arc<TokioMutex<Option<RequestCallback>>>,
     /// Shutdown signal sender
     shutdown_tx: RwLock<Option<mpsc::Sender<()>>>,
 }
@@ -110,6 +120,7 @@ impl SseTransport {
             client,
             alive: Arc::new(RwLock::new(true)),
             notification_handler: Arc::new(RwLock::new(None)),
+            request_handler: Arc::new(TokioMutex::new(None)),
             shutdown_tx: RwLock::new(None),
         }
     }
@@ -135,6 +146,7 @@ impl SseTransport {
         let server_name = self.server_name.clone();
         let headers = self.config.headers.clone();
         let notification_handler = Arc::clone(&self.notification_handler);
+        let request_handler = Arc::clone(&self.request_handler);
         let alive = Arc::clone(&self.alive);
 
         tokio::spawn(async move {
@@ -155,7 +167,7 @@ impl SseTransport {
                         tracing::info!(server = %server_name, "SSE listener shutdown requested");
                         break;
                     }
-                    result = Self::listen_for_events(&sse_client, &sse_url, &headers, &notification_handler) => {
+                    result = Self::listen_for_events(&sse_client, &sse_url, &headers, &notification_handler, &request_handler, &server_name) => {
                         match result {
                             Ok(()) => {
                                 tracing::debug!(server = %server_name, "SSE stream ended normally");
@@ -186,25 +198,124 @@ impl SseTransport {
         Ok(())
     }
 
-    /// Listen for SSE events
-    ///
-    /// This is a placeholder implementation. In production, you would use
-    /// a proper SSE client library like reqwest-eventsource or eventsource-client.
+    /// Listen for SSE events from the server
     async fn listen_for_events(
-        _client: &Client,
-        _url: &str,
-        _headers: &HashMap<String, String>,
-        _notification_handler: &Arc<RwLock<Option<NotificationCallback>>>,
+        client: &Client,
+        url: &str,
+        headers: &HashMap<String, String>,
+        notification_handler: &Arc<RwLock<Option<NotificationCallback>>>,
+        request_handler: &Arc<TokioMutex<Option<RequestCallback>>>,
+        server_name: &str,
     ) -> Result<()> {
-        // Placeholder: In a real implementation, this would:
-        // 1. Connect to the SSE endpoint
-        // 2. Parse incoming events
-        // 3. Deserialize notifications
-        // 4. Call the notification handler
-        //
-        // For now, we just sleep to simulate a long-lived connection
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        // Build request with headers
+        let mut request = client.get(url);
+        request = request.header("Accept", "text/event-stream");
+        for (key, value) in headers {
+            request = request.header(key, value);
+        }
+
+        let mut es = EventSource::new(request).map_err(|e| {
+            AetherError::IoError(format!("Failed to create EventSource: {}", e))
+        })?;
+
+        tracing::debug!(server = %server_name, "SSE EventSource created, waiting for events");
+
+        while let Some(event) = es.next().await {
+            match event {
+                Ok(Event::Open) => {
+                    tracing::debug!(server = %server_name, "SSE connection opened");
+                }
+                Ok(Event::Message(msg)) => {
+                    let sse_event = SseEvent::parse(&msg.event, &msg.data);
+                    Self::handle_sse_event(
+                        sse_event,
+                        notification_handler,
+                        request_handler,
+                        server_name,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    // Check if it's a fatal error
+                    let error_str = e.to_string();
+                    if error_str.contains("connection") || error_str.contains("closed") {
+                        tracing::warn!(server = %server_name, error = %e, "SSE connection error");
+                        return Err(AetherError::IoError(format!("SSE connection error: {}", e)));
+                    } else {
+                        tracing::debug!(server = %server_name, error = %e, "SSE non-fatal error");
+                    }
+                }
+            }
+        }
+
+        tracing::debug!(server = %server_name, "SSE stream ended");
         Ok(())
+    }
+
+    /// Handle a parsed SSE event
+    async fn handle_sse_event(
+        event: SseEvent,
+        notification_handler: &Arc<RwLock<Option<NotificationCallback>>>,
+        request_handler: &Arc<TokioMutex<Option<RequestCallback>>>,
+        server_name: &str,
+    ) {
+        match event {
+            SseEvent::Notification(notif) => {
+                tracing::debug!(
+                    server = %server_name,
+                    method = %notif.method,
+                    "Received SSE notification"
+                );
+
+                // Create JsonRpcNotification and dispatch
+                let json_notif = JsonRpcNotification {
+                    jsonrpc: notif.jsonrpc,
+                    method: notif.method,
+                    params: notif.params,
+                };
+
+                if let Some(ref handler) = *notification_handler.read().await {
+                    handler(json_notif);
+                }
+            }
+            SseEvent::Request(req) => {
+                tracing::debug!(
+                    server = %server_name,
+                    method = %req.method,
+                    id = req.id,
+                    "Received SSE request (server-initiated RPC)"
+                );
+
+                // Handle server-initiated requests like sampling/createMessage
+                if let Some(ref handler) = *request_handler.lock().await {
+                    handler(req.id, &req.method, req.params);
+                } else {
+                    tracing::warn!(
+                        server = %server_name,
+                        method = %req.method,
+                        "No handler registered for server-initiated requests"
+                    );
+                }
+            }
+            SseEvent::Endpoint { url } => {
+                tracing::info!(
+                    server = %server_name,
+                    endpoint = %url,
+                    "Received endpoint URL from server"
+                );
+            }
+            SseEvent::Ping => {
+                tracing::trace!(server = %server_name, "Received SSE ping");
+            }
+            SseEvent::Unknown { event_type, data } => {
+                tracing::debug!(
+                    server = %server_name,
+                    event_type = %event_type,
+                    data_len = data.len(),
+                    "Received unknown SSE event"
+                );
+            }
+        }
     }
 
     /// Build request with configured headers
@@ -335,6 +446,22 @@ impl McpTransport for SseTransport {
                 );
             });
         }
+    }
+}
+
+impl SseTransport {
+    /// Set handler for server-initiated requests (like sampling/createMessage)
+    pub fn set_request_handler(&self, handler: RequestCallback) {
+        tracing::debug!(
+            server = %self.server_name,
+            "Setting SSE request handler"
+        );
+
+        let request_handler = Arc::clone(&self.request_handler);
+        tokio::spawn(async move {
+            let mut h = request_handler.lock().await;
+            *h = Some(handler);
+        });
     }
 }
 
