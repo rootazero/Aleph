@@ -558,6 +558,74 @@ pub enum HookEvent {
     CommandExecuteAfter,
 }
 
+/// Hook execution kind - determines how the hook is executed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum HookKind {
+    /// Interceptor: Pipeline execution, can modify context or block
+    /// Execution: Sequential by priority, short-circuit on block
+    Interceptor,
+
+    /// Observer: Fire-and-forget, read-only context
+    /// Execution: Parallel, errors logged but not propagated
+    #[default]
+    Observer,
+
+    /// Resolver: First-win competition
+    /// Execution: Sequential by priority, stops when one returns Some
+    Resolver,
+}
+
+impl HookKind {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "interceptor" => HookKind::Interceptor,
+            "resolver" => HookKind::Resolver,
+            _ => HookKind::Observer,
+        }
+    }
+}
+
+/// Hook priority levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookPriority {
+    /// System-level hooks (security, audit) - runs first
+    System = -1000,
+    /// High priority business logic
+    High = -100,
+    /// Default priority
+    Normal = 0,
+    /// Low priority extensions
+    Low = 100,
+}
+
+impl Default for HookPriority {
+    fn default() -> Self {
+        HookPriority::Normal
+    }
+}
+
+impl HookPriority {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "system" => HookPriority::System,
+            "high" => HookPriority::High,
+            "low" => HookPriority::Low,
+            _ => HookPriority::Normal,
+        }
+    }
+
+    pub fn as_i32(&self) -> i32 {
+        match self {
+            HookPriority::System => -1000,
+            HookPriority::High => -100,
+            HookPriority::Normal => 0,
+            HookPriority::Low => 100,
+        }
+    }
+}
+
 /// Hook action types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
