@@ -100,10 +100,13 @@ impl McpResourceManager {
     ///
     /// A list of resources available from the server
     pub async fn list(&self, server: &str) -> Result<Vec<McpResource>> {
-        // TODO: Implement resources/list call to specific server
-        // This requires adding resources/list support to McpServerConnection
-        tracing::debug!(server = %server, "Listing resources (stub - not yet implemented)");
-        Ok(Vec::new())
+        let all_resources = self.client.list_resources().await;
+        let prefix = format!("{}:", server);
+
+        Ok(all_resources
+            .into_iter()
+            .filter(|r| r.uri.starts_with(&prefix))
+            .collect())
     }
 
     /// Read a resource by URI from a specific server
@@ -117,14 +120,14 @@ impl McpResourceManager {
     ///
     /// The resource content
     pub async fn read(&self, server: &str, uri: &str) -> Result<ResourceContent> {
-        // TODO: Implement resources/read call
-        // This requires adding resources/read support to McpServerConnection
-        tracing::debug!(
-            server = %server,
-            uri = %uri,
-            "Reading resource (stub - not yet implemented)"
-        );
-        Ok(ResourceContent::Text(String::new()))
+        // Ensure URI has server prefix
+        let full_uri = if uri.starts_with(&format!("{}:", server)) {
+            uri.to_string()
+        } else {
+            format!("{}:{}", server, uri)
+        };
+
+        self.client.read_resource(&full_uri).await
     }
 
     /// List all resources from all connected servers
@@ -215,13 +218,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resource_manager_read_stub() {
+    async fn test_resource_manager_read_not_found() {
         let client = Arc::new(McpClient::new());
         let manager = McpResourceManager::new(client);
 
+        // With no servers, reading a resource should return NotFound
         let content = manager.read("server", "file:///test.txt").await;
-        assert!(content.is_ok());
-        assert!(content.unwrap().is_text());
+        assert!(content.is_err());
     }
 
     #[test]
