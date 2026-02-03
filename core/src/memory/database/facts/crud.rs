@@ -1,11 +1,140 @@
 //! CRUD operations for memory facts
 
 use crate::error::AetherError;
-use crate::memory::context::MemoryFact;
+use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::database::core::VectorDatabase;
 use rusqlite::params;
 
 impl VectorDatabase {
+    /// Get a single fact by ID
+    pub async fn get_fact(&self, fact_id: &str) -> Result<Option<MemoryFact>, AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        let result = conn.query_row(
+            r#"
+            SELECT id, content, fact_type, embedding, source_memory_ids,
+                   created_at, updated_at, confidence, is_valid, invalidation_reason,
+                   specificity, temporal_scope, decay_invalidated_at
+            FROM memory_facts
+            WHERE id = ?1
+            "#,
+            params![fact_id],
+            |row| {
+                let id: String = row.get(0)?;
+                let content: String = row.get(1)?;
+                let fact_type_str: String = row.get(2)?;
+                let embedding_bytes: Option<Vec<u8>> = row.get(3)?;
+                let source_ids_json: String = row.get(4)?;
+                let created_at: i64 = row.get(5)?;
+                let updated_at: i64 = row.get(6)?;
+                let confidence: f32 = row.get(7)?;
+                let is_valid: i32 = row.get(8)?;
+                let invalidation_reason: Option<String> = row.get(9)?;
+                let specificity_str: String = row.get(10)?;
+                let temporal_scope_str: String = row.get(11)?;
+                let decay_invalidated_at: Option<i64> = row.get(12)?;
+
+                let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
+                let source_memory_ids: Vec<String> =
+                    serde_json::from_str(&source_ids_json).unwrap_or_default();
+
+                Ok(MemoryFact {
+                    id,
+                    content,
+                    fact_type: FactType::from_str(&fact_type_str),
+                    embedding,
+                    source_memory_ids,
+                    created_at,
+                    updated_at,
+                    confidence,
+                    is_valid: is_valid != 0,
+                    invalidation_reason,
+                    decay_invalidated_at,
+                    specificity: FactSpecificity::from_str(&specificity_str),
+                    temporal_scope: TemporalScope::from_str(&temporal_scope_str),
+                    similarity_score: None,
+                })
+            },
+        );
+
+        match result {
+            Ok(fact) => Ok(Some(fact)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(AetherError::config(format!("Failed to get fact: {}", e))),
+        }
+    }
+
+    /// Get all facts, optionally including invalid ones
+    pub async fn get_all_facts(&self, include_invalid: bool) -> Result<Vec<MemoryFact>, AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        let query = if include_invalid {
+            r#"
+            SELECT id, content, fact_type, embedding, source_memory_ids,
+                   created_at, updated_at, confidence, is_valid, invalidation_reason,
+                   specificity, temporal_scope, decay_invalidated_at
+            FROM memory_facts
+            ORDER BY updated_at DESC
+            "#
+        } else {
+            r#"
+            SELECT id, content, fact_type, embedding, source_memory_ids,
+                   created_at, updated_at, confidence, is_valid, invalidation_reason,
+                   specificity, temporal_scope, decay_invalidated_at
+            FROM memory_facts
+            WHERE is_valid = 1
+            ORDER BY updated_at DESC
+            "#
+        };
+
+        let mut stmt = conn
+            .prepare(query)
+            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+
+        let facts = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let content: String = row.get(1)?;
+                let fact_type_str: String = row.get(2)?;
+                let embedding_bytes: Option<Vec<u8>> = row.get(3)?;
+                let source_ids_json: String = row.get(4)?;
+                let created_at: i64 = row.get(5)?;
+                let updated_at: i64 = row.get(6)?;
+                let confidence: f32 = row.get(7)?;
+                let is_valid: i32 = row.get(8)?;
+                let invalidation_reason: Option<String> = row.get(9)?;
+                let specificity_str: String = row.get(10)?;
+                let temporal_scope_str: String = row.get(11)?;
+                let decay_invalidated_at: Option<i64> = row.get(12)?;
+
+                let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
+                let source_memory_ids: Vec<String> =
+                    serde_json::from_str(&source_ids_json).unwrap_or_default();
+
+                Ok(MemoryFact {
+                    id,
+                    content,
+                    fact_type: FactType::from_str(&fact_type_str),
+                    embedding,
+                    source_memory_ids,
+                    created_at,
+                    updated_at,
+                    confidence,
+                    is_valid: is_valid != 0,
+                    invalidation_reason,
+                    decay_invalidated_at,
+                    specificity: FactSpecificity::from_str(&specificity_str),
+                    temporal_scope: TemporalScope::from_str(&temporal_scope_str),
+                    similarity_score: None,
+                })
+            })
+            .map_err(|e| AetherError::config(format!("Failed to query facts: {}", e)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AetherError::config(format!("Failed to parse fact rows: {}", e)))?;
+
+        Ok(facts)
+    }
+
     /// Insert a memory fact into the database
     pub async fn insert_fact(&self, fact: MemoryFact) -> Result<(), AetherError> {
         let embedding_bytes = fact
