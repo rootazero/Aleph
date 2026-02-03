@@ -52,6 +52,7 @@ pub mod sync_api;
 
 mod channel_manager;
 mod error;
+mod http_handler;
 mod loader;
 pub mod manifest;
 mod provider_adapter;
@@ -64,6 +65,7 @@ pub mod watcher;
 
 pub use channel_manager::{ChannelHandle, ChannelManager};
 pub use error::*;
+pub use http_handler::PluginHttpHandler;
 pub use loader::*;
 pub use manifest::*;
 pub use plugin_loader::PluginLoader;
