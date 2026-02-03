@@ -5,7 +5,11 @@
 
 use crate::agents::thinking::ThinkLevel;
 use crate::clipboard::ImageData;
+use crate::config::ProviderConfig;
 use crate::core::MediaAttachment;
+use crate::error::Result;
+use async_trait::async_trait;
+use futures::stream::BoxStream;
 
 /// Unified request payload for protocol adapters
 ///
@@ -70,6 +74,53 @@ impl<'a> RequestPayload<'a> {
         self.force_standard_mode = force;
         self
     }
+}
+
+/// Protocol adapter trait for building requests and parsing responses
+///
+/// Each protocol (OpenAI, Anthropic, Gemini, etc.) implements this trait
+/// to handle protocol-specific serialization and deserialization.
+#[async_trait]
+pub trait ProtocolAdapter: Send + Sync {
+    /// Build an HTTP request from the payload
+    ///
+    /// # Arguments
+    /// * `payload` - The unified request payload
+    /// * `config` - Provider configuration (API key, model, etc.)
+    /// * `is_streaming` - Whether to enable streaming response
+    ///
+    /// # Returns
+    /// A configured reqwest::RequestBuilder ready to send
+    fn build_request(
+        &self,
+        payload: &RequestPayload,
+        config: &ProviderConfig,
+        is_streaming: bool,
+    ) -> Result<reqwest::RequestBuilder>;
+
+    /// Parse a non-streaming response
+    ///
+    /// # Arguments
+    /// * `response` - The HTTP response from the API
+    ///
+    /// # Returns
+    /// The extracted text content from the response
+    async fn parse_response(&self, response: reqwest::Response) -> Result<String>;
+
+    /// Parse a streaming response (SSE)
+    ///
+    /// # Arguments
+    /// * `response` - The HTTP response with chunked body
+    ///
+    /// # Returns
+    /// A stream of text chunks
+    async fn parse_stream(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<BoxStream<'static, Result<String>>>;
+
+    /// Get the protocol name for logging
+    fn name(&self) -> &'static str;
 }
 
 #[cfg(test)]
