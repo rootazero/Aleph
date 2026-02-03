@@ -50,6 +50,7 @@ pub mod retry;
 pub mod shared;
 pub mod t8star;
 pub mod adapter;
+pub mod protocols;
 
 // Re-exports
 pub use auth_profile_registry::{AuthProfileProviderRegistry, AuthProfileRegistryConfig};
@@ -80,7 +81,8 @@ pub use profile_manager::{
 pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
 pub use t8star::T8StarProvider;
-pub use adapter::RequestPayload;
+pub use adapter::{ProtocolAdapter, RequestPayload};
+pub use protocols::OpenAiProtocol;
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
