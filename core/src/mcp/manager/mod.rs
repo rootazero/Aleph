@@ -22,14 +22,13 @@
 //! # Example
 //!
 //! ```ignore
-//! use aethecore::mcp::manager::{McpManagerHandle, McpManagerConfig, McpPersistentConfig};
+//! use aethecore::mcp::manager::{McpManagerActor, McpManagerHandle, McpManagerConfig};
 //!
-//! // Load configuration from disk
-//! let mut config = McpPersistentConfig::load(McpPersistentConfig::default_path().as_path()).await?;
-//! config.expand_env_vars();
+//! // Create the actor (loads config from default path)
+//! let (actor, handle) = McpManagerActor::new(None).await?;
 //!
-//! // Get a handle to the manager
-//! let handle = manager.handle();
+//! // Spawn the actor task
+//! tokio::spawn(actor.run());
 //!
 //! // Add a server
 //! let server_config = McpManagerConfig::stdio("my-server", "My Server", "npx")
@@ -46,12 +45,17 @@
 //! while let Ok(event) = events.recv().await {
 //!     println!("Event: {:?}", event);
 //! }
+//!
+//! // Graceful shutdown
+//! handle.shutdown().await?;
 //! ```
 
+mod actor;
 mod config;
 mod handle;
 mod types;
 
+pub use actor::{HealthCheckConfig, McpManagerActor};
 pub use config::McpPersistentConfig;
 pub use handle::McpManagerHandle;
 pub use types::{
