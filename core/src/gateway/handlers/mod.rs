@@ -125,6 +125,7 @@ impl HandlerRegistry {
         registry.register("plugins.load", plugins::handle_load);
         registry.register("plugins.unload", plugins::handle_unload);
         registry.register("plugins.callTool", plugins::handle_call_tool);
+        registry.register("plugins.executeCommand", plugins::handle_execute_command);
 
         // Models handlers (use default config as placeholder)
         let models_config = Arc::new(Config::default());
@@ -397,6 +398,7 @@ mod tests {
         assert!(registry.has_method("plugins.load"));
         assert!(registry.has_method("plugins.unload"));
         assert!(registry.has_method("plugins.callTool"));
+        assert!(registry.has_method("plugins.executeCommand"));
     }
 
     #[test]

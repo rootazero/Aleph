@@ -563,6 +563,39 @@ impl ExtensionManager {
             .execute_hook(plugin_id, handler, event_data)
     }
 
+    /// Execute a direct command on a runtime plugin.
+    ///
+    /// This method executes a direct command handler on a loaded runtime plugin
+    /// (Node.js or WASM). Direct commands are user-triggered commands that execute
+    /// immediately without LLM involvement (e.g., `/status`, `/clear`, `/version`).
+    ///
+    /// # Lock Behavior
+    ///
+    /// This method acquires a **write lock** on the plugin loader because the underlying
+    /// IPC call requires mutable access to the Node.js process stdin/stdout streams.
+    ///
+    /// # Arguments
+    ///
+    /// * `plugin_id` - The ID of the plugin containing the command handler
+    /// * `handler` - The handler function name to call
+    /// * `args` - The arguments to pass to the handler
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(DirectCommandResult)` - The result from the command handler
+    /// * `Err(ExtensionError::PluginNotFound)` - If the plugin is not loaded
+    pub async fn execute_plugin_command(
+        &self,
+        plugin_id: &str,
+        handler: &str,
+        args: serde_json::Value,
+    ) -> ExtensionResult<DirectCommandResult> {
+        self.plugin_loader
+            .write()
+            .await
+            .execute_command(plugin_id, handler, args)
+    }
+
     /// Get the plugin registry for runtime plugins.
     ///
     /// This provides read access to the registry containing tools, hooks,
