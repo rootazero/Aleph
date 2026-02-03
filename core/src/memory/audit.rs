@@ -181,6 +181,132 @@ impl AuditEntry {
     }
 }
 
+use crate::error::AetherError;
+use crate::memory::database::VectorDatabase;
+use std::sync::Arc;
+
+/// Logger for memory audit events
+pub struct AuditLogger {
+    db: Arc<VectorDatabase>,
+}
+
+impl AuditLogger {
+    /// Create a new audit logger
+    pub fn new(db: Arc<VectorDatabase>) -> Self {
+        Self { db }
+    }
+
+    /// Log an audit event
+    pub async fn log(&self, entry: AuditEntry) -> Result<(), AetherError> {
+        self.db.insert_audit_entry(&entry).await
+    }
+
+    /// Log a fact creation event
+    pub async fn log_created(
+        &self,
+        fact_id: &str,
+        source: &str,
+        extraction_context: Option<&str>,
+    ) -> Result<(), AetherError> {
+        let entry = AuditEntry::new(
+            fact_id.to_string(),
+            AuditAction::Created,
+            AuditActor::Agent,
+            Some("Fact extracted from conversation".to_string()),
+            Some(AuditDetails::Created {
+                source: source.to_string(),
+                extraction_context: extraction_context.map(|s| s.to_string()),
+            }),
+        );
+        self.log(entry).await
+    }
+
+    /// Log a fact access event
+    pub async fn log_accessed(
+        &self,
+        fact_id: &str,
+        query: Option<&str>,
+        relevance_score: Option<f32>,
+        used_in_response: bool,
+    ) -> Result<(), AetherError> {
+        let entry = AuditEntry::new(
+            fact_id.to_string(),
+            AuditAction::Accessed,
+            AuditActor::Agent,
+            None,
+            Some(AuditDetails::Accessed {
+                query: query.map(|s| s.to_string()),
+                relevance_score,
+                used_in_response,
+            }),
+        );
+        self.log(entry).await
+    }
+
+    /// Log a fact invalidation event
+    pub async fn log_invalidated(
+        &self,
+        fact_id: &str,
+        reason: &str,
+        actor: AuditActor,
+        strength_at_invalidation: Option<f32>,
+    ) -> Result<(), AetherError> {
+        let entry = AuditEntry::new(
+            fact_id.to_string(),
+            AuditAction::Invalidated,
+            actor,
+            Some(format!("Fact invalidated: {}", reason)),
+            Some(AuditDetails::Invalidated {
+                reason: reason.to_string(),
+                strength_at_invalidation,
+            }),
+        );
+        self.log(entry).await
+    }
+
+    /// Log a fact restoration event
+    pub async fn log_restored(&self, fact_id: &str, new_strength: f32) -> Result<(), AetherError> {
+        let entry = AuditEntry::new(
+            fact_id.to_string(),
+            AuditAction::Restored,
+            AuditActor::User,
+            Some("Fact restored from recycle bin".to_string()),
+            Some(AuditDetails::Restored { new_strength }),
+        );
+        self.log(entry).await
+    }
+
+    /// Log a permanent deletion event
+    pub async fn log_deleted(
+        &self,
+        fact_id: &str,
+        reason: &str,
+        days_in_recycle_bin: Option<u32>,
+    ) -> Result<(), AetherError> {
+        let entry = AuditEntry::new(
+            fact_id.to_string(),
+            AuditAction::Deleted,
+            AuditActor::System,
+            Some(format!("Fact permanently deleted: {}", reason)),
+            Some(AuditDetails::Deleted {
+                reason: reason.to_string(),
+                days_in_recycle_bin,
+            }),
+        );
+        self.log(entry).await
+    }
+
+    /// Get audit history for a specific fact
+    pub async fn get_fact_history(&self, fact_id: &str) -> Result<Vec<AuditEntry>, AetherError> {
+        self.db.get_audit_entries_for_fact(fact_id).await
+    }
+
+    /// Get recent audit events
+    pub async fn get_recent_events(&self, limit: usize) -> Result<Vec<AuditEntry>, AetherError> {
+        self.db.get_recent_audit_entries(limit).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
