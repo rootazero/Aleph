@@ -43,7 +43,7 @@ use crate::extension::runtime::nodejs::{hook_def_to_registration, tool_def_to_re
 use crate::extension::runtime::NodeJsRuntime;
 #[cfg(feature = "plugin-wasm")]
 use crate::extension::runtime::WasmRuntime;
-use crate::extension::types::PluginKind;
+use crate::extension::types::{DirectCommandResult, PluginKind};
 
 /// Manages loading plugins into appropriate runtimes.
 ///
@@ -437,6 +437,85 @@ impl PluginLoader {
         }
     }
 
+    /// Execute a direct command handler on a loaded plugin.
+    ///
+    /// Direct commands are user-triggered commands that execute immediately
+    /// without LLM involvement (e.g., `/status`, `/clear`, `/version`).
+    ///
+    /// # Arguments
+    ///
+    /// * `plugin_id` - The ID of the plugin containing the command handler
+    /// * `handler` - The handler function name to call
+    /// * `args` - The arguments to pass to the handler
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(DirectCommandResult)` - The result from the command handler
+    /// * `Err(ExtensionError)` - If the execution failed
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = loader.execute_command("my-plugin", "statusHandler", json!({}))?;
+    /// println!("Output: {}", result.content);
+    /// ```
+    pub fn execute_command(
+        &mut self,
+        plugin_id: &str,
+        handler: &str,
+        args: serde_json::Value,
+    ) -> ExtensionResult<DirectCommandResult> {
+        let kind = self
+            .loaded_plugins
+            .get(plugin_id)
+            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
+
+        match kind {
+            PluginKind::NodeJs => {
+                let runtime = self.nodejs_runtime.as_mut().ok_or_else(|| {
+                    ExtensionError::Runtime("Node.js runtime not initialized".to_string())
+                })?;
+
+                // Call the handler and convert result to DirectCommandResult
+                let result = runtime.call_tool(plugin_id, handler, args)?;
+                Ok(serde_json::from_value(result).unwrap_or_else(|_| {
+                    DirectCommandResult::success("Command executed")
+                }))
+            }
+            #[cfg(feature = "plugin-wasm")]
+            PluginKind::Wasm => {
+                let runtime = self.wasm_runtime.as_mut().ok_or_else(|| {
+                    ExtensionError::Runtime("WASM runtime not initialized".to_string())
+                })?;
+
+                let input = crate::extension::runtime::WasmToolInput {
+                    name: handler.to_string(),
+                    arguments: args,
+                };
+                let output = runtime.call_tool(plugin_id, handler, input)?;
+
+                if output.success {
+                    // Try to parse result as DirectCommandResult, or create success response
+                    let result = output.result.unwrap_or(serde_json::Value::Null);
+                    Ok(serde_json::from_value(result).unwrap_or_else(|_| {
+                        DirectCommandResult::success("Command executed")
+                    }))
+                } else {
+                    Ok(DirectCommandResult::error(
+                        output.error.unwrap_or_else(|| "Unknown WASM error".to_string()),
+                    ))
+                }
+            }
+            #[cfg(not(feature = "plugin-wasm"))]
+            PluginKind::Wasm => Err(ExtensionError::Runtime(
+                "WASM runtime not enabled".to_string(),
+            )),
+            PluginKind::Static => Err(ExtensionError::Runtime(
+                "Static plugins cannot have direct commands".to_string(),
+            )),
+        }
+    }
+
     /// Shutdown all runtimes and unload all plugins.
     ///
     /// This method should be called when the application is shutting down
@@ -551,6 +630,17 @@ mod tests {
     fn test_plugin_loader_execute_hook_nonexistent() {
         let mut loader = PluginLoader::new();
         let result = loader.execute_hook("nonexistent", "handler", serde_json::json!({}));
+        assert!(result.is_err());
+        match result {
+            Err(ExtensionError::PluginNotFound(id)) => assert_eq!(id, "nonexistent"),
+            _ => panic!("Expected PluginNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_plugin_loader_execute_command_nonexistent() {
+        let mut loader = PluginLoader::new();
+        let result = loader.execute_command("nonexistent", "handler", serde_json::json!({}));
         assert!(result.is_err());
         match result {
             Err(ExtensionError::PluginNotFound(id)) => assert_eq!(id, "nonexistent"),
