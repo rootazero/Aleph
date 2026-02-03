@@ -47,6 +47,10 @@ pub struct McpServerConnection {
     capabilities: RwLock<Option<mcp_types::ServerCapabilities>>,
     /// Cached tools list
     cached_tools: RwLock<Vec<McpTool>>,
+    /// Cached resources list
+    cached_resources: RwLock<Vec<crate::mcp::types::McpResource>>,
+    /// Cached prompts list
+    cached_prompts: RwLock<Vec<crate::mcp::prompts::McpPrompt>>,
     /// Connection state
     state: RwLock<ConnectionState>,
 }
@@ -135,6 +139,8 @@ impl McpServerConnection {
             id_gen: IdGenerator::new(),
             capabilities: RwLock::new(None),
             cached_tools: RwLock::new(Vec::new()),
+            cached_resources: RwLock::new(Vec::new()),
+            cached_prompts: RwLock::new(Vec::new()),
             state: RwLock::new(ConnectionState::Connecting),
         };
 
@@ -204,6 +210,14 @@ impl McpServerConnection {
         // Pre-fetch tools list
         self.refresh_tools().await?;
 
+        // Pre-fetch resources and prompts (non-fatal if not supported)
+        if let Err(e) = self.refresh_resources().await {
+            tracing::debug!(server = %self.name, error = %e, "Resources refresh failed (may not be supported)");
+        }
+        if let Err(e) = self.refresh_prompts().await {
+            tracing::debug!(server = %self.name, error = %e, "Prompts refresh failed (may not be supported)");
+        }
+
         Ok(())
     }
 
@@ -254,9 +268,130 @@ impl McpServerConnection {
         Ok(())
     }
 
+    /// Refresh the cached resources list
+    pub async fn refresh_resources(&self) -> Result<()> {
+        // Check if server supports resources
+        let caps = self.capabilities.read().await;
+        if caps.as_ref().and_then(|c| c.resources.as_ref()).is_none() {
+            tracing::debug!(server = %self.name, "Server does not support resources");
+            return Ok(());
+        }
+        drop(caps);
+
+        let request = JsonRpcRequest::new(self.id_gen.next(), "resources/list");
+        let response = self.transport.send_request(&request).await?;
+
+        let result = response.into_result().map_err(|e| {
+            AetherError::IoError(format!(
+                "MCP server '{}' resources/list failed: {}",
+                self.name, e
+            ))
+        })?;
+
+        let resources_result: mcp_types::ResourcesListResult =
+            serde_json::from_value(result).map_err(|e| {
+                AetherError::IoError(format!(
+                    "Failed to parse resources list from '{}': {}",
+                    self.name, e
+                ))
+            })?;
+
+        // Convert to our McpResource format
+        let resources: Vec<crate::mcp::types::McpResource> = resources_result
+            .resources
+            .into_iter()
+            .map(|r| crate::mcp::types::McpResource {
+                uri: format!("{}:{}", self.name, r.uri), // Namespace with server
+                name: r.name,
+                description: r.description,
+                mime_type: r.mime_type,
+            })
+            .collect();
+
+        tracing::debug!(
+            server = %self.name,
+            resource_count = resources.len(),
+            "Cached resources list"
+        );
+
+        let mut cached = self.cached_resources.write().await;
+        *cached = resources;
+
+        Ok(())
+    }
+
+    /// Refresh the cached prompts list
+    pub async fn refresh_prompts(&self) -> Result<()> {
+        // Check if server supports prompts
+        let caps = self.capabilities.read().await;
+        if caps.as_ref().and_then(|c| c.prompts.as_ref()).is_none() {
+            tracing::debug!(server = %self.name, "Server does not support prompts");
+            return Ok(());
+        }
+        drop(caps);
+
+        let request = JsonRpcRequest::new(self.id_gen.next(), "prompts/list");
+        let response = self.transport.send_request(&request).await?;
+
+        let result = response.into_result().map_err(|e| {
+            AetherError::IoError(format!(
+                "MCP server '{}' prompts/list failed: {}",
+                self.name, e
+            ))
+        })?;
+
+        let prompts_result: mcp_types::PromptsListResult =
+            serde_json::from_value(result).map_err(|e| {
+                AetherError::IoError(format!(
+                    "Failed to parse prompts list from '{}': {}",
+                    self.name, e
+                ))
+            })?;
+
+        // Convert to our McpPrompt format
+        let prompts: Vec<crate::mcp::prompts::McpPrompt> = prompts_result
+            .prompts
+            .into_iter()
+            .map(|p| crate::mcp::prompts::McpPrompt {
+                name: format!("{}:{}", self.name, p.name), // Namespace with server
+                description: p.description,
+                arguments: p
+                    .arguments
+                    .into_iter()
+                    .map(|a| crate::mcp::prompts::McpPromptArgument {
+                        name: a.name,
+                        description: a.description,
+                        required: a.required,
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        tracing::debug!(
+            server = %self.name,
+            prompt_count = prompts.len(),
+            "Cached prompts list"
+        );
+
+        let mut cached = self.cached_prompts.write().await;
+        *cached = prompts;
+
+        Ok(())
+    }
+
     /// Get cached tools list
     pub async fn list_tools(&self) -> Vec<McpTool> {
         self.cached_tools.read().await.clone()
+    }
+
+    /// Get cached resources list
+    pub async fn list_resources(&self) -> Vec<crate::mcp::types::McpResource> {
+        self.cached_resources.read().await.clone()
+    }
+
+    /// Get cached prompts list
+    pub async fn list_prompts(&self) -> Vec<crate::mcp::prompts::McpPrompt> {
+        self.cached_prompts.read().await.clone()
     }
 
     /// Check if this connection provides a specific tool
@@ -356,6 +491,152 @@ impl McpServerConnection {
         Ok(json!({
             "content": content,
         }))
+    }
+
+    /// Read a resource by URI
+    pub async fn read_resource(&self, uri: &str) -> Result<crate::mcp::resources::ResourceContent> {
+        // Strip server namespace prefix if present
+        let resource_uri = uri
+            .strip_prefix(&format!("{}:", self.name))
+            .unwrap_or(uri);
+
+        let params = mcp_types::ResourceReadParams {
+            uri: resource_uri.to_string(),
+        };
+
+        let request = JsonRpcRequest::with_params(
+            self.id_gen.next(),
+            "resources/read",
+            serde_json::to_value(&params).map_err(|e| {
+                AetherError::IoError(format!("Failed to serialize resource read params: {}", e))
+            })?,
+        );
+
+        tracing::debug!(
+            server = %self.name,
+            uri = %resource_uri,
+            "Reading resource"
+        );
+
+        let response = self.transport.send_request(&request).await?;
+        let result = response.into_result().map_err(|e| {
+            AetherError::IoError(format!(
+                "Resource read '{}' on '{}' failed: {}",
+                resource_uri, self.name, e
+            ))
+        })?;
+
+        let read_result: mcp_types::ResourceReadResult =
+            serde_json::from_value(result).map_err(|e| {
+                AetherError::IoError(format!(
+                    "Failed to parse resource read result from '{}': {}",
+                    self.name, e
+                ))
+            })?;
+
+        // Convert first content item to ResourceContent
+        if let Some(content) = read_result.contents.into_iter().next() {
+            match content {
+                mcp_types::ResourceContentItem::Text { text, .. } => {
+                    Ok(crate::mcp::resources::ResourceContent::Text(text))
+                }
+                mcp_types::ResourceContentItem::Blob { blob, mime_type, .. } => {
+                    // Decode base64
+                    use base64::Engine;
+                    let data = base64::engine::general_purpose::STANDARD
+                        .decode(&blob)
+                        .map_err(|e| {
+                            AetherError::IoError(format!("Failed to decode blob: {}", e))
+                        })?;
+                    Ok(crate::mcp::resources::ResourceContent::Binary {
+                        data,
+                        mime_type: mime_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+                    })
+                }
+            }
+        } else {
+            Ok(crate::mcp::resources::ResourceContent::Text(String::new()))
+        }
+    }
+
+    /// Get a prompt by name with optional arguments
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<crate::mcp::prompts::PromptResult> {
+        // Strip server namespace prefix if present
+        let prompt_name = name
+            .strip_prefix(&format!("{}:", self.name))
+            .unwrap_or(name);
+
+        let params = mcp_types::PromptGetParams {
+            name: prompt_name.to_string(),
+            arguments,
+        };
+
+        let request = JsonRpcRequest::with_params(
+            self.id_gen.next(),
+            "prompts/get",
+            serde_json::to_value(&params).map_err(|e| {
+                AetherError::IoError(format!("Failed to serialize prompt get params: {}", e))
+            })?,
+        );
+
+        tracing::debug!(
+            server = %self.name,
+            prompt = %prompt_name,
+            "Getting prompt"
+        );
+
+        let response = self.transport.send_request(&request).await?;
+        let result = response.into_result().map_err(|e| {
+            AetherError::IoError(format!(
+                "Prompt get '{}' on '{}' failed: {}",
+                prompt_name, self.name, e
+            ))
+        })?;
+
+        let get_result: mcp_types::PromptGetResult =
+            serde_json::from_value(result).map_err(|e| {
+                AetherError::IoError(format!(
+                    "Failed to parse prompt get result from '{}': {}",
+                    self.name, e
+                ))
+            })?;
+
+        // Convert to our PromptResult format
+        let messages = get_result
+            .messages
+            .into_iter()
+            .map(|m| {
+                let role = match m.role {
+                    mcp_types::PromptRole::User => "user",
+                    mcp_types::PromptRole::Assistant => "assistant",
+                    mcp_types::PromptRole::System => "system",
+                };
+                let content = match m.content {
+                    mcp_types::PromptContentItem::Text { text } => {
+                        crate::mcp::prompts::PromptContent::Text { text }
+                    }
+                    mcp_types::PromptContentItem::Image { data, mime_type } => {
+                        crate::mcp::prompts::PromptContent::Image { data, mime_type }
+                    }
+                    mcp_types::PromptContentItem::Resource { uri, text, .. } => {
+                        crate::mcp::prompts::PromptContent::Resource { uri, text }
+                    }
+                };
+                crate::mcp::prompts::PromptMessage {
+                    role: role.to_string(),
+                    content,
+                }
+            })
+            .collect();
+
+        Ok(crate::mcp::prompts::PromptResult {
+            description: get_result.description,
+            messages,
+        })
     }
 
     /// Get current connection state
