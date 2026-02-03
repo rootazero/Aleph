@@ -6,7 +6,8 @@
 use super::error::{ExtensionError, ExtensionResult};
 use super::template::SkillTemplate;
 use super::types::{
-    ExtensionSkill, PermissionAction, PermissionRule, SkillContext, SkillMetadata, SkillToolResult,
+    ExtensionSkill, PermissionAction, PermissionRule, PromptScope, SkillContext, SkillMetadata,
+    SkillToolResult,
 };
 use crate::event::{
     AetherEvent, EventFilter, EventType, GlobalBus, PermissionReply, PermissionRequest,
@@ -267,6 +268,76 @@ pub fn build_skill_tool_description(skills: &[ExtensionSkill]) -> String {
     parts.join(" ")
 }
 
+/// Filter skills by scope for injection
+///
+/// Returns skills that should be auto-injected based on their scope and active tools:
+/// - `System` scope: Always included
+/// - `Tool` scope: Only included if the bound tool is in the active tools list
+/// - `Standalone` scope: Never auto-injected (user must explicitly invoke)
+/// - `Disabled` scope: Never included
+pub fn filter_skills_by_scope<'a>(
+    skills: &'a [ExtensionSkill],
+    active_tools: Option<&[String]>,
+) -> Vec<&'a ExtensionSkill> {
+    skills
+        .iter()
+        .filter(|skill| match skill.scope {
+            PromptScope::System => true,
+            PromptScope::Tool => {
+                // Only include if bound tool is active
+                if let (Some(bound), Some(tools)) = (&skill.bound_tool, active_tools) {
+                    tools.iter().any(|t| t == bound)
+                } else {
+                    false
+                }
+            }
+            PromptScope::Standalone => false,
+            PromptScope::Disabled => false,
+        })
+        .collect()
+}
+
+/// Build skill tool description with scope-aware filtering
+///
+/// This is an enhanced version of `build_skill_tool_description` that filters
+/// skills based on their scope and the currently active tools.
+///
+/// # Arguments
+///
+/// * `skills` - All available skills
+/// * `active_tools` - Optional list of currently active tool names. If provided,
+///   skills with `Tool` scope will only be included if their bound tool is in this list.
+///
+/// # Returns
+///
+/// A formatted string describing the available skills, suitable for injection
+/// into the system prompt. Returns an empty string if no skills pass the filter.
+pub fn build_skill_tool_description_v2(
+    skills: &[ExtensionSkill],
+    active_tools: Option<&[String]>,
+) -> String {
+    let filtered = filter_skills_by_scope(skills, active_tools);
+
+    if filtered.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::from("<available_skills>\n");
+
+    for skill in filtered {
+        if skill.is_auto_invocable() {
+            output.push_str(&format!(
+                "  <skill>\n    <name>{}</name>\n    <description>{}</description>\n  </skill>\n",
+                skill.qualified_name(),
+                skill.description
+            ));
+        }
+    }
+
+    output.push_str("</available_skills>");
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,4 +455,196 @@ mod tests {
     // Note: Full EventBus integration tests for permission request are in
     // core/src/event/integration_test.rs. These unit tests focus on basic
     // permission logic without requiring the full async EventBus flow.
+
+    // =============================================================================
+    // Scope Filtering Tests
+    // =============================================================================
+
+    fn create_skill_with_scope(name: &str, scope: PromptScope, bound_tool: Option<&str>) -> ExtensionSkill {
+        ExtensionSkill {
+            name: name.to_string(),
+            plugin_name: Some("test-plugin".to_string()),
+            skill_type: crate::extension::SkillType::Skill,
+            description: format!("{} description", name),
+            content: "Content".to_string(),
+            disable_model_invocation: false,
+            scope,
+            bound_tool: bound_tool.map(|s| s.to_string()),
+            source_path: PathBuf::from("/test/skill/SKILL.md"),
+            source: DiscoverySource::AetherGlobal,
+        }
+    }
+
+    #[test]
+    fn test_filter_skills_by_scope_system_always_included() {
+        let skills = vec![
+            create_skill_with_scope("system-skill", PromptScope::System, None),
+        ];
+
+        // Should be included with no active tools
+        let filtered = filter_skills_by_scope(&skills, None);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "system-skill");
+
+        // Should be included with any active tools
+        let active_tools = vec!["some-tool".to_string()];
+        let filtered = filter_skills_by_scope(&skills, Some(&active_tools));
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_skills_by_scope_tool_requires_active_tool() {
+        let skills = vec![
+            create_skill_with_scope("tool-skill", PromptScope::Tool, Some("bash")),
+        ];
+
+        // Should NOT be included with no active tools
+        let filtered = filter_skills_by_scope(&skills, None);
+        assert_eq!(filtered.len(), 0);
+
+        // Should NOT be included if bound tool is not in active tools
+        let active_tools = vec!["read".to_string(), "write".to_string()];
+        let filtered = filter_skills_by_scope(&skills, Some(&active_tools));
+        assert_eq!(filtered.len(), 0);
+
+        // Should be included if bound tool IS in active tools
+        let active_tools = vec!["bash".to_string(), "read".to_string()];
+        let filtered = filter_skills_by_scope(&skills, Some(&active_tools));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "tool-skill");
+    }
+
+    #[test]
+    fn test_filter_skills_by_scope_tool_without_bound_tool_excluded() {
+        // A Tool scope skill without a bound_tool should never be included
+        let skills = vec![
+            create_skill_with_scope("broken-tool-skill", PromptScope::Tool, None),
+        ];
+
+        let active_tools = vec!["bash".to_string()];
+        let filtered = filter_skills_by_scope(&skills, Some(&active_tools));
+        assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn test_filter_skills_by_scope_standalone_never_included() {
+        let skills = vec![
+            create_skill_with_scope("standalone-skill", PromptScope::Standalone, None),
+        ];
+
+        // Should never be auto-injected
+        let filtered = filter_skills_by_scope(&skills, None);
+        assert_eq!(filtered.len(), 0);
+
+        let active_tools = vec!["bash".to_string()];
+        let filtered = filter_skills_by_scope(&skills, Some(&active_tools));
+        assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn test_filter_skills_by_scope_disabled_never_included() {
+        let skills = vec![
+            create_skill_with_scope("disabled-skill", PromptScope::Disabled, None),
+        ];
+
+        let filtered = filter_skills_by_scope(&skills, None);
+        assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn test_filter_skills_by_scope_mixed() {
+        let skills = vec![
+            create_skill_with_scope("system-1", PromptScope::System, None),
+            create_skill_with_scope("system-2", PromptScope::System, None),
+            create_skill_with_scope("tool-bash", PromptScope::Tool, Some("bash")),
+            create_skill_with_scope("tool-read", PromptScope::Tool, Some("read")),
+            create_skill_with_scope("standalone", PromptScope::Standalone, None),
+            create_skill_with_scope("disabled", PromptScope::Disabled, None),
+        ];
+
+        // With no active tools: only System skills
+        let filtered = filter_skills_by_scope(&skills, None);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|s| s.scope == PromptScope::System));
+
+        // With bash active: System + tool-bash
+        let active_tools = vec!["bash".to_string()];
+        let filtered = filter_skills_by_scope(&skills, Some(&active_tools));
+        assert_eq!(filtered.len(), 3);
+
+        let names: Vec<&str> = filtered.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"system-1"));
+        assert!(names.contains(&"system-2"));
+        assert!(names.contains(&"tool-bash"));
+        assert!(!names.contains(&"tool-read"));
+        assert!(!names.contains(&"standalone"));
+        assert!(!names.contains(&"disabled"));
+    }
+
+    #[test]
+    fn test_build_skill_tool_description_v2_empty() {
+        let skills: Vec<ExtensionSkill> = vec![];
+        let desc = build_skill_tool_description_v2(&skills, None);
+        assert!(desc.is_empty());
+    }
+
+    #[test]
+    fn test_build_skill_tool_description_v2_filters_by_scope() {
+        let skills = vec![
+            create_skill_with_scope("system-skill", PromptScope::System, None),
+            create_skill_with_scope("tool-skill", PromptScope::Tool, Some("bash")),
+            create_skill_with_scope("standalone-skill", PromptScope::Standalone, None),
+        ];
+
+        // Without active tools: only system-skill
+        let desc = build_skill_tool_description_v2(&skills, None);
+        assert!(desc.contains("system-skill"));
+        assert!(!desc.contains("tool-skill"));
+        assert!(!desc.contains("standalone-skill"));
+
+        // With bash active: system-skill + tool-skill
+        let active_tools = vec!["bash".to_string()];
+        let desc = build_skill_tool_description_v2(&skills, Some(&active_tools));
+        assert!(desc.contains("system-skill"));
+        assert!(desc.contains("tool-skill"));
+        assert!(!desc.contains("standalone-skill"));
+    }
+
+    #[test]
+    fn test_build_skill_tool_description_v2_respects_auto_invocable() {
+        let system_skill = create_skill_with_scope("invocable", PromptScope::System, None);
+        let mut non_invocable = create_skill_with_scope("non-invocable", PromptScope::System, None);
+        non_invocable.disable_model_invocation = true;
+
+        let mut command_skill = create_skill_with_scope("command", PromptScope::System, None);
+        command_skill.skill_type = crate::extension::SkillType::Command;
+
+        let skills = vec![system_skill, non_invocable, command_skill];
+
+        let desc = build_skill_tool_description_v2(&skills, None);
+
+        // Only "invocable" should appear (auto-invocable)
+        assert!(desc.contains("invocable"));
+        // "non-invocable" has disable_model_invocation = true
+        assert!(!desc.contains("non-invocable"));
+        // "command" is SkillType::Command, not Skill
+        assert!(!desc.contains(">command<")); // Using >< to avoid matching "command" in other contexts
+    }
+
+    #[test]
+    fn test_build_skill_tool_description_v2_format() {
+        let skills = vec![
+            create_skill_with_scope("my-skill", PromptScope::System, None),
+        ];
+
+        let desc = build_skill_tool_description_v2(&skills, None);
+
+        // Check XML structure
+        assert!(desc.starts_with("<available_skills>"));
+        assert!(desc.ends_with("</available_skills>"));
+        assert!(desc.contains("<skill>"));
+        assert!(desc.contains("</skill>"));
+        assert!(desc.contains("<name>test-plugin:my-skill</name>"));
+        assert!(desc.contains("<description>my-skill description</description>"));
+    }
 }
