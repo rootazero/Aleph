@@ -626,6 +626,38 @@ impl HookPriority {
     }
 }
 
+/// Prompt injection scope
+///
+/// Determines when and how a prompt is injected into the conversation context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptScope {
+    /// System-level: Always injected when plugin is active
+    #[default]
+    System,
+
+    /// Tool-bound: Injected when specific tool is available
+    Tool,
+
+    /// Standalone: User must explicitly invoke (command)
+    Standalone,
+
+    /// Disabled: Not injected
+    Disabled,
+}
+
+impl PromptScope {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "system" => PromptScope::System,
+            "tool" => PromptScope::Tool,
+            "standalone" => PromptScope::Standalone,
+            "disabled" => PromptScope::Disabled,
+            _ => PromptScope::System,
+        }
+    }
+}
+
 /// Hook action types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
