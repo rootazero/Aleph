@@ -51,6 +51,49 @@ pub struct SkillContext {
     pub agent_permissions: Option<HashMap<String, PermissionRule>>,
 }
 
+/// Direct command execution result
+///
+/// Used by commands that execute immediately without LLM involvement
+/// (e.g., `/status`, `/clear`, `/version`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectCommandResult {
+    /// Command output to display to user
+    pub content: String,
+    /// Optional structured data
+    pub data: Option<serde_json::Value>,
+    /// Whether command was successful
+    pub success: bool,
+}
+
+impl DirectCommandResult {
+    /// Create a successful result with content only
+    pub fn success(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            data: None,
+            success: true,
+        }
+    }
+
+    /// Create a successful result with content and structured data
+    pub fn with_data(content: impl Into<String>, data: serde_json::Value) -> Self {
+        Self {
+            content: content.into(),
+            data: Some(data),
+            success: true,
+        }
+    }
+
+    /// Create an error result
+    pub fn error(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            data: None,
+            success: false,
+        }
+    }
+}
+
 // =============================================================================
 // Skill Types
 // =============================================================================
@@ -1019,5 +1062,43 @@ mod tests {
         // Parse back
         let parsed: PluginStatus = serde_json::from_str("\"loaded\"").unwrap();
         assert_eq!(parsed, PluginStatus::Loaded);
+    }
+
+    #[test]
+    fn test_direct_command_result_success() {
+        let result = DirectCommandResult::success("Operation completed");
+        assert_eq!(result.content, "Operation completed");
+        assert!(result.success);
+        assert!(result.data.is_none());
+    }
+
+    #[test]
+    fn test_direct_command_result_with_data() {
+        let data = serde_json::json!({"count": 42, "items": ["a", "b"]});
+        let result = DirectCommandResult::with_data("Found items", data.clone());
+        assert_eq!(result.content, "Found items");
+        assert!(result.success);
+        assert_eq!(result.data, Some(data));
+    }
+
+    #[test]
+    fn test_direct_command_result_error() {
+        let result = DirectCommandResult::error("Something went wrong");
+        assert_eq!(result.content, "Something went wrong");
+        assert!(!result.success);
+        assert!(result.data.is_none());
+    }
+
+    #[test]
+    fn test_direct_command_result_serde() {
+        let result = DirectCommandResult::with_data(
+            "Test output",
+            serde_json::json!({"key": "value"}),
+        );
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: DirectCommandResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.content, "Test output");
+        assert!(parsed.success);
+        assert!(parsed.data.is_some());
     }
 }
