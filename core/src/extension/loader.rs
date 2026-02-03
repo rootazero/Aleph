@@ -3,6 +3,7 @@
 use super::error::*;
 use super::manifest::{
     parse_frontmatter, parse_plugin_manifest, validate_plugin_name, LegacyPluginManifest,
+    PluginManifest,
 };
 use super::types::*;
 use crate::discovery::{
@@ -416,6 +417,137 @@ impl ComponentLoader {
 
         Ok(config.mcp_servers)
     }
+
+    // =========================================================================
+    // V2 Prompt Loading Methods
+    // =========================================================================
+
+    /// Load V2 global prompt from manifest's `[prompt]` section
+    ///
+    /// This method reads the prompt file specified in the TOML manifest and
+    /// creates an ExtensionSkill with the appropriate scope settings.
+    ///
+    /// # Arguments
+    /// * `manifest` - The parsed V2 plugin manifest
+    /// * `plugin_dir` - The plugin directory containing the prompt file
+    ///
+    /// # Returns
+    /// * `Ok(Some(skill))` - If a prompt is configured and loaded successfully
+    /// * `Ok(None)` - If no prompt is configured or it's disabled
+    /// * `Err(ExtensionError)` - If the prompt file cannot be read or parsed
+    pub async fn load_v2_prompt(
+        &self,
+        manifest: &PluginManifest,
+        plugin_dir: &Path,
+    ) -> ExtensionResult<Option<ExtensionSkill>> {
+        let prompt_config = match &manifest.prompt_v2 {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        // Check if disabled
+        if prompt_config.scope == "disabled" {
+            return Ok(None);
+        }
+
+        // Read prompt file
+        let prompt_path = plugin_dir.join(&prompt_config.file);
+        let content = tokio::fs::read_to_string(&prompt_path).await.map_err(|e| {
+            ExtensionError::invalid_manifest(
+                &prompt_path,
+                format!("Failed to read prompt file: {}", e),
+            )
+        })?;
+
+        // Parse frontmatter if present
+        let (frontmatter, body) = if content.starts_with("---") {
+            parse_frontmatter::<SkillFrontmatter>(&content, &prompt_path)?
+        } else {
+            (SkillFrontmatter::default(), content)
+        };
+
+        let skill = ExtensionSkill {
+            name: frontmatter.name.unwrap_or_else(|| manifest.id.clone()),
+            plugin_name: Some(manifest.id.clone()),
+            skill_type: SkillType::Skill,
+            description: frontmatter.description.unwrap_or_default(),
+            content: body,
+            disable_model_invocation: frontmatter.disable_model_invocation,
+            source_path: prompt_path,
+            source: DiscoverySource::Plugin,
+            scope: PromptScope::from_str(&prompt_config.scope),
+            bound_tool: None,
+        };
+
+        debug!("Loaded V2 prompt for plugin {}: scope={:?}", manifest.id, skill.scope);
+        Ok(Some(skill))
+    }
+
+    /// Load V2 tool-bound prompts (instruction files) from manifest's `[[tools]]` sections
+    ///
+    /// This method loads instruction files specified in tool definitions and creates
+    /// ExtensionSkills bound to specific tools. These are automatically injected
+    /// when the associated tool is available.
+    ///
+    /// # Arguments
+    /// * `manifest` - The parsed V2 plugin manifest
+    /// * `plugin_dir` - The plugin directory containing the instruction files
+    ///
+    /// # Returns
+    /// * `Ok(Vec<ExtensionSkill>)` - Tool-bound skills loaded from instruction files
+    /// * `Err(ExtensionError)` - If an instruction file cannot be read
+    pub async fn load_v2_tool_prompts(
+        &self,
+        manifest: &PluginManifest,
+        plugin_dir: &Path,
+    ) -> ExtensionResult<Vec<ExtensionSkill>> {
+        let tools = match &manifest.tools_v2 {
+            Some(t) => t,
+            None => return Ok(vec![]),
+        };
+
+        let mut skills = Vec::new();
+
+        for tool in tools {
+            if let Some(ref instruction_file) = tool.instruction_file {
+                let path = plugin_dir.join(instruction_file);
+                if path.exists() {
+                    let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
+                        ExtensionError::invalid_manifest(
+                            &path,
+                            format!("Failed to read instruction file: {}", e),
+                        )
+                    })?;
+
+                    let skill = ExtensionSkill {
+                        name: format!("{}_instructions", tool.name),
+                        plugin_name: Some(manifest.id.clone()),
+                        skill_type: SkillType::Skill,
+                        description: format!("Instructions for {} tool", tool.name),
+                        content,
+                        disable_model_invocation: true, // Tool-bound, not direct invoke
+                        source_path: path.clone(),
+                        source: DiscoverySource::Plugin,
+                        scope: PromptScope::Tool,
+                        bound_tool: Some(tool.name.clone()),
+                    };
+
+                    debug!(
+                        "Loaded V2 tool prompt for {}/{}: {}",
+                        manifest.id, tool.name, path.display()
+                    );
+                    skills.push(skill);
+                } else {
+                    trace!(
+                        "Tool instruction file not found for {}/{}: {}",
+                        manifest.id, tool.name, path.display()
+                    );
+                }
+            }
+        }
+
+        Ok(skills)
+    }
 }
 
 /// Determine discovery source from path
@@ -508,5 +640,302 @@ You are a code reviewer..."#,
         assert_eq!(agent.mode, AgentMode::Subagent);
         assert_eq!(agent.model, Some("anthropic/claude-haiku".to_string()));
         assert_eq!(agent.temperature, Some(0.3));
+    }
+
+    #[tokio::test]
+    async fn test_load_v2_prompt() {
+        use crate::extension::manifest::PromptSection;
+        use crate::extension::types::PluginKind;
+
+        let temp = TempDir::new().unwrap();
+        let plugin_dir = temp.path();
+
+        // Write the prompt file
+        std::fs::write(
+            plugin_dir.join("SYSTEM.md"),
+            r#"---
+name: my-system-prompt
+description: A system prompt
+---
+
+You are a helpful assistant."#,
+        )
+        .unwrap();
+
+        // Create a manifest with prompt_v2
+        let manifest = crate::extension::manifest::PluginManifest {
+            id: "test-plugin".to_string(),
+            name: "Test Plugin".to_string(),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            kind: PluginKind::Static,
+            entry: ".".into(),
+            root_dir: plugin_dir.to_path_buf(),
+            config_schema: None,
+            config_ui_hints: std::collections::HashMap::new(),
+            permissions: vec![],
+            author: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            keywords: vec![],
+            extensions: vec![],
+            tools_v2: None,
+            hooks_v2: None,
+            commands_v2: None,
+            services_v2: None,
+            prompt_v2: Some(PromptSection {
+                file: "SYSTEM.md".to_string(),
+                scope: "system".to_string(),
+            }),
+            capabilities_v2: None,
+        };
+
+        let loader = ComponentLoader::new();
+        let skill = loader.load_v2_prompt(&manifest, plugin_dir).await.unwrap();
+
+        assert!(skill.is_some());
+        let skill = skill.unwrap();
+        assert_eq!(skill.name, "my-system-prompt");
+        assert_eq!(skill.description, "A system prompt");
+        assert_eq!(skill.plugin_name, Some("test-plugin".to_string()));
+        assert_eq!(skill.scope, PromptScope::System);
+        assert!(skill.content.contains("You are a helpful assistant."));
+    }
+
+    #[tokio::test]
+    async fn test_load_v2_prompt_disabled() {
+        use crate::extension::manifest::PromptSection;
+        use crate::extension::types::PluginKind;
+
+        let temp = TempDir::new().unwrap();
+        let plugin_dir = temp.path();
+
+        // Create a manifest with disabled prompt
+        let manifest = crate::extension::manifest::PluginManifest {
+            id: "test-plugin".to_string(),
+            name: "Test Plugin".to_string(),
+            version: None,
+            description: None,
+            kind: PluginKind::Static,
+            entry: ".".into(),
+            root_dir: plugin_dir.to_path_buf(),
+            config_schema: None,
+            config_ui_hints: std::collections::HashMap::new(),
+            permissions: vec![],
+            author: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            keywords: vec![],
+            extensions: vec![],
+            tools_v2: None,
+            hooks_v2: None,
+            commands_v2: None,
+            services_v2: None,
+            prompt_v2: Some(PromptSection {
+                file: "SYSTEM.md".to_string(),
+                scope: "disabled".to_string(),
+            }),
+            capabilities_v2: None,
+        };
+
+        let loader = ComponentLoader::new();
+        let skill = loader.load_v2_prompt(&manifest, plugin_dir).await.unwrap();
+
+        // Should return None for disabled prompt
+        assert!(skill.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_load_v2_prompt_no_frontmatter() {
+        use crate::extension::manifest::PromptSection;
+        use crate::extension::types::PluginKind;
+
+        let temp = TempDir::new().unwrap();
+        let plugin_dir = temp.path();
+
+        // Write a prompt file without frontmatter
+        std::fs::write(
+            plugin_dir.join("SIMPLE.md"),
+            "Just plain content without frontmatter.",
+        )
+        .unwrap();
+
+        let manifest = crate::extension::manifest::PluginManifest {
+            id: "simple-plugin".to_string(),
+            name: "Simple Plugin".to_string(),
+            version: None,
+            description: None,
+            kind: PluginKind::Static,
+            entry: ".".into(),
+            root_dir: plugin_dir.to_path_buf(),
+            config_schema: None,
+            config_ui_hints: std::collections::HashMap::new(),
+            permissions: vec![],
+            author: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            keywords: vec![],
+            extensions: vec![],
+            tools_v2: None,
+            hooks_v2: None,
+            commands_v2: None,
+            services_v2: None,
+            prompt_v2: Some(PromptSection {
+                file: "SIMPLE.md".to_string(),
+                scope: "user".to_string(),
+            }),
+            capabilities_v2: None,
+        };
+
+        let loader = ComponentLoader::new();
+        let skill = loader.load_v2_prompt(&manifest, plugin_dir).await.unwrap();
+
+        assert!(skill.is_some());
+        let skill = skill.unwrap();
+        // Name should default to plugin id
+        assert_eq!(skill.name, "simple-plugin");
+        assert_eq!(skill.content, "Just plain content without frontmatter.");
+    }
+
+    #[tokio::test]
+    async fn test_load_v2_tool_prompts() {
+        use crate::extension::manifest::ToolSection;
+        use crate::extension::types::PluginKind;
+
+        let temp = TempDir::new().unwrap();
+        let plugin_dir = temp.path();
+
+        // Create instructions directory
+        let instructions_dir = plugin_dir.join("instructions");
+        std::fs::create_dir(&instructions_dir).unwrap();
+
+        // Write instruction files
+        std::fs::write(
+            instructions_dir.join("my-tool.md"),
+            "Instructions for using my-tool.",
+        )
+        .unwrap();
+        std::fs::write(
+            instructions_dir.join("other-tool.md"),
+            "Instructions for using other-tool.",
+        )
+        .unwrap();
+
+        let manifest = crate::extension::manifest::PluginManifest {
+            id: "tool-plugin".to_string(),
+            name: "Tool Plugin".to_string(),
+            version: None,
+            description: None,
+            kind: PluginKind::Wasm,
+            entry: "plugin.wasm".into(),
+            root_dir: plugin_dir.to_path_buf(),
+            config_schema: None,
+            config_ui_hints: std::collections::HashMap::new(),
+            permissions: vec![],
+            author: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            keywords: vec![],
+            extensions: vec![],
+            tools_v2: Some(vec![
+                ToolSection {
+                    name: "my-tool".to_string(),
+                    description: Some("My tool".to_string()),
+                    handler: Some("handle_my_tool".to_string()),
+                    instruction_file: Some("instructions/my-tool.md".to_string()),
+                    parameters: None,
+                },
+                ToolSection {
+                    name: "other-tool".to_string(),
+                    description: Some("Other tool".to_string()),
+                    handler: Some("handle_other_tool".to_string()),
+                    instruction_file: Some("instructions/other-tool.md".to_string()),
+                    parameters: None,
+                },
+                ToolSection {
+                    name: "no-instruction-tool".to_string(),
+                    description: Some("Tool without instructions".to_string()),
+                    handler: Some("handle_no_instruction".to_string()),
+                    instruction_file: None,
+                    parameters: None,
+                },
+            ]),
+            hooks_v2: None,
+            commands_v2: None,
+            services_v2: None,
+            prompt_v2: None,
+            capabilities_v2: None,
+        };
+
+        let loader = ComponentLoader::new();
+        let skills = loader.load_v2_tool_prompts(&manifest, plugin_dir).await.unwrap();
+
+        // Should load 2 instruction files (the third tool has no instruction_file)
+        assert_eq!(skills.len(), 2);
+
+        // Check first skill
+        let my_tool_skill = skills.iter().find(|s| s.name == "my-tool_instructions").unwrap();
+        assert_eq!(my_tool_skill.plugin_name, Some("tool-plugin".to_string()));
+        assert_eq!(my_tool_skill.scope, PromptScope::Tool);
+        assert_eq!(my_tool_skill.bound_tool, Some("my-tool".to_string()));
+        assert!(my_tool_skill.disable_model_invocation);
+        assert!(my_tool_skill.content.contains("Instructions for using my-tool."));
+
+        // Check second skill
+        let other_tool_skill = skills.iter().find(|s| s.name == "other-tool_instructions").unwrap();
+        assert_eq!(other_tool_skill.bound_tool, Some("other-tool".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_load_v2_tool_prompts_missing_file() {
+        use crate::extension::manifest::ToolSection;
+        use crate::extension::types::PluginKind;
+
+        let temp = TempDir::new().unwrap();
+        let plugin_dir = temp.path();
+
+        // No instruction file exists
+        let manifest = crate::extension::manifest::PluginManifest {
+            id: "tool-plugin".to_string(),
+            name: "Tool Plugin".to_string(),
+            version: None,
+            description: None,
+            kind: PluginKind::Wasm,
+            entry: "plugin.wasm".into(),
+            root_dir: plugin_dir.to_path_buf(),
+            config_schema: None,
+            config_ui_hints: std::collections::HashMap::new(),
+            permissions: vec![],
+            author: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            keywords: vec![],
+            extensions: vec![],
+            tools_v2: Some(vec![
+                ToolSection {
+                    name: "my-tool".to_string(),
+                    description: Some("My tool".to_string()),
+                    handler: Some("handle_my_tool".to_string()),
+                    instruction_file: Some("nonexistent.md".to_string()),
+                    parameters: None,
+                },
+            ]),
+            hooks_v2: None,
+            commands_v2: None,
+            services_v2: None,
+            prompt_v2: None,
+            capabilities_v2: None,
+        };
+
+        let loader = ComponentLoader::new();
+        let skills = loader.load_v2_tool_prompts(&manifest, plugin_dir).await.unwrap();
+
+        // Should gracefully skip missing files
+        assert_eq!(skills.len(), 0);
     }
 }
