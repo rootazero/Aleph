@@ -607,6 +607,45 @@ pub mod mcp {
         pub stop_reason: Option<StopReason>,
     }
 
+    /// Streaming sampling response chunk
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SamplingChunk {
+        /// Partial text content
+        pub delta: String,
+        /// Whether this is the final chunk
+        #[serde(default)]
+        pub is_final: bool,
+        /// Model that generated the response (only in final chunk)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub model: Option<String>,
+        /// Stop reason (only in final chunk)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub stop_reason: Option<StopReason>,
+    }
+
+    impl SamplingChunk {
+        /// Create a content chunk
+        pub fn content(delta: impl Into<String>) -> Self {
+            Self {
+                delta: delta.into(),
+                is_final: false,
+                model: None,
+                stop_reason: None,
+            }
+        }
+
+        /// Create a final chunk
+        pub fn final_chunk(model: Option<String>, stop_reason: StopReason) -> Self {
+            Self {
+                delta: String::new(),
+                is_final: true,
+                model,
+                stop_reason: Some(stop_reason),
+            }
+        }
+    }
+
     impl InitializeParams {
         /// Create default initialize params for Aether
         pub fn aether_default() -> Self {
