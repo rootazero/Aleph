@@ -43,6 +43,7 @@
 
 pub mod auth;
 mod client;
+mod context_injector;
 pub mod external;
 pub mod jsonrpc;
 pub mod manager;
@@ -58,6 +59,7 @@ pub use auth::{
     OAuthServerMetadata, OAuthStorage, OAuthTokens, DEFAULT_CALLBACK_PORT,
 };
 pub use client::{ExternalServerConfig, McpClient, McpClientBuilder, McpStartupReport};
+pub use context_injector::{ContextInjector, InjectedContext, ResourceContext, ToolContext};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{
     mcp::IncludeContext, IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest,
