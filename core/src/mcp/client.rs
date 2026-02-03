@@ -458,7 +458,7 @@ impl McpClient {
                                 "Processing sampling/createMessage request"
                             );
 
-                            match handler.handle_request(request_id, params_value).await {
+                            match handler.handle_request(request_id, params_value, &server).await {
                                 Ok(response) => {
                                     tracing::debug!(
                                         server = %server,
