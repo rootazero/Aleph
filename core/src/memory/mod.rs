@@ -25,6 +25,7 @@ pub mod context;
 pub mod database;
 pub mod decay;
 pub mod dreaming;
+pub mod lazy_decay;
 pub mod embedding;
 pub mod fact_retrieval;
 pub mod graph;
@@ -54,6 +55,7 @@ pub use context::{
 pub use database::VectorDatabase;
 pub use decay::{DecayConfig, MemoryStrength};
 pub use dreaming::{DailyInsight, DreamStatus, MemoryDecayReport, ensure_dream_daemon, record_activity};
+pub use lazy_decay::{LazyDecayEngine, DecayEvaluation};
 pub use graph::{GraphStore, ResolvedEntity, GraphDecayConfig, GraphDecayReport};
 #[deprecated(
     since = "0.1.0",
