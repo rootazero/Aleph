@@ -24,11 +24,18 @@
 //! ```
 
 mod aether_plugin;
+mod aether_plugin_toml;
 mod package_json;
 mod types;
 
 pub use aether_plugin::{
     parse_aether_plugin, parse_aether_plugin_content, sanitize_plugin_id, validate_plugin_id,
+};
+pub use aether_plugin_toml::{
+    convert_permissions, parse_aether_plugin_toml, parse_aether_plugin_toml_content,
+    parse_aether_plugin_toml_sync, AetherPluginToml, CapabilitiesSection, CommandSection,
+    FilesystemPermission, HookSection, PermissionsSection, PluginAuthorToml, PluginSection,
+    PromptSection, ServiceSection, ToolSection, AETHER_PLUGIN_TOML,
 };
 pub use package_json::{parse_package_json, parse_package_json_content};
 pub use types::{AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission};
