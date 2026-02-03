@@ -87,6 +87,8 @@ pub struct McpManagerActor {
     cmd_rx: mpsc::Receiver<McpCommand>,
     /// Command sender (for handle creation)
     cmd_tx: mpsc::Sender<McpCommand>,
+    /// Stored sampling callback for new servers
+    sampling_callback: Option<Arc<crate::mcp::sampling::SamplingCallback>>,
 }
 
 impl McpManagerActor {
@@ -130,6 +132,7 @@ impl McpManagerActor {
             event_tx,
             cmd_rx,
             cmd_tx,
+            sampling_callback: None,
         };
 
         Ok((actor, handle))
@@ -262,6 +265,24 @@ impl McpManagerActor {
             McpCommand::Shutdown { respond_to } => {
                 let _ = respond_to.send(());
                 return false;
+            }
+            McpCommand::SetSamplingCallback {
+                callback,
+                respond_to,
+            } => {
+                // Set callback on all existing clients
+                for client in self.clients.values() {
+                    let cb = Arc::clone(&callback);
+                    client
+                        .set_sampling_callback(move |req| {
+                            let cb = Arc::clone(&cb);
+                            async move { cb(req).await }
+                        })
+                        .await;
+                }
+                // Store for new servers
+                self.sampling_callback = Some(callback);
+                let _ = respond_to.send(());
             }
         }
         true
@@ -471,6 +492,17 @@ impl McpManagerActor {
                     .await
                     .map_err(|e| format!("Failed to start remote server: {}", e))?;
             }
+        }
+
+        // Set sampling callback if one is registered
+        if let Some(ref callback) = self.sampling_callback {
+            let cb = Arc::clone(callback);
+            client
+                .set_sampling_callback(move |req| {
+                    let cb = Arc::clone(&cb);
+                    async move { cb(req).await }
+                })
+                .await;
         }
 
         // Get tool count for event
