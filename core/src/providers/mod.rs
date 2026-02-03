@@ -51,7 +51,6 @@ pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod failover;
 pub mod gemini;
-pub mod gemini_legacy;
 pub mod mock;
 pub mod ollama;
 pub mod openai;
@@ -76,7 +75,6 @@ pub use auth_profiles::{
     mark_profile_used, normalize_provider_id, resolve_profile_order,
 };
 pub use failover::{FailoverConfig, FailoverProvider, ProviderEntry};
-pub use gemini_legacy::GeminiProvider;
 pub use mock::{MockError, MockProvider};
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
