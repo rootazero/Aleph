@@ -212,6 +212,86 @@ impl McpClient {
         tools
     }
 
+    /// List all available resources from external servers
+    pub async fn list_resources(&self) -> Vec<crate::mcp::types::McpResource> {
+        let mut resources = Vec::new();
+
+        let servers = self.external_servers.read().await;
+        for connection in servers.values() {
+            resources.extend(connection.list_resources().await);
+        }
+
+        resources
+    }
+
+    /// List all available prompts from external servers
+    pub async fn list_prompts(&self) -> Vec<crate::mcp::prompts::McpPrompt> {
+        let mut prompts = Vec::new();
+
+        let servers = self.external_servers.read().await;
+        for connection in servers.values() {
+            prompts.extend(connection.list_prompts().await);
+        }
+
+        prompts
+    }
+
+    /// Read a resource by URI
+    ///
+    /// The URI should include the server prefix (e.g., "server_name:file:///path")
+    pub async fn read_resource(&self, uri: &str) -> Result<crate::mcp::resources::ResourceContent> {
+        let servers = self.external_servers.read().await;
+
+        // Check if URI has server prefix
+        if let Some((server_name, _resource_uri)) = uri.split_once(':') {
+            // Try server with matching prefix
+            if let Some(connection) = servers.get(server_name) {
+                return connection.read_resource(uri).await;
+            }
+        }
+
+        // Try all servers
+        for connection in servers.values() {
+            // Check if this server has this resource
+            let resources = connection.list_resources().await;
+            if resources.iter().any(|r| r.uri == uri) {
+                return connection.read_resource(uri).await;
+            }
+        }
+
+        Err(AetherError::NotFound(format!("Resource not found: {}", uri)))
+    }
+
+    /// Get a prompt by name with optional arguments
+    ///
+    /// The name should include the server prefix (e.g., "server_name:prompt_name")
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<crate::mcp::prompts::PromptResult> {
+        let servers = self.external_servers.read().await;
+
+        // Check if name has server prefix
+        if let Some((server_name, _prompt_name)) = name.split_once(':') {
+            // Try server with matching prefix
+            if let Some(connection) = servers.get(server_name) {
+                return connection.get_prompt(name, arguments).await;
+            }
+        }
+
+        // Try all servers
+        for connection in servers.values() {
+            // Check if this server has this prompt
+            let prompts = connection.list_prompts().await;
+            if prompts.iter().any(|p| p.name == name) {
+                return connection.get_prompt(name, arguments).await;
+            }
+        }
+
+        Err(AetherError::NotFound(format!("Prompt not found: {}", name)))
+    }
+
     /// Get tools as a formatted list for context injection
     pub async fn get_tools_for_context(&self) -> Vec<(String, String, serde_json::Value)> {
         self.list_tools()
