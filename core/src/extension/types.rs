@@ -85,6 +85,14 @@ pub struct ExtensionSkill {
     /// Whether to disable automatic model invocation
     pub disable_model_invocation: bool,
 
+    /// V2: Prompt injection scope
+    #[serde(default)]
+    pub scope: PromptScope,
+
+    /// V2: Bound tool name (for Tool scope)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bound_tool: Option<String>,
+
     /// Source path
     pub source_path: PathBuf,
 
@@ -736,6 +744,14 @@ pub struct SkillFrontmatter {
 
     #[serde(rename = "disable-model-invocation", default)]
     pub disable_model_invocation: bool,
+
+    /// V2: Prompt injection scope
+    #[serde(default)]
+    pub scope: Option<PromptScope>,
+
+    /// V2: Bound tool name (for Tool scope)
+    #[serde(rename = "bound-tool", default)]
+    pub bound_tool: Option<String>,
 }
 
 /// Agent frontmatter
@@ -788,6 +804,8 @@ mod tests {
             description: "Test".to_string(),
             content: "Content".to_string(),
             disable_model_invocation: false,
+            scope: PromptScope::System,
+            bound_tool: None,
             source_path: PathBuf::from("/test"),
             source: DiscoverySource::AetherGlobal,
         };
@@ -804,6 +822,8 @@ mod tests {
             description: "Greet someone".to_string(),
             content: "Hello, $ARGUMENTS!".to_string(),
             disable_model_invocation: false,
+            scope: PromptScope::System,
+            bound_tool: None,
             source_path: PathBuf::from("/test"),
             source: DiscoverySource::AetherGlobal,
         };

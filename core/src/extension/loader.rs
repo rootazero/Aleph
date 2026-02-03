@@ -85,6 +85,8 @@ impl ComponentLoader {
             description: frontmatter.description.unwrap_or_default(),
             content: body,
             disable_model_invocation: frontmatter.disable_model_invocation,
+            scope: frontmatter.scope.unwrap_or_default(),
+            bound_tool: frontmatter.bound_tool,
             source_path: path.to_path_buf(),
             source: determine_source(path),
         };
