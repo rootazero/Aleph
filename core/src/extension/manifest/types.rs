@@ -11,7 +11,8 @@ use std::path::PathBuf;
 
 // V2 field types from aether_plugin_toml module
 use super::aether_plugin_toml::{
-    CapabilitiesSection, CommandSection, HookSection, PromptSection, ServiceSection, ToolSection,
+    CapabilitiesSection, ChannelSection, CommandSection, HookSection, HttpRouteSection,
+    PromptSection, ProviderSection, ServiceSection, ToolSection,
 };
 
 // =============================================================================
@@ -254,6 +255,22 @@ pub struct PluginManifest {
     /// V2: Dynamic capability declarations
     #[serde(skip)]
     pub capabilities_v2: Option<CapabilitiesSection>,
+
+    // ═══════════════════════════════════════════
+    // P2 Extension fields
+    // ═══════════════════════════════════════════
+
+    /// V2: Channel definitions for messaging platform integrations
+    #[serde(skip)]
+    pub channels_v2: Option<Vec<ChannelSection>>,
+
+    /// V2: Provider definitions for AI model providers
+    #[serde(skip)]
+    pub providers_v2: Option<Vec<ProviderSection>>,
+
+    /// V2: HTTP route definitions for REST API endpoints
+    #[serde(skip)]
+    pub http_routes_v2: Option<Vec<HttpRouteSection>>,
 }
 
 impl PluginManifest {
@@ -283,6 +300,10 @@ impl PluginManifest {
             services_v2: None,
             prompt_v2: None,
             capabilities_v2: None,
+            // P2 fields
+            channels_v2: None,
+            providers_v2: None,
+            http_routes_v2: None,
         }
     }
 

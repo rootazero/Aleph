@@ -86,6 +86,22 @@ pub struct AetherPluginToml {
     /// Advanced capabilities (optional)
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
+
+    // ═══════════════════════════════════════════
+    // P2 Extension Sections
+    // ═══════════════════════════════════════════
+
+    /// Channel definitions for messaging platform integrations (optional)
+    #[serde(default)]
+    pub channels: Vec<ChannelSection>,
+
+    /// Provider definitions for AI model providers (optional)
+    #[serde(default)]
+    pub providers: Vec<ProviderSection>,
+
+    /// HTTP route definitions for REST API endpoints (optional)
+    #[serde(default)]
+    pub http_routes: Vec<HttpRouteSection>,
 }
 
 /// Plugin metadata section
@@ -350,6 +366,64 @@ pub struct CapabilitiesSection {
 }
 
 // =============================================================================
+// P2 Extension Types
+// =============================================================================
+
+/// Channel definition section for messaging platform integrations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelSection {
+    /// Unique channel identifier (e.g., "slack", "telegram")
+    pub id: String,
+
+    /// Display label for the channel
+    pub label: String,
+
+    /// Handler function name for receiving/sending messages
+    #[serde(default)]
+    pub handler: Option<String>,
+
+    /// Optional configuration schema (JSON Schema as TOML inline table)
+    #[serde(default)]
+    pub config_schema: Option<JsonValue>,
+}
+
+/// Provider definition section for AI model providers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderSection {
+    /// Unique provider identifier (e.g., "custom-llm")
+    pub id: String,
+
+    /// Display name for the provider
+    pub name: String,
+
+    /// List of model IDs supported by this provider
+    #[serde(default)]
+    pub models: Vec<String>,
+
+    /// Handler function name for chat completions
+    #[serde(default)]
+    pub handler: Option<String>,
+
+    /// Optional configuration schema (JSON Schema as TOML inline table)
+    #[serde(default)]
+    pub config_schema: Option<JsonValue>,
+}
+
+/// HTTP route definition section for REST API endpoints
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpRouteSection {
+    /// URL path pattern (e.g., "/api/v1/data", "/api/items/{id}")
+    pub path: String,
+
+    /// HTTP methods allowed (e.g., ["GET", "POST"])
+    #[serde(default)]
+    pub methods: Vec<String>,
+
+    /// Handler function name within the plugin
+    pub handler: String,
+}
+
+// =============================================================================
 // Permission Conversion
 // =============================================================================
 
@@ -506,6 +580,22 @@ pub fn parse_aether_plugin_toml_content(
         },
         prompt_v2: toml.prompt,
         capabilities_v2: Some(toml.capabilities),
+        // P2 fields from TOML
+        channels_v2: if toml.channels.is_empty() {
+            None
+        } else {
+            Some(toml.channels)
+        },
+        providers_v2: if toml.providers.is_empty() {
+            None
+        } else {
+            Some(toml.providers)
+        },
+        http_routes_v2: if toml.http_routes.is_empty() {
+            None
+        } else {
+            Some(toml.http_routes)
+        },
     };
 
     Ok(manifest)

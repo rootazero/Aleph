@@ -65,7 +65,7 @@ pub mod watcher;
 
 pub use channel_manager::{ChannelHandle, ChannelManager};
 pub use error::*;
-pub use http_handler::PluginHttpHandler;
+pub use http_handler::{match_path, PluginHttpHandler};
 pub use loader::*;
 pub use manifest::*;
 pub use plugin_loader::PluginLoader;

@@ -846,6 +846,370 @@ id = "no-prompt"
 }
 
 // =============================================================================
+// Test 12.6: P2 Channels Parsing
+// =============================================================================
+
+#[test]
+fn test_v2_channels_parsing() {
+    let content = r#"
+[plugin]
+id = "test-channels"
+kind = "nodejs"
+
+[[channels]]
+id = "slack"
+label = "Slack"
+handler = "handleSlackChannel"
+
+[channels.config_schema]
+token = { type = "string" }
+
+[[channels]]
+id = "telegram"
+label = "Telegram"
+handler = "handleTelegramChannel"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+
+    let channels = manifest.channels_v2.expect("channels_v2 should be Some");
+    assert_eq!(channels.len(), 2);
+
+    // Check first channel
+    assert_eq!(channels[0].id, "slack");
+    assert_eq!(channels[0].label, "Slack");
+    assert_eq!(channels[0].handler, Some("handleSlackChannel".to_string()));
+    assert!(channels[0].config_schema.is_some());
+
+    // Check second channel
+    assert_eq!(channels[1].id, "telegram");
+    assert_eq!(channels[1].label, "Telegram");
+    assert_eq!(channels[1].handler, Some("handleTelegramChannel".to_string()));
+    assert!(channels[1].config_schema.is_none());
+}
+
+#[test]
+fn test_v2_channels_empty() {
+    let content = r#"
+[plugin]
+id = "no-channels"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    assert!(manifest.channels_v2.is_none());
+}
+
+// =============================================================================
+// Test 12.7: P2 Providers Parsing
+// =============================================================================
+
+#[test]
+fn test_v2_providers_parsing() {
+    let content = r#"
+[plugin]
+id = "test-providers"
+kind = "nodejs"
+
+[[providers]]
+id = "custom-llm"
+name = "Custom LLM"
+models = ["model-fast", "model-quality"]
+handler = "handleChat"
+
+[providers.config_schema]
+api_key = { type = "string" }
+
+[[providers]]
+id = "local-llm"
+name = "Local LLM"
+models = ["llama-7b", "llama-13b"]
+handler = "handleLocalChat"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+
+    let providers = manifest.providers_v2.expect("providers_v2 should be Some");
+    assert_eq!(providers.len(), 2);
+
+    // Check first provider
+    assert_eq!(providers[0].id, "custom-llm");
+    assert_eq!(providers[0].name, "Custom LLM");
+    assert_eq!(providers[0].models, vec!["model-fast", "model-quality"]);
+    assert_eq!(providers[0].handler, Some("handleChat".to_string()));
+    assert!(providers[0].config_schema.is_some());
+
+    // Check second provider
+    assert_eq!(providers[1].id, "local-llm");
+    assert_eq!(providers[1].name, "Local LLM");
+    assert_eq!(providers[1].models.len(), 2);
+    assert_eq!(providers[1].handler, Some("handleLocalChat".to_string()));
+    assert!(providers[1].config_schema.is_none());
+}
+
+#[test]
+fn test_v2_providers_empty() {
+    let content = r#"
+[plugin]
+id = "no-providers"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    assert!(manifest.providers_v2.is_none());
+}
+
+#[test]
+fn test_v2_providers_no_models() {
+    let content = r#"
+[plugin]
+id = "provider-no-models"
+
+[[providers]]
+id = "empty-models"
+name = "Empty Models Provider"
+handler = "handleChat"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+
+    let providers = manifest.providers_v2.expect("providers_v2 should be Some");
+    assert_eq!(providers[0].models.len(), 0);
+}
+
+// =============================================================================
+// Test 12.8: P2 HTTP Routes Parsing
+// =============================================================================
+
+#[test]
+fn test_v2_http_routes_parsing() {
+    let content = r#"
+[plugin]
+id = "test-http"
+kind = "nodejs"
+
+[[http_routes]]
+path = "/api/data"
+methods = ["GET", "POST"]
+handler = "handleData"
+
+[[http_routes]]
+path = "/api/items/{id}"
+methods = ["GET", "PUT", "DELETE"]
+handler = "handleItem"
+
+[[http_routes]]
+path = "/api/health"
+methods = ["GET"]
+handler = "handleHealth"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+
+    let routes = manifest.http_routes_v2.expect("http_routes_v2 should be Some");
+    assert_eq!(routes.len(), 3);
+
+    // Check first route
+    assert_eq!(routes[0].path, "/api/data");
+    assert_eq!(routes[0].methods, vec!["GET", "POST"]);
+    assert_eq!(routes[0].handler, "handleData");
+
+    // Check second route (with path parameter)
+    assert_eq!(routes[1].path, "/api/items/{id}");
+    assert_eq!(routes[1].methods, vec!["GET", "PUT", "DELETE"]);
+    assert_eq!(routes[1].handler, "handleItem");
+
+    // Check third route
+    assert_eq!(routes[2].path, "/api/health");
+    assert_eq!(routes[2].methods, vec!["GET"]);
+    assert_eq!(routes[2].handler, "handleHealth");
+}
+
+#[test]
+fn test_v2_http_routes_empty() {
+    let content = r#"
+[plugin]
+id = "no-http-routes"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    assert!(manifest.http_routes_v2.is_none());
+}
+
+#[test]
+fn test_v2_http_routes_no_methods() {
+    let content = r#"
+[plugin]
+id = "route-no-methods"
+
+[[http_routes]]
+path = "/api/test"
+handler = "handleTest"
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+
+    let routes = manifest.http_routes_v2.expect("http_routes_v2 should be Some");
+    assert_eq!(routes[0].methods.len(), 0);
+}
+
+// =============================================================================
+// Test 12.9: HTTP Path Matching
+// =============================================================================
+
+#[test]
+fn test_http_path_matching() {
+    use aethecore::extension::match_path;
+
+    // Exact match
+    let params = match_path("/api/users", "/api/users");
+    assert!(params.is_some());
+    let params = params.unwrap();
+    assert!(params.is_empty());
+
+    // Parameter match
+    let params = match_path("/api/users/{id}", "/api/users/123");
+    assert!(params.is_some());
+    let params = params.unwrap();
+    assert_eq!(params.get("id"), Some(&"123".to_string()));
+
+    // Multiple parameters
+    let params = match_path("/api/{org}/repos/{repo}", "/api/acme/repos/widgets");
+    assert!(params.is_some());
+    let params = params.unwrap();
+    assert_eq!(params.get("org"), Some(&"acme".to_string()));
+    assert_eq!(params.get("repo"), Some(&"widgets".to_string()));
+
+    // No match - different path
+    assert!(match_path("/api/users", "/api/posts").is_none());
+
+    // No match - different segment count
+    assert!(match_path("/api/users/{id}", "/api/users/123/posts").is_none());
+
+    // No match - different literal segment
+    assert!(match_path("/api/users/{id}", "/api/posts/123").is_none());
+}
+
+#[test]
+fn test_http_path_matching_edge_cases() {
+    use aethecore::extension::match_path;
+
+    // Root path
+    let params = match_path("/", "/");
+    assert!(params.is_some());
+    assert!(params.unwrap().is_empty());
+
+    // Trailing slash handling
+    let params = match_path("/api/users", "/api/users/");
+    assert!(params.is_some());
+
+    let params = match_path("/api/users/", "/api/users");
+    assert!(params.is_some());
+
+    // Single segment parameter
+    let params = match_path("/{id}", "/123");
+    assert!(params.is_some());
+    assert_eq!(params.unwrap().get("id"), Some(&"123".to_string()));
+
+    // Complex path with multiple parameters
+    let params = match_path(
+        "/v1/{version}/users/{user_id}/posts/{post_id}",
+        "/v1/2024/users/alice/posts/42",
+    );
+    assert!(params.is_some());
+    let params = params.unwrap();
+    assert_eq!(params.get("version"), Some(&"2024".to_string()));
+    assert_eq!(params.get("user_id"), Some(&"alice".to_string()));
+    assert_eq!(params.get("post_id"), Some(&"42".to_string()));
+}
+
+// =============================================================================
+// Test 12.10: P2 Complete Manifest with All Features
+// =============================================================================
+
+#[test]
+fn test_v2_complete_manifest_with_p2_features() {
+    let content = r#"
+[plugin]
+id = "full-p2-plugin"
+name = "Full P2 Plugin"
+version = "2.0.0"
+kind = "nodejs"
+entry = "dist/index.js"
+
+[permissions]
+network = true
+filesystem = "read"
+
+[[tools]]
+name = "my-tool"
+description = "A custom tool"
+handler = "handleTool"
+
+[[hooks]]
+event = "PreToolUse"
+kind = "interceptor"
+handler = "onPreTool"
+
+[[services]]
+name = "background-worker"
+start_handler = "startWorker"
+stop_handler = "stopWorker"
+
+[[commands]]
+name = "status"
+handler = "handleStatus"
+
+[[channels]]
+id = "custom-channel"
+label = "Custom Channel"
+handler = "handleChannel"
+
+[[providers]]
+id = "custom-provider"
+name = "Custom Provider"
+models = ["model-a", "model-b"]
+handler = "handleProvider"
+
+[[http_routes]]
+path = "/api/webhook"
+methods = ["POST"]
+handler = "handleWebhook"
+
+[capabilities]
+dynamic_tools = true
+"#;
+
+    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+
+    // Verify plugin basics
+    assert_eq!(manifest.id, "full-p2-plugin");
+    assert_eq!(manifest.name, "Full P2 Plugin");
+
+    // Verify P0/P1 features
+    assert!(manifest.tools_v2.is_some());
+    assert!(manifest.hooks_v2.is_some());
+    assert!(manifest.services_v2.is_some());
+    assert!(manifest.commands_v2.is_some());
+
+    // Verify P2 features
+    let channels = manifest.channels_v2.expect("channels should be present");
+    assert_eq!(channels.len(), 1);
+    assert_eq!(channels[0].id, "custom-channel");
+
+    let providers = manifest.providers_v2.expect("providers should be present");
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0].id, "custom-provider");
+    assert_eq!(providers[0].models.len(), 2);
+
+    let routes = manifest.http_routes_v2.expect("http_routes should be present");
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].path, "/api/webhook");
+
+    // Verify capabilities
+    let caps = manifest.capabilities_v2.expect("capabilities should be present");
+    assert!(caps.dynamic_tools);
+}
+
+// =============================================================================
 // Test 12.5: Services Full Lifecycle (P1.5)
 // =============================================================================
 
