@@ -205,6 +205,14 @@ impl AetherTool for SearchTool {
     type Args = SearchArgs;
     type Output = SearchOutput;
 
+    fn examples(&self) -> Option<Vec<String>> {
+        Some(vec![
+            "search(query='latest Rust async trends', limit=5)".to_string(),
+            "search(query='Claude AI capabilities 2025')".to_string(),
+            "search(query='Docker best practices', limit=10)".to_string(),
+        ])
+    }
+
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Delegate to the internal implementation, converting ToolError to AetherError
         self.call_impl(args).await.map_err(Into::into)

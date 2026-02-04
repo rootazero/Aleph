@@ -65,6 +65,15 @@ Example:
     type Args = BashExecArgs;
     type Output = super::code_exec::CodeExecOutput;
 
+    fn examples(&self) -> Option<Vec<String>> {
+        Some(vec![
+            "bash(cmd='ls -la /tmp')".to_string(),
+            "bash(cmd='echo \"Hello World\" > /tmp/test.txt')".to_string(),
+            "bash(cmd='pwd && ls -l', working_dir='/home/user')".to_string(),
+            "bash(cmd='find . -name \"*.rs\" | wc -l', timeout=30)".to_string(),
+        ])
+    }
+
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Convert BashExecArgs to CodeExecArgs
         let code_exec_args = CodeExecArgs {

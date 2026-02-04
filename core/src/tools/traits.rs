@@ -88,16 +88,54 @@ pub trait AetherTool: Clone + Send + Sync + 'static {
         false
     }
 
+    /// Provide usage examples for LLM context (Few-shot learning).
+    ///
+    /// Returns a list of example usage strings that demonstrate how to use the tool.
+    /// These examples are injected into the tool definition's `llm_context` field
+    /// to help the LLM understand proper usage patterns.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn examples(&self) -> Option<Vec<String>> {
+    ///     Some(vec![
+    ///         "search(query='Rust async patterns', max_results=5)".to_string(),
+    ///         "search(query='Machine learning basics')".to_string(),
+    ///     ])
+    /// }
+    /// ```
+    ///
+    /// Default implementation returns None (no examples).
+    fn examples(&self) -> Option<Vec<String>> {
+        None
+    }
+
     /// Get tool definition with auto-generated JSON Schema.
     ///
-    /// The default implementation generates the schema from `Self::Args`.
+    /// The default implementation generates the schema from `Self::Args`
+    /// and includes examples in the `llm_context` field if provided.
     /// Override only if custom schema handling is needed.
     fn definition(&self) -> ToolDefinition {
         let schema = schema_for!(Self::Args);
         let parameters = serde_json::to_value(&schema).unwrap_or_default();
 
-        ToolDefinition::new(Self::NAME, Self::DESCRIPTION, parameters, self.category())
-            .with_confirmation(self.requires_confirmation())
+        let mut def = ToolDefinition::new(Self::NAME, Self::DESCRIPTION, parameters, self.category())
+            .with_confirmation(self.requires_confirmation());
+
+        // Inject examples as llm_context if available
+        if let Some(examples) = self.examples() {
+            let examples_text = examples
+                .iter()
+                .enumerate()
+                .map(|(i, ex)| format!("{}. {}", i + 1, ex))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let context = format!("## Usage Examples\n\n{}", examples_text);
+            def = def.with_llm_context(context);
+        }
+
+        def
     }
 
     /// Execute the tool with typed arguments.
@@ -254,5 +292,54 @@ mod tests {
         let result = tool.call(args).await.unwrap();
 
         assert_eq!(result["result"], "Echo: dynamic");
+    }
+
+    // Tool with examples for testing
+    #[derive(Clone)]
+    struct ExampleTool;
+
+    #[async_trait]
+    impl AetherTool for ExampleTool {
+        const NAME: &'static str = "example_tool";
+        const DESCRIPTION: &'static str = "A tool with examples";
+
+        type Args = TestArgs;
+        type Output = TestOutput;
+
+        fn examples(&self) -> Option<Vec<String>> {
+            Some(vec![
+                "example_tool(message='Hello World')".to_string(),
+                "example_tool(message='Test example')".to_string(),
+            ])
+        }
+
+        async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+            Ok(TestOutput {
+                result: format!("Example: {}", args.message),
+            })
+        }
+    }
+
+    #[test]
+    fn test_tool_with_examples() {
+        let tool = ExampleTool;
+        let def = AetherTool::definition(&tool);
+
+        assert_eq!(def.name, "example_tool");
+        assert!(def.llm_context.is_some());
+
+        let context = def.llm_context.unwrap();
+        assert!(context.contains("## Usage Examples"));
+        assert!(context.contains("1. example_tool(message='Hello World')"));
+        assert!(context.contains("2. example_tool(message='Test example')"));
+    }
+
+    #[test]
+    fn test_tool_without_examples() {
+        let tool = TestTool;
+        let def = AetherTool::definition(&tool);
+
+        assert_eq!(def.name, "test_tool");
+        assert!(def.llm_context.is_none());
     }
 }
