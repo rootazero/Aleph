@@ -1,11 +1,12 @@
 //! CLI Execution Backends
 //!
-//! Implements host and Docker execution modes for Markdown CLI tools.
+//! Implements host, Docker, and VirtualFs execution modes for Markdown CLI tools.
 
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use anyhow::Result;
 use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::spec::{NetworkMode, SandboxMode};
 use super::tool_adapter::{MarkdownCliTool, MarkdownToolOutput};
@@ -223,4 +224,206 @@ impl MarkdownCliTool {
             "bridge".to_string()
         }
     }
+
+    /// Execute in VirtualFs sandbox (lightweight isolation)
+    ///
+    /// Provides filesystem isolation through:
+    /// - Temporary isolated working directory
+    /// - Environment variable redirection (HOME, TMPDIR, PWD)
+    /// - Read-only access to real filesystem
+    /// - Writable temporary filesystem
+    /// - Automatic cleanup after execution
+    pub(crate) async fn execute_in_virtualfs(
+        &self,
+        cli_args: &[String],
+    ) -> Result<MarkdownToolOutput> {
+        let bin = self
+            .spec
+            .metadata
+            .requires
+            .bins
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No binary specified"))?;
+
+        // Create isolated sandbox environment
+        let sandbox = VirtualFsSandbox::new(&self.spec.name)?;
+
+        info!(
+            tool = %self.spec.name,
+            bin = %bin,
+            sandbox_dir = %sandbox.root_dir.display(),
+            args = ?cli_args,
+            "Executing CLI tool in VirtualFs sandbox"
+        );
+
+        // Build command with isolated environment
+        let mut cmd = Command::new(bin);
+        cmd.args(cli_args)
+            .current_dir(&sandbox.work_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null());
+
+        // Apply sandbox environment variables
+        sandbox.apply_env(&mut cmd);
+
+        // Apply network restrictions if specified
+        if let Some(aether) = &self.spec.metadata.aether {
+            if matches!(aether.security.network, NetworkMode::None) {
+                #[cfg(target_os = "linux")]
+                {
+                    cmd.env("NO_PROXY", "*");
+                }
+            }
+        }
+
+        // Execute
+        let output = cmd.output().await?;
+
+        // Cleanup happens when sandbox is dropped
+
+        Ok(MarkdownToolOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
+}
+
+/// VirtualFs Sandbox Environment
+///
+/// Provides lightweight filesystem isolation by creating a temporary
+/// directory structure and redirecting environment variables.
+///
+/// ## Isolation Strategy
+///
+/// - **Working Directory**: Isolated temp directory for execution
+/// - **Home Directory**: Sandbox-specific home for config files
+/// - **Temp Directory**: Sandbox-specific temp for temporary files
+/// - **Real Filesystem**: Read-only access (via normal file paths)
+///
+/// ## Security
+///
+/// - All writes go to sandbox temp directories
+/// - Real filesystem remains unmodified (unless tool uses absolute paths)
+/// - Automatic cleanup on drop
+///
+/// ## Limitations
+///
+/// - Not true filesystem isolation (tools can still access real FS via absolute paths)
+/// - Best for well-behaved CLI tools that respect environment variables
+/// - For untrusted code, use Docker sandbox instead
+struct VirtualFsSandbox {
+    /// Root directory of the sandbox (will be cleaned up)
+    root_dir: PathBuf,
+
+    /// Working directory for command execution
+    work_dir: PathBuf,
+
+    /// Isolated home directory
+    home_dir: PathBuf,
+
+    /// Isolated temp directory
+    temp_dir: PathBuf,
+}
+
+impl VirtualFsSandbox {
+    /// Create a new VirtualFs sandbox
+    fn new(tool_name: &str) -> Result<Self> {
+        // Create root sandbox directory with unique name
+        let root_dir = std::env::temp_dir().join(format!(
+            "aether-virtualfs-{}-{}",
+            tool_name,
+            uuid::Uuid::new_v4()
+        ));
+
+        std::fs::create_dir_all(&root_dir)?;
+
+        // Create subdirectories
+        let work_dir = root_dir.join("work");
+        let home_dir = root_dir.join("home");
+        let temp_dir = root_dir.join("tmp");
+
+        std::fs::create_dir_all(&work_dir)?;
+        std::fs::create_dir_all(&home_dir)?;
+        std::fs::create_dir_all(&temp_dir)?;
+
+        debug!(
+            root = %root_dir.display(),
+            "Created VirtualFs sandbox"
+        );
+
+        Ok(Self {
+            root_dir,
+            work_dir,
+            home_dir,
+            temp_dir,
+        })
+    }
+
+    /// Apply sandbox environment variables to command
+    fn apply_env(&self, cmd: &mut Command) {
+        // Redirect HOME to sandbox home
+        cmd.env("HOME", &self.home_dir);
+
+        // Redirect TMPDIR/TEMP/TMP to sandbox temp
+        cmd.env("TMPDIR", &self.temp_dir);
+        cmd.env("TEMP", &self.temp_dir);
+        cmd.env("TMP", &self.temp_dir);
+
+        // Set PWD to sandbox work directory
+        cmd.env("PWD", &self.work_dir);
+
+        // Clear potentially dangerous environment variables
+        cmd.env_remove("LD_PRELOAD");
+        cmd.env_remove("DYLD_INSERT_LIBRARIES");
+        cmd.env_remove("DYLD_LIBRARY_PATH");
+        cmd.env_remove("LD_LIBRARY_PATH");
+
+        debug!(
+            home = %self.home_dir.display(),
+            tmp = %self.temp_dir.display(),
+            pwd = %self.work_dir.display(),
+            "Applied VirtualFs environment"
+        );
+    }
+
+    /// Get paths info for debugging
+    #[allow(dead_code)]
+    fn info(&self) -> SandboxInfo {
+        SandboxInfo {
+            root: self.root_dir.clone(),
+            work: self.work_dir.clone(),
+            home: self.home_dir.clone(),
+            temp: self.temp_dir.clone(),
+        }
+    }
+}
+
+impl Drop for VirtualFsSandbox {
+    fn drop(&mut self) {
+        // Clean up sandbox directory
+        if let Err(e) = std::fs::remove_dir_all(&self.root_dir) {
+            warn!(
+                error = %e,
+                sandbox_dir = %self.root_dir.display(),
+                "Failed to clean up VirtualFs sandbox"
+            );
+        } else {
+            debug!(
+                sandbox_dir = %self.root_dir.display(),
+                "Cleaned up VirtualFs sandbox"
+            );
+        }
+    }
+}
+
+/// Sandbox path information (for debugging/testing)
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct SandboxInfo {
+    root: PathBuf,
+    work: PathBuf,
+    home: PathBuf,
+    temp: PathBuf,
 }

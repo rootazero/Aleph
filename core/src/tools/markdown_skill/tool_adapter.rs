@@ -189,11 +189,11 @@ impl MarkdownCliTool {
                     format!("[{}] Docker execution failed: {}", self.spec.name, e)
                 )
             })?,
-            SandboxMode::VirtualFs => {
-                return Err(crate::error::AetherError::IoError(
-                    format!("[{}] VirtualFs sandbox not yet implemented", self.spec.name)
-                ));
-            }
+            SandboxMode::VirtualFs => self.execute_in_virtualfs(&cli_args).await.map_err(|e| {
+                crate::error::AetherError::IoError(
+                    format!("[{}] VirtualFs execution failed: {}", self.spec.name, e)
+                )
+            })?,
         };
 
         Ok(output)
