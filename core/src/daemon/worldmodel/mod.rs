@@ -12,9 +12,11 @@
 //! Decision-making is handled by the Dispatcher (Phase 4).
 
 pub mod config;
+pub mod persistence;
 pub mod state;
 
 pub use config::WorldModelConfig;
+pub use persistence::StatePersistence;
 pub use state::{
     ActivityType, CircularBuffer, ConfidenceScore, CoreState, Counter, EnhancedContext,
     InferenceCache, MemoryPressure, PendingAction, SystemLoad,
