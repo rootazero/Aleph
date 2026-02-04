@@ -28,7 +28,7 @@ pub fn create_service_manager() -> Result<Box<dyn ServiceManager>> {
     #[cfg(target_os = "macos")]
     {
         use super::platforms::launchd::LaunchdService;
-        Ok(Box::new(LaunchdService::new()))
+        Ok(Box::new(LaunchdService::new()?))
     }
 
     #[cfg(target_os = "linux")]
