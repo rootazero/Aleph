@@ -142,6 +142,7 @@ httpdate = "1.0"
 dashmap = "5.5"
 # For SSE (Server-Sent Events) client in MCP transport
 reqwest-eventsource = "0.6"
+plist = "1.7"
 
 # Gateway dependencies (optional)
 tokio-tungstenite = { version = "0.26", optional = true }
