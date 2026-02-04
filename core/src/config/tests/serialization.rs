@@ -166,7 +166,7 @@ fn test_full_config_conversion() {
     config.providers.insert("openai".to_string(), provider1);
 
     let mut provider2 = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
-    provider2.provider_type = Some("claude".to_string());
+    provider2.protocol = Some("anthropic".to_string());
     config.providers.insert("claude".to_string(), provider2);
 
     // Convert to FullConfig
