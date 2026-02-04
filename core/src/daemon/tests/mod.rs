@@ -1,6 +1,7 @@
 mod service_manager_tests;
 #[cfg(target_os = "macos")]
 mod launchd_tests;
+mod resource_governor_tests;
 
 #[cfg(test)]
 mod tests {
