@@ -5,7 +5,9 @@
 pub mod openai;
 pub mod anthropic;
 pub mod gemini;
+pub mod definition;
 
 pub use openai::OpenAiProtocol;
 pub use anthropic::AnthropicProtocol;
 pub use gemini::GeminiProtocol;
+pub use definition::ProtocolDefinition;
