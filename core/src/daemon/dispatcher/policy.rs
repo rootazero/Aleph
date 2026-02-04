@@ -87,6 +87,11 @@ impl PolicyEngine {
         }
     }
 
+    /// Get the number of registered policies
+    pub fn policy_count(&self) -> usize {
+        self.policies.len()
+    }
+
     /// Evaluate all policies against the context and event
     pub fn evaluate_all(
         &self,
