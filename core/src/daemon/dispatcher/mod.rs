@@ -8,6 +8,7 @@ pub mod mode;
 pub mod policy;
 pub mod policies;
 pub mod scripting;
+pub mod yaml_policy;
 
 pub use config::DispatcherConfig;
 pub use executor::ActionExecutor;
