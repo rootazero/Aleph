@@ -201,13 +201,12 @@ mod tests {
     fn test_truncator_handles_multiline_output() {
         let truncator = ToolTruncator::new(200);
 
-        let multiline_output = r#"Line 1: Important header
+        let multiline_output = format!(r#"Line 1: Important header
 Line 2: Some content
 Line 3: More content
 Line 4: Even more content
-"#
-        .to_string()
-            + &"Additional content\n".repeat(50);
+{}
+"#, "Additional content\n".repeat(50));
 
         let result = truncator.truncate(&multiline_output, "read_file");
 
