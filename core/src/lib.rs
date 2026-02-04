@@ -114,8 +114,11 @@ mod tests;
 // Error types (always needed)
 pub use crate::error::{AlephError, AlephException, Result};
 
-// Configuration (main entry points only)
-pub use crate::config::{Config, FullConfig, ProviderConfig};
+// Configuration (main entry points and commonly used types)
+pub use crate::config::{
+    Config, FullConfig, ProviderConfig,
+    MemoryConfig, BehaviorConfig, ShortcutsConfig, GeneralConfig, SmartFlowConfig,
+};
 
 // Initialization
 pub use crate::initialization::{
