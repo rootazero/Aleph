@@ -35,5 +35,8 @@ mod server;
 pub mod sessions;
 mod traits;
 
-pub use server::{AetherToolServer, AetherToolServerHandle};
+// Markdown skill system
+pub mod markdown_skill;
+
+pub use server::{AetherToolServer, AetherToolServerHandle, ToolUpdateInfo};
 pub use traits::{AetherTool, AetherToolDyn};
