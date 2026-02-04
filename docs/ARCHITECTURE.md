@@ -222,6 +222,55 @@ Thinker Decision (tool_use)
 
 ---
 
+## Providers
+
+### Protocol Adapter Architecture
+
+Aether uses a layered protocol adapter system supporting multiple AI provider protocols:
+
+**Layer 1: Built-in Protocols** (Compiled Rust)
+- `OpenAiProtocol` - OpenAI-compatible APIs
+- `AnthropicProtocol` - Claude/Anthropic APIs
+- `GeminiProtocol` - Google Gemini APIs
+- `OllamaProvider` - Local Ollama (native implementation)
+
+**Layer 2: Configurable Protocols** (YAML-based, hot-reload)
+- Minimal configuration mode - Extend existing protocols with differences
+- Full template mode - Completely custom protocol implementations
+- Loaded from `~/.aether/protocols/` directory
+- Changes detected within 600ms (500ms debounce + processing)
+
+**Layer 3: Extension Protocols** (Future)
+- WASM/Node.js plugin protocols
+- Independent process protocols (MCP/gRPC)
+
+#### Protocol Resolution Flow
+
+```
+User config.protocol
+    ↓
+ProtocolRegistry.get(name)
+    ↓
+├─> Dynamic protocols (YAML-loaded) ───> ConfigurableProtocol
+│   ├─> Minimal mode: base + differences
+│   └─> Custom mode: template rendering
+├─> Built-in protocols ───> OpenAi/Anthropic/Gemini
+└─> Not found ───> Error with available list
+```
+
+#### Hot Reload Mechanism
+
+1. `notify-debouncer-full` watches `~/.aether/protocols/`
+2. File change detected (Create/Modify/Delete)
+3. YAML parsed into `ProtocolDefinition`
+4. `ConfigurableProtocol` created
+5. Registry updated atomically
+6. New requests use updated protocol
+
+See `docs/PROTOCOL_ADAPTER_USER_GUIDE.md` for user documentation.
+
+---
+
 ## Feature Flags
 
 ```toml
