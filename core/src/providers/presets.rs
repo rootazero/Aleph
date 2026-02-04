@@ -103,26 +103,10 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             color: "#d97757",
         },
     );
-    m.insert(
-        "anthropic",
-        ProviderPreset {
-            base_url: "https://api.anthropic.com",
-            protocol: "anthropic",
-            color: "#d97757",
-        },
-    );
 
     // Google Gemini
     m.insert(
         "gemini",
-        ProviderPreset {
-            base_url: "https://generativelanguage.googleapis.com",
-            protocol: "gemini",
-            color: "#4285f4",
-        },
-    );
-    m.insert(
-        "google",
         ProviderPreset {
             base_url: "https://generativelanguage.googleapis.com",
             protocol: "gemini",
@@ -262,9 +246,7 @@ mod tests {
 
         // Native protocols
         assert!(PRESETS.contains_key("claude"));
-        assert!(PRESETS.contains_key("anthropic"));
         assert!(PRESETS.contains_key("gemini"));
-        assert!(PRESETS.contains_key("google"));
 
         // Tier 1: High-priority OpenAI-compatible
         assert!(PRESETS.contains_key("groq"));
@@ -309,5 +291,21 @@ mod tests {
         let moonshot = get_preset("moonshot").unwrap();
         let kimi = get_preset("kimi").unwrap();
         assert_eq!(moonshot.base_url, kimi.base_url);
+    }
+
+    #[test]
+    fn test_technical_aliases_removed() {
+        // These should NOT exist
+        assert!(get_preset("anthropic").is_none());
+        assert!(get_preset("google").is_none());
+    }
+
+    #[test]
+    fn test_brand_names_retained() {
+        // These should exist
+        assert!(get_preset("claude").is_some());
+        assert!(get_preset("gemini").is_some());
+        assert!(get_preset("kimi").is_some());
+        assert!(get_preset("moonshot").is_some());
     }
 }
