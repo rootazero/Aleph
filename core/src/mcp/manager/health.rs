@@ -2,6 +2,8 @@
 //!
 //! Utilities for checking server health and processing results.
 
+#![allow(dead_code)]
+
 use std::sync::Arc;
 use std::time::Duration;
 

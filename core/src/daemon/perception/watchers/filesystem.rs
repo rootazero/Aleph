@@ -4,7 +4,7 @@ use crate::daemon::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::path::PathBuf;
 use std::sync::Arc;

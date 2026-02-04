@@ -557,7 +557,7 @@ impl WorldModel {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Vec<crate::daemon::events::DerivedEvent> {
-        use crate::daemon::events::DerivedEvent;
+        
 
         let cache = self.cache.lock().await;
 

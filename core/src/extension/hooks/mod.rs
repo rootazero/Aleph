@@ -24,7 +24,7 @@
 //! }
 //! ```
 
-use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
+use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::ExtensionError;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

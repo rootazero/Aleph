@@ -12,7 +12,6 @@ use core_foundation::array::CFArray;
 const AX_VALUE_TYPE_CGRECT: u32 = 3;
 use core_foundation::base::{CFTypeRef, TCFType};
 use core_foundation::string::CFString;
-use image::GenericImageView;
 use once_cell::sync::Lazy;
 use tracing::warn;
 
@@ -434,7 +433,7 @@ fn merge_shadow_dom(
             }
         }
 
-        let mut sources = vec![super::ShadowSource {
+        let sources = vec![super::ShadowSource {
             ax_node_id: best_ax.map(|n| n.node_id.clone()),
             vision_block_id: Some(block.block_id.clone()),
         }];

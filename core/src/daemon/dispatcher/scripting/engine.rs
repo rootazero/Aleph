@@ -24,8 +24,7 @@ pub fn create_sandboxed_engine() -> Engine {
     engine.disable_symbol("loop");
     engine.disable_symbol("for");
 
-    // No module loading
-    #[cfg(not(feature = "no_module"))]
+    // No module loading - always disable for security
     {
         use rhai::module_resolvers::DummyModuleResolver;
         engine.set_module_resolver(DummyModuleResolver::new());
