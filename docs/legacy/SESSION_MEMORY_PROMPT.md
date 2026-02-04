@@ -6,7 +6,7 @@
 
 ## 项目背景
 
-**Aether** 是一个 macOS/Windows/Linux 的系统级 AI 中间件，采用 Rust Core + Native UI 架构。核心理念是"Ghost"美学 - 无 Dock 图标、无永久窗口，只有后台进程和系统托盘。
+**Aleph** 是一个 macOS/Windows/Linux 的系统级 AI 中间件，采用 Rust Core + Native UI 架构。核心理念是"Ghost"美学 - 无 Dock 图标、无永久窗口，只有后台进程和系统托盘。
 
 ### 技术栈
 - **Rust Core**: `cdylib` + `staticlib`，通过 UniFFI 暴露接口
@@ -35,7 +35,7 @@
 **测试**: 31 tests passed
 
 ### Phase 2: OpenAI Provider ✅
-**文件**: `Aether/core/src/providers/openai.rs` (437 行)
+**文件**: `Aleph/core/src/providers/openai.rs` (437 行)
 
 **核心功能**:
 - OpenAI Chat Completion API 客户端
@@ -60,7 +60,7 @@ pub struct OpenAiProvider {
 **测试**: 10 tests (配置验证、请求构建、错误处理)
 
 ### Phase 3: Claude Provider ✅
-**文件**: `Aether/core/src/providers/claude.rs` (442 行)
+**文件**: `Aleph/core/src/providers/claude.rs` (442 行)
 
 **核心功能**:
 - Anthropic Messages API 客户端
@@ -76,7 +76,7 @@ pub struct OpenAiProvider {
 **测试**: 11 tests
 
 ### Phase 4: Ollama Provider ✅
-**文件**: `Aether/core/src/providers/ollama.rs` (318 行)
+**文件**: `Aleph/core/src/providers/ollama.rs` (318 行)
 
 **核心功能**:
 - 本地 Ollama CLI 命令执行
@@ -209,7 +209,7 @@ provider = "openai"
 - 异步存储交互（`tokio::spawn()`）
 
 ### Phase 7: AlephCore Integration
-- 添加 `router: Arc<Router>` 字段到 `AetherCore`
+- 添加 `router: Arc<Router>` 字段到 `AlephCore`
 - 实现 `process_with_ai()` pipeline
 - 更新 `process_clipboard()` 调用 AI
 - 扩展 UniFFI 回调（`on_ai_processing_started`, `on_ai_response_received`）
@@ -291,7 +291,7 @@ cargo fmt
 ### UniFFI Bindings（Phase 9）
 ```bash
 # 生成 Swift bindings
-cargo run --bin uniffi-bindgen generate src/aether.udl \
+cargo run --bin uniffi-bindgen generate src/aleph.udl \
   --language swift \
   --out-dir ../Sources/Generated/
 
@@ -316,20 +316,20 @@ xcodebuild -project Aleph.xcodeproj -scheme Aleph build
 ## 关键文件位置
 
 ### 核心代码
-- `Aether/core/src/providers/` - AI Provider 实现
-- `Aether/core/src/router/` - Router 实现（待添加）
-- `Aether/core/src/memory/` - Memory 模块（已实现，待集成）
-- `Aether/core/src/core.rs` - AlephCore（待集成 Router）
+- `Aleph/core/src/providers/` - AI Provider 实现
+- `Aleph/core/src/router/` - Router 实现（待添加）
+- `Aleph/core/src/memory/` - Memory 模块（已实现，待集成）
+- `Aleph/core/src/core.rs` - AlephCore（待集成 Router）
 
 ### 配置
-- `Aether/core/Cargo.toml` - Rust 依赖
+- `Aleph/core/Cargo.toml` - Rust 依赖
 - `project.yml` - XcodeGen 配置
 - `config.example.toml` - 配置示例（待创建）
 
 ### 文档
 - `CLAUDE.md` - 项目总体指南
 - `openspec/changes/integrate-ai-providers/` - OpenSpec 变更文档
-- `Aether/core/PHASE2-4_IMPLEMENTATION_SUMMARY.md` - Phase 2-4 总结
+- `Aleph/core/PHASE2-4_IMPLEMENTATION_SUMMARY.md` - Phase 2-4 总结
 
 ---
 

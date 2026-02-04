@@ -13,7 +13,7 @@ use super::template::{generate_scratchpad, DEFAULT_TEMPLATE};
 /// Configuration for scratchpad behavior
 #[derive(Debug, Clone)]
 pub struct ScratchpadConfig {
-    /// Directory name within project root (default: ".aether")
+    /// Directory name within project root (default: ".aleph")
     pub dir_name: String,
     /// Scratchpad filename (default: "scratchpad.md")
     pub filename: String,
@@ -26,7 +26,7 @@ pub struct ScratchpadConfig {
 impl Default for ScratchpadConfig {
     fn default() -> Self {
         Self {
-            dir_name: ".aether".to_string(),
+            dir_name: ".aleph".to_string(),
             filename: "scratchpad.md".to_string(),
             history_filename: "session_history.log".to_string(),
             backup_on_write: true,
@@ -60,26 +60,26 @@ impl ScratchpadManager {
         }
     }
 
-    /// Get the .aether directory path
-    pub fn aether_dir(&self) -> PathBuf {
+    /// Get the .aleph directory path
+    pub fn aleph_dir(&self) -> PathBuf {
         self.project_root.join(&self.config.dir_name)
     }
 
     /// Get the scratchpad file path
     pub fn scratchpad_path(&self) -> PathBuf {
-        self.aether_dir().join(&self.config.filename)
+        self.aleph_dir().join(&self.config.filename)
     }
 
     /// Get the history log path
     pub fn history_path(&self) -> PathBuf {
-        self.aether_dir().join(&self.config.history_filename)
+        self.aleph_dir().join(&self.config.history_filename)
     }
 
-    /// Ensure the .aether directory exists
+    /// Ensure the .aleph directory exists
     pub async fn ensure_dir(&self) -> Result<(), AlephError> {
-        fs::create_dir_all(self.aether_dir())
+        fs::create_dir_all(self.aleph_dir())
             .await
-            .map_err(|e| AlephError::other(format!("Failed to create .aether dir: {}", e)))
+            .map_err(|e| AlephError::other(format!("Failed to create .aleph dir: {}", e)))
     }
 
     /// Check if scratchpad file exists
@@ -277,7 +277,7 @@ mod tests {
         let manager = ScratchpadManager::new(project_root.clone(), "test-session");
         manager.ensure_dir().await.unwrap();
 
-        assert!(manager.aether_dir().exists());
+        assert!(manager.aleph_dir().exists());
     }
 
     #[tokio::test]

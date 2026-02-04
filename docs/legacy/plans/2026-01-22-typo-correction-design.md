@@ -169,7 +169,7 @@ fn build_prompt(&self, text: &str) -> String {
 ### UniFFI 定义
 
 ```webidl
-// core/src/aether.udl 新增
+// core/src/aleph.udl 新增
 
 [Enum]
 interface CorrectionResult {
@@ -198,7 +198,7 @@ Swift: AlephCore.correctTypo(text)
 ### 文件结构
 
 ```
-platforms/macos/Aether/Sources/Features/TypoCorrection/
+platforms/macos/Aleph/Sources/Features/TypoCorrection/
 ├── KeyboardMonitor.swift              # 快捷键监听
 ├── TypoCorrectionCoordinator.swift    # 协调器
 └── AccessibilityHelper.swift          # 辅助功能封装
@@ -298,7 +298,7 @@ class TypoCorrectionCoordinator {
 
 ### Rust Core 修改
 
-- `core/src/aether.udl` - 新增接口定义
+- `core/src/aleph.udl` - 新增接口定义
 - `core/src/lib.rs` - 导出模块
 - `core/src/config/mod.rs` - 加载配置
 - `core/src/config/types/mod.rs` - 导出配置类型

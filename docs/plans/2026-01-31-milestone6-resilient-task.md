@@ -35,7 +35,7 @@
 
 **Step 1: 创建 types.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/resilient/types.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/resilient/types.rs`：
 
 ```rust
 //! Core types for resilient task execution.
@@ -385,7 +385,7 @@ mod tests {
 
 **Step 2: 创建 mod.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/resilient/mod.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/resilient/mod.rs`：
 
 ```rust
 //! Resilient task execution framework.
@@ -427,12 +427,12 @@ pub use types::{
 
 **Step 3: 更新 lib.rs**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/lib.rs` 添加模块声明和导出。
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/lib.rs` 添加模块声明和导出。
 
 **Step 4: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test resilient::types::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test resilient::types::tests
 ```
 
 **Step 5: Commit**
@@ -452,7 +452,7 @@ git commit -m "feat(resilient): add core types for resilient task execution"
 
 **Step 1: 创建 task.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/resilient/task.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/resilient/task.rs`：
 
 ```rust
 //! ResilientTask trait definition.
@@ -758,7 +758,7 @@ git commit -m "feat(resilient): define ResilientTask trait"
 
 **Step 1: 创建 executor.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/resilient/executor.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/resilient/executor.rs`：
 
 ```rust
 //! ResilientExecutor - executes tasks with retry and fallback.
@@ -1176,7 +1176,7 @@ git commit -m "feat(resilient): implement ResilientExecutor with retry and fallb
 
 **Step 1: 创建 cron_integration.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/resilient/cron_integration.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/resilient/cron_integration.rs`：
 
 ```rust
 //! Integration with the Cron scheduling system.
@@ -1430,18 +1430,18 @@ git commit -m "feat(resilient): add cron integration with PodcastTask example"
 **Step 1: 运行所有测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test resilient::
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test resilient::
 ```
 
 **Step 2: 编译验证**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 3: 更新设计文档**
 
-修改 `/Volumes/TBU4/Workspace/Aether/docs/plans/2026-01-31-aether-beyond-openclaw-design.md`：
+修改 `/Volumes/TBU4/Workspace/Aleph/docs/plans/2026-01-31-aleph-beyond-openclaw-design.md`：
 
 ```markdown
 ### Milestone 6: ResilientTask 韧性执行

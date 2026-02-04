@@ -13,7 +13,7 @@
 
 ### ✅ Working Components:
 1. **Permissions**: Both Accessibility and Input Monitoring permissions are granted
-2. **Core Initialization**: `AetherCore` successfully initializes (confirmed by Settings menu opening)
+2. **Core Initialization**: `AlephCore` successfully initializes (confirmed by Settings menu opening)
 3. **Hotkey Detection**: `GlobalHotkeyMonitor` successfully detects `` ` `` key press (confirmed via debug alert)
 4. **Permission Gate**: Not active (confirmed via debug alert)
 
@@ -58,7 +58,7 @@ Core Initialized: true
 - `cargo clean` to remove stale artifacts
 - `cargo build --release` to rebuild fresh library
 - Updated UniFFI bindings
-- Copied new dylib to `Aether/Frameworks/`
+- Copied new dylib to `Aleph/Frameworks/`
 
 ## Current Hypothesis
 
@@ -134,11 +134,11 @@ Check Xcode console for print statements:
    - Line 601-613: Hotkey early return checks
    - (All debug alerts removed before commit)
 
-2. **`Aether/core/` (Rust)**:
+2. **`Aleph/core/` (Rust)**:
    - Rebuilt from clean state
    - No code changes, just fresh build
 
-3. **`Aether/Frameworks/libalephcore.dylib`**:
+3. **`Aleph/Frameworks/libalephcore.dylib`**:
    - Updated to freshly built version (9.5MB)
 
 ## Build Cache Status

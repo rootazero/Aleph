@@ -1,7 +1,7 @@
 /// Performance metrics and timing instrumentation module
 ///
 /// This module provides tools for measuring and logging performance metrics
-/// across the Aether pipeline. It is designed to have minimal overhead when
+/// across the Aleph pipeline. It is designed to have minimal overhead when
 /// profiling is disabled and detailed instrumentation when enabled.
 ///
 /// # Usage

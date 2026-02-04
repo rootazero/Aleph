@@ -30,7 +30,7 @@ This plan:
 ### Task 1: Create HaloInputCoordinator
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/Coordinators/HaloInputCoordinator.swift`
+- Create: `platforms/macos/Aleph/Sources/Coordinators/HaloInputCoordinator.swift`
 
 **Step 1: Create the coordinator file**
 
@@ -302,13 +302,13 @@ final class HaloInputCoordinator {
 
 **Step 2: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aether/Sources/Coordinators/HaloInputCoordinator.swift`
+Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aleph/Sources/Coordinators/HaloInputCoordinator.swift`
 Expected: Syntax valid
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Coordinators/HaloInputCoordinator.swift
+git add platforms/macos/Aleph/Sources/Coordinators/HaloInputCoordinator.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): add HaloInputCoordinator for command handling
 
@@ -326,8 +326,8 @@ EOF
 ### Task 2: Add commandList State to HaloState
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/HaloState.swift`
-- Modify: `platforms/macos/Aether/Sources/Components/HaloStreamingTypes.swift`
+- Modify: `platforms/macos/Aleph/Sources/HaloState.swift`
+- Modify: `platforms/macos/Aleph/Sources/Components/HaloStreamingTypes.swift`
 
 **Step 1: Add CommandListContext to HaloStreamingTypes.swift**
 
@@ -432,16 +432,16 @@ In the `windowSize` computed property (around line 119), add:
 
 **Step 6: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aether/Sources/HaloState.swift`
+Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aleph/Sources/HaloState.swift`
 Expected: Syntax valid
 
-Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aether/Sources/Components/HaloStreamingTypes.swift`
+Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aleph/Sources/Components/HaloStreamingTypes.swift`
 Expected: Syntax valid
 
 **Step 7: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/HaloState.swift platforms/macos/Aether/Sources/Components/HaloStreamingTypes.swift
+git add platforms/macos/Aleph/Sources/HaloState.swift platforms/macos/Aleph/Sources/Components/HaloStreamingTypes.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): add commandList state for / command
 
@@ -458,7 +458,7 @@ EOF
 ### Task 3: Create HaloCommandListView
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/Components/HaloCommandListView.swift`
+- Create: `platforms/macos/Aleph/Sources/Components/HaloCommandListView.swift`
 
 **Step 1: Create the view file**
 
@@ -708,13 +708,13 @@ struct HaloCommandListView_Previews: PreviewProvider {
 
 **Step 2: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aether/Sources/Components/HaloCommandListView.swift`
+Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aleph/Sources/Components/HaloCommandListView.swift`
 Expected: Syntax valid
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Components/HaloCommandListView.swift
+git add platforms/macos/Aleph/Sources/Components/HaloCommandListView.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): add HaloCommandListView for / command UI
 
@@ -731,7 +731,7 @@ EOF
 ### Task 4: Update HaloViewV2 for commandList State
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Components/HaloViewV2.swift`
+- Modify: `platforms/macos/Aleph/Sources/Components/HaloViewV2.swift`
 
 **Step 1: Add onCommandSelect callback to HaloCallbacksV2**
 
@@ -801,13 +801,13 @@ In the `stateIdentifier` computed property, add:
 
 **Step 6: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aether/Sources/Components/HaloViewV2.swift`
+Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aleph/Sources/Components/HaloViewV2.swift`
 Expected: Syntax valid
 
 **Step 7: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Components/HaloViewV2.swift
+git add platforms/macos/Aleph/Sources/Components/HaloViewV2.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): integrate HaloCommandListView in HaloViewV2
 
@@ -824,7 +824,7 @@ EOF
 ### Task 5: Fix HotkeyService Reference
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Services/HotkeyService.swift`
+- Modify: `platforms/macos/Aleph/Sources/Services/HotkeyService.swift`
 
 **Step 1: Replace MultiTurnCoordinator with HaloInputCoordinator**
 
@@ -842,13 +842,13 @@ to:
 
 **Step 2: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aether/Sources/Services/HotkeyService.swift`
+Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aleph/Sources/Services/HotkeyService.swift`
 Expected: Syntax valid
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Services/HotkeyService.swift
+git add platforms/macos/Aleph/Sources/Services/HotkeyService.swift
 git commit -m "$(cat <<'EOF'
 fix(hotkey): replace MultiTurnCoordinator with HaloInputCoordinator
 
@@ -864,7 +864,7 @@ EOF
 ### Task 6: Fix AppDelegate References
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/AppDelegate.swift`
+- Modify: `platforms/macos/Aleph/Sources/AppDelegate.swift`
 
 **Step 1: Replace showConversation implementation**
 
@@ -902,13 +902,13 @@ to:
 
 **Step 3: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aether/Sources/AppDelegate.swift`
+Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aleph/Sources/AppDelegate.swift`
 Expected: Syntax valid
 
 **Step 4: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/AppDelegate.swift
+git add platforms/macos/Aleph/Sources/AppDelegate.swift
 git commit -m "$(cat <<'EOF'
 fix(app): replace MultiTurnCoordinator with HaloInputCoordinator
 
@@ -924,7 +924,7 @@ EOF
 ### Task 7: Fix DependencyContainer Reference
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/DI/DependencyContainer.swift`
+- Modify: `platforms/macos/Aleph/Sources/DI/DependencyContainer.swift`
 
 **Step 1: Remove MultiTurnCoordinator comment**
 
@@ -942,13 +942,13 @@ to:
 
 **Step 2: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aether/Sources/DI/DependencyContainer.swift`
+Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aleph/Sources/DI/DependencyContainer.swift`
 Expected: Syntax valid
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/DI/DependencyContainer.swift
+git add platforms/macos/Aleph/Sources/DI/DependencyContainer.swift
 git commit -m "$(cat <<'EOF'
 fix(di): update comment to reference HaloInputCoordinator
 
@@ -964,7 +964,7 @@ EOF
 ### Task 8: Fix GatewayMultiTurnAdapter References
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Gateway/GatewayMultiTurnAdapter.swift`
+- Modify: `platforms/macos/Aleph/Sources/Gateway/GatewayMultiTurnAdapter.swift`
 
 **Step 1: Remove coordinator reference**
 
@@ -1016,13 +1016,13 @@ Replace all `coordinator?.handle*` calls with comments or remove them:
 
 **Step 4: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aether/Sources/Gateway/GatewayMultiTurnAdapter.swift`
+Run: `~/.uv/python3/bin/python Scripts/verify_swift_syntax.py platforms/macos/Aleph/Sources/Gateway/GatewayMultiTurnAdapter.swift`
 Expected: Syntax valid
 
 **Step 5: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Gateway/GatewayMultiTurnAdapter.swift
+git add platforms/macos/Aleph/Sources/Gateway/GatewayMultiTurnAdapter.swift
 git commit -m "$(cat <<'EOF'
 fix(gateway): remove MultiTurnCoordinator dependency from adapter
 
@@ -1039,8 +1039,8 @@ EOF
 ### Task 9: Add Localization Keys
 
 **Files:**
-- Modify: `platforms/macos/Aether/Resources/en.lproj/Localizable.strings`
-- Modify: `platforms/macos/Aether/Resources/zh-Hans.lproj/Localizable.strings`
+- Modify: `platforms/macos/Aleph/Resources/en.lproj/Localizable.strings`
+- Modify: `platforms/macos/Aleph/Resources/zh-Hans.lproj/Localizable.strings`
 
 **Step 1: Add English localization keys**
 
@@ -1067,7 +1067,7 @@ Add to `zh-Hans.lproj/Localizable.strings`:
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Resources/en.lproj/Localizable.strings platforms/macos/Aether/Resources/zh-Hans.lproj/Localizable.strings
+git add platforms/macos/Aleph/Resources/en.lproj/Localizable.strings platforms/macos/Aleph/Resources/zh-Hans.lproj/Localizable.strings
 git commit -m "$(cat <<'EOF'
 i18n: add localization keys for command list
 

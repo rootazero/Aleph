@@ -1,6 +1,6 @@
 //! Dispatcher Layer - Core Scheduling Center
 //!
-//! This module is Aether's core dispatch center, responsible for:
+//! This module is Aleph's core dispatch center, responsible for:
 //!
 //! - **Model Routing**: Intelligent model selection based on task characteristics
 //! - **Tool Registry**: Aggregates all tool sources (Native, MCP, Skills, Custom)

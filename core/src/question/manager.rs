@@ -1,9 +1,9 @@
-// Aether/core/src/question/manager.rs
+// Aleph/core/src/question/manager.rs
 //! Question manager for handling structured user interaction.
 
 use super::error::QuestionError;
 use crate::event::question::{Answer, QuestionReply, QuestionRequest};
-use crate::event::{AetherEvent, EventBus};
+use crate::event::{AlephEvent, EventBus};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -81,7 +81,7 @@ impl QuestionManager {
 
         // Publish event
         self.event_bus
-            .publish(AetherEvent::QuestionAsked(request))
+            .publish(AlephEvent::QuestionAsked(request))
             .await;
 
         // Wait for response with optional timeout
@@ -128,7 +128,7 @@ impl QuestionManager {
 
         // Publish reply event
         self.event_bus
-            .publish(AetherEvent::QuestionReplied {
+            .publish(AlephEvent::QuestionReplied {
                 session_id,
                 request_id: request_id.to_string(),
                 answers: reply.answers.clone(),
@@ -157,7 +157,7 @@ impl QuestionManager {
 
         // Publish reject event
         self.event_bus
-            .publish(AetherEvent::QuestionRejected {
+            .publish(AlephEvent::QuestionRejected {
                 session_id,
                 request_id: request_id.to_string(),
             })

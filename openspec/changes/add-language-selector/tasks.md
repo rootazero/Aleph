@@ -3,7 +3,7 @@
 ## 1. Backend (Rust Core) - Language Configuration
 
 ### Task 1.1: Add `language` field to `GeneralConfig`
-- [ ] Add `language: Option<String>` field to `GeneralConfig` struct in `Aether/core/src/config/mod.rs`
+- [ ] Add `language: Option<String>` field to `GeneralConfig` struct in `Aleph/core/src/config/mod.rs`
 - [ ] Add serde attribute: `#[serde(default, skip_serializing_if = "Option::is_none")]`
 - [ ] Document field: "Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language."
 
@@ -14,7 +14,7 @@
 
 ### Task 1.3: Expose language config via UniFFI
 - [ ] Verify `GeneralConfig` is already exposed through UniFFI (it is, via `FullConfig`)
-- [ ] No changes needed to `aether.udl` (language field auto-exposed via nested struct)
+- [ ] No changes needed to `aleph.udl` (language field auto-exposed via nested struct)
 
 **Validation:**
 - Run `cargo build` successfully
@@ -26,7 +26,7 @@
 ## 2. Frontend (Swift UI) - Language Selector UI
 
 ### Task 2.1: Add language dropdown to `GeneralSettingsView`
-- [ ] Open `Aether/Sources/SettingsView.swift`
+- [ ] Open `Aleph/Sources/SettingsView.swift`
 - [ ] Add new `Section` with header `"settings.general.language"` after the "Sound" section
 - [ ] Add `Picker` with label `"settings.general.language_preference"`
 - [ ] Add options:
@@ -43,7 +43,7 @@
 ### Task 2.3: Save language preference and show restart alert
 - [ ] Add `onChange(of: selectedLanguage)` handler
 - [ ] Call `core?.updateConfig()` to persist language change
-- [ ] Show `NSAlert` with message: "Language will change after restarting Aether. Restart now?"
+- [ ] Show `NSAlert` with message: "Language will change after restarting Aleph. Restart now?"
 - [ ] Add "Restart Now" button that calls `NSApp.terminate(nil)`
 - [ ] Add "Later" button that dismisses alert
 
@@ -51,14 +51,14 @@
 - Build and run app
 - Verify dropdown appears in General Settings
 - Verify selecting a language shows restart alert
-- Verify selection persists to `~/.aether/config.toml`
+- Verify selection persists to `~/.aleph/config.toml`
 
 ---
 
 ## 3. Application Launch - Apply Language Override
 
-### Task 3.1: Apply language override in `AppDelegate` or `AetherApp`
-- [ ] Open `Aether/Sources/AetherApp.swift` or `Aether/Sources/AppDelegate.swift`
+### Task 3.1: Apply language override in `AppDelegate` or `AlephApp`
+- [ ] Open `Aleph/Sources/AlephApp.swift` or `Aleph/Sources/AppDelegate.swift`
 - [ ] In `applicationDidFinishLaunching` (AppKit) or `init()` (SwiftUI), check for language override
 - [ ] Read language from config: `let config = core?.getConfig()`
 - [ ] If `config.general.language` is set, apply override:
@@ -87,7 +87,7 @@
 ## 4. Localization - Add New String Keys
 
 ### Task 4.1: Add English strings
-- [ ] Open `Aether/Resources/en.lproj/Localizable.strings`
+- [ ] Open `Aleph/Resources/en.lproj/Localizable.strings`
 - [ ] Add keys:
   ```strings
   /* Settings - General - Language */
@@ -95,13 +95,13 @@
   "settings.general.language_preference" = "Preferred Language";
   "settings.general.language_system_default" = "System Default";
   "settings.general.language_restart_title" = "Restart Required";
-  "settings.general.language_restart_message" = "Language will change after restarting Aether. Restart now?";
+  "settings.general.language_restart_message" = "Language will change after restarting Aleph. Restart now?";
   "settings.general.language_restart_now" = "Restart Now";
   "settings.general.language_restart_later" = "Later";
   ```
 
 ### Task 4.2: Add Simplified Chinese strings
-- [ ] Open `Aether/Resources/zh-Hans.lproj/Localizable.strings`
+- [ ] Open `Aleph/Resources/zh-Hans.lproj/Localizable.strings`
 - [ ] Add translated keys:
   ```strings
   /* Settings - General - Language */
@@ -109,7 +109,7 @@
   "settings.general.language_preference" = "首选语言";
   "settings.general.language_system_default" = "系统默认";
   "settings.general.language_restart_title" = "需要重启";
-  "settings.general.language_restart_message" = "语言将在重启 Aether 后生效。是否立即重启?";
+  "settings.general.language_restart_message" = "语言将在重启 Aleph 后生效。是否立即重启?";
   "settings.general.language_restart_now" = "立即重启";
   "settings.general.language_restart_later" = "稍后";
   ```
@@ -128,7 +128,7 @@
   2. Select 简体中文 → Restart → Verify UI is in Chinese
   3. Select "System Default" → Restart → Verify UI follows system language
 - [ ] Test config persistence:
-  1. Check `~/.aether/config.toml` after each selection
+  1. Check `~/.aleph/config.toml` after each selection
   2. Verify `[general]` section contains `language = "en"` or `language = "zh-Hans"` or omits the field for system default
 
 ### Task 5.2: Edge case testing

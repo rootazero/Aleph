@@ -86,7 +86,7 @@ AdaptiveGlassContainer(spacing: 8) {
 
 ### File Location
 
-`Aether/Sources/Components/Atoms/AdaptiveGlassModifier.swift`
+`Aleph/Sources/Components/Atoms/AdaptiveGlassModifier.swift`
 
 ---
 
@@ -156,7 +156,7 @@ struct TrafficLightButton: View {
 - 位置: top 14pt, leading 18pt（相对侧边栏）
 - Hover 状态: 显示操作图标（✕、−、全屏箭头）
 
-**文件位置:** `Aether/Sources/Components/Window/TrafficLightButton.swift`
+**文件位置:** `Aleph/Sources/Components/Window/TrafficLightButton.swift`
 
 ---
 
@@ -187,7 +187,7 @@ final class WindowController {
 - 动态获取 keyWindow（支持多窗口扩展）
 - 优雅处理 nil window（Debug 日志）
 
-**文件位置:** `Aether/Sources/Components/Window/WindowController.swift`
+**文件位置:** `Aleph/Sources/Components/Window/WindowController.swift`
 
 ---
 
@@ -241,7 +241,7 @@ RootContentView()
 - 必须通过 AppKit API 显式隐藏原生交通灯
 - 否则会同时显示原生和自定义两套交通灯
 
-**文件位置:** `Aether/Sources/Components/Window/WindowConfigurator.swift`
+**文件位置:** `Aleph/Sources/Components/Window/WindowConfigurator.swift`
 
 ---
 
@@ -287,7 +287,7 @@ struct SidebarWithTrafficLights: View {
   - Dark Mode: `windowBackgroundColor.opacity(0.9)`
   - Light Mode: `underPageBackgroundColor`
 
-**文件位置:** `Aether/Sources/Components/Window/SidebarWithTrafficLights.swift`
+**文件位置:** `Aleph/Sources/Components/Window/SidebarWithTrafficLights.swift`
 
 ---
 
@@ -317,7 +317,7 @@ struct RootContentView: View {
 - 分隔线: 1pt Divider
 - 右侧: 内容区（.frame(maxWidth: .infinity)）
 
-**文件位置:** `Aether/Sources/Components/Window/RootContentView.swift`
+**文件位置:** `Aleph/Sources/Components/Window/RootContentView.swift`
 
 ---
 
@@ -414,17 +414,17 @@ NSApp.keyWindow?.performClose(nil)
 
 ### 新增组件 (5 个文件)
 
-- `Aether/Sources/Components/Window/TrafficLightButton.swift` - 自定义交通灯按钮
-- `Aether/Sources/Components/Window/WindowController.swift` - AppKit 桥接
-- `Aether/Sources/Components/Window/WindowConfigurator.swift` - 隐藏原生交通灯
-- `Aether/Sources/Components/Window/SidebarWithTrafficLights.swift` - 圆角侧边栏
-- `Aether/Sources/Components/Window/RootContentView.swift` - 根布局容器
+- `Aleph/Sources/Components/Window/TrafficLightButton.swift` - 自定义交通灯按钮
+- `Aleph/Sources/Components/Window/WindowController.swift` - AppKit 桥接
+- `Aleph/Sources/Components/Window/WindowConfigurator.swift` - 隐藏原生交通灯
+- `Aleph/Sources/Components/Window/SidebarWithTrafficLights.swift` - 圆角侧边栏
+- `Aleph/Sources/Components/Window/RootContentView.swift` - 根布局容器
 
 ### 修改文件 (3 个文件)
 
-- `Aether/Sources/AetherApp.swift` - 添加 WindowGroup（Feature Flag 控制）
-- `Aether/Sources/AppDelegate.swift` - 暴露 core/keychainManager，更新 showSettings()
-- `Aether/Sources/Components/Atoms/AdaptiveGlassModifier.swift` - Liquid Glass 实现
+- `Aleph/Sources/AlephApp.swift` - 添加 WindowGroup（Feature Flag 控制）
+- `Aleph/Sources/AppDelegate.swift` - 暴露 core/keychainManager，更新 showSettings()
+- `Aleph/Sources/Components/Atoms/AdaptiveGlassModifier.swift` - Liquid Glass 实现
 
 ### 代码统计
 
@@ -473,4 +473,4 @@ NSApp.keyWindow?.performClose(nil)
 
 - See `docs/ui-design-guide.md` for general UI design principles
 - See `docs/visual-testing-guide.md` for visual testing procedures
-- See `Aether/Sources/Components/Window/` for implementation code
+- See `Aleph/Sources/Components/Window/` for implementation code

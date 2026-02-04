@@ -1,6 +1,6 @@
 //
 //  PermissionCoordinator.swift
-//  Aether
+//  Aleph
 //
 //  Coordinator for managing permission gate flow.
 //  Extracted from AppDelegate to improve separation of concerns.
@@ -74,7 +74,7 @@ final class PermissionCoordinator {
 
         // Create window for permission gate
         let window = NSWindow(contentViewController: hostingController)
-        window.title = "Aether 需要权限"
+        window.title = "Aleph 需要权限"
         window.setContentSize(NSSize(width: 600, height: 600))
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.titlebarAppearsTransparent = true

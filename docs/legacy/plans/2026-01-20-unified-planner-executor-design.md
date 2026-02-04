@@ -351,7 +351,7 @@ pub async fn process(
 **计划确认视图 (PlanConfirmationView)**
 
 ```swift
-// platforms/macos/Aether/Sources/Views/PlanConfirmationView.swift
+// platforms/macos/Aleph/Sources/Views/PlanConfirmationView.swift
 
 struct PlanConfirmationView: View {
     let plan: ExecutionPlan
@@ -393,7 +393,7 @@ struct ExecutionProgressView: View {
 ### 7.3 回调桥接修改
 
 ```swift
-// platforms/macos/Aether/Sources/Bridge/AlephEventHandler.swift
+// platforms/macos/Aleph/Sources/Bridge/AlephEventHandler.swift
 
 protocol AlephEventHandler {
     // 删除

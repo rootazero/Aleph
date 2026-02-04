@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::event::{
-    AetherEvent, EventBus, LoopState as EventLoopState, StopReason, TokenUsage, ToolCallResult,
+    AlephEvent, EventBus, LoopState as EventLoopState, StopReason, TokenUsage, ToolCallResult,
 };
 
 /// Helper for triggering compaction checks at key points in the agent loop.
@@ -65,7 +65,7 @@ impl CompactionTrigger {
         );
 
         self.event_bus
-            .publish(AetherEvent::LoopContinue(loop_state))
+            .publish(AlephEvent::LoopContinue(loop_state))
             .await;
     }
 
@@ -106,7 +106,7 @@ impl CompactionTrigger {
         );
 
         self.event_bus
-            .publish(AetherEvent::ToolCallCompleted(result))
+            .publish(AlephEvent::ToolCallCompleted(result))
             .await;
     }
 
@@ -120,7 +120,7 @@ impl CompactionTrigger {
         );
 
         self.event_bus
-            .publish(AetherEvent::LoopStop(reason))
+            .publish(AlephEvent::LoopStop(reason))
             .await;
     }
 }

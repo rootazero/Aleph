@@ -1,15 +1,15 @@
 //
-//  AetherBridgingHeader.h
-//  Aether
+//  AlephBridgingHeader.h
+//  Aleph
 //
 //  Bridging header for UniFFI-generated FFI functions
 //
 
-#ifndef AetherBridgingHeader_h
-#define AetherBridgingHeader_h
+#ifndef AlephBridgingHeader_h
+#define AlephBridgingHeader_h
 
 // Import the UniFFI-generated C header
 // This provides all the FFI function declarations and type definitions
-#import "aetherFFI.h"
+#import "alephFFI.h"
 
-#endif /* AetherBridgingHeader_h */
+#endif /* AlephBridgingHeader_h */

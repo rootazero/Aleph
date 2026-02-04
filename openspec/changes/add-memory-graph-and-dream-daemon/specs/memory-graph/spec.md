@@ -5,7 +5,7 @@ Provide a local entity-relation graph that disambiguates references and links me
 
 ## ADDED Requirements
 ### Requirement: Graph Storage Initialization
-The system SHALL create graph storage tables inside `~/.aether/memory.db` when memory is enabled.
+The system SHALL create graph storage tables inside `~/.aleph/memory.db` when memory is enabled.
 
 Graph tables MUST include:
 - `graph_nodes` (id, name, kind, aliases_json, metadata_json, created_at, updated_at, decay_score)

@@ -1,6 +1,6 @@
 //
 //  HaloInputCoordinator.swift
-//  Aether
+//  Aleph
 //
 //  Lightweight coordinator for Halo input handling.
 //  Routes input based on prefix for command-based interaction.
@@ -33,7 +33,7 @@ final class HaloInputCoordinator {
     // MARK: - Dependencies (Weak References)
 
     private weak var haloWindow: HaloWindow?
-    private weak var core: AetherCore?
+    private weak var core: AlephCore?
 
     // MARK: - State
 
@@ -55,8 +55,8 @@ final class HaloInputCoordinator {
     ///
     /// - Parameters:
     ///   - haloWindow: The Halo overlay window
-    ///   - core: The AetherCore FFI instance
-    func configure(haloWindow: HaloWindow?, core: AetherCore?) {
+    ///   - core: The AlephCore FFI instance
+    func configure(haloWindow: HaloWindow?, core: AlephCore?) {
         self.haloWindow = haloWindow
         self.core = core
         print("[HaloInputCoordinator] Configured with haloWindow: \(haloWindow != nil), core: \(core != nil)")

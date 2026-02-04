@@ -16,7 +16,7 @@ Aleph's permission system uses a **three-layer protection architecture** to elim
 
 ### PermissionManager (Swift)
 
-**Location**: `Aether/Sources/Utils/PermissionManager.swift`
+**Location**: `Aleph/Sources/Utils/PermissionManager.swift`
 
 **Role**: Passive permission monitoring without automatic restart logic
 
@@ -28,7 +28,7 @@ Aleph's permission system uses a **three-layer protection architecture** to elim
 
 ### PermissionGateView (Swift)
 
-**Location**: `Aether/Sources/Components/PermissionGateView.swift`
+**Location**: `Aleph/Sources/Components/PermissionGateView.swift`
 
 **Role**: Waterfall flow permission guidance
 
@@ -40,7 +40,7 @@ Aleph's permission system uses a **three-layer protection architecture** to elim
 
 ### PermissionChecker (Swift)
 
-**Location**: `Aether/Sources/Utils/PermissionChecker.swift`
+**Location**: `Aleph/Sources/Utils/PermissionChecker.swift`
 
 **Key Methods**:
 - `hasAccessibilityPermission()` - Direct `AXIsProcessTrusted()` call
@@ -49,7 +49,7 @@ Aleph's permission system uses a **three-layer protection architecture** to elim
 
 ### AlephCore Permission Pre-check (Rust)
 
-**Location**: `Aether/core/src/core.rs`
+**Location**: `Aleph/core/src/core.rs`
 
 **Key Features**:
 - `has_input_monitoring_permission` field (set by Swift via UniFFI)
@@ -59,7 +59,7 @@ Aleph's permission system uses a **three-layer protection architecture** to elim
 
 ### rdev Panic Protection (Rust)
 
-**Location**: `Aether/core/src/hotkey/rdev_listener.rs`
+**Location**: `Aleph/core/src/hotkey/rdev_listener.rs`
 
 **Mechanism**: `std::panic::catch_unwind()` wraps `rdev::listen()`
 

@@ -266,7 +266,7 @@ core/src/skills/
 ├── mod.rs                    # SkillFrontmatter.triggers
 └── registry.rs               # Adapt to new triggers field
 
-core/src/aether.udl           # FFI interface updates (if needed)
+core/src/aleph.udl           # FFI interface updates (if needed)
 ```
 
 ## Dependencies

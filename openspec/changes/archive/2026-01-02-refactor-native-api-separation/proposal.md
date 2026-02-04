@@ -10,7 +10,7 @@
 
 ## Why
 
-当前的 Aether 架构存在严重的 **前后端职责混淆** 问题，违反了现代软件工程的分层原则，导致以下关键缺陷：
+当前的 Aleph 架构存在严重的 **前后端职责混淆** 问题，违反了现代软件工程的分层原则，导致以下关键缺陷：
 
 ### 核心问题分析
 
@@ -130,9 +130,9 @@ Swift: NSPasteboard.general.string(forType: .string)
 ```
 
 **删除 Rust 模块**:
-- `Aether/core/src/hotkey/rdev_listener.rs`
-- `Aether/core/src/clipboard/arboard_manager.rs`
-- `Aether/core/src/input/enigo_simulator.rs`
+- `Aleph/core/src/hotkey/rdev_listener.rs`
+- `Aleph/core/src/clipboard/arboard_manager.rs`
+- `Aleph/core/src/input/enigo_simulator.rs`
 
 #### Phase 2: 扩展 Swift 层功能
 
@@ -162,11 +162,11 @@ Swift: NSPasteboard.general.string(forType: .string)
 
 #### Phase 3: 简化 UniFFI 接口
 
-**更新 `aether.udl`**:
+**更新 `aleph.udl`**:
 
 移除不再需要的接口：
 ```diff
-interface AetherCore {
+interface AlephCore {
 -  void start_listening();  // 已在 Swift 实现
 -  void stop_listening();   // 已在 Swift 实现
 -  string get_clipboard_text();  // 已在 Swift 实现
@@ -178,7 +178,7 @@ interface AetherCore {
 
 新增简化的核心接口：
 ```diff
-interface AetherCore {
+interface AlephCore {
 +  // 核心 AI 处理管线（接收预处理的输入）
 +  string process_input(string user_input, CapturedContext context);
 +
@@ -189,7 +189,7 @@ interface AetherCore {
 
 移除不再需要的回调：
 ```diff
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
 -  void on_hotkey_detected(string clipboard_content);  // Swift 直接处理
 }
 ```
@@ -260,15 +260,15 @@ callback interface AetherEventHandler {
 ### 代码变更范围
 
 **删除**:
-- `Aether/core/src/hotkey/rdev_listener.rs` (~234 lines)
-- `Aether/core/src/clipboard/arboard_manager.rs` (~150 lines)
-- `Aether/core/src/input/enigo_simulator.rs` (~200 lines)
-- UniFFI 接口定义（~50 lines in aether.udl）
+- `Aleph/core/src/hotkey/rdev_listener.rs` (~234 lines)
+- `Aleph/core/src/clipboard/arboard_manager.rs` (~150 lines)
+- `Aleph/core/src/input/enigo_simulator.rs` (~200 lines)
+- UniFFI 接口定义（~50 lines in aleph.udl）
 - **总计删除: ~634 lines Rust + FFI**
 
 **新增**:
-- `Aether/Sources/Utils/ClipboardManager.swift` (~100 lines)
-- `Aether/Sources/Utils/KeyboardSimulator.swift` (~150 lines)
+- `Aleph/Sources/Utils/ClipboardManager.swift` (~100 lines)
+- `Aleph/Sources/Utils/KeyboardSimulator.swift` (~150 lines)
 - **总计新增: ~250 lines Swift**
 
 **净减少**: ~384 lines，代码库更简洁
@@ -284,7 +284,7 @@ callback interface AetherEventHandler {
 **破坏性变更**:
 - UniFFI 接口签名改变（移除系统 API 方法）
 - 需要重新生成 Swift bindings
-- **不影响外部用户**（Aether 是独立应用，无公开 API）
+- **不影响外部用户**（Aleph 是独立应用，无公开 API）
 
 **迁移策略**:
 - Phase 1: 实现 Swift 层功能
@@ -411,7 +411,7 @@ callback interface AetherEventHandler {
 
 **缺点**:
 - 违反"原生优先"哲学
-- Aether 的核心价值是"隐形"，Flutter 不适合做透明悬浮窗
+- Aleph 的核心价值是"隐形"，Flutter 不适合做透明悬浮窗
 - 增加依赖和复杂度
 
 **为什么拒绝**: 与项目核心价值观冲突
@@ -436,12 +436,12 @@ callback interface AetherEventHandler {
    - 可接受在 Rust 层处理 Linux 系统 API
 
 2. **为什么不用 Swift Package Manager 管理依赖？**
-   - Aether 使用 XcodeGen 管理项目
+   - Aleph 使用 XcodeGen 管理项目
    - 系统框架（AppKit, Cocoa）无需包管理器
    - 保持简单
 
 3. **UniFFI 接口是否需要版本号？**
-   - 当前不需要（Aether 是单体应用）
+   - 当前不需要（Aleph 是单体应用）
    - 如果未来开放 API，需要添加版本管理
 
 ---

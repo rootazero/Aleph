@@ -1,7 +1,7 @@
 # 附件显示机制修复 - 实现记录
 
 ## 问题描述
-classical-poetry等skill通过bash命令或Python脚本创建的文件没有被Aether的文件追踪系统记录，导致UI无法显示这些附件。
+classical-poetry等skill通过bash命令或Python脚本创建的文件没有被Aleph的文件追踪系统记录，导致UI无法显示这些附件。
 
 ## 根本原因
 1. `record_written_file()` 只在 FileOpsTool 中被调用
@@ -52,7 +52,7 @@ classical-poetry等skill通过bash命令或Python脚本创建的文件没有被A
 
 ### 方法1：使用classical-poetry skill重新测试
 ```bash
-# 在Aether中运行
+# 在Aleph中运行
 /classical-poetry 使用蝶恋花词牌创作一首词，主题是用闺怨表达政治失意。
 ```
 

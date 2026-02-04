@@ -12,7 +12,7 @@
 
 ## 🎯 为什么需要这个变更？
 
-当前Aether的设置界面存在以下问题：
+当前Aleph的设置界面存在以下问题：
 
 1. ❌ **问题1**：设置修改后立即生效 → 容易误操作
 2. ❌ **问题2**：无法预览修改效果就提交 → 用户缺乏信心
@@ -107,16 +107,16 @@
 
 ### 新增组件
 
-1. **UnifiedSaveBar** (`Aether/Sources/Components/Molecules/UnifiedSaveBar.swift`)
+1. **UnifiedSaveBar** (`Aleph/Sources/Components/Molecules/UnifiedSaveBar.swift`)
    - 所有设置标签页的可复用组件
    - 属性：`hasUnsavedChanges`, `isSaving`, `statusMessage`, `onSave`, `onCancel`
 
-2. **FormStateful 协议** (`Aether/Sources/Utils/FormState.swift`)
+2. **FormStateful 协议** (`Aleph/Sources/Utils/FormState.swift`)
    - 定义工作副本 vs. 已保存状态的契约
    - 方法：`save()`, `cancel()`, `loadSavedState()`
    - 计算属性：`hasUnsavedChanges`, `isFormValid()`
 
-3. **NavigationGuard** (`Aether/Sources/Utils/NavigationGuard.swift`)
+3. **NavigationGuard** (`Aleph/Sources/Utils/NavigationGuard.swift`)
    - 未保存修改的警告对话框
    - 返回：`.save`, `.discard`, 或 `.cancel`
 

@@ -558,7 +558,7 @@ pub struct GenerationProviderConfig {
 **Commands:**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/Aether/core
+cd /Users/zouguojun/Workspace/Aleph/Aleph/core
 
 # Check compilation
 cargo check

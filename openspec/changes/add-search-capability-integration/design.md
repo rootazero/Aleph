@@ -91,7 +91,7 @@
 
 ### 1. SearchResult (Core Data Structure)
 
-**Location**: `Aether/core/src/search/result.rs` (new file)
+**Location**: `Aleph/core/src/search/result.rs` (new file)
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -169,7 +169,7 @@ impl SearchResult {
 
 ### 2. SearchOptions (Configuration)
 
-**Location**: `Aether/core/src/search/options.rs` (new file)
+**Location**: `Aleph/core/src/search/options.rs` (new file)
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -236,7 +236,7 @@ impl SearchOptions {
 
 ### SearchProvider Trait
 
-**Location**: `Aether/core/src/search/provider.rs` (new file)
+**Location**: `Aleph/core/src/search/provider.rs` (new file)
 
 ```rust
 use async_trait::async_trait;
@@ -259,7 +259,7 @@ pub trait SearchProvider: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(Vec<SearchResult>)` - List of search results
-    /// * `Err(AetherError)` - Network error, API error, quota exceeded, etc.
+    /// * `Err(AlephError)` - Network error, API error, quota exceeded, etc.
     ///
     /// # Example
     ///
@@ -314,13 +314,13 @@ impl QuotaInfo {
 
 ### SearchRegistry (Factory & Router)
 
-**Location**: `Aether/core/src/search/registry.rs` (new file)
+**Location**: `Aleph/core/src/search/registry.rs` (new file)
 
 ```rust
 use std::collections::HashMap;
 use std::sync::Arc;
 use crate::config::SearchConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::search::{SearchProvider, SearchResult, SearchOptions};
 
 /// Registry for managing multiple search providers
@@ -349,7 +349,7 @@ impl SearchRegistry {
         }
 
         if providers.is_empty() {
-            return Err(AetherError::invalid_config(
+            return Err(AlephError::invalid_config(
                 "No search providers configured or available"
             ));
         }
@@ -398,7 +398,7 @@ impl SearchRegistry {
             }
         }
 
-        Err(AetherError::provider_error(format!(
+        Err(AlephError::provider_error(format!(
             "All search providers failed for query: {}",
             query
         )))
@@ -420,7 +420,7 @@ fn create_provider(
         )?)),
         "bing" => Ok(Arc::new(BingProvider::new(config.api_key.clone())?)),
         "exa" => Ok(Arc::new(ExaProvider::new(config.api_key.clone())?)),
-        _ => Err(AetherError::invalid_config(format!(
+        _ => Err(AlephError::invalid_config(format!(
             "Unknown search provider type: {}",
             config.provider_type
         ))),
@@ -434,13 +434,13 @@ fn create_provider(
 
 ### Example: TavilyProvider (AI-Optimized)
 
-**Location**: `Aether/core/src/search/providers/tavily.rs` (new file)
+**Location**: `Aleph/core/src/search/providers/tavily.rs` (new file)
 
 ```rust
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::search::{SearchProvider, SearchResult, SearchOptions};
 
 pub struct TavilyProvider {
@@ -478,7 +478,7 @@ struct TavilyResult {
 impl TavilyProvider {
     pub fn new(api_key: String) -> Result<Self> {
         if api_key.is_empty() {
-            return Err(AetherError::invalid_config("Tavily API key is required"));
+            return Err(AlephError::invalid_config("Tavily API key is required"));
         }
 
         Ok(Self {
@@ -486,7 +486,7 @@ impl TavilyProvider {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .map_err(|e| AetherError::network_error(e.to_string()))?,
+                .map_err(|e| AlephError::network_error(e.to_string()))?,
         })
     }
 }
@@ -522,10 +522,10 @@ impl SearchProvider for TavilyProvider {
             .timeout(std::time::Duration::from_secs(options.timeout_seconds))
             .send()
             .await
-            .map_err(|e| AetherError::network_error(e.to_string()))?;
+            .map_err(|e| AlephError::network_error(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(AetherError::provider_error(format!(
+            return Err(AlephError::provider_error(format!(
                 "Tavily API error: {}",
                 response.status()
             )));
@@ -534,7 +534,7 @@ impl SearchProvider for TavilyProvider {
         let tavily_response: TavilyResponse = response
             .json()
             .await
-            .map_err(|e| AetherError::provider_error(format!("Failed to parse Tavily response: {}", e)))?;
+            .map_err(|e| AlephError::provider_error(format!("Failed to parse Tavily response: {}", e)))?;
 
         // Convert to unified format
         let results = tavily_response
@@ -578,7 +578,7 @@ impl SearchProvider for TavilyProvider {
 ### Search Configuration in `config.toml`
 
 ```toml
-# ~/.aether/config.toml
+# ~/.aleph/config.toml
 
 [search]
 enabled = true
@@ -623,7 +623,7 @@ system_prompt = "Summarize search results and answer the user's question."
 
 ### SearchConfig Struct
 
-**Location**: `Aether/core/src/config/mod.rs` (extend existing)
+**Location**: `Aleph/core/src/config/mod.rs` (extend existing)
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -758,7 +758,7 @@ User Input: "/search 今日 AI 新闻"
    - Missing API key
    - Invalid provider type
    - Malformed config file
-   - **Action**: Return `AetherError::InvalidConfig`, log error, disable search
+   - **Action**: Return `AlephError::InvalidConfig`, log error, disable search
 
 2. **Network Errors** (Retry + Fallback)
    - Connection timeout
@@ -827,7 +827,7 @@ pub fn execute_search(&self, payload: &mut AgentPayload) -> Result<()> {
 
 ### 1. PII Scrubbing
 
-**Implementation**: `Aether/core/src/privacy/scrubber.rs` (existing module)
+**Implementation**: `Aleph/core/src/privacy/scrubber.rs` (existing module)
 
 ```rust
 pub fn scrub_search_query(query: &str) -> String {

@@ -10,7 +10,7 @@
 
 **Design Document:** `docs/plans/2026-02-01-poe-architecture-design.md`
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aether/.worktrees/feat-poe-architecture`
+**Worktree:** `/Volumes/TBU4/Workspace/Aleph/.worktrees/feat-poe-architecture`
 
 ---
 

@@ -76,7 +76,7 @@ UniFFI callback SHALL provide on_response_chunk(text: String) for streaming text
 
 #### Scenario: Rust streams response chunks to Swift
 
-**Given** AetherCore is processing AI request
+**Given** AlephCore is processing AI request
 **When** AI provider returns streaming response
 **Then** Rust accumulates chunks in buffer
 **And** calls on_response_chunk(full_text) every 100ms

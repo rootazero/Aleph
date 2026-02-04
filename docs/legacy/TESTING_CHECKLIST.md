@@ -12,7 +12,7 @@
 ### 1. 编译和运行
 
 1. **选择目标**:
-   - 在 Xcode 顶部工具栏，选择 `Aether` scheme
+   - 在 Xcode 顶部工具栏，选择 `Aleph` scheme
    - 选择 `My Mac` 作为运行目标
 
 2. **编译并运行**:
@@ -155,7 +155,7 @@ cat ~/.aleph/config.toml
 **验证 API Key 存储**:
 - [ ] 添加一个 provider 并输入 API key
 - [ ] 打开 macOS "钥匙串访问" 应用
-- [ ] 搜索 "aether"
+- [ ] 搜索 "aleph"
 - [ ] **验证**: API key 存储在 Keychain 中
 - [ ] **验证**: config.toml 中没有明文 API key
 
@@ -234,4 +234,4 @@ cat ~/.aleph/config.toml
 
 1. **Accessibility 权限**: 应用需要 Accessibility 权限才能使用快捷键功能
 2. **首次启动**: 会自动创建 `~/.aleph/` 目录和默认配置
-3. **日志查看**: 使用 `Console.app` 查看应用日志（搜索 "Aether"）
+3. **日志查看**: 使用 `Console.app` 查看应用日志（搜索 "Aleph"）

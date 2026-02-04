@@ -1,6 +1,6 @@
 //
 //  NonDraggableArea.swift
-//  Aether
+//  Aleph
 //
 //  Prevents window dragging in specific areas (e.g., text selection areas).
 //

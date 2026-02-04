@@ -1,8 +1,8 @@
 //
 //  KeyboardEventHandler.swift
-//  Aether
+//  Aleph
 //
-//  Handles keyboard events for Aether, particularly Escape key for cancellation.
+//  Handles keyboard events for Aleph, particularly Escape key for cancellation.
 //  This decouples keyboard handling from EventHandler for better testability.
 //
 

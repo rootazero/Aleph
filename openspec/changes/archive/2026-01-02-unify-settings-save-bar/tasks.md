@@ -3,7 +3,7 @@
 ## Phase 1: Core Infrastructure (Foundation)
 
 ### Task 1.1: Create Unified Save Bar Component
-- [ ] Create `UnifiedSaveBar.swift` in `Aether/Sources/Components/Molecules/`
+- [ ] Create `UnifiedSaveBar.swift` in `Aleph/Sources/Components/Molecules/`
 - [ ] Implement layout: [Status Message] [Spacer] [Cancel Button] [Save Button]
 - [ ] Add state properties: `hasUnsavedChanges: Bool`, `statusMessage: String?`, `isSaving: Bool`
 - [ ] Add action closures: `onSave: () -> Void`, `onCancel: () -> Void`
@@ -15,7 +15,7 @@
 **Validation**: Component renders correctly with all states (idle, unsaved, saving, error)
 
 ### Task 1.2: Implement Form State Management Protocol
-- [ ] Create `FormStateful` protocol in `Aether/Sources/Utils/FormState.swift`
+- [ ] Create `FormStateful` protocol in `Aleph/Sources/Utils/FormState.swift`
 - [ ] Define required properties: `workingCopy`, `savedState`, `hasUnsavedChanges: Bool`
 - [ ] Define required methods: `save() async throws`, `cancel()`, `loadSavedState() async`
 - [ ] Add `isFormValid() -> Bool` for validation
@@ -25,7 +25,7 @@
 **Validation**: Protocol correctly tracks dirty state and validates forms
 
 ### Task 1.3: Implement Navigation Guard
-- [ ] Create `NavigationGuard.swift` utility in `Aether/Sources/Utils/`
+- [ ] Create `NavigationGuard.swift` utility in `Aleph/Sources/Utils/`
 - [ ] Implement `canNavigateAway(hasUnsavedChanges: Bool) -> NavigationAction` enum
 - [ ] Create `showUnsavedChangesAlert() -> NavigationAction` with NSAlert
 - [ ] Alert options: "Save", "Discard", "Cancel" (map to enum cases)
@@ -39,7 +39,7 @@
 ## Phase 2: Provider Settings Integration
 
 ### Task 2.1: Add Test Button to Provider Cards
-- [ ] Modify `SimpleProviderCard.swift` in `Aether/Sources/Components/Molecules/`
+- [ ] Modify `SimpleProviderCard.swift` in `Aleph/Sources/Components/Molecules/`
 - [ ] Add `onTestConnection: () -> Void` closure parameter
 - [ ] Add icon button (SF Symbol: `network`) left of Active toggle
 - [ ] Size: 24x24 hit area, 16x16 icon
@@ -65,7 +65,7 @@
 
 ### Task 2.3: Implement Per-Provider Test with Unsaved Values
 - [ ] Modify `testConnection()` in `ProvidersView` to use `workingConfig`
-- [ ] Pass `workingConfig` (not `savedConfig`) to `AetherCore.testProviderConnectionWithConfig()`
+- [ ] Pass `workingConfig` (not `savedConfig`) to `AlephCore.testProviderConnectionWithConfig()`
 - [ ] Update test button in `SimpleProviderCard` to call modified method
 - [ ] Ensure test works even when provider is not yet saved
 - [ ] Display test result inline below the card

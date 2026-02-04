@@ -15,7 +15,7 @@ mod tests {
         let service = LaunchdService::new().expect("Failed to create LaunchdService");
         let config = DaemonConfig::default();
         let plist = service.generate_plist(&config).unwrap();
-        assert!(plist.contains("com.aether.daemon"));
+        assert!(plist.contains("com.aleph.daemon"));
         assert!(plist.contains("RunAtLoad"));
         assert!(plist.contains("KeepAlive"));
     }

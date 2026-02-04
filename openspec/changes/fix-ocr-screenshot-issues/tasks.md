@@ -18,7 +18,7 @@
 
 - [ ] **1.3** 手动测试并收集日志：
   - 执行一次 OCR 截图
-  - 检查 `~/Desktop/aether_debug.log`
+  - 检查 `~/Desktop/aleph_debug.log`
   - 检查 Console.app 中的 NSLog 输出
   - 验证：确定问题是 provider 配置、网络、还是代码逻辑
   - 依赖：1.1, 1.2

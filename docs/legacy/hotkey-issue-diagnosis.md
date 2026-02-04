@@ -5,18 +5,18 @@
 用户反馈热键（Command + `）无法正常工作，控制台日志显示：
 
 ```
-[Aether] Accessibility permission not granted, requesting...
+[Aleph] Accessibility permission not granted, requesting...
 [EventHandler] Escape key monitor installed
 [Memory] Warning: No tokio runtime, skipping background cleanup task
-[Aether] AlephCore initialized
+[Aleph] AlephCore initialized
 [EventHandler] State changed: listening
-[Aether] Hotkey listening started (⌘~)
+[Aleph] Hotkey listening started (⌘~)
 [EventHandler] VoiceOver announcement: Listening for input
 AFIsDeviceGreymatterEligible Missing entitlements for os_eligibility lookup
 cannot open file at line 51043 of [f0ca7bba1c]
 os_unix.c:51043: (2) open(/private/var/db/DetachedSignatures) - No such file or directory
 [EventHandler] State changed: idle
-[Aether] Core stopped successfully
+[Aleph] Core stopped successfully
 ```
 
 ## 根本原因分析
@@ -31,7 +31,7 @@ os_unix.c:51043: (2) open(/private/var/db/DetachedSignatures) - No such file or 
 
 **代码位置**：
 - `AppDelegate.swift:229-240` - Swift 权限检查
-- `Aether/core/src/hotkey/rdev_listener.rs:65-100` - Rust 热键监听启动
+- `Aleph/core/src/hotkey/rdev_listener.rs:65-100` - Rust 热键监听启动
 
 ### 2. rdev 的权限要求
 
@@ -77,7 +77,7 @@ info:
     NSAccessibilityUsageDescription: "Aleph needs Accessibility permission to detect global hotkeys and capture window context for memory features."
 ```
 
-2. **Aether/core/src/hotkey/rdev_listener.rs** - 在 start_listening 前检查权限
+2. **Aleph/core/src/hotkey/rdev_listener.rs** - 在 start_listening 前检查权限
 
 **实现方案 A**（推荐）：
 ```rust
@@ -86,7 +86,7 @@ info:
 private func initializeRustCore() {
     // 检查权限
     if !ContextCapture.hasAccessibilityPermission() {
-        print("[Aether] Accessibility permission required for hotkey listening")
+        print("[Aleph] Accessibility permission required for hotkey listening")
         eventHandler?.showPermissionPrompt(type: .accessibility)
         return // 不初始化 Rust core
     }

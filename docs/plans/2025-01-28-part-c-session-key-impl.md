@@ -137,7 +137,7 @@ pub mod routing; // NEW: Channel-aware routing and session key system
 
 **Step 4: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check 2>&1 | head -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check 2>&1 | head -30`
 Expected: Compiles with no errors (no consumers yet)
 
 **Step 5: Commit**
@@ -221,7 +221,7 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib routing::session_key::tests 2>&1 | tail -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib routing::session_key::tests 2>&1 | tail -20`
 Expected: FAIL - methods not defined
 
 **Step 3: Implement constructors and agent_id**
@@ -373,7 +373,7 @@ pub fn normalize_agent_id(id: &str) -> String {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib routing::session_key::tests 2>&1 | tail -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib routing::session_key::tests 2>&1 | tail -20`
 Expected: All tests PASS
 
 **Step 5: Commit**
@@ -519,7 +519,7 @@ Append to the `mod tests` block:
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib routing::session_key::tests 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib routing::session_key::tests 2>&1 | tail -30`
 Expected: FAIL - to_key_string and parse not defined
 
 **Step 3: Implement to_key_string and parse**
@@ -714,7 +714,7 @@ impl fmt::Display for SessionKey {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib routing::session_key::tests 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib routing::session_key::tests 2>&1 | tail -30`
 Expected: All tests PASS
 
 **Step 5: Commit**
@@ -890,7 +890,7 @@ pub use session_key::{normalize_agent_id, DmScope, PeerKind, SessionKey, DEFAULT
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib routing 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib routing 2>&1 | tail -30`
 Expected: All tests PASS
 
 **Step 4: Commit**
@@ -1026,7 +1026,7 @@ pub use session_key::{normalize_agent_id, DmScope, PeerKind, SessionKey, DEFAULT
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib routing 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib routing 2>&1 | tail -30`
 Expected: All tests PASS
 
 **Step 4: Commit**
@@ -1509,7 +1509,7 @@ pub use session_key::{normalize_agent_id, DmScope, PeerKind, SessionKey, DEFAULT
 
 **Step 3: Run all routing tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib routing 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib routing 2>&1 | tail -30`
 Expected: All tests PASS
 
 **Step 4: Commit**
@@ -1603,12 +1603,12 @@ impl SessionKey {
 
 **Step 3: Verify everything compiles**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check --features gateway 2>&1 | tail -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check --features gateway 2>&1 | tail -20`
 Expected: Compiles
 
 **Step 4: Run all tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --features gateway 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --features gateway 2>&1 | tail -30`
 Expected: All tests PASS (existing + new)
 
 **Step 5: Commit**
@@ -1627,12 +1627,12 @@ git commit -m "routing: add backward-compatible bridge between old and new Sessi
 
 **Step 1: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --features gateway 2>&1 | tail -40`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --features gateway 2>&1 | tail -40`
 Expected: All tests PASS
 
 **Step 2: Verify routing module is properly exported**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo doc --no-deps --features gateway 2>&1 | tail -10`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo doc --no-deps --features gateway 2>&1 | tail -10`
 Expected: Documentation builds without errors
 
 **Step 3: Final commit**

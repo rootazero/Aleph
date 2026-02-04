@@ -18,7 +18,7 @@ The system SHALL provide default routing rules for `/search`, `/mcp`, and `/skil
 
 #### Scenario: /search rule is preconfigured
 
-- **GIVEN** user installs Aether for the first time
+- **GIVEN** user installs Aleph for the first time
 - **WHEN** default `config.toml` is generated
 - **THEN** routing rules include `/search` pattern
 - **AND** rule has `intent_type = "builtin_search"`

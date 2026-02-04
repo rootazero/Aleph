@@ -1,6 +1,6 @@
 //
 //  ProvidersView.swift
-//  Aether
+//  Aleph
 //
 //  Redesigned to match uisample.png reference design.
 //  Shows all preset providers regardless of configuration status.
@@ -11,7 +11,7 @@ import SwiftUI
 struct ProvidersView: View {
     // MARK: - Dependencies
 
-    let core: AetherCore
+    let core: AlephCore
     @Binding var hasUnsavedChanges: Bool
 
     // MARK: - State

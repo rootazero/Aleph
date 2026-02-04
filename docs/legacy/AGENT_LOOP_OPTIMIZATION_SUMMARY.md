@@ -57,15 +57,15 @@ info!(
 **环境变量使用**:
 ```bash
 # 使用默认 100 步
-./aether
+./aleph
 
 # 临时提升到 150 步
 export AETHER_SKILL_MAX_STEPS=150
-./aether
+./aleph
 
 # 测试上限保护（会被限制为 500）
 export AETHER_SKILL_MAX_STEPS=1000
-./aether
+./aleph
 ```
 
 ---

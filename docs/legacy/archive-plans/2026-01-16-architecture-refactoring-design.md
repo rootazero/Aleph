@@ -59,7 +59,7 @@
 ┌──────────────────────────────────────────┼───────────────────────────────────────────┐
 │                               Rust Core 层 (核心业务逻辑)                             │
 │  ┌───────────────────────────────────────▼───────────────────────────────────────┐  │
-│  │                         uniffi_core.rs (AetherCore)                            │  │
+│  │                         uniffi_core.rs (AlephCore)                            │  │
 │  └───────────────────────────────────────┬───────────────────────────────────────┘  │
 │            ┌─────────────────────────────┼─────────────────────────────┐             │
 │            ↓                             ↓                             ↓             │
@@ -133,7 +133,7 @@
 ```
 src/
 ├── ffi/                     (新建目录)
-│   ├── mod.rs              (AetherCore 主结构 + 核心 API)
+│   ├── mod.rs              (AlephCore 主结构 + 核心 API)
 │   ├── processing.rs       (process/process_multi_turn)
 │   ├── tools.rs            (list_tools/register_mcp_tools)
 │   ├── memory.rs           (search_memory/store_memory/get_stats)
@@ -146,7 +146,7 @@ src/
 
 ### 实施步骤
 
-1. 创建 `src/ffi/mod.rs`，保留 `AetherCore` 核心结构
+1. 创建 `src/ffi/mod.rs`，保留 `AlephCore` 核心结构
 2. 创建 `src/ffi/processing.rs`，移入 `process()` 和 `process_multi_turn()`
 3. 创建 `src/ffi/tools.rs`，移入工具管理相关方法
 4. 创建 `src/ffi/memory.rs`，移入内存操作相关方法

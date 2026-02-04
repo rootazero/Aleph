@@ -84,7 +84,7 @@ pub use parts::{
 
 ### Swift UI (9个文件)
 
-#### 6. `platforms/macos/Aether/Sources/MultiTurn/Models/PartModels.swift`
+#### 6. `platforms/macos/Aleph/Sources/MultiTurn/Models/PartModels.swift`
 **改动**: 添加120行新代码
 ```swift
 // ✨ 新增
@@ -93,7 +93,7 @@ struct PlanPart: Identifiable, Sendable { ... }
 struct PlanStep: Identifiable, Sendable { ... }
 ```
 
-#### 7. `platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationViewModel.swift`
+#### 7. `platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationViewModel.swift`
 **改动**: 添加Part状态和处理
 ```swift
 // ✨ 新增状态
@@ -110,10 +110,10 @@ private func handlePlanPartUpdate(event:) { ... }
 ```
 
 #### 8-9. 新建UI组件
-- `platforms/macos/Aether/Sources/MultiTurn/Views/ReasoningPartView.swift` (78行)
-- `platforms/macos/Aether/Sources/MultiTurn/Views/PlanPartView.swift` (113行)
+- `platforms/macos/Aleph/Sources/MultiTurn/Views/ReasoningPartView.swift` (78行)
+- `platforms/macos/Aleph/Sources/MultiTurn/Views/PlanPartView.swift` (113行)
 
-#### 10. `platforms/macos/Aether/Sources/MultiTurn/Views/ConversationAreaView.swift`
+#### 10. `platforms/macos/Aleph/Sources/MultiTurn/Views/ConversationAreaView.swift`
 **改动**: VStack → LazyVStack
 ```swift
 // ✨ Phase 4: LazyVStack虚拟滚动
@@ -131,7 +131,7 @@ LazyVStack(spacing: 12, pinnedViews: []) {
 }
 ```
 
-#### 11. `platforms/macos/Aether/Sources/Store/AttachmentStore.swift`
+#### 11. `platforms/macos/Aleph/Sources/Store/AttachmentStore.swift`
 **改动**: 添加批量查询
 ```swift
 // ✨ 新增方法
@@ -139,7 +139,7 @@ func batchGetAttachments(messageIds: [String]) -> [String: [StoredAttachment]]
 func getAttachmentsByTopic(topicId: String) -> [String: [StoredAttachment]]
 ```
 
-#### 12. `platforms/macos/Aether/Sources/Store/AttachmentFileManager.swift`
+#### 12. `platforms/macos/Aleph/Sources/Store/AttachmentFileManager.swift`
 **改动**: 添加NSCache缓存
 ```swift
 // ✨ 新增缓存
@@ -344,8 +344,8 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 git add core/src/components/types/parts/reasoning.rs
 git add core/src/components/types/parts/plan.rs
 git add core/src/ffi/agent_loop_adapter.rs
-git add platforms/macos/Aether/Sources/MultiTurn/
-git add platforms/macos/Aether/Sources/Store/
+git add platforms/macos/Aleph/Sources/MultiTurn/
+git add platforms/macos/Aleph/Sources/Store/
 git add docs/PART_DRIVEN_UI_MIGRATION.md
 git add docs/PERFORMANCE_OPTIMIZATION.md
 

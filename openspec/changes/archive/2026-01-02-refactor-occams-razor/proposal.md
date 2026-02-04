@@ -10,7 +10,7 @@
 
 ## Why
 
-The Aether codebase has accumulated unnecessary complexity through code duplication, over-abstraction, and unused dependencies. This violates Occam's Razor principle ("Entities should not be multiplied without necessity") and creates:
+The Aleph codebase has accumulated unnecessary complexity through code duplication, over-abstraction, and unused dependencies. This violates Occam's Razor principle ("Entities should not be multiplied without necessity") and creates:
 - Increased maintenance burden from duplicated logic
 - Slower build times from unused dependencies
 - Reduced code readability from excessive boilerplate
@@ -43,7 +43,7 @@ All changes preserve exact behavior and maintain UniFFI/FFI compatibility.
 ## Overview
 
 ### Problem Statement
-The Aether codebase has accumulated **18 identified violations** of Occam's Razor principle ("Entities should not be multiplied without necessity"), affecting approximately **480 lines of code** across both Rust core and Swift UI layers:
+The Aleph codebase has accumulated **18 identified violations** of Occam's Razor principle ("Entities should not be multiplied without necessity"), affecting approximately **480 lines of code** across both Rust core and Swift UI layers:
 
 1. **High Severity (6 violations)**: Core logic issues causing significant maintenance burden
    - Excessive mutex lock boilerplate (20+ repetitions in `core.rs`)
@@ -192,7 +192,7 @@ This refactoring affects multiple specs but maintains compatibility:
 1. Verify all tests pass (no regressions)
 2. Validate UniFFI bindings generate correctly:
    ```bash
-   cargo run --bin uniffi-bindgen generate src/aether.udl \
+   cargo run --bin uniffi-bindgen generate src/aleph.udl \
      --language swift \
      --out-dir ../Sources/Generated/
    ```

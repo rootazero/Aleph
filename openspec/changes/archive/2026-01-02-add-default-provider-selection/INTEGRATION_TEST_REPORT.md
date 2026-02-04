@@ -31,7 +31,7 @@
 - ✅ "Set as Default" button is disabled for inactive providers
 - ✅ After clicking, indicator changes to "This is the default provider"
 - ✅ "Default" badge appears in provider card list
-- ✅ Config file `~/.aether/config.toml` updates `general.default_provider`
+- ✅ Config file `~/.aleph/config.toml` updates `general.default_provider`
 
 **Automated Checks**:
 - ✅ Code logic verified: `setAsDefaultProvider()` calls `core.setDefaultProvider(providerName:)`
@@ -47,7 +47,7 @@
 **Scenario**: User switches default provider via menu bar
 
 **Steps**:
-1. Click Aether menu bar icon
+1. Click Aleph menu bar icon
 2. Verify enabled providers are listed (between About and Settings)
 3. Click a provider name (e.g., "Claude")
 4. Verify checkmark (✓) moves to selected provider
@@ -75,8 +75,8 @@
 
 **Steps**:
 1. Set default provider to "Claude"
-2. Verify config file: `cat ~/.aether/config.toml | grep default_provider`
-3. Quit and restart Aether
+2. Verify config file: `cat ~/.aleph/config.toml | grep default_provider`
+3. Quit and restart Aleph
 4. Open Settings → Providers
 5. Verify "Claude" shows "Default" badge
 
@@ -262,7 +262,7 @@
 ### Manual Tests: ⚠️ PENDING USER VERIFICATION
 
 **Next Steps for Manual Testing**:
-1. Build and run the app: `xcodebuild && open build/Debug/Aether.app`
+1. Build and run the app: `xcodebuild && open build/Debug/Aleph.app`
 2. Configure at least 2 providers (OpenAI, Claude)
 3. Follow test scenarios above
 4. Verify visual appearance matches design

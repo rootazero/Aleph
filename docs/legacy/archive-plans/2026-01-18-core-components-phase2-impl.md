@@ -10,19 +10,19 @@
 
 **Reference Files:**
 - Design: `docs/plans/2026-01-18-event-driven-agent-loop-design.md`
-- Event Types: `Aether/core/src/event/types.rs`
-- Event Handler Trait: `Aether/core/src/event/handler.rs`
-- Existing IntentClassifier: `Aether/core/src/intent/classifier.rs`
-- Existing ToolRegistry: `Aether/core/src/dispatcher/registry.rs`
+- Event Types: `Aleph/core/src/event/types.rs`
+- Event Handler Trait: `Aleph/core/src/event/handler.rs`
+- Existing IntentClassifier: `Aleph/core/src/intent/classifier.rs`
+- Existing ToolRegistry: `Aleph/core/src/dispatcher/registry.rs`
 
 ---
 
 ## Task 1: Create Components Module Structure
 
 **Files:**
-- Create: `Aether/core/src/components/mod.rs`
-- Create: `Aether/core/src/components/types.rs`
-- Modify: `Aether/core/src/lib.rs`
+- Create: `Aleph/core/src/components/mod.rs`
+- Create: `Aleph/core/src/components/types.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Create components module directory and mod.rs**
 
@@ -266,7 +266,7 @@ impl ComponentContext {
 
 **Step 3: Run syntax check**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check 2>&1 | head -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check 2>&1 | head -30`
 Expected: Error about missing files (intent_analyzer.rs, etc.) - this is expected at this stage
 
 **Step 4: Commit module structure**
@@ -281,8 +281,8 @@ git commit -m "feat(components): add components module structure and shared type
 ## Task 2: Implement IntentAnalyzer Component
 
 **Files:**
-- Create: `Aether/core/src/components/intent_analyzer.rs`
-- Reference: `Aether/core/src/intent/classifier.rs`
+- Create: `Aleph/core/src/components/intent_analyzer.rs`
+- Reference: `Aleph/core/src/intent/classifier.rs`
 
 **Step 1: Write IntentAnalyzer implementation**
 
@@ -479,9 +479,9 @@ impl EventHandler for IntentAnalyzer {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         let AlephEvent::InputReceived(input) = event else {
             return Ok(vec![]);
         };
@@ -498,14 +498,14 @@ impl EventHandler for IntentAnalyzer {
         match complexity {
             Complexity::Simple => {
                 debug!("Simple request - building direct tool call");
-                Ok(vec![AetherEvent::ToolCallRequested(
+                Ok(vec![AlephEvent::ToolCallRequested(
                     self.build_direct_call(&intent, input),
                 )])
             }
             Complexity::NeedsPlan => {
                 debug!("Complex request - requesting planning phase");
                 let detected_steps = self.extract_steps(&input.text);
-                Ok(vec![AetherEvent::PlanRequested(PlanRequest {
+                Ok(vec![AlephEvent::PlanRequested(PlanRequest {
                     input: input.clone(),
                     intent: format!("{:?}", intent),
                     detected_steps,
@@ -572,7 +572,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test intent_analyzer --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test intent_analyzer --no-fail-fast 2>&1`
 Expected: Tests should compile but may need IntentClassifier adjustments
 
 **Step 3: Commit IntentAnalyzer**
@@ -587,7 +587,7 @@ git commit -m "feat(components): implement IntentAnalyzer with complexity detect
 ## Task 3: Implement TaskPlanner Component
 
 **Files:**
-- Create: `Aether/core/src/components/task_planner.rs`
+- Create: `Aleph/core/src/components/task_planner.rs`
 
 **Step 1: Write TaskPlanner implementation**
 
@@ -751,9 +751,9 @@ impl EventHandler for TaskPlanner {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         let AlephEvent::PlanRequested(request) = event else {
             return Ok(vec![]);
         };
@@ -774,7 +774,7 @@ impl EventHandler for TaskPlanner {
 
         debug!("Created plan with {} steps", plan.steps.len());
 
-        Ok(vec![AetherEvent::PlanCreated(plan)])
+        Ok(vec![AlephEvent::PlanCreated(plan)])
     }
 }
 
@@ -842,7 +842,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test task_planner --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test task_planner --no-fail-fast 2>&1`
 Expected: All tests pass
 
 **Step 3: Commit TaskPlanner**
@@ -857,7 +857,7 @@ git commit -m "feat(components): implement TaskPlanner with rule-based step deco
 ## Task 4: Implement ToolExecutor Component
 
 **Files:**
-- Create: `Aether/core/src/components/tool_executor.rs`
+- Create: `Aleph/core/src/components/tool_executor.rs`
 
 **Step 1: Write ToolExecutor implementation**
 
@@ -1025,9 +1025,9 @@ impl EventHandler for ToolExecutor {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         let AlephEvent::ToolCallRequested(request) = event else {
             return Ok(vec![]);
         };
@@ -1050,7 +1050,7 @@ impl EventHandler for ToolExecutor {
         match self.execute_with_retry(request, ctx).await {
             Ok((output, attempts)) => {
                 debug!("Tool {} completed successfully after {} attempts", request.tool, attempts);
-                Ok(vec![AetherEvent::ToolCallCompleted(ToolCallResult {
+                Ok(vec![AlephEvent::ToolCallCompleted(ToolCallResult {
                     call_id: request.call_id.clone(),
                     tool: request.tool.clone(),
                     input: request.parameters.clone(),
@@ -1062,7 +1062,7 @@ impl EventHandler for ToolExecutor {
             }
             Err((error_kind, error_msg, attempts)) => {
                 error!("Tool {} failed after {} attempts: {}", request.tool, attempts, error_msg);
-                Ok(vec![AetherEvent::ToolCallFailed(ToolCallError {
+                Ok(vec![AlephEvent::ToolCallFailed(ToolCallError {
                     call_id: request.call_id.clone(),
                     tool: request.tool.clone(),
                     error: error_msg,
@@ -1121,7 +1121,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test tool_executor --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test tool_executor --no-fail-fast 2>&1`
 Expected: All tests pass
 
 **Step 3: Commit ToolExecutor**
@@ -1136,7 +1136,7 @@ git commit -m "feat(components): implement ToolExecutor with exponential backoff
 ## Task 5: Implement LoopController Component
 
 **Files:**
-- Create: `Aether/core/src/components/loop_controller.rs`
+- Create: `Aleph/core/src/components/loop_controller.rs`
 
 **Step 1: Write LoopController implementation**
 
@@ -1311,9 +1311,9 @@ impl EventHandler for LoopController {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         match event {
             AlephEvent::PlanCreated(plan) => {
                 info!("LoopController received plan with {} steps", plan.steps.len());
@@ -1337,7 +1337,7 @@ impl EventHandler for LoopController {
                     ])
                 } else {
                     warn!("Plan has no executable steps");
-                    Ok(vec![AetherEvent::LoopStop(StopReason::EmptyPlan)])
+                    Ok(vec![AlephEvent::LoopStop(StopReason::EmptyPlan)])
                 }
             }
 
@@ -1348,7 +1348,7 @@ impl EventHandler for LoopController {
                 // TODO: Get actual session from context
                 let mock_session = ExecutionSession::new();
                 if let Some(stop_reason) = self.check_guards(&mock_session, ctx) {
-                    return Ok(vec![AetherEvent::LoopStop(stop_reason)]);
+                    return Ok(vec![AlephEvent::LoopStop(stop_reason)]);
                 }
 
                 // Update step status if this was a plan step
@@ -1359,7 +1359,7 @@ impl EventHandler for LoopController {
                 // Check if plan is complete
                 if self.is_plan_complete() {
                     info!("Plan completed successfully");
-                    return Ok(vec![AetherEvent::LoopStop(StopReason::Completed)]);
+                    return Ok(vec![AlephEvent::LoopStop(StopReason::Completed)]);
                 }
 
                 // Get next step
@@ -1381,7 +1381,7 @@ impl EventHandler for LoopController {
                 }
 
                 // No plan or no next step - complete
-                Ok(vec![AetherEvent::LoopStop(StopReason::Completed)])
+                Ok(vec![AlephEvent::LoopStop(StopReason::Completed)])
             }
 
             AlephEvent::ToolCallFailed(error) => {
@@ -1394,7 +1394,7 @@ impl EventHandler for LoopController {
 
                 // For now, stop on failure
                 // TODO: Add retry logic or alternative path execution
-                Ok(vec![AetherEvent::LoopStop(StopReason::Error(error.error.clone()))])
+                Ok(vec![AlephEvent::LoopStop(StopReason::Error(error.error.clone()))])
             }
 
             _ => Ok(vec![]),
@@ -1519,7 +1519,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test loop_controller --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test loop_controller --no-fail-fast 2>&1`
 Expected: All tests pass
 
 **Step 3: Commit LoopController**
@@ -1534,7 +1534,7 @@ git commit -m "feat(components): implement LoopController with doom loop detecti
 ## Task 6: Implement SessionRecorder Component
 
 **Files:**
-- Create: `Aether/core/src/components/session_recorder.rs`
+- Create: `Aleph/core/src/components/session_recorder.rs`
 
 **Step 1: Write SessionRecorder implementation**
 
@@ -1654,7 +1654,7 @@ impl SessionRecorder {
     }
 
     /// Convert event to session part
-    fn event_to_part(&self, event: &AetherEvent) -> Option<SessionPart> {
+    fn event_to_part(&self, event: &AlephEvent) -> Option<SessionPart> {
         match event {
             AlephEvent::InputReceived(input) => Some(SessionPart::UserInput(UserInputPart {
                 text: input.text.clone(),
@@ -1742,9 +1742,9 @@ impl EventHandler for SessionRecorder {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         let session_id = &ctx.session_id;
 
         // Ensure session exists
@@ -1861,7 +1861,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test session_recorder --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test session_recorder --no-fail-fast 2>&1`
 Expected: All tests pass
 
 **Step 3: Commit SessionRecorder**
@@ -1876,7 +1876,7 @@ git commit -m "feat(components): implement SessionRecorder with SQLite persisten
 ## Task 7: Implement SessionCompactor Component
 
 **Files:**
-- Create: `Aether/core/src/components/session_compactor.rs`
+- Create: `Aleph/core/src/components/session_compactor.rs`
 
 **Step 1: Write SessionCompactor implementation**
 
@@ -2166,9 +2166,9 @@ impl EventHandler for SessionCompactor {
 
     async fn handle(
         &self,
-        _event: &AetherEvent,
+        _event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Get session for checking
         // TODO: Access actual session from context
         // For now, we use a mock check
@@ -2186,7 +2186,7 @@ impl EventHandler for SessionCompactor {
         // let tokens_after = session.total_tokens;
         //
         // if tokens_saved > 0 {
-        //     return Ok(vec![AetherEvent::SessionCompacted(CompactionInfo {
+        //     return Ok(vec![AlephEvent::SessionCompacted(CompactionInfo {
         //         session_id: ctx.session_id.clone(),
         //         tokens_before,
         //         tokens_after,
@@ -2309,7 +2309,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test session_compactor --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test session_compactor --no-fail-fast 2>&1`
 Expected: All tests pass
 
 **Step 3: Commit SessionCompactor**
@@ -2324,8 +2324,8 @@ git commit -m "feat(components): implement SessionCompactor with token tracking 
 ## Task 8: Integrate Components into lib.rs
 
 **Files:**
-- Modify: `Aether/core/src/lib.rs`
-- Modify: `Aether/core/src/components/mod.rs`
+- Modify: `Aleph/core/src/lib.rs`
+- Modify: `Aleph/core/src/components/mod.rs`
 
 **Step 1: Update components mod.rs with placeholder files**
 
@@ -2358,12 +2358,12 @@ pub use crate::components::{
 
 **Step 4: Run cargo check**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check 2>&1 | head -50`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check 2>&1 | head -50`
 Expected: No errors (warnings OK)
 
 **Step 5: Run all component tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test components --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test components --no-fail-fast 2>&1`
 Expected: All tests pass
 
 **Step 6: Commit integration**
@@ -2378,8 +2378,8 @@ git commit -m "feat(components): integrate all 6 core components into lib.rs"
 ## Task 9: Add Integration Tests
 
 **Files:**
-- Create: `Aether/core/src/components/integration_test.rs`
-- Modify: `Aether/core/src/components/mod.rs`
+- Create: `Aleph/core/src/components/integration_test.rs`
+- Modify: `Aleph/core/src/components/mod.rs`
 
 **Step 1: Create integration test file**
 
@@ -2641,7 +2641,7 @@ mod integration_test;
 
 **Step 3: Run integration tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test components::integration_test --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test components::integration_test --no-fail-fast 2>&1`
 Expected: All tests pass
 
 **Step 4: Commit integration tests**
@@ -2657,17 +2657,17 @@ git commit -m "test(components): add integration tests for event chain"
 
 **Step 1: Run all tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test 2>&1 | tail -30`
 Expected: All tests pass
 
 **Step 2: Run cargo clippy**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo clippy 2>&1 | head -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo clippy 2>&1 | head -30`
 Expected: No errors (warnings OK)
 
 **Step 3: Build release**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo build --release 2>&1 | tail -10`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo build --release 2>&1 | tail -10`
 Expected: Build succeeds
 
 **Step 4: Create summary commit**

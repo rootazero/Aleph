@@ -250,7 +250,7 @@ The system SHALL provide an MCP client that manages builtin services and externa
 
 #### Scenario: Handle tool not found
 - **WHEN** `call_tool()` is called with an unknown tool name
-- **THEN** the system SHALL return `AetherError::McpToolNotFound`
+- **THEN** the system SHALL return `AlephError::McpToolNotFound`
 
 ---
 
@@ -300,7 +300,7 @@ The system SHALL support Stdio transport for communicating with external MCP ser
 
 #### Scenario: Handle subprocess timeout
 - **WHEN** a subprocess does not respond within timeout (default: 30 seconds)
-- **THEN** the system SHALL return `AetherError::McpTimeout`
+- **THEN** the system SHALL return `AlephError::McpTimeout`
 - **AND** the system SHALL NOT terminate the subprocess
 
 ---

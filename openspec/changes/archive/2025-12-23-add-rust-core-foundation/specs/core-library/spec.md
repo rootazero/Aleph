@@ -14,10 +14,10 @@ The system SHALL provide a library-based Rust core that can be compiled as a dyn
 - **AND** the library contains all required dependencies
 
 ### Requirement: Core Lifecycle Management
-The system SHALL provide an `AetherCore` struct that manages the lifecycle of all core components (hotkey listener, clipboard manager, event handler).
+The system SHALL provide an `AlephCore` struct that manages the lifecycle of all core components (hotkey listener, clipboard manager, event handler).
 
 #### Scenario: Initialize core with event handler
-- **WHEN** client calls `AetherCore::new(event_handler)`
+- **WHEN** client calls `AlephCore::new(event_handler)`
 - **THEN** the core initializes successfully
 - **AND** stores a reference to the event handler for callbacks
 - **AND** initializes tokio async runtime
@@ -36,7 +36,7 @@ The system SHALL provide an `AetherCore` struct that manages the lifecycle of al
 
 #### Scenario: Handle initialization error
 - **WHEN** core initialization fails (e.g., hotkey listener cannot start)
-- **THEN** the constructor returns an AetherError
+- **THEN** the constructor returns an AlephError
 - **AND** provides a descriptive error message
 
 ### Requirement: Thread-Safe Callback Invocation
@@ -49,16 +49,16 @@ The system SHALL support thread-safe callback invocation from Rust to client cod
 - **AND** uses Arc<dyn EventHandler> for shared ownership
 
 ### Requirement: Error Handling
-The system SHALL define a custom error type (`AetherError`) that represents all possible error conditions in the core library.
+The system SHALL define a custom error type (`AlephError`) that represents all possible error conditions in the core library.
 
 #### Scenario: Hotkey listener error
 - **WHEN** hotkey listener fails to start (e.g., permissions denied)
-- **THEN** returns `AetherError::HotkeyError` with descriptive message
+- **THEN** returns `AlephError::HotkeyError` with descriptive message
 - **AND** error can be propagated through Result<T, E>
 
 #### Scenario: Clipboard operation error
 - **WHEN** clipboard read fails (e.g., unsupported content type)
-- **THEN** returns `AetherError::ClipboardError` with details
+- **THEN** returns `AlephError::ClipboardError` with details
 - **AND** error message indicates the failure reason
 
 #### Scenario: No panics in library code
@@ -71,7 +71,7 @@ The system SHALL define a custom error type (`AetherError`) that represents all 
 The system SHALL initialize a tokio async runtime to support non-blocking operations for future async features (AI API calls).
 
 #### Scenario: Runtime initialization
-- **WHEN** AetherCore is initialized
+- **WHEN** AlephCore is initialized
 - **THEN** tokio runtime is created successfully
 - **AND** supports multi-threaded execution
 - **AND** allows spawning async tasks
@@ -88,11 +88,11 @@ The system SHALL define traits for all core components (HotkeyListener, Clipboar
 #### Scenario: Swap clipboard implementation
 - **WHEN** developer wants to use a different clipboard backend
 - **THEN** they implement the ClipboardManager trait
-- **AND** pass the new implementation to AetherCore
+- **AND** pass the new implementation to AlephCore
 - **AND** no changes to core logic are required
 
 #### Scenario: Mock components in tests
-- **WHEN** writing unit tests for AetherCore
+- **WHEN** writing unit tests for AlephCore
 - **THEN** developer creates mock implementations of traits
-- **AND** injects mocks into AetherCore constructor
+- **AND** injects mocks into AlephCore constructor
 - **AND** tests core logic in isolation

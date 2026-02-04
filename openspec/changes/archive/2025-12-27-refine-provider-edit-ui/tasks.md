@@ -98,8 +98,8 @@
 - [x] 4.4.4 Test custom provider with same name as preset (user-defined names prevent conflicts)
 
 ## 5. Syntax Validation
-- [x] 5.1 Run Swift syntax checker: `$HOME/.python3/bin/python verify_swift_syntax.py Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
-- [x] 5.2 Run Swift syntax checker: `$HOME/.python3/bin/python verify_swift_syntax.py Aether/Sources/Models/PresetProviders.swift`
+- [x] 5.1 Run Swift syntax checker: `$HOME/.python3/bin/python verify_swift_syntax.py Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
+- [x] 5.2 Run Swift syntax checker: `$HOME/.python3/bin/python verify_swift_syntax.py Aleph/Sources/Models/PresetProviders.swift`
 - [x] 5.3 Fix any syntax errors reported
 
 ## 6. Documentation
@@ -186,8 +186,8 @@ All tasks have been completed successfully:
    - Consistent form validation
 
 ### Files Modified
-- `Aether/Sources/Models/PresetProviders.swift` - Added Custom preset
-- `Aether/Sources/Components/Organisms/ProviderEditPanel.swift` - Complete UI refactor
+- `Aleph/Sources/Models/PresetProviders.swift` - Added Custom preset
+- `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift` - Complete UI refactor
 
 ### No Breaking Changes
 - Configuration file format unchanged

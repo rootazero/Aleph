@@ -23,10 +23,10 @@
 - `settings-ui-layout` - 修改Provider编辑面板的交互逻辑和布局
 
 **Affected code:**
-- `Aether/Sources/ProvidersView.swift` - 供应商列表点击逻辑调整
-- `Aether/Sources/Components/Organisms/ProviderEditPanel.swift` - 移除中间状态,直接展示编辑表单
-- `Aether/core/src/config/mod.rs` - 可能需要扩展ProviderConfig支持更多参数
-- `Aether/core/src/aether.udl` - UniFFI接口可能需要更新以支持新参数
+- `Aleph/Sources/ProvidersView.swift` - 供应商列表点击逻辑调整
+- `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift` - 移除中间状态,直接展示编辑表单
+- `Aleph/core/src/config/mod.rs` - 可能需要扩展ProviderConfig支持更多参数
+- `Aleph/core/src/aleph.udl` - UniFFI接口可能需要更新以支持新参数
 
 **Breaking changes:**
 无 - 这是UI重构,不影响底层数据结构和API

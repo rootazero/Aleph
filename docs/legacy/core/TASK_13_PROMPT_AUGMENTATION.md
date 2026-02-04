@@ -8,7 +8,7 @@ Task 13 实现了提示词增强功能，完成了记忆模块的最后一个核
 
 ### 1. PromptAugmenter 核心功能
 
-**文件**: `Aether/core/src/memory/augmentation.rs`
+**文件**: `Aleph/core/src/memory/augmentation.rs`
 
 #### 主要特性
 
@@ -229,11 +229,11 @@ User: Show me an example of error handling
 记忆模块已完全实现，可以集成到主 AlephCore 工作流程中：
 
 1. **集成到 core.rs**
-   - 在 `AetherCore::process_clipboard()` 中调用检索
+   - 在 `AlephCore::process_clipboard()` 中调用检索
    - 使用增强后的提示词调用 AI provider
 
 2. **UniFFI 绑定**
-   - 将 `PromptAugmenter` 添加到 `aether.udl`
+   - 将 `PromptAugmenter` 添加到 `aleph.udl`
    - 暴露配置选项给 Swift UI
 
 3. **Swift UI**
@@ -245,8 +245,8 @@ User: Show me an example of error handling
 
 - **Proposal**: `openspec/changes/add-contextual-memory-rag/proposal.md`
 - **Tasks**: `openspec/changes/add-contextual-memory-rag/tasks.md`
-- **Implementation**: `Aether/core/src/memory/augmentation.rs`
-- **Tests**: `Aether/core/src/memory/integration_tests.rs`
+- **Implementation**: `Aleph/core/src/memory/augmentation.rs`
+- **Tests**: `Aleph/core/src/memory/integration_tests.rs`
 
 ---
 

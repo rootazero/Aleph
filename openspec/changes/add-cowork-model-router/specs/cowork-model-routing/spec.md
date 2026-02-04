@@ -20,13 +20,13 @@ The system SHALL define model profiles that describe AI model capabilities.
 - **WHEN** loading `[cowork.model_profiles.*]` sections from config.toml
 - **THEN** each section is parsed into `ModelProfile` struct
 - **AND** profiles are stored in HashMap by ID
-- **AND** invalid profile causes `AetherError::InvalidConfig`
-- **AND** duplicate profile ID causes `AetherError::InvalidConfig`
+- **AND** invalid profile causes `AlephError::InvalidConfig`
+- **AND** duplicate profile ID causes `AlephError::InvalidConfig`
 
 #### Scenario: Validate profile provider references
 - **WHEN** profile references a provider name
 - **THEN** provider must exist in `[providers]` section
-- **AND** missing provider causes `AetherError::InvalidConfig`
+- **AND** missing provider causes `AlephError::InvalidConfig`
 - **AND** error message lists available providers
 
 ### Requirement: Capability Tags
@@ -66,7 +66,7 @@ The system SHALL define routing rules that map task types to model profiles.
 - **THEN** task type mappings are parsed
 - **AND** default_model is set
 - **AND** cost_strategy is set (cheapest, balanced, best_quality)
-- **AND** invalid profile reference causes `AetherError::InvalidConfig`
+- **AND** invalid profile reference causes `AlephError::InvalidConfig`
 
 #### Scenario: Define cost strategy
 - **WHEN** cost_strategy is set
@@ -108,7 +108,7 @@ The system SHALL implement model matching logic for task routing.
 #### Scenario: Handle no match
 - **WHEN** no profile matches task requirements
 - **AND** no default_model is configured
-- **THEN** `route()` returns `AetherError::NoModelAvailable`
+- **THEN** `route()` returns `AlephError::NoModelAvailable`
 - **AND** error includes task type and required capabilities
 
 ### Requirement: Pipeline Executor
@@ -190,18 +190,18 @@ The system SHALL validate model routing configuration at load time.
 
 #### Scenario: Detect invalid profile reference
 - **WHEN** routing rule references non-existent profile ID
-- **THEN** error type is `AetherError::InvalidConfig`
+- **THEN** error type is `AlephError::InvalidConfig`
 - **AND** error message includes rule and available profiles
 
 #### Scenario: Detect duplicate profile IDs
 - **WHEN** config has duplicate profile IDs
-- **THEN** error type is `AetherError::InvalidConfig`
+- **THEN** error type is `AlephError::InvalidConfig`
 - **AND** error message lists duplicate IDs
 
 #### Scenario: Validate default model exists
 - **WHEN** default_model is set
 - **AND** profile with that ID doesn't exist
-- **THEN** error type is `AetherError::InvalidConfig`
+- **THEN** error type is `AlephError::InvalidConfig`
 - **AND** error message lists available profiles
 
 ### Requirement: Settings UI

@@ -61,7 +61,7 @@
 
 ### Module 1: Config Module (扩展)
 
-**文件**: `Aether/core/src/config/mod.rs`
+**文件**: `Aleph/core/src/config/mod.rs`
 
 **职责**:
 - 扩展 `RoutingRuleConfig` 结构体（新增 3 个字段）
@@ -229,7 +229,7 @@ Aleph/core/src/payload/
 
 ### Module 3: Router Module (增强)
 
-**文件**: `Aether/core/src/router/mod.rs` + `decision.rs`
+**文件**: `Aleph/core/src/router/mod.rs` + `decision.rs`
 
 **职责**:
 - 新增 `RoutingDecision` 数据结构
@@ -363,7 +363,7 @@ fn test_routing_decision_capabilities() {
 
 ### Module 4: Capability Executor (🆕 新建)
 
-**文件**: `Aether/core/src/capability/mod.rs`（新建）
+**文件**: `Aleph/core/src/capability/mod.rs`（新建）
 
 **职责**:
 - 按照固定顺序执行 capabilities（memory → search → mcp）
@@ -550,7 +550,7 @@ async fn test_execute_search_capability_not_implemented() {
 
 ### Module 5: Prompt Assembler (🆕 新建)
 
-**文件**: `Aether/core/src/payload/assembler.rs`
+**文件**: `Aleph/core/src/payload/assembler.rs`
 
 **职责**:
 - 将 `AgentPayload` 转换为最终的 System Prompt
@@ -601,7 +601,7 @@ impl PromptAssembler {
 
 ### Module 6: Core Orchestrator (重构)
 
-**文件**: `Aether/core/src/core.rs`
+**文件**: `Aleph/core/src/core.rs`
 
 **职责**:
 - 重构 `process_with_ai_internal()` 方法
@@ -687,7 +687,7 @@ impl AlephCore {
 
 ### Component 7: RoutingView.swift (UI 扩展)
 
-**文件**: `Aether/Sources/Components/Organisms/RoutingView.swift`
+**文件**: `Aleph/Sources/Components/Organisms/RoutingView.swift`
 
 **职责**:
 - 新增 Capabilities 配置 UI
@@ -811,7 +811,7 @@ struct RoutingRuleEditView: View {
 
 7. 🔮 `payload/mod.rs` - AgentContext.workflow_state 字段
 8. 🔮 `config/mod.rs` - RoutingRuleConfig 添加 5 个 Skills 字段
-9. 🔮 `aether.udl` - RoutingRuleConfig 添加 Skills 字段定义
+9. 🔮 `aleph.udl` - RoutingRuleConfig 添加 Skills 字段定义
 
 ### Phase 2: 路由增强（必须）
 

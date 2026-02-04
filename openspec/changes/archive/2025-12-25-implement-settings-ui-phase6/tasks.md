@@ -10,8 +10,8 @@
 - [x] 1.2 Implement config file watcher in `core/src/config/watcher.rs`
   - Use `notify` crate with FSEvents backend
   - Debounce changes (wait 500ms before reload)
-  - Trigger callback on `AetherEventHandler` when config changes
-  - ✅ Fully implemented with integration in AetherCore
+  - Trigger callback on `AlephEventHandler` when config changes
+  - ✅ Fully implemented with integration in AlephCore
 - [x] 1.3 Add config validation in `core/src/config.rs`
   - Validate regex patterns (compile test)
   - Validate provider names (must match known providers)
@@ -30,7 +30,7 @@
   - `update_behavior(behavior: BehaviorConfig)` - Returns Result<(), ConfigError>
   - `validate_regex(pattern: String)` - Returns Result<bool, String>
   - `test_provider_connection(provider: String)` - Returns Result<String, ProviderError>
-  - ✅ All methods implemented in AetherCore
+  - ✅ All methods implemented in AlephCore
 
 ## 2. Provider Configuration UI (Swift)
 
@@ -124,12 +124,12 @@
 
 ## 6. Config Hot-Reload (Swift + Rust)
 
-- [x] 6.1 Add `onConfigChanged(config: Config)` callback to `AetherEventHandler`
+- [x] 6.1 Add `onConfigChanged(config: Config)` callback to `AlephEventHandler`
   - Rust calls this when config file changes externally
-  - ✅ Implemented in `aether.udl` and `event_handler.rs`
+  - ✅ Implemented in `aleph.udl` and `event_handler.rs`
 - [x] 6.2 Implement callback handler in `EventHandler.swift`
   - Dispatch to main queue
-  - Post `NSNotification.Name("AetherConfigDidChange")`
+  - Post `NSNotification.Name("AlephConfigDidChange")`
   - ✅ Implemented with toast notification
 - [x] 6.3 Update SettingsView to observe config changes
   - Add `.onReceive(NotificationCenter.publisher)` observer
@@ -160,7 +160,7 @@
   - Test: Save provider → Quit app → Relaunch → Verify persisted
   - Test: Edit rule → External config.toml edit → Verify hot-reload
   - Test: Keychain integration (save/load/delete API key)
-  - ✅ Created AetherTests/ConfigPersistenceTests.swift with 6 integration tests
+  - ✅ Created AlephTests/ConfigPersistenceTests.swift with 6 integration tests
 - [x] 8.3 Manual testing checklist
   - Add OpenAI API key → Test connection → Invoke GPT-4o
   - Create rule "^/test → Claude" → Test routing with "/test hello"
@@ -269,11 +269,11 @@ Before marking complete, verify:
   - Links to all documentation
 
 ### Files Modified/Created:
-- `Aether/core/src/config/mod.rs` - Added 13 unit tests
-- `AetherTests/ConfigPersistenceTests.swift` - Created new file with integration tests
+- `Aleph/core/src/config/mod.rs` - Added 13 unit tests
+- `AlephTests/ConfigPersistenceTests.swift` - Created new file with integration tests
 - `docs/manual-testing-checklist.md` - Created comprehensive testing guide
 - `CLAUDE.md` - Updated Phase 6 status to "✅ COMPLETED"
-- `Aether/config.example.toml` - Enhanced with Phase 6 sections
+- `Aleph/config.example.toml` - Enhanced with Phase 6 sections
 - `docs/settings-ui-guide.md` - Created complete user guide
 - `README.md` - Created from scratch with full project documentation
 

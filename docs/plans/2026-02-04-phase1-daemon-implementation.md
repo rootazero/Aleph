@@ -105,7 +105,7 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             socket_path: "~/.aleph/daemon.sock".to_string(),
-            binary_path: PathBuf::from("~/.aleph/bin/aether-daemon"),
+            binary_path: PathBuf::from("~/.aleph/bin/aleph-daemon"),
             log_dir: PathBuf::from("~/.aleph/logs"),
             nice_value: 10,
             soft_mem_limit: 512 * 1024 * 1024,  // 512MB
@@ -362,7 +362,7 @@ mod tests {
         let service = LaunchdService::new();
         let config = DaemonConfig::default();
         let plist = service.generate_plist(&config).unwrap();
-        assert!(plist.contains("com.aether.daemon"));
+        assert!(plist.contains("com.aleph.daemon"));
         assert!(plist.contains("RunAtLoad"));
         assert!(plist.contains("KeepAlive"));
     }
@@ -394,7 +394,7 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::process::Command;
 
-const LAUNCHD_LABEL: &str = "com.aether.daemon";
+const LAUNCHD_LABEL: &str = "com.aleph.daemon";
 
 pub struct LaunchdService {
     plist_path: PathBuf,
@@ -544,7 +544,7 @@ impl ServiceManager for LaunchdService {
     async fn start(&self) -> Result<()> {
         if !self.plist_path.exists() {
             return Err(DaemonError::ServiceError(
-                "Service not installed. Run 'aether daemon install' first.".to_string(),
+                "Service not installed. Run 'aleph daemon install' first.".to_string(),
             ));
         }
 
@@ -895,7 +895,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ipc_server_creation() {
-        let socket_path = "/tmp/aether-test.sock";
+        let socket_path = "/tmp/aleph-test.sock";
         let _ = std::fs::remove_file(socket_path); // Clean up if exists
 
         let server = IpcServer::new(socket_path.to_string());
@@ -1197,7 +1197,7 @@ mod tests {
     async fn test_daemon_cli_command_parsing() {
         use clap::Parser;
 
-        let args = vec!["aether", "daemon", "install"];
+        let args = vec!["aleph", "daemon", "install"];
         let cli = DaemonCli::try_parse_from(args);
         assert!(cli.is_ok());
 
@@ -1270,7 +1270,7 @@ impl DaemonCli {
         service.install(&config).await?;
 
         info!("✓ Daemon service installed successfully");
-        info!("  Run 'aether daemon start' to start the service");
+        info!("  Run 'aleph daemon start' to start the service");
 
         Ok(())
     }
@@ -1519,22 +1519,22 @@ JSON-RPC 2.0 server over Unix Domain Socket:
 
 ```bash
 # Install daemon as system service
-aether daemon install
+aleph daemon install
 
 # Start daemon
-aether daemon start
+aleph daemon start
 
 # Check status
-aether daemon status
+aleph daemon status
 
 # Stop daemon
-aether daemon stop
+aleph daemon stop
 
 # Uninstall daemon
-aether daemon uninstall
+aleph daemon uninstall
 
 # Run in foreground (development)
-aether daemon run
+aleph daemon run
 ```
 
 ### Programmatic Usage
@@ -1564,7 +1564,7 @@ Default configuration:
 ```rust
 DaemonConfig {
     socket_path: "~/.aleph/daemon.sock",
-    binary_path: "~/.aleph/bin/aether-daemon",
+    binary_path: "~/.aleph/bin/aleph-daemon",
     log_dir: "~/.aleph/logs",
     nice_value: 10,
     soft_mem_limit: 512 * 1024 * 1024,  // 512MB
@@ -1623,7 +1623,7 @@ After Phase 1 completion:
 
 - [ ] All unit tests pass: `cargo test --lib daemon::`
 - [ ] Integration test passes: `cargo test --lib test_daemon_full_lifecycle -- --ignored`
-- [ ] CLI commands work: `aether daemon install/start/stop/status`
+- [ ] CLI commands work: `aleph daemon install/start/stop/status`
 - [ ] Daemon runs in background without errors
 - [ ] IPC communication works (can send JSON-RPC requests)
 - [ ] Resource governor correctly throttles under high load

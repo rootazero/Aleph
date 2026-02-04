@@ -1,13 +1,13 @@
 #!/bin/bash
-# Update Aether app icon with the new enlarged satellite star design
+# Update Aleph app icon with the new enlarged satellite star design
 # Requires: rsvg-convert (install via: brew install librsvg)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR/.."
-SVG_SOURCE="$PROJECT_DIR/Aether/Assets.xcassets/AppIcon-Source.imageset/AetherIcon.svg"
-APPICONSET_DIR="$PROJECT_DIR/Aether/Assets.xcassets/AppIcon.appiconset"
+SVG_SOURCE="$PROJECT_DIR/Aleph/Assets.xcassets/AppIcon-Source.imageset/AlephIcon.svg"
+APPICONSET_DIR="$PROJECT_DIR/Aleph/Assets.xcassets/AppIcon.appiconset"
 
 # Check if source SVG exists
 if [ ! -f "$SVG_SOURCE" ]; then

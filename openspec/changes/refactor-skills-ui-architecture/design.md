@@ -20,7 +20,7 @@
 ### 1.2 数据类型定义
 
 ```rust
-// aether.udl
+// aleph.udl
 
 /// Skill 类型枚举
 enum SkillType {
@@ -279,7 +279,7 @@ struct SkillPermissionsEditor: View {
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Config File (~/.aether/config.toml)                          │
+│  Config File (~/.aleph/config.toml)                          │
 │  ───────────────────────────────────────────────────────────────────│
 │  [skills.fs]                                                         │
 │  enabled = true                                                      │
@@ -288,7 +288,7 @@ struct SkillPermissionsEditor: View {
                                  │ read/write
                                  ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Rust Core (AetherCore)                                              │
+│  Rust Core (AlephCore)                                              │
 │  ───────────────────────────────────────────────────────────────────│
 │  skills: Vec<UnifiedSkillConfig>                                     │
 │  skill_statuses: HashMap<String, SkillStatusInfo>                    │
@@ -360,7 +360,7 @@ env = { LINEAR_API_KEY = "..." }
 ```toml
 [skills]
 enabled = true
-skills_dir = "~/.aether/skills"
+skills_dir = "~/.aleph/skills"
 auto_match_enabled = true
 ```
 
@@ -402,7 +402,7 @@ color = "#5E6AD2"
 
 # 提示模板 Skills
 [skills.templates]
-dir = "~/.aether/skills"
+dir = "~/.aleph/skills"
 auto_match_enabled = true
 ```
 
@@ -456,7 +456,7 @@ fn migrate_legacy_config(old_config: &Config) -> Config {
 ### 4.4 迁移触发条件
 
 ```rust
-impl AetherCore {
+impl AlephCore {
     fn load_config() -> Result<Config> {
         let config = Config::load_from_file()?;
 

@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether currently operates in a single-mode paradigm where users type natural language, which is routed to AI providers. While effective for chat, this model lacks:
+Aleph currently operates in a single-mode paradigm where users type natural language, which is routed to AI providers. While effective for chat, this model lacks:
 
 1. **Discoverability**: Users must know command syntax (e.g., `/draw`, `/en`) in advance
 2. **Hierarchy**: No way to browse nested commands (MCP tools, skills)
@@ -85,7 +85,7 @@ Aether currently operates in a single-mode paradigm where users type natural lan
 **What**: All command tree logic lives in Rust; Swift only renders
 
 **Why**:
-- Consistent with Aether's architecture (no business logic in Swift)
+- Consistent with Aleph's architecture (no business logic in Swift)
 - Enables future cross-platform support (Windows/Linux)
 - Single source of truth for command availability
 
@@ -208,14 +208,14 @@ Text(hint)
 **Why**:
 - Consistent experience for international users
 - No burden on users to translate system commands
-- Follows Aether's existing i18n pattern (Localizable.strings)
+- Follows Aleph's existing i18n pattern (Localizable.strings)
 
 ## Data Structures
 
 ### UniFFI Types (Rust → Swift)
 
 ```rust
-// In aether.udl
+// In aleph.udl
 
 enum CommandType {
     "Action",     // Execute immediately
@@ -233,8 +233,8 @@ dictionary CommandNode {
     string? source_id;
 };
 
-// Extended AetherCore interface
-interface AetherCore {
+// Extended AlephCore interface
+interface AlephCore {
     // ... existing methods ...
 
     // Command Registry API

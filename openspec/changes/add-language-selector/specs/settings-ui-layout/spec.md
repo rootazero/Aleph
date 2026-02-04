@@ -28,23 +28,23 @@ The General Settings tab SHALL provide a language selector to allow users to ove
 - **WHEN** the user selects a language from the dropdown (other than current selection)
 - **THEN** the new selection SHALL be saved to `config.toml` immediately
 - **AND** an alert dialog SHALL appear with the title "Restart Required"
-- **AND** the alert message SHALL read: "Language will change after restarting Aether. Restart now?"
+- **AND** the alert message SHALL read: "Language will change after restarting Aleph. Restart now?"
 - **AND** the alert SHALL have two buttons:
   - "Restart Now" - terminates the app immediately (`NSApp.terminate(nil)`)
   - "Later" - dismisses the alert and keeps the app running
 
 #### Scenario: Language preference persists across sessions
 - **GIVEN** the user has selected a specific language
-- **WHEN** the user restarts Aether
+- **WHEN** the user restarts Aleph
 - **THEN** the app SHALL launch with the selected language applied to all UI elements
 - **AND** the Settings dropdown SHALL show the selected language as active
-- **AND** the `~/.aether/config.toml` file SHALL contain the language setting in the `[general]` section
+- **AND** the `~/.aleph/config.toml` file SHALL contain the language setting in the `[general]` section
 
 #### Scenario: Selecting "System Default" removes language override
 - **GIVEN** the user has previously selected a specific language
 - **WHEN** the user selects "System Default" from the dropdown
 - **THEN** the language override SHALL be removed from `config.toml`
-- **AND** after restart, Aether SHALL follow the macOS system language setting
+- **AND** after restart, Aleph SHALL follow the macOS system language setting
 - **AND** the restart alert SHALL still be shown (since language may change)
 
 ### Requirement: Language Dropdown Positioning and Styling

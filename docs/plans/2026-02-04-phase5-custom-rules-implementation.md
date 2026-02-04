@@ -303,7 +303,7 @@ action:
   type: notify
 risk: low
 metadata:
-  author: "aether-community"
+  author: "aleph-community"
   tags: ["test", "example"]
 "#;
         let rule: YamlRule = serde_yaml::from_str(yaml).unwrap();
@@ -1935,7 +1935,7 @@ Create `examples/policies.yaml`:
   risk: low
   metadata:
     tags: ["battery", "alert"]
-    author: "aether-mvp"
+    author: "aleph-mvp"
 
 - name: "Meeting Auto-Mute"
   enabled: true
@@ -1971,7 +1971,7 @@ Create `examples/policies.yaml`:
   risk: low
   metadata:
     tags: ["health", "productivity"]
-    author: "aether-community"
+    author: "aleph-community"
 
 - name: "Refactoring Mode Detection (Disabled for MVP)"
   enabled: false

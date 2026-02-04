@@ -136,7 +136,7 @@ private static let thumbnailCache: NSCache<NSString, NSImage> = {
     let cache = NSCache<NSString, NSImage>()
     cache.countLimit = 100              // 最多100个对象
     cache.totalCostLimit = 50 * 1024 * 1024  // 最多50MB内存
-    cache.name = "com.aether.thumbnailCache"
+    cache.name = "com.aleph.thumbnailCache"
     return cache
 }()
 

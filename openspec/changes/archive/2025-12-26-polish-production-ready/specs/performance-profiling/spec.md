@@ -155,7 +155,7 @@ The system SHALL allow exporting profiling data for offline analysis (developer 
 #### Scenario: Export profiling data
 
 - **WHEN** user enables `export_profiling_data` in config (hidden option)
-- **THEN** profiling data is written to `~/.aether/profiling.jsonl`
+- **THEN** profiling data is written to `~/.aleph/profiling.jsonl`
 - **AND** each line is JSON object: `{"stage": "ai_request", "latency_ms": 450, "provider": "OpenAI", "timestamp": "..."}`
 - **AND** file is rotated daily (same as logs)
 
@@ -222,5 +222,5 @@ None - This is a new capability with no modifications to existing specs.
 ## References
 
 - **Related Spec**: `structured-logging` - Performance logs use logging framework
-- **Related Spec**: `core-library` - AetherCore integrates metrics module
+- **Related Spec**: `core-library` - AlephCore integrates metrics module
 - **Depends On**: `tracing` for instrumentation, `std::time::Instant` for timing

@@ -1,6 +1,6 @@
 //
 //  HaloState.swift
-//  Aether
+//  Aleph
 //
 //  Simplified Halo state enum (V2 refactored).
 //  8 unified states for cleaner state management.

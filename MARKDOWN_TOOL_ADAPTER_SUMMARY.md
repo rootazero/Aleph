@@ -10,14 +10,14 @@
 
 ## 🎯 Executive Summary
 
-Successfully implemented a complete **Markdown Tool Adapter** system that bridges Aether's type-safe Rust architecture with OpenClaw's flexible Markdown-based skill format. This enables:
+Successfully implemented a complete **Markdown Tool Adapter** system that bridges Aleph's type-safe Rust architecture with OpenClaw's flexible Markdown-based skill format. This enables:
 
 1. **Runtime-loadable CLI tools** defined in Markdown (SKILL.md)
 2. **Evolution Loop integration** for auto-generating skills from usage patterns
 3. **Hot reload support** for development and production updates
-4. **100% OpenClaw compatibility** while adding Aether-specific enhancements
+4. **100% OpenClaw compatibility** while adding Aleph-specific enhancements
 
-This is the **"Missing Link"** that allows Aether's evolution system to generate executable skills without recompiling.
+This is the **"Missing Link"** that allows Aleph's evolution system to generate executable skills without recompiling.
 
 ---
 
@@ -65,7 +65,7 @@ Total: 16 tests, 0 failures
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                 MarkdownCliTool (Phase 1)                    │
-│  - Dynamic AetherToolDyn implementation                      │
+│  - Dynamic AlephToolDyn implementation                      │
 │  - JSON Schema generation from input_hints                   │
 │  - Safety-first CLI args conversion (args array)             │
 │  - Sandbox execution (Host / Docker / VirtualFs)            │
@@ -73,8 +73,8 @@ Total: 16 tests, 0 failures
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    AetherToolServer                          │
-│  - Register as Box<dyn AetherToolDyn>                        │
+│                    AlephToolServer                          │
+│  - Register as Box<dyn AlephToolDyn>                        │
 │  - Available for LLM tool selection                          │
 │  - Execute with typed args → MarkdownToolOutput              │
 └─────────────────────────────────────────────────────────────┘
@@ -93,18 +93,18 @@ Total: 16 tests, 0 failures
 
 ### Phase 1: Runtime Container (Core Adapter)
 
-**Goal**: Load SKILL.md files and execute them as Aether tools
+**Goal**: Load SKILL.md files and execute them as Aleph tools
 
 **Files**:
-- `spec.rs` (267 lines) - AetherSkillSpec data structures
+- `spec.rs` (267 lines) - AlephSkillSpec data structures
 - `parser.rs` (189 lines) - YAML frontmatter parsing
-- `tool_adapter.rs` (339 lines) - MarkdownCliTool with AetherToolDyn
+- `tool_adapter.rs` (339 lines) - MarkdownCliTool with AlephToolDyn
 - `executor.rs` (209 lines) - Host and Docker execution
 - `loader.rs` (238 lines) - Batch loading with error tolerance
 
 **Key Features**:
 - OpenClaw format compatibility (zero modification)
-- Aether extensions: security, input_hints, docker, evolution
+- Aleph extensions: security, input_hints, docker, evolution
 - Safety-first args conversion (prioritize array over object)
 - Docker-aware binary checking
 - Strict image resolution (no blind fallback to alpine)
@@ -117,7 +117,7 @@ description: GitHub PR operations in Docker
 metadata:
   requires:
     bins: ["gh"]
-  aether:
+  aleph:
     security:
       sandbox: docker
       confirmation: write
@@ -144,7 +144,7 @@ Manage pull requests using GitHub CLI in Docker sandbox.
 
 ### Phase 2: Context Enhancement
 
-**Goal**: Add examples() method to AetherTool for Few-shot learning
+**Goal**: Add examples() method to AlephTool for Few-shot learning
 
 **Files**:
 - Modified `traits.rs` - Added optional `examples()` method
@@ -206,9 +206,9 @@ SolidificationSuggestion {
 MarkdownSkillGenerator
   (Convert suggestion → SKILL.md)
     ↓
-~/.aether/skills/generated/git-quick-commit/SKILL.md
+~/.aleph/skills/generated/git-quick-commit/SKILL.md
     ↓
-SkillLoader → MarkdownCliTool → AetherToolServer
+SkillLoader → MarkdownCliTool → AlephToolServer
 ```
 
 **Generated Example**:
@@ -219,7 +219,7 @@ description: "Quickly commit changes with a message"
 metadata:
   requires:
     bins: ["git"]
-  aether:
+  aleph:
     security:
       sandbox: host
       confirmation: write
@@ -284,7 +284,7 @@ let callback: ReloadCallback = Arc::new(|tools| {
 let watcher = SkillWatcher::new(&skills_dir, callback.clone(), Default::default())?;
 tokio::spawn(watcher.run(skills_dir, callback));
 
-// Now edit ~/.aether/skills/*/SKILL.md → Auto-reload! 🔥
+// Now edit ~/.aleph/skills/*/SKILL.md → Auto-reload! 🔥
 ```
 
 ---
@@ -301,20 +301,20 @@ tokio::spawn(watcher.run(skills_dir, callback));
 
 **Decision**: Markdown enables the Evolution Loop to generate skills instantly.
 
-### 2. Why Direct AetherToolDyn Implementation?
+### 2. Why Direct AlephToolDyn Implementation?
 
-**Problem**: Blanket impl `impl<T: AetherTool> AetherToolDyn for T` returns `T::NAME` (const "dynamic").
+**Problem**: Blanket impl `impl<T: AlephTool> AlephToolDyn for T` returns `T::NAME` (const "dynamic").
 
-**Solution**: MarkdownCliTool implements AetherToolDyn directly with runtime name resolution.
+**Solution**: MarkdownCliTool implements AlephToolDyn directly with runtime name resolution.
 
 ```rust
 // ❌ Doesn't work (tool registered as "dynamic")
-impl AetherTool for MarkdownCliTool {
+impl AlephTool for MarkdownCliTool {
     const NAME: &'static str = "dynamic";  // Can't be runtime!
 }
 
 // ✅ Works (tool registered with spec.name)
-impl AetherToolDyn for MarkdownCliTool {
+impl AlephToolDyn for MarkdownCliTool {
     fn name(&self) -> &str {
         &self.spec.name  // Runtime value
     }
@@ -341,7 +341,7 @@ impl AetherToolDyn for MarkdownCliTool {
 ### 7 Integration Tests (Phase 1)
 
 1. `test_load_openclaw_compatible_skill` - Backward compatibility
-2. `test_load_aether_enhanced_skill` - Aether extensions
+2. `test_load_aleph_enhanced_skill` - Aleph extensions
 3. `test_partial_failure_tolerance` - Error resilience
 4. `test_tool_definition_includes_llm_context` - Context injection
 5. `test_tool_server_integration` - ToolServer integration
@@ -460,7 +460,7 @@ tokio::spawn(watcher.run(skills_dir, callback));
 ```
 aac5ffb0 feat(tools): add hot reload support for Markdown Skills (Phase 4)
 8708a9a2 feat(tools): add Evolution Loop integration for Markdown Skills (Phase 3)
-175e7c95 feat(tools): add examples() method to AetherTool trait (Phase 2)
+175e7c95 feat(tools): add examples() method to AlephTool trait (Phase 2)
 d884ba21 feat(tools): complete Markdown Tool Adapter integration
 6403b63e feat(tools): implement Markdown Tool Adapter (Phase 1)
 ```

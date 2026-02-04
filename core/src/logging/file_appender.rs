@@ -142,7 +142,7 @@ fn setup_logging(
 /// Get the log directory path
 ///
 /// Returns `~/.aleph/logs/` on all platforms (unified path).
-/// Uses the same base directory as other Aether data for consistency.
+/// Uses the same base directory as other Aleph data for consistency.
 pub fn get_log_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let config_dir = get_config_dir().map_err(|e| e.to_string())?;
 

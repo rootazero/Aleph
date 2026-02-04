@@ -1,6 +1,6 @@
 //! Plugin Registry Module
 //!
-//! This module provides the registration infrastructure for the Aether plugin system.
+//! This module provides the registration infrastructure for the Aleph plugin system.
 //!
 //! ## Components
 //!

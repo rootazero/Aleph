@@ -190,7 +190,7 @@ impl OnboardingFlow {
             ],
             _ => vec![
                 WizardOption::new(json!("auto"), "Auto-detect")
-                    .with_hint("Let Aether choose the best model"),
+                    .with_hint("Let Aleph choose the best model"),
             ],
         }
     }
@@ -240,9 +240,9 @@ impl WizardFlow for OnboardingFlow {
         let mut data = OnboardingData::default();
 
         // ===== Stage 1: Welcome =====
-        prompter.intro("Welcome to Aether").await?;
+        prompter.intro("Welcome to Aleph").await?;
         prompter.note(
-            "This wizard will help you set up Aether, your personal AI assistant.\n\n\
+            "This wizard will help you set up Aleph, your personal AI assistant.\n\n\
              You'll configure:\n\
              • AI provider and model\n\
              • Optional secondary model for failover\n\
@@ -371,7 +371,7 @@ impl WizardFlow for OnboardingFlow {
         progress.finish("Configuration saved");
 
         // ===== Stage 10: Complete =====
-        prompter.outro("Aether is ready! Run 'aether chat' to start.").await?;
+        prompter.outro("Aleph is ready! Run 'aether chat' to start.").await?;
 
         Ok(())
     }

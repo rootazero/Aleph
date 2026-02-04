@@ -1,13 +1,13 @@
-//! Built-in UI hints definitions for Aether configuration.
+//! Built-in UI hints definitions for Aleph configuration.
 //!
-//! This module contains the default UI hints for all standard Aether configuration
+//! This module contains the default UI hints for all standard Aleph configuration
 //! fields. It uses the `define_groups!` and `define_hints!` macros for a declarative
 //! definition style.
 
 use super::{ConfigUiHints, FieldHint, GroupMeta};
 use crate::{define_groups, define_hints};
 
-/// Build the complete UI hints for Aether configuration.
+/// Build the complete UI hints for Aleph configuration.
 ///
 /// Returns a `ConfigUiHints` instance containing all default groups and field hints.
 ///
@@ -247,7 +247,7 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
         // === Shortcuts ===
         "shortcuts.summon" => {
             label: "Summon Shortcut",
-            help: "Keyboard shortcut to summon Aether",
+            help: "Keyboard shortcut to summon Aleph",
             group: "shortcuts",
             placeholder: "Command+Grave",
         },

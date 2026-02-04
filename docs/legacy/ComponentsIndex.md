@@ -20,7 +20,7 @@ Design System
 ## Foundation Layer
 
 ### DesignTokens.swift
-**Location**: `Aether/Sources/DesignSystem/DesignTokens.swift`
+**Location**: `Aleph/Sources/DesignSystem/DesignTokens.swift`
 
 **Purpose**: Centralized design system constants ensuring visual consistency across the application.
 
@@ -61,13 +61,13 @@ Text("Title").font(DesignTokens.Typography.title)
 ---
 
 ### ThemeManager.swift
-**Location**: `Aether/Sources/DesignSystem/ThemeManager.swift`
+**Location**: `Aleph/Sources/DesignSystem/ThemeManager.swift`
 
 **Purpose**: Manages application theme state (Light/Dark/Auto) with persistence and system appearance tracking.
 
 **Features**:
 - Three theme modes: `.light`, `.dark`, `.auto`
-- UserDefaults persistence (key: "aether_theme_preference")
+- UserDefaults persistence (key: "aleph_theme_preference")
 - Automatic system appearance following in Auto mode
 - Real-time NSAppearance application
 
@@ -92,7 +92,7 @@ themeManager.currentTheme // .light, .dark, or .auto
 ## Atoms (Basic Building Blocks)
 
 ### SearchBar.swift
-**Location**: `Aether/Sources/Components/Atoms/SearchBar.swift`
+**Location**: `Aleph/Sources/Components/Atoms/SearchBar.swift`
 
 **Purpose**: Reusable search input component with clear functionality.
 
@@ -119,7 +119,7 @@ SearchBar(searchText: $searchQuery, placeholder: "Search providers")
 ---
 
 ### StatusIndicator.swift
-**Location**: `Aether/Sources/Components/Atoms/StatusIndicator.swift`
+**Location**: `Aleph/Sources/Components/Atoms/StatusIndicator.swift`
 
 **Purpose**: Visual status indicator with color-coded states.
 
@@ -146,7 +146,7 @@ StatusIndicator(status: .warning, label: "Limited", animated: true)
 ---
 
 ### ActionButton.swift
-**Location**: `Aether/Sources/Components/Atoms/ActionButton.swift`
+**Location**: `Aleph/Sources/Components/Atoms/ActionButton.swift`
 
 **Purpose**: Consistent button styles for primary, secondary, and danger actions.
 
@@ -180,7 +180,7 @@ ActionButton(title: "Delete", style: .danger, disabled: isReadOnly) {
 ---
 
 ### VisualEffectBackground.swift
-**Location**: `Aether/Sources/Components/Atoms/VisualEffectBackground.swift`
+**Location**: `Aleph/Sources/Components/Atoms/VisualEffectBackground.swift`
 
 **Purpose**: NSVisualEffectView wrapper for native macOS blur effects.
 
@@ -207,7 +207,7 @@ ZStack {
 ---
 
 ### ThemeSwitcher.swift
-**Location**: `Aether/Sources/Components/Atoms/ThemeSwitcher.swift`
+**Location**: `Aleph/Sources/Components/Atoms/ThemeSwitcher.swift`
 
 **Purpose**: Three-button theme selector (Light/Dark/Auto) with visual feedback.
 
@@ -237,7 +237,7 @@ ThemeSwitcher(themeManager: themeManager)
 ## Molecules (Composed Components)
 
 ### ProviderCard.swift
-**Location**: `Aether/Sources/Components/Molecules/ProviderCard.swift`
+**Location**: `Aleph/Sources/Components/Molecules/ProviderCard.swift`
 
 **Purpose**: Card displaying Provider information with interactive states.
 
@@ -271,7 +271,7 @@ ProviderCard(
 ---
 
 ### ProviderDetailPanel.swift
-**Location**: `Aether/Sources/Components/Molecules/ProviderDetailPanel.swift`
+**Location**: `Aleph/Sources/Components/Molecules/ProviderDetailPanel.swift`
 
 **Purpose**: Detailed view of selected Provider with configuration and code examples.
 
@@ -303,7 +303,7 @@ ProviderDetailPanel(
 ---
 
 ### SidebarItem.swift
-**Location**: `Aether/Sources/Components/Atoms/SidebarItem.swift`
+**Location**: `Aleph/Sources/Components/Atoms/SidebarItem.swift`
 
 **Purpose**: Sidebar navigation item with icon and text.
 
@@ -336,7 +336,7 @@ SidebarItem(
 ---
 
 ### MemoryEntryCard.swift
-**Location**: `Aether/Sources/MemoryView.swift` (nested component)
+**Location**: `Aleph/Sources/MemoryView.swift` (nested component)
 
 **Purpose**: Displays individual memory entry with app context and timestamp.
 
@@ -363,7 +363,7 @@ MemoryEntryCard(entry: memoryEntry) {
 ---
 
 ### SkeletonView.swift
-**Location**: `Aether/Sources/Components/Molecules/SkeletonView.swift`
+**Location**: `Aleph/Sources/Components/Molecules/SkeletonView.swift`
 
 **Purpose**: Loading placeholder with shimmer animation.
 
@@ -393,7 +393,7 @@ if isLoading {
 ---
 
 ### ToastView.swift
-**Location**: `Aether/Sources/Components/Molecules/ToastView.swift`
+**Location**: `Aleph/Sources/Components/Molecules/ToastView.swift`
 
 **Purpose**: Temporary notification popup (success/error/info/warning).
 
@@ -431,7 +431,7 @@ ToastView(message: toastMessage, type: toastType, isShowing: $showToast)
 ## Organisms (Complex Components)
 
 ### ModernSidebarView.swift
-**Location**: `Aether/Sources/Components/Organisms/ModernSidebarView.swift`
+**Location**: `Aleph/Sources/Components/Organisms/ModernSidebarView.swift`
 
 **Purpose**: Full sidebar with navigation tabs and bottom actions.
 
@@ -471,7 +471,7 @@ ModernSidebarView(
 ---
 
 ### ProvidersView.swift (Redesigned)
-**Location**: `Aether/Sources/ProvidersView.swift`
+**Location**: `Aleph/Sources/ProvidersView.swift`
 
 **Purpose**: Main Provider management interface with search, list, and detail panel.
 
@@ -515,7 +515,7 @@ ModernSidebarView(
 ---
 
 ### RoutingView.swift (Modernized)
-**Location**: `Aether/Sources/RoutingView.swift`
+**Location**: `Aleph/Sources/RoutingView.swift`
 
 **Purpose**: Routing rules management with card-based layout.
 
@@ -533,7 +533,7 @@ ModernSidebarView(
 ---
 
 ### ShortcutsView.swift (Modernized)
-**Location**: `Aether/Sources/ShortcutsView.swift`
+**Location**: `Aleph/Sources/ShortcutsView.swift`
 
 **Purpose**: Global hotkey configuration and permissions.
 
@@ -550,7 +550,7 @@ ModernSidebarView(
 ---
 
 ### BehaviorSettingsView.swift (Modernized)
-**Location**: `Aether/Sources/BehaviorSettingsView.swift`
+**Location**: `Aleph/Sources/BehaviorSettingsView.swift`
 
 **Purpose**: Application behavior configuration.
 
@@ -567,7 +567,7 @@ ModernSidebarView(
 ---
 
 ### MemoryView.swift (Modernized)
-**Location**: `Aether/Sources/MemoryView.swift`
+**Location**: `Aleph/Sources/MemoryView.swift`
 
 **Purpose**: Memory/context management interface.
 
@@ -586,7 +586,7 @@ ModernSidebarView(
 ---
 
 ### SettingsView.swift (Main Container)
-**Location**: `Aether/Sources/SettingsView.swift`
+**Location**: `Aleph/Sources/SettingsView.swift`
 
 **Purpose**: Root settings window coordinating all tabs.
 

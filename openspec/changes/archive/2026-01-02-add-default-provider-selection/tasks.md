@@ -53,7 +53,7 @@ This document outlines the step-by-step implementation plan for adding default p
 ## Phase 3: Rust Core Implementation
 
 ### Task 3.1: Add default provider validation to Config
-**File**: `Aether/core/src/config/mod.rs`
+**File**: `Aleph/core/src/config/mod.rs`
 - [x] Add validation in `Config::validate()` to ensure default provider is enabled
 - [x] Add helper method `get_default_provider() -> Option<String>` that returns enabled default
 - [x] Add helper method `set_default_provider(name: &str) -> Result<()>` with validation
@@ -62,7 +62,7 @@ This document outlines the step-by-step implementation plan for adding default p
 **Deliverable**: ✅ Config validation ensures default provider is enabled
 
 ### Task 3.2: Update Router to handle disabled default provider
-**File**: `Aether/core/src/router/mod.rs`
+**File**: `Aleph/core/src/router/mod.rs`
 - [x] Modify `Router::new()` to validate default provider is enabled
 - [x] Add fallback logic: if default is disabled, use first enabled provider
 - [x] Log warning when default provider is disabled/missing
@@ -71,12 +71,12 @@ This document outlines the step-by-step implementation plan for adding default p
 **Deliverable**: ✅ Router gracefully handles disabled default provider
 
 ### Task 3.3: Expose default provider management via UniFFI
-**File**: `Aether/core/src/aether.udl`
-- [x] Add `get_default_provider()` method to `AetherCore` interface
+**File**: `Aleph/core/src/aleph.udl`
+- [x] Add `get_default_provider()` method to `AlephCore` interface
 - [x] Add `set_default_provider(provider_name: string)` method with validation
 - [x] Add `get_enabled_providers()` method to return only enabled providers
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 - [x] Implement `get_default_provider()` to read from config
 - [x] Implement `set_default_provider()` with validation and config save
 - [x] Implement `get_enabled_providers()` to filter active providers
@@ -89,7 +89,7 @@ This document outlines the step-by-step implementation plan for adding default p
 ## Phase 4: Swift UI Implementation - Settings
 
 ### Task 4.1: Add default provider state to ProvidersView
-**File**: `Aether/Sources/ProvidersView.swift`
+**File**: `Aleph/Sources/ProvidersView.swift`
 - [x] Add `@State private var defaultProviderId: String?` to track current default
 - [x] Add method `loadDefaultProvider()` to fetch from core
 - [x] Call `loadDefaultProvider()` in `onAppear` and after config changes
@@ -98,20 +98,20 @@ This document outlines the step-by-step implementation plan for adding default p
 **Deliverable**: ✅ ProvidersView tracks current default provider
 
 ### Task 4.2: Add visual indicator for default provider in cards
-**File**: `Aether/Sources/Components/Molecules/SimpleProviderCard.swift`
+**File**: `Aleph/Sources/Components/Molecules/SimpleProviderCard.swift`
 - [x] Add `isDefault: Bool` parameter to `SimpleProviderCard`
 - [x] Add "Default" badge display (similar to "Active" indicator)
 - [x] Use DesignTokens for badge styling (e.g., blue accent color)
 - [x] Position badge near provider name or in top-right corner
 
-**File**: `Aether/Sources/ProvidersView.swift`
+**File**: `Aleph/Sources/ProvidersView.swift`
 - [x] Pass `isDefault: isDefault(preset)` to `SimpleProviderCard`
 - [x] Update card rendering to show default badge
 
 **Deliverable**: ✅ Default provider visually indicated in provider list
 
 ### Task 4.3: Update ProviderEditPanel to show default status
-**File**: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+**File**: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 - [x] Add `defaultProviderId: String?` binding parameter
 - [x] Display "Default Provider" indicator in provider info card (if applicable)
 - [x] Add "Set as Default" button in edit panel
@@ -127,7 +127,7 @@ This document outlines the step-by-step implementation plan for adding default p
 ## Phase 5: Swift UI Implementation - Menu Bar
 
 ### Task 5.1: Add enabled providers menu section
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 - [x] Add `private var enabledProvidersMenu: NSMenu?` property
 - [x] Modify `setupMenuBar()` to include enabled providers section
 - [x] Add separator after "About" menu item
@@ -137,7 +137,7 @@ This document outlines the step-by-step implementation plan for adding default p
 **Deliverable**: ✅ Menu bar includes section for enabled providers
 
 ### Task 5.2: Implement dynamic provider menu generation
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 - [x] Add method `rebuildProvidersMenu()` to regenerate provider menu items
 - [x] Call `core.getEnabledProviders()` to get active providers
 - [x] For each enabled provider:
@@ -149,7 +149,7 @@ This document outlines the step-by-step implementation plan for adding default p
 **Deliverable**: ✅ Menu bar dynamically shows enabled providers
 
 ### Task 5.3: Implement quick switch action
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 - [x] Implement `@objc private func selectDefaultProvider(sender: NSMenuItem)`
 - [x] Extract provider name from menu item
 - [x] Call `core.setDefaultProvider(providerName)`
@@ -160,7 +160,7 @@ This document outlines the step-by-step implementation plan for adding default p
 **Deliverable**: ✅ Users can switch default provider from menu bar
 
 ### Task 5.4: Add config change observer to update menu
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 - [x] Add observer for config changes (if not already present)
 - [x] Call `rebuildProvidersMenu()` when providers are added/removed/enabled/disabled
 - [x] Ensure menu stays in sync with current config state
@@ -224,7 +224,7 @@ This document outlines the step-by-step implementation plan for adding default p
 **Deliverable**: ✅ Documentation complete and accurate
 
 ### Task 7.2: Add localization strings
-**File**: `Aether/Resources/en.lproj/Localizable.strings`
+**File**: `Aleph/Resources/en.lproj/Localizable.strings`
 - [x] Add `"provider.badge.default" = "Default";`
 - [x] Add `"provider.action.set_default" = "Set as Default";`
 - [x] Add `"provider.notification.default_changed" = "Default provider set to %@";`
@@ -232,7 +232,7 @@ This document outlines the step-by-step implementation plan for adding default p
 - [x] Add `"provider.warning.default_disabled" = "Default provider is disabled. Using fallback.";`
 - [x] Add menu bar strings (`menu.providers.*`)
 
-**File**: `Aether/Resources/zh-Hans.lproj/Localizable.strings`
+**File**: `Aleph/Resources/zh-Hans.lproj/Localizable.strings`
 - [x] Add Chinese translations for all new strings
 
 **Deliverable**: ✅ All UI text is localized (EN + ZH)

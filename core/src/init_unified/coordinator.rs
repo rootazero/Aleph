@@ -262,7 +262,7 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn download_embedding_model(&self) -> Result<(), InitError> {
-        use crate::memory::EmbeddingModel as AetherEmbeddingModel;
+        use crate::memory::EmbeddingModel as AlephEmbeddingModel;
         use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
         info!("Downloading embedding model bge-small-zh-v1.5...");
@@ -278,7 +278,7 @@ impl InitializationCoordinator {
 
         // Get our custom cache directory (same as EmbeddingModel uses at runtime)
         // This ensures consistency: ~/.aleph/models/fastembed/
-        let cache_dir = AetherEmbeddingModel::get_default_model_path().map_err(|e| {
+        let cache_dir = AlephEmbeddingModel::get_default_model_path().map_err(|e| {
             InitError::new(
                 "embedding_model",
                 format!("Failed to get model path: {}", e),

@@ -13,19 +13,19 @@ use crate::error::Result;
 use crate::tools::AlephToolDyn;
 
 use super::parser::{extract_first_paragraph, extract_markdown_section};
-use super::spec::{AetherSkillSpec, SandboxMode};
+use super::spec::{AlephSkillSpec, SandboxMode};
 
 /// Dynamic CLI tool loaded from Markdown
 #[derive(Clone)]
 pub struct MarkdownCliTool {
-    pub spec: AetherSkillSpec,
+    pub spec: AlephSkillSpec,
     /// Whether usage examples have been injected in current session
     context_injected: Arc<AtomicBool>,
 }
 
 impl MarkdownCliTool {
     /// Create a new Markdown CLI tool
-    pub fn new(spec: AetherSkillSpec) -> Self {
+    pub fn new(spec: AlephSkillSpec) -> Self {
         Self {
             spec,
             context_injected: Arc::new(AtomicBool::new(false)),
@@ -38,7 +38,7 @@ impl MarkdownCliTool {
         let mut required_fields = Vec::new();
 
         // If input_hints exist, use them
-        if let Some(aether) = &self.spec.metadata.aether {
+        if let Some(aether) = &self.spec.metadata.aleph {
             for (key, hint) in &aether.input_hints {
                 let mut prop = serde_json::Map::new();
 
@@ -93,7 +93,7 @@ impl MarkdownCliTool {
     pub(crate) fn get_sandbox_mode(&self) -> SandboxMode {
         self.spec
             .metadata
-            .aether
+            .aleph
             .as_ref()
             .map(|a| a.security.sandbox.clone())
             .unwrap_or(SandboxMode::Host)
@@ -157,7 +157,7 @@ impl MarkdownCliTool {
 
     /// Check if tool requires confirmation
     pub fn requires_confirmation(&self) -> bool {
-        if let Some(aether) = &self.spec.metadata.aether {
+        if let Some(aether) = &self.spec.metadata.aleph {
             matches!(
                 aether.security.confirmation,
                 super::spec::ConfirmationMode::Always
@@ -226,7 +226,7 @@ impl MarkdownCliTool {
             let hints = self
                 .spec
                 .metadata
-                .aether
+                .aleph
                 .as_ref().map(|a| &a.input_hints);
 
             let mut cli_args = Vec::new();
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_args_to_cli_array_mode() {
-        let spec = AetherSkillSpec {
+        let spec = AlephSkillSpec {
             name: "test".to_string(),
             description: "test".to_string(),
             metadata: Default::default(),

@@ -144,5 +144,5 @@ All performance targets met. Ready to proceed to Task 8 (Integrate embedding int
 
 - Proposal: `openspec/changes/add-contextual-memory-rag/proposal.md`
 - Tasks: `openspec/changes/add-contextual-memory-rag/tasks.md` (Task 6-7)
-- Implementation: `Aether/core/src/memory/embedding.rs`
+- Implementation: `Aleph/core/src/memory/embedding.rs`
 - Model: [sentence-transformers/all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)

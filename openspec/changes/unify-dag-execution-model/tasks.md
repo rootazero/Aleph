@@ -48,7 +48,7 @@
 
 - [x] 5.1 Create `core/src/rig_tools/batch_execute.rs`
 - [x] 5.2 Define BatchExecuteArgs schema with JsonSchema
-- [x] 5.3 Implement AetherTool trait for BatchExecute
+- [x] 5.3 Implement AlephTool trait for BatchExecute
 - [x] 5.4 Add validation for tool array (max 25)
 - [x] 5.5 Define output format for batch specification
 - [x] 5.6 Export in mod.rs

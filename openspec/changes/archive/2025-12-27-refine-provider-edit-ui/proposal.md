@@ -66,9 +66,9 @@
 - `settings-ui-layout` - Provider 编辑面板的 UI 布局和交互
 
 ### Affected Code
-- `Aether/Sources/Components/Organisms/ProviderEditPanel.swift` - 主要修改
-- `Aether/Sources/Models/PresetProviders.swift` - 添加 Custom 预设选项
-- `Aether/Sources/ProvidersView.swift` - 支持多个自定义供应商实例（可能需要调整）
+- `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift` - 主要修改
+- `Aleph/Sources/Models/PresetProviders.swift` - 添加 Custom 预设选项
+- `Aleph/Sources/ProvidersView.swift` - 支持多个自定义供应商实例（可能需要调整）
 
 ### Breaking Changes
 无。此变更仅优化 UI 交互，配置文件格式保持兼容。

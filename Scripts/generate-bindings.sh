@@ -22,9 +22,9 @@ generate_macos() {
     cargo run --bin uniffi-bindgen generate \
         --library ../target/release/libaethecore.dylib \
         --language swift \
-        --out-dir "$ROOT_DIR/platforms/macos/Aether/Sources/Generated/"
+        --out-dir "$ROOT_DIR/platforms/macos/Aleph/Sources/Generated/"
 
-    echo "✅ macOS bindings generated at platforms/macos/Aether/Sources/Generated/"
+    echo "✅ macOS bindings generated at platforms/macos/Aleph/Sources/Generated/"
 }
 
 generate_windows() {
@@ -35,9 +35,9 @@ generate_windows() {
     cargo build --release --features cabi
 
     # Check if bindings were generated
-    BINDINGS_PATH="$ROOT_DIR/platforms/windows/Aether/Interop/NativeMethods.g.cs"
+    BINDINGS_PATH="$ROOT_DIR/platforms/windows/Aleph/Interop/NativeMethods.g.cs"
     if [ -f "$BINDINGS_PATH" ]; then
-        echo "✅ Windows bindings generated at platforms/windows/Aether/Interop/"
+        echo "✅ Windows bindings generated at platforms/windows/Aleph/Interop/"
     else
         echo "⚠️  Windows bindings not found. Check build.rs csbindgen configuration."
     fi

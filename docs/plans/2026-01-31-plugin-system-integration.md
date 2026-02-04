@@ -836,9 +836,9 @@ fn create_test_plugin(dir: &std::path::Path) -> PathBuf {
     let plugin_dir = dir.join("test-plugin");
     std::fs::create_dir_all(&plugin_dir).unwrap();
 
-    // Create aether.plugin.json
+    // Create aleph.plugin.json
     std::fs::write(
-        plugin_dir.join("aether.plugin.json"),
+        plugin_dir.join("aleph.plugin.json"),
         r#"{
             "id": "test-plugin",
             "name": "Test Plugin",
@@ -982,11 +982,11 @@ git commit -m "$(cat <<'EOF'
 feat(cli): add plugins subcommand for plugin management
 
 CLI now supports:
-- aether plugins list
-- aether plugins install <url>
-- aether plugins uninstall <name>
-- aether plugins enable <name>
-- aether plugins disable <name>
+- aleph plugins list
+- aleph plugins install <url>
+- aleph plugins uninstall <name>
+- aleph plugins enable <name>
+- aleph plugins disable <name>
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF

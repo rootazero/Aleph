@@ -1,6 +1,6 @@
 //! Core types module
 //!
-//! This module provides shared type definitions used across the Aether library:
+//! This module provides shared type definitions used across the Aleph library:
 //! - `Capability`: Agent capability types (Memory, Mcp, Skills)
 //! - `CapturedContext`: Context from active application
 //! - `MediaAttachment`: Multimodal content support

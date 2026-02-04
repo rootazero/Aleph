@@ -1,6 +1,6 @@
 //
 //  AgentProgressView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI component for displaying Task graph execution progress.
 //  Shows DAG structure, task status, and execution controls.

@@ -67,7 +67,7 @@
 - [ ] 4.1.3 Update `get_builtin_routing_rules()` (only 3 commands now)
 - [ ] 4.1.4 Update unit tests for 3 builtin commands
 
-### 4.2 Update aether.udl
+### 4.2 Update aleph.udl
 - [ ] 4.2.1 Remove `CommandType::Namespace` if no longer needed
 - [ ] 4.2.2 Remove `has_subtools` from `UnifiedToolInfo` if not used
 - [ ] 4.2.3 Regenerate Swift bindings

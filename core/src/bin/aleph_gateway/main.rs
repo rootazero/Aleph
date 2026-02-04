@@ -1,7 +1,7 @@
-//! Aether Gateway - WebSocket Control Plane
+//! Aleph Gateway - WebSocket Control Plane
 //!
 //! A standalone WebSocket server that provides a JSON-RPC 2.0 interface
-//! for controlling Aether agents and receiving events.
+//! for controlling Aleph agents and receiving events.
 //!
 //! # Usage
 //!

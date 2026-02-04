@@ -786,9 +786,9 @@ mod tests {
 ### Phase 4：Profile CLI
 
 实现 P3 建议的管理工具：
-- `aether profile add` - 添加新配置
-- `aether profile list` - 列出所有配置
-- `aether profile switch` - 切换默认配置
+- `aleph profile add` - 添加新配置
+- `aleph profile list` - 列出所有配置
+- `aleph profile switch` - 切换默认配置
 
 ---
 

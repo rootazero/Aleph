@@ -98,7 +98,7 @@ The system SHALL generate a SKILL.md file and register the skill on approval.
 #### Scenario: Create new skill
 - **GIVEN** an approved suggestion with name "convert-csv-currency"
 - **WHEN** generation runs
-- **THEN** the system creates `~/.aether/skills/convert-csv-currency/SKILL.md`
+- **THEN** the system creates `~/.aleph/skills/convert-csv-currency/SKILL.md`
 - **AND** returns a diff preview
 - **AND** reloads the SkillsRegistry to include the new skill
 

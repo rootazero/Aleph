@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError,
 };
 
 use super::compactor::SessionCompactor;
@@ -20,16 +20,16 @@ impl EventHandler for SessionCompactor {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Check if auto-compaction is enabled
         if !self.config().auto_compact {
             return Ok(vec![]);
         }
 
         match event {
-            AetherEvent::LoopContinue(loop_state) => {
+            AlephEvent::LoopContinue(loop_state) => {
                 // Check if we need compaction based on token count
                 let limit = self.token_tracker().get_model_limit(&loop_state.model);
 
@@ -46,12 +46,12 @@ impl EventHandler for SessionCompactor {
                     // Example (pseudo-code):
                     // let session = ctx.get_session(&loop_state.session_id).await;
                     // if let Some(compaction_info) = self.check_and_compact(&mut session).await {
-                    //     return Ok(vec![AetherEvent::SessionCompacted(compaction_info)]);
+                    //     return Ok(vec![AlephEvent::SessionCompacted(compaction_info)]);
                     // }
                 }
                 Ok(vec![])
             }
-            AetherEvent::ToolCallCompleted(result) => {
+            AlephEvent::ToolCallCompleted(result) => {
                 // Log pruning trigger
                 if self.config().prune_enabled {
                     tracing::debug!(

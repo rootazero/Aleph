@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether Cowork 需要支持多模型协作来处理复杂任务。当前架构中，所有 AI 请求都通过单一的 Router 路由到一个 provider。这在简单场景下够用，但对于 Cowork 的多步骤任务执行来说，存在以下问题：
+Aleph Cowork 需要支持多模型协作来处理复杂任务。当前架构中，所有 AI 请求都通过单一的 Router 路由到一个 provider。这在简单场景下够用，但对于 Cowork 的多步骤任务执行来说，存在以下问题：
 
 1. 不同任务类型有不同的最优模型选择
 2. 成本控制需要智能路由
@@ -379,7 +379,7 @@ default_model = "claude-sonnet"
 ## Module Structure
 
 ```
-Aether/core/src/cowork/
+Aleph/core/src/cowork/
 ├── mod.rs                    # Public API exports
 ├── model_router/
 │   ├── mod.rs                # Module exports

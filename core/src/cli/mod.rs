@@ -1,4 +1,4 @@
-//! CLI utilities for Aether Gateway commands.
+//! CLI utilities for Aleph Gateway commands.
 
 pub mod channels;
 pub mod client;

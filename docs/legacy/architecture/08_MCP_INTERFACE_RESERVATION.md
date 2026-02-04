@@ -205,7 +205,7 @@ MCP 协议定义了三种核心抽象：
 
 ### 2.1 McpResource 结构体
 
-**文件**: `Aether/core/src/mcp/resource.rs`（新建）
+**文件**: `Aleph/core/src/mcp/resource.rs`（新建）
 
 **定义**:
 
@@ -266,7 +266,7 @@ impl McpResource {
 
 ### 2.2 McpTool 结构体
 
-**文件**: `Aether/core/src/mcp/tool.rs`（新建）
+**文件**: `Aleph/core/src/mcp/tool.rs`（新建）
 
 **定义**:
 
@@ -311,7 +311,7 @@ pub struct McpToolResult {
 
 ### 2.3 McpPrompt 结构体
 
-**文件**: `Aether/core/src/mcp/prompt.rs`（新建）
+**文件**: `Aleph/core/src/mcp/prompt.rs`（新建）
 
 **定义**:
 
@@ -368,7 +368,7 @@ pub struct McpMessage {
 
 ### 2.4 AgentContext.mcp_resources 字段
 
-**文件**: `Aether/core/src/payload/mod.rs`（已存在）
+**文件**: `Aleph/core/src/payload/mod.rs`（已存在）
 
 **当前定义**:
 
@@ -416,7 +416,7 @@ pub struct AgentContext {
 
 ### 2.5 Intent::BuiltinMcp 增强
 
-**文件**: `Aether/core/src/payload/intent.rs`（已存在）
+**文件**: `Aleph/core/src/payload/intent.rs`（已存在）
 
 **当前定义**:
 
@@ -456,7 +456,7 @@ pub enum Intent {
 
 ### 3.1 CapabilityExecutor::execute_mcp()
 
-**文件**: `Aether/core/src/capability/mod.rs`（已存在）
+**文件**: `Aleph/core/src/capability/mod.rs`（已存在）
 
 **当前实现**（空）:
 
@@ -519,7 +519,7 @@ impl CapabilityExecutor {
 
 ### 3.2 McpClient 架构设计
 
-**文件**: `Aether/core/src/mcp/client.rs`（新建）
+**文件**: `Aleph/core/src/mcp/client.rs`（新建）
 
 **职责**:
 - 管理多个 MCP Server 连接
@@ -1367,7 +1367,7 @@ impl CapabilityExecutor {
 
 ### 6.1 MCP Server 管理界面
 
-**文件**: `Aether/Sources/Components/Settings/McpSettingsView.swift`（新建）
+**文件**: `Aleph/Sources/Components/Settings/McpSettingsView.swift`（新建）
 
 **UI 设计草图**:
 

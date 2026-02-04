@@ -6,7 +6,7 @@
 
 ## 实施概览
 
-成功实现了 macOS 平台上的应用程序和窗口上下文捕获，并将其集成到 Aether 的内存系统中。这使得 Aether 能够根据用户当前所在的应用程序和窗口来存储和检索交互记忆。
+成功实现了 macOS 平台上的应用程序和窗口上下文捕获，并将其集成到 Aleph 的内存系统中。这使得 Aleph 能够根据用户当前所在的应用程序和窗口来存储和检索交互记忆。
 
 ## 完成的任务
 
@@ -29,14 +29,14 @@
 - 添加了详细的日志输出用于调试
 
 **文件**：
-- `/Users/zouguojun/Workspace/Aether/Aether/Sources/ContextCapture.swift`
+- `/Users/zouguojun/Workspace/Aleph/Aleph/Sources/ContextCapture.swift`
 
 ### Task 11: 通过 UniFFI 桥接上下文捕获 ✅
 
 **Rust 端（已存在）**：
 - `CapturedContext` 结构体已在 `core.rs` 中定义（第 23-27 行）
 - `set_current_context()` 方法已实现（第 377-380 行）
-- UniFFI 接口定义已存在于 `aether.udl`（第 162-165 行，第 101 行）
+- UniFFI 接口定义已存在于 `aleph.udl`（第 162-165 行，第 101 行）
 
 **Swift 端集成**：
 - 在 `EventHandler.swift` 的 `onHotkeyDetected()` 方法中集成上下文捕获
@@ -49,8 +49,8 @@
 - 提供了打开系统设置的快捷方式
 
 **修改的文件**：
-- `/Users/zouguojun/Workspace/Aether/Aether/Sources/EventHandler.swift`（第 45-64 行）
-- `/Users/zouguojun/Workspace/Aether/Aether/Sources/AppDelegate.swift`（第 217-242 行）
+- `/Users/zouguojun/Workspace/Aleph/Aleph/Sources/EventHandler.swift`（第 45-64 行）
+- `/Users/zouguojun/Workspace/Aleph/Aleph/Sources/AppDelegate.swift`（第 217-242 行）
 
 ### Task 12: 在内存操作中使用捕获的上下文 ✅
 
@@ -64,23 +64,23 @@
 
 **辅助方法**：
 添加了 `get_embedding_model_dir()` 方法：
-- 返回嵌入模型目录路径：`~/.aether/models/all-MiniLM-L6-v2`
+- 返回嵌入模型目录路径：`~/.aleph/models/all-MiniLM-L6-v2`
 - 自动创建目录（如果不存在）
 
 **依赖更新**：
 - 在 `Cargo.toml` 中添加了 `chrono = "0.4"` 依赖
 
 **UniFFI 接口**：
-在 `aether.udl` 中导出了新方法（第 103-105 行）：
+在 `aleph.udl` 中导出了新方法（第 103-105 行）：
 ```idl
-[Throws=AetherError]
+[Throws=AlephError]
 string store_interaction_memory(string user_input, string ai_output);
 ```
 
 **修改的文件**：
-- `/Users/zouguojun/Workspace/Aether/Aether/core/src/core.rs`（第 382-447 行）
-- `/Users/zouguojun/Workspace/Aether/Aether/core/src/aether.udl`（第 103-105 行）
-- `/Users/zouguojun/Workspace/Aether/Aether/core/Cargo.toml`（添加 chrono 依赖）
+- `/Users/zouguojun/Workspace/Aleph/Aleph/core/src/core.rs`（第 382-447 行）
+- `/Users/zouguojun/Workspace/Aleph/Aleph/core/src/aleph.udl`（第 103-105 行）
+- `/Users/zouguojun/Workspace/Aleph/Aleph/core/Cargo.toml`（添加 chrono 依赖）
 
 ## 测试验证 ✅
 
@@ -124,11 +124,11 @@ ContextCapture.captureContext() 捕获上下文
     ↓
 CapturedContext 通过 UniFFI 传递给 Rust
     ↓
-AetherCore.set_current_context() 存储上下文
+AlephCore.set_current_context() 存储上下文
     ↓
 [AI 处理用户输入...]
     ↓
-AetherCore.store_interaction_memory() 被调用
+AlephCore.store_interaction_memory() 被调用
     ├─ 从 current_context 获取上下文
     ├─ 创建 ContextAnchor (app + window + timestamp)
     ├─ 生成嵌入（EmbeddingModel）
@@ -228,23 +228,23 @@ pub struct ContextAnchor {
 ## 文件清单
 
 ### 新增文件
-- `Aether/Sources/ContextCapture.swift` - 上下文捕获实用工具
+- `Aleph/Sources/ContextCapture.swift` - 上下文捕获实用工具
 
 ### 修改文件
-- `Aether/Sources/EventHandler.swift` - 集成上下文捕获
-- `Aether/Sources/AppDelegate.swift` - 权限检查和请求
-- `Aether/core/src/core.rs` - 添加 `store_interaction_memory()` 方法和测试
-- `Aether/core/src/aether.udl` - 导出新的 UniFFI 方法
-- `Aether/core/Cargo.toml` - 添加 chrono 依赖
+- `Aleph/Sources/EventHandler.swift` - 集成上下文捕获
+- `Aleph/Sources/AppDelegate.swift` - 权限检查和请求
+- `Aleph/core/src/core.rs` - 添加 `store_interaction_memory()` 方法和测试
+- `Aleph/core/src/aleph.udl` - 导出新的 UniFFI 方法
+- `Aleph/core/Cargo.toml` - 添加 chrono 依赖
 
 ### 生成的文件
-- `Aether/Sources/Generated/aether.swift` - 更新的 UniFFI Swift 绑定
-- `Aether/Sources/Generated/aetherFFI.h` - 更新的 C 头文件
-- `Aether/Sources/Generated/aetherFFI.modulemap` - 更新的模块映射
+- `Aleph/Sources/Generated/aleph.swift` - 更新的 UniFFI Swift 绑定
+- `Aleph/Sources/Generated/alephFFI.h` - 更新的 C 头文件
+- `Aleph/Sources/Generated/alephFFI.modulemap` - 更新的模块映射
 
 ## 结论
 
-Task 10-12 已成功完成，实现了完整的 macOS 上下文捕获流程，并将其集成到 Aether 的内存系统中。所有单元测试通过，代码结构清晰，符合 Phase 4C 的设计目标。
+Task 10-12 已成功完成，实现了完整的 macOS 上下文捕获流程，并将其集成到 Aleph 的内存系统中。所有单元测试通过，代码结构清晰，符合 Phase 4C 的设计目标。
 
 **关键成果**：
 - ✅ 无缝的上下文捕获（Swift → Rust）

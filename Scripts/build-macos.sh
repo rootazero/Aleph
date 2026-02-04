@@ -24,16 +24,16 @@ fi
 
 # Step 2: Copy library
 echo "📋 Copying library..."
-cp "$LIB_PATH" "$MACOS_DIR/Aether/Frameworks/"
+cp "$LIB_PATH" "$MACOS_DIR/Aleph/Frameworks/"
 install_name_tool -id "@rpath/libaethecore.dylib" \
-    "$MACOS_DIR/Aether/Frameworks/libaethecore.dylib"
+    "$MACOS_DIR/Aleph/Frameworks/libaethecore.dylib"
 
 # Step 3: Generate UniFFI bindings
 echo "🔗 Generating UniFFI bindings..."
 cargo run --bin uniffi-bindgen generate \
     --library "$LIB_PATH" \
     --language swift \
-    --out-dir "$MACOS_DIR/Aether/Sources/Generated/"
+    --out-dir "$MACOS_DIR/Aleph/Sources/Generated/"
 
 # Step 4: Generate Xcode project
 echo "🛠️ Generating Xcode project..."
@@ -43,9 +43,9 @@ xcodegen generate
 # Step 5: Build with xcodebuild
 echo "🏗️ Building with xcodebuild..."
 if [ "$CONFIG" = "debug" ]; then
-    xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build
+    xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build
 else
-    xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build
+    xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Release build
 fi
 
 echo "✅ macOS build complete!"

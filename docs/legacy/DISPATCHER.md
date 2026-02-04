@@ -321,9 +321,9 @@ This allows the LLM to self-correct on the next iteration.
 | **Rig Tools** | `rig_tools/` (search.rs, web_fetch.rs, file_ops.rs, youtube.rs, invalid.rs, skill_reader.rs) |
 | **Tool Output** | `tool_output/` (truncation.rs, cleanup.rs) |
 | **Tool Server** | `tools/server.rs` (call_with_repair, try_repair_tool_name) |
-| Swift event handler | `platforms/macos/Aether/Sources/EventHandler.swift` |
-| Swift notifications | `platforms/macos/Aether/Sources/Notifications.swift` |
-| Command completion | `platforms/macos/Aether/Sources/Utils/CommandCompletionManager.swift` |
+| Swift event handler | `platforms/macos/Aleph/Sources/EventHandler.swift` |
+| Swift notifications | `platforms/macos/Aleph/Sources/Notifications.swift` |
+| Command completion | `platforms/macos/Aleph/Sources/Utils/CommandCompletionManager.swift` |
 
 ---
 

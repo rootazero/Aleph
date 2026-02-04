@@ -131,7 +131,7 @@ static func detectConflict(for hotkey: Hotkey) -> String? {
 ## 文件变更
 
 ### 新增文件
-- `Aether/Sources/HotkeyRecorderView.swift` (380 行)
+- `Aleph/Sources/HotkeyRecorderView.swift` (380 行)
   - Hotkey 数据结构
   - HotkeyRecorderView 组件
   - PresetShortcut 模型和列表
@@ -139,7 +139,7 @@ static func detectConflict(for hotkey: Hotkey) -> String? {
   - SwiftUI Preview 示例
 
 ### 修改文件
-- `Aether/Sources/ShortcutsView.swift`
+- `Aleph/Sources/ShortcutsView.swift`
   - 集成 HotkeyRecorderView
   - 添加预设选择对话框
   - 添加冲突警告显示
@@ -165,7 +165,7 @@ $ xcodegen generate
 ⚙️  Generating plists...
 ⚙️  Generating project...
 ⚙️  Writing project...
-Created project at /Users/zouguojun/Workspace/Aether/Aleph.xcodeproj
+Created project at /Users/zouguojun/Workspace/Aleph/Aleph.xcodeproj
 ```
 
 ## 下一步工作

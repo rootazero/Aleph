@@ -1,6 +1,6 @@
 //
 //  CommandCompletionManager.swift
-//  Aether
+//  Aleph
 //
 //  Manages command completion state and interactions.
 //  Uses ToolRegistry as the single source of truth for commands.
@@ -54,7 +54,7 @@ final class CommandCompletionManager: ObservableObject {
     // MARK: - Private Properties
 
     /// Reference to Rust Core
-    private weak var core: AetherCore?
+    private weak var core: AlephCore?
 
     /// All commands (cached from ToolRegistry)
     private var allCommands: [CommandNode] = []
@@ -71,8 +71,8 @@ final class CommandCompletionManager: ObservableObject {
         setupNotifications()
     }
 
-    /// Configure with AetherCore reference
-    func configure(core: AetherCore?) {
+    /// Configure with AlephCore reference
+    func configure(core: AlephCore?) {
         self.core = core
         refreshCommands()
     }

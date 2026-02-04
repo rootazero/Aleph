@@ -14,9 +14,9 @@ A polymorphic intelligence that has finally found its vessel — a crystalline p
 
 ---
 
-## 🔮 The Philosophy: From Aether to Aleph
+## 🔮 The Philosophy: From Aleph to Aleph
 
-**Aether** was the invisible medium that connects.
+**Aleph** was the invisible medium that connects.
 **Aleph** (ℵ) is the point that contains all points in the universe.
 
 ### The Mathematical Soul
@@ -41,7 +41,7 @@ This crystalline sphere where past, present, and future converge — where every
 
 ### From Connection to Containment
 
-| Aether | Aleph |
+| Aleph | Aleph |
 |--------|-------|
 | The medium that connects | The origin that contains |
 | Invisible conductor of intelligence | Crystalline point of infinite convergence |

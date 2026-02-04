@@ -1,6 +1,6 @@
 //
 //  ConversationModels.swift
-//  Aether
+//  Aleph
 //
 //  Data models for conversation persistence.
 //

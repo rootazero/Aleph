@@ -23,6 +23,6 @@ cargo run --features=uniffi/cli --bin uniffi-bindgen -- generate \
     --library "$BUILD_DIR/libaethecore.dylib" \
     --language swift \
     --out-dir "$OUT_DIR" \
-    src/aether.udl
+    src/aleph.udl
 
 echo "✅ Swift bindings generated in $OUT_DIR/"

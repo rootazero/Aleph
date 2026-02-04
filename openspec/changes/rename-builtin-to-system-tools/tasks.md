@@ -32,7 +32,7 @@
 - [x] Rename `McpBuiltinConfig` → `ToolsConfig`
 - [x] Add `[tools]` section to config schema
 - [x] Update `McpConfig` - remove `builtin` field
-- [x] Update `aether.udl` type definitions (docs only, struct unchanged)
+- [x] Update `aleph.udl` type definitions (docs only, struct unchanged)
 
 ### 2.2 Config Migration
 - [x] Implement `migrate_mcp_builtin_to_tools()` function (as `migrate_mcp_builtin_in_toml`)
@@ -89,7 +89,7 @@
 ### 5.1 Documentation
 - [x] Update `CLAUDE.md` - architecture section (existing docs still accurate)
 - [x] Update config.toml example in docs (not needed, tools uses same fields)
-- [x] Update any "builtin MCP" references (in types.rs and aether.udl)
+- [x] Update any "builtin MCP" references (in types.rs and aleph.udl)
 
 ### 5.2 Testing
 - [x] Run `cargo test` - all tests pass (733 passed)

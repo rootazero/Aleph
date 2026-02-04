@@ -9,7 +9,7 @@
 - [x] Update HaloView switch cases
 
 ### 1.2 Create HaloToastView Component
-- [x] Create `Aether/Sources/Components/HaloToastView.swift`
+- [x] Create `Aleph/Sources/Components/HaloToastView.swift`
 - [x] Implement light background with semi-transparency (85% white, 90% opacity)
 - [x] Add backdrop blur effect using `.regularMaterial`
 - [x] Add icon based on ToastType (SF Symbols)
@@ -89,14 +89,14 @@
 ## Implementation Summary
 
 **Files Created:**
-- `Aether/Sources/Components/HaloToastView.swift` - Toast view component
+- `Aleph/Sources/Components/HaloToastView.swift` - Toast view component
 
 **Files Modified:**
-- `Aether/Sources/HaloState.swift` - Added ToastType enum and toast state case
-- `Aether/Sources/HaloView.swift` - Added toast state handling
-- `Aether/Sources/HaloWindow.swift` - Added toast support and showToastCentered()
-- `Aether/Sources/EventHandler.swift` - Added showToast() and dismissToast() methods
-- `Aether/Sources/Themes/Theme.swift` - Added toastView() to HaloTheme protocol
-- `Aether/Sources/AppDelegate.swift` - Replaced NSAlert calls with toast
-- `Aether/Sources/RoutingView.swift` - Replaced NSAlert calls with toast
-- `Aether/Sources/Utils/AlertHelper.swift` - Added toast convenience functions
+- `Aleph/Sources/HaloState.swift` - Added ToastType enum and toast state case
+- `Aleph/Sources/HaloView.swift` - Added toast state handling
+- `Aleph/Sources/HaloWindow.swift` - Added toast support and showToastCentered()
+- `Aleph/Sources/EventHandler.swift` - Added showToast() and dismissToast() methods
+- `Aleph/Sources/Themes/Theme.swift` - Added toastView() to HaloTheme protocol
+- `Aleph/Sources/AppDelegate.swift` - Replaced NSAlert calls with toast
+- `Aleph/Sources/RoutingView.swift` - Replaced NSAlert calls with toast
+- `Aleph/Sources/Utils/AlertHelper.swift` - Added toast convenience functions

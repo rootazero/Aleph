@@ -28,7 +28,7 @@
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                         Tool Sources                            │
 //! ├─────────────────────────────────────────────────────────────────┤
-//! │  Aether Tools              │  External MCP Servers              │
+//! │  Aleph Tools              │  External MCP Servers              │
 //! │  (see crate::builtin_tools)    │  (see this mcp module)             │
 //! │  ├── SearchTool            │  ├── McpTransport trait            │
 //! │  ├── WebFetchTool          │  │   ├── StdioTransport            │

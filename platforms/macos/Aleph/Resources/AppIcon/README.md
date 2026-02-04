@@ -1,34 +1,34 @@
-# Aether App Icon Integration
+# Aleph App Icon Integration
 
 ## Files Generated
 
-1. **AetherLogo.svg** - Main logo with gradients (for marketing, web, etc.)
-2. **AetherAppIcon.svg** - App icon with background (1024x1024 base)
-3. **AetherMenuBar.svg** - Menu bar icon (template mode, monochrome)
-4. **AetherSimple.svg** - Simplified version for small sizes
+1. **AlephLogo.svg** - Main logo with gradients (for marketing, web, etc.)
+2. **AlephAppIcon.svg** - App icon with background (1024x1024 base)
+3. **AlephMenuBar.svg** - Menu bar icon (template mode, monochrome)
+4. **AlephSimple.svg** - Simplified version for small sizes
 
 ## Integration Steps
 
 ### 1. Generate .icns file (macOS App Icon)
 
 ```bash
-cd Aether
+cd Aleph
 ./Scripts/generate_app_icon.sh
 ```
 
-This will create `AppIcon.icns` from `AetherAppIcon.svg`.
+This will create `AppIcon.icns` from `AlephAppIcon.svg`.
 
 ### 2. Add to Xcode Project
 
 **Option A: Use .icns directly**
-1. In Xcode, select `Aether/Assets.xcassets`
+1. In Xcode, select `Aleph/Assets.xcassets`
 2. Select `AppIcon` imageset
 3. Drag `AppIcon.icns` into the appropriate slots
 4. Or manually configure in `project.yml`:
 
 ```yaml
 targets:
-  Aether:
+  Aleph:
     settings:
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 ```
@@ -39,11 +39,11 @@ targets:
 
 ### 3. Menu Bar Icon
 
-For the menu bar icon, add `AetherMenuBar.svg` to Assets.xcassets:
+For the menu bar icon, add `AlephMenuBar.svg` to Assets.xcassets:
 
 1. Create new Image Set: `MenuBarIcon`
 2. Set "Render As" to "Template Image"
-3. Add `AetherMenuBar.svg` to "Universal" slot
+3. Add `AlephMenuBar.svg` to "Universal" slot
 4. Set "Preserve Vector Data" to true
 
 Then use in code:

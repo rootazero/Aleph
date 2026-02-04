@@ -110,8 +110,8 @@ final class ContentExtractorRegistry: @unchecked Sendable {
     // MARK: - Private Properties
 
     private var extractors: [ContentExtractor] = []
-    private let queue = DispatchQueue(label: "com.aether.content-extractor-registry")
-    private let logger = Logger(subsystem: "com.aether", category: "ContentExtractor")
+    private let queue = DispatchQueue(label: "com.aleph.content-extractor-registry")
+    private let logger = Logger(subsystem: "com.aleph", category: "ContentExtractor")
 
     // MARK: - Initialization
 

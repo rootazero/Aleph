@@ -165,7 +165,7 @@ Status: Clean (no blocking issues)
 
 ### 1. Tokio Runtime Issue ✅
 
-**Problem**: Tests failed with "no reactor running" error when creating `AetherCore`
+**Problem**: Tests failed with "no reactor running" error when creating `AlephCore`
 
 **Root Cause**: Cleanup service started background task during initialization, but tests don't run in tokio runtime
 

@@ -1,9 +1,9 @@
-// Aether/core/src/event/mod.rs
-//! Event-driven architecture for Aether's agentic loop.
+// Aleph/core/src/event/mod.rs
+//! Event-driven architecture for Aleph's agentic loop.
 //!
 //! This module provides:
 //! - `EventBus`: Type-safe broadcast channel for component communication
-//! - `AetherEvent`: Unified event enum for all system events
+//! - `AlephEvent`: Unified event enum for all system events
 //! - `EventHandler`: Trait for components to subscribe and handle events
 //! - `PermissionEvent`: Permission request/reply events
 //! - `QuestionEvent`: Structured user interaction events
@@ -24,7 +24,7 @@ mod tests;
 pub use bus::{EventBus, EventBusConfig, EventBusError, EventSubscriber};
 pub use handler::{EventContext, EventHandler, EventHandlerRegistry, HandlerError};
 pub use types::{
-    AetherEvent,
+    AlephEvent,
     // AI response
     AiResponse,
     CompactionInfo,

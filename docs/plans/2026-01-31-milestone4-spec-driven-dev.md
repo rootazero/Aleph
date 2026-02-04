@@ -38,7 +38,7 @@
 
 **Step 1: 创建 types.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/spec_driven/types.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/spec_driven/types.rs`：
 
 ```rust
 //! Core types for spec-driven development workflow.
@@ -333,7 +333,7 @@ mod tests {
 
 **Step 2: 创建 mod.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/spec_driven/mod.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/spec_driven/mod.rs`：
 
 ```rust
 //! Spec-driven development workflow.
@@ -354,7 +354,7 @@ pub use types::{
 
 **Step 3: 更新 lib.rs**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/lib.rs` 添加模块声明：
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/lib.rs` 添加模块声明：
 
 ```rust
 pub mod spec_driven; // Spec-driven development workflow
@@ -373,7 +373,7 @@ pub use crate::spec_driven::{
 **Step 4: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test spec_driven::types::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test spec_driven::types::tests
 ```
 
 Expected: All 4 tests PASS
@@ -395,7 +395,7 @@ git commit -m "feat(spec_driven): add core types for spec-driven workflow"
 
 **Step 1: 创建 spec_writer.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/spec_driven/spec_writer.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/spec_driven/spec_writer.rs`：
 
 ```rust
 //! SpecWriter - generates specifications from requirements.
@@ -590,7 +590,7 @@ pub use types::{...};
 **Step 3: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test spec_driven::spec_writer::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test spec_driven::spec_writer::tests
 ```
 
 **Step 4: Commit**
@@ -610,7 +610,7 @@ git commit -m "feat(spec_driven): implement SpecWriter for requirement analysis"
 
 **Step 1: 创建 test_writer.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/spec_driven/test_writer.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/spec_driven/test_writer.rs`：
 
 ```rust
 //! TestWriter - generates test cases from specifications.
@@ -860,7 +860,7 @@ git commit -m "feat(spec_driven): implement TestWriter for test generation"
 
 **Step 1: 创建 judge.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/spec_driven/judge.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/spec_driven/judge.rs`：
 
 ```rust
 //! LlmJudge - evaluates implementations against specifications.
@@ -1230,7 +1230,7 @@ git commit -m "feat(spec_driven): implement LlmJudge for evaluation"
 
 **Step 1: 创建 workflow.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/spec_driven/workflow.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/spec_driven/workflow.rs`：
 
 ```rust
 //! SpecDrivenWorkflow - orchestrates the entire spec-driven development cycle.
@@ -1633,18 +1633,18 @@ git commit -m "feat(spec_driven): implement SpecDrivenWorkflow orchestrator"
 **Step 1: 运行所有测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test spec_driven::
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test spec_driven::
 ```
 
 **Step 2: 编译验证**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 3: 更新设计文档**
 
-修改 `/Volumes/TBU4/Workspace/Aether/docs/plans/2026-01-31-aether-beyond-openclaw-design.md`：
+修改 `/Volumes/TBU4/Workspace/Aleph/docs/plans/2026-01-31-aleph-beyond-openclaw-design.md`：
 
 ```markdown
 ### Milestone 4: 规格驱动开发闭环

@@ -14,7 +14,7 @@ The current gateway control plane has partial, disconnected implementations: aut
 - **Affected specs**: add new `gateway-control-plane` capability (new spec delta).
 - **Affected code**:
   - `core/src/gateway/server.rs`
-  - `core/src/bin/aether_gateway.rs`
+  - `core/src/bin/aleph_gateway.rs`
   - `core/src/gateway/inbound_router.rs`
   - `core/src/gateway/router.rs`
   - `core/src/gateway/handlers/*` (auth/events/pairing/agent)

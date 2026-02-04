@@ -1,13 +1,13 @@
 //! Event handler trait for callbacks from Rust to client code.
 //!
 //! This trait defines the callback interface that Swift/Kotlin clients
-//! must implement to receive events from the Aether core. UniFFI will
+//! must implement to receive events from the Aleph core. UniFFI will
 //! generate a protocol/interface for each target language.
 
 use crate::clarification::{ClarificationRequest, ClarificationResult};
 use crate::dispatcher::PendingConfirmationInfo;
 
-/// Processing states for the Aether system
+/// Processing states for the Aleph system
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessingState {
     /// System is idle, not processing
@@ -97,7 +97,7 @@ impl McpStartupReport {
     }
 }
 
-/// Trait for receiving events from Aether core
+/// Trait for receiving events from Aleph core
 ///
 /// Clients (Swift, Kotlin, etc.) implement this trait to receive
 /// callbacks when hotkeys are detected, states change, or errors occur.
@@ -215,7 +215,7 @@ pub trait InternalEventHandler: Send + Sync {
     /// a full tool registry refresh.
     ///
     /// Note: This is separate from `on_tools_changed` because the config watcher
-    /// callback doesn't have access to AetherCore to call refresh_tool_registry()
+    /// callback doesn't have access to AlephCore to call refresh_tool_registry()
     /// directly.
     fn on_tools_refresh_needed(&self);
 

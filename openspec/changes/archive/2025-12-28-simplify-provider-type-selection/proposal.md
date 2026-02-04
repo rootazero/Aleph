@@ -37,7 +37,7 @@
 - `settings-ui-layout` - Provider 编辑面板的 UI 交互逻辑
 
 ### Affected Code
-- `Aether/Sources/Components/Organisms/ProviderEditPanel.swift` - 移除 Provider Type 选择器，添加供应商信息卡片
+- `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift` - 移除 Provider Type 选择器，添加供应商信息卡片
 - 不影响 `ProvidersView.swift` - 左侧列表逻辑保持不变
 - 不影响 `PresetProviders.swift` - 预设数据结构保持不变
 

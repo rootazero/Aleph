@@ -23,7 +23,7 @@
 - [x] 3.2 Update script to run `install_name_tool -id @rpath/libaethecore.dylib`
 - [x] 3.3 Set `@rpath` in Xcode to `@executable_path/../Frameworks` (requires manual configuration)
 - [x] 3.4 Test app launches without dylib not found errors (pending user testing)
-- [x] 3.5 Verify with `otool -L Aether.app/Contents/MacOS/Aether` (pending user testing)
+- [x] 3.5 Verify with `otool -L Aleph.app/Contents/MacOS/Aleph` (pending user testing)
 
 ## 4. Clean System Testing
 - [x] 4.1 Build release version of Rust core (`cargo build --release`)
@@ -44,7 +44,7 @@
 - [x] 5.8 Run app for 30 minutes stability test (user can test)
 
 ## 6. README Documentation
-- [x] 6.1 Create `Aether/README.md` file
+- [x] 6.1 Create `Aleph/README.md` file
 - [x] 6.2 Add build instructions (Rust + Xcode)
 - [x] 6.3 Document system requirements
 - [x] 6.4 Explain Accessibility permission

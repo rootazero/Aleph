@@ -13,13 +13,13 @@
 ## Task 1: Create agents module structure
 
 **Files:**
-- Create: `Aether/core/src/agents/mod.rs`
-- Create: `Aether/core/src/agents/types.rs`
-- Modify: `Aether/core/src/lib.rs`
+- Create: `Aleph/core/src/agents/mod.rs`
+- Create: `Aleph/core/src/agents/types.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Create agents module file**
 
-Create `Aether/core/src/agents/mod.rs`:
+Create `Aleph/core/src/agents/mod.rs`:
 
 ```rust
 //! Agent system for sub-agent delegation.
@@ -41,7 +41,7 @@ pub use types::{AgentDef, AgentMode};
 
 **Step 2: Create types file**
 
-Create `Aether/core/src/agents/types.rs`:
+Create `Aleph/core/src/agents/types.rs`:
 
 ```rust
 //! Agent type definitions.
@@ -185,7 +185,7 @@ mod tests {
 
 **Step 3: Add module to lib.rs**
 
-Add to `Aether/core/src/lib.rs` after `pub mod agent;`:
+Add to `Aleph/core/src/lib.rs` after `pub mod agent;`:
 
 ```rust
 pub mod agents; // NEW: Sub-agent system
@@ -193,7 +193,7 @@ pub mod agents; // NEW: Sub-agent system
 
 **Step 4: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test agents::types`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test agents::types`
 Expected: 6 tests passing
 
 **Step 5: Commit**
@@ -209,12 +209,12 @@ git commit -m "feat(agents): add agent types module with AgentDef and AgentMode"
 ## Task 2: Implement AgentRegistry
 
 **Files:**
-- Create: `Aether/core/src/agents/registry.rs`
-- Modify: `Aether/core/src/agents/mod.rs`
+- Create: `Aleph/core/src/agents/registry.rs`
+- Modify: `Aleph/core/src/agents/mod.rs`
 
 **Step 1: Create registry file**
 
-Create `Aether/core/src/agents/registry.rs`:
+Create `Aleph/core/src/agents/registry.rs`:
 
 ```rust
 //! Agent registry for managing agent definitions.
@@ -467,7 +467,7 @@ mod tests {
 
 Create directory and prompt files:
 
-`Aether/core/src/agents/prompts/main.md`:
+`Aleph/core/src/agents/prompts/main.md`:
 ```markdown
 You are the main assistant agent. You have access to all available tools and can delegate tasks to specialized sub-agents.
 
@@ -479,7 +479,7 @@ When facing complex tasks, consider delegating to:
 Always think step by step and use the most appropriate tools for each task.
 ```
 
-`Aether/core/src/agents/prompts/explore.md`:
+`Aleph/core/src/agents/prompts/explore.md`:
 ```markdown
 You are an exploration agent specialized in searching and reading.
 
@@ -493,7 +493,7 @@ Your capabilities:
 You cannot modify files. Focus on gathering information and reporting findings.
 ```
 
-`Aether/core/src/agents/prompts/coder.md`:
+`Aleph/core/src/agents/prompts/coder.md`:
 ```markdown
 You are a coding agent specialized in writing and editing code.
 
@@ -506,7 +506,7 @@ Your capabilities:
 Focus on clean, well-documented code. Follow the project's coding conventions.
 ```
 
-`Aether/core/src/agents/prompts/researcher.md`:
+`Aleph/core/src/agents/prompts/researcher.md`:
 ```markdown
 You are a research agent specialized in information gathering.
 
@@ -520,7 +520,7 @@ You cannot modify files. Focus on comprehensive research and clear summaries.
 
 **Step 3: Update mod.rs**
 
-Update `Aether/core/src/agents/mod.rs` to include registry:
+Update `Aleph/core/src/agents/mod.rs` to include registry:
 
 ```rust
 //! Agent system for sub-agent delegation.
@@ -540,7 +540,7 @@ pub use types::{AgentDef, AgentMode};
 
 **Step 4: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test agents::registry`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test agents::registry`
 Expected: 11 tests passing
 
 **Step 5: Commit**
@@ -555,12 +555,12 @@ git commit -m "feat(agents): add AgentRegistry with built-in agent definitions"
 ## Task 3: Implement TaskTool
 
 **Files:**
-- Create: `Aether/core/src/agents/task_tool.rs`
-- Modify: `Aether/core/src/agents/mod.rs`
+- Create: `Aleph/core/src/agents/task_tool.rs`
+- Modify: `Aleph/core/src/agents/mod.rs`
 
 **Step 1: Create task_tool file**
 
-Create `Aether/core/src/agents/task_tool.rs`:
+Create `Aleph/core/src/agents/task_tool.rs`:
 
 ```rust
 //! TaskTool for calling sub-agents.
@@ -572,7 +572,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::agents::registry::AgentRegistry;
-use crate::event::{AetherEvent, EventBus, SubAgentRequest};
+use crate::event::{AlephEvent, EventBus, SubAgentRequest};
 
 /// Error type for TaskTool operations
 #[derive(Debug, thiserror::Error)]
@@ -684,7 +684,7 @@ impl TaskTool {
 
         // Publish SubAgentStarted event
         self.bus
-            .publish(AetherEvent::SubAgentStarted(request))
+            .publish(AlephEvent::SubAgentStarted(request))
             .await
             .map_err(|e| TaskToolError::EventBusError(e.to_string()))?;
 
@@ -880,7 +880,7 @@ mod tests {
 
 **Step 2: Update mod.rs**
 
-Update `Aether/core/src/agents/mod.rs`:
+Update `Aleph/core/src/agents/mod.rs`:
 
 ```rust
 //! Agent system for sub-agent delegation.
@@ -902,7 +902,7 @@ pub use types::{AgentDef, AgentMode};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test agents::task_tool`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test agents::task_tool`
 Expected: 10 tests passing
 
 **Step 4: Commit**
@@ -917,12 +917,12 @@ git commit -m "feat(agents): add TaskTool for calling sub-agents"
 ## Task 4: Implement SubAgentHandler Component
 
 **Files:**
-- Create: `Aether/core/src/components/subagent_handler.rs`
-- Modify: `Aether/core/src/components/mod.rs`
+- Create: `Aleph/core/src/components/subagent_handler.rs`
+- Modify: `Aleph/core/src/components/mod.rs`
 
 **Step 1: Create subagent_handler file**
 
-Create `Aether/core/src/components/subagent_handler.rs`:
+Create `Aleph/core/src/components/subagent_handler.rs`:
 
 ```rust
 //! Sub-agent handler component for managing sub-agent lifecycle.
@@ -1084,7 +1084,7 @@ impl EventHandler for SubAgentHandler {
         vec![EventType::SubAgentStarted, EventType::SubAgentCompleted]
     }
 
-    async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<(), HandlerError> {
+    async fn handle(&self, event: &AlephEvent, ctx: &EventContext) -> Result<(), HandlerError> {
         match event {
             AlephEvent::SubAgentStarted(request) => {
                 self.handle_started(request, ctx).await
@@ -1196,7 +1196,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
         handler
-            .handle(&AetherEvent::SubAgentStarted(start_request), &ctx)
+            .handle(&AlephEvent::SubAgentStarted(start_request), &ctx)
             .await
             .unwrap();
 
@@ -1211,7 +1211,7 @@ mod tests {
             error: None,
         };
         handler
-            .handle(&AetherEvent::SubAgentCompleted(result), &ctx)
+            .handle(&AlephEvent::SubAgentCompleted(result), &ctx)
             .await
             .unwrap();
 
@@ -1231,7 +1231,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
         handler
-            .handle(&AetherEvent::SubAgentStarted(request), &ctx)
+            .handle(&AlephEvent::SubAgentStarted(request), &ctx)
             .await
             .unwrap();
 
@@ -1258,7 +1258,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
         handler
-            .handle(&AetherEvent::SubAgentStarted(request), &ctx)
+            .handle(&AlephEvent::SubAgentStarted(request), &ctx)
             .await
             .unwrap();
 
@@ -1284,7 +1284,7 @@ mod tests {
 
 **Step 2: Update components/mod.rs**
 
-Add to `Aether/core/src/components/mod.rs`:
+Add to `Aleph/core/src/components/mod.rs`:
 
 ```rust
 mod subagent_handler;
@@ -1293,7 +1293,7 @@ pub use subagent_handler::SubAgentHandler;
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test components::subagent_handler`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test components::subagent_handler`
 Expected: 11 tests passing
 
 **Step 4: Commit**
@@ -1308,11 +1308,11 @@ git commit -m "feat(components): add SubAgentHandler for sub-agent lifecycle man
 ## Task 5: Add lib.rs exports for agents module
 
 **Files:**
-- Modify: `Aether/core/src/lib.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Add agents module declaration and exports**
 
-Add to `Aether/core/src/lib.rs` after `pub mod agent;`:
+Add to `Aleph/core/src/lib.rs` after `pub mod agent;`:
 
 ```rust
 pub mod agents; // NEW: Sub-agent system (AgentDef, AgentRegistry, TaskTool)
@@ -1336,7 +1336,7 @@ SubAgentHandler,
 
 **Step 2: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test`
 Expected: All tests passing
 
 **Step 3: Commit**
@@ -1351,12 +1351,12 @@ git commit -m "feat(lib): add agents module exports"
 ## Task 6: Integration tests for sub-agent system
 
 **Files:**
-- Create: `Aether/core/src/agents/integration_test.rs`
-- Modify: `Aether/core/src/agents/mod.rs`
+- Create: `Aleph/core/src/agents/integration_test.rs`
+- Modify: `Aleph/core/src/agents/mod.rs`
 
 **Step 1: Create integration test file**
 
-Create `Aether/core/src/agents/integration_test.rs`:
+Create `Aleph/core/src/agents/integration_test.rs`:
 
 ```rust
 //! Integration tests for the sub-agent system.
@@ -1365,7 +1365,7 @@ use std::sync::Arc;
 
 use crate::agents::{AgentMode, AgentRegistry, TaskTool};
 use crate::components::SubAgentHandler;
-use crate::event::{AetherEvent, EventBus, EventBusConfig, EventHandler, EventContext, SubAgentRequest, SubAgentResult};
+use crate::event::{AlephEvent, EventBus, EventBusConfig, EventHandler, EventContext, SubAgentRequest, SubAgentResult};
 
 fn create_test_setup() -> (Arc<AgentRegistry>, Arc<EventBus>, SubAgentHandler, TaskTool) {
     let registry = Arc::new(AgentRegistry::with_builtins());
@@ -1422,7 +1422,7 @@ async fn test_full_subagent_lifecycle() {
         error: None,
     };
 
-    bus.publish(AetherEvent::SubAgentCompleted(completion.clone()))
+    bus.publish(AlephEvent::SubAgentCompleted(completion.clone()))
         .await
         .unwrap();
 
@@ -1482,7 +1482,7 @@ async fn test_max_iterations_enforcement() {
         parent_session_id: "parent".into(),
         child_session_id: "test-child".into(),
     };
-    handler.handle(&AetherEvent::SubAgentStarted(request.clone()), &ctx).await.unwrap();
+    handler.handle(&AlephEvent::SubAgentStarted(request.clone()), &ctx).await.unwrap();
 
     // Iterate up to max
     for _ in 0..19 {
@@ -1510,7 +1510,7 @@ async fn test_nested_subagent_tracking() {
         parent_session_id: "main-session".into(),
         child_session_id: "child-1".into(),
     };
-    handler.handle(&AetherEvent::SubAgentStarted(request1), &ctx).await.unwrap();
+    handler.handle(&AlephEvent::SubAgentStarted(request1), &ctx).await.unwrap();
 
     // Start second sub-agent from the first
     let request2 = SubAgentRequest {
@@ -1519,7 +1519,7 @@ async fn test_nested_subagent_tracking() {
         parent_session_id: "child-1".into(),
         child_session_id: "child-2".into(),
     };
-    handler.handle(&AetherEvent::SubAgentStarted(request2), &ctx).await.unwrap();
+    handler.handle(&AlephEvent::SubAgentStarted(request2), &ctx).await.unwrap();
 
     // Both sessions active
     assert!(handler.is_session_active("child-1").await);
@@ -1543,7 +1543,7 @@ async fn test_nested_subagent_tracking() {
         success: true,
         error: None,
     };
-    handler.handle(&AetherEvent::SubAgentCompleted(result2), &ctx).await.unwrap();
+    handler.handle(&AlephEvent::SubAgentCompleted(result2), &ctx).await.unwrap();
 
     assert!(!handler.is_session_active("child-2").await);
     assert!(handler.is_session_active("child-1").await);
@@ -1556,7 +1556,7 @@ async fn test_nested_subagent_tracking() {
         success: true,
         error: None,
     };
-    handler.handle(&AetherEvent::SubAgentCompleted(result1), &ctx).await.unwrap();
+    handler.handle(&AlephEvent::SubAgentCompleted(result1), &ctx).await.unwrap();
 
     assert!(!handler.is_session_active("child-1").await);
 }
@@ -1572,7 +1572,7 @@ async fn test_subagent_failure_tracking() {
         parent_session_id: "parent".into(),
         child_session_id: "child".into(),
     };
-    handler.handle(&AetherEvent::SubAgentStarted(request), &ctx).await.unwrap();
+    handler.handle(&AlephEvent::SubAgentStarted(request), &ctx).await.unwrap();
 
     // Sub-agent fails
     let result = SubAgentResult {
@@ -1582,7 +1582,7 @@ async fn test_subagent_failure_tracking() {
         success: false,
         error: Some("Tool execution failed".into()),
     };
-    handler.handle(&AetherEvent::SubAgentCompleted(result), &ctx).await.unwrap();
+    handler.handle(&AlephEvent::SubAgentCompleted(result), &ctx).await.unwrap();
 
     // Session still cleaned up on failure
     assert!(!handler.is_session_active("child").await);
@@ -1612,7 +1612,7 @@ async fn test_builtin_agent_prompts_loaded() {
 
 **Step 2: Update agents/mod.rs**
 
-Add to `Aether/core/src/agents/mod.rs`:
+Add to `Aleph/core/src/agents/mod.rs`:
 
 ```rust
 #[cfg(test)]
@@ -1621,7 +1621,7 @@ mod integration_test;
 
 **Step 3: Run integration tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test agents::integration_test`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test agents::integration_test`
 Expected: 7 tests passing
 
 **Step 4: Commit**
@@ -1637,17 +1637,17 @@ git commit -m "test(agents): add integration tests for sub-agent system"
 
 **Step 1: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test`
 Expected: All tests passing
 
 **Step 2: Run clippy**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo clippy -- -D warnings`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo clippy -- -D warnings`
 Expected: No new warnings (existing warnings acceptable)
 
 **Step 3: Build release**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo build --release`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo build --release`
 Expected: Build succeeds
 
 **Step 4: Document completion**

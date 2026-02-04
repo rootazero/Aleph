@@ -47,7 +47,7 @@ pub struct FullConfig {
 
 **Step 4: Verify compilation**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo check`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo check`
 Expected: Compilation succeeds (may have warnings about nested types needing JsonSchema)
 
 **Step 5: Commit**
@@ -79,7 +79,7 @@ Add `JsonSchema` to derive for:
 
 **Step 3: Verify compilation**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo check`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo check`
 
 **Step 4: Commit**
 
@@ -241,7 +241,7 @@ use schemars::JsonSchema;
 
 **Step 2: Add JsonSchema to all types**
 
-- `AetherConfig`
+- `AlephConfig`
 - `AgentConfigOverride`
 - `McpConfig` (enum)
 - `OAuthConfig`
@@ -331,7 +331,7 @@ pub use schema::{generate_config_schema, generate_config_schema_json};
 
 **Step 3: Run tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test config::schema`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test config::schema`
 Expected: Tests pass
 
 **Step 4: Commit**
@@ -1445,10 +1445,10 @@ git commit -m "feat(config): add reload plan generation module"
 
 use std::path::{Path, PathBuf};
 use crate::error::AlephError;
-use super::types::AetherConfig;
+use super::types::AlephConfig;
 
 /// Config file priority order.
-const CONFIG_FILES: &[&str] = &["aether.toml", "aether.jsonc", "aether.json"];
+const CONFIG_FILES: &[&str] = &["aleph.toml", "aleph.jsonc", "aleph.json"];
 
 /// Find the config file in a directory.
 pub fn find_config_file(dir: &Path) -> Option<PathBuf> {
@@ -1462,7 +1462,7 @@ pub fn find_config_file(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Load extension config from a directory.
-pub fn load_extension_config(dir: &Path) -> Result<Option<AetherConfig>, AlephError> {
+pub fn load_extension_config(dir: &Path) -> Result<Option<AlephConfig>, AlephError> {
     let Some(path) = find_config_file(dir) else {
         return Ok(None);
     };
@@ -1471,7 +1471,7 @@ pub fn load_extension_config(dir: &Path) -> Result<Option<AetherConfig>, AlephEr
 }
 
 /// Load config from a specific file.
-pub fn load_config_file(path: &Path) -> Result<AetherConfig, AlephError> {
+pub fn load_config_file(path: &Path) -> Result<AlephConfig, AlephError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         AlephError::InvalidConfig(format!("Failed to read {}: {}", path.display(), e))
     })?;
@@ -1491,13 +1491,13 @@ pub fn load_config_file(path: &Path) -> Result<AetherConfig, AlephError> {
     }
 }
 
-fn parse_toml(content: &str, path: &Path) -> Result<AetherConfig, AlephError> {
+fn parse_toml(content: &str, path: &Path) -> Result<AlephConfig, AlephError> {
     toml::from_str(content).map_err(|e| {
         AlephError::InvalidConfig(format!("Failed to parse {}: {}", path.display(), e))
     })
 }
 
-fn parse_jsonc(content: &str, path: &Path) -> Result<AetherConfig, AlephError> {
+fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, AlephError> {
     // Strip comments for JSONC
     let stripped = strip_json_comments(content);
 
@@ -1580,12 +1580,12 @@ mod tests {
         let dir = tempdir().unwrap();
 
         // Create both files
-        fs::write(dir.path().join("aether.toml"), "").unwrap();
-        fs::write(dir.path().join("aether.jsonc"), "{}").unwrap();
+        fs::write(dir.path().join("aleph.toml"), "").unwrap();
+        fs::write(dir.path().join("aleph.jsonc"), "{}").unwrap();
 
         // TOML should have priority
         let found = find_config_file(dir.path()).unwrap();
-        assert!(found.to_string_lossy().ends_with("aether.toml"));
+        assert!(found.to_string_lossy().ends_with("aleph.toml"));
     }
 
     #[test]
@@ -1605,7 +1605,7 @@ mod tests {
     #[test]
     fn test_parse_toml_config() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("aether.toml");
+        let path = dir.path().join("aleph.toml");
 
         fs::write(&path, r#"
             model = "claude-opus-4-5"
@@ -1619,7 +1619,7 @@ mod tests {
     #[test]
     fn test_parse_jsonc_config() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("aether.jsonc");
+        let path = dir.path().join("aleph.jsonc");
 
         fs::write(&path, r#"{
             // This is a comment
@@ -1708,10 +1708,10 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, AlephError>
 
     // Determine target path
     let target_path = jsonc_path.with_extension("toml");
-    let target_path = if target_path.file_name().map(|f| f.to_string_lossy()) == Some("aether.toml".into()) {
+    let target_path = if target_path.file_name().map(|f| f.to_string_lossy()) == Some("aleph.toml".into()) {
         target_path
     } else {
-        jsonc_path.parent().unwrap_or(Path::new(".")).join("aether.toml")
+        jsonc_path.parent().unwrap_or(Path::new(".")).join("aleph.toml")
     };
 
     // Backup original if target exists
@@ -1739,8 +1739,8 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, AlephError>
 
 /// Check if a directory needs migration.
 pub fn needs_migration(dir: &Path) -> bool {
-    let toml_exists = dir.join("aether.toml").exists();
-    let jsonc_exists = dir.join("aether.jsonc").exists() || dir.join("aether.json").exists();
+    let toml_exists = dir.join("aleph.toml").exists();
+    let jsonc_exists = dir.join("aleph.jsonc").exists() || dir.join("aleph.json").exists();
 
     !toml_exists && jsonc_exists
 }
@@ -1754,7 +1754,7 @@ mod tests {
     #[test]
     fn test_migrate_jsonc_to_toml() {
         let dir = tempdir().unwrap();
-        let jsonc_path = dir.path().join("aether.jsonc");
+        let jsonc_path = dir.path().join("aleph.jsonc");
 
         fs::write(&jsonc_path, r#"{
             "model": "claude-opus-4-5",
@@ -1764,7 +1764,7 @@ mod tests {
         let result = migrate_to_toml(&jsonc_path).unwrap();
 
         assert!(result.target.exists());
-        assert_eq!(result.target.file_name().unwrap(), "aether.toml");
+        assert_eq!(result.target.file_name().unwrap(), "aleph.toml");
 
         let content = fs::read_to_string(&result.target).unwrap();
         assert!(content.contains("model = \"claude-opus-4-5\""));
@@ -1779,11 +1779,11 @@ mod tests {
         assert!(!needs_migration(dir.path()));
 
         // Only JSONC - needs migration
-        fs::write(dir.path().join("aether.jsonc"), "{}").unwrap();
+        fs::write(dir.path().join("aleph.jsonc"), "{}").unwrap();
         assert!(needs_migration(dir.path()));
 
         // Both exist - no migration (TOML takes priority)
-        fs::write(dir.path().join("aether.toml"), "").unwrap();
+        fs::write(dir.path().join("aleph.toml"), "").unwrap();
         assert!(!needs_migration(dir.path()));
     }
 }
@@ -1918,7 +1918,7 @@ git commit -m "test(config): add schema system integration tests"
 **Step 1: Run full test suite**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test
 ```
 
 **Step 2: Build with all features**

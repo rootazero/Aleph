@@ -25,7 +25,7 @@ This document describes the technical architecture and design decisions for impl
                              │ UniFFI Calls
                              ▼
               ┌───────────────────────────────────────┐
-              │      Rust Core (AetherCore)           │
+              │      Rust Core (AlephCore)           │
               │  - getDefaultProvider()               │
               │  - setDefaultProvider(name)           │
               │  - getEnabledProviders()              │
@@ -52,7 +52,7 @@ This document describes the technical architecture and design decisions for impl
 
 ### 1. Rust Core - Config Validation
 
-**File**: `Aether/core/src/config/mod.rs`
+**File**: `Aleph/core/src/config/mod.rs`
 
 **Design Decision**: Centralize default provider validation in the config layer rather than router.
 
@@ -71,7 +71,7 @@ impl Config {
         if let Some(ref default_provider) = self.general.default_provider {
             // Check provider exists
             if !self.providers.contains_key(default_provider) {
-                return Err(AetherError::invalid_config(
+                return Err(AlephError::invalid_config(
                     format!("Default provider '{}' not found", default_provider)
                 ));
             }
@@ -107,10 +107,10 @@ impl Config {
                 self.general.default_provider = Some(name.to_string());
                 Ok(())
             }
-            Some(_) => Err(AetherError::invalid_config(
+            Some(_) => Err(AlephError::invalid_config(
                 format!("Provider '{}' is not enabled", name)
             )),
-            None => Err(AetherError::invalid_config(
+            None => Err(AlephError::invalid_config(
                 format!("Provider '{}' not found", name)
             )),
         }
@@ -120,7 +120,7 @@ impl Config {
 
 ### 2. Rust Core - UniFFI Bridge
 
-**File**: `Aether/core/src/aether.udl`
+**File**: `Aleph/core/src/aleph.udl`
 
 **Design Decision**: Expose minimal, high-level API through UniFFI.
 
@@ -131,7 +131,7 @@ impl Config {
 
 **Implementation**:
 ```idl
-interface AetherCore {
+interface AlephCore {
     // Existing methods...
 
     // NEW: Default provider management
@@ -141,10 +141,10 @@ interface AetherCore {
 };
 ```
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 
 ```rust
-impl AetherCore {
+impl AlephCore {
     pub fn get_default_provider(&self) -> Option<String> {
         let config = self.config.lock().unwrap();
         config.get_default_provider()
@@ -176,7 +176,7 @@ impl AetherCore {
 
 ### 3. Router - Fallback Logic
 
-**File**: `Aether/core/src/router/mod.rs`
+**File**: `Aleph/core/src/router/mod.rs`
 
 **Design Decision**: Implement graceful fallback in router initialization.
 
@@ -217,7 +217,7 @@ impl Router {
 
 ### 4. Swift UI - ProvidersView State Management
 
-**File**: `Aether/Sources/ProvidersView.swift`
+**File**: `Aleph/Sources/ProvidersView.swift`
 
 **Design Decision**: Use separate `@State` for default provider ID, reload on config changes.
 
@@ -266,7 +266,7 @@ struct ProvidersView: View {
 
 ### 5. Menu Bar - Dynamic Provider Menu
 
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 
 **Design Decision**: Rebuild menu on config changes using observer pattern.
 

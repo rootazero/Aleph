@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 /// Routing rule configuration for TOML parsing
 ///
-/// Aether supports two types of routing rules:
+/// Aleph supports two types of routing rules:
 ///
 /// ## Command Rules
 /// - Pattern starts with `^/` (e.g., `^/draw`, `^/translate`)

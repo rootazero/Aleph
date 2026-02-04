@@ -3,12 +3,12 @@
 ## Phase 1: Theme System Removal (Low Risk)
 
 ### Task 1.1: Remove Theme Files
-- [x] Delete `Aether/Sources/Themes/ZenTheme.swift`
-- [x] Delete `Aether/Sources/Themes/CyberpunkTheme.swift`
-- [x] Delete `Aether/Sources/Themes/JarvisTheme.swift`
-- [x] Delete `Aether/Sources/Themes/Effects/GlitchOverlay.swift`
-- [x] Delete `Aether/Sources/Themes/Shapes/HexSegment.swift`
-- [x] Delete `Aether/Sources/Themes/ThemeEngine.swift`
+- [x] Delete `Aleph/Sources/Themes/ZenTheme.swift`
+- [x] Delete `Aleph/Sources/Themes/CyberpunkTheme.swift`
+- [x] Delete `Aleph/Sources/Themes/JarvisTheme.swift`
+- [x] Delete `Aleph/Sources/Themes/Effects/GlitchOverlay.swift`
+- [x] Delete `Aleph/Sources/Themes/Shapes/HexSegment.swift`
+- [x] Delete `Aleph/Sources/Themes/ThemeEngine.swift`
 - [x] Update `project.yml` to remove deleted files from build (handled by XcodeGen)
 
 **Validation:** Project compiles without theme files ✅
@@ -122,7 +122,7 @@ Instead of deleting HaloWindow completely, we simplified it:
 - [x] Removed theme support from `HaloView.swift`
 - [x] Removed theme support from `HaloWindowController.swift`
 - [x] Removed success state from `HaloState.swift`
-- [x] Deleted `Aether/Sources/Themes/Theme.swift`
+- [x] Deleted `Aleph/Sources/Themes/Theme.swift`
 - [x] Deleted all theme-specific files
 
 **Validation:** Project compiles with simplified Halo components ✅
@@ -171,29 +171,29 @@ Instead of deleting HaloWindow completely, we simplified it:
 ## Summary of Changes
 
 ### Files Deleted:
-- `Aether/Sources/Themes/ZenTheme.swift` (~355 lines)
-- `Aether/Sources/Themes/CyberpunkTheme.swift` (~409 lines)
-- `Aether/Sources/Themes/JarvisTheme.swift` (~486 lines)
-- `Aether/Sources/Themes/ThemeEngine.swift` (~59 lines)
-- `Aether/Sources/Themes/Effects/GlitchOverlay.swift`
-- `Aether/Sources/Themes/Shapes/HexSegment.swift`
-- `Aether/Sources/Themes/Theme.swift` (~266 lines)
+- `Aleph/Sources/Themes/ZenTheme.swift` (~355 lines)
+- `Aleph/Sources/Themes/CyberpunkTheme.swift` (~409 lines)
+- `Aleph/Sources/Themes/JarvisTheme.swift` (~486 lines)
+- `Aleph/Sources/Themes/ThemeEngine.swift` (~59 lines)
+- `Aleph/Sources/Themes/Effects/GlitchOverlay.swift`
+- `Aleph/Sources/Themes/Shapes/HexSegment.swift`
+- `Aleph/Sources/Themes/Theme.swift` (~266 lines)
 
 ### Files Created:
-- `Aether/Sources/Components/ProcessingIndicatorWindow.swift` (~100 lines)
-- `Aether/Sources/Extensions/ErrorType+Extensions.swift` (~45 lines)
+- `Aleph/Sources/Components/ProcessingIndicatorWindow.swift` (~100 lines)
+- `Aleph/Sources/Extensions/ErrorType+Extensions.swift` (~45 lines)
 
 ### Files Modified:
-- `Aether/Sources/HaloState.swift` - Removed success state, added ToastType extensions
-- `Aether/Sources/HaloView.swift` - Removed themes, simplified components
-- `Aether/Sources/HaloWindow.swift` - Removed ThemeEngine, added showBelow/forceHide
-- `Aether/Sources/Controllers/HaloWindowController.swift` - Removed ThemeEngine
-- `Aether/Sources/DI/DependencyContainer.swift` - Removed ThemeEngine
-- `Aether/Sources/AppDelegate.swift` - Removed ThemeEngine
-- `Aether/Sources/EventHandler.swift` - Removed success state, removed providerColor
-- `Aether/Sources/SettingsView.swift` - Removed theme picker
-- `Aether/Sources/Components/Window/RootContentView.swift` - Removed ThemeEngine
-- `Aether/Sources/Coordinator/OutputCoordinator.swift` - Removed success state
+- `Aleph/Sources/HaloState.swift` - Removed success state, added ToastType extensions
+- `Aleph/Sources/HaloView.swift` - Removed themes, simplified components
+- `Aleph/Sources/HaloWindow.swift` - Removed ThemeEngine, added showBelow/forceHide
+- `Aleph/Sources/Controllers/HaloWindowController.swift` - Removed ThemeEngine
+- `Aleph/Sources/DI/DependencyContainer.swift` - Removed ThemeEngine
+- `Aleph/Sources/AppDelegate.swift` - Removed ThemeEngine
+- `Aleph/Sources/EventHandler.swift` - Removed success state, removed providerColor
+- `Aleph/Sources/SettingsView.swift` - Removed theme picker
+- `Aleph/Sources/Components/Window/RootContentView.swift` - Removed ThemeEngine
+- `Aleph/Sources/Coordinator/OutputCoordinator.swift` - Removed success state
 
 ### Code Reduction Summary
 | Component | Lines Deleted |

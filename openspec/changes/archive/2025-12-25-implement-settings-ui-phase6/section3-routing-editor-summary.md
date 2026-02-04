@@ -11,7 +11,7 @@
 
 ### 3.1 ✅ RuleEditorView.swift Modal Dialog
 
-**文件:** `Aether/Sources/RuleEditorView.swift` (366 行)
+**文件:** `Aleph/Sources/RuleEditorView.swift` (366 行)
 
 **实现内容:**
 - ✅ **正则表达式模式输入：**
@@ -89,7 +89,7 @@ struct RuleEditorView: View {
 
 ### 3.2 ✅ RoutingView.swift Integration
 
-**文件:** `Aether/Sources/RoutingView.swift` (512 行)
+**文件:** `Aleph/Sources/RoutingView.swift` (512 行)
 
 **实现内容:**
 - ✅ **动态加载规则：**
@@ -248,7 +248,7 @@ Button("Save") { saveRule() }
 - ✅ **导出功能：**
   - NSSavePanel 文件保存对话框
   - JSON 格式（pretty-printed）
-  - 默认文件名：`aether-routing-rules.json`
+  - 默认文件名：`aleph-routing-rules.json`
   - 成功通知
 
 - ✅ **导入功能：**
@@ -269,7 +269,7 @@ Button("Save") { saveRule() }
 private func exportRules() {
     let savePanel = NSSavePanel()
     savePanel.title = "Export Routing Rules"
-    savePanel.nameFieldStringValue = "aether-routing-rules.json"
+    savePanel.nameFieldStringValue = "aleph-routing-rules.json"
     savePanel.allowedContentTypes = [.json]
 
     savePanel.begin { response in
@@ -429,13 +429,13 @@ RuleEditorView (Modal)
 ## 文件清单
 
 ### 已验证的文件
-1. `Aether/Sources/RuleEditorView.swift` - 规则编辑模态对话框（366 行）
-2. `Aether/Sources/RoutingView.swift` - 规则列表视图（512 行）
+1. `Aleph/Sources/RuleEditorView.swift` - 规则编辑模态对话框（366 行）
+2. `Aleph/Sources/RoutingView.swift` - 规则列表视图（512 行）
 
 ### 相关的 Rust 文件
-1. `Aether/core/src/core.rs` - update_routing_rules, validate_regex 实现
-2. `Aether/core/src/aether.udl` - UniFFI 接口定义
-3. `Aether/core/src/config/mod.rs` - RoutingRuleConfig 定义
+1. `Aleph/core/src/core.rs` - update_routing_rules, validate_regex 实现
+2. `Aleph/core/src/aleph.udl` - UniFFI 接口定义
+3. `Aleph/core/src/config/mod.rs` - RoutingRuleConfig 定义
 
 ## 测试场景
 

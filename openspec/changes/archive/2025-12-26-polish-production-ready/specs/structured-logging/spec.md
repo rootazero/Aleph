@@ -12,7 +12,7 @@ The system SHALL initialize the tracing-based logging system at application star
 
 #### Scenario: Initialize logging on app launch
 
-- **WHEN** AetherCore is initialized
+- **WHEN** AlephCore is initialized
 - **THEN** `init_logging()` function is called
 - **AND** tracing subscriber is configured with env filter
 - **AND** log output includes timestamp, level, target, and message
@@ -69,7 +69,7 @@ The system SHALL manage log files with daily rotation, size limits, and automati
 
 - **WHEN** application runs past midnight (UTC)
 - **THEN** new log file is created with date-stamped name
-- **AND** file name follows pattern: `aether-YYYY-MM-DD.log`
+- **AND** file name follows pattern: `aleph-YYYY-MM-DD.log`
 - **AND** old log file is closed cleanly
 - **AND** no log messages are lost during rotation
 
@@ -83,7 +83,7 @@ The system SHALL manage log files with daily rotation, size limits, and automati
 #### Scenario: Enforce log size limit
 
 - **WHEN** daily log file exceeds 50MB
-- **THEN** file is rotated to `aether-YYYY-MM-DD.N.log`
+- **THEN** file is rotated to `aleph-YYYY-MM-DD.N.log`
 - **AND** new file is started for remaining logs
 - **AND** total log directory size is capped at 350MB (7 days * 50MB)
 
@@ -185,7 +185,7 @@ The system SHALL provide UI for viewing logs without requiring terminal access.
 #### Scenario: Export logs for bug reports
 
 - **WHEN** user clicks "Export Logs" button
-- **THEN** save dialog opens with filename: "aether-logs-YYYY-MM-DD.zip"
+- **THEN** save dialog opens with filename: "aleph-logs-YYYY-MM-DD.zip"
 - **AND** last 3 days of logs are included
 - **AND** PII scrubbing is re-applied before export
 - **AND** user can attach file to GitHub issue
@@ -219,7 +219,7 @@ The system SHALL expose logging controls to Swift via UniFFI for Settings UI int
 
 - **WHEN** Swift calls `core.get_log_directory()`
 - **THEN** absolute path to log directory is returned
-- **AND** path is `~/.aether/logs/`
+- **AND** path is `~/.aleph/logs/`
 - **AND** Swift can open directory in Finder
 
 ## MODIFIED Requirements

@@ -132,12 +132,12 @@
 
 ## 7. UniFFI Exports
 
-- [x] 7.1 Add model router types to aether.udl
+- [x] 7.1 Add model router types to aleph.udl
   - [x] 7.1.1 Export ModelProfile
   - [x] 7.1.2 Export Capability enum
   - [x] 7.1.3 Export CostTier and LatencyTier enums
   - [x] 7.1.4 Export StageResult
-- [x] 7.2 Add model router functions to aether.udl
+- [x] 7.2 Add model router functions to aleph.udl
   - [x] 7.2.1 `get_model_profiles() -> Vec<ModelProfile>`
   - [x] 7.2.2 `get_routing_rules() -> ModelRoutingRules`
   - [x] 7.2.3 `update_model_profile(profile: ModelProfile) -> Result<()>`

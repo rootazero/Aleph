@@ -3,10 +3,10 @@
 ## Phase 1: Rust Core - Provider Testing API (5h)
 
 ### Task 1.1: Add ProviderTestResult enum (1h)
-- [ ] Create `ProviderTestResult` enum in `Aether/core/src/search/mod.rs`
+- [ ] Create `ProviderTestResult` enum in `Aleph/core/src/search/mod.rs`
   - Variants: `Success { latency_ms: u32 }`, `AuthError { message: String }`, `NetworkError { message: String }`, `InvalidConfig { message: String }`
 - [ ] Derive UniFFI traits for enum
-- [ ] Add to `aether.udl` interface definition
+- [ ] Add to `aleph.udl` interface definition
 
 **Validation**: Enum compiles and generates Swift code via `uniffi-bindgen`
 
@@ -26,23 +26,23 @@
 ---
 
 ### Task 1.3: Export test API via UniFFI (1h)
-- [ ] Add `test_search_provider()` method to `AetherCore` struct
-- [ ] Update `aether.udl`:
+- [ ] Add `test_search_provider()` method to `AlephCore` struct
+- [ ] Update `aleph.udl`:
   ```idl
-  interface AetherCore {
+  interface AlephCore {
       [Async]
       ProviderTestResult test_search_provider(string provider_name);
   };
   ```
 - [ ] Regenerate Swift bindings: `cargo run --bin uniffi-bindgen generate ...`
-- [ ] Copy `libaethecore.dylib` to `Aether/Frameworks/`
+- [ ] Copy `libaethecore.dylib` to `Aleph/Frameworks/`
 
 **Validation**: Swift can call `await core.testSearchProvider("tavily")`
 
 ---
 
 ### Task 1.4: Unit tests for provider testing (1h)
-- [ ] Create `Aether/core/src/search/tests/test_provider_testing.rs`
+- [ ] Create `Aleph/core/src/search/tests/test_provider_testing.rs`
 - [ ] Test cases:
   - `test_search_provider_success()` - Valid provider returns Success
   - `test_search_provider_auth_error()` - Invalid API key returns AuthError
@@ -56,10 +56,10 @@
 ## Phase 2: Rust Core - Command Validation (4h)
 
 ### Task 2.1: Add ValidationError type (1h)
-- [ ] Create `ValidationError` enum in `Aether/core/src/error.rs`:
+- [ ] Create `ValidationError` enum in `Aleph/core/src/error.rs`:
   - `MissingSpace { command: String, suggestion: String }`
 - [ ] Implement `Display` and `Error` traits
-- [ ] Add to `AetherError` enum as variant
+- [ ] Add to `AlephError` enum as variant
 
 **Validation**: Error compiles and can be constructed
 
@@ -80,15 +80,15 @@
   }
   Ok(())
   ```
-- [ ] Integrate into `AetherCore::process_clipboard()` before routing
+- [ ] Integrate into `AlephCore::process_clipboard()` before routing
 
 **Validation**: Unit tests for valid/invalid formats pass
 
 ---
 
 ### Task 2.3: Add Halo validation hints (1h)
-- [ ] Add `on_validation_hint(message: String, suggestion: String)` callback to `AetherEventHandler` in `aether.udl`
-- [ ] Call callback from `AetherCore` when `ValidationError` occurs
+- [ ] Add `on_validation_hint(message: String, suggestion: String)` callback to `AlephEventHandler` in `aleph.udl`
+- [ ] Call callback from `AlephCore` when `ValidationError` occurs
 - [ ] Regenerate UniFFI bindings
 
 **Validation**: Validation error triggers Swift callback
@@ -98,7 +98,7 @@
 ## Phase 3: Swift UI - Provider Presets (3h) ✅ COMPLETED
 
 ### Task 3.1: Create SearchProviderPreset struct (1h) ✅
-- [x] Create `Aether/Sources/Models/SearchProviderPreset.swift`
+- [x] Create `Aleph/Sources/Models/SearchProviderPreset.swift`
 - [x] Define structs:
   ```swift
   struct SearchProviderPreset {
@@ -152,7 +152,7 @@
 ## Phase 4: Swift UI - Components (8h) ✅ COMPLETED
 
 ### Task 4.1: Create ProviderCard component (3h) ✅
-- [x] Create `Aether/Sources/Components/Molecules/SearchProviderCard.swift`
+- [x] Create `Aleph/Sources/Components/Molecules/SearchProviderCard.swift`
 - [x] UI structure:
   - Header: Icon, Name, Status Badge (⚠️/✅/❌/🔄)
   - Body: Dynamic fields based on preset (SecureField, TextField, Picker)
@@ -173,7 +173,7 @@
 ---
 
 ### Task 4.3: Create SearchSettingsView (3h) ✅
-- [x] Create `Aether/Sources/SearchSettingsView.swift`
+- [x] Create `Aleph/Sources/SearchSettingsView.swift`
 - [x] UI structure:
   ```
   ScrollView
@@ -195,7 +195,7 @@
 ## Phase 5: Configuration & Migration (4h)
 
 ### Task 5.1: Add PIIConfig to SearchConfig (1h)
-- [ ] Update `Aether/core/src/config/mod.rs`:
+- [ ] Update `Aleph/core/src/config/mod.rs`:
   ```rust
   #[derive(Debug, Clone, Serialize, Deserialize, Default)]
   pub struct PIIConfig {
@@ -281,7 +281,7 @@
 ## Phase 7: Preset Routing Rules (2h)
 
 ### Task 7.1: Add default routing rules to Config::default() (1h)
-- [ ] Update `Config::default()` in `Aether/core/src/config/mod.rs`:
+- [ ] Update `Config::default()` in `Aleph/core/src/config/mod.rs`:
   ```rust
   rules: vec![
       RoutingRuleConfig {

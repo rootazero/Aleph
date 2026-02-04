@@ -30,7 +30,7 @@ Aleph SDK 2.0 旨在将插件系统从"工具提供者"升级为"全能力扩展
 
 | 原则 | 描述 |
 |------|------|
-| **Contract-first** | Manifest (`aether_plugin.toml`) 是插件契约，权限边界静态可见 |
+| **Contract-first** | Manifest (`aleph_plugin.toml`) 是插件契约，权限边界静态可见 |
 | **Hybrid Registration** | 静态声明为主，动态注册为辅，动态不能超越声明 |
 | **Layered DX** | 宏/definePlugin 是 DX 糖衣，Trait/api.register 是底层骨架 |
 | **Typed Hooks** | Hook 按语义分类：Interceptor（控制）、Observer（观测）、Resolver（决议） |
@@ -51,7 +51,7 @@ Aleph SDK 2.0 旨在将插件系统从"工具提供者"升级为"全能力扩展
 
 ### 1.4 设计哲学：混合模式 (Hybrid)
 
-在混合模式下，`aether_plugin.toml` 被视为 Plugin Contract：
+在混合模式下，`aleph_plugin.toml` 被视为 Plugin Contract：
 
 1. **权限 (Permissions)** —— 必须是 100% 声明式
    - 安全边界必须静态可见
@@ -73,7 +73,7 @@ Aleph SDK 2.0 旨在将插件系统从"工具提供者"升级为"全能力扩展
 
 ```
 my-plugin/
-├── aether_plugin.toml      # 核心契约（必需）
+├── aleph_plugin.toml      # 核心契约（必需）
 ├── SKILL.md                # 全局 Prompt（可选）
 ├── skills/                 # 独立 Skill 目录（可选）
 │   └── weekly_report.md
@@ -99,7 +99,7 @@ entry = "dist/index.js"
 
 [plugin.author]
 name = "Aleph Community"
-email = "plugins@aether.dev"
+email = "plugins@aleph.dev"
 
 # ═══════════════════════════════════════════
 # P0: 权限声明（安全天花板，不可突破）
@@ -205,7 +205,7 @@ dynamic_hooks = ["after_*"]  # 只允许注册 after_* 类 hook
 
 ```typescript
 // dist/index.ts
-import { definePlugin, type AlephPluginAPI } from '@aether/plugin-sdk';
+import { definePlugin, type AlephPluginAPI } from '@aleph/plugin-sdk';
 
 export default definePlugin({
   // ═══════════════════════════════════════════
@@ -289,7 +289,7 @@ export default definePlugin({
 ### 3.2 类型定义摘要
 
 ```typescript
-// @aether/plugin-sdk 类型定义
+// @aleph/plugin-sdk 类型定义
 
 interface AlephPluginAPI {
   // 动态注册（需 TOML 中声明 capabilities）
@@ -324,7 +324,7 @@ type HookHandler<T> = (ctx: T) => Promise<void | InterceptorResult<T>>;
 | **TypeScript 原生** | 完整类型定义，零配置 IDE 支持 |
 | **Schema 自动推断** | 从 `args` 参数类型生成 JSON Schema（可选） |
 | **Hot Reload** | 开发模式下修改代码自动重载 |
-| **脚手架工具** | `aether plugin create my-plugin --template nodejs` |
+| **脚手架工具** | `aleph plugin create my-plugin --template nodejs` |
 
 ---
 
@@ -334,9 +334,9 @@ type HookHandler<T> = (ctx: T) => Promise<void | InterceptorResult<T>>;
 
 ```rust
 // src/lib.rs
-use aether_plugin_sdk::prelude::*;
+use aleph_plugin_sdk::prelude::*;
 
-#[aether_plugin(id = "com.example.sql-explorer")]
+#[aleph_plugin(id = "com.example.sql-explorer")]
 mod plugin {
     use super::*;
 
@@ -456,7 +456,7 @@ mod plugin {
 
 ```rust
 // 宏展开后的底层实现，高级用户可直接使用
-use aether_plugin_sdk::traits::*;
+use aleph_plugin_sdk::traits::*;
 
 pub struct SqlExplorerPlugin;
 
@@ -616,7 +616,7 @@ type InterceptorResult<T> =
 Channel 允许插件接入新的消息渠道（如飞书、Slack、WhatsApp），无需修改 Aleph Core。
 
 ```toml
-# aether_plugin.toml
+# aleph_plugin.toml
 [[channels]]
 name = "feishu"
 description = "Feishu (Lark) messaging integration"
@@ -630,7 +630,7 @@ app_secret = { type = "string", required = true, sensitive = true }
 
 ```typescript
 // Node.js 实现
-import { definePlugin, type ChannelContext, type Message } from '@aether/plugin-sdk';
+import { definePlugin, type ChannelContext, type Message } from '@aleph/plugin-sdk';
 
 export default definePlugin({
   channels: {
@@ -676,7 +676,7 @@ export default definePlugin({
 Provider 允许插件接入新的 LLM 供应商（如 Groq、本地 Ollama、私有部署）。
 
 ```toml
-# aether_plugin.toml
+# aleph_plugin.toml
 [[providers]]
 name = "groq"
 description = "Groq LPU inference"
@@ -734,7 +734,7 @@ export default definePlugin({
 允许插件暴露 HTTP 端点，用于 Webhook 接收或自定义 UI。
 
 ```toml
-# aether_plugin.toml
+# aleph_plugin.toml
 [[http_routes]]
 method = "POST"
 path = "/webhooks/feishu"
@@ -776,18 +776,18 @@ export default definePlugin({
 
 ```bash
 # 创建新插件
-aether plugin create my-plugin --template nodejs
-aether plugin create my-plugin --template rust
+aleph plugin create my-plugin --template nodejs
+aleph plugin create my-plugin --template rust
 
 # 模板选项
-aether plugin create my-plugin --template nodejs --features tool,hook,command
-aether plugin create my-plugin --template rust --features channel,provider
+aleph plugin create my-plugin --template nodejs --features tool,hook,command
+aleph plugin create my-plugin --template rust --features channel,provider
 
 # 生成的目录结构
 my-plugin/
-├── aether_plugin.toml      # 预填充的 Manifest
+├── aleph_plugin.toml      # 预填充的 Manifest
 ├── SKILL.md                # 示例 Prompt
-├── package.json            # (nodejs) 依赖 @aether/plugin-sdk
+├── package.json            # (nodejs) 依赖 @aleph/plugin-sdk
 ├── tsconfig.json           # (nodejs) TypeScript 配置
 ├── src/
 │   └── index.ts            # 入口文件（带示例代码）
@@ -798,7 +798,7 @@ my-plugin/
 
 ```bash
 # 启动开发服务器（热重载）
-aether plugin dev
+aleph plugin dev
 
 # 输出：
 # 🔌 Plugin loaded: my-plugin v0.1.0
@@ -816,34 +816,34 @@ aether plugin dev
 | **Hot Reload** | 文件保存后自动重载，无需重启 Aleph |
 | **类型检查** | 实时 TypeScript 类型校验 |
 | **Manifest 校验** | TOML 语法和 Schema 校验 |
-| **模拟调用** | `aether plugin call query_sql '{"query": "SELECT 1"}'` |
+| **模拟调用** | `aleph plugin call query_sql '{"query": "SELECT 1"}'` |
 
 ### 7.3 构建与发布
 
 ```bash
 # 构建
-aether plugin build              # 输出到 dist/
-aether plugin build --target wasm  # WASM 编译
+aleph plugin build              # 输出到 dist/
+aleph plugin build --target wasm  # WASM 编译
 
 # 校验（发布前检查）
-aether plugin validate
+aleph plugin validate
 # ✓ Manifest valid
 # ✓ All declared tools have handlers
 # ✓ Permissions match capability usage
 # ✓ No undeclared dynamic capabilities
 
 # 打包
-aether plugin pack               # 生成 my-plugin-0.1.0.aether
+aleph plugin pack               # 生成 my-plugin-0.1.0.aleph
 
 # 发布到 Registry（未来）
-aether plugin publish
+aleph plugin publish
 ```
 
 ### 7.4 类型生成
 
 ```bash
 # 从 TOML 生成 TypeScript 类型
-aether plugin typegen
+aleph plugin typegen
 
 # 生成结果：src/generated/types.ts
 export interface QuerySqlArgs {
@@ -860,7 +860,7 @@ export interface PluginConfig {
 
 ```typescript
 // src/index.test.ts
-import { createTestContext } from '@aether/plugin-sdk/testing';
+import { createTestContext } from '@aleph/plugin-sdk/testing';
 import plugin from './index';
 
 describe('query_sql tool', () => {
@@ -896,7 +896,7 @@ describe('query_sql tool', () => {
 
 ```bash
 # 查看插件状态
-aether plugin inspect my-plugin
+aleph plugin inspect my-plugin
 # Plugin: my-plugin v0.1.0
 # Status: loaded
 # Tools: 2 registered (1 static, 1 dynamic)
@@ -906,7 +906,7 @@ aether plugin inspect my-plugin
 # Permissions: network:postgres://* (used), filesystem:./data (unused)
 
 # 查看 Hook 执行日志
-aether plugin hooks --trace
+aleph plugin hooks --trace
 # [12:34:56] before_tool_call <- my-plugin (2ms) -> pass
 # [12:34:56] before_tool_call <- security-plugin (1ms) -> pass
 # [12:34:58] after_tool_call <- my-plugin (0ms) -> ok
@@ -920,7 +920,7 @@ aether plugin hooks --trace
 
 **V1 格式（当前）→ V2 格式对照：**
 
-| V1 (`aether.plugin.json`) | V2 (`aether_plugin.toml`) |
+| V1 (`aleph.plugin.json`) | V2 (`aleph_plugin.toml`) |
 |---------------------------|---------------------------|
 | `"id": "my-plugin"` | `[plugin] id = "my-plugin"` |
 | `"kind": "nodejs"` | `kind = "nodejs"` |
@@ -934,12 +934,12 @@ aether plugin hooks --trace
 
 ```
 Phase 1: 双格式共存（V2.0 - V2.2）
-├── 检测到 aether.plugin.json → 使用 V1 Loader
-├── 检测到 aether_plugin.toml → 使用 V2 Loader
+├── 检测到 aleph.plugin.json → 使用 V1 Loader
+├── 检测到 aleph_plugin.toml → 使用 V2 Loader
 └── 两者都存在 → 优先 V2，警告迁移
 
 Phase 2: 迁移工具（V2.1）
-├── aether plugin migrate  # 自动转换 JSON → TOML
+├── aleph plugin migrate  # 自动转换 JSON → TOML
 └── 生成兼容性报告
 
 Phase 3: V1 废弃（V3.0）
@@ -951,24 +951,24 @@ Phase 3: V1 废弃（V3.0）
 
 ```bash
 # 自动迁移
-aether plugin migrate
+aleph plugin migrate
 
 # 输出：
 # 📦 Migrating my-plugin from V1 to V2...
-# ✓ Created aether_plugin.toml
+# ✓ Created aleph_plugin.toml
 # ✓ Converted permissions
 # ⚠ Manual review needed:
 #   - 3 tools detected in code, add [[tools]] declarations
 #   - Consider adding [prompt] for SKILL.md
 #
-# Run 'aether plugin validate' to verify.
+# Run 'aleph plugin validate' to verify.
 ```
 
 ### 8.4 Breaking Changes 汇总
 
 | 变更 | 影响 | 迁移方式 |
 |------|------|----------|
-| Manifest 格式 | 所有插件 | `aether plugin migrate` |
+| Manifest 格式 | 所有插件 | `aleph plugin migrate` |
 | 权限语法细化 | 使用权限的插件 | 手动调整为 `protocol://pattern` |
 | Hook 需声明类型 | 使用 Hook 的插件 | 添加 `kind = "interceptor"` |
 | 动态能力需声明 | 使用 `api.register*` 的插件 | 添加 `[capabilities]` |

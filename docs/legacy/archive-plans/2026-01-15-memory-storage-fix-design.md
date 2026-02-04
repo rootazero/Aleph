@@ -60,7 +60,7 @@ The memory ingestion pipeline exists but is **never connected** to the main requ
 
 ### 1. ProcessOptions Extension
 
-**File**: `Aether/core/src/uniffi_core.rs`
+**File**: `Aleph/core/src/uniffi_core.rs`
 
 ```rust
 pub struct ProcessOptions {
@@ -74,7 +74,7 @@ pub struct ProcessOptions {
 
 ### 2. Memory Storage Integration
 
-**File**: `Aether/core/src/uniffi_core.rs` (process function)
+**File**: `Aleph/core/src/uniffi_core.rs` (process function)
 
 ```rust
 match result {
@@ -106,24 +106,24 @@ match result {
 
 ### 3. New Delete APIs
 
-**File**: `Aether/core/src/aether.udl`
+**File**: `Aleph/core/src/aleph.udl`
 
 ```
 interface AlephCore {
     // Existing methods...
 
     // New delete APIs
-    [Throws=AetherFfiError]
+    [Throws=AlephFfiError]
     void clear_all_memories();
 
-    [Throws=AetherFfiError]
+    [Throws=AlephFfiError]
     void delete_memories_by_topic(string topic_id);
 };
 ```
 
 ### 4. VectorDatabase Delete Implementation
 
-**File**: `Aether/core/src/memory/database.rs`
+**File**: `Aleph/core/src/memory/database.rs`
 
 ```rust
 impl VectorDatabase {
@@ -164,14 +164,14 @@ impl VectorDatabase {
 
 ### 5. Swift Integration
 
-**File**: `Aether/Sources/Store/ConversationStore.swift`
+**File**: `Aleph/Sources/Store/ConversationStore.swift`
 
 ```swift
 func deleteTopic(id: String) throws {
     try dbQueue.write { db in
         try Topic.filter(Column("id") == id).updateAll(db, Column("isDeleted").set(to: true))
     }
-    try aetherCore.deleteMemoriesByTopic(topicId: id)
+    try alephCore.deleteMemoriesByTopic(topicId: id)
 }
 
 func clearAllData() throws {
@@ -179,7 +179,7 @@ func clearAllData() throws {
         try Topic.deleteAll(db)
         try ConversationMessage.deleteAll(db)
     }
-    try aetherCore.clearAllMemories()
+    try alephCore.clearAllMemories()
 }
 ```
 
@@ -188,10 +188,10 @@ func clearAllData() throws {
 | File | Change Type | Description |
 |------|-------------|-------------|
 | `core/src/uniffi_core.rs` | Modify | Add topic_id to ProcessOptions, integrate memory storage, add delete APIs |
-| `core/src/aether.udl` | Modify | Add topic_id field and delete API declarations |
+| `core/src/aleph.udl` | Modify | Add topic_id field and delete API declarations |
 | `core/src/memory/database.rs` | Modify | Add delete_by_topic_id() and clear_all() |
 | `core/src/memory/context.rs` | Verify | Confirm with_topic() method exists |
-| `Sources/Generated/aether.swift` | Auto-gen | Regenerate with UniFFI |
+| `Sources/Generated/aleph.swift` | Auto-gen | Regenerate with UniFFI |
 | `Sources/Coordinators/MultiTurnCoordinator.swift` | Modify | Pass topic_id |
 | `Sources/Store/ConversationStore.swift` | Modify | Integrate delete API calls |
 | `Sources/Views/SettingsView.swift` | Modify | Clear button calls clearAllData() |

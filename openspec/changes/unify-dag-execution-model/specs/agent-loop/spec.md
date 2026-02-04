@@ -1,6 +1,6 @@
 # Agent Loop Specification
 
-This specification defines the Agent Loop execution model for Aether.
+This specification defines the Agent Loop execution model for Aleph.
 
 ## ADDED Requirements
 

@@ -34,7 +34,7 @@
 
 **Step 1: 创建 risk.rs 定义四级风险等级**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/exec/risk.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/exec/risk.rs`：
 
 ```rust
 //! Risk level assessment for command execution.
@@ -213,7 +213,7 @@ mod tests {
 
 **Step 2: 更新 mod.rs 导出**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/exec/mod.rs` 添加：
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/exec/mod.rs` 添加：
 
 ```rust
 pub mod risk;
@@ -224,7 +224,7 @@ pub use risk::{RiskLevel, BLOCKED_PATTERNS, DANGER_PATTERNS, SAFE_PATTERNS};
 **Step 3: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test exec::risk::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test exec::risk::tests
 ```
 
 Expected: All 9 tests PASS
@@ -246,7 +246,7 @@ git commit -m "feat(exec): add RiskLevel enum and pattern definitions"
 
 **Step 1: 创建 kernel.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/exec/kernel.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/exec/kernel.rs`：
 
 ```rust
 //! SecurityKernel - Deterministic command risk assessment.
@@ -453,7 +453,7 @@ mod tests {
 
 **Step 2: 更新 mod.rs 导出**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/exec/mod.rs` 添加：
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/exec/mod.rs` 添加：
 
 ```rust
 pub mod kernel;
@@ -464,7 +464,7 @@ pub use kernel::{RiskAssessment, SecurityKernel};
 **Step 3: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test exec::kernel::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test exec::kernel::tests
 ```
 
 Expected: All 9 tests PASS
@@ -486,7 +486,7 @@ git commit -m "feat(exec): implement SecurityKernel with regex rule engine"
 
 **Step 1: 创建 masker.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/exec/masker.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/exec/masker.rs`：
 
 ```rust
 //! SecretMasker - Redact sensitive information from output.
@@ -729,7 +729,7 @@ MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8DHGP...
 
 **Step 2: 更新 mod.rs 导出**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/exec/mod.rs` 添加：
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/exec/mod.rs` 添加：
 
 ```rust
 pub mod masker;
@@ -740,7 +740,7 @@ pub use masker::SecretMasker;
 **Step 3: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test exec::masker::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test exec::masker::tests
 ```
 
 Expected: All 10 tests PASS
@@ -795,7 +795,7 @@ pub use crate::exec::{
 **Step 2: 验证编译**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 Expected: 编译通过
@@ -816,7 +816,7 @@ git commit -m "feat(lib): export SecurityKernel, RiskLevel, and SecretMasker"
 
 **Step 1: 在 ClaudeSupervisor 中集成 SecretMasker**
 
-修改 `/Volumes/TBU4/Workspace/Aether/core/src/supervisor/pty.rs`，在 `strip_ansi` 函数后添加 secret masking：
+修改 `/Volumes/TBU4/Workspace/Aleph/core/src/supervisor/pty.rs`，在 `strip_ansi` 函数后添加 secret masking：
 
 找到 `strip_ansi` 函数（大约在 368-375 行），将 reader thread 中的处理逻辑更新：
 
@@ -891,7 +891,7 @@ fn test_secret_masking_in_output() {
 **Step 3: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test supervisor::
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test supervisor::
 ```
 
 Expected: All tests PASS
@@ -910,7 +910,7 @@ git commit -m "feat(supervisor): integrate SecretMasker for output redaction"
 **Step 1: 运行所有 exec 和 supervisor 测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test exec:: && cargo test supervisor::
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test exec:: && cargo test supervisor::
 ```
 
 Expected: All tests PASS
@@ -918,14 +918,14 @@ Expected: All tests PASS
 **Step 2: 运行完整测试验证无回归**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib -- --test-threads=4
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib -- --test-threads=4
 ```
 
 Expected: 现有测试无回归
 
 **Step 3: 更新设计文档状态**
 
-修改 `/Volumes/TBU4/Workspace/Aether/docs/plans/2026-01-31-aether-beyond-openclaw-design.md`。
+修改 `/Volumes/TBU4/Workspace/Aleph/docs/plans/2026-01-31-aleph-beyond-openclaw-design.md`。
 
 找到 "### Milestone 2: SecurityKernel 规则引擎" 部分，将其更新为：
 

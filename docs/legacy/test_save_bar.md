@@ -96,4 +96,4 @@
 - Check console logs for errors during testing
 
 ## Screenshots Location
-Save any screenshots to: `/Users/zouguojun/Workspace/Aether/test_screenshots/`
+Save any screenshots to: `/Users/zouguojun/Workspace/Aleph/test_screenshots/`

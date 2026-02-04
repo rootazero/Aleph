@@ -1,6 +1,6 @@
 //
 //  AttachmentFileManager.swift
-//  Aether
+//  Aleph
 //
 //  File system management for attachments.
 //  Handles storage, retrieval, and cleanup of attachment files.
@@ -40,7 +40,7 @@ final class AttachmentFileManager: @unchecked Sendable {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 100              // Max 100 thumbnails
         cache.totalCostLimit = 50 * 1024 * 1024  // Max 50MB memory
-        cache.name = "com.aether.thumbnailCache"
+        cache.name = "com.aleph.thumbnailCache"
         return cache
     }()
 
@@ -49,7 +49,7 @@ final class AttachmentFileManager: @unchecked Sendable {
     /// Base attachments directory
     static var attachmentsDirectory: URL {
         let configDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".aether/attachments")
+            .appendingPathComponent(".aleph/attachments")
         return configDir
     }
 

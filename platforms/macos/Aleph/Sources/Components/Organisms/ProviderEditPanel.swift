@@ -6,7 +6,7 @@ import AppKit
 struct ProviderEditPanel: View {
     // MARK: - Dependencies
 
-    let core: AetherCore
+    let core: AlephCore
 
     // MARK: - Bindings
 
@@ -1017,7 +1017,7 @@ struct ProviderEditPanel: View {
                     // Notify that configuration was saved internally
                     // This prevents ConfigWatcher from triggering a full view rebuild
                     NotificationCenter.default.post(
-                        name: .aetherConfigSavedInternally,
+                        name: .alephConfigSavedInternally,
                         object: savedProviderName  // Pass the saved provider name
                     )
                 }
@@ -1308,7 +1308,7 @@ struct ProviderEditPanel: View {
         case "gemini", "google":
             return "Google's Gemini models offer multimodal capabilities with strong performance across text, code, and reasoning tasks."
         default:
-            return "A configured AI language model provider for use with Aether."
+            return "A configured AI language model provider for use with Aleph."
         }
     }
     // swiftlint:enable line_length

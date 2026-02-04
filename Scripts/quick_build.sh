@@ -1,9 +1,9 @@
 #!/bin/bash
-# Quick Build Script for Aether
+# Quick Build Script for Aleph
 
 set -e  # Exit on error
 
-echo "🚀 Aether Quick Build Script"
+echo "🚀 Aleph Quick Build Script"
 echo "=============================="
 
 # Colors
@@ -18,7 +18,7 @@ cd "$PROJECT_ROOT"
 
 echo ""
 echo "📦 Step 1/5: Building Rust Core (Release mode)..."
-cd Aether/core
+cd Aleph/core
 /Users/zouguojun/.cargo/bin/cargo build --release
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓${NC} Rust Core built successfully"
@@ -44,11 +44,11 @@ cd "$PROJECT_ROOT"
 
 echo ""
 echo "📋 Step 3/5: Copying dylib to Frameworks..."
-mkdir -p Aether/Frameworks
-cp Aether/core/target/release/libaethecore.dylib Aether/Frameworks/
+mkdir -p Aleph/Frameworks
+cp Aleph/core/target/release/libaethecore.dylib Aleph/Frameworks/
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓${NC} dylib copied to Frameworks"
-    ls -lh Aether/Frameworks/libaethecore.dylib
+    ls -lh Aleph/Frameworks/libaethecore.dylib
 else
     echo -e "${RED}✗${NC} Failed to copy dylib"
     exit 1
@@ -66,7 +66,7 @@ fi
 
 echo ""
 echo "🎯 Step 5/5: Opening project in Xcode..."
-open Aether.xcodeproj
+open Aleph.xcodeproj
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓${NC} Xcode project opened"
 else
@@ -79,7 +79,7 @@ echo "✅ Build completed successfully!"
 echo "==============================${NC}"
 echo ""
 echo "Next steps:"
-echo "1. In Xcode, select 'Aether' scheme and 'My Mac' target"
+echo "1. In Xcode, select 'Aleph' scheme and 'My Mac' target"
 echo "2. Press Cmd+R to build and run"
 echo "3. Look for the ✨ icon in the menu bar"
 echo ""

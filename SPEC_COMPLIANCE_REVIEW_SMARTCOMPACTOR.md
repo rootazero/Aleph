@@ -4,8 +4,8 @@
 
 **Reviewed:** 2026-01-24
 **Review Date:** SmartCompactor implementation vs. Design Spec (Part 4)
-**Design Spec:** `/Users/zouguojun/Workspace/Aether/docs/plans/2026-01-24-event-compaction-parts-design.md`
-**Implementation:** `/Users/zouguojun/Workspace/Aether/core/src/compressor/smart_compactor.rs`
+**Design Spec:** `/Users/zouguojun/Workspace/Aleph/docs/plans/2026-01-24-event-compaction-parts-design.md`
+**Implementation:** `/Users/zouguojun/Workspace/Aleph/core/src/compressor/smart_compactor.rs`
 
 ---
 
@@ -220,7 +220,7 @@ fn compacted(
 
 ### SmartCompactionStrategy ✅
 
-**Location:** `/Users/zouguojun/Workspace/Aether/core/src/compressor/smart_strategy.rs`
+**Location:** `/Users/zouguojun/Workspace/Aleph/core/src/compressor/smart_strategy.rs`
 
 **Spec Fields Match (Lines 76-86):**
 - `tool_output_max_chars: usize` ✅
@@ -234,13 +234,13 @@ fn compacted(
 
 ### ToolTruncator ✅
 
-**Location:** `/Users/zouguojun/Workspace/Aether/core/src/compressor/tool_truncator.rs`
+**Location:** `/Users/zouguojun/Workspace/Aleph/core/src/compressor/tool_truncator.rs`
 
 **Key Method:** `truncate(&self, output: &str, tool_name: &str) -> TruncatedOutput` ✅
 
 ### TurnProtector ✅
 
-**Location:** `/Users/zouguojun/Workspace/Aether/core/src/compressor/turn_protector.rs`
+**Location:** `/Users/zouguojun/Workspace/Aleph/core/src/compressor/turn_protector.rs`
 
 **Key Methods:**
 - `calculate_turn_index(&self, parts: &[SessionPart])` ✅
@@ -248,7 +248,7 @@ fn compacted(
 
 ### CompactionMarker ✅
 
-**Location:** `/Users/zouguojun/Workspace/Aether/core/src/components/types.rs` (Lines 252-266)
+**Location:** `/Users/zouguojun/Workspace/Aleph/core/src/components/types.rs` (Lines 252-266)
 
 **Spec Fields Match:**
 - `timestamp: i64` ✅
@@ -365,12 +365,12 @@ The SmartCompactor implementation is **production-ready** and meets all design r
 
 ## Files Reviewed
 
-1. **Implementation:** `/Users/zouguojun/Workspace/Aether/core/src/compressor/smart_compactor.rs` (294 lines)
-2. **Strategy:** `/Users/zouguojun/Workspace/Aether/core/src/compressor/smart_strategy.rs` (731 lines)
-3. **Truncator:** `/Users/zouguojun/Workspace/Aether/core/src/compressor/tool_truncator.rs` (partial)
-4. **TurnProtector:** `/Users/zouguojun/Workspace/Aether/core/src/compressor/turn_protector.rs` (partial)
-5. **CompactionMarker:** `/Users/zouguojun/Workspace/Aether/core/src/components/types.rs` (lines 252-266)
-6. **Spec:** `/Users/zouguojun/Workspace/Aether/docs/plans/2026-01-24-event-compaction-parts-design.md` (Part 4)
+1. **Implementation:** `/Users/zouguojun/Workspace/Aleph/core/src/compressor/smart_compactor.rs` (294 lines)
+2. **Strategy:** `/Users/zouguojun/Workspace/Aleph/core/src/compressor/smart_strategy.rs` (731 lines)
+3. **Truncator:** `/Users/zouguojun/Workspace/Aleph/core/src/compressor/tool_truncator.rs` (partial)
+4. **TurnProtector:** `/Users/zouguojun/Workspace/Aleph/core/src/compressor/turn_protector.rs` (partial)
+5. **CompactionMarker:** `/Users/zouguojun/Workspace/Aleph/core/src/components/types.rs` (lines 252-266)
+6. **Spec:** `/Users/zouguojun/Workspace/Aleph/docs/plans/2026-01-24-event-compaction-parts-design.md` (Part 4)
 
 ---
 

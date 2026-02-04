@@ -78,13 +78,13 @@ Create a standalone `ProcessingIndicatorWindow` that:
 ## Impact Assessment
 
 ### Files to Create
-- `Aether/Sources/Components/ProcessingIndicatorWindow.swift` - Floating indicator window
+- `Aleph/Sources/Components/ProcessingIndicatorWindow.swift` - Floating indicator window
 
 ### Files to Modify
-- `Aether/Sources/Coordinator/UnifiedInputCoordinator.swift` - Show indicator during processing
-- `Aether/Sources/Coordinator/ConversationCoordinator.swift` - Keep window visible
-- `Aether/Sources/Coordinator/OutputCoordinator.swift` - Handle indicator visibility
-- `Aether/Sources/AppDelegate.swift` - May need indicator lifecycle management
+- `Aleph/Sources/Coordinator/UnifiedInputCoordinator.swift` - Show indicator during processing
+- `Aleph/Sources/Coordinator/ConversationCoordinator.swift` - Keep window visible
+- `Aleph/Sources/Coordinator/OutputCoordinator.swift` - Handle indicator visibility
+- `Aleph/Sources/AppDelegate.swift` - May need indicator lifecycle management
 
 ### Risk Level
 **Low-Medium** - Changes are additive and primarily affect UI behavior

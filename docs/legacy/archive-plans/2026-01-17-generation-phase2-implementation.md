@@ -13,11 +13,11 @@
 ## Task 1: 创建 providers 目录结构
 
 **Files:**
-- Create: `Aether/core/src/generation/providers/mod.rs`
+- Create: `Aleph/core/src/generation/providers/mod.rs`
 
 **Step 1: Write the failing test**
 
-在 `Aether/core/src/generation/mod.rs` 添加测试：
+在 `Aleph/core/src/generation/mod.rs` 添加测试：
 
 ```rust
 #[test]
@@ -30,12 +30,12 @@ fn test_providers_module_exists() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test generation::tests::test_providers_module_exists`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test generation::tests::test_providers_module_exists`
 Expected: FAIL with "failed to resolve: use of undeclared crate or module `providers`"
 
 **Step 3: Create the providers module**
 
-Create `Aether/core/src/generation/providers/mod.rs`:
+Create `Aleph/core/src/generation/providers/mod.rs`:
 
 ```rust
 //! Generation provider implementations
@@ -58,14 +58,14 @@ pub use openai_tts::OpenAiTtsProvider;
 pub use openai_compat::OpenAiCompatProvider;
 ```
 
-Update `Aether/core/src/generation/mod.rs` to add:
+Update `Aleph/core/src/generation/mod.rs` to add:
 ```rust
 pub mod providers;
 ```
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test generation::tests::test_providers_module_exists`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test generation::tests::test_providers_module_exists`
 Expected: PASS
 
 **Step 5: Commit**
@@ -82,12 +82,12 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 2: 实现 OpenAI 图像生成供应商 (DALL·E 3)
 
 **Files:**
-- Create: `Aether/core/src/generation/providers/openai_image.rs`
+- Create: `Aleph/core/src/generation/providers/openai_image.rs`
 - Test: in same file
 
 **Step 1: Create the provider file with tests first**
 
-Create `Aether/core/src/generation/providers/openai_image.rs`:
+Create `Aleph/core/src/generation/providers/openai_image.rs`:
 
 ```rust
 //! OpenAI DALL·E 3 Image Generation Provider
@@ -556,7 +556,7 @@ mod tests {
 
 **Step 2: Run test to verify compilation and tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test generation::providers::openai_image::tests`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test generation::providers::openai_image::tests`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -578,11 +578,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 3: 实现 OpenAI TTS 供应商
 
 **Files:**
-- Create: `Aether/core/src/generation/providers/openai_tts.rs`
+- Create: `Aleph/core/src/generation/providers/openai_tts.rs`
 
 **Step 1: Create the TTS provider with tests**
 
-Create `Aether/core/src/generation/providers/openai_tts.rs`:
+Create `Aleph/core/src/generation/providers/openai_tts.rs`:
 
 ```rust
 //! OpenAI Text-to-Speech Provider
@@ -970,7 +970,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test generation::providers::openai_tts::tests`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test generation::providers::openai_tts::tests`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -993,11 +993,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 4: 实现 OpenAI 兼容 API 供应商
 
 **Files:**
-- Create: `Aether/core/src/generation/providers/openai_compat.rs`
+- Create: `Aleph/core/src/generation/providers/openai_compat.rs`
 
 **Step 1: Create the OpenAI-compatible provider**
 
-Create `Aether/core/src/generation/providers/openai_compat.rs`:
+Create `Aleph/core/src/generation/providers/openai_compat.rs`:
 
 ```rust
 //! Generic OpenAI-Compatible Image Generation Provider
@@ -1450,7 +1450,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test generation::providers::openai_compat::tests`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test generation::providers::openai_compat::tests`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -1472,11 +1472,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 5: 更新 providers/mod.rs 导出并添加工厂函数
 
 **Files:**
-- Modify: `Aether/core/src/generation/providers/mod.rs`
+- Modify: `Aleph/core/src/generation/providers/mod.rs`
 
 **Step 1: Update mod.rs with proper exports and factory function**
 
-Update `Aether/core/src/generation/providers/mod.rs`:
+Update `Aleph/core/src/generation/providers/mod.rs`:
 
 ```rust
 //! Generation provider implementations
@@ -1705,7 +1705,7 @@ mod tests {
 
 **Step 2: Run all tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test generation::providers`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test generation::providers`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -1725,7 +1725,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 6: 在 lib.rs 中导出 providers 模块
 
 **Files:**
-- Modify: `Aether/core/src/lib.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Add providers to public API**
 
@@ -1738,7 +1738,7 @@ pub use generation::providers;
 
 **Step 2: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -1756,17 +1756,17 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 **Step 1: Run cargo build**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo build`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo build`
 Expected: Build succeeds with no errors
 
 **Step 2: Run cargo clippy**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo clippy -- -D warnings`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo clippy -- -D warnings`
 Expected: No warnings
 
 **Step 3: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test`
 Expected: All tests pass
 
 ---

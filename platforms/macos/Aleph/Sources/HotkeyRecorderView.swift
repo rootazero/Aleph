@@ -1,6 +1,6 @@
 //
 //  HotkeyRecorderView.swift
-//  Aether
+//  Aleph
 //
 //  Visual hotkey recorder component for capturing global keyboard shortcuts.
 //

@@ -32,7 +32,7 @@ def check_file_contains(filepath, patterns, description):
 def main():
     checks = [
         (
-            "Aether/Sources/EventHandler.swift",
+            "Aleph/Sources/EventHandler.swift",
             [
                 ("onAiProcessingStarted callback", "func onAiProcessingStarted"),
                 ("onAiResponseReceived callback", "func onAiResponseReceived"),
@@ -45,7 +45,7 @@ def main():
             "EventHandler callbacks and state handling"
         ),
         (
-            "Aether/Sources/HaloState.swift",
+            "Aleph/Sources/HaloState.swift",
             [
                 ("retrievingMemory state", "case retrievingMemory"),
                 ("processingWithAI state", "case processingWithAI"),
@@ -55,7 +55,7 @@ def main():
             "HaloState enum updates"
         ),
         (
-            "Aether/Sources/HaloView.swift",
+            "Aleph/Sources/HaloView.swift",
             [
                 ("retrievingMemory case in body", "case .retrievingMemory:"),
                 ("processingWithAI case in body", "case .processingWithAI"),
@@ -65,7 +65,7 @@ def main():
             "HaloView state rendering"
         ),
         (
-            "Aether/Sources/Themes/Theme.swift",
+            "Aleph/Sources/Themes/Theme.swift",
             [
                 ("retrievingMemoryView protocol method", "func retrievingMemoryView()"),
                 ("processingWithAIView protocol method", "func processingWithAIView"),
@@ -75,7 +75,7 @@ def main():
             "Theme protocol updates"
         ),
         (
-            "Aether/Sources/Generated/aether.swift",
+            "Aleph/Sources/Generated/aleph.swift",
             [
                 ("retrievingMemory enum case", "case retrievingMemory"),
                 ("processingWithAi enum case", "case processingWithAi"),

@@ -118,14 +118,14 @@ pub enum HaloState {
 
 ---
 
-### Requirement (Modified): AetherEventHandler supports validation hints
+### Requirement (Modified): AlephEventHandler supports validation hints
 
 **Original**: `on_error(message: String)` callback for all errors
 **Modified**: Add `on_validation_hint(message: String, suggestion: String)`
 
 **Changes**:
 ```idl
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
     void on_state_changed(HaloState state);
     void on_halo_show(HaloPosition position, string? provider_color);
     void on_halo_hide();

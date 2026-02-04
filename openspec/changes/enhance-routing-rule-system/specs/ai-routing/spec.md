@@ -76,7 +76,7 @@ The system SHALL return the appropriate provider and system prompt for matched i
 - **WHEN** no rule matches
 - **AND** no default provider is configured
 - **THEN** `route()` returns `None`
-- **AND** caller receives `AetherError::NoProviderAvailable`
+- **AND** caller receives `AlephError::NoProviderAvailable`
 
 ### Requirement: Router API (UPDATED)
 The system SHALL provide clean API for routing operations with context awareness.
@@ -191,7 +191,7 @@ None - all existing requirements are preserved or enhanced.
 - **clipboard-management**: Clipboard content must be available
 
 ### Affects
-- **core-library**: `AetherCore::process_clipboard()` must build context string
+- **core-library**: `AlephCore::process_clipboard()` must build context string
 - **memory-augmentation**: Memory retrieval happens AFTER routing (order matters)
 
 ### Future Extensions

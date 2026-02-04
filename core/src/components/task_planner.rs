@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError, PlanRequest, PlanStep,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, PlanRequest, PlanStep,
     StepStatus, TaskPlan,
 };
 
@@ -280,12 +280,12 @@ impl EventHandler for TaskPlanner {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Only handle PlanRequested events
         let request = match event {
-            AetherEvent::PlanRequested(req) => req,
+            AlephEvent::PlanRequested(req) => req,
             _ => return Ok(vec![]),
         };
 
@@ -299,7 +299,7 @@ impl EventHandler for TaskPlanner {
         };
 
         // Return PlanCreated event
-        Ok(vec![AetherEvent::PlanCreated(plan)])
+        Ok(vec![AlephEvent::PlanCreated(plan)])
     }
 }
 
@@ -605,7 +605,7 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         // LoopStop event should be ignored
-        let event = AetherEvent::LoopStop(StopReason::Completed);
+        let event = AlephEvent::LoopStop(StopReason::Completed);
         let result = planner.handle(&event, &ctx).await.unwrap();
 
         assert!(result.is_empty());
@@ -618,13 +618,13 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         let request = create_plan_request("打开文件然后复制", vec!["打开文件", "复制内容"]);
-        let event = AetherEvent::PlanRequested(request);
+        let event = AlephEvent::PlanRequested(request);
         let result = planner.handle(&event, &ctx).await.unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AetherEvent::PlanCreated(_)));
+        assert!(matches!(result[0], AlephEvent::PlanCreated(_)));
 
-        if let AetherEvent::PlanCreated(plan) = &result[0] {
+        if let AlephEvent::PlanCreated(plan) = &result[0] {
             assert_eq!(plan.steps.len(), 2);
             assert!(!plan.id.is_empty());
         }
@@ -637,10 +637,10 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         let request = create_plan_request("搜索文件然后删除", vec!["搜索配置文件", "删除旧文件"]);
-        let event = AetherEvent::PlanRequested(request);
+        let event = AlephEvent::PlanRequested(request);
         let result = planner.handle(&event, &ctx).await.unwrap();
 
-        if let AetherEvent::PlanCreated(plan) = &result[0] {
+        if let AlephEvent::PlanCreated(plan) = &result[0] {
             assert_eq!(plan.steps[0].tool, "search");
             assert_eq!(plan.steps[1].tool, "file_delete");
         } else {

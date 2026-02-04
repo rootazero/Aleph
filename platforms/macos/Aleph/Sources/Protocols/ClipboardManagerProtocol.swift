@@ -1,6 +1,6 @@
 //
 //  ClipboardManagerProtocol.swift
-//  Aether
+//  Aleph
 //
 //  Protocol for clipboard operations, enabling dependency injection and testability.
 //

@@ -1,6 +1,6 @@
 //! Extension configuration system
 //!
-//! Handles aether.jsonc configuration with multi-level merging.
+//! Handles aleph.jsonc configuration with multi-level merging.
 //! Now also supports aether.toml as the preferred format.
 
 mod types;
@@ -11,17 +11,17 @@ pub use types::*;
 pub use loader::{find_config_file, load_config_file, load_extension_config};
 pub use migrate::{migrate_to_toml, needs_migration, MigrationResult};
 
-use crate::discovery::{DiscoveryManager, AETHER_CONFIG_FILE, AETHER_CONFIG_FILE_ALT};
+use crate::discovery::{DiscoveryManager, ALEPH_CONFIG_FILE, ALEPH_CONFIG_FILE_ALT};
 use crate::extension::ExtensionError;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-/// Configuration manager for aether.jsonc
+/// Configuration manager for aleph.jsonc
 #[derive(Debug)]
 pub struct ConfigManager {
     /// Merged configuration
-    config: AetherConfig,
+    config: AlephConfig,
     /// Source files that contributed to the config
     sources: Vec<PathBuf>,
 }
@@ -30,7 +30,7 @@ impl ConfigManager {
     /// Create a new config manager, loading and merging configurations
     pub async fn new(discovery: &DiscoveryManager) -> Result<Self, ExtensionError> {
         let mut manager = Self {
-            config: AetherConfig::default(),
+            config: AlephConfig::default(),
             sources: Vec::new(),
         };
 
@@ -41,10 +41,10 @@ impl ConfigManager {
     /// Load and merge all configuration files
     async fn load_all(&mut self, discovery: &DiscoveryManager) -> Result<(), ExtensionError> {
         // Find all config files
-        let config_files = discovery.find_config_files(AETHER_CONFIG_FILE)?;
+        let config_files = discovery.find_config_files(ALEPH_CONFIG_FILE)?;
 
         // Also check for .json variant
-        let alt_files = discovery.find_config_files(AETHER_CONFIG_FILE_ALT)?;
+        let alt_files = discovery.find_config_files(ALEPH_CONFIG_FILE_ALT)?;
 
         // Merge all configs in priority order
         let mut all_files: Vec<_> = config_files
@@ -102,7 +102,7 @@ impl ConfigManager {
 
     /// Merge a JSON string
     fn merge_json_str(&mut self, content: &str) -> Result<(), ExtensionError> {
-        let parsed: AetherConfig = serde_json::from_str(content)
+        let parsed: AlephConfig = serde_json::from_str(content)
             .map_err(|e| ExtensionError::ConfigMerge(format!("JSON parse error: {}", e)))?;
 
         self.merge(parsed);
@@ -110,7 +110,7 @@ impl ConfigManager {
     }
 
     /// Merge another config into this one
-    fn merge(&mut self, other: AetherConfig) {
+    fn merge(&mut self, other: AlephConfig) {
         // Plugins are concatenated
         if let Some(plugins) = other.plugin {
             let existing = self.config.plugin.get_or_insert_with(Vec::new);
@@ -168,7 +168,7 @@ impl ConfigManager {
     }
 
     /// Get the merged configuration
-    pub fn get_config(&self) -> &AetherConfig {
+    pub fn get_config(&self) -> &AlephConfig {
         &self.config
     }
 
@@ -194,7 +194,7 @@ impl ConfigManager {
 }
 
 /// Parse JSONC (JSON with comments)
-fn parse_jsonc(content: &str, path: &Path) -> Result<AetherConfig, ExtensionError> {
+fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError> {
     // Remove single-line comments
     let mut cleaned = String::new();
     for line in content.lines() {
@@ -296,12 +296,12 @@ mod tests {
     #[test]
     fn test_config_merge() {
         let mut manager = ConfigManager {
-            config: AetherConfig::default(),
+            config: AlephConfig::default(),
             sources: Vec::new(),
         };
 
         // First config
-        let config1 = AetherConfig {
+        let config1 = AlephConfig {
             plugin: Some(vec!["plugin-a".to_string()]),
             model: Some("model-1".to_string()),
             ..Default::default()
@@ -309,7 +309,7 @@ mod tests {
         manager.merge(config1);
 
         // Second config
-        let config2 = AetherConfig {
+        let config2 = AlephConfig {
             plugin: Some(vec!["plugin-b".to_string()]),
             model: Some("model-2".to_string()),
             ..Default::default()

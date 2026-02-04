@@ -11,7 +11,7 @@ Dependencies: None (can start immediately)
 
 ### 1.1 Add Video Capability Enum
 
-**File:** `Aether/core/src/payload/capability.rs`
+**File:** `Aleph/core/src/payload/capability.rs`
 
 - [ ] Add `Video = 3` variant to `Capability` enum
 - [ ] Update `Capability::parse()` to handle "video" string
@@ -23,10 +23,10 @@ Dependencies: None (can start immediately)
 ### 1.2 Create Video Module Structure
 
 **Files to create:**
-- `Aether/core/src/video/mod.rs`
-- `Aether/core/src/video/youtube.rs`
-- `Aether/core/src/video/transcript.rs`
-- `Aether/core/src/video/error.rs`
+- `Aleph/core/src/video/mod.rs`
+- `Aleph/core/src/video/youtube.rs`
+- `Aleph/core/src/video/transcript.rs`
+- `Aleph/core/src/video/error.rs`
 
 - [ ] Create `video/` directory
 - [ ] Create `mod.rs` with module exports
@@ -37,7 +37,7 @@ Dependencies: None (can start immediately)
 
 ### 1.3 Define Video Data Structures
 
-**File:** `Aether/core/src/video/transcript.rs`
+**File:** `Aleph/core/src/video/transcript.rs`
 
 - [ ] Define `TranscriptSegment` struct (start, duration, text)
 - [ ] Define `VideoTranscript` struct (video_id, title, language, segments)
@@ -49,7 +49,7 @@ Dependencies: None (can start immediately)
 
 ### 1.4 Add VideoConfig to Configuration
 
-**File:** `Aether/core/src/config/mod.rs`
+**File:** `Aleph/core/src/config/mod.rs`
 
 - [ ] Define `VideoConfig` struct with fields:
   - `enabled: bool`
@@ -64,7 +64,7 @@ Dependencies: None (can start immediately)
 
 ### 1.5 Update UniFFI Interface
 
-**File:** `Aether/core/src/aether.udl`
+**File:** `Aleph/core/src/aleph.udl`
 
 - [ ] Add `Video` to Capability enum (if exposed via UniFFI)
 - [ ] Add `VideoConfig` dictionary (if needed for Swift UI)
@@ -73,7 +73,7 @@ Dependencies: None (can start immediately)
 
 ### 1.6 Extend AgentContext for Video
 
-**File:** `Aether/core/src/payload/mod.rs`
+**File:** `Aleph/core/src/payload/mod.rs`
 
 - [ ] Add `video_transcript: Option<VideoTranscript>` to `AgentContext`
 - [ ] Update `AgentContext::default()` implementation
@@ -82,7 +82,7 @@ Dependencies: None (can start immediately)
 
 ### 1.7 Update PromptAssembler
 
-**File:** `Aether/core/src/payload/assembler.rs`
+**File:** `Aleph/core/src/payload/assembler.rs`
 
 - [ ] Add video transcript formatting to context assembly
 - [ ] Insert transcript section after search results, before user input
@@ -90,13 +90,13 @@ Dependencies: None (can start immediately)
 
 **Validation:** `cargo test assembler`
 
-### 1.8 Add VideoError to AetherError
+### 1.8 Add VideoError to AlephError
 
-**File:** `Aether/core/src/error.rs`
+**File:** `Aleph/core/src/error.rs`
 
-- [ ] Add `VideoError` variant to `AetherError` enum
-- [ ] Add `AetherError::video(msg)` constructor helper
-- [ ] Implement `From<VideoError> for AetherError`
+- [ ] Add `VideoError` variant to `AlephError` enum
+- [ ] Add `AlephError::video(msg)` constructor helper
+- [ ] Implement `From<VideoError> for AlephError`
 
 **Validation:** `cargo test error`
 
@@ -106,7 +106,7 @@ Dependencies: None (can start immediately)
 
 ### 2.1 Implement YouTube URL Parser
 
-**File:** `Aether/core/src/video/youtube.rs`
+**File:** `Aleph/core/src/video/youtube.rs`
 
 - [ ] Create `parse_video_id(url: &str) -> Result<String>` function
 - [ ] Support URL formats:
@@ -121,7 +121,7 @@ Dependencies: None (can start immediately)
 
 ### 2.2 Implement Video Page Fetcher
 
-**File:** `Aether/core/src/video/youtube.rs`
+**File:** `Aleph/core/src/video/youtube.rs`
 
 - [ ] Create `YouTubeExtractor` struct with `reqwest::Client`
 - [ ] Implement `fetch_video_page(video_id: &str) -> Result<String>`
@@ -132,7 +132,7 @@ Dependencies: None (can start immediately)
 
 ### 2.3 Implement Player Response Extractor
 
-**File:** `Aether/core/src/video/youtube.rs`
+**File:** `Aleph/core/src/video/youtube.rs`
 
 - [ ] Implement `extract_player_response(html: &str) -> Result<serde_json::Value>`
 - [ ] Find and parse `ytInitialPlayerResponse` from script tags
@@ -143,7 +143,7 @@ Dependencies: None (can start immediately)
 
 ### 2.4 Implement Caption Track Finder
 
-**File:** `Aether/core/src/video/youtube.rs`
+**File:** `Aleph/core/src/video/youtube.rs`
 
 - [ ] Implement `find_caption_url(response: &Value, lang: &str) -> Result<String>`
 - [ ] Extract caption tracks from player response
@@ -155,7 +155,7 @@ Dependencies: None (can start immediately)
 
 ### 2.5 Implement Transcript XML Parser
 
-**File:** `Aether/core/src/video/youtube.rs`
+**File:** `Aleph/core/src/video/youtube.rs`
 
 - [ ] Implement `parse_transcript_xml(xml: &str) -> Result<Vec<TranscriptSegment>>`
 - [ ] Parse YouTube transcript XML format
@@ -167,7 +167,7 @@ Dependencies: None (can start immediately)
 
 ### 2.6 Implement Full Extraction Pipeline
 
-**File:** `Aether/core/src/video/youtube.rs`
+**File:** `Aleph/core/src/video/youtube.rs`
 
 - [ ] Implement `YouTubeExtractor::extract_transcript(url: &str) -> Result<VideoTranscript>`
 - [ ] Chain all extraction steps
@@ -179,7 +179,7 @@ Dependencies: None (can start immediately)
 
 ### 2.7 Add Retry and Timeout Logic
 
-**File:** `Aether/core/src/video/youtube.rs`
+**File:** `Aleph/core/src/video/youtube.rs`
 
 - [ ] Add configurable timeout (default: 10s)
 - [ ] Implement retry with exponential backoff (max 3 attempts)
@@ -193,7 +193,7 @@ Dependencies: None (can start immediately)
 
 ### 3.1 Add Video to CapabilityExecutor
 
-**File:** `Aether/core/src/capability/mod.rs`
+**File:** `Aleph/core/src/capability/mod.rs`
 
 - [ ] Add `video_config: Option<Arc<VideoConfig>>` field
 - [ ] Update constructor to accept video config
@@ -203,7 +203,7 @@ Dependencies: None (can start immediately)
 
 ### 3.2 Implement execute_video Method
 
-**File:** `Aether/core/src/capability/mod.rs`
+**File:** `Aleph/core/src/capability/mod.rs`
 
 - [ ] Implement `execute_video(&self, payload: AgentPayload) -> Result<AgentPayload>`
 - [ ] Check if video capability is configured
@@ -216,7 +216,7 @@ Dependencies: None (can start immediately)
 
 ### 3.3 Add YouTube URL Detection to Router
 
-**File:** `Aether/core/src/router/mod.rs`
+**File:** `Aleph/core/src/router/mod.rs`
 
 - [ ] Add `detect_content_capabilities(input: &str) -> Vec<Capability>` method
 - [ ] Implement YouTube URL regex matching
@@ -225,9 +225,9 @@ Dependencies: None (can start immediately)
 
 **Validation:** `cargo test router::url_detection`
 
-### 3.4 Wire Video Config in AetherCore
+### 3.4 Wire Video Config in AlephCore
 
-**File:** `Aether/core/src/core.rs`
+**File:** `Aleph/core/src/core.rs`
 
 - [ ] Load video config from TOML
 - [ ] Pass video config to CapabilityExecutor
@@ -237,7 +237,7 @@ Dependencies: None (can start immediately)
 
 ### 3.5 Add Integration Tests
 
-**File:** `Aether/core/src/video/mod.rs` (tests module)
+**File:** `Aleph/core/src/video/mod.rs` (tests module)
 
 - [ ] Test full pipeline with mock HTTP responses
 - [ ] Test error scenarios (no captions, invalid URL, timeout)
@@ -252,7 +252,7 @@ Dependencies: None (can start immediately)
 
 ### 4.1 Add Default /video Rule
 
-**File:** `Aether/core/src/config/mod.rs` or initialization
+**File:** `Aleph/core/src/config/mod.rs` or initialization
 
 - [ ] Add built-in `/video` command rule
 - [ ] Set default system prompt for video analysis
@@ -262,7 +262,7 @@ Dependencies: None (can start immediately)
 
 ### 4.2 Update Example Config
 
-**File:** `Aether/config.example.toml`
+**File:** `Aleph/config.example.toml`
 
 - [ ] Add `[video]` section with all options documented
 - [ ] Add example `/video` rule in `[[rules]]` section
@@ -272,7 +272,7 @@ Dependencies: None (can start immediately)
 
 ### 4.3 Add Configuration Validation
 
-**File:** `Aether/core/src/config/mod.rs`
+**File:** `Aleph/core/src/config/mod.rs`
 
 - [ ] Validate `preferred_language` is valid ISO 639-1 code
 - [ ] Validate `max_transcript_length` is reasonable (1000-100000)

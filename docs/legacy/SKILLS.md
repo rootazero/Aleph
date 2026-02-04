@@ -430,7 +430,7 @@ const MAX_FILE_SIZE: u64 = 5 * 1024 * 1024; // 5MB
 - Registers `read_skill` and `list_skills` tools
 - Handles tool execution
 
-**UniFFI Interface** (`aether.udl`):
+**UniFFI Interface** (`aleph.udl`):
 - `list_installed_skills()` - List all skills
 - `delete_skill(skill_id)` - Remove a skill
 - `install_skill_from_url(url)` - Install from GitHub

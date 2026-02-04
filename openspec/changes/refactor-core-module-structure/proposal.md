@@ -22,7 +22,7 @@ src/
 src/
 ├── core.rs           (only re-exports: pub mod x;)
 ├── core/
-│   ├── mod.rs        (AetherCore struct + new() + core logic)
+│   ├── mod.rs        (AlephCore struct + new() + core logic)
 │   ├── types.rs      (MediaAttachment, CapturedContext, CompressionStats, etc.)
 │   ├── memory.rs     (Memory-related methods: store, retrieve, cleanup, compression)
 │   ├── config_ops.rs (Config management: load, update, reload_router)
@@ -47,17 +47,17 @@ src/
 | `conversation.rs` | ~250 | `start_conversation`, `continue_conversation`, `end_conversation`, `has_active_conversation` |
 | `processing.rs` | ~700 | `process_input`, `process_with_ai_first`, `build_enriched_payload`, `execute_capability_and_continue`, routing context builders |
 | `tests.rs` | ~200 | All `#[cfg(test)]` test functions |
-| `mod.rs` | ~1500 | `AetherCore` struct, `new()`, helper methods, remaining logic |
+| `mod.rs` | ~1500 | `AlephCore` struct, `new()`, helper methods, remaining logic |
 
 ### API Stability
 
 - **NO breaking API changes** - All public functions retain exact signatures
-- **NO UniFFI changes** - `aether.udl` remains unchanged
+- **NO UniFFI changes** - `aleph.udl` remains unchanged
 - **Internal reorganization only** - Module paths change but public interface stable
 
 ## Impact
 
 - **Affected specs**: `core-library`
-- **Affected code**: `Aether/core/src/core.rs` → split into `Aether/core/src/core/` directory
+- **Affected code**: `Aleph/core/src/core.rs` → split into `Aleph/core/src/core/` directory
 - **Risk level**: Low (pure refactor, no logic changes)
 - **Testing**: All existing tests must pass; module paths may need updates in test imports

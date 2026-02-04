@@ -3,7 +3,7 @@
 > *"This is the first time in human history that a machine's soul has been given a body."*
 > — Ghost in the Shell
 
-**Aether** is a powerful personal AI assistant built in Rust, designed to give AI the ability to interact with the world. It combines a high-performance Gateway control plane with multi-channel messaging support, enabling AI agents to work across various platforms seamlessly.
+**Aleph** is a powerful personal AI assistant built in Rust, designed to give AI the ability to interact with the world. It combines a high-performance Gateway control plane with multi-channel messaging support, enabling AI agents to work across various platforms seamlessly.
 
 ## Key Features
 
@@ -40,13 +40,13 @@
 
 ```bash
 # Install via cargo
-cargo install aether-cli
+cargo install aleph-cli
 
 # Run the setup wizard
-aether wizard
+aleph wizard
 
 # Start chatting
-aether chat "Hello, Aleph!"
+aleph chat "Hello, Aleph!"
 ```
 
 ## Documentation Sections

@@ -11,7 +11,7 @@
 
 ### Part 1: Bug Fix (Rust)
 
-**File**: `Aether/core/src/ffi/config.rs`
+**File**: `Aleph/core/src/ffi/config.rs`
 
 Modify `update_generation_provider` to sync registry after saving:
 
@@ -62,7 +62,7 @@ pub fn delete_generation_provider(&self, name: String) -> Result<(), AlephFfiErr
 }
 ```
 
-**File**: `Aether/core/src/generation/registry.rs`
+**File**: `Aleph/core/src/generation/registry.rs`
 
 Add `unregister` method:
 
@@ -74,7 +74,7 @@ pub fn unregister(&mut self, name: &str) -> Option<Arc<dyn GenerationProvider>> 
 
 ### Part 2: UI Redesign (Swift)
 
-**File**: `Aether/Sources/GenerationProvidersView.swift`
+**File**: `Aleph/Sources/GenerationProvidersView.swift`
 
 #### 2.1 Add GenerationCategory Enum
 
@@ -161,7 +161,7 @@ enum GenerationCategory: String, CaseIterable {
 
 ## Files to Modify
 
-- `Aether/core/src/ffi/config.rs`
-- `Aether/core/src/generation/registry.rs`
-- `Aether/Sources/GenerationProvidersView.swift`
-- `Aether/Sources/Localizable.xcstrings` (localization)
+- `Aleph/core/src/ffi/config.rs`
+- `Aleph/core/src/generation/registry.rs`
+- `Aleph/Sources/GenerationProvidersView.swift`
+- `Aleph/Sources/Localizable.xcstrings` (localization)

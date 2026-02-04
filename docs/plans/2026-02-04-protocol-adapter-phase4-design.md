@@ -296,7 +296,7 @@ impl ProtocolLoader {
         // 1. Auto-scan convention path
         let default_dir = dirs::home_dir()
             .unwrap_or_default()
-            .join(".aether/protocols");
+            .join(".aleph/protocols");
 
         if default_dir.exists() {
             self.load_from_dir(&default_dir).await?;
@@ -340,7 +340,7 @@ impl ProtocolLoader {
 # ~/.aleph/config.yaml
 protocol_extensions:
   - path: ./custom-protocols/my-provider.yaml
-  - path: /etc/aether/shared-protocols/company.yaml
+  - path: /etc/aleph/shared-protocols/company.yaml
 ```
 
 ---
@@ -368,7 +368,7 @@ impl ProtocolLoader {
         // Watch convention directory
         let protocols_dir = dirs::home_dir()
             .unwrap_or_default()
-            .join(".aether/protocols");
+            .join(".aleph/protocols");
 
         if protocols_dir.exists() {
             watcher.watch(&protocols_dir, RecursiveMode::NonRecursive)?;

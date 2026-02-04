@@ -29,7 +29,7 @@ let config = self.config.lock().unwrap_or_else(|e| e.into_inner());  // ✅ Pois
 
 ## Changes Made
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 **Replacements**: 22 occurrences of `config.lock().unwrap()`
 **Method**: Automated sed replacement
 

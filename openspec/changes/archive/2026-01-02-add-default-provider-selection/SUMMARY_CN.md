@@ -2,7 +2,7 @@
 
 ## 提案概述
 
-为 Aether 添加默认供应商选择功能,并支持通过系统菜单栏快速切换默认供应商。
+为 Aleph 添加默认供应商选择功能,并支持通过系统菜单栏快速切换默认供应商。
 
 ## 核心功能
 
@@ -31,7 +31,7 @@ Swift UI (ProvidersView / AppDelegate)
     ├─ Edit Panel: "Set as Default" Button
     └─ Menu Bar: Click Provider Name
     ↓ UniFFI
-Rust Core (AetherCore)
+Rust Core (AlephCore)
     ├─ get_default_provider()
     ├─ set_default_provider(name)
     └─ get_enabled_providers()

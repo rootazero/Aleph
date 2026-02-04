@@ -9,7 +9,7 @@ import os.log
 private func debugLog(_ message: String) {
     let timestamp = ISO8601DateFormatter().string(from: Date())
     let logMessage = "[\(timestamp)] \(message)\n"
-    let logPath = NSHomeDirectory() + "/Desktop/aether_debug.log"
+    let logPath = NSHomeDirectory() + "/Desktop/aleph_debug.log"
 
     if let data = logMessage.data(using: .utf8) {
         if FileManager.default.fileExists(atPath: logPath) {
@@ -409,7 +409,7 @@ final class ScreenCaptureCoordinator: ObservableObject {
     private func extractTextFromImage(pngData: Data) async throws -> String {
         debugLog("[OCR] extractTextFromImage START: dataSize=\(pngData.count) bytes")
 
-        // Get AetherCore instance from AppDelegate
+        // Get AlephCore instance from AppDelegate
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else {
             debugLog("[OCR] ERROR: AppDelegate not found")
             throw NSError(
@@ -420,11 +420,11 @@ final class ScreenCaptureCoordinator: ObservableObject {
         }
 
         guard let core = appDelegate.core else {
-            debugLog("[OCR] ERROR: AetherCore not initialized")
+            debugLog("[OCR] ERROR: AlephCore not initialized")
             throw NSError(
                 domain: "ScreenCapture",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "AetherCore not initialized"]
+                userInfo: [NSLocalizedDescriptionKey: "AlephCore not initialized"]
             )
         }
 

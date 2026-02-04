@@ -230,7 +230,7 @@ Timer.scheduledTimer(withTimeInterval: delayBetweenChars, repeats: true) { timer
 
 ## Rust Core 配置结构 (已存在)
 
-在 `Aether/core/src/config/mod.rs` 中已定义：
+在 `Aleph/core/src/config/mod.rs` 中已定义：
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,7 +263,7 @@ impl Default for BehaviorConfig {
 ## 文件变更
 
 ### 新增文件
-- `Aether/Sources/BehaviorSettingsView.swift` (486 行)
+- `Aleph/Sources/BehaviorSettingsView.swift` (486 行)
   - BehaviorSettingsView 主组件
   - InputMode 枚举
   - OutputMode 枚举
@@ -272,7 +272,7 @@ impl Default for BehaviorConfig {
   - SwiftUI Preview
 
 ### 修改文件
-- `Aether/Sources/SettingsView.swift`
+- `Aleph/Sources/SettingsView.swift`
   - 在 `SettingsTab` 枚举中添加 `.behavior`
   - 在侧边栏添加 Behavior 标签
   - 在 switch 语句中添加 `.behavior` case
@@ -296,7 +296,7 @@ $ xcodegen generate
 ⚙️  Generating plists...
 ⚙️  Generating project...
 ⚙️  Writing project...
-Created project at /Users/zouguojun/Workspace/Aether/Aleph.xcodeproj
+Created project at /Users/zouguojun/Workspace/Aleph/Aleph.xcodeproj
 ```
 
 ## 待办事项（需要 Rust Core 支持）

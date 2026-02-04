@@ -750,4 +750,4 @@ impl ConfigWatcher {
 - Moltbot Gateway: `/Users/zouguojun/Workspace/moltbot/src/gateway/`
 - Moltbot Channels: `/Users/zouguojun/Workspace/moltbot/src/channels/`
 - Moltbot Config: `/Users/zouguojun/Workspace/moltbot/src/config/`
-- Aleph CLAUDE.md: `/Users/zouguojun/Workspace/Aether/CLAUDE.md`
+- Aleph CLAUDE.md: `/Users/zouguojun/Workspace/Aleph/CLAUDE.md`

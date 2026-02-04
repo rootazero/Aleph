@@ -29,7 +29,7 @@
 ## Phase 1: Swift Layer - Permission Monitoring Redesign
 
 ### Task 1.1: Create new PermissionManager class
-- [x] Create `Aether/Sources/Utils/PermissionManager.swift`
+- [x] Create `Aleph/Sources/Utils/PermissionManager.swift`
 - [x] Implement `@Published` properties: `accessibilityGranted`, `inputMonitoringGranted`
 - [x] Implement `Timer`-based polling (1-second interval)
 - [x] Implement `checkPermissions()` method (passive monitoring, no restart)
@@ -40,7 +40,7 @@
 - [ ] Validation: Run unit tests to verify timer polling and state updates
 
 **Files created:**
-- `Aether/Sources/Utils/PermissionManager.swift`
+- `Aleph/Sources/Utils/PermissionManager.swift`
 
 **Acceptance criteria:**
 - ✅ Timer polls every 1 second
@@ -49,12 +49,12 @@
 - ✅ NO calls to `exit()`, `NSApp.terminate()`, or restart methods
 
 ### Task 1.2: rewrite PermissionGateView with waterfall design
-- [x] Backup existing `Aether/Sources/Components/PermissionGateView.swift`
+- [x] Backup existing `Aleph/Sources/Components/PermissionGateView.swift`
 - [x] Replace `@StateObject var monitor: PermissionStatusMonitor` with `PermissionManager`
 - [x] Implement waterfall flow: Step 1 (Accessibility) → Step 2 (Input Monitoring)
 - [x] Add `isEnabled` logic for Step 2 (depends on Step 1 completion)
 - [x] Remove all automatic restart logic from `startMonitoring()` callback
-- [x] Add "进入 Aether" button (shown when both permissions granted)
+- [x] Add "进入 Aleph" button (shown when both permissions granted)
 - [x] Implement user-triggered `restartApp()` method
 - [x] Simplify `checkInitialPermissions()` (0.3s delay, no debounce)
 - [x] **FIX #1**: Call `manager.startMonitoring()` to activate timer polling
@@ -62,16 +62,16 @@
 - [ ] Validation: Manual test permission grant flow
 
 **Files modified:**
-- `Aether/Sources/Components/PermissionGateView.swift`
+- `Aleph/Sources/Components/PermissionGateView.swift`
 
 **Acceptance criteria:**
 - ✅ Step 2 button disabled until Step 1 completed
 - ✅ Accessibility grant does NOT trigger automatic restart
-- ✅ Input Monitoring grant shows "进入 Aether" button (user clicks to restart)
+- ✅ Input Monitoring grant shows "进入 Aleph" button (user clicks to restart)
 - ✅ No automatic restart logic in entire view
 
 ### Task 1.3: Enhance PermissionChecker with HID detection
-- [x] Modify `Aether/Sources/Utils/PermissionChecker.swift`
+- [x] Modify `Aleph/Sources/Utils/PermissionChecker.swift`
 - [x] Add `hasInputMonitoringViaHID()` static method
 - [x] Implement IOHIDManager creation, device matching, and open/close
 - [x] Update `hasInputMonitoringPermission()` to call HID method
@@ -80,7 +80,7 @@
 - [ ] Validation: Run unit tests to verify HID detection accuracy
 
 **Files modified:**
-- `Aether/Sources/Utils/PermissionChecker.swift`
+- `Aleph/Sources/Utils/PermissionChecker.swift`
 
 **Acceptance criteria:**
 - ✅ `hasInputMonitoringViaHID()` accurately detects permission status
@@ -90,34 +90,34 @@
 
 ### Task 1.4: Delete deprecated PermissionStatusMonitor
 - [x] Remove all references to `PermissionStatusMonitor` in codebase
-- [x] Search for imports: `grep -r "PermissionStatusMonitor" Aether/Sources/`
+- [x] Search for imports: `grep -r "PermissionStatusMonitor" Aleph/Sources/`
 - [x] Update `PermissionGateView` to use `PermissionManager` instead
-- [x] Delete file: `Aether/Sources/Utils/PermissionStatusMonitor.swift`
+- [x] Delete file: `Aleph/Sources/Utils/PermissionStatusMonitor.swift`
 - [x] Validation: Build succeeds without errors
 
 **Files deleted:**
-- `Aether/Sources/Utils/PermissionStatusMonitor.swift`
+- `Aleph/Sources/Utils/PermissionStatusMonitor.swift`
 
 **Acceptance criteria:**
 - ✅ No references to `PermissionStatusMonitor` in codebase
 - ✅ Project compiles successfully
 
 ### Task 1.5: Update AppDelegate permission gate logic
-- [x] Modify `Aether/Sources/AppDelegate.swift`
+- [x] Modify `Aleph/Sources/AppDelegate.swift`
 - [x] Use `PermissionChecker.hasAllRequiredPermissions()` at startup
 - [x] Show `PermissionGateView` if permissions missing
-- [x] Initialize `AetherCore` only after permissions granted
+- [x] Initialize `AlephCore` only after permissions granted
 - [x] Remove any old restart logic from permission callbacks
 - [x] Lower permission gate window level from `.floating` to `.modalPanel`
 - [ ] Validation: Launch app without permissions, verify gate appears
 
 **Files modified:**
-- `Aether/Sources/AppDelegate.swift`
+- `Aleph/Sources/AppDelegate.swift`
 
 **Acceptance criteria:**
 - ✅ App shows permission gate when permissions missing
 - ✅ App skips gate when permissions already granted
-- ✅ `AetherCore` initialized only after permissions confirmed
+- ✅ `AlephCore` initialized only after permissions confirmed
 - ✅ Permission gate window level set to `.modalPanel` to avoid system conflicts
 
 ## Phase 2: Rust Layer - Panic Protection & Permission Pre-Check
@@ -126,15 +126,15 @@
 - [x] Analyze crash report: `_dispatch_assert_queue_fail` in `TSMGetInputSourceProperty`
 - [x] Identify root cause: rdev 0.5.x calls input method API on background thread
 - [x] **Solution**: Upgrade rdev from 0.5.x to 0.6.0 (git main branch)
-- [x] Modify `Aether/core/Cargo.toml` to use git version
+- [x] Modify `Aleph/core/Cargo.toml` to use git version
 - [x] Rebuild Rust library with new rdev version
-- [x] Copy updated `libaethecore.dylib` to `Aether/Frameworks/`
+- [x] Copy updated `libaethecore.dylib` to `Aleph/Frameworks/`
 - [x] Verify Release build succeeds
 - [ ] Validation: Manual test - type in other apps without crash
 
 **Files modified:**
-- `Aether/core/Cargo.toml` - Updated rdev dependency to git main
-- `Aether/Frameworks/libaethecore.dylib` - Rebuilt with rdev 0.6.0
+- `Aleph/core/Cargo.toml` - Updated rdev dependency to git main
+- `Aleph/Frameworks/libaethecore.dylib` - Rebuilt with rdev 0.6.0
 
 **Acceptance criteria:**
 - ✅ rdev upgraded to git version with main thread fixes
@@ -144,17 +144,17 @@
 
 **Note**: This solution is superior to panic protection because it fixes the root cause in rdev itself, rather than catching panics after they occur. The existing panic protection in `rdev_listener.rs` provides a safety net, but is no longer needed for this specific issue.
 
-### Task 2.2: Implement permission pre-check in AetherCore
-- [x] Modify `Aether/core/src/core.rs`
-- [x] Add `has_input_monitoring_permission: bool` field to `AetherCore` struct
+### Task 2.2: Implement permission pre-check in AlephCore
+- [x] Modify `Aleph/core/src/core.rs`
+- [x] Add `has_input_monitoring_permission: bool` field to `AlephCore` struct
 - [x] Implement `set_input_monitoring_permission(granted: bool)` method
 - [x] Update `start_listening()` to check permission before calling rdev
-- [x] Return `Err(AetherError::PermissionDenied)` if permission not granted
+- [x] Return `Err(AlephError::PermissionDenied)` if permission not granted
 - [x] Call `event_handler.on_error()` with permission error message
 - [ ] Validation: Run unit test with permission = false
 
 **Files modified:**
-- `Aether/core/src/core.rs`
+- `Aleph/core/src/core.rs`
 
 **Acceptance criteria:**
 - ✅ `start_listening()` returns error if permission not granted
@@ -162,40 +162,40 @@
 - ✅ Swift layer receives error via UniFFI
 
 ### Task 2.3: Update UniFFI interface definition
-- [ ] Modify `Aether/core/src/aether.udl`
-- [ ] Add `set_input_monitoring_permission(boolean granted)` method to AetherCore
-- [ ] Add `PermissionDenied` variant to `AetherError` enum
+- [ ] Modify `Aleph/core/src/aleph.udl`
+- [ ] Add `set_input_monitoring_permission(boolean granted)` method to AlephCore
+- [ ] Add `PermissionDenied` variant to `AlephError` enum
 - [ ] Add `PermissionDenied` variant to `HotkeyError` enum
 - [ ] Regenerate Swift bindings: `cargo run --bin uniffi-bindgen generate ...`
 - [ ] Validation: Swift code compiles with new bindings
 
 **Files modified:**
-- `Aether/core/src/aether.udl`
-- `Aether/Sources/Generated/aether.swift` (generated)
+- `Aleph/core/src/aleph.udl`
+- `Aleph/Sources/Generated/aleph.swift` (generated)
 
 **Acceptance criteria:**
 - ✅ UniFFI generates `setInputMonitoringPermission()` method in Swift
-- ✅ Swift can catch `AetherError.permissionDenied`
+- ✅ Swift can catch `AlephError.permissionDenied`
 
 ### Task 2.4: Add error types for permission denial
-- [ ] Modify `Aether/core/src/error.rs`
-- [ ] Add `PermissionDenied(String)` variant to `AetherError`
+- [ ] Modify `Aleph/core/src/error.rs`
+- [ ] Add `PermissionDenied(String)` variant to `AlephError`
 - [ ] Add `PermissionDenied(String)` variant to `HotkeyError`
 - [ ] Implement `Display` and `Error` traits for new variants
 - [ ] Update error conversion logic for UniFFI
 - [ ] Validation: Run unit tests for error handling
 
 **Files modified:**
-- `Aether/core/src/error.rs`
+- `Aleph/core/src/error.rs`
 
 **Acceptance criteria:**
-- ✅ `AetherError::PermissionDenied` can be created and formatted
+- ✅ `AlephError::PermissionDenied` can be created and formatted
 - ✅ Error messages include actionable user guidance
 
 ## Phase 3: Integration & Testing
 
 ### Task 3.1: Write Swift unit tests for PermissionManager
-- [ ] Create `AetherTests/PermissionManagerTests.swift`
+- [ ] Create `AlephTests/PermissionManagerTests.swift`
 - [ ] Test: Timer starts and stops correctly
 - [ ] Test: `checkPermissions()` updates `@Published` properties
 - [ ] Test: No restart methods called when permission changes
@@ -203,14 +203,14 @@
 - [ ] Validation: All tests pass
 
 **Files created:**
-- `AetherTests/PermissionManagerTests.swift`
+- `AlephTests/PermissionManagerTests.swift`
 
 **Acceptance criteria:**
 - ✅ 100% test coverage for PermissionManager public methods
 - ✅ All tests pass
 
 ### Task 3.2: Write Rust unit tests for panic protection
-- [ ] Modify `Aether/core/tests/hotkey_tests.rs`
+- [ ] Modify `Aleph/core/tests/hotkey_tests.rs`
 - [ ] Test: `catch_unwind()` captures panic in rdev listener
 - [ ] Test: Permission pre-check blocks listener start
 - [ ] Test: `set_input_monitoring_permission()` updates flag
@@ -218,7 +218,7 @@
 - [ ] Validation: All tests pass
 
 **Files modified:**
-- `Aether/core/tests/hotkey_tests.rs`
+- `Aleph/core/tests/hotkey_tests.rs`
 
 **Acceptance criteria:**
 - ✅ Panic protection test passes (no crash)
@@ -226,14 +226,14 @@
 - ✅ All tests pass with `cargo test`
 
 ### Task 3.3: Integration test - Swift ↔ Rust permission flow
-- [ ] Create `AetherTests/PermissionIntegrationTests.swift`
+- [ ] Create `AlephTests/PermissionIntegrationTests.swift`
 - [ ] Test: Swift calls `core.start_listening()` without permission → receives error
 - [ ] Test: Swift updates permission via `core.set_input_monitoring_permission(true)` → listener starts
 - [ ] Test: Rust calls `event_handler.on_error()` → Swift receives callback
 - [ ] Validation: All tests pass
 
 **Files created:**
-- `AetherTests/PermissionIntegrationTests.swift`
+- `AlephTests/PermissionIntegrationTests.swift`
 
 **Acceptance criteria:**
 - ✅ Swift-Rust communication works correctly for permission flow
@@ -242,8 +242,8 @@
 ### Task 3.4: Manual testing - End-to-end permission flow
 - [ ] Test: Launch app without permissions → PermissionGateView appears
 - [ ] Test: Grant Accessibility → UI updates, no restart
-- [ ] Test: Grant Input Monitoring → "进入 Aether" button appears
-- [ ] Test: Click "进入 Aether" → App restarts
+- [ ] Test: Grant Input Monitoring → "进入 Aleph" button appears
+- [ ] Test: Click "进入 Aleph" → App restarts
 - [ ] Test: Relaunch app with permissions → Gate skipped, Core initialized
 - [ ] Test: Revoke permission mid-session → Error logged, no crash
 - [ ] Document results in `docs/permission-flow-testing-results.md`
@@ -282,15 +282,15 @@
 - ✅ AI assistant guidance reflects new permission architecture
 
 ### Task 4.3: Update translation files for new UI strings
-- [ ] Update `Aether/Resources/en.lproj/Localizable.strings`
-- [ ] Update `Aether/Resources/zh-Hans.lproj/Localizable.strings`
-- [ ] Add key: `permission.gate.button.enter_aether` = "进入 Aether"
+- [ ] Update `Aleph/Resources/en.lproj/Localizable.strings`
+- [ ] Update `Aleph/Resources/zh-Hans.lproj/Localizable.strings`
+- [ ] Add key: `permission.gate.button.enter_aleph` = "进入 Aleph"
 - [ ] Run `Scripts/validate_translations.sh` to verify completeness
 - [ ] Validation: Translation coverage 100%
 
 **Files modified:**
-- `Aether/Resources/en.lproj/Localizable.strings`
-- `Aether/Resources/zh-Hans.lproj/Localizable.strings`
+- `Aleph/Resources/en.lproj/Localizable.strings`
+- `Aleph/Resources/zh-Hans.lproj/Localizable.strings`
 
 **Acceptance criteria:**
 - ✅ All new UI strings are localized

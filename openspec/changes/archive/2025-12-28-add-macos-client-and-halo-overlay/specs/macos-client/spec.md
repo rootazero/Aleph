@@ -1,6 +1,6 @@
 # Specification: macOS Client
 
-Swift-based macOS application that integrates with Rust core via UniFFI to provide native UI for Aether AI middleware.
+Swift-based macOS application that integrates with Rust core via UniFFI to provide native UI for Aleph AI middleware.
 
 ## ADDED Requirements
 
@@ -16,31 +16,31 @@ The macOS client **SHALL** run as a menu bar-only application with no Dock icon.
 - No window in Dock
 - App survives system sleep/wake
 
-#### Scenario: User launches Aether
+#### Scenario: User launches Aleph
 
-**Given** Aether.app is installed
-**When** user double-clicks Aether.app
+**Given** Aleph.app is installed
+**When** user double-clicks Aleph.app
 **Then** menu bar icon appears with sparkles symbol
 **And** no window appears in Dock
 **And** app can be quit via menu bar menu
 
 ---
 
-### Requirement: AetherEventHandler Implementation
+### Requirement: AlephEventHandler Implementation
 
-The client **SHALL** implement the AetherEventHandler protocol to receive callbacks from Rust core.
+The client **SHALL** implement the AlephEventHandler protocol to receive callbacks from Rust core.
 
 **Why:** Required for Rust → Swift communication via UniFFI.
 
 **Acceptance criteria:**
-- EventHandler class conforms to AetherEventHandler
+- EventHandler class conforms to AlephEventHandler
 - All callback methods use DispatchQueue.main.async
 - Callbacks trigger UI updates (Halo, menu bar icon)
 - Thread-safe state management
 
 #### Scenario: Rust core triggers hotkey callback
 
-**Given** AetherCore is initialized with EventHandler
+**Given** AlephCore is initialized with EventHandler
 **When** Rust detects Cmd+~ hotkey
 **Then** onHotkeyDetected() is called on background thread
 **And** DispatchQueue.main.async executes UI update
@@ -85,7 +85,7 @@ The client **SHALL** request and validate macOS Accessibility permissions on lau
 
 #### Scenario: First launch without permission
 
-**Given** user launches Aether for first time
+**Given** user launches Aleph for first time
 **When** app checks Accessibility permission
 **Then** permission is not granted
 **And** alert shows explaining why it's needed
@@ -99,20 +99,20 @@ The client **SHALL** request and validate macOS Accessibility permissions on lau
 
 ### Requirement: Rust Core Lifecycle Management
 
-The client **SHALL** properly initialize and clean up the Rust AetherCore instance.
+The client **SHALL** properly initialize and clean up the Rust AlephCore instance.
 
 **Why:** Prevents resource leaks and ensures clean shutdown.
 
 **Acceptance criteria:**
-- AetherCore created in applicationDidFinishLaunching
+- AlephCore created in applicationDidFinishLaunching
 - startListening() called after permission check
 - stopListening() called in applicationWillTerminate
-- Error handling for AetherError exceptions
+- Error handling for AlephError exceptions
 - No crashes on quit
 
 #### Scenario: App shutdown
 
-**Given** app is running with AetherCore listening
+**Given** app is running with AlephCore listening
 **When** user quits via menu bar "Quit"
 **Then** applicationWillTerminate is called
 **And** core.stopListening() executes successfully

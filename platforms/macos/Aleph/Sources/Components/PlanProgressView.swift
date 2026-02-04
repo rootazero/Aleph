@@ -1,6 +1,6 @@
 //
 //  PlanProgressView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI component for displaying multi-step plan execution progress.
 //  Shows current step, overall progress, and step results.

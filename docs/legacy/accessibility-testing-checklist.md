@@ -31,7 +31,7 @@ This document provides comprehensive accessibility testing procedures to ensure 
 ### General VoiceOver Navigation
 
 #### Window and App Identification
-- [ ] **App Name**: VoiceOver announces "Aether" when app gains focus
+- [ ] **App Name**: VoiceOver announces "Aleph" when app gains focus
 - [ ] **Window Title**: Announces "Settings" or similar
 - [ ] **Window Role**: Identified as "window"
 

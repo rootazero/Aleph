@@ -7,7 +7,7 @@ Get Aleph running in under 5 minutes.
 The setup wizard guides you through initial configuration:
 
 ```bash
-aether wizard
+aleph wizard
 ```
 
 This will:
@@ -20,10 +20,10 @@ This will:
 
 ```bash
 # Start in foreground
-aether gateway run
+aleph gateway run
 
 # Or start as daemon
-aether gateway run --daemon
+aleph gateway run --daemon
 ```
 
 The gateway listens on `ws://127.0.0.1:18789` by default.
@@ -32,13 +32,13 @@ The gateway listens on `ws://127.0.0.1:18789` by default.
 
 ```bash
 # Simple chat
-aether chat "What's the weather like today?"
+aleph chat "What's the weather like today?"
 
 # With specific thinking level
-aether chat --thinking high "Explain quantum computing"
+aleph chat --thinking high "Explain quantum computing"
 
 # Interactive mode
-aether chat --interactive
+aleph chat --interactive
 ```
 
 ## 4. Connect a Messaging App (Optional)
@@ -47,20 +47,20 @@ aether chat --interactive
 
 ```bash
 # Set your bot token
-aether config set channels.telegram.token "YOUR_BOT_TOKEN"
+aleph config set channels.telegram.token "YOUR_BOT_TOKEN"
 
 # Start the channel
-aether channels start telegram
+aleph channels start telegram
 ```
 
 ### Discord
 
 ```bash
 # Set your bot token
-aether config set channels.discord.token "YOUR_BOT_TOKEN"
+aleph config set channels.discord.token "YOUR_BOT_TOKEN"
 
 # Start the channel
-aether channels start discord
+aleph channels start discord
 ```
 
 ## Next Steps

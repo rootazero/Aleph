@@ -75,7 +75,7 @@
   - [x] Ollama repeat penalty < 1.0 should fail
 
 ## 3. Syntax Validation
-- [x] 3.1 Run Swift syntax checker: `$HOME/.python3/bin/python verify_swift_syntax.py Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+- [x] 3.1 Run Swift syntax checker: `$HOME/.python3/bin/python verify_swift_syntax.py Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 - [x] 3.2 Fix any syntax errors reported
 
 ## 4. Documentation (if needed)
@@ -95,7 +95,7 @@ Execute tasks in the order listed above:
 
 ### Dependencies
 - No external dependencies required
-- Uses existing `PresetProvider` data structure from `Aether/Sources/Models/PresetProviders.swift`
+- Uses existing `PresetProvider` data structure from `Aleph/Sources/Models/PresetProviders.swift`
 - Uses existing `DesignTokens` for styling consistency
 
 ### Testing Focus

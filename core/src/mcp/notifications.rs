@@ -1,6 +1,6 @@
 //! MCP Notification Router
 //!
-//! Routes server-initiated notifications to the Aether event bus.
+//! Routes server-initiated notifications to the Aleph event bus.
 //!
 //! MCP servers can send notifications to inform clients about state changes:
 //! - `notifications/tools/listChanged` - Tool list has changed
@@ -8,7 +8,7 @@
 //! - `notifications/prompts/listChanged` - Prompt list has changed
 //!
 //! This module provides a notification router that converts these MCP
-//! notifications into Aether events for the rest of the system to handle.
+//! notifications into Aleph events for the rest of the system to handle.
 
 use std::sync::Arc;
 
@@ -101,7 +101,7 @@ pub type McpEventHandler = Box<dyn Fn(McpEvent) + Send + Sync>;
 ///
 /// The notification router converts incoming JSON-RPC notifications
 /// from MCP servers into typed events that can be handled by the
-/// Aether event system.
+/// Aleph event system.
 pub struct McpNotificationRouter {
     /// Event handlers
     handlers: Vec<McpEventHandler>,

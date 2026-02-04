@@ -75,7 +75,7 @@ The test button SHALL provide clear visual feedback for idle, loading, success, 
 - **THEN** the system SHALL:
   1. Set button to loading state (show spinner)
   2. Build test config from current form values (working copy, not saved state)
-  3. Call `AetherCore.testProviderConnectionWithConfig(providerName, workingConfig)`
+  3. Call `AlephCore.testProviderConnectionWithConfig(providerName, workingConfig)`
   4. Wait for async response
   5. Display test result inline below the card
   6. Return button to idle state
@@ -97,7 +97,7 @@ The test SHALL use the current working copy (form values) instead of saved confi
     - `base_url`: Current value in Base URL field (or preset default)
     - Other parameters: Current form values or preset defaults
   - Build a temporary `ProviderConfig` struct
-  - Call `AetherCore.testProviderConnectionWithConfig()` (does NOT persist to disk)
+  - Call `AlephCore.testProviderConnectionWithConfig()` (does NOT persist to disk)
   - Display result inline below the card
 
 #### Scenario: Test configured provider with unsaved changes
@@ -212,14 +212,14 @@ The test button SHALL be available for all provider types with appropriate valid
 
 ### Requirement: Test Connection API Integration
 
-The test button SHALL use the existing `AetherCore.testProviderConnectionWithConfig()` API.
+The test button SHALL use the existing `AlephCore.testProviderConnectionWithConfig()` API.
 
 #### Scenario: Test API call signature
 - **GIVEN** the user clicks the test button
 - **WHEN** the test is triggered
 - **THEN** the system SHALL call:
   ```swift
-  AetherCore.testProviderConnectionWithConfig(
+  AlephCore.testProviderConnectionWithConfig(
       providerName: String,      // e.g., "openai", "claude", "custom-provider-1"
       providerConfig: ProviderConfig  // Temporary config built from working copy
   ) -> TestConnectionResult

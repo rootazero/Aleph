@@ -560,8 +560,8 @@ fn determine_source(path: &Path) -> DiscoverySource {
         } else {
             DiscoverySource::Project
         }
-    } else if path_str.contains("/.aether/") {
-        DiscoverySource::AetherGlobal
+    } else if path_str.contains("/.aleph/") {
+        DiscoverySource::AlephGlobal
     } else {
         DiscoverySource::Project
     }

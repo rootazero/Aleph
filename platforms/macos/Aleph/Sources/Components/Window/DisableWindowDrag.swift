@@ -1,6 +1,6 @@
 //
 //  DisableWindowDrag.swift
-//  Aether
+//  Aleph
 //
 //  Temporarily disables window dragging for views that need drag interactions (like List reordering).
 //  Prevents conflict between SwiftUI drag gestures and window background dragging.

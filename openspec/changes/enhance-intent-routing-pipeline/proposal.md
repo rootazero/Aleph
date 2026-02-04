@@ -13,7 +13,7 @@
 
 ### Current State Analysis
 
-Aether currently implements a multi-layer routing system (L1/L2/L3) with the following components:
+Aleph currently implements a multi-layer routing system (L1/L2/L3) with the following components:
 
 **Existing Architecture:**
 ```
@@ -461,7 +461,7 @@ impl IntentRoutingPipeline {
         &self,
         input: &str,
         context: RoutingContext,
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn AlephEventHandler,
     ) -> Result<PipelineResult> {
         // 1. Check cache for fast path
         if let Some(cached) = self.cache.get(input).await {
@@ -511,7 +511,7 @@ impl IntentRoutingPipeline {
         &self,
         intent: AggregatedIntent,
         context: RoutingContext,
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn AlephEventHandler,
     ) -> Result<PipelineResult> {
         match intent.action {
             IntentAction::Execute => {
@@ -602,7 +602,7 @@ impl IntentRoutingPipeline {
 3. Integrate clarification flow
 
 ### Phase 6: Migration and Cleanup (Week 3)
-1. Migrate `AetherCore` to use pipeline
+1. Migrate `AlephCore` to use pipeline
 2. Remove legacy `route_with_confirmation` path
 3. Update tests
 

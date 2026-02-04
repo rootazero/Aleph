@@ -1,7 +1,7 @@
 //! package.json parser for Node.js plugins
 //!
 //! This module parses npm `package.json` files that contain an "aleph" field
-//! for plugin metadata. This allows Node.js packages to function as Aether plugins.
+//! for plugin metadata. This allows Node.js packages to function as Aleph plugins.
 
 use super::types::{AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission};
 use crate::extension::error::{ExtensionError, ExtensionResult};
@@ -53,9 +53,9 @@ struct PackageJson {
     #[serde(default)]
     keywords: Option<Vec<String>>,
 
-    /// Aether plugin configuration
-    #[serde(default)]
-    aether: Option<AetherConfig>,
+    /// Aleph plugin configuration
+    #[serde(default, alias = "aether")]
+    aleph: Option<AlephConfig>,
 }
 
 /// Package author (supports string or object format)
@@ -108,10 +108,10 @@ impl PackageRepository {
     }
 }
 
-/// Aether-specific configuration in package.json
+/// Aleph-specific configuration in package.json
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AetherConfig {
+struct AlephConfig {
     /// Plugin ID override (defaults to package name)
     #[serde(default)]
     id: Option<String>,
@@ -151,7 +151,7 @@ struct AetherConfig {
 
 /// Parse a package.json file into a PluginManifest
 ///
-/// The package.json must have an "aleph" field to be recognized as an Aether plugin.
+/// The package.json must have an "aleph" field to be recognized as an Aleph plugin.
 /// If no "aleph" field is present, returns an error.
 ///
 /// # Arguments
@@ -172,11 +172,11 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
     let pkg: PackageJson = serde_json::from_str(content)
         .map_err(|e| ExtensionError::invalid_manifest(path, format!("JSON parse error: {}", e)))?;
 
-    // Require aether field for plugin recognition
-    let aether = pkg.aether.ok_or_else(|| {
+    // Require aleph field for plugin recognition
+    let aleph = pkg.aleph.ok_or_else(|| {
         ExtensionError::invalid_manifest(
             path,
-            "Missing 'aether' field - not an Aether plugin".to_string(),
+            "Missing 'aleph' field - not an Aleph plugin".to_string(),
         )
     })?;
 
@@ -185,8 +185,8 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
         return Err(ExtensionError::missing_field(path, "name"));
     }
 
-    // Determine plugin ID (aether.id > package name)
-    let id = aether.id.unwrap_or_else(|| sanitize_npm_package_name(&pkg.name));
+    // Determine plugin ID (aleph.id > package name)
+    let id = aleph.id.unwrap_or_else(|| sanitize_npm_package_name(&pkg.name));
 
     // Validate plugin ID
     super::aleph_plugin::validate_plugin_id(&id).map_err(|e| {
@@ -194,16 +194,16 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
     })?;
 
     // Determine display name
-    let name = aether.name.unwrap_or(pkg.name);
+    let name = aleph.name.unwrap_or(pkg.name);
 
     // Determine entry point
-    let entry = aether
+    let entry = aleph
         .entry
         .or(pkg.main)
         .unwrap_or_else(|| "index.js".to_string());
 
     // Determine plugin kind
-    let kind = aether.kind.unwrap_or(PluginKind::NodeJs);
+    let kind = aleph.kind.unwrap_or(PluginKind::NodeJs);
 
     // Build manifest
     let manifest = PluginManifest {
@@ -214,15 +214,15 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
         kind,
         entry: entry.into(),
         root_dir: path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
-        config_schema: aether.config_schema,
-        config_ui_hints: aether.config_ui_hints.unwrap_or_default(),
-        permissions: aether.permissions.unwrap_or_default(),
+        config_schema: aleph.config_schema,
+        config_ui_hints: aleph.config_ui_hints.unwrap_or_default(),
+        permissions: aleph.permissions.unwrap_or_default(),
         author: pkg.author.map(AuthorInfo::from),
         homepage: pkg.homepage,
         repository: pkg.repository.and_then(|r| r.url()),
         license: pkg.license,
         keywords: pkg.keywords.unwrap_or_default(),
-        extensions: aether.extensions.unwrap_or_default(),
+        extensions: aleph.extensions.unwrap_or_default(),
         // V2 fields not available in package.json format
         tools_v2: None,
         hooks_v2: None,

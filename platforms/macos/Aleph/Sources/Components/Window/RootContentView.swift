@@ -1,6 +1,6 @@
 //
 //  RootContentView.swift
-//  Aether
+//  Aleph
 //
 //  Root layout for the Settings window with macOS 26 design.
 //  Two-panel layout: rounded sidebar (left) + content area (right).
@@ -20,7 +20,7 @@ struct RootContentView: View {
     // MARK: - Dependencies
 
     /// core (rig-core based) - used for all config operations
-    var core: AetherCore? {
+    var core: AlephCore? {
         appDelegate.core
     }
 
@@ -109,10 +109,10 @@ struct RootContentView: View {
             // Update window delegate's state for close interception
             updateWindowDelegateState()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .aetherConfigDidChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .alephConfigDidChange)) { _ in
             handleExternalConfigChange()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .aetherConfigSavedInternally)) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: .alephConfigSavedInternally)) { notification in
             handleInternalConfigSave(providerName: notification.object as? String)
         }
     }
@@ -237,7 +237,7 @@ struct RootContentView: View {
                 ProvidersView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Provider management requires AetherCore initialization")
+                placeholderView("Provider management requires AlephCore initialization")
             }
 
         case .generation:
@@ -246,7 +246,7 @@ struct RootContentView: View {
                 GenerationProvidersView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Generation provider management requires AetherCore initialization")
+                placeholderView("Generation provider management requires AlephCore initialization")
             }
 
         case .shortcuts:
@@ -261,7 +261,7 @@ struct RootContentView: View {
             if let core = core {
                 MemoryView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
             } else {
-                placeholderView("Memory management requires AetherCore initialization")
+                placeholderView("Memory management requires AlephCore initialization")
             }
 
         case .search:
@@ -270,7 +270,7 @@ struct RootContentView: View {
                 SearchSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Search settings requires AetherCore initialization")
+                placeholderView("Search settings requires AlephCore initialization")
             }
 
         case .mcp:
@@ -279,7 +279,7 @@ struct RootContentView: View {
                 McpSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("MCP settings requires AetherCore initialization")
+                placeholderView("MCP settings requires AlephCore initialization")
             }
 
         case .skills:
@@ -288,7 +288,7 @@ struct RootContentView: View {
                 SkillsSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Skills management requires AetherCore initialization")
+                placeholderView("Skills management requires AlephCore initialization")
             }
 
         case .plugins:
@@ -297,7 +297,7 @@ struct RootContentView: View {
                 PluginsSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Plugins management requires AetherCore initialization")
+                placeholderView("Plugins management requires AlephCore initialization")
             }
 
         case .security:
@@ -306,7 +306,7 @@ struct RootContentView: View {
                 SecuritySettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Security settings requires AetherCore initialization")
+                placeholderView("Security settings requires AlephCore initialization")
             }
 
         case .policies:
@@ -315,7 +315,7 @@ struct RootContentView: View {
                 PoliciesSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Policies settings requires AetherCore initialization")
+                placeholderView("Policies settings requires AlephCore initialization")
             }
         }
     }
@@ -393,7 +393,7 @@ struct RootContentView: View {
             do {
                 guard let core = core else {
                     await MainActor.run {
-                        showAlert(title: "Error", message: "AetherCore not initialized")
+                        showAlert(title: "Error", message: "AlephCore not initialized")
                     }
                     return
                 }
@@ -404,7 +404,7 @@ struct RootContentView: View {
                 // Get the config directory
                 let configDir = FileManager.default.homeDirectoryForCurrentUser
                     .appendingPathComponent(".config")
-                    .appendingPathComponent("aether")
+                    .appendingPathComponent("aleph")
 
                 // Write to config.toml
                 let configPath = configDir.appendingPathComponent("config.toml")
@@ -437,7 +437,7 @@ struct RootContentView: View {
         let panel = NSSavePanel()
         panel.title = "Export Settings"
         panel.message = "Choose where to save your configuration"
-        panel.nameFieldStringValue = "aether-config.toml"
+        panel.nameFieldStringValue = "aleph-config.toml"
         panel.allowedContentTypes = [.toml, .item]
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -447,7 +447,7 @@ struct RootContentView: View {
                 // Get current config file path
                 let configDir = FileManager.default.homeDirectoryForCurrentUser
                     .appendingPathComponent(".config")
-                    .appendingPathComponent("aether")
+                    .appendingPathComponent("aleph")
                 let configPath = configDir.appendingPathComponent("config.toml")
 
                 // Read current config
@@ -491,7 +491,7 @@ struct RootContentView: View {
             do {
                 guard let core = core else {
                     await MainActor.run {
-                        showAlert(title: "Error", message: "AetherCore not initialized")
+                        showAlert(title: "Error", message: "AlephCore not initialized")
                     }
                     return
                 }
@@ -499,7 +499,7 @@ struct RootContentView: View {
                 // Get config path
                 let configDir = FileManager.default.homeDirectoryForCurrentUser
                     .appendingPathComponent(".config")
-                    .appendingPathComponent("aether")
+                    .appendingPathComponent("aleph")
                 let configPath = configDir.appendingPathComponent("config.toml")
 
                 // Delete current config file

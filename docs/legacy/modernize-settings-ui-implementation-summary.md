@@ -5,7 +5,7 @@
 **变更提案**: modernize-settings-ui
 **实施日期**: 2025-12-23 至 2025-12-26
 **当前状态**: ✅ 98% 完成（147/153任务）
-**主要目标**: 将Aether设置界面现代化，采用卡片化设计、三种主题模式、优化的动画效果和完整的测试框架
+**主要目标**: 将Aleph设置界面现代化，采用卡片化设计、三种主题模式、优化的动画效果和完整的测试框架
 
 ---
 
@@ -17,7 +17,7 @@
 **任务**: 14/14 完成
 
 **已创建文件**:
-1. `Aether/Sources/DesignSystem/DesignTokens.swift` (310行)
+1. `Aleph/Sources/DesignSystem/DesignTokens.swift` (310行)
    - 颜色规范（背景色、强调色、状态色、文本色）
    - 间距规范（xs到xxl，6个级别）
    - 圆角规范（small/medium/large）
@@ -25,7 +25,7 @@
    - 阴影规范（card/elevated/dropdown）
    - 动画时长规范（fast/normal/slow）
 
-2. `Aether/Sources/DesignSystem/ThemeManager.swift` (120行)
+2. `Aleph/Sources/DesignSystem/ThemeManager.swift` (120行)
    - ThemeMode枚举（light/dark/auto）
    - UserDefaults持久化
    - 系统外观监听
@@ -52,19 +52,19 @@
 **任务**: 37/37 完成
 
 **已创建文件**:
-1. `Aether/Sources/Components/Molecules/ProviderCard.swift` (200行)
+1. `Aleph/Sources/Components/Molecules/ProviderCard.swift` (200行)
    - 卡片化布局（图标+名称+状态+悬停效果）
    - Scale动画（1.0 → 1.02）
    - 选中状态（2pt蓝色边框）
    - 右键菜单支持
 
-2. `Aether/Sources/Components/Molecules/ProviderDetailPanel.swift` (350行)
+2. `Aleph/Sources/Components/Molecules/ProviderDetailPanel.swift` (350行)
    - 详情面板（配置/代码示例/操作按钮）
    - 可折叠Section
    - 复制按钮（API endpoint、环境变量）
    - Edit/Delete操作
 
-3. `Aether/Sources/ProvidersView.swift` (重构，500+行)
+3. `Aleph/Sources/ProvidersView.swift` (重构，500+行)
    - SearchBar集成
    - ProviderCard列表（可滚动、可过滤）
    - ProviderDetailPanel右侧面板
@@ -86,20 +86,20 @@
 **任务**: 28/28 完成
 
 **已创建文件**:
-1. `Aether/Sources/Components/Atoms/SidebarItem.swift` (150行)
+1. `Aleph/Sources/Components/Atoms/SidebarItem.swift` (150行)
    - Icon + Text布局
    - 选中状态（蓝色背景+左侧蓝条）
    - 悬停状态（浅灰背景）
    - 滑动指示条动画（300ms）
 
-2. `Aether/Sources/Components/Organisms/ModernSidebarView.swift` (400行)
+2. `Aleph/Sources/Components/Organisms/ModernSidebarView.swift` (400行)
    - 完整侧边栏组件
    - 顶部：应用logo和版本
    - 中间：导航Tab列表
    - 底部：Import/Export/Reset按钮
    - VisualEffectBackground（sidebar材质）
 
-3. `Aether/Sources/SettingsView.swift` (重构)
+3. `Aleph/Sources/SettingsView.swift` (重构)
    - 集成ModernSidebarView
    - ThemeSwitcher在toolbar（右上角）
    - NavigationSplitView布局
@@ -223,7 +223,7 @@
    - 使用Xcode Accessibility Inspector验证
 
 **自动化测试用例** (2个文件):
-5. **AetherTests/UI/ModernSettingsUITests.swift** (350行，27个测试)
+5. **AlephTests/UI/ModernSettingsUITests.swift** (350行，27个测试)
    - ThemeManager初始化和持久化
    - Provider搜索和过滤逻辑
    - 路由规则验证
@@ -234,7 +234,7 @@
    - JSON导入/导出测试
    - 性能基准测试
 
-6. **AetherUITests/ModernSettingsUITestsXCUI.swift** (600行，30+个测试)
+6. **AlephUITests/ModernSettingsUITestsXCUI.swift** (600行，30+个测试)
    - 主题切换器交互
    - VoiceOver无障碍
    - 键盘导航

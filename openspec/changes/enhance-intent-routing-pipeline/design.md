@@ -931,7 +931,7 @@ Result: Search executed after clarification
 The new pipeline will be implemented alongside existing code and can be enabled via config flag:
 
 ```rust
-// In AetherCore
+// In AlephCore
 pub async fn process_input(&self, input: &str) -> Result<String> {
     if self.config.routing.pipeline.enabled {
         // New pipeline

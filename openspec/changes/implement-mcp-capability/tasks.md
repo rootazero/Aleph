@@ -5,11 +5,11 @@
 **目标**：建立共享基础模块 (`services/`)，供 MCP、Skills 及未来扩展复用
 
 ### 0.1 模块结构
-- [ ] 0.1.1 Create `Aether/core/src/services/mod.rs` module root
+- [ ] 0.1.1 Create `Aleph/core/src/services/mod.rs` module root
 - [ ] 0.1.2 Define module exports for fs, git, system_info
 
 ### 0.2 FileOps Trait (services::fs)
-- [ ] 0.2.1 Create `Aether/core/src/services/fs/mod.rs`
+- [ ] 0.2.1 Create `Aleph/core/src/services/fs/mod.rs`
 - [ ] 0.2.2 Define `DirEntry` struct (name, path, is_dir, size, modified)
 - [ ] 0.2.3 Define `FileOps` trait with methods:
   - `read_file()`, `read_file_bytes()`
@@ -17,29 +17,29 @@
   - `list_dir()`, `exists()`, `is_dir()`
   - `create_dir()`, `delete()`
   - `search()` (glob pattern)
-- [ ] 0.2.4 Create `Aether/core/src/services/fs/local.rs`
+- [ ] 0.2.4 Create `Aleph/core/src/services/fs/local.rs`
 - [ ] 0.2.5 Implement `LocalFs` using `tokio::fs`
 - [ ] 0.2.6 Add `glob` crate for pattern matching
 - [ ] 0.2.7 Write unit tests for FileOps
 
 ### 0.3 GitOps Trait (services::git)
-- [ ] 0.3.1 Create `Aether/core/src/services/git/mod.rs`
+- [ ] 0.3.1 Create `Aleph/core/src/services/git/mod.rs`
 - [ ] 0.3.2 Define data structs: `GitFileStatus`, `GitCommit`, `GitDiff`
 - [ ] 0.3.3 Define `GitOps` trait with methods:
   - `status()`, `log()`, `diff()`
   - `current_branch()`, `is_repo()`
 - [ ] 0.3.4 Add `git2` to Cargo.toml dependencies
-- [ ] 0.3.5 Create `Aether/core/src/services/git/repository.rs`
+- [ ] 0.3.5 Create `Aleph/core/src/services/git/repository.rs`
 - [ ] 0.3.6 Implement `GitRepository` using `git2-rs`
 - [ ] 0.3.7 Wrap all git2 calls with `tokio::task::spawn_blocking`
 - [ ] 0.3.8 Write unit tests for GitOps
 
 ### 0.4 SystemInfoProvider Trait (services::system_info)
-- [ ] 0.4.1 Create `Aether/core/src/services/system_info/mod.rs`
+- [ ] 0.4.1 Create `Aleph/core/src/services/system_info/mod.rs`
 - [ ] 0.4.2 Define `SystemInfo` struct (os_name, os_version, hostname, etc.)
 - [ ] 0.4.3 Define `SystemInfoProvider` trait with methods:
   - `get_info()`, `active_application()`, `active_window_title()`
-- [ ] 0.4.4 Create `Aether/core/src/services/system_info/macos.rs`
+- [ ] 0.4.4 Create `Aleph/core/src/services/system_info/macos.rs`
 - [ ] 0.4.5 Implement `MacOsSystemInfo` using system commands / CoreFoundation
 - [ ] 0.4.6 Write unit tests for SystemInfoProvider
 
@@ -55,15 +55,15 @@
 **目标**：用户零配置即可使用核心 MCP 功能，无需安装 Node.js/Python
 
 ### 1.1 模块结构与数据类型
-- [ ] 1.1.1 Create `Aether/core/src/mcp/mod.rs` module root
-- [ ] 1.1.2 Create `Aether/core/src/mcp/types.rs` with `McpResource`, `McpTool`, `McpToolResult`
-- [ ] 1.1.3 Create `Aether/core/src/mcp/config.rs` with `McpConfig`, `BuiltinConfig`, `McpPermissions`
+- [ ] 1.1.1 Create `Aleph/core/src/mcp/mod.rs` module root
+- [ ] 1.1.2 Create `Aleph/core/src/mcp/types.rs` with `McpResource`, `McpTool`, `McpToolResult`
+- [ ] 1.1.3 Create `Aleph/core/src/mcp/config.rs` with `McpConfig`, `BuiltinConfig`, `McpPermissions`
 - [ ] 1.1.4 Update `AgentContext.mcp_resources` to `mcp_context: Option<McpContext>`
 - [ ] 1.1.5 Add `McpContext` struct with `resources`, `tool_results`, `available_tools` fields
 - [ ] 1.1.6 Write unit tests for data structures (serialization/deserialization)
 
 ### 1.2 BuiltinMcpService Trait (MCP 适配器接口)
-- [ ] 1.2.1 Create `Aether/core/src/mcp/builtin/mod.rs`
+- [ ] 1.2.1 Create `Aleph/core/src/mcp/builtin/mod.rs`
 - [ ] 1.2.2 Define `BuiltinMcpService` trait with methods:
   - `name()`, `description()`
   - `list_resources()`, `read_resource(uri)`
@@ -72,7 +72,7 @@
 - [ ] 1.2.3 Write mock implementation for testing
 
 ### 1.3 FsService (MCP 适配器 - 封装 services::fs)
-- [ ] 1.3.1 Create `Aether/core/src/mcp/builtin/fs.rs`
+- [ ] 1.3.1 Create `Aleph/core/src/mcp/builtin/fs.rs`
 - [ ] 1.3.2 Implement `FsService` struct with `Arc<dyn FileOps>` + `allowed_roots`
 - [ ] 1.3.3 Add `with_fs()` constructor for dependency injection (testing)
 - [ ] 1.3.4 Implement `is_path_allowed()` security check
@@ -83,7 +83,7 @@
 - [ ] 1.3.9 Write unit tests for FsService (with mock FileOps)
 
 ### 1.4 GitService (MCP 适配器 - 封装 services::git)
-- [ ] 1.4.1 Create `Aether/core/src/mcp/builtin/git.rs`
+- [ ] 1.4.1 Create `Aleph/core/src/mcp/builtin/git.rs`
 - [ ] 1.4.2 Implement `GitService` struct with `Arc<dyn GitOps>` + `allowed_repos`
 - [ ] 1.4.3 Add `with_git()` constructor for dependency injection (testing)
 - [ ] 1.4.4 Implement `is_repo_allowed()` security check
@@ -93,14 +93,14 @@
 - [ ] 1.4.8 Write unit tests for GitService (with mock GitOps)
 
 ### 1.5 SystemInfoService (MCP 适配器 - 封装 services::system_info)
-- [ ] 1.5.1 Create `Aether/core/src/mcp/builtin/system_info.rs`
+- [ ] 1.5.1 Create `Aleph/core/src/mcp/builtin/system_info.rs`
 - [ ] 1.5.2 Implement `SystemInfoService` struct with `Arc<dyn SystemInfoProvider>`
 - [ ] 1.5.3 Implement `sys_info` tool delegating to `self.provider.get_info()`
 - [ ] 1.5.4 Implement `active_app` tool delegating to `self.provider.active_application()`
 - [ ] 1.5.5 Write unit tests for SystemInfoService
 
 ### 1.6 ShellService (独立实现 - 不使用共享基础模块)
-- [ ] 1.6.1 Create `Aether/core/src/mcp/builtin/shell.rs`
+- [ ] 1.6.1 Create `Aleph/core/src/mcp/builtin/shell.rs`
 - [ ] 1.6.2 Implement `ShellService` struct with `timeout`, `allowed_commands` fields
 - [ ] 1.6.3 Implement `is_command_allowed()` whitelist check
 - [ ] 1.6.4 Implement `shell_exec` tool using `tokio::process::Command`
@@ -109,7 +109,7 @@
 - [ ] 1.6.7 Write unit tests for ShellService
 
 ### 1.7 McpClient (服务注册与路由)
-- [ ] 1.7.1 Create `Aether/core/src/mcp/client.rs`
+- [ ] 1.7.1 Create `Aleph/core/src/mcp/client.rs`
 - [ ] 1.7.2 Implement `McpClient` struct with `builtin_services` HashMap
 - [ ] 1.7.3 Implement `register_builtin()` for service registration
 - [ ] 1.7.4 Implement `list_tools()` aggregating from all builtin services
@@ -150,15 +150,15 @@
 **目标**：支持高级用户配置外部 MCP Server（带运行时检测）
 
 ### 2.1 JSON-RPC 2.0 协议
-- [ ] 2.1.1 Create `Aether/core/src/mcp/jsonrpc.rs`
+- [ ] 2.1.1 Create `Aleph/core/src/mcp/jsonrpc.rs`
 - [ ] 2.1.2 Implement `JsonRpcRequest` struct with builder pattern
 - [ ] 2.1.3 Implement `JsonRpcResponse` with `Success` and `Error` variants
 - [ ] 2.1.4 Implement `IdGenerator` for request ID management
 - [ ] 2.1.5 Write unit tests for JSON-RPC serialization
 
 ### 2.2 Stdio Transport
-- [ ] 2.2.1 Create `Aether/core/src/mcp/transport/mod.rs`
-- [ ] 2.2.2 Create `Aether/core/src/mcp/transport/stdio.rs`
+- [ ] 2.2.1 Create `Aleph/core/src/mcp/transport/mod.rs`
+- [ ] 2.2.2 Create `Aleph/core/src/mcp/transport/stdio.rs`
 - [ ] 2.2.3 Implement `StdioTransport::spawn()` for subprocess creation
 - [ ] 2.2.4 Implement `StdioTransport::send()` for request/response
 - [ ] 2.2.5 Implement `StdioTransport::close()` for cleanup
@@ -173,8 +173,8 @@
 - [ ] 2.3.5 Write tests for runtime detection
 
 ### 2.4 McpServerConnection
-- [ ] 2.4.1 Create `Aether/core/src/mcp/external/mod.rs`
-- [ ] 2.4.2 Create `Aether/core/src/mcp/external/connection.rs`
+- [ ] 2.4.1 Create `Aleph/core/src/mcp/external/mod.rs`
+- [ ] 2.4.2 Create `Aleph/core/src/mcp/external/connection.rs`
 - [ ] 2.4.3 Implement `connect()` with MCP `initialize` handshake
 - [ ] 2.4.4 Implement `list_tools()` → `tools/list` RPC
 - [ ] 2.4.5 Implement `has_tool()` check
@@ -190,26 +190,26 @@
 - [ ] 2.5.5 Implement `stop_all()` for cleanup
 - [ ] 2.5.6 Write integration tests for multi-server scenarios
 
-## Phase 3: UI & AetherCore Integration
+## Phase 3: UI & AlephCore Integration
 
 **目标**：完善用户界面和 Core 集成
 
-### 3.1 AetherCore 集成
-- [ ] 3.1.1 Initialize `McpClient` in `AetherCore::new()` if configured
+### 3.1 AlephCore 集成
+- [ ] 3.1.1 Initialize `McpClient` in `AlephCore::new()` if configured
 - [ ] 3.1.2 Register builtin services based on config
 - [ ] 3.1.3 Start external servers on `start_listening()`
 - [ ] 3.1.4 Stop all servers on `stop_listening()`
 - [ ] 3.1.5 Pass `McpClient` to `CapabilityExecutor`
 
 ### 3.2 UniFFI 接口
-- [ ] 3.2.1 Add `McpServiceInfo` struct to `aether.udl`
-- [ ] 3.2.2 Add `list_mcp_services()` method to `AetherCore`
+- [ ] 3.2.1 Add `McpServiceInfo` struct to `aleph.udl`
+- [ ] 3.2.2 Add `list_mcp_services()` method to `AlephCore`
 - [ ] 3.2.3 Add `get_mcp_tools()` method
 - [ ] 3.2.4 Add `ToolConfirmationCallback` interface
 - [ ] 3.2.5 Regenerate Swift bindings
 
 ### 3.3 Swift UI - McpSettingsView
-- [ ] 3.3.1 Create `Aether/Sources/Components/Settings/McpSettingsView.swift`
+- [ ] 3.3.1 Create `Aleph/Sources/Components/Settings/McpSettingsView.swift`
 - [ ] 3.3.2 Add MCP enabled toggle
 - [ ] 3.3.3 Add builtin services section (fs, git, shell toggles)
 - [ ] 3.3.4 Add allowed_roots/allowed_repos path editor
@@ -217,7 +217,7 @@
 - [ ] 3.3.6 Integrate into main Settings navigation
 
 ### 3.4 Tool 确认对话框
-- [ ] 3.4.1 Create `Aether/Sources/Components/Dialogs/ToolConfirmationView.swift`
+- [ ] 3.4.1 Create `Aleph/Sources/Components/Dialogs/ToolConfirmationView.swift`
 - [ ] 3.4.2 Design confirmation UI (tool name, args, warning)
 - [ ] 3.4.3 Implement UniFFI callback for confirmation requests
 - [ ] 3.4.4 Show confirmation in Halo/Popover
@@ -258,7 +258,7 @@
 ### 5.1 打包基础设施
 - [ ] 5.1.1 Setup Bun build environment
 - [ ] 5.1.2 Create build script for bundled servers
-- [ ] 5.1.3 Define `Aether.app/Contents/Resources/mcp-servers/` structure
+- [ ] 5.1.3 Define `Aleph.app/Contents/Resources/mcp-servers/` structure
 - [ ] 5.1.4 Add bundled server discovery in McpClient
 
 ### 5.2 候选服务评估

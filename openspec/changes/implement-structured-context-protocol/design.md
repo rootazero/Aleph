@@ -219,7 +219,7 @@ pub fn route(&self, input: &str, captured_context: &CapturedContext)
 
     // 4. Get provider
     let provider = self.providers.get(&decision.provider_name)
-        .ok_or_else(|| AetherError::ProviderNotFound(decision.provider_name.clone()))?;
+        .ok_or_else(|| AlephError::ProviderNotFound(decision.provider_name.clone()))?;
 
     Ok((provider.clone(), payload))
 }
@@ -759,6 +759,6 @@ for cap in caps {
 ## References
 
 - [agentstructure.md](../../../agentstructure.md) - 原始架构设计
-- Memory Module Design - `Aether/core/src/memory/mod.rs`
-- Router Implementation - `Aether/core/src/router/mod.rs`
+- Memory Module Design - `Aleph/core/src/memory/mod.rs`
+- Router Implementation - `Aleph/core/src/router/mod.rs`
 - Config Schema - `config.toml.example`

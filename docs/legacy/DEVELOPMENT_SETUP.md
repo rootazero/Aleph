@@ -104,7 +104,7 @@ cargo build --release --features uniffi -p alephcore
 cd core && cargo run --bin uniffi-bindgen generate \
     --library ../target/release/libalephcore.dylib \
     --language swift \
-    --out-dir ../platforms/macos/Aether/Sources/Generated/
+    --out-dir ../platforms/macos/Aleph/Sources/Generated/
 ```
 
 ### Xcode Build Errors

@@ -56,7 +56,7 @@ struct AlephPluginJson {
 
     /// Author information
     #[serde(default)]
-    author: Option<AetherPluginAuthor>,
+    author: Option<AlephPluginAuthor>,
 
     /// Homepage URL
     #[serde(default)]
@@ -82,7 +82,7 @@ struct AlephPluginJson {
 /// Author information in aleph.plugin.json
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum AetherPluginAuthor {
+enum AlephPluginAuthor {
     /// Simple string format
     String(String),
     /// Object format
@@ -96,11 +96,11 @@ enum AetherPluginAuthor {
     },
 }
 
-impl From<AetherPluginAuthor> for AuthorInfo {
-    fn from(author: AetherPluginAuthor) -> Self {
+impl From<AlephPluginAuthor> for AuthorInfo {
+    fn from(author: AlephPluginAuthor) -> Self {
         match author {
-            AetherPluginAuthor::String(s) => AuthorInfo::from(s.as_str()),
-            AetherPluginAuthor::Object { name, email, url } => AuthorInfo { name, email, url },
+            AlephPluginAuthor::String(s) => AuthorInfo::from(s.as_str()),
+            AlephPluginAuthor::Object { name, email, url } => AuthorInfo { name, email, url },
         }
     }
 }

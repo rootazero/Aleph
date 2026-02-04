@@ -7,7 +7,7 @@
 
 ## Summary
 
-Enable Aether to analyze YouTube video content by automatically extracting video transcripts (subtitles/captions) and injecting them into the AI context. This allows users to use commands like `/search analyze this video: https://youtube.com/watch?v=...` to get AI-powered video content analysis.
+Enable Aleph to analyze YouTube video content by automatically extracting video transcripts (subtitles/captions) and injecting them into the AI context. This allows users to use commands like `/search analyze this video: https://youtube.com/watch?v=...` to get AI-powered video content analysis.
 
 ## Motivation
 
@@ -19,7 +19,7 @@ Users want to:
 3. Translate video content to another language
 4. Ask questions about video content without watching the entire video
 
-Currently, Aether can only process text and images. Video content analysis requires manual transcript copying, which breaks the "frictionless" user experience.
+Currently, Aleph can only process text and images. Video content analysis requires manual transcript copying, which breaks the "frictionless" user experience.
 
 ### Why YouTube First
 

@@ -1510,7 +1510,7 @@ impl InboundMessageRouter {
         }
 
         // Check common patterns
-        let patterns = ["@aether", "@bot", "aether"];
+        let patterns = ["@aleph", "@bot", "aleph"];
         patterns.iter().any(|p| text_lower.contains(p))
     }
 
@@ -1664,7 +1664,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(router.check_mention("Hey @aether, help me", &channel_config));
+        assert!(router.check_mention("Hey @aleph, help me", &channel_config));
         assert!(router.check_mention("MyBot can you help?", &channel_config));
         assert!(router.check_mention("Hello AETHER", &channel_config));
         assert!(!router.check_mention("Hello world", &channel_config));
@@ -2269,7 +2269,7 @@ async fn test_group_with_mention_required() {
         ChannelConfig {
             group_policy: GroupPolicy::Open,
             require_mention: true,
-            bot_name: Some("Aether".to_string()),
+            bot_name: Some("Aleph".to_string()),
             ..Default::default()
         },
     );
@@ -2280,7 +2280,7 @@ async fn test_group_with_mention_required() {
     assert!(result.is_ok()); // Filtered but no error
 
     // With mention - should pass
-    let msg = make_group_message("chat_id:42", "+15551234567", "Hey @aether, help me!");
+    let msg = make_group_message("chat_id:42", "+15551234567", "Hey @aleph, help me!");
     let result = router.handle_message(msg).await;
     assert!(result.is_ok());
 }
@@ -2301,7 +2301,7 @@ async fn test_group_disabled() {
         },
     );
 
-    let msg = make_group_message("chat_id:42", "+15551234567", "@aether help!");
+    let msg = make_group_message("chat_id:42", "+15551234567", "@aleph help!");
     let result = router.handle_message(msg).await;
 
     // Should be filtered (group disabled)

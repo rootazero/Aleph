@@ -12,7 +12,7 @@
 
 ## 🎯 Why This Change?
 
-Users need confidence when editing settings. Currently, Aether's settings UI has inconsistent save behavior:
+Users need confidence when editing settings. Currently, Aleph's settings UI has inconsistent save behavior:
 
 - ❌ **Problem 1**: Changes save immediately without confirmation → Accidental modifications
 - ❌ **Problem 2**: No way to preview changes before committing → Reduced confidence
@@ -108,16 +108,16 @@ Users need confidence when editing settings. Currently, Aether's settings UI has
 
 ### New Components
 
-1. **UnifiedSaveBar** (`Aether/Sources/Components/Molecules/UnifiedSaveBar.swift`)
+1. **UnifiedSaveBar** (`Aleph/Sources/Components/Molecules/UnifiedSaveBar.swift`)
    - Reusable component for all settings tabs
    - Props: `hasUnsavedChanges`, `isSaving`, `statusMessage`, `onSave`, `onCancel`
 
-2. **FormStateful Protocol** (`Aether/Sources/Utils/FormState.swift`)
+2. **FormStateful Protocol** (`Aleph/Sources/Utils/FormState.swift`)
    - Defines working copy vs. saved state contract
    - Methods: `save()`, `cancel()`, `loadSavedState()`
    - Computed: `hasUnsavedChanges`, `isFormValid()`
 
-3. **NavigationGuard** (`Aether/Sources/Utils/NavigationGuard.swift`)
+3. **NavigationGuard** (`Aleph/Sources/Utils/NavigationGuard.swift`)
    - Alert dialog for unsaved changes
    - Returns: `.save`, `.discard`, or `.cancel`
 
@@ -213,19 +213,19 @@ Users need confidence when editing settings. Currently, Aether's settings UI has
 ## 📦 Deliverables
 
 ### Code Files (New)
-- `Aether/Sources/Components/Molecules/UnifiedSaveBar.swift`
-- `Aether/Sources/Utils/FormState.swift`
-- `Aether/Sources/Utils/NavigationGuard.swift`
+- `Aleph/Sources/Components/Molecules/UnifiedSaveBar.swift`
+- `Aleph/Sources/Utils/FormState.swift`
+- `Aleph/Sources/Utils/NavigationGuard.swift`
 
 ### Code Files (Modified)
-- `Aether/Sources/ProvidersView.swift`
-- `Aether/Sources/SettingsView.swift` (GeneralSettingsView)
-- `Aether/Sources/RoutingView.swift`
-- `Aether/Sources/ShortcutsView.swift`
-- `Aether/Sources/BehaviorSettingsView.swift`
-- `Aether/Sources/MemoryView.swift`
-- `Aether/Sources/Components/Molecules/SimpleProviderCard.swift`
-- `Aether/Sources/Components/Window/RootContentView.swift` (navigation guard hooks)
+- `Aleph/Sources/ProvidersView.swift`
+- `Aleph/Sources/SettingsView.swift` (GeneralSettingsView)
+- `Aleph/Sources/RoutingView.swift`
+- `Aleph/Sources/ShortcutsView.swift`
+- `Aleph/Sources/BehaviorSettingsView.swift`
+- `Aleph/Sources/MemoryView.swift`
+- `Aleph/Sources/Components/Molecules/SimpleProviderCard.swift`
+- `Aleph/Sources/Components/Window/RootContentView.swift` (navigation guard hooks)
 
 ### Specifications (New)
 - `openspec/changes/unify-settings-save-bar/specs/unified-save-bar/spec.md` (9 requirements)
@@ -268,9 +268,9 @@ Users need confidence when editing settings. Currently, Aether's settings UI has
 - `settings-ui-layout` - May need update for bottom bar addition
 
 ### APIs (Already Exist)
-- `AetherCore.loadConfig()` - Load configuration
-- `AetherCore.updateProvider()` - Save provider config
-- `AetherCore.testProviderConnectionWithConfig()` - Test with temp config
+- `AlephCore.loadConfig()` - Load configuration
+- `AlephCore.updateProvider()` - Save provider config
+- `AlephCore.testProviderConnectionWithConfig()` - Test with temp config
 
 ---
 

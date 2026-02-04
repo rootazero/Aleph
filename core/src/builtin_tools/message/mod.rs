@@ -1,6 +1,6 @@
 //! Message Tool
 //!
-//! Unified cross-channel message operations for Aether agents.
+//! Unified cross-channel message operations for Aleph agents.
 //!
 //! # Overview
 //!

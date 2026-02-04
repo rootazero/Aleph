@@ -15,7 +15,7 @@ Users are experiencing critical crashes due to unsafe Mutex handling in the Rust
 
 ## What Changes
 
-**Core Stability (`Aether/core/src/core.rs`)**:
+**Core Stability (`Aleph/core/src/core.rs`)**:
 - Replace all `.lock().unwrap()` calls with safe error handling
 - Use `lock().unwrap_or_else()` or pattern matching to handle poison errors
 - Add logging for Mutex poison errors
@@ -34,7 +34,7 @@ Users are experiencing critical crashes due to unsafe Mutex handling in the Rust
 
 ### Current Issues
 
-Users are experiencing two critical bugs when using Aether:
+Users are experiencing two critical bugs when using Aleph:
 
 1. **PoisonError Crash (Selected Text)**
    - Symptom: Error dialog appears with `called Result::unwrap() on an Err value: PoisonError { .. }`
@@ -55,7 +55,7 @@ Users are experiencing two critical bugs when using Aether:
 
 #### 1. Unsafe Mutex Unwrapping
 
-**Location**: `Aether/core/src/core.rs`
+**Location**: `Aleph/core/src/core.rs`
 
 The codebase contains **11 unsafe `lock().unwrap()` calls** across multiple Mutex instances:
 
@@ -84,7 +84,7 @@ The `core` object may be in an inconsistent state if initialization partially fa
 
 - **Severity**: Critical (P0)
 - **User Impact**: Application unusable for core functionality
-- **Affected Users**: All users attempting to use Aether's AI features
+- **Affected Users**: All users attempting to use Aleph's AI features
 - **Workaround**: None available
 
 ## Proposed Solution
@@ -144,7 +144,7 @@ Replace silent failures with user-visible error messages:
 ### Phase 1: Fix Mutex Operations (Critical)
 
 **Files Modified:**
-- `Aether/core/src/core.rs` - Fix 11 occurrences
+- `Aleph/core/src/core.rs` - Fix 11 occurrences
 
 **Changes:**
 1. Replace `is_typewriting.lock().unwrap()` → poison-safe version (2 places)
@@ -160,18 +160,18 @@ Replace silent failures with user-visible error messages:
 ### Phase 2: Core Initialization Validation (High)
 
 **Files Modified:**
-- `Aether/Sources/AppDelegate.swift`
+- `Aleph/Sources/AppDelegate.swift`
 
 **Changes:**
-1. Add `isInitialized()` method to AetherCore (via UniFFI)
+1. Add `isInitialized()` method to AlephCore (via UniFFI)
 2. Check initialization state before processing hotkeys
 3. Show clear error message if core not ready
 
 ### Phase 3: Error Handling Improvements (Medium)
 
 **Files Modified:**
-- `Aether/Sources/AppDelegate.swift`
-- `Aether/Sources/EventHandler.swift`
+- `Aleph/Sources/AppDelegate.swift`
+- `Aleph/Sources/EventHandler.swift`
 
 **Changes:**
 1. Add try-catch around core method calls
@@ -266,4 +266,4 @@ Replace silent failures with user-visible error messages:
 
 - [Rust Mutex Poisoning Documentation](https://doc.rust-lang.org/std/sync/struct.Mutex.html#poisoning)
 - Previous fix: `MUTEX_POISON_FIX.md` (partial fix for `config` Mutex)
-- Crash reports: `~/Library/Logs/DiagnosticReports/Aether-2025-12-31-*.ips`
+- Crash reports: `~/Library/Logs/DiagnosticReports/Aleph-2025-12-31-*.ips`

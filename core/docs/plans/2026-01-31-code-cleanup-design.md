@@ -6,7 +6,7 @@
 
 ## 背景
 
-Aether 项目经历了多次重构，Rust 层 (`core/src/`) 存在：
+Aleph 项目经历了多次重构，Rust 层 (`core/src/`) 存在：
 - 废弃代码（无引用模块）
 - 重复代码（功能重叠模块）
 - 死代码（未使用的类型/函数）
@@ -216,7 +216,7 @@ cargo check
 ### 4.5 `tools/` (2.5k 行)
 
 - 检查与 `builtin_tools/` 的重复
-- `AetherTool` trait 是核心，保留
+- `AlephTool` trait 是核心，保留
 - 移除重复实现
 
 ### 4.6 `thinker/` (3k 行)

@@ -53,7 +53,7 @@ impl ExecApprovalsStorage {
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aether")
+            .join(".aleph")
             .join("exec-approvals.json")
     }
 

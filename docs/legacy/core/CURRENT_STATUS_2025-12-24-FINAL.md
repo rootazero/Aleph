@@ -15,7 +15,7 @@
 ### Task 13: Prompt Augmentation Module ✅
 
 **Status**: COMPLETED
-**Module**: `Aether/core/src/memory/augmentation.rs` (425 lines)
+**Module**: `Aleph/core/src/memory/augmentation.rs` (425 lines)
 
 #### Implementation Highlights
 
@@ -64,7 +64,7 @@
 ### Task 14: AI Pipeline Integration ✅
 
 **Status**: COMPLETED
-**Method**: `AetherCore::retrieve_and_augment_prompt()` (core.rs:555-649)
+**Method**: `AlephCore::retrieve_and_augment_prompt()` (core.rs:555-649)
 
 #### Implementation Highlights
 
@@ -88,7 +88,7 @@
    - Error propagation for critical failures
 
 4. **UniFFI Integration**
-   - Exposed in `aether.udl:110`
+   - Exposed in `aleph.udl:110`
    - Callable from Swift with error handling
    - Returns augmented prompt string
 
@@ -259,27 +259,27 @@ test result: ok. 100 passed; 0 failed; 0 ignored
 ### Session 1 (Memory Management & Settings UI)
 
 #### Created
-- ✅ `Aether/Sources/MemoryView.swift` (503 lines)
-- ✅ `Aether/core/TASK_20-21_MEMORY_UI_IMPLEMENTATION.md`
+- ✅ `Aleph/Sources/MemoryView.swift` (503 lines)
+- ✅ `Aleph/core/TASK_20-21_MEMORY_UI_IMPLEMENTATION.md`
 
 #### Modified
-- ✅ `Aether/Sources/SettingsView.swift`
-- ✅ `Aether/Sources/AppDelegate.swift`
-- ✅ `Aether/core/src/core.rs` (memory management APIs)
+- ✅ `Aleph/Sources/SettingsView.swift`
+- ✅ `Aleph/Sources/AppDelegate.swift`
+- ✅ `Aleph/core/src/core.rs` (memory management APIs)
 - ✅ `openspec/changes/add-contextual-memory-rag/tasks.md`
 
 ### Session 2 (Prompt Augmentation & AI Pipeline)
 
 #### Created
-- ✅ `Aether/core/TASK_13-14_MEMORY_AUGMENTATION.md` (comprehensive doc)
-- ✅ `Aether/core/CURRENT_STATUS_2025-12-24-FINAL.md` (this file)
+- ✅ `Aleph/core/TASK_13-14_MEMORY_AUGMENTATION.md` (comprehensive doc)
+- ✅ `Aleph/core/CURRENT_STATUS_2025-12-24-FINAL.md` (this file)
 
 #### Modified
 - ✅ `openspec/changes/add-contextual-memory-rag/tasks.md` (Task 13-14 status)
 
 #### Verified Existing
-- ✅ `Aether/core/src/memory/augmentation.rs` (425 lines, already implemented)
-- ✅ `Aether/core/src/core.rs` (retrieve_and_augment_prompt method)
+- ✅ `Aleph/core/src/memory/augmentation.rs` (425 lines, already implemented)
+- ✅ `Aleph/core/src/core.rs` (retrieve_and_augment_prompt method)
 
 ### Build Artifacts
 - ✅ Swift bindings regenerated
@@ -507,7 +507,7 @@ cargo clippy --all-targets
 
 echo "6. Regenerating UniFFI bindings..."
 cd Aleph/core
-cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/
+cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/
 
 echo "7. Regenerating Xcode project..."
 cd ../..

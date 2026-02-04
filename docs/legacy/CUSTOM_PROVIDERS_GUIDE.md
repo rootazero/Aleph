@@ -208,8 +208,8 @@ provider = "openai"  # 兜底规则（匹配所有）
 
 ## 更多信息
 
-- 完整配置示例：`Aether/config.example.toml`
-- 实施细节：`Aether/core/CUSTOM_PROVIDERS_SUMMARY.md`
+- 完整配置示例：`Aleph/config.example.toml`
+- 实施细节：`Aleph/core/CUSTOM_PROVIDERS_SUMMARY.md`
 - OpenAI API 文档：https://platform.openai.com/docs/api-reference
 - DeepSeek API 文档：https://platform.deepseek.com/docs
 - Moonshot API 文档：https://platform.moonshot.cn/docs
@@ -219,7 +219,7 @@ provider = "openai"  # 兜底规则（匹配所有）
 如果遇到问题：
 1. 查看 `config.example.toml` 中的详细注释
 2. 检查 Aleph 日志输出
-3. 在 GitHub 提交 Issue：https://github.com/your-repo/aether/issues
+3. 在 GitHub 提交 Issue：https://github.com/your-repo/aleph/issues
 
 ---
 

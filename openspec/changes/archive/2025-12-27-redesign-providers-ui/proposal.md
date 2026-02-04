@@ -41,7 +41,7 @@ The current Providers UI (ProvidersView.swift + ProviderEditPanel.swift) has bee
 - Maintain existing functionality (add, edit, delete, test providers)
 
 ## Non-Goals
-- Changing the underlying data model or API (ProviderConfig, AetherCore methods)
+- Changing the underlying data model or API (ProviderConfig, AlephCore methods)
 - Adding new provider types beyond what's currently supported
 - Implementing batch operations (multi-select, bulk delete)
 - Auto-detecting provider API endpoints
@@ -63,9 +63,9 @@ The reference design shows:
 - **Window**: Appears to be ~1000px wide minimum
 
 ### Current Implementation
-- File: `Aether/Sources/ProvidersView.swift` (431 lines)
-- File: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift` (755 lines)
-- File: `Aether/Sources/Components/Molecules/ProviderCard.swift` (371 lines)
+- File: `Aleph/Sources/ProvidersView.swift` (431 lines)
+- File: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift` (755 lines)
+- File: `Aleph/Sources/Components/Molecules/ProviderCard.swift` (371 lines)
 
 ### Technical Constraints
 - SwiftUI framework limitations for custom layouts

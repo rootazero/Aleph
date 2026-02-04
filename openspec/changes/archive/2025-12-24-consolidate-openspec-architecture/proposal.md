@@ -27,20 +27,20 @@ This consolidation unblocks clean development workflows and establishes foundati
 
 1. **多个 OpenSpec 根目录**:
    - `/openspec/` - 主要的规范目录
-   - `/Aether/openspec/` - Aether 子项目的副本
+   - `/Aleph/openspec/` - Aleph 子项目的副本
    - 两者内容部分重叠但不一致
 
 2. **深度嵌套结构**:
-   - `/Aether/openspec/changes/complete-phase2-testing-and-polish/openspec/changes/complete-phase2-testing-and-polish/`
+   - `/Aleph/openspec/changes/complete-phase2-testing-and-polish/openspec/changes/complete-phase2-testing-and-polish/`
    - 存在 4-5 层嵌套的 openspec 目录
 
 3. **重复的 change 定义**:
-   - 某些 change 在主 openspec 和 Aether openspec 中都存在
+   - 某些 change 在主 openspec 和 Aleph openspec 中都存在
    - 不清楚哪个是权威版本
 
 4. **工具混淆**:
    - `openspec list` 只能看到主目录的 changes
-   - Aether 子目录的 changes 被忽略或导致错误
+   - Aleph 子目录的 changes 被忽略或导致错误
 
 这导致：
 - 维护成本高（需要同步多个位置）
@@ -60,7 +60,7 @@ This consolidation unblocks clean development workflows and establishes foundati
 ### 目标架构
 
 ```
-/Users/zouguojun/Workspace/Aether/
+/Users/zouguojun/Workspace/Aleph/
 ├── openspec/                          # 唯一的 OpenSpec 根目录
 │   ├── AGENTS.md                      # OpenSpec 代理指南
 │   ├── project.md                     # 项目上下文
@@ -83,7 +83,7 @@ This consolidation unblocks clean development workflows and establishes foundati
 │       ├── testing-framework/
 │       └── uniffi-bridge/
 │
-├── Aether/                            # macOS 应用源码
+├── Aleph/                            # macOS 应用源码
 │   ├── (no openspec directory)        # 删除重复的 openspec
 │   └── ...
 │
@@ -102,7 +102,7 @@ This consolidation unblocks clean development workflows and establishes foundati
    ```
 
 2. **识别重复和冲突**:
-   - 比较主目录和 Aether 子目录的内容
+   - 比较主目录和 Aleph 子目录的内容
    - 列出重复的 changes
    - 检查内容差异
 
@@ -114,7 +114,7 @@ This consolidation unblocks clean development workflows and establishes foundati
 
 1. **合并 complete-phase2-testing-and-polish**:
    ```bash
-   # 当前位置：/Aether/openspec/changes/complete-phase2-testing-and-polish/
+   # 当前位置：/Aleph/openspec/changes/complete-phase2-testing-and-polish/
    # 已归档位置：/openspec/changes/archive/2025-12-23-complete-phase2-testing-and-polish/
 
    # 操作：检查是否有新内容，如有则提取，否则删除副本
@@ -122,12 +122,12 @@ This consolidation unblocks clean development workflows and establishes foundati
 
 2. **扁平化嵌套 openspec**:
    ```bash
-   # 提取：/Aether/openspec/changes/complete-phase2-testing-and-polish/openspec/changes/
+   # 提取：/Aleph/openspec/changes/complete-phase2-testing-and-polish/openspec/changes/
    # 到：  /openspec/changes/ 或 /openspec/changes/archive/
    ```
 
 3. **删除空目录和重复**:
-   - 删除 `/Aether/openspec/` 整个目录
+   - 删除 `/Aleph/openspec/` 整个目录
    - 清理所有 `.DS_Store` 文件
    - 删除空的 `{specs` 目录（损坏的命名）
 
@@ -153,15 +153,15 @@ This consolidation unblocks clean development workflows and establishes foundati
 ### 删除的目录
 
 ```
-/Aether/openspec/                                    # 整个子目录
-/Aether/openspec/changes/complete-phase2-testing-and-polish/openspec/  # 嵌套重复
+/Aleph/openspec/                                    # 整个子目录
+/Aleph/openspec/changes/complete-phase2-testing-and-polish/openspec/  # 嵌套重复
 ```
 
 ### 移动/合并的内容
 
 | 源路径 | 目标路径 | 操作 |
 |--------|---------|------|
-| `/Aether/openspec/changes/complete-phase2-testing-and-polish/` | 检查后归档或删除 | 与 `/openspec/changes/archive/2025-12-23-complete-phase2-testing-and-polish/` 比较 |
+| `/Aleph/openspec/changes/complete-phase2-testing-and-polish/` | 检查后归档或删除 | 与 `/openspec/changes/archive/2025-12-23-complete-phase2-testing-and-polish/` 比较 |
 | 嵌套的 spec 文件 | 提取到正确位置或删除 | 如果是重复内容则删除 |
 
 ### 保留的结构
@@ -177,19 +177,19 @@ This consolidation unblocks clean development workflows and establishes foundati
 
 ```bash
 # 创建完整备份
-tar -czf ~/aether_openspec_backup_$(date +%Y%m%d).tar.gz \
-  /Users/zouguojun/Workspace/Aether/openspec \
-  /Users/zouguojun/Workspace/Aether/Aether/openspec
+tar -czf ~/aleph_openspec_backup_$(date +%Y%m%d).tar.gz \
+  /Users/zouguojun/Workspace/Aleph/openspec \
+  /Users/zouguojun/Workspace/Aleph/Aleph/openspec
 ```
 
 ### Step 2: 审计差异
 
 ```bash
 # 比较两个 openspec 目录
-diff -r openspec/ Aether/openspec/
+diff -r openspec/ Aleph/openspec/
 
 # 检查嵌套内容
-find Aether/openspec -type f -name "*.md" | while read f; do
+find Aleph/openspec -type f -name "*.md" | while read f; do
   echo "=== $f ==="
   head -5 "$f"
 done
@@ -198,10 +198,10 @@ done
 ### Step 3: 执行迁移
 
 ```bash
-# 1. 检查 Aether/openspec 是否有独特内容
+# 1. 检查 Aleph/openspec 是否有独特内容
 # 2. 如有，提取到主 openspec
-# 3. 删除 Aether/openspec
-rm -rf Aether/openspec/
+# 3. 删除 Aleph/openspec
+rm -rf Aleph/openspec/
 
 # 4. 清理 .DS_Store
 find openspec/ -name ".DS_Store" -delete
@@ -262,7 +262,7 @@ openspec validate --all
 ### 结构验证
 
 - [ ] 只存在一个 `/openspec/` 根目录
-- [ ] 不存在 `/Aether/openspec/` 目录
+- [ ] 不存在 `/Aleph/openspec/` 目录
 - [ ] 所有 changes 都在 `/openspec/changes/` 或 `archive/` 下
 - [ ] 无 4 层以上的嵌套目录
 
@@ -280,7 +280,7 @@ openspec validate --all
 
 ## Open Questions
 
-1. **Aether/openspec 的内容是否包含独特信息？**
+1. **Aleph/openspec 的内容是否包含独特信息？**
    - 需要逐个比较 changes
    - 如有独特内容，决定如何合并
 
@@ -288,7 +288,7 @@ openspec validate --all
    - 可能是工具错误
    - 需要防止未来再次发生
 
-3. **是否需要保留 Aether 子项目的独立 openspec？**
+3. **是否需要保留 Aleph 子项目的独立 openspec？**
    - 当前判断：不需要（单体仓库）
    - 如果未来拆分子项目，再考虑
 
@@ -332,8 +332,8 @@ openspec validate --all
 
 ```bash
 # 从备份恢复
-cd /Users/zouguojun/Workspace/Aether
-tar -xzf ~/aether_openspec_backup_*.tar.gz
+cd /Users/zouguojun/Workspace/Aleph
+tar -xzf ~/aleph_openspec_backup_*.tar.gz
 
 # 验证恢复
 openspec list
@@ -359,10 +359,10 @@ git status
 └── specs/ (8 specs, 38 requirements)
 ```
 
-### Aether 子目录（待清理）
+### Aleph 子目录（待清理）
 
 ```
-/Aether/openspec/
+/Aleph/openspec/
 └── changes/
     └── complete-phase2-testing-and-polish/
         ├── openspec/            # 嵌套重复

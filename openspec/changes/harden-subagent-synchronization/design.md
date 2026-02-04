@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the architectural design for enhancing Aether's sub-agent execution system to match OpenCode's efficiency and reliability.
+This document describes the architectural design for enhancing Aleph's sub-agent execution system to match OpenCode's efficiency and reliability.
 
 ## Current Architecture Analysis
 
@@ -21,9 +21,9 @@ OpenCode uses a **session-based synchronous execution model**:
 
 **Key insight**: OpenCode treats each sub-agent as a **mini-conversation session** with full message history, not just a single function call.
 
-### Aether's Current Approach
+### Aleph's Current Approach
 
-Aether uses an **event-driven fire-and-forget model**:
+Aleph uses an **event-driven fire-and-forget model**:
 
 ```
 1. Parent calls dispatcher.dispatch(request)
@@ -194,14 +194,14 @@ impl EventHandler for SubAgentHandler {
         ]
     }
 
-    async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<Vec<AetherEvent>> {
+    async fn handle(&self, event: &AlephEvent, ctx: &EventContext) -> Result<Vec<AlephEvent>> {
         match event {
-            AetherEvent::SubAgentStarted(request) => {
+            AlephEvent::SubAgentStarted(request) => {
                 // Existing session tracking...
                 // NEW: Initialize result collector for this request
                 self.result_collector.init_request(&request.id).await;
             }
-            AetherEvent::SubAgentCompleted(result) => {
+            AlephEvent::SubAgentCompleted(result) => {
                 // Existing session cleanup...
                 // NEW: Notify coordinator with aggregated summary
                 let summary = self.result_collector.get_summary(&result.request_id).await;
@@ -209,13 +209,13 @@ impl EventHandler for SubAgentHandler {
                 self.coordinator.on_execution_completed(enhanced_result).await;
             }
             // NEW: Tool call tracking
-            AetherEvent::ToolCallStarted(event) => {
+            AlephEvent::ToolCallStarted(event) => {
                 if let Some(request_id) = self.get_request_for_session(&event.session_id).await {
                     let record = ToolCallRecord::from_started(event);
                     self.result_collector.record_tool_start(&request_id, record).await;
                 }
             }
-            AetherEvent::ToolCallCompleted(event) => {
+            AlephEvent::ToolCallCompleted(event) => {
                 if let Some(request_id) = self.get_request_for_session(&event.session_id).await {
                     self.result_collector.update_tool_status(
                         &request_id,
@@ -552,5 +552,5 @@ async fn test_mcp_subagent_with_tool_summary() {
 - OpenCode `task.ts`: Sub-agent task execution
 - OpenCode `prompt.ts`: Session prompt synchronous loop
 - OpenCode `message-v2.ts`: Part state machine
-- Aether `agent_loop/mod.rs`: Current loop implementation
-- Aether `agents/sub_agents/dispatcher.rs`: Current dispatcher
+- Aleph `agent_loop/mod.rs`: Current loop implementation
+- Aleph `agents/sub_agents/dispatcher.rs`: Current dispatcher

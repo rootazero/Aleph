@@ -5,16 +5,16 @@
 
 ## Why
 
-当前 Aether 已完成基础架构（hotkey detection、clipboard management、memory module），但缺少最核心的 AI 处理能力。没有这个变更，用户无法：
+当前 Aleph 已完成基础架构（hotkey detection、clipboard management、memory module），但缺少最核心的 AI 处理能力。没有这个变更，用户无法：
 - 将剪贴板内容发送到任何 AI 服务进行处理
 - 根据不同场景选择合适的 AI 模型（代码用 Claude，绘图用 OpenAI）
 - 利用本地 Ollama 模型避免 API 费用和隐私问题
 - 享受记忆增强的上下文感知 AI 交互
 
-这是 Aether 路线图的 Phase 5，是实现完整"Cut → AI → Paste"流程的关键里程碑。
+这是 Aleph 路线图的 Phase 5，是实现完整"Cut → AI → Paste"流程的关键里程碑。
 
 ## Overview
-实现 Phase 5 的核心目标：集成多个 AI 提供商（OpenAI、Claude、Ollama）并实现智能路由系统。该变更将使 Aether 能够根据用户配置的规则将剪贴板内容路由到合适的 AI 提供商，并将响应结果返回。
+实现 Phase 5 的核心目标：集成多个 AI 提供商（OpenAI、Claude、Ollama）并实现智能路由系统。该变更将使 Aleph 能够根据用户配置的规则将剪贴板内容路由到合适的 AI 提供商，并将响应结果返回。
 
 ## Motivation
 Phase 5 的目标是：
@@ -69,7 +69,7 @@ Phase 5 的目标是：
 5. `ai-routing` - 智能路由系统
 
 同时会修改：
-- `core-library` - 集成 AI pipeline 到 AetherCore
+- `core-library` - 集成 AI pipeline 到 AlephCore
 - `event-handler` - 新增 AI 处理状态回调
 - 间接影响 `memory-augmentation` - 需要与 AI pipeline 集成
 
@@ -134,7 +134,7 @@ Phase 5 的目标是：
 - Testing & Integration: 见 `tasks.md`
 
 ## Notes
-- 该变更是 Phase 5 的完整实现，是 Aether 最核心的功能
+- 该变更是 Phase 5 的完整实现，是 Aleph 最核心的功能
 - 实现需严格遵循 trait-based 架构，确保可测试性
 - 所有 API 调用必须使用 tokio async，避免阻塞
 - 记忆增强功能是 Phase 5 的关键创新点，需确保性能（<100ms）

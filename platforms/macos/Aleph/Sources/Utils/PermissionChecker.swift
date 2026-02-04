@@ -1,8 +1,8 @@
 //
 //  PermissionChecker.swift
-//  Aether
+//  Aleph
 //
-//  Utility class for checking macOS system permissions required by Aether.
+//  Utility class for checking macOS system permissions required by Aleph.
 //  Provides centralized permission status checking for Accessibility and Input Monitoring.
 //
 
@@ -13,7 +13,7 @@ import IOKit.hid
 import Combine
 import ScreenCaptureKit
 
-/// Centralized permission checker for all system permissions required by Aether
+/// Centralized permission checker for all system permissions required by Aleph
 class PermissionChecker {
 
     // MARK: - Accessibility Permission

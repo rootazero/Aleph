@@ -30,17 +30,17 @@ The Rust core library SHALL contain ONLY platform-agnostic business logic, with 
   - `ClipboardManager` trait
   - `InputSimulator` trait
 - **AND** only exports:
-  - `AetherCore` (main interface)
-  - `AetherEventHandler` callback trait
+  - `AlephCore` (main interface)
+  - `AlephEventHandler` callback trait
   - Configuration types
   - Memory types
   - Provider types
 
 ### Requirement: Simplified Core Interface
-The AetherCore interface SHALL provide high-level business operations, not low-level system API wrappers.
+The AlephCore interface SHALL provide high-level business operations, not low-level system API wrappers.
 
 #### Scenario: Core method signatures (MODIFIED)
-- **WHEN** calling AetherCore methods
+- **WHEN** calling AlephCore methods
 - **THEN** provides `process_input(user_input, context)` (high-level)
 - **AND** does NOT provide:
   - `start_listening()` (moved to Swift)
@@ -85,7 +85,7 @@ The Rust core SHALL implement ONLY business logic: AI routing, memory operations
 
 #### Scenario: Configuration management
 - **WHEN** loading configuration
-- **THEN** Rust reads `~/.aether/config.toml`
+- **THEN** Rust reads `~/.aleph/config.toml`
 - **AND** parses TOML using serde
 - **AND** validates provider configs
 - **AND** does NOT interact with Keychain (handled by Swift via callback)
@@ -103,7 +103,7 @@ The Rust core SHALL implement ONLY business logic: AI routing, memory operations
 The Rust core SHALL minimize FFI boundary crossings by accepting pre-processed input and returning final output.
 
 #### Scenario: Single FFI call for processing
-- **WHEN** user triggers Aether
+- **WHEN** user triggers Aleph
 - **THEN** Swift performs ALL preprocessing:
   - Read clipboard (ClipboardManager)
   - Capture context (ContextCapture)

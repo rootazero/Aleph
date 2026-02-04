@@ -271,12 +271,12 @@ port = 18789
 max_connections = 100
 
 [agents.main]
-workspace = "~/aether-main"
+workspace = "~/aleph-main"
 model = "claude-sonnet-4-5"
 fallback_models = ["claude-opus-4-5", "gpt-4-turbo"]
 
 [agents.work]
-workspace = "~/aether-work"
+workspace = "~/aleph-work"
 model = "claude-opus-4-5"
 
 [bindings]
@@ -295,7 +295,7 @@ token = "${DISCORD_BOT_TOKEN}"
 
 [sandbox]
 enabled = true
-docker_image = "aether-sandbox:latest"
+docker_image = "aleph-sandbox:latest"
 memory_limit_mb = 512
 
 [tools.chrome]
@@ -546,7 +546,7 @@ pub enum Scope {
 1. Remote device connects without token
 2. Gateway generates 6-digit approval code
 3. Code displayed on device, broadcast to operator clients
-4. Operator approves via UI (`aether devices approve <code>`)
+4. Operator approves via UI (`aleph devices approve <code>`)
 5. Gateway issues Device-Token (JWT)
 6. Device stores token for future connections
 
@@ -720,7 +720,7 @@ pub async fn handle_health(&self) -> JsonRpcResult<HealthStatus> {
 
 **Diagnostics CLI:**
 ```bash
-$ aether doctor
+$ aleph doctor
 
 🔍 Aleph Diagnostics
 
@@ -738,8 +738,8 @@ $ aether doctor
   - Uptime: 2d 14h 32m
 
 🔧 Agent Status:
-  main: active, 3 sessions, workspace: ~/aether-main
-  work: active, 2 sessions, workspace: ~/aether-work
+  main: active, 3 sessions, workspace: ~/aleph-main
+  work: active, 2 sessions, workspace: ~/aleph-work
 ```
 
 ---
@@ -878,7 +878,7 @@ pub async fn create_sandbox_container(session_id: &str) -> Result<String> {
     let docker = Docker::connect_with_local_defaults()?;
 
     let config = Config {
-        image: Some("aether-sandbox:latest"),
+        image: Some("aleph-sandbox:latest"),
         network_disabled: Some(false),
         host_config: Some(HostConfig {
             memory: Some(512 * 1024 * 1024),  // 512MB
@@ -1092,11 +1092,11 @@ core/src/gateway/
 - [ ] App-Token generation and Keychain storage (macOS)
 - [ ] Event bus (tokio broadcast channel)
 - [ ] Health check endpoint
-- [ ] CLI command: `aether gateway [--daemon]`
+- [ ] CLI command: `aleph gateway [--daemon]`
 - [ ] Integration test: connect + echo
 
 **Verification:**
-- [ ] `aether gateway` starts successfully
+- [ ] `aleph gateway` starts successfully
 - [ ] `wscat -c ws://127.0.0.1:18789` connects and handshakes
 - [ ] Health check responds correctly
 - [ ] Existing UniFFI interfaces still work (no regression)
@@ -1150,13 +1150,13 @@ core/src/components/
 
 **Deliverables:**
 ```swift
-// platforms/macos/Aether/Sources/Gateway/
+// platforms/macos/Aleph/Sources/Gateway/
 ├── GatewayClient.swift        // WebSocket client (URLSession)
 ├── ProtocolModels.swift       // JSON-RPC types
 ├── EventStream.swift          // Event handling (AsyncStream)
 └── TokenManager.swift         // App-Token from Keychain
 
-// platforms/macos/Aether/Sources/MultiTurn/
+// platforms/macos/Aleph/Sources/MultiTurn/
 ├── UnifiedConversationViewModel.swift  // Subscribe to events
 └── Views/
     ├── ReasoningPartView.swift         // Display streaming reasoning
@@ -1166,7 +1166,7 @@ core/src/components/
 
 **App Startup Flow:**
 1. Check if Gateway process is running (`Process.runningProcesses`)
-2. If not, launch: `Process().run("aether", args: ["gateway", "--daemon"])`
+2. If not, launch: `Process().run("aleph", args: ["gateway", "--daemon"])`
 3. Wait for port 18789 to be available (max 5s, exponential backoff)
 4. Connect WebSocket client
 5. Authenticate with App-Token from Keychain
@@ -1244,11 +1244,11 @@ core/src/tools/            // ENHANCED: Local tools
 **Configuration Example:**
 ```toml
 [agents.main]
-workspace = "~/aether-main"
+workspace = "~/aleph-main"
 model = "claude-sonnet-4-5"
 
 [agents.work]
-workspace = "~/aether-work"
+workspace = "~/aleph-work"
 model = "claude-opus-4-5"
 
 [bindings]
@@ -1262,7 +1262,7 @@ token = "${TELEGRAM_BOT_TOKEN}"
 
 [sandbox]
 enabled = true
-docker_image = "aether-sandbox:latest"
+docker_image = "aleph-sandbox:latest"
 
 [tools.chrome]
 enabled = true
@@ -1316,10 +1316,10 @@ enabled = true
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.aether.gateway</string>
+    <string>com.aleph.gateway</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/aether</string>
+        <string>/usr/local/bin/aleph</string>
         <string>gateway</string>
         <string>--daemon</string>
     </array>
@@ -1398,7 +1398,7 @@ impl AgentInstance {
     fn new(agent_id: &str) -> Result<Self> {
         let agents_dir = dirs::home_dir()
             .ok_or_else(|| anyhow!("No home directory"))?
-            .join(".aether/agents");
+            .join(".aleph/agents");
 
         let agent_dir = agents_dir.join(agent_id);
 
@@ -1520,7 +1520,7 @@ fn bench_event_broadcast() {
 
 - [ ] **Startup Time:** macOS app launch < 2s (including Gateway start)
 - [ ] **Error Messages:** Clear diagnostics on connection failure
-- [ ] **Diagnostics:** `aether doctor` command for troubleshooting
+- [ ] **Diagnostics:** `aleph doctor` command for troubleshooting
 - [ ] **Streaming Smoothness:** No UI jank during long responses
 
 ---
@@ -1576,7 +1576,7 @@ fn bench_event_broadcast() {
 ### Appendix C: File Structure
 
 ```
-aether/
+aleph/
 ├── core/
 │   └── src/
 │       ├── gateway/                  # NEW: WebSocket Gateway
@@ -1627,13 +1627,13 @@ max_connections = 100
 protocol_version = 2
 
 [agents.main]
-workspace = "~/aether-main"
+workspace = "~/aleph-main"
 model = "claude-sonnet-4-5"
 fallback_models = ["claude-opus-4-5", "gpt-4-turbo"]
 max_loops = 20
 
 [agents.work]
-workspace = "~/aether-work"
+workspace = "~/aleph-work"
 model = "claude-opus-4-5"
 
 [bindings]
@@ -1656,7 +1656,7 @@ enabled = false
 
 [sandbox]
 enabled = true
-docker_image = "aether-sandbox:latest"
+docker_image = "aleph-sandbox:latest"
 memory_limit_mb = 512
 cpu_quota_percent = 50
 network_mode = "restricted"

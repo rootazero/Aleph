@@ -29,7 +29,7 @@
 
 ### 2.1 RoutingRuleConfig（扩展）
 
-**文件位置**: `Aether/core/src/aether.udl`
+**文件位置**: `Aleph/core/src/aleph.udl`
 
 ```rust
 // 扩展现有的 RoutingRuleConfig
@@ -214,7 +214,7 @@ knowledge_base = "~/.aleph/skills/build-macos-apps/knowledge"
 
 ### 3.1 AgentPayload（核心数据结构）
 
-**文件位置**: `Aether/core/src/payload/mod.rs`（新建）
+**文件位置**: `Aleph/core/src/payload/mod.rs`（新建）
 
 ```rust
 use crate::config::RoutingRuleConfig;
@@ -507,7 +507,7 @@ impl Default for ContextFormat {
 
 > **详细设计文档**: 完整的 Search 接口设计请参考 [07_SEARCH_INTERFACE_RESERVATION.md](./07_SEARCH_INTERFACE_RESERVATION.md)
 
-**文件位置**: `Aether/core/src/search/mod.rs` (Stage 2 实现)
+**文件位置**: `Aleph/core/src/search/mod.rs` (Stage 2 实现)
 
 ```rust
 /// 搜索结果（第二阶段实现）
@@ -683,7 +683,7 @@ impl Default for WorkflowState {
 
 ### 4.1 RoutingDecision（路由决策结果）
 
-**文件位置**: `Aether/core/src/router/decision.rs`（新建）
+**文件位置**: `Aleph/core/src/router/decision.rs`（新建）
 
 ```rust
 use crate::payload::{Capability, ContextFormat, Intent};
@@ -762,7 +762,7 @@ impl<'a> RoutingDecision<'a> {
 
 ### 4.2 Router 扩展方法
 
-**文件位置**: `Aether/core/src/router/mod.rs`（修改）
+**文件位置**: `Aleph/core/src/router/mod.rs`（修改）
 
 ```rust
 impl Router {
@@ -820,7 +820,7 @@ impl Router {
 
 ### 5.1 PromptAssembler（核心组装器）
 
-**文件位置**: `Aether/core/src/payload/assembler.rs`（新建）
+**文件位置**: `Aleph/core/src/payload/assembler.rs`（新建）
 
 ```rust
 use crate::payload::{AgentContext, AgentPayload, ContextFormat};

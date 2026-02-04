@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义 Aether Skills 设置界面的 UI 规范，包括布局结构、组件行为、状态管理和交互模式。Skills 设置界面是管理所有 AI 能力扩展（内置 MCP 服务、外部 MCP 服务、提示模板）的统一入口。
+定义 Aleph Skills 设置界面的 UI 规范，包括布局结构、组件行为、状态管理和交互模式。Skills 设置界面是管理所有 AI 能力扩展（内置 MCP 服务、外部 MCP 服务、提示模板）的统一入口。
 
 ## ADDED Requirements
 

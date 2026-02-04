@@ -288,8 +288,8 @@ src/windows/settings/tabs/ProvidersSettings.tsx
 
 ## 7. Reference Files (macOS)
 
-- `platforms/macos/Aether/Sources/DesignSystem/DesignTokens.swift`
-- `platforms/macos/Aether/Sources/SettingsView.swift`
-- `platforms/macos/Aether/Sources/BehaviorSettingsView.swift`
-- `platforms/macos/Aether/Sources/ProvidersView.swift`
-- `platforms/macos/Aether/Sources/Components/Molecules/UnifiedSaveBar.swift`
+- `platforms/macos/Aleph/Sources/DesignSystem/DesignTokens.swift`
+- `platforms/macos/Aleph/Sources/SettingsView.swift`
+- `platforms/macos/Aleph/Sources/BehaviorSettingsView.swift`
+- `platforms/macos/Aleph/Sources/ProvidersView.swift`
+- `platforms/macos/Aleph/Sources/Components/Molecules/UnifiedSaveBar.swift`

@@ -12,7 +12,7 @@
 创建同心几何计算工具类，提供圆角半径计算函数。
 
 **Acceptance Criteria**:
-- [x] 创建 `Aether/Sources/DesignSystem/ConcentricGeometry.swift`
+- [x] 创建 `Aleph/Sources/DesignSystem/ConcentricGeometry.swift`
 - [x] 实现 `childRadius(parent:padding:minimum:)` 静态函数
 - [x] 添加预定义常量：`windowRadius`, `sidebarRadius`, `cardRadius`
 - [ ] 编写单元测试验证边界条件（负值、零值、极小值）
@@ -36,7 +36,7 @@ swift test --filter ConcentricGeometryTests
 创建自适应材质组件，根据 macOS 版本选择 Liquid Glass 或降级方案。
 
 **Acceptance Criteria**:
-- [x] 创建 `Aether/Sources/Components/Atoms/AdaptiveMaterial.swift`
+- [x] 创建 `Aleph/Sources/Components/Atoms/AdaptiveMaterial.swift`
 - [x] 实现 `@available` 版本检测
 - [x] 支持 macOS 15+ 使用 `.ultraThinMaterial`
 - [x] 支持 macOS 13-14 使用基础材质
@@ -59,7 +59,7 @@ swift test --filter ConcentricGeometryTests
 创建滚动边缘效果修饰符，为滚动视图添加淡入淡出边缘。
 
 **Acceptance Criteria**:
-- [x] 创建 `Aether/Sources/DesignSystem/ScrollEdgeModifier.swift`
+- [x] 创建 `Aleph/Sources/DesignSystem/ScrollEdgeModifier.swift`
 - [x] 实现 `.soft` 和 `.hard` 样式
 - [x] 支持上下边缘独立控制
 - [x] 使用 LinearGradient 遮罩实现淡入淡出
@@ -117,7 +117,7 @@ swift test --filter ConcentricGeometryTests
 **Verification**:
 ```bash
 # 构建并运行
-xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether build
+xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph build
 ```
 打开 Settings 窗口，验证布局正确。
 

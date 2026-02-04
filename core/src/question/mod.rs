@@ -1,4 +1,4 @@
-// Aether/core/src/question/mod.rs
+// Aleph/core/src/question/mod.rs
 //! Structured User Interaction System
 //!
 //! This module implements a structured Q&A system for agent-user interaction,

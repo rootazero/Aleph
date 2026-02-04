@@ -34,7 +34,7 @@ openspec show add-default-provider-selection --json --deltas-only
 
 ### 8.2.1: Rust Code Quality
 
-#### `Aether/core/src/config/mod.rs`
+#### `Aleph/core/src/config/mod.rs`
 
 **Changes**:
 - Added `get_default_provider()` method
@@ -46,7 +46,7 @@ openspec show add-default-provider-selection --json --deltas-only
 - ✅ Returns `Option<String>` for safety (no panics)
 - ✅ Validation ensures provider exists and is enabled
 - ✅ Config save called after setting default
-- ✅ Error handling with `Result<T, AetherError>`
+- ✅ Error handling with `Result<T, AlephError>`
 - ✅ Logging at appropriate levels (INFO for user actions)
 - ✅ No unsafe code blocks
 - ✅ Thread-safe (uses Mutex for config access)
@@ -55,7 +55,7 @@ openspec show add-default-provider-selection --json --deltas-only
 
 ---
 
-#### `Aether/core/src/router/mod.rs`
+#### `Aleph/core/src/router/mod.rs`
 
 **Changes**:
 - Updated `Router::new()` to use `get_default_provider()`
@@ -71,7 +71,7 @@ openspec show add-default-provider-selection --json --deltas-only
 
 ---
 
-#### `Aether/core/src/core.rs` & `aether.udl`
+#### `Aleph/core/src/core.rs` & `aleph.udl`
 
 **Changes**:
 - Exposed `get_default_provider()` via UniFFI
@@ -81,7 +81,7 @@ openspec show add-default-provider-selection --json --deltas-only
 **Checklist**:
 - ✅ UniFFI interface matches Rust implementation
 - ✅ Method signatures correct (return types, parameters)
-- ✅ Error handling: Throws `AetherException` on failure
+- ✅ Error handling: Throws `AlephException` on failure
 - ✅ Config save triggered in `set_default_provider()`
 - ✅ Thread safety: Uses Mutex lock guards
 - ✅ Bindings regenerated successfully
@@ -92,7 +92,7 @@ openspec show add-default-provider-selection --json --deltas-only
 
 ### 8.2.2: Swift Code Quality
 
-#### `Aether/Sources/ProvidersView.swift`
+#### `Aleph/Sources/ProvidersView.swift`
 
 **Changes**:
 - Added `@State private var defaultProviderId: String?`
@@ -112,7 +112,7 @@ openspec show add-default-provider-selection --json --deltas-only
 
 ---
 
-#### `Aether/Sources/Components/Molecules/SimpleProviderCard.swift`
+#### `Aleph/Sources/Components/Molecules/SimpleProviderCard.swift`
 
 **Changes**:
 - Added `var isDefault: Bool = false` parameter
@@ -130,7 +130,7 @@ openspec show add-default-provider-selection --json --deltas-only
 
 ---
 
-#### `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+#### `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 
 **Changes**:
 - Added `defaultProviderId: Binding<String?>?` parameter
@@ -150,7 +150,7 @@ openspec show add-default-provider-selection --json --deltas-only
 
 ---
 
-#### `Aether/Sources/AppDelegate.swift`
+#### `Aleph/Sources/AppDelegate.swift`
 
 **Changes**:
 - Added `providersMenuStartIndex` and `providersMenuEndIndex`

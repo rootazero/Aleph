@@ -2,7 +2,7 @@
 
 ## Summary
 
-为 Aether 添加完整的 Search Settings UI，包括：
+为 Aleph 添加完整的 Search Settings UI，包括：
 1. 图形化配置 6 个搜索供应商（Tavily, SearXNG, Google, Bing, Brave, Exa）
 2. 提供商测试连接、备选顺序管理、PII 隐私保护
 3. 增强斜杠命令系统，支持精准匹配和空格验证

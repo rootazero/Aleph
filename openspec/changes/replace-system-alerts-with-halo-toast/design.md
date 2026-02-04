@@ -45,7 +45,7 @@ enum HaloState {
 ### EventHandler Protocol Extension
 
 ```swift
-protocol AetherEventHandler {
+protocol AlephEventHandler {
     // ... existing methods ...
 
     /// Show toast notification

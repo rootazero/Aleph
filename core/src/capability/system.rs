@@ -116,7 +116,7 @@ impl SystemStatus {
 /// Unified Capability System
 ///
 /// High-level coordinator for all capability operations. This is the recommended
-/// entry point for capability management in Aether.
+/// entry point for capability management in Aleph.
 pub struct CapabilitySystem {
     /// The underlying composite executor
     executor: RwLock<CompositeCapabilityExecutor>,

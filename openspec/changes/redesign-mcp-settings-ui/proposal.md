@@ -88,10 +88,10 @@
 - `settings-ui-layout` - MCP 设置遵循相同的 Master-Detail 模式
 
 ### Affected Code
-- `Aether/Sources/McpSettingsView.swift` (完全重写)
-- `Aether/core/src/config/mod.rs` (扩展 McpConfig)
-- `Aether/core/src/aether.udl` (添加 UniFFI 接口)
-- `Aether/Resources/*/Localizable.strings` (新增本地化字符串)
+- `Aleph/Sources/McpSettingsView.swift` (完全重写)
+- `Aleph/core/src/config/mod.rs` (扩展 McpConfig)
+- `Aleph/core/src/aleph.udl` (添加 UniFFI 接口)
+- `Aleph/Resources/*/Localizable.strings` (新增本地化字符串)
 
 ### Breaking Changes
 - **NONE** - 现有配置格式向后兼容

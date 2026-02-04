@@ -3,8 +3,8 @@
 ## Phase 1: The Detective (Scan & Tag) ✅
 
 ### Task 1.1: Automated Codebase Analysis
-- [x] Run exploration agent to scan Rust core (`Aether/core/src/`)
-- [x] Scan Swift UI layer (`Aether/Sources/`)
+- [x] Run exploration agent to scan Rust core (`Aleph/core/src/`)
+- [x] Scan Swift UI layer (`Aleph/Sources/`)
 - [x] Identify violations by severity (HIGH/MEDIUM/LOW)
 - [x] Generate `STEP1_CANDIDATES.md` report
 - **Validation**: 18 violations identified, categorized by severity
@@ -34,9 +34,9 @@
 - **Estimated Time**: 1 hour
 
 ### Task 2.3: Establish Baseline Metrics
-- [ ] Run full test suite: `cd Aether/core && cargo test`
+- [ ] Run full test suite: `cd Aleph/core && cargo test`
 - [ ] Measure build time: `cargo clean && cargo build --release --timings`
-- [ ] Capture binary size: `ls -lh Aether/Frameworks/libaethecore.dylib`
+- [ ] Capture binary size: `ls -lh Aleph/Frameworks/libaethecore.dylib`
 - [ ] Document current metrics in `BASELINE_METRICS.md`
 - **Validation**: Baseline documented for comparison
 - **Dependencies**: None (can run in parallel with 2.1-2.2)
@@ -51,7 +51,7 @@
 #### Task 3.1: Remove Unused Dependencies
 - [ ] Remove `tokio-util` from `Cargo.toml` (HIGH severity #6)
   - Remove dependency line
-  - Remove `cancellation_token` field from `AetherCore`
+  - Remove `cancellation_token` field from `AlephCore`
   - Remove related imports
 - [ ] Remove `futures_util` from `Cargo.toml` (LOW severity #15)
   - Check if `StreamExt` can be replaced with tokio
@@ -64,7 +64,7 @@
 - **Estimated Time**: 1 hour
 
 #### Task 3.2: Extract Mutex Lock Helpers (HIGH severity #1)
-- [ ] Add helper methods to `AetherCore` in `core.rs`:
+- [ ] Add helper methods to `AlephCore` in `core.rs`:
   ```rust
   fn lock_config(&self) -> MutexGuard<Config> { ... }
   fn lock_last_request(&self) -> MutexGuard<Option<Instant>> { ... }
@@ -78,7 +78,7 @@
 - **Estimated Time**: 1 hour
 
 #### Task 3.3: Extract Memory DB Helper (HIGH severity #2)
-- [ ] Add helper method to `AetherCore`:
+- [ ] Add helper method to `AlephCore`:
   ```rust
   fn require_memory_db(&self) -> Result<&Arc<VectorDatabase>> { ... }
   ```
@@ -144,7 +144,7 @@
 #### Task 3.8: Simplify Error Conversion (HIGH severity #4)
 - [ ] Extract error handling helper in `core.rs`:
   ```rust
-  fn handle_processing_error(&self, error: AetherError) -> AetherException { ... }
+  fn handle_processing_error(&self, error: AlephError) -> AlephException { ... }
   ```
 - [ ] Replace duplicated error handling in `process_input()` and `process_with_ai()`
 - [ ] Run `cargo test` to verify
@@ -197,7 +197,7 @@
 ### Task 4.1: Measure Impact
 - [ ] Run full test suite: `cargo test && xcodebuild test`
 - [ ] Measure new build time: `cargo clean && cargo build --release --timings`
-- [ ] Compare binary size: `ls -lh Aether/Frameworks/libaethecore.dylib`
+- [ ] Compare binary size: `ls -lh Aleph/Frameworks/libaethecore.dylib`
 - [ ] Calculate reduction percentages
 - **Validation**: All tests pass, metrics improved
 - **Dependencies**: All Phase 3 tasks complete

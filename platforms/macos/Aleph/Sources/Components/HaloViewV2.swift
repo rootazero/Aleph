@@ -1,6 +1,6 @@
 //
 //  HaloViewV2.swift
-//  Aether
+//  Aleph
 //
 //  Main Halo overlay view (V2) that integrates all state-specific components.
 //  Uses the simplified 9-state HaloState model.
@@ -367,7 +367,7 @@ struct HaloErrorViewV2: View {
                     .font(.system(size: 18, weight: .medium))
                     .foregroundColor(.red)
 
-                Text(L("error.aether"))
+                Text(L("error.aleph"))
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.primary)
             }

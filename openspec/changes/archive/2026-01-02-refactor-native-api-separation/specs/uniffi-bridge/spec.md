@@ -9,7 +9,7 @@ The UniFFI bridge SHALL expose ONLY high-level business operations, not low-leve
 **Changed to**: UniFFI exposes only AI processing, memory management, and configuration methods.
 
 #### Scenario: Removed interface methods (MODIFIED)
-- **WHEN** examining `aether.udl` interface definition
+- **WHEN** examining `aleph.udl` interface definition
 - **THEN** the following methods are REMOVED:
   - `void start_listening()`
   - `void stop_listening()`
@@ -22,7 +22,7 @@ The UniFFI bridge SHALL expose ONLY high-level business operations, not low-leve
 - **AND** `ImageFormat` enum is REMOVED
 
 #### Scenario: Simplified callback interface (MODIFIED)
-- **WHEN** examining `AetherEventHandler` callback interface
+- **WHEN** examining `AlephEventHandler` callback interface
 - **THEN** the following callback is REMOVED:
   - `void on_hotkey_detected(string clipboard_content)`
 - **AND** remaining callbacks:
@@ -41,7 +41,7 @@ The UniFFI bridge SHALL provide a single high-level method for processing user i
   - `context`: Captured application context (bundle ID, window title)
 - **AND** Rust performs complete AI pipeline
 - **AND** returns AI response as `String`
-- **AND** throws `AetherException` on errors
+- **AND** throws `AlephException` on errors
 
 ## REMOVED Requirements
 
@@ -67,7 +67,7 @@ The UniFFI bridge SHALL provide a single high-level method for processing user i
 The UniFFI bridge SHALL minimize FFI calls by batching operations into high-level methods.
 
 #### Scenario: Single call for AI processing
-- **WHEN** user triggers Aether
+- **WHEN** user triggers Aleph
 - **THEN** Swift makes ONE FFI call: `process_input()`
 - **AND** Rust performs all business logic internally
 - **AND** Swift receives ONE response
@@ -85,7 +85,7 @@ The UniFFI bridge SHALL clearly propagate errors from Rust to Swift with actiona
 
 #### Scenario: Typed error responses
 - **WHEN** Rust encounters an error during processing
-- **THEN** throws `AetherException` with error message
+- **THEN** throws `AlephException` with error message
 - **AND** Swift catches exception
 - **AND** displays user-friendly error message
 - **AND** suggests recovery actions (e.g., "Check network connection")

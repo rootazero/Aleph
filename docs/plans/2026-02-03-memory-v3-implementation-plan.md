@@ -135,7 +135,7 @@ pub use scratchpad::{ScratchpadManager, SessionHistory};
 **Step 5: Run cargo check**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 Expected: Compilation errors about missing manager.rs and history.rs (we'll create them next)
 
@@ -171,8 +171,8 @@ mod tests {
 
         let manager = ScratchpadManager::new(project_root.clone(), "test-session");
 
-        // .aether directory should exist after initialization
-        assert!(manager.aether_dir().exists() || manager.ensure_dir().await.is_ok());
+        // .aleph directory should exist after initialization
+        assert!(manager.aleph_dir().exists() || manager.ensure_dir().await.is_ok());
     }
 }
 ```
@@ -196,7 +196,7 @@ use super::template::{generate_scratchpad, DEFAULT_TEMPLATE};
 /// Configuration for scratchpad behavior
 #[derive(Debug, Clone)]
 pub struct ScratchpadConfig {
-    /// Directory name within project root (default: ".aether")
+    /// Directory name within project root (default: ".aleph")
     pub dir_name: String,
     /// Scratchpad filename (default: "scratchpad.md")
     pub filename: String,
@@ -209,7 +209,7 @@ pub struct ScratchpadConfig {
 impl Default for ScratchpadConfig {
     fn default() -> Self {
         Self {
-            dir_name: ".aether".to_string(),
+            dir_name: ".aleph".to_string(),
             filename: "scratchpad.md".to_string(),
             history_filename: "session_history.log".to_string(),
             backup_on_write: true,
@@ -243,26 +243,26 @@ impl ScratchpadManager {
         }
     }
 
-    /// Get the .aether directory path
-    pub fn aether_dir(&self) -> PathBuf {
+    /// Get the .aleph directory path
+    pub fn aleph_dir(&self) -> PathBuf {
         self.project_root.join(&self.config.dir_name)
     }
 
     /// Get the scratchpad file path
     pub fn scratchpad_path(&self) -> PathBuf {
-        self.aether_dir().join(&self.config.filename)
+        self.aleph_dir().join(&self.config.filename)
     }
 
     /// Get the history log path
     pub fn history_path(&self) -> PathBuf {
-        self.aether_dir().join(&self.config.history_filename)
+        self.aleph_dir().join(&self.config.history_filename)
     }
 
-    /// Ensure the .aether directory exists
+    /// Ensure the .aleph directory exists
     pub async fn ensure_dir(&self) -> Result<(), AlephError> {
-        fs::create_dir_all(self.aether_dir())
+        fs::create_dir_all(self.aleph_dir())
             .await
-            .map_err(|e| AlephError::other(format!("Failed to create .aether dir: {}", e)))
+            .map_err(|e| AlephError::other(format!("Failed to create .aleph dir: {}", e)))
     }
 
     /// Check if scratchpad file exists
@@ -462,7 +462,7 @@ mod tests {
         let manager = ScratchpadManager::new(project_root.clone(), "test-session");
         manager.ensure_dir().await.unwrap();
 
-        assert!(manager.aether_dir().exists());
+        assert!(manager.aleph_dir().exists());
     }
 
     #[tokio::test]
@@ -558,7 +558,7 @@ mod tests {
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test scratchpad --lib
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test scratchpad --lib
 ```
 Expected: All tests pass
 
@@ -803,7 +803,7 @@ mod tests {
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test history --lib
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test history --lib
 ```
 Expected: All tests pass
 
@@ -866,14 +866,14 @@ pub use scratchpad::{ScratchpadManager, ScratchpadConfig, SessionHistory};
 **Step 3: Run full test suite**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test memory::scratchpad
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test memory::scratchpad
 ```
 Expected: All tests pass
 
 **Step 4: Run cargo clippy**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo clippy --lib -- -D warnings
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo clippy --lib -- -D warnings
 ```
 Expected: No warnings
 
@@ -883,7 +883,7 @@ Expected: No warnings
 git add -A
 git commit -m "feat(memory): complete Milestone 1 - Scratchpad Foundation
 
-- ScratchpadManager for project-local .aether/scratchpad.md
+- ScratchpadManager for project-local .aleph/scratchpad.md
 - SessionHistory for archiving completed tasks
 - Markdown templates with sections: Objective, Plan, Working State, Notes
 - Backup on write for crash recovery
@@ -1009,7 +1009,7 @@ impl VectorDatabase {
 **Step 6: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test facts --lib
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test facts --lib
 ```
 
 **Step 7: Commit**
@@ -1119,7 +1119,7 @@ Update `effective_half_life` method:
 **Step 4: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test decay --lib
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test decay --lib
 ```
 
 **Step 5: Commit**
@@ -1309,7 +1309,7 @@ pub use lazy_decay::{LazyDecayEngine, DecayEvaluation};
 **Step 4: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test lazy_decay --lib
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test lazy_decay --lib
 ```
 
 **Step 5: Commit**
@@ -1622,7 +1622,7 @@ pub use trigger::{CompressionTrigger, TriggerConfig, TriggerReason, CompressionA
 **Step 4: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test trigger --lib
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test trigger --lib
 ```
 
 **Step 5: Commit**
@@ -1663,7 +1663,7 @@ Due to document length, the remaining milestones are summarized. Each follows th
 
 ```bash
 # Run all memory tests
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test memory --lib
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test memory --lib
 
 # Run with output
 cargo test memory --lib -- --nocapture
@@ -1688,7 +1688,7 @@ After completing all milestones:
 
 - [ ] All tests pass: `cargo test memory --lib`
 - [ ] No clippy warnings: `cargo clippy --lib -- -D warnings`
-- [ ] Scratchpad creates `.aether/scratchpad.md` in project directory
+- [ ] Scratchpad creates `.aleph/scratchpad.md` in project directory
 - [ ] Lazy decay filters facts at read time
 - [ ] Hybrid trigger fires at 90% token threshold
 - [ ] CLI commands work with file locking

@@ -762,12 +762,12 @@ mod tests {
     fn test_execution_context_builders() {
         let ctx = ExecutionContext::new()
             .with_app_context("VSCode")
-            .with_window_title("main.rs - Aether")
+            .with_window_title("main.rs - Aleph")
             .with_topic_id("topic_123")
             .with_stream(false);
 
         assert_eq!(ctx.app_context, Some("VSCode".to_string()));
-        assert_eq!(ctx.window_title, Some("main.rs - Aether".to_string()));
+        assert_eq!(ctx.window_title, Some("main.rs - Aleph".to_string()));
         assert_eq!(ctx.topic_id, Some("topic_123".to_string()));
         assert!(!ctx.stream);
     }

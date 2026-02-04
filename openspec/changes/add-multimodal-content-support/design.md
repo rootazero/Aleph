@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether is a system-level AI middleware that captures user content via clipboard and routes to AI providers. The current architecture only supports text input, but modern vision-language models (GPT-4o, Claude 3.5, Gemini) can process images. Users need to analyze screenshots, diagrams, and photos directly from their workflow.
+Aleph is a system-level AI middleware that captures user content via clipboard and routes to AI providers. The current architecture only supports text input, but modern vision-language models (GPT-4o, Claude 3.5, Gemini) can process images. Users need to analyze screenshots, diagrams, and photos directly from their workflow.
 
 **Stakeholders:**
 - End users: Need frictionless image analysis
@@ -18,7 +18,7 @@ Aether is a system-level AI middleware that captures user content via clipboard 
 
 ## Content Acquisition Methods Analysis
 
-Aether uses two different methods to capture window content, and they have **fundamentally different capabilities** for media content:
+Aleph uses two different methods to capture window content, and they have **fundamentally different capabilities** for media content:
 
 ### Method 1: Command+C/X (Clipboard-based)
 
@@ -84,7 +84,7 @@ When files are copied (e.g., from Finder), the clipboard contains file URLs, not
 
 ### Content Acquisition Scenarios
 
-Based on the two acquisition methods, here are the key scenarios Aether must handle:
+Based on the two acquisition methods, here are the key scenarios Aleph must handle:
 
 **Scenario A: User selects image in application and presses hotkey**
 ```
@@ -571,7 +571,7 @@ dictionary MediaAttachment {
 ## Migration Plan
 
 ### Phase 1: API Extension (This Change)
-1. Add `MediaAttachment` dictionary to aether.udl
+1. Add `MediaAttachment` dictionary to aleph.udl
 2. Add optional `attachments` to `CapturedContext`
 3. Modify `process_input` to check for attachments
 4. Update Swift layer to capture and encode images

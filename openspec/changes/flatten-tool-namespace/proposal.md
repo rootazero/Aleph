@@ -145,7 +145,7 @@ When `flat_namespace = false`:
 | `types.rs` | Add `original_name` field for shadowed tools |
 | `CommandCompletionManager.swift` | Remove namespace navigation logic |
 | `SubPanelView.swift` | Update to show flat list with badges |
-| `aether.udl` | Remove namespace-related APIs |
+| `aleph.udl` | Remove namespace-related APIs |
 
 ### Breaking Changes
 

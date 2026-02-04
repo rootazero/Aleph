@@ -10,7 +10,7 @@
 
 ## Why
 
-Users need confidence when editing settings. Currently, the Aether settings UI saves changes immediately without explicit confirmation, which creates several problems:
+Users need confidence when editing settings. Currently, the Aleph settings UI saves changes immediately without explicit confirmation, which creates several problems:
 
 1. **Accidental Changes**: Users may accidentally modify a setting and have no way to undo it
 2. **Preview Inability**: Users cannot preview how changes will affect their workflow before committing
@@ -148,7 +148,7 @@ Refactor the settings UI to implement a **unified save bar architecture** with d
 
 ### State Architecture
 - Use `@State` for working copy (editable fields)
-- Use `let savedConfig` for persisted state (loaded from `AetherCore.loadConfig()`)
+- Use `let savedConfig` for persisted state (loaded from `AlephCore.loadConfig()`)
 - Implement `isDirty: Bool` computed property to track changes
 
 ### Validation

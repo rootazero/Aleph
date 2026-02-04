@@ -68,7 +68,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::traits::tests -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::traits::tests -v`
 Expected: FAIL with "module traits not found"
 
 **Step 3: Write minimal implementation**
@@ -188,13 +188,13 @@ pub use traits::{McpTransport, NotificationCallback};
 
 **Step 5: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport -v`
 Expected: PASS
 
 **Step 6: Commit**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
+cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement
 git add core/src/mcp/transport/traits.rs core/src/mcp/transport/mod.rs
 git commit -m "feat(mcp): add McpTransport trait for transport abstraction
 
@@ -234,7 +234,7 @@ async fn test_stdio_implements_mcp_transport() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::stdio::tests::test_stdio_implements_mcp_transport -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::stdio::tests::test_stdio_implements_mcp_transport -v`
 Expected: FAIL with "method `server_name` not found"
 
 **Step 3: Implement McpTransport for StdioTransport**
@@ -272,13 +272,13 @@ impl McpTransport for StdioTransport {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::stdio -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::stdio -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
+cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement
 git add core/src/mcp/transport/stdio.rs
 git commit -m "feat(mcp): implement McpTransport trait for StdioTransport
 
@@ -322,7 +322,7 @@ async fn test_connection_with_transport_trait() {
 
 **Step 2: Run existing tests first**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::external::connection -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::external::connection -v`
 Expected: PASS (baseline)
 
 **Step 3: Refactor McpServerConnection**
@@ -423,13 +423,13 @@ pub async fn close(&self) -> Result<()> {
 
 **Step 4: Run tests to verify refactoring works**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp -v`
 Expected: All 55 MCP tests PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
+cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement
 git add core/src/mcp/external/connection.rs
 git commit -m "refactor(mcp): use McpTransport trait object in connection
 
@@ -486,7 +486,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::http -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::http -v`
 Expected: FAIL with "module http not found"
 
 **Step 3: Write implementation**
@@ -754,13 +754,13 @@ pub use traits::{McpTransport, NotificationCallback};
 
 **Step 5: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport -v`
 Expected: All transport tests PASS
 
 **Step 6: Commit**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
+cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement
 git add core/src/mcp/transport/http.rs core/src/mcp/transport/mod.rs
 git commit -m "feat(mcp): add HttpTransport for remote MCP servers
 
@@ -803,7 +803,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::sse -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::sse -v`
 Expected: FAIL
 
 **Step 3: Write implementation**
@@ -1088,13 +1088,13 @@ pub use traits::{McpTransport, NotificationCallback};
 
 **Step 5: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport -v`
 Expected: PASS
 
 **Step 6: Commit**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
+cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement
 git add core/src/mcp/transport/sse.rs core/src/mcp/transport/mod.rs
 git commit -m "feat(mcp): add SseTransport for bidirectional MCP communication
 
@@ -1250,13 +1250,13 @@ impl McpClient {
 
 **Step 5: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp -v`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp -v`
 Expected: PASS
 
 **Step 6: Commit**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
+cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement
 git add core/src/mcp/types.rs core/src/mcp/client.rs
 git commit -m "feat(mcp): add remote server configuration and connection support
 
@@ -1399,7 +1399,7 @@ pub use resources::{McpResourceManager, ResourceContent};
 **Step 4: Run tests and commit**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
+cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement
 cargo test --package alephcore --lib mcp::resources -v
 git add core/src/mcp/resources.rs core/src/mcp/mod.rs
 git commit -m "feat(mcp): add McpResourceManager for resource handling
@@ -1665,7 +1665,7 @@ impl OAuthStorage {
     pub fn default_path() -> PathBuf {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("aether")
+            .join("aleph")
             .join("mcp-auth.json")
     }
 
@@ -1923,7 +1923,7 @@ After completing all tasks:
 
 Run final verification:
 ```bash
-cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
+cd /Users/zouguojun/Workspace/Aleph/.worktrees/mcp-enhancement
 cargo test --package alephcore --lib mcp -v
 cargo clippy --package alephcore -- -D warnings
 ```

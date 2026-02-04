@@ -926,7 +926,7 @@ impl ProtocolLoader {
     pub fn start_watching() -> Result<Option<RecommendedWatcher>> {
         let protocols_dir = dirs::home_dir()
             .ok_or_else(|| AlephError::provider("Cannot determine home directory"))?
-            .join(".aether/protocols");
+            .join(".aleph/protocols");
 
         if !protocols_dir.exists() {
             info!("Protocols directory doesn't exist, skipping hot reload: {:?}", protocols_dir);
@@ -1252,7 +1252,7 @@ Aleph automatically watches these locations:
 ```yaml
 protocol_extensions:
   - path: ./custom-protocols/my-provider.yaml
-  - path: /etc/aether/shared-protocols/company.yaml
+  - path: /etc/aleph/shared-protocols/company.yaml
 ```
 
 Changes to protocol files are detected within 2 seconds and applied automatically. No restart required.
@@ -1263,7 +1263,7 @@ Changes to protocol files are detected within 2 seconds and applied automaticall
 
 Check logs for errors:
 ```bash
-tail -f ~/.aleph/logs/aether.log | grep protocol
+tail -f ~/.aleph/logs/aleph.log | grep protocol
 ```
 
 Common issues:
@@ -1274,10 +1274,10 @@ Common issues:
 
 ### Testing protocol
 
-Use `aether test-protocol` command:
+Use `aleph test-protocol` command:
 
 ```bash
-aether test-protocol ~/.aleph/protocols/my-provider.yaml
+aleph test-protocol ~/.aleph/protocols/my-provider.yaml
 ```
 
 This validates YAML syntax and template rendering.

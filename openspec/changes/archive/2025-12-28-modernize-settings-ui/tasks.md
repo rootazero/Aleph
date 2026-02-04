@@ -3,7 +3,7 @@
 ## 1. Design System Foundation (设计系统基础)
 
 ### 1.1 Create DesignTokens.swift
-- [x] 1.1.1 创建`Aether/Sources/DesignSystem/DesignTokens.swift`文件
+- [x] 1.1.1 创建`Aleph/Sources/DesignSystem/DesignTokens.swift`文件
 - [x] 1.1.2 定义颜色规范（Colors enum）
   - [x] Sidebar背景色、卡片背景色
   - [x] 强调色（Accent colors）
@@ -20,7 +20,7 @@
 - [x] 1.1.7 验证DesignTokens编译通过
 
 ### 1.2 Create Base Components (原子组件)
-- [x] 1.2.1 创建`Aether/Sources/Components/Atoms/`目录
+- [x] 1.2.1 创建`Aleph/Sources/Components/Atoms/`目录
 - [x] 1.2.2 实现`SearchBar.swift`
   - [x] 搜索图标 + 文本输入框
   - [x] 占位符文本
@@ -57,7 +57,7 @@
 ## 2. Provider Management UI Redesign (Provider管理界面重构)
 
 ### 2.1 Create ProviderCard Component
-- [x] 2.1.1 创建`Aether/Sources/Components/Molecules/ProviderCard.swift`
+- [x] 2.1.1 创建`Aleph/Sources/Components/Molecules/ProviderCard.swift`
 - [x] 2.1.2 实现卡片布局
   - [x] 左侧：Provider图标（SF Symbol或自定义图标）
   - [x] 中间：Provider名称 + 类型标签 + 简要描述
@@ -74,7 +74,7 @@
 - [x] 2.1.5 添加PreviewProvider测试不同状态
 
 ### 2.2 Create ProviderDetailPanel Component
-- [x] 2.2.1 创建`Aether/Sources/Components/Molecules/ProviderDetailPanel.swift`
+- [x] 2.2.1 创建`Aleph/Sources/Components/Molecules/ProviderDetailPanel.swift`
 - [x] 2.2.2 实现详情面板布局
   - [x] 顶部：Provider名称 + 状态标签（Active/Inactive）
   - [x] 描述区：显示Provider功能描述
@@ -135,7 +135,7 @@
 ## 3. Modern Sidebar Implementation (现代化侧边栏实现)
 
 ### 3.1 Create ModernSidebarView Component
-- [x] 3.1.1 创建`Aether/Sources/Components/Organisms/ModernSidebarView.swift`
+- [x] 3.1.1 创建`Aleph/Sources/Components/Organisms/ModernSidebarView.swift`
 - [x] 3.1.2 实现侧边栏布局
   - [x] 顶部：应用图标 + 版本号（可选）
   - [x] 中间：导航列表（General/Providers/Routing/等）
@@ -257,8 +257,8 @@
 - ✅ `docs/visual-testing-guide.md` - 视觉测试详细指南
 - ✅ `docs/performance-testing-guide.md` - 性能测试详细指南
 - ✅ `docs/accessibility-testing-checklist.md` - 无障碍测试检查清单
-- ✅ `AetherTests/UI/ModernSettingsUITests.swift` - 功能测试用例（XCTest）
-- ✅ `AetherUITests/ModernSettingsUITestsXCUI.swift` - UI交互测试用例（XCUITest）
+- ✅ `AlephTests/UI/ModernSettingsUITests.swift` - 功能测试用例（XCTest）
+- ✅ `AlephUITests/ModernSettingsUITestsXCUI.swift` - UI交互测试用例（XCUITest）
 
 ### 6.1 Functional Testing
 **状态**: ⏳ 测试框架已建立，待实际环境执行
@@ -282,7 +282,7 @@
   - [ ] 确认后恢复默认配置
   - [ ] 验证config.toml被重置
 
-**测试文件**: `AetherTests/UI/ModernSettingsUITests.swift` (已创建，包含27个测试用例)
+**测试文件**: `AlephTests/UI/ModernSettingsUITests.swift` (已创建，包含27个测试用例)
 
 ### 6.2 Visual Testing
 **状态**: ⏳ 测试指南已完成，待手动执行
@@ -466,7 +466,7 @@
   - ✅ `docs/performance-testing-guide.md` - 性能测试指南（900行，包含Instruments使用说明和性能指标）
   - ✅ `docs/accessibility-testing-checklist.md` - 无障碍测试清单（800行，包含VoiceOver和WCAG 2.1 AA测试步骤）
 - ✅ 自动化测试用例创建
-  - ✅ `AetherTests/UI/ModernSettingsUITests.swift` - 27个功能测试用例（XCTest）
+  - ✅ `AlephTests/UI/ModernSettingsUITests.swift` - 27个功能测试用例（XCTest）
     - ThemeManager初始化和持久化测试
     - Provider搜索和过滤测试
     - 路由规则验证测试
@@ -476,7 +476,7 @@
     - 配置持久化测试
     - JSON导入/导出测试
     - 性能基准测试
-  - ✅ `AetherUITests/ModernSettingsUITestsXCUI.swift` - UI交互测试（XCUITest）
+  - ✅ `AlephUITests/ModernSettingsUITestsXCUI.swift` - UI交互测试（XCUITest）
     - 主题切换器交互测试
     - VoiceOver无障碍测试
     - 键盘导航测试

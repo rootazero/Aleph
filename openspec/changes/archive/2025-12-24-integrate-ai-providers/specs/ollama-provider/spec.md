@@ -52,32 +52,32 @@ The system SHALL handle all ollama execution errors appropriately.
 
 #### Scenario: Handle command not found
 - **WHEN** ollama binary is not in PATH
-- **THEN** error type is `AetherError::ProviderError`
+- **THEN** error type is `AlephError::ProviderError`
 - **AND** error message indicates "ollama command not found"
 - **AND** user is advised to install Ollama
 
 #### Scenario: Handle model not found
 - **WHEN** ollama exits with error "model not found"
-- **THEN** error type is `AetherError::ProviderError`
+- **THEN** error type is `AlephError::ProviderError`
 - **AND** error message includes model name
 - **AND** user is advised to run `ollama pull {model}`
 
 #### Scenario: Handle non-zero exit code
 - **WHEN** ollama exits with non-zero status
-- **THEN** error type is `AetherError::ProviderError`
+- **THEN** error type is `AlephError::ProviderError`
 - **AND** stderr output is included in error message
 - **AND** exit code is logged for debugging
 
 #### Scenario: Handle UTF-8 decode errors
 - **WHEN** ollama stdout is not valid UTF-8
-- **THEN** error type is `AetherError::ProviderError`
+- **THEN** error type is `AlephError::ProviderError`
 - **AND** error message indicates "Invalid UTF-8 output"
 - **AND** raw bytes are logged in hex
 
 #### Scenario: Handle timeout
 - **WHEN** ollama execution exceeds timeout
 - **THEN** process is killed
-- **AND** error type is `AetherError::Timeout`
+- **AND** error type is `AlephError::Timeout`
 - **AND** no partial output is returned
 
 ### Requirement: Timeout Configuration
@@ -120,7 +120,7 @@ The system SHALL load model name from configuration.
 - **WHEN** initializing OllamaProvider
 - **THEN** `model` field is read from `[providers.ollama]` section
 - **AND** model name is required (no default)
-- **AND** missing model returns `AetherError::InvalidConfig`
+- **AND** missing model returns `AlephError::InvalidConfig`
 
 #### Scenario: Support all ollama models
 - **WHEN** user configures any ollama model name

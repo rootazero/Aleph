@@ -1,6 +1,6 @@
 //
 //  ClarificationManager.swift
-//  Aether
+//  Aleph
 //
 //  Manages Phantom Flow clarification requests between Rust core and Halo UI.
 //  This is the Swift-side coordinator for in-place user interaction.

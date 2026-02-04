@@ -20,8 +20,8 @@ PROVIDERS = [
     "Github",
 ]
 
-SVG_DIR = os.path.expanduser("~/Workspace/Aether/Aether/Resources/ProviderIcons")
-ASSETS_DIR = os.path.expanduser("~/Workspace/Aether/Aether/Assets.xcassets")
+SVG_DIR = os.path.expanduser("~/Workspace/Aleph/Aleph/Resources/ProviderIcons")
+ASSETS_DIR = os.path.expanduser("~/Workspace/Aleph/Aleph/Assets.xcassets")
 
 
 def create_imageset_contents(svg_filename):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Setup Aether app icons in Assets.xcassets
+Setup Aleph app icons in Assets.xcassets
 - Menu bar icon (template mode)
 - App icon reference
 """
@@ -10,8 +10,8 @@ import json
 import shutil
 
 # Paths
-RESOURCES_DIR = os.path.expanduser("~/Workspace/Aether/Aether/Resources/AppIcon")
-ASSETS_DIR = os.path.expanduser("~/Workspace/Aether/Aether/Assets.xcassets")
+RESOURCES_DIR = os.path.expanduser("~/Workspace/Aleph/Aleph/Resources/AppIcon")
+ASSETS_DIR = os.path.expanduser("~/Workspace/Aleph/Aleph/Assets.xcassets")
 
 def setup_menubar_icon():
     """Add menu bar icon to Assets.xcassets as template image"""
@@ -22,15 +22,15 @@ def setup_menubar_icon():
     os.makedirs(imageset_dir, exist_ok=True)
 
     # Copy SVG file
-    src_svg = os.path.join(RESOURCES_DIR, "AetherMenuBar.svg")
-    dst_svg = os.path.join(imageset_dir, "AetherMenuBar.svg")
+    src_svg = os.path.join(RESOURCES_DIR, "AlephMenuBar.svg")
+    dst_svg = os.path.join(imageset_dir, "AlephMenuBar.svg")
     shutil.copy2(src_svg, dst_svg)
 
     # Create Contents.json for template rendering
     contents = {
         "images": [
             {
-                "filename": "AetherMenuBar.svg",
+                "filename": "AlephMenuBar.svg",
                 "idiom": "universal"
             }
         ],
@@ -61,15 +61,15 @@ def setup_app_logo():
     os.makedirs(imageset_dir, exist_ok=True)
 
     # Copy SVG file
-    src_svg = os.path.join(RESOURCES_DIR, "AetherLogo.svg")
-    dst_svg = os.path.join(imageset_dir, "AetherLogo.svg")
+    src_svg = os.path.join(RESOURCES_DIR, "AlephLogo.svg")
+    dst_svg = os.path.join(imageset_dir, "AlephLogo.svg")
     shutil.copy2(src_svg, dst_svg)
 
     # Create Contents.json
     contents = {
         "images": [
             {
-                "filename": "AetherLogo.svg",
+                "filename": "AlephLogo.svg",
                 "idiom": "universal"
             }
         ],
@@ -93,7 +93,7 @@ def setup_app_logo():
 
 def create_usage_guide():
     """Create SwiftUI usage example file"""
-    usage_code = '''// Aether Icon Usage Examples
+    usage_code = '''// Aleph Icon Usage Examples
 
 import SwiftUI
 
@@ -147,7 +147,7 @@ struct IconSizesExample: View {
 
 
 def main():
-    print("🎨 Setting up Aether icons in Assets.xcassets...\n")
+    print("🎨 Setting up Aleph icons in Assets.xcassets...\n")
 
     setup_menubar_icon()
     setup_app_logo()

@@ -7,21 +7,21 @@
 - [ ] Make `provider` field optional (required for command, ignored for keyword)
 - [ ] Update serde deserialization with default value detection
 - [ ] Add helper methods: `is_command_rule()`, `is_keyword_rule()`
-- **File**: `Aether/core/src/config/mod.rs`
+- **File**: `Aleph/core/src/config/mod.rs`
 
 ### Task 1.2: Create RoutingMatch Types
 - [ ] Create `RoutingMatch` struct
 - [ ] Create `MatchedCommandRule` struct
 - [ ] Create `MatchedKeywordRule` struct
 - [ ] Add `assemble_prompt()` method to `RoutingMatch`
-- **File**: `Aether/core/src/router/mod.rs` (new module or extend existing)
+- **File**: `Aleph/core/src/router/mod.rs` (new module or extend existing)
 
 ### Task 1.3: Auto-detect Rule Type on Load
 - [ ] Implement rule type auto-detection in `Config::load_from_file()`
 - [ ] If regex starts with `^/`, default to command rule
 - [ ] If regex doesn't start with `/`, default to keyword rule
 - [ ] Preserve explicit `rule_type` if specified
-- **File**: `Aether/core/src/config/mod.rs`
+- **File**: `Aleph/core/src/config/mod.rs`
 
 ## Phase 2: Router Logic Changes
 
@@ -30,27 +30,27 @@
 - [ ] Populate both vectors during `Router::new()`
 - [ ] Validate command rules have `provider` field
 - [ ] Validate keyword rules have `system_prompt` field
-- **File**: `Aether/core/src/router/mod.rs`
+- **File**: `Aleph/core/src/router/mod.rs`
 
 ### Task 2.2: Implement match_rules()
 - [ ] Create `Router::match_rules()` method
 - [ ] Phase 1: Match command rules (first-match-stops)
 - [ ] Phase 2: Match keyword rules (all-match)
 - [ ] Return `RoutingMatch` struct
-- **File**: `Aether/core/src/router/mod.rs`
+- **File**: `Aleph/core/src/router/mod.rs`
 
 ### Task 2.3: Command Prefix Stripping
 - [ ] Enhance `RoutingRule::strip_matched_prefix()` method
 - [ ] Ensure prefix is stripped for all command rules
 - [ ] Handle edge cases (no content after prefix)
 - [ ] Add validation for empty cleaned_input
-- **File**: `Aether/core/src/router/mod.rs`
+- **File**: `Aleph/core/src/router/mod.rs`
 
 ### Task 2.4: Update route_with_extended_info()
 - [ ] Modify to use `match_rules()` internally
 - [ ] Update `RoutingDecision` to include keyword prompts
 - [ ] Ensure backward compatibility with existing callers
-- **File**: `Aether/core/src/router/mod.rs`, `Aether/core/src/router/decision.rs`
+- **File**: `Aleph/core/src/router/mod.rs`, `Aleph/core/src/router/decision.rs`
 
 ## Phase 3: Core Integration
 
@@ -59,21 +59,21 @@
 - [ ] Get provider from command rule or default_provider
 - [ ] Assemble combined prompt using `assemble_prompt()`
 - [ ] Pass cleaned_input (not original) to AI
-- **File**: `Aether/core/src/core.rs`
+- **File**: `Aleph/core/src/core.rs`
 
 ### Task 3.2: Update PromptAssembler
 - [ ] Accept keyword prompts as additional input
 - [ ] Merge keyword prompts with command prompt
 - [ ] Ensure proper formatting
-- **File**: `Aether/core/src/prompt/assembler.rs`
+- **File**: `Aleph/core/src/prompt/assembler.rs`
 
 ## Phase 4: UniFFI Bindings
 
-### Task 4.1: Update aether.udl
+### Task 4.1: Update aleph.udl
 - [ ] Add `rule_type` to RoutingRuleConfig dictionary
 - [ ] Ensure optional `provider` field works
 - [ ] Regenerate Swift bindings
-- **File**: `Aether/core/src/aether.udl`
+- **File**: `Aleph/core/src/aleph.udl`
 
 ### Task 4.2: Test UniFFI Round-trip
 - [ ] Test config serialization/deserialization through UniFFI
@@ -92,7 +92,7 @@
 - [ ] Keyword cards show: regex, prompt preview (no provider)
 - [ ] Builtin rules: [查看] button only, no edit/delete
 - [ ] User rules: [编辑] [删除] buttons
-- **File**: `Aether/Sources/RoutingRulesView.swift` or similar
+- **File**: `Aleph/Sources/RoutingRulesView.swift` or similar
 
 ### Task 5.2: Update RuleEditorSheet
 - [ ] Add rule type picker (Segmented control: 指令规则 / 关键词规则)
@@ -101,7 +101,7 @@
 - [ ] Validate: command rules require provider, keyword rules require prompt
 - [ ] Add hint text "指令规则建议以 ^/ 开头"
 - [ ] Pre-fill regex with "^/" for command rules
-- **File**: `Aether/Sources/RuleEditorSheet.swift` or similar
+- **File**: `Aleph/Sources/RuleEditorSheet.swift` or similar
 
 ### Task 5.3: Add Builtin Rule Detail View
 - [ ] Create read-only view for builtin commands
@@ -125,13 +125,13 @@
 - [ ] Add "rules.command.hint" = "输入以 / 开头触发..."
 - [ ] Add "rules.keyword.hint" = "输入包含关键词时..."
 - [ ] Add "error.command.empty" = "指令需要内容"
-- **File**: `Aether/Resources/en.lproj/Localizable.strings`, `zh-Hans.lproj/...`
+- **File**: `Aleph/Resources/en.lproj/Localizable.strings`, `zh-Hans.lproj/...`
 
 ### Task 5.6: Update Halo Error Display
 - [ ] Handle empty command error case
 - [ ] Display localized error message in Halo
 - [ ] Show error animation then auto-dismiss
-- **File**: `Aether/Sources/HaloView.swift` or related
+- **File**: `Aleph/Sources/HaloView.swift` or related
 
 ## Phase 6: Testing
 
@@ -140,27 +140,27 @@
 - [ ] Test keyword rule all-match
 - [ ] Test mixed command + keyword matching
 - [ ] Test no matches case
-- **File**: `Aether/core/src/router/mod.rs` (tests module)
+- **File**: `Aleph/core/src/router/mod.rs` (tests module)
 
 ### Task 6.2: Unit Tests for Prompt Assembly
 - [ ] Test command-only prompt
 - [ ] Test keyword-only prompt
 - [ ] Test combined prompt
 - [ ] Test empty prompts handling
-- **File**: `Aether/core/src/router/mod.rs` (tests module)
+- **File**: `Aleph/core/src/router/mod.rs` (tests module)
 
 ### Task 6.3: Unit Tests for Prefix Stripping
 - [ ] Test `/draw content` → "content"
 - [ ] Test `/draw` alone → error or empty
 - [ ] Test complex patterns like `/en/translate`
 - [ ] Test non-command patterns (no stripping)
-- **File**: `Aether/core/src/router/mod.rs` (tests module)
+- **File**: `Aleph/core/src/router/mod.rs` (tests module)
 
 ### Task 6.4: Backward Compatibility Tests
 - [ ] Test loading old config without `rule_type`
 - [ ] Test auto-detection of rule types
 - [ ] Ensure existing functionality unchanged
-- **File**: `Aether/core/src/config/mod.rs` (tests module)
+- **File**: `Aleph/core/src/config/mod.rs` (tests module)
 
 ### Task 6.5: Integration Tests
 - [ ] End-to-end test: input → matching → prompt assembly

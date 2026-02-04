@@ -212,7 +212,7 @@ Response (ephemeral)
 ```rust
 // ProcessOptions with topic_id = Some(uuid)
 ProcessOptions {
-    app_context: Some("com.aether.multi-turn"),
+    app_context: Some("com.aleph.multi-turn"),
     window_title: None,
     topic_id: Some("550e8400-e29b-41d4-a716-446655440000"),  // ✅ Multi-turn marker
     stream: true,
@@ -245,7 +245,7 @@ Response (persistent, linked to session)
 **Key Components**:
 - **Agent Loop**: `core/src/agent_loop/` - Observe-Think-Act-Feedback cycle
 - **DAG Scheduler**: `core/src/dispatcher/scheduler/` - Multi-step task orchestration
-- **Session Manager**: `platforms/macos/Aether/Sources/Store/ConversationStore.swift`
+- **Session Manager**: `platforms/macos/Aleph/Sources/Store/ConversationStore.swift`
 - **History Injection**: `core/src/ffi/prompt_helpers.rs::build_history_summary_from_conversations`
 
 **History Management**:
@@ -1110,7 +1110,7 @@ pub struct OAuthTokens {
 - **Claude Code compatible**: Follows Claude Code plugin manifest format (`.claude-plugin/plugin.json`)
 - **Multi-level discovery**: Reads from `~/.claude/`, `~/.aleph/`, `.claude/` (current project)
 - **Plugin types**: Skills, commands, agents, MCP servers, hooks
-- **Configuration**: `aether.jsonc` with multi-source merging
+- **Configuration**: `aleph.jsonc` with multi-source merging
 - **Async FFI**: Native async/await via UniFFI 0.31+ (Swift, Kotlin, Python)
 - **Hot reload**: Plugins loaded and activated at runtime
 
@@ -1118,13 +1118,13 @@ pub struct OAuthTokens {
 ```
 discovery/              # Multi-level component discovery
 ├── scanner.rs         # Directory scanning (DiscoveryManager)
-├── paths.rs           # Path utilities (aether_home, git_root)
+├── paths.rs           # Path utilities (aleph_home, git_root)
 └── types.rs           # DiscoveredComponent, DiscoverySource
 
 extension/              # Extension system
 ├── loader.rs          # ComponentLoader (skills, commands, agents, plugins)
 ├── registry.rs        # ComponentRegistry (state management)
-├── config/            # ConfigManager (aether.jsonc merging)
+├── config/            # ConfigManager (aleph.jsonc merging)
 ├── hooks/             # HookExecutor (PreToolUse, PostToolUse, Stop)
 ├── runtime/           # Node.js runtime (fnm, npm install)
 └── sync_api.rs        # SyncExtensionManager (legacy sync wrapper)
@@ -1350,7 +1350,7 @@ Part events are published via EventBus and forwarded through CallbackBridge:
 
 #### Swift UI Integration
 
-**Location**: `platforms/macos/Aether/Sources/`
+**Location**: `platforms/macos/Aleph/Sources/`
 
 | File | Purpose |
 |------|---------|
@@ -1525,7 +1525,7 @@ The GlobalBus provides a centralized event aggregation system for cross-agent co
 The singleton event aggregator that receives events from all EventBus instances:
 
 ```rust
-use aether_core::event::{GlobalBus, EventFilter};
+use aleph_core::event::{GlobalBus, EventFilter};
 
 // Get the global singleton
 let global_bus = GlobalBus::global();
@@ -1576,7 +1576,7 @@ let filter = EventFilter::new(vec![EventType::LoopStop])
 EventBus instances can optionally connect to GlobalBus for automatic event broadcasting:
 
 ```rust
-use aether_core::event::{EventBus, GlobalBus};
+use aleph_core::event::{EventBus, GlobalBus};
 
 let bus = EventBus::new()
     .with_agent_id("agent-1")
@@ -1585,7 +1585,7 @@ let bus = EventBus::new()
 
 // All events published to this bus are automatically
 // broadcast to GlobalBus with agent/session context
-bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
 ```
 
 ### GlobalEvent
@@ -1681,7 +1681,7 @@ Aleph implements a permission system inspired by OpenCode and Claude Code, provi
 Rules use pattern matching with wildcards (`*`, `?`):
 
 ```rust
-use aether_core::permission::{PermissionRule, PermissionEvaluator};
+use aleph_core::permission::{PermissionRule, PermissionEvaluator};
 
 // Allow git commands
 PermissionRule::allow("bash", "git *");
@@ -1711,7 +1711,7 @@ PermissionRule::ask("bash", "*");
 The QuestionManager provides structured Q&A interaction:
 
 ```rust
-use aether_core::question::{QuestionManager, QuestionRequest, QuestionInfo};
+use aleph_core::question::{QuestionManager, QuestionRequest, QuestionInfo};
 
 let question = QuestionInfo::new(
     "Which option do you prefer?",

@@ -27,7 +27,7 @@ This document describes a complete rewrite of Aleph's plugin system, inspired by
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                        ConfigManager                                 │   │
 │  │  - Multi-level config discovery (global → project → inline)         │   │
-│  │  - aether.jsonc central configuration                               │   │
+│  │  - aleph.jsonc central configuration                               │   │
 │  │  - Config merging with priority                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                    │                                        │
@@ -85,7 +85,7 @@ This document describes a complete rewrite of Aleph's plugin system, inspired by
 
 ```
 ~/.aleph/
-├── aether.jsonc         # Global configuration
+├── aleph.jsonc         # Global configuration
 ├── plugins/             # Installed plugins
 ├── skills/              # User skills
 ├── commands/            # User commands
@@ -96,21 +96,21 @@ This document describes a complete rewrite of Aleph's plugin system, inspired by
 
 ### Configuration File Priority
 
-1. `~/.aleph/aether.jsonc` (global)
-2. `./aether.jsonc` (project-level, find_up)
+1. `~/.aleph/aleph.jsonc` (global)
+2. `./aleph.jsonc` (project-level, find_up)
 3. `AETHER_CONFIG_CONTENT` (environment variable, highest priority)
 
 ## Configuration Format
 
-### aether.jsonc
+### aleph.jsonc
 
 ```jsonc
 {
-  "$schema": "https://aether.ai/config.json",
+  "$schema": "https://aleph.ai/config.json",
 
   // Plugins (npm packages or local files)
   "plugin": [
-    "@anthropic/aether-tools@1.0.0",
+    "@anthropic/aleph-tools@1.0.0",
     "file:///path/to/local/plugin.ts"
   ],
 
@@ -288,7 +288,7 @@ pub enum HookEvent {
 
 ```typescript
 // plugin.ts
-import { plugin } from "@anthropic/aether-plugin"
+import { plugin } from "@anthropic/aleph-plugin"
 
 export default plugin(async (ctx) => ({
   // Modify LLM params
@@ -334,7 +334,7 @@ core/src/
 │
 ├── config/               ← NEW: Unified configuration system
 │   ├── mod.rs            # ConfigManager entry
-│   ├── loader.rs         # aether.jsonc parsing
+│   ├── loader.rs         # aleph.jsonc parsing
 │   ├── merger.rs         # Multi-level config merging
 │   ├── types.rs          # AlephConfig, AgentConfig, etc
 │   └── env.rs            # Environment variable handling
@@ -379,7 +379,7 @@ core/src/
 
 **1.1 Create config/ module**
 - AlephConfig type definitions
-- aether.jsonc parser
+- aleph.jsonc parser
 - Multi-level config merging logic
 
 **1.2 Create discovery/ module**

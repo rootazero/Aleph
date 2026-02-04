@@ -216,7 +216,7 @@ MultiTurnCoordinator.exit()
 ### New API
 
 ```rust
-// aether.udl addition
+// aleph.udl addition
 
 /// Generate title based on conversation content
 fn generate_topic_title(user_input: string, ai_response: string) -> string;

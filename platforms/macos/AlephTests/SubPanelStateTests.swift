@@ -1,13 +1,13 @@
 //
 //  SubPanelStateTests.swift
-//  AetherTests
+//  AlephTests
 //
 //  Unit tests for SubPanelState component.
 //  Part of: refactor-unified-halo-window Phase 7
 //
 
 import XCTest
-@testable import Aether
+@testable import Aleph
 
 /// Unit tests for SubPanelState
 ///

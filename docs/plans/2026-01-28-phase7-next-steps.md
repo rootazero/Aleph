@@ -50,14 +50,14 @@ Task 7.1: Hot Configuration Reload
 ├── Config validation before apply
 ├── Atomic reload (no partial state)
 ├── Event broadcast on change
-└── CLI: `aether config reload`
+└── CLI: `aleph config reload`
 
 Task 7.2: Device Pairing System
 ├── Device fingerprint generation
 ├── Pairing code flow
 ├── Token issuance after approval
 ├── Device registry (SQLite)
-└── CLI: `aether pairing approve/reject/list`
+└── CLI: `aleph pairing approve/reject/list`
 ```
 
 **Week 3-4: WebChat UI**
@@ -111,7 +111,7 @@ Task 7.1: Scheduled Job System
 ├── Job storage (SQLite)
 ├── Execution engine
 ├── Gateway RPC: cron.list/create/delete
-├── CLI: `aether cron`
+├── CLI: `aleph cron`
 └── Agent tool: schedule_job()
 ```
 
@@ -189,9 +189,9 @@ tokio::spawn(async move {
 
 **CLI Commands**:
 ```bash
-aether config reload        # Force reload
-aether config show          # Show current config
-aether config validate      # Validate config file
+aleph config reload        # Force reload
+aleph config show          # Show current config
+aleph config validate      # Validate config file
 ```
 
 ---
@@ -241,7 +241,7 @@ impl DeviceRegistry {
 ```
 1. New device connects to Gateway
 2. Gateway generates pairing code (6 digits)
-3. User approves via CLI: `aether pairing approve <code>`
+3. User approves via CLI: `aleph pairing approve <code>`
 4. Gateway issues device token
 5. Device stores token for future connections
 ```

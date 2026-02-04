@@ -35,7 +35,7 @@
 
 ### 2.1 Intent 枚举测试
 
-**文件**: `Aether/core/src/payload/intent.rs`
+**文件**: `Aleph/core/src/payload/intent.rs`
 
 ```rust
 #[cfg(test)]
@@ -94,7 +94,7 @@ mod tests {
 
 ### 2.2 Capability 枚举测试
 
-**文件**: `Aether/core/src/payload/capability.rs`
+**文件**: `Aleph/core/src/payload/capability.rs`
 
 ```rust
 #[cfg(test)]
@@ -139,7 +139,7 @@ mod tests {
 
 ### 2.3 ContextFormat 枚举测试
 
-**文件**: `Aether/core/src/payload/context_format.rs`
+**文件**: `Aleph/core/src/payload/context_format.rs`
 
 ```rust
 #[cfg(test)]
@@ -168,7 +168,7 @@ mod tests {
 
 ### 2.4 PayloadBuilder 测试
 
-**文件**: `Aether/core/src/payload/builder.rs`
+**文件**: `Aleph/core/src/payload/builder.rs`
 
 ```rust
 #[cfg(test)]
@@ -251,7 +251,7 @@ mod tests {
 
 ### 2.5 RoutingRuleConfig 解析测试
 
-**文件**: `Aether/core/src/config/mod.rs`
+**文件**: `Aleph/core/src/config/mod.rs`
 
 ```rust
 #[cfg(test)]
@@ -343,7 +343,7 @@ mod tests {
 
 ### 3.1 PromptAssembler 测试
 
-**文件**: `Aether/core/src/payload/assembler.rs`
+**文件**: `Aleph/core/src/payload/assembler.rs`
 
 ```rust
 #[cfg(test)]
@@ -453,7 +453,7 @@ mod tests {
 
 ### 3.2 CapabilityExecutor 测试
 
-**文件**: `Aether/core/src/capability/mod.rs`
+**文件**: `Aleph/core/src/capability/mod.rs`
 
 ```rust
 #[cfg(test)]
@@ -527,7 +527,7 @@ mod tests {
 
 ### 3.3 Router RoutingDecision 测试
 
-**文件**: `Aether/core/src/router/mod.rs`
+**文件**: `Aleph/core/src/router/mod.rs`
 
 ```rust
 #[cfg(test)]
@@ -583,7 +583,7 @@ mod tests {
 
 ### 4.1 完整流程测试（简单场景）
 
-**文件**: `Aether/core/tests/integration_simple.rs`
+**文件**: `Aleph/core/tests/integration_simple.rs`
 
 ```rust
 use alephcore::*;
@@ -658,7 +658,7 @@ async fn test_backward_compatibility_old_config() {
 
 ### 4.2 完整流程测试（带 Memory）
 
-**文件**: `Aether/core/tests/integration_memory.rs`
+**文件**: `Aleph/core/tests/integration_memory.rs`
 
 ```rust
 #[tokio::test]
@@ -871,7 +871,7 @@ pub mod test_helpers {
     use super::*;
 
     pub fn create_test_config_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("aether_test_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("aleph_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

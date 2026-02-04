@@ -715,7 +715,7 @@ mod tests {
             id: Some(123),
             result: Some(serde_json::json!({
                 "role": "assistant",
-                "content": {"type": "text", "text": "Hello from Aether!"}
+                "content": {"type": "text", "text": "Hello from Aleph!"}
             })),
             error: None,
         };
@@ -724,7 +724,7 @@ mod tests {
         assert!(json.contains("\"jsonrpc\":\"2.0\""));
         assert!(json.contains("\"id\":123"));
         assert!(json.contains("\"result\""));
-        assert!(json.contains("Hello from Aether!"));
+        assert!(json.contains("Hello from Aleph!"));
         assert!(!json.contains("\"error\""));
     }
 

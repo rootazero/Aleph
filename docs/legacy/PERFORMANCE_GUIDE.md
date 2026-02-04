@@ -398,7 +398,7 @@ NotificationCenter.default.addObserver(
     queue: .main
 ) { [weak self] notification in
     if let fps = notification.userInfo?["fps"] as? Double {
-        print("[Aether] ⚠️ Performance drop: \(fps) FPS")
+        print("[Aleph] ⚠️ Performance drop: \(fps) FPS")
         // Could automatically reduce quality here
     }
 }

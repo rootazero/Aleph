@@ -1,4 +1,4 @@
-这是一个非常完善的、系统级的交互方案。这个方案将 Aether 从一个简单的对话框提升为一个语义化操作系统启动器 (Semantic OS Launcher)。
+这是一个非常完善的、系统级的交互方案。这个方案将 Aleph 从一个简单的对话框提升为一个语义化操作系统启动器 (Semantic OS Launcher)。
 
 以下是基于我们讨论内容的完整技术实现方案总结，分为架构设计、数据结构、前端交互和后端逻辑四个部分。
 
@@ -139,7 +139,7 @@ Rust 动作：加载 "Translate to English" 的 System Prompt。
 
 执行：用户粘贴一段中文文本 -> 按 Enter。
 
-结果：Aether 直接流式输出英文翻译。
+结果：Aleph 直接流式输出英文翻译。
 
 5. 键盘拦截器 (The Interceptor)
 
@@ -167,4 +167,4 @@ Escape: 退出 Command Mode，返回 Chat Mode。
 
 专业性：胶囊式面包屑和层级补全，给用户极其专业、高效的掌控感。
 
-这套方案实现后，你的 Aether 将拥有比 Raycast 更灵活的“大脑”，比 Cursor 更原生的“触手”。
+这套方案实现后，你的 Aleph 将拥有比 Raycast 更灵活的“大脑”，比 Cursor 更原生的“触手”。

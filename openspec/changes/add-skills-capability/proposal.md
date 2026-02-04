@@ -10,10 +10,10 @@
 
 [Claude Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) 是 Anthropic 发布的开放标准，用于扩展 AI Agent 的能力。Skills 不是可执行代码，而是**动态指令注入**——教 Claude 如何完成特定任务的结构化指南。
 
-OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中间件，需要支持此开放标准：
+OpenAI、GitHub Copilot 等已采用相同规范。Aleph 作为 OS-Level AI 中间件，需要支持此开放标准：
 - 用户可以创建/分享 Skills
 - 与 Claude Code、GitHub Copilot 等工具兼容
-- 扩展 Aether 的任务处理能力
+- 扩展 Aleph 的任务处理能力
 
 ## What Changes
 
@@ -46,7 +46,7 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
    - 从 `SkillsRegistry` 加载匹配的 Skill
 
 3. **SkillsRegistry (skills/registry.rs)**
-   - 管理 Skills 目录 (`~/.aether/skills/`)
+   - 管理 Skills 目录 (`~/.aleph/skills/`)
    - 解析 SKILL.md 文件（YAML frontmatter + Markdown body）
    - 支持热重载
 
@@ -105,7 +105,7 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
 2. **官方 Skills 一键安装**
    - 按钮触发从 `anthropics/skills` 仓库下载
    - 显示下载进度
-   - 自动解析并安装到 `~/.aether/skills/`
+   - 自动解析并安装到 `~/.aleph/skills/`
 
 3. **第三方 Skills 安装（URL）**
    - URL 输入框（支持 GitHub 仓库地址）
@@ -129,26 +129,26 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
 
   ```
   Phase 1-4: Rust Core (已有)
-  ├── Aether/core/src/skills/mod.rs
-  ├── Aether/core/src/skills/registry.rs
-  ├── Aether/core/src/capability/strategies/skills.rs
+  ├── Aleph/core/src/skills/mod.rs
+  ├── Aleph/core/src/skills/registry.rs
+  ├── Aleph/core/src/capability/strategies/skills.rs
   └── ...
 
   Phase 5: Skills Installer (Rust)
-  ├── Aether/core/src/skills/installer.rs (NEW)
-  └── Aether/core/src/skills/mod.rs (ADD installer exports)
+  ├── Aleph/core/src/skills/installer.rs (NEW)
+  └── Aleph/core/src/skills/mod.rs (ADD installer exports)
 
   Phase 6: UniFFI Interface
-  ├── Aether/core/src/aether.udl (ADD Skill types and methods)
-  └── Aether/Sources/Generated/aether.swift (REGENERATE)
+  ├── Aleph/core/src/aleph.udl (ADD Skill types and methods)
+  └── Aleph/Sources/Generated/aleph.swift (REGENERATE)
 
   Phase 7: Skills Settings UI (Swift)
-  ├── Aether/Sources/SkillsSettingsView.swift (NEW)
-  ├── Aether/Sources/Components/Molecules/SkillCard.swift (NEW)
-  └── Aether/Sources/SettingsView.swift (ADD .skills tab)
+  ├── Aleph/Sources/SkillsSettingsView.swift (NEW)
+  ├── Aleph/Sources/Components/Molecules/SkillCard.swift (NEW)
+  └── Aleph/Sources/SettingsView.swift (ADD .skills tab)
 
   Phase 8: Localization
-  └── Aether/Resources/Localizations/*.lproj/Localizable.strings
+  └── Aleph/Resources/Localizations/*.lproj/Localizable.strings
   ```
 
 - **Breaking changes**: None（增量添加）
@@ -273,7 +273,7 @@ When refining text, follow these principles:
 
 **理由**：
 - 减少 UI 复杂度
-- Skills 创建/编辑是高级操作，可直接编辑 `~/.aether/skills/<name>/SKILL.md`
+- Skills 创建/编辑是高级操作，可直接编辑 `~/.aleph/skills/<name>/SKILL.md`
 - 保持设置界面轻量化
 
 ---
@@ -283,6 +283,6 @@ When refining text, follow these principles:
 - [Claude Agent Skills Overview](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)
 - [Anthropic Skills GitHub](https://github.com/anthropics/skills)
 - [Simon Willison: Claude Skills](https://simonwillison.net/2025/Oct/16/claude-skills/)
-- Current CapabilityStrategy: `Aether/core/src/capability/strategy.rs`
-- Existing Settings UI: `Aether/Sources/SettingsView.swift`
-- UI Components: `Aether/Sources/Components/`
+- Current CapabilityStrategy: `Aleph/core/src/capability/strategy.rs`
+- Existing Settings UI: `Aleph/Sources/SettingsView.swift`
+- UI Components: `Aleph/Sources/Components/`

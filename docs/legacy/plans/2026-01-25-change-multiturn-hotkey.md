@@ -7,8 +7,8 @@
 **Architecture:** The hotkey system has three layers:
 1. **Rust Core** (`core/src/config/types/general.rs`): Configuration schema and defaults
 2. **Config Migration** (`core/src/config/migration.rs`): Automatic migration of old hotkey values
-3. **HotkeyService** (`platforms/macos/Aether/Sources/Services/HotkeyService.swift`): Runtime hotkey monitoring
-4. **UI Settings** (`platforms/macos/Aether/Sources/ShortcutsView.swift`): User configuration interface
+3. **HotkeyService** (`platforms/macos/Aleph/Sources/Services/HotkeyService.swift`): Runtime hotkey monitoring
+4. **UI Settings** (`platforms/macos/Aleph/Sources/ShortcutsView.swift`): User configuration interface
 
 **Tech Stack:** Rust (config + migration), Swift (hotkey monitoring + UI), TOML (config files)
 
@@ -23,7 +23,7 @@
 **Files:**
 - Modify: `core/src/config/types/general.rs:71-73`
 - Modify: `shared/config/default-config.toml:60`
-- Modify: `platforms/macos/Aether/config.example.toml:60`
+- Modify: `platforms/macos/Aleph/config.example.toml:60`
 
 **Step 1: Update Rust default hotkey value**
 
@@ -45,7 +45,7 @@ command_prompt = "Option+Space"
 
 **Step 3: Update macOS example config**
 
-In `platforms/macos/Aether/config.example.toml`, change line 60:
+In `platforms/macos/Aleph/config.example.toml`, change line 60:
 
 ```toml
 command_prompt = "Option+Space"
@@ -59,7 +59,7 @@ Expected: Build succeeds, UniFFI bindings regenerated
 **Step 5: Commit Rust config changes**
 
 ```bash
-git add core/src/config/types/general.rs shared/config/default-config.toml platforms/macos/Aether/config.example.toml
+git add core/src/config/types/general.rs shared/config/default-config.toml platforms/macos/Aleph/config.example.toml
 git commit -m "feat(config): change default multi-turn hotkey to Option+Space
 
 BREAKING CHANGE: Default hotkey changed from Command+Option+/ to Option+Space
@@ -237,7 +237,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 3: Update HotkeyService Parsing Logic
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Services/HotkeyService.swift:255-292`
+- Modify: `platforms/macos/Aleph/Sources/Services/HotkeyService.swift:255-292`
 
 **Step 1: Add Esc keycode to parseMultiTurnHotkey method**
 
@@ -267,7 +267,7 @@ Expected: Build succeeds
 **Step 3: Commit HotkeyService changes**
 
 ```bash
-git add platforms/macos/Aether/Sources/Services/HotkeyService.swift
+git add platforms/macos/Aleph/Sources/Services/HotkeyService.swift
 git commit -m "feat(hotkey): add Esc key support for command prompt hotkey
 
 - Add keyCode 53 for Esc/Escape in parseMultiTurnHotkey
@@ -282,9 +282,9 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 4: Update UI Settings Enums and Pickers
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/ShortcutsView.swift:22-24` (default state values)
-- Modify: `platforms/macos/Aether/Sources/ShortcutsView.swift:48-50` (default constants)
-- Modify: `platforms/macos/Aether/Sources/ShortcutsView.swift:767-809` (CommandCharKey enum)
+- Modify: `platforms/macos/Aleph/Sources/ShortcutsView.swift:22-24` (default state values)
+- Modify: `platforms/macos/Aleph/Sources/ShortcutsView.swift:48-50` (default constants)
+- Modify: `platforms/macos/Aleph/Sources/ShortcutsView.swift:767-809` (CommandCharKey enum)
 
 **Step 1: Add Esc to CommandCharKey enum**
 
@@ -367,7 +367,7 @@ Expected: Build succeeds, no compilation errors
 **Step 5: Commit UI changes**
 
 ```bash
-git add platforms/macos/Aether/Sources/ShortcutsView.swift
+git add platforms/macos/Aleph/Sources/ShortcutsView.swift
 git commit -m "feat(ui): update command completion hotkey defaults and add Esc key
 
 - Change default modifiers from Command+Option to Option+Command
@@ -428,12 +428,12 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 6: Update UI Localization Strings
 
 **Files:**
-- Modify: `platforms/macos/Aether/Resources/en.lproj/Localizable.strings:254-256`
-- Modify: `platforms/macos/Aether/Resources/zh-Hans.lproj/Localizable.strings:254-256`
+- Modify: `platforms/macos/Aleph/Resources/en.lproj/Localizable.strings:254-256`
+- Modify: `platforms/macos/Aleph/Resources/zh-Hans.lproj/Localizable.strings:254-256`
 
 **Step 1: Update English localization**
 
-In `platforms/macos/Aether/Resources/en.lproj/Localizable.strings`, change lines 254-256:
+In `platforms/macos/Aleph/Resources/en.lproj/Localizable.strings`, change lines 254-256:
 
 ```strings
 "settings.shortcuts.command_completion_description" = "Press Option+Space to open the conversation window for multi-turn dialogue and commands.";
@@ -443,7 +443,7 @@ In `platforms/macos/Aether/Resources/en.lproj/Localizable.strings`, change lines
 
 **Step 2: Update Chinese localization**
 
-In `platforms/macos/Aether/Resources/zh-Hans.lproj/Localizable.strings`, change lines 254-256:
+In `platforms/macos/Aleph/Resources/zh-Hans.lproj/Localizable.strings`, change lines 254-256:
 
 ```strings
 "settings.shortcuts.command_completion_description" = "按 Option+空格 打开会话窗口，支持多轮对话和命令补全。";
@@ -459,7 +459,7 @@ Expected: Build succeeds, strings compiled
 **Step 4: Commit localization changes**
 
 ```bash
-git add platforms/macos/Aether/Resources/en.lproj/Localizable.strings platforms/macos/Aether/Resources/zh-Hans.lproj/Localizable.strings
+git add platforms/macos/Aleph/Resources/en.lproj/Localizable.strings platforms/macos/Aleph/Resources/zh-Hans.lproj/Localizable.strings
 git commit -m "feat(i18n): update hotkey descriptions to reflect Option+Space
 
 - Update English and Chinese localization strings
@@ -530,7 +530,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 1. Create test config with old hotkey:
    ```bash
-   mkdir -p ~/.aether
+   mkdir -p ~/.aleph
    cat > ~/.aleph/config.toml <<EOF
    [shortcuts]
    command_prompt = "Command+Option+/"
@@ -651,15 +651,15 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ### Files Modified (Total: 9 files)
 1. `core/src/config/types/general.rs` - Rust default
 2. `shared/config/default-config.toml` - Shared config
-3. `platforms/macos/Aether/config.example.toml` - Example config
+3. `platforms/macos/Aleph/config.example.toml` - Example config
 4. `core/src/config/migration.rs` - Migration logic
 5. `core/src/config/load.rs` - Migration call
 6. `core/src/config/tests/migration.rs` - Migration tests
-7. `platforms/macos/Aether/Sources/Services/HotkeyService.swift` - Esc support
-8. `platforms/macos/Aether/Sources/ShortcutsView.swift` - UI defaults + Esc enum
+7. `platforms/macos/Aleph/Sources/Services/HotkeyService.swift` - Esc support
+8. `platforms/macos/Aleph/Sources/ShortcutsView.swift` - UI defaults + Esc enum
 9. `docs/CONFIGURATION.md` - Documentation
-10. `platforms/macos/Aether/Resources/en.lproj/Localizable.strings` - English UI
-11. `platforms/macos/Aether/Resources/zh-Hans.lproj/Localizable.strings` - Chinese UI
+10. `platforms/macos/Aleph/Resources/en.lproj/Localizable.strings` - English UI
+11. `platforms/macos/Aleph/Resources/zh-Hans.lproj/Localizable.strings` - Chinese UI
 12. `core/src/config/tests/serialization.rs` - Test cases
 
 ### Commits Made (Total: 7 commits)

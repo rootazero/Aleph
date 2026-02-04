@@ -359,9 +359,9 @@ impl EventHandler for SessionCompactor {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         match event {
             AlephEvent::LoopContinue(loop_state) => {
                 // Check if we need compaction based on token count

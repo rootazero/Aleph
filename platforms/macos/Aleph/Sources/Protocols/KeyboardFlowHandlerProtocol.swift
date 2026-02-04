@@ -1,6 +1,6 @@
 //
 //  KeyboardFlowHandlerProtocol.swift
-//  Aether
+//  Aleph
 //
 //  Protocol for keyboard-driven UI flow handlers (Clarification, Conversation).
 //  Enables separation of keyboard event handling from HaloWindow.

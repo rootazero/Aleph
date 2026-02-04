@@ -211,7 +211,7 @@ impl AgentPayload {
     pub fn from_routing_decision(
         decision: &crate::router::RoutingDecision,
         user_input: String,
-        context: crate::aether::CapturedContext,
+        context: crate::aleph::CapturedContext,
     ) -> Self {
         // 实现逻辑（参见 02_DATA_STRUCTURES.md）
     }
@@ -1037,12 +1037,12 @@ struct RoutingRuleEditView: View {
 ### Step 10: 单元测试
 
 **测试文件**:
-- `Aether/core/src/payload/intent.rs` - Intent 枚举测试
-- `Aether/core/src/payload/capability.rs` - Capability 枚举测试
-- `Aether/core/src/payload/builder.rs` - PayloadBuilder 测试
-- `Aether/core/src/payload/assembler.rs` - PromptAssembler 测试
-- `Aether/core/src/config/mod.rs` - RoutingRuleConfig 测试
-- `Aether/core/src/router/decision.rs` - RoutingDecision 测试
+- `Aleph/core/src/payload/intent.rs` - Intent 枚举测试
+- `Aleph/core/src/payload/capability.rs` - Capability 枚举测试
+- `Aleph/core/src/payload/builder.rs` - PayloadBuilder 测试
+- `Aleph/core/src/payload/assembler.rs` - PromptAssembler 测试
+- `Aleph/core/src/config/mod.rs` - RoutingRuleConfig 测试
+- `Aleph/core/src/router/decision.rs` - RoutingDecision 测试
 
 **运行命令**:
 ```bash
@@ -1208,7 +1208,7 @@ UniFFI error: Type AgentPayload not found in UDL
 ```
 
 **解决**:
-AgentPayload 不应暴露给 UniFFI，确保没有在 `aether.udl` 中声明。
+AgentPayload 不应暴露给 UniFFI，确保没有在 `aleph.udl` 中声明。
 
 ### 问题 3: 测试找不到 VectorDatabase
 

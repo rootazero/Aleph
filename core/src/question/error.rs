@@ -1,4 +1,4 @@
-// Aether/core/src/question/error.rs
+// Aleph/core/src/question/error.rs
 //! Question error types.
 
 use thiserror::Error;

@@ -16,7 +16,7 @@ The system SHALL distinguish between Command Rules and Keyword Rules.
 #### Scenario: Command rule requires provider
 - **WHEN** rule is classified as "command"
 - **THEN** rule MUST have `provider` field specified
-- **AND** if `provider` is missing, return `AetherError::InvalidConfig`
+- **AND** if `provider` is missing, return `AlephError::InvalidConfig`
 - **AND** rule MAY have `system_prompt` field
 - **AND** `strip_prefix` defaults to true for command rules
 
@@ -111,7 +111,7 @@ The system SHALL determine provider from command rule or default.
 #### Scenario: No provider available
 - **WHEN** no command rule matches
 - **AND** `default_provider` is not configured
-- **THEN** return `AetherError::NoProviderAvailable`
+- **THEN** return `AlephError::NoProviderAvailable`
 - **AND** log error with helpful message
 
 ### Requirement: Builtin Command Rules

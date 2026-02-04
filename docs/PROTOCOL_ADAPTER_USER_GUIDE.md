@@ -121,7 +121,7 @@ differences:
 
   # OpenRouter-specific headers (future feature)
   # extra_headers:
-  #   HTTP-Referer: https://aether.app
+  #   HTTP-Referer: https://aleph.app
   #   X-Title: Aleph Assistant
 ```
 
@@ -482,7 +482,7 @@ You'll be able to specify additional paths in `config.toml`:
 [protocol_extensions]
 paths = [
     "./custom-protocols/my-provider.yaml",
-    "/etc/aether/shared-protocols/company.yaml"
+    "/etc/aleph/shared-protocols/company.yaml"
 ]
 ```
 
@@ -505,7 +505,7 @@ paths = [
 
 2. **Start Aleph** with logging:
    ```bash
-   RUST_LOG=info aether gateway
+   RUST_LOG=info aleph gateway
    ```
 
 3. **Verify initial load**:
@@ -650,7 +650,7 @@ paths = [
 
 1. **Enable debug logging**
    ```bash
-   RUST_LOG=debug aether chat --provider my-provider "test"
+   RUST_LOG=debug aleph chat --provider my-provider "test"
    ```
 
 2. **Examine actual response** in logs:
@@ -732,12 +732,12 @@ paths = [
 
 1. **Test non-streaming first**:
    ```bash
-   aether chat --provider my-provider --no-stream "test"
+   aleph chat --provider my-provider --no-stream "test"
    ```
 
 2. **Enable verbose logging**:
    ```bash
-   RUST_LOG=trace aether chat --provider my-provider --stream "test"
+   RUST_LOG=trace aleph chat --provider my-provider --stream "test"
    ```
 
 3. **Check stream format** in logs:
@@ -793,7 +793,7 @@ paths = [
 **Testing**:
 ```bash
 # Enable debug to see actual headers sent
-RUST_LOG=debug aether chat --provider my-provider "test" 2>&1 | grep -i auth
+RUST_LOG=debug aleph chat --provider my-provider "test" 2>&1 | grep -i auth
 ```
 
 ## Examples
@@ -1007,7 +1007,7 @@ custom:
 
 ```bash
 export MY_PROVIDER_API_KEY="secret-key"
-aether chat --provider my-provider "Hello"
+aleph chat --provider my-provider "Hello"
 ```
 
 **Benefits**:

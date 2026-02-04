@@ -63,7 +63,7 @@ impl Default for RigAgentConfig {
             max_tokens: default_max_tokens(),
             max_turns: default_max_turns(),
             timeout_seconds: default_timeout_seconds(),
-            system_prompt: "You are Aether, an intelligent assistant.".to_string(),
+            system_prompt: "You are Aleph, an intelligent assistant.".to_string(),
             api_key: None,
             base_url: None,
         }

@@ -5,7 +5,7 @@
 
 ## Why
 
-Currently, Aether's `process_input` API only accepts string input, limiting users to text-only interactions. Modern AI providers (OpenAI GPT-4o, Claude 3.5) support multimodal input including images, and users frequently need to process:
+Currently, Aleph's `process_input` API only accepts string input, limiting users to text-only interactions. Modern AI providers (OpenAI GPT-4o, Claude 3.5) support multimodal input including images, and users frequently need to process:
 1. **Images** from clipboard (screenshots, photos)
 2. **Videos** or video frames (for future AI video understanding)
 3. **Text files** dragged into applications
@@ -20,7 +20,7 @@ The current architecture:
 
 ### Content Acquisition Methods Comparison
 
-Aether uses two methods to capture content, which have **fundamentally different capabilities**:
+Aleph uses two methods to capture content, which have **fundamentally different capabilities**:
 
 | Content Type | Command+C/X (Clipboard) | Accessibility API |
 |-------------|------------------------|-------------------|
@@ -83,13 +83,13 @@ The data fed to AI follows this sequence:
 - `content-extractor` - **NEW** Extensible content extractor architecture
 
 ### Affected code
-- `Aether/Sources/Utils/ClipboardManager.swift`
-- `Aether/Sources/AppDelegate.swift`
-- `Aether/core/src/core.rs`
-- `Aether/core/src/aether.udl`
-- `Aether/core/src/payload/mod.rs`
-- `Aether/core/src/providers/openai.rs`
-- `Aether/core/src/providers/claude.rs`
+- `Aleph/Sources/Utils/ClipboardManager.swift`
+- `Aleph/Sources/AppDelegate.swift`
+- `Aleph/core/src/core.rs`
+- `Aleph/core/src/aleph.udl`
+- `Aleph/core/src/payload/mod.rs`
+- `Aleph/core/src/providers/openai.rs`
+- `Aleph/core/src/providers/claude.rs`
 
 ### Breaking Changes
 - **BREAKING**: `process_input` API signature change (requires Swift layer update)

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use crate::dispatcher::DEFAULT_MAX_RETRIES;
 use crate::event::{
-    AetherEvent, ErrorKind, EventContext, EventHandler, EventType, HandlerError, TokenUsage,
+    AlephEvent, ErrorKind, EventContext, EventHandler, EventType, HandlerError, TokenUsage,
     ToolCallError, ToolCallRequest, ToolCallResult, ToolCallRetry, ToolCallStarted,
 };
 
@@ -218,7 +218,7 @@ impl ToolExecutor {
                     let delay_ms = self.calculate_delay(attempt);
 
                     // Publish ToolCallRetrying event
-                    let retry_event = AetherEvent::ToolCallRetrying(ToolCallRetry {
+                    let retry_event = AlephEvent::ToolCallRetrying(ToolCallRetry {
                         call_id: call_id.to_string(),
                         attempt,
                         delay_ms,
@@ -259,12 +259,12 @@ impl EventHandler for ToolExecutor {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Only handle ToolCallRequested events
         let request = match event {
-            AetherEvent::ToolCallRequested(req) => req,
+            AlephEvent::ToolCallRequested(req) => req,
             _ => return Ok(vec![]),
         };
 
@@ -273,7 +273,7 @@ impl EventHandler for ToolExecutor {
         let started_at = chrono::Utc::now().timestamp_millis();
 
         // Publish ToolCallStarted event
-        let started_event = AetherEvent::ToolCallStarted(ToolCallStarted {
+        let started_event = AlephEvent::ToolCallStarted(ToolCallStarted {
             call_id: call_id.clone(),
             tool: request.tool.clone(),
             input: request.parameters.clone(),
@@ -290,7 +290,7 @@ impl EventHandler for ToolExecutor {
         match result {
             Ok((output, _attempts)) => {
                 // Return ToolCallCompleted event
-                Ok(vec![AetherEvent::ToolCallCompleted(ToolCallResult {
+                Ok(vec![AlephEvent::ToolCallCompleted(ToolCallResult {
                     call_id,
                     tool: request.tool.clone(),
                     input: request.parameters.clone(),
@@ -303,7 +303,7 @@ impl EventHandler for ToolExecutor {
             }
             Err((error, error_kind, attempts)) => {
                 // Return ToolCallFailed event
-                Ok(vec![AetherEvent::ToolCallFailed(ToolCallError {
+                Ok(vec![AlephEvent::ToolCallFailed(ToolCallError {
                     call_id,
                     tool: request.tool.clone(),
                     error,
@@ -521,7 +521,7 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         // LoopStop event should be ignored
-        let event = AetherEvent::LoopStop(StopReason::Completed);
+        let event = AlephEvent::LoopStop(StopReason::Completed);
         let result = executor.handle(&event, &ctx).await.unwrap();
 
         assert!(result.is_empty());
@@ -539,13 +539,13 @@ mod tests {
             plan_step_id: None,
         };
 
-        let event = AetherEvent::ToolCallRequested(request);
+        let event = AlephEvent::ToolCallRequested(request);
         let result = executor.handle(&event, &ctx).await.unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AetherEvent::ToolCallCompleted(_)));
+        assert!(matches!(result[0], AlephEvent::ToolCallCompleted(_)));
 
-        if let AetherEvent::ToolCallCompleted(completed) = &result[0] {
+        if let AlephEvent::ToolCallCompleted(completed) = &result[0] {
             assert_eq!(completed.tool, "test_tool");
             assert!(completed.output.contains("test_tool"));
             assert!(completed.completed_at >= completed.started_at);
@@ -566,7 +566,7 @@ mod tests {
             plan_step_id: None,
         };
 
-        let event = AetherEvent::ToolCallRequested(request);
+        let event = AlephEvent::ToolCallRequested(request);
 
         // Handle in background so we can receive events
         let handle = tokio::spawn({
@@ -584,7 +584,7 @@ mod tests {
 
         assert!(received.is_ok());
         if let Ok(Ok(timestamped)) = received {
-            assert!(matches!(timestamped.event, AetherEvent::ToolCallStarted(_)));
+            assert!(matches!(timestamped.event, AlephEvent::ToolCallStarted(_)));
         }
 
         handle.await.unwrap().unwrap();
@@ -605,13 +605,13 @@ mod tests {
             plan_step_id: None,
         };
 
-        let event = AetherEvent::ToolCallRequested(request);
+        let event = AlephEvent::ToolCallRequested(request);
         let result = executor.handle(&event, &ctx).await.unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AetherEvent::ToolCallFailed(_)));
+        assert!(matches!(result[0], AlephEvent::ToolCallFailed(_)));
 
-        if let AetherEvent::ToolCallFailed(error) = &result[0] {
+        if let AlephEvent::ToolCallFailed(error) = &result[0] {
             assert_eq!(error.error_kind, ErrorKind::Aborted);
             assert!(!error.is_retryable);
         }

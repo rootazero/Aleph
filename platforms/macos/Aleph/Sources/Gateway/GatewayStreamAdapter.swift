@@ -1,6 +1,6 @@
 //
 //  GatewayStreamAdapter.swift
-//  Aether
+//  Aleph
 //
 //  Adapter that bridges Gateway WebSocket events to Halo UI callbacks.
 //  Enables conversations via the Gateway control plane.

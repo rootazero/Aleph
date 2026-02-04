@@ -647,13 +647,13 @@ pub mod mcp {
     }
 
     impl InitializeParams {
-        /// Create default initialize params for Aether
-        pub fn aether_default() -> Self {
+        /// Create default initialize params for Aleph
+        pub fn aleph_default() -> Self {
             Self {
                 protocol_version: "2024-11-05".to_string(),
                 capabilities: ClientCapabilities::default(),
                 client_info: ClientInfo {
-                    name: "Aether".to_string(),
+                    name: "Aleph".to_string(),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
             }
@@ -838,8 +838,8 @@ mod tests {
 
     #[test]
     fn test_mcp_initialize_params() {
-        let params = mcp::InitializeParams::aether_default();
-        assert_eq!(params.client_info.name, "Aether");
+        let params = mcp::InitializeParams::aleph_default();
+        assert_eq!(params.client_info.name, "Aleph");
         let json = serde_json::to_string(&params).unwrap();
         assert!(json.contains("protocolVersion"));
     }

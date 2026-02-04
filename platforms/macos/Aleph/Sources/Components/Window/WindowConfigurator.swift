@@ -1,6 +1,6 @@
 //
 //  WindowConfigurator.swift
-//  Aether
+//  Aleph
 //
 //  Configures NSWindow to hide native traffic lights for custom window design.
 //  Also enforces strict window size constraints that SwiftUI's Settings scene ignores.

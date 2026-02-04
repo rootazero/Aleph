@@ -146,7 +146,7 @@ async fn dispatch_command(&self, input: String) {
 
 UI: /git 变成一个胶囊（Token）。
 
-Context: Aether 知道当前上下文在 Git 命名空间下。
+Context: Aleph 知道当前上下文在 Git 命名空间下。
 
 Completion: 此时 Halo 自动列出 Git MCP Server 提供的 tools 列表 (commit, push, status)。
 
@@ -162,7 +162,7 @@ Completion: 此时 Halo 自动列出 Git MCP Server 提供的 tools 列表 (comm
 
 对 UI：通过 图标和标签 区分来源，而不是通过冗长的文本前缀。
 
-现在的 Aether 使用起来会是这样：
+现在的 Aleph 使用起来会是这样：
 
 /search (调用 Rust)
 

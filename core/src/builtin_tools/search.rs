@@ -195,7 +195,7 @@ impl Clone for SearchTool {
 
 /// Implementation of AlephTool trait for SearchTool
 ///
-/// This allows SearchTool to be used with Aether's unified tool system.
+/// This allows SearchTool to be used with Aleph's unified tool system.
 #[async_trait]
 impl AlephTool for SearchTool {
     const NAME: &'static str = "search";

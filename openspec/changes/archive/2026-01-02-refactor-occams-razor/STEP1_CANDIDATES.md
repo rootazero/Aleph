@@ -2,7 +2,7 @@
 
 **Generated**: 2026-01-02
 **Method**: Automated codebase analysis via exploration agent
-**Scope**: Rust core (`Aether/core/src/`) + Swift UI (`Aether/Sources/`)
+**Scope**: Rust core (`Aleph/core/src/`) + Swift UI (`Aleph/Sources/`)
 
 ---
 
@@ -10,7 +10,7 @@
 
 ### #1: Excessive Mutex Lock Boilerplate
 
-**Location**: `Aether/core/src/core.rs`
+**Location**: `Aleph/core/src/core.rs`
 **Lines**: Throughout file (20+ occurrences)
 
 **Code Pattern**:
@@ -36,7 +36,7 @@ let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
 
 ### #2: Redundant Memory DB Null Checks
 
-**Location**: `Aether/core/src/core.rs`
+**Location**: `Aleph/core/src/core.rs`
 **Lines**: 553-558, 564-573, 599-606, 609-621, and others
 
 **Code Snippet**:
@@ -45,7 +45,7 @@ pub fn get_memory_stats(&self) -> Result<MemoryStats> {
     let db = self
         .memory_db
         .as_ref()
-        .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+        .ok_or_else(|| AlephError::config("Memory database not initialized"))?;
     // ... rest of method
 }
 ```
@@ -63,7 +63,7 @@ pub fn get_memory_stats(&self) -> Result<MemoryStats> {
 
 ### #3: Duplicated Provider Menu Rebuild Logic
 
-**Location**: `Aether/Sources/AppDelegate.swift`
+**Location**: `Aleph/Sources/AppDelegate.swift`
 **Lines**: 261-317 (rebuildProvidersMenu), 355-407 (rebuildInputModeMenu)
 
 **Code Pattern**:
@@ -88,7 +88,7 @@ pub fn get_memory_stats(&self) -> Result<MemoryStats> {
 
 ### #4: Redundant Error Conversion Boilerplate
 
-**Location**: `Aether/core/src/core.rs`
+**Location**: `Aleph/core/src/core.rs`
 **Lines**: 1022-1038 (process_input), 1059-1070 (process_with_ai)
 
 **Code Snippet**:
@@ -101,7 +101,7 @@ match self.process_with_ai_internal(input, context, start_time) {
         error!(error = ?e, user_message = %friendly_message, "AI processing failed");
         self.event_handler.on_error(friendly_message, suggestion);
         self.event_handler.on_state_changed(ProcessingState::Error);
-        Err(AetherException::Error)
+        Err(AlephException::Error)
     }
 }
 ```
@@ -119,7 +119,7 @@ match self.process_with_ai_internal(input, context, start_time) {
 
 ### #5: Over-Complex Nested Match in Async Code
 
-**Location**: `Aether/core/src/core.rs`
+**Location**: `Aleph/core/src/core.rs`
 **Lines**: 1188-1239 (process_with_ai_internal)
 
 **Code Structure**:
@@ -154,7 +154,7 @@ self.runtime.block_on(async {
 
 ### #6: Unused Dependency: tokio-util
 
-**Location**: `Aether/core/Cargo.toml:20`
+**Location**: `Aleph/core/Cargo.toml:20`
 **Usage**: Only in `core.rs` for legacy `CancellationToken` (now handled in Swift)
 
 **Why it violates Occam's Razor**:
@@ -174,7 +174,7 @@ self.runtime.block_on(async {
 
 ### #7: Duplicated Config Reload Observer Pattern
 
-**Location**: `Aether/Sources/EventHandler.swift`
+**Location**: `Aleph/Sources/EventHandler.swift`
 **Lines**: 119-150 (onConfigChanged callback), 444-454 (setupInternalConfigSaveObserver)
 
 **Why it violates Occam's Razor**:
@@ -190,7 +190,7 @@ self.runtime.block_on(async {
 
 ### #8: Over-Abstracted ProviderConfigEntry Wrapper
 
-**Location**: `Aether/core/src/config/mod.rs:124-129`
+**Location**: `Aleph/core/src/config/mod.rs:124-129`
 
 **Code**:
 ```rust
@@ -216,7 +216,7 @@ pub struct ProviderConfigEntry {
 
 ### #9: Redundant Provider Type Inference
 
-**Location**: `Aether/core/src/config/mod.rs` (around lines 200-250)
+**Location**: `Aleph/core/src/config/mod.rs` (around lines 200-250)
 
 **Code Pattern**:
 ```rust
@@ -244,7 +244,7 @@ fn infer_provider_type(name: &str) -> String {
 
 ### #10: Excessive Clone Operations
 
-**Location**: Throughout `Aether/core/src/` (198 occurrences)
+**Location**: Throughout `Aleph/core/src/` (198 occurrences)
 
 **Examples** (from `core.rs`):
 ```rust
@@ -269,7 +269,7 @@ let response_copy = response.clone();  // Used 2 times
 
 ### #11: Duplicated Test Provider Logic
 
-**Location**: `Aether/core/src/core.rs:1366-1500`
+**Location**: `Aleph/core/src/core.rs:1366-1500`
 
 **Code Pattern**:
 ```rust
@@ -302,11 +302,11 @@ pub fn test_provider_connection_with_config(
 
 ### #12: Over-Engineered Error Type Hierarchy
 
-**Location**: `Aether/core/src/error.rs:8-109`
+**Location**: `Aleph/core/src/error.rs:8-109`
 
 **Code Pattern**:
 ```rust
-pub enum AetherError {
+pub enum AlephError {
     HotkeyError { message: String, suggestion: Option<String> },
     ClipboardError { message: String, suggestion: Option<String> },
     InputSimulationError { message: String, suggestion: Option<String> },
@@ -329,7 +329,7 @@ pub enum AetherError {
 
 ### #13: Redundant Permission Check Methods
 
-**Location**: `Aether/Sources/Utils/PermissionManager.swift:85-115`
+**Location**: `Aleph/Sources/Utils/PermissionManager.swift:85-115`
 
 **Code Pattern**:
 ```swift
@@ -355,7 +355,7 @@ private func checkInputMonitoringViaHID() { /* ... */ }
 
 ### #14: Duplicated Alert Creation Logic
 
-**Location**: `Aether/Sources/RoutingView.swift`
+**Location**: `Aleph/Sources/RoutingView.swift`
 **Lines**: 330-337, 413-419, 440-446
 
 **Code Pattern**:
@@ -383,7 +383,7 @@ alert.runModal()
 
 ### #15: Unused Dependency: futures_util
 
-**Location**: `Aether/core/Cargo.toml:32`
+**Location**: `Aleph/core/Cargo.toml:32`
 **Usage**: Only in `initialization.rs` for `StreamExt`
 
 **Why it violates Occam's Razor**:
@@ -398,7 +398,7 @@ alert.runModal()
 
 ### #16: Unused Dependency: once_cell
 
-**Location**: `Aether/core/Cargo.toml:28`
+**Location**: `Aleph/core/Cargo.toml:28`
 **Usage**: Only in `memory/embedding.rs`
 
 **Why it violates Occam's Razor**:
@@ -413,7 +413,7 @@ alert.runModal()
 
 ### #17: Redundant Color Parsing Logic
 
-**Location**: `Aether/Sources/EventHandler.swift:282-297`
+**Location**: `Aleph/Sources/EventHandler.swift:282-297`
 
 **Code**:
 ```swift
@@ -442,7 +442,7 @@ private func parseHexColor(_ hex: String) -> Color? {
 
 **Example**:
 ```rust
-AetherError::hotkey(msg.into())  // Could use msg.to_string()
+AlephError::hotkey(msg.into())  // Could use msg.to_string()
 ```
 
 **Why it violates Occam's Razor**:

@@ -36,7 +36,7 @@ This change completes Phase 2 by ensuring the macOS client is production-ready, 
 - Test Rust callback error handling
 
 ### Documentation
-- Create `Aether/README.md` with:
+- Create `Aleph/README.md` with:
   - Build instructions (Xcode + Rust core)
   - Permission requirements
   - Architecture overview diagram
@@ -64,7 +64,7 @@ This change completes Phase 2 by ensuring the macOS client is production-ready, 
 
 **Affected code:**
 - New file: `Scripts/copy_rust_libs.sh`
-- New file: `Aether/README.md`
+- New file: `Aleph/README.md`
 - Xcode project: Add build phase
 - All Swift files: Code quality improvements
 

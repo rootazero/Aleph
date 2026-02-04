@@ -196,11 +196,11 @@ AlertHelper.showWarning("Error", message: message)
 
 // AFTER: 1 parameterized test
 #[rstest]
-#[case::hotkey(AetherError::hotkey("test"), "Hotkey listener error")]
-#[case::clipboard(AetherError::clipboard("test"), "Clipboard error")]
-#[case::network(AetherError::network("test"), "Network error")]
+#[case::hotkey(AlephError::hotkey("test"), "Hotkey listener error")]
+#[case::clipboard(AlephError::clipboard("test"), "Clipboard error")]
+#[case::network(AlephError::network("test"), "Network error")]
 // ... more cases
-fn test_error_variants(#[case] error: AetherError, #[case] expected: &str) {
+fn test_error_variants(#[case] error: AlephError, #[case] expected: &str) {
     assert!(error.to_string().contains(expected));
     assert!(error.suggestion().is_some());
 }

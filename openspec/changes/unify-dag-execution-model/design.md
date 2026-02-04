@@ -282,7 +282,7 @@ pub enum ActionResult {
 4. Add integration tests
 
 ### Phase 3: batch_execute Tool
-1. Implement batch_execute as AetherTool
+1. Implement batch_execute as AlephTool
 2. Wire into tool registry
 3. Test with LLM
 

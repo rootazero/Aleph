@@ -298,7 +298,7 @@ mod integration_tests {
 
         // Simulate a conversation about a project
         let conversation = vec![
-            ("What should we name the project?", "Let's call it Aether."),
+            ("What should we name the project?", "Let's call it Aleph."),
             ("When is the deadline?", "The deadline is December 31st."),
             (
                 "Who is on the team?",

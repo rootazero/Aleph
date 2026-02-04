@@ -2,13 +2,13 @@
 
 ## Phase 1: SearchRegistry Integration (4h)
 
-### Task 1.1: Add SearchRegistry field to AetherCore (1h)
+### Task 1.1: Add SearchRegistry field to AlephCore (1h)
 - [ ] Add `search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>` field
 - [ ] Update constructor to initialize from config
 - [ ] Handle config.search = None case
 - [ ] Add helper method `create_search_registry_from_config()`
 
-**Validation**: AetherCore compiles with new field
+**Validation**: AlephCore compiles with new field
 
 ---
 
@@ -24,12 +24,12 @@
 
 ---
 
-### Task 1.3: Implement test_search_provider() in AetherCore (1h)
+### Task 1.3: Implement test_search_provider() in AlephCore (1h)
 - [ ] Add async method `pub async fn test_search_provider(&self, provider_name: String) -> ProviderTestResult`
 - [ ] Acquire read lock on search_registry
 - [ ] Delegate to `registry.test_search_provider(name).await`
 - [ ] Handle case where search is disabled
-- [ ] Uncomment UniFFI method declaration in aether.udl
+- [ ] Uncomment UniFFI method declaration in aleph.udl
 
 **Validation**: Method compiles and returns ProviderTestResult
 
@@ -123,7 +123,7 @@
 ### Task 4.1: Regenerate Swift bindings (0.5h)
 - [ ] Run `cargo build --release` to rebuild Rust library
 - [ ] Run `uniffi-bindgen generate` to regenerate Swift bindings
-- [ ] Copy updated `aether.swift` to Swift source directory
+- [ ] Copy updated `aleph.swift` to Swift source directory
 - [ ] Copy `libaethecore.dylib` to Frameworks directory
 
 **Validation**: Swift project compiles with new bindings

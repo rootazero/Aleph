@@ -26,7 +26,7 @@
 
 ## Why (Original)
 
-当前 Aether 存在两个独立的设置界面来管理"后台能力"：
+当前 Aleph 存在两个独立的设置界面来管理"后台能力"：
 
 1. **McpSettingsView** - 管理 MCP Servers（内置 + 外部扩展）
 2. **SkillsSettingsView** - 管理 Claude Agent Skills（用户安装的 prompt 模板）
@@ -40,7 +40,7 @@
 
 ### 设计目标
 
-针对 Aether 这样一个"幽灵般"的系统级 Agent，其设置界面不仅是参数配置的地方，更是 **Skills（能力）的控制塔**。设计目标是：
+针对 Aleph 这样一个"幽灵般"的系统级 Agent，其设置界面不仅是参数配置的地方，更是 **Skills（能力）的控制塔**。设计目标是：
 
 - **可视化不可见的服务**：让后台运行的进程状态清晰可见
 - **简化复杂的参数注入**：将 CLI 参数、环境变量、权限等复杂配置简化为友好表单
@@ -179,13 +179,13 @@ struct UnifiedSkillConfig {
 - (新建) `skills-settings-ui` - Skills 设置 UI 规范
 
 ### Affected Code
-- `Aether/Sources/McpSettingsView.swift` → `SkillsSettingsView.swift` (重写)
-- `Aether/Sources/SkillsSettingsView.swift` (删除，合并到上面)
-- `Aether/Sources/SettingsView.swift` (更新 Tab 配置)
-- `Aether/Sources/Components/Window/RootContentView.swift` (更新导航)
-- `Aether/core/src/config/mod.rs` (统一配置模型)
-- `Aether/core/src/aether.udl` (更新 UniFFI 接口)
-- `Aether/Resources/*/Localizable.strings` (新增本地化字符串)
+- `Aleph/Sources/McpSettingsView.swift` → `SkillsSettingsView.swift` (重写)
+- `Aleph/Sources/SkillsSettingsView.swift` (删除，合并到上面)
+- `Aleph/Sources/SettingsView.swift` (更新 Tab 配置)
+- `Aleph/Sources/Components/Window/RootContentView.swift` (更新导航)
+- `Aleph/core/src/config/mod.rs` (统一配置模型)
+- `Aleph/core/src/aleph.udl` (更新 UniFFI 接口)
+- `Aleph/Resources/*/Localizable.strings` (新增本地化字符串)
 
 ### Breaking Changes
 - **配置迁移**：旧版 `[mcp]` 和 `[skills]` 配置将自动迁移到新的统一格式

@@ -122,7 +122,7 @@ git commit -m "feat(tauri): add ContentDisplayState type for halo window"
 import { create } from 'zustand';
 import { commands } from '@/lib/commands';
 import {
-  subscribeToAetherEvents,
+  subscribeToAlephEvents,
   type AlephEventHandlers,
   type StreamChunkPayload,
   type CompletePayload,
@@ -506,7 +506,7 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
       },
     };
 
-    const unsubscribe = await subscribeToAetherEvents(handlers);
+    const unsubscribe = await subscribeToAlephEvents(handlers);
     set({ unsubscribe });
     console.log('[UnifiedHaloStore] Initialized');
   },

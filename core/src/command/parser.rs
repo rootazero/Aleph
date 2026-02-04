@@ -1,6 +1,6 @@
 //! Unified Slash Command Parser
 //!
-//! This module provides a unified parser for all slash commands in Aether:
+//! This module provides a unified parser for all slash commands in Aleph:
 //! - Builtin commands (search, youtube, webfetch, agent)
 //! - MCP tool commands
 //! - Skill commands

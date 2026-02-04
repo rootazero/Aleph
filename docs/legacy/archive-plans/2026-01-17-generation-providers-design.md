@@ -223,7 +223,7 @@ default_audio_provider = "stability"
 default_speech_provider = "openai-tts"
 
 # 输出设置
-output_dir = "~/Downloads/Aether/generated"
+output_dir = "~/Downloads/Aleph/generated"
 auto_paste_threshold_mb = 5        # 小于 5MB 自动粘贴
 background_task_threshold_seconds = 30  # 超过 30s 转后台
 
@@ -657,7 +657,7 @@ impl GenerationExecutor {
 ### UDL 接口定义
 
 ```udl
-// core/src/aether.udl (新增部分)
+// core/src/aleph.udl (新增部分)
 
 enum GenerationType {
     "Image",
@@ -811,7 +811,7 @@ Aleph/core/src/
 ├── dispatcher/
 │   └── registry.rs                 # 【修改】
 ├── lib.rs                          # 【修改】
-└── aether.udl                      # 【修改】
+└── aleph.udl                      # 【修改】
 
 Aleph/Sources/
 ├── GenerationHandler.swift         # 【新增】

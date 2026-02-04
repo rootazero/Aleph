@@ -1,6 +1,6 @@
 //
 //  AdaptiveGlassModifier.swift
-//  Aether
+//  Aleph
 //
 //  Adaptive glass effect with backward compatibility:
 //  - macOS 26+: Native Liquid Glass using glassEffect API

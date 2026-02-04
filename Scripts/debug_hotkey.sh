@@ -1,43 +1,43 @@
 #!/bin/bash
-# Aether hotkey diagnostic script
+# Aleph hotkey diagnostic script
 
-echo "=== Aether 热键诊断工具 ==="
+echo "=== Aleph 热键诊断工具 ==="
 echo ""
 
 # 1. Check if application is running
-echo "1. 检查 Aether 应用状态..."
-if pgrep -x "Aether" > /dev/null; then
-    echo "   ✅ Aether 正在运行"
-    echo "   进程 ID: $(pgrep -x Aether)"
+echo "1. 检查 Aleph 应用状态..."
+if pgrep -x "Aleph" > /dev/null; then
+    echo "   ✅ Aleph 正在运行"
+    echo "   进程 ID: $(pgrep -x Aleph)"
 else
-    echo "   ❌ Aether 未运行"
-    echo "   请先启动 Aether 应用"
+    echo "   ❌ Aleph 未运行"
+    echo "   请先启动 Aleph 应用"
 fi
 echo ""
 
 # 2. Check Accessibility permission
 echo "2. 检查 Accessibility 权限..."
 echo "   请手动检查: 系统设置 → 隐私与安全性 → 辅助功能"
-echo "   确保 'Aether' 已勾选"
+echo "   确保 'Aleph' 已勾选"
 echo ""
 
 # 3. Check Rust core library
 echo "3. 检查 Rust core 库..."
-DYLIB_PATH="Aether/Frameworks/libaethecore.dylib"
+DYLIB_PATH="Aleph/Frameworks/libaethecore.dylib"
 if [ -f "$DYLIB_PATH" ]; then
     echo "   ✅ 找到 Rust core 库: $DYLIB_PATH"
     echo "   文件大小: $(ls -lh "$DYLIB_PATH" | awk '{print $5}')"
     echo "   修改时间: $(ls -l "$DYLIB_PATH" | awk '{print $6, $7, $8}')"
 else
     echo "   ❌ 未找到 Rust core 库"
-    echo "   请运行: cd Aether/core && cargo build"
+    echo "   请运行: cd Aleph/core && cargo build"
 fi
 echo ""
 
 # 4. View recent application logs
 echo "4. 查看最近的应用日志..."
 echo "   运行以下命令查看实时日志:"
-echo "   log stream --predicate 'processImagePath contains \"Aether\"' --level debug"
+echo "   log stream --predicate 'processImagePath contains \"Aleph\"' --level debug"
 echo ""
 
 # 5. Hotkey testing info
@@ -54,6 +54,6 @@ echo ""
 echo "=== 诊断完成 ==="
 echo ""
 echo "如果问题仍未解决，请提供以下信息:"
-echo "1. 控制台中是否有 '[Aether] Hotkey listening started' 消息"
+echo "1. 控制台中是否有 '[Aleph] Hotkey listening started' 消息"
 echo "2. 是否授予了 Accessibility 权限"
 echo "3. 运行 'log stream' 命令后按热键时的输出"

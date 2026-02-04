@@ -16,8 +16,8 @@
   - [x] Claude: temperature 0-1, max_tokens > 0, top_p 0-1, top_k > 0
   - [x] Gemini: temperature 0-2, maxOutputTokens > 0, topP 0-1, topK > 0, thinking_level enum
   - [x] Ollama: temperature >= 0, num_predict > 0, top_k > 0, top_p 0-1, repeat_penalty >= 0
-- [x] 2.3 Update UniFFI interface definition in `aether.udl` with new ProviderConfig fields
-- [x] 2.4 Regenerate Swift bindings: `cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/`
+- [x] 2.3 Update UniFFI interface definition in `aleph.udl` with new ProviderConfig fields
+- [x] 2.4 Regenerate Swift bindings: `cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/`
 
 ## 3. Update Provider Type Detection
 - [x] 3.1 Enhance `infer_provider_type()` to support Gemini provider detection

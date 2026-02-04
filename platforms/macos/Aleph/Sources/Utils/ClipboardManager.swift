@@ -37,7 +37,7 @@ class ClipboardManager {
 
     // MARK: - Private Properties
 
-    private let logger = Logger(subsystem: "com.aether", category: "ClipboardManager")
+    private let logger = Logger(subsystem: "com.aleph", category: "ClipboardManager")
     private var extractorsSetup = false
 
     /// Private initializer to encourage singleton usage

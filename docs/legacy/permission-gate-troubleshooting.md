@@ -59,17 +59,17 @@ open /path/to/Aleph.app
 **B. Verify Permissions in System Settings:**
 1. Open **System Settings** → **Privacy & Security**
 2. Click **Accessibility**
-   - Ensure "Aether" is in the list and **CHECKED**
+   - Ensure "Aleph" is in the list and **CHECKED**
 3. Click **Input Monitoring**
-   - Ensure "Aether" is in the list and **CHECKED**
+   - Ensure "Aleph" is in the list and **CHECKED**
 
 **C. Reset Permissions Database (macOS):**
 ```bash
 # Reset Accessibility permissions database (requires admin)
-sudo tccutil reset Accessibility com.aether.Aether
+sudo tccutil reset Accessibility com.aleph.Aleph
 
 # Reset Input Monitoring permissions database
-sudo tccutil reset ListenEvent com.aether.Aether
+sudo tccutil reset ListenEvent com.aleph.Aleph
 
 # Restart Aleph and grant permissions again
 ```
@@ -86,7 +86,7 @@ sudo tccutil reset ListenEvent com.aether.Aether
 **1. Check Console Logs:**
 ```bash
 # Tail Aleph logs
-log stream --predicate 'process == "Aether"' --level debug
+log stream --predicate 'process == "Aleph"' --level debug
 ```
 
 Look for:
@@ -148,7 +148,7 @@ codesign -s - -f --deep /path/to/Aleph.app
 ```
 
 **C. Check Entitlements File:**
-Ensure `Aether/Aleph.entitlements` contains:
+Ensure `Aleph/Aleph.entitlements` contains:
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -198,7 +198,7 @@ Monitor permission changes in real-time:
 
 ```bash
 # In Xcode console or terminal
-log stream --predicate 'subsystem == "com.aether.Aether" AND category == "PermissionStatusMonitor"' --level debug
+log stream --predicate 'subsystem == "com.aleph.Aleph" AND category == "PermissionStatusMonitor"' --level debug
 ```
 
 Expected output when granting permission:
@@ -226,7 +226,7 @@ If permissions seem stuck, force a re-check:
 killall Aleph
 
 # Clear macOS TCC cache (requires restart)
-sudo tccutil reset All com.aether.Aether
+sudo tccutil reset All com.aleph.Aleph
 
 # Restart Mac (recommended)
 sudo reboot
@@ -260,7 +260,7 @@ If issues persist, file a bug report with:
 
 1. **Console Logs:**
    ```bash
-   log show --predicate 'process == "Aether"' --last 5m > aether_logs.txt
+   log show --predicate 'process == "Aleph"' --last 5m > aleph_logs.txt
    ```
 
 2. **Permission Status:**
@@ -279,7 +279,7 @@ If issues persist, file a bug report with:
    - What you expected
    - What actually happened
 
-Submit to: https://github.com/anthropics/aether/issues
+Submit to: https://github.com/anthropics/aleph/issues
 
 ## Related Documentation
 

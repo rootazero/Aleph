@@ -211,7 +211,7 @@ impl std::fmt::Display for FactSpecificity {
 pub enum TemporalScope {
     /// Long-term valid: "User's native language is Chinese"
     Permanent,
-    /// Context-related: "User is working on Aether project"
+    /// Context-related: "User is working on Aleph project"
     #[default]
     Contextual,
     /// Short-term valid: "User wants to focus on docs today"

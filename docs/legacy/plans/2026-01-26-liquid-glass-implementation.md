@@ -13,7 +13,7 @@
 ## 文件路径约定
 
 ```
-platforms/macos/Aether/Sources/
+platforms/macos/Aleph/Sources/
 ├── LiquidGlass/                              # 新建目录
 │   ├── Metal/
 │   │   ├── Shaders/
@@ -41,11 +41,11 @@ platforms/macos/Aether/Sources/
 ## Task 1: 创建 Shader 类型定义文件
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/LiquidGlass/Metal/Shaders/ShaderTypes.h`
+- Create: `platforms/macos/Aleph/Sources/LiquidGlass/Metal/Shaders/ShaderTypes.h`
 
 **Step 1: 创建目录结构**
 
-Run: `mkdir -p platforms/macos/Aether/Sources/LiquidGlass/Metal/Shaders platforms/macos/Aether/Sources/LiquidGlass/ColorSampling platforms/macos/Aether/Sources/LiquidGlass/Physics`
+Run: `mkdir -p platforms/macos/Aleph/Sources/LiquidGlass/Metal/Shaders platforms/macos/Aleph/Sources/LiquidGlass/ColorSampling platforms/macos/Aleph/Sources/LiquidGlass/Physics`
 Expected: Success, no output
 
 **Step 2: 创建 ShaderTypes.h**
@@ -121,13 +121,13 @@ typedef enum {
 
 **Step 3: 验证文件创建**
 
-Run: `cat platforms/macos/Aether/Sources/LiquidGlass/Metal/Shaders/ShaderTypes.h | head -20`
+Run: `cat platforms/macos/Aleph/Sources/LiquidGlass/Metal/Shaders/ShaderTypes.h | head -20`
 Expected: Shows header content
 
 **Step 4: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/LiquidGlass/
+git add platforms/macos/Aleph/Sources/LiquidGlass/
 git commit -m "feat(liquid-glass): add shader types header for Metal-Swift interop"
 ```
 
@@ -136,7 +136,7 @@ git commit -m "feat(liquid-glass): add shader types header for Metal-Swift inter
 ## Task 2: 创建 Metal Shader 文件
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/LiquidGlass/Metal/Shaders/LiquidGlassShaders.metal`
+- Create: `platforms/macos/Aleph/Sources/LiquidGlass/Metal/Shaders/LiquidGlassShaders.metal`
 
 **Step 1: 创建 Metal Shader 文件**
 
@@ -432,13 +432,13 @@ fragment float4 liquidGlassCompositeFragment(
 
 **Step 2: 验证 shader 文件**
 
-Run: `wc -l platforms/macos/Aether/Sources/LiquidGlass/Metal/Shaders/LiquidGlassShaders.metal`
+Run: `wc -l platforms/macos/Aleph/Sources/LiquidGlass/Metal/Shaders/LiquidGlassShaders.metal`
 Expected: ~280 lines
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/LiquidGlass/Metal/Shaders/LiquidGlassShaders.metal
+git add platforms/macos/Aleph/Sources/LiquidGlass/Metal/Shaders/LiquidGlassShaders.metal
 git commit -m "feat(liquid-glass): add Metal shaders for aurora, metaball fusion, and glass effects"
 ```
 
@@ -447,7 +447,7 @@ git commit -m "feat(liquid-glass): add Metal shaders for aurora, metaball fusion
 ## Task 3: 创建 Metal Renderer
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/LiquidGlass/Metal/LiquidGlassRenderer.swift`
+- Create: `platforms/macos/Aleph/Sources/LiquidGlass/Metal/LiquidGlassRenderer.swift`
 
 **Step 1: 创建 Renderer 文件**
 
@@ -837,13 +837,13 @@ struct BubbleData {
 
 **Step 2: 验证文件**
 
-Run: `wc -l platforms/macos/Aether/Sources/LiquidGlass/Metal/LiquidGlassRenderer.swift`
+Run: `wc -l platforms/macos/Aleph/Sources/LiquidGlass/Metal/LiquidGlassRenderer.swift`
 Expected: ~320 lines
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/LiquidGlass/Metal/LiquidGlassRenderer.swift
+git add platforms/macos/Aleph/Sources/LiquidGlass/Metal/LiquidGlassRenderer.swift
 git commit -m "feat(liquid-glass): add Metal renderer with triple buffering and multi-pass rendering"
 ```
 
@@ -852,7 +852,7 @@ git commit -m "feat(liquid-glass): add Metal renderer with triple buffering and 
 ## Task 4: 创建 MTKView 封装
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/LiquidGlass/Metal/LiquidGlassMetalView.swift`
+- Create: `platforms/macos/Aleph/Sources/LiquidGlass/Metal/LiquidGlassMetalView.swift`
 
 **Step 1: 创建 MTKView 封装**
 
@@ -983,7 +983,7 @@ struct LiquidGlassMetalView: NSViewRepresentable {
 **Step 2: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/LiquidGlass/Metal/LiquidGlassMetalView.swift
+git add platforms/macos/Aleph/Sources/LiquidGlass/Metal/LiquidGlassMetalView.swift
 git commit -m "feat(liquid-glass): add SwiftUI wrapper for MTKView"
 ```
 
@@ -992,8 +992,8 @@ git commit -m "feat(liquid-glass): add SwiftUI wrapper for MTKView"
 ## Task 5: 创建壁纸色采样器
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/LiquidGlass/ColorSampling/WallpaperColorSampler.swift`
-- Create: `platforms/macos/Aether/Sources/LiquidGlass/ColorSampling/DominantColorExtractor.swift`
+- Create: `platforms/macos/Aleph/Sources/LiquidGlass/ColorSampling/WallpaperColorSampler.swift`
+- Create: `platforms/macos/Aleph/Sources/LiquidGlass/ColorSampling/DominantColorExtractor.swift`
 
 **Step 1: 创建 DominantColorExtractor**
 
@@ -1408,7 +1408,7 @@ final class WallpaperColorSampler: ObservableObject {
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/LiquidGlass/ColorSampling/
+git add platforms/macos/Aleph/Sources/LiquidGlass/ColorSampling/
 git commit -m "feat(liquid-glass): add wallpaper color sampling with K-means extraction"
 ```
 
@@ -1417,7 +1417,7 @@ git commit -m "feat(liquid-glass): add wallpaper color sampling with K-means ext
 ## Task 6: 创建气泡融合计算器
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/LiquidGlass/Physics/BubbleFusionCalculator.swift`
+- Create: `platforms/macos/Aleph/Sources/LiquidGlass/Physics/BubbleFusionCalculator.swift`
 
 **Step 1: 创建 BubbleFusionCalculator**
 
@@ -1592,7 +1592,7 @@ struct BubbleInfo {
 **Step 2: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/LiquidGlass/Physics/BubbleFusionCalculator.swift
+git add platforms/macos/Aleph/Sources/LiquidGlass/Physics/BubbleFusionCalculator.swift
 git commit -m "feat(liquid-glass): add bubble fusion calculator with distance/time/interaction factors"
 ```
 
@@ -1601,7 +1601,7 @@ git commit -m "feat(liquid-glass): add bubble fusion calculator with distance/ti
 ## Task 7: 创建配置文件
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/LiquidGlass/LiquidGlassConfiguration.swift`
+- Create: `platforms/macos/Aleph/Sources/LiquidGlass/LiquidGlassConfiguration.swift`
 
 **Step 1: 创建配置文件**
 
@@ -1767,7 +1767,7 @@ struct LiquidGlassConfiguration {
 **Step 2: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/LiquidGlass/LiquidGlassConfiguration.swift
+git add platforms/macos/Aleph/Sources/LiquidGlass/LiquidGlassConfiguration.swift
 git commit -m "feat(liquid-glass): add central configuration for all effect parameters"
 ```
 
@@ -1776,7 +1776,7 @@ git commit -m "feat(liquid-glass): add central configuration for all effect para
 ## Task 8: 创建 BubbleGeometryReporter
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/MultiTurn/Views/BubbleGeometryReporter.swift`
+- Create: `platforms/macos/Aleph/Sources/MultiTurn/Views/BubbleGeometryReporter.swift`
 
 **Step 1: 创建 BubbleGeometryReporter**
 
@@ -1957,7 +1957,7 @@ class BubbleDataCollector: ObservableObject {
 **Step 2: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/MultiTurn/Views/BubbleGeometryReporter.swift
+git add platforms/macos/Aleph/Sources/MultiTurn/Views/BubbleGeometryReporter.swift
 git commit -m "feat(liquid-glass): add geometry reporter for SwiftUI-Metal bridge"
 ```
 
@@ -1966,7 +1966,7 @@ git commit -m "feat(liquid-glass): add geometry reporter for SwiftUI-Metal bridg
 ## Task 9: 集成 Metal 层到 UnifiedConversationView
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationView.swift`
+- Modify: `platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationView.swift`
 
 **Step 1: 读取当前文件（已完成）**
 
@@ -2074,7 +2074,7 @@ Expected: Build starts (may have warnings initially)
 **Step 4: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationView.swift
+git add platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationView.swift
 git commit -m "feat(liquid-glass): integrate Metal layer into UnifiedConversationView"
 ```
 
@@ -2083,7 +2083,7 @@ git commit -m "feat(liquid-glass): integrate Metal layer into UnifiedConversatio
 ## Task 10: 修改 MessageBubbleView 添加几何上报
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/MultiTurn/Views/MessageBubbleView.swift`
+- Modify: `platforms/macos/Aleph/Sources/MultiTurn/Views/MessageBubbleView.swift`
 
 **Step 1: 修改 MessageBubbleView**
 
@@ -2119,7 +2119,7 @@ var body: some View {
 **Step 2: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/MultiTurn/Views/MessageBubbleView.swift
+git add platforms/macos/Aleph/Sources/MultiTurn/Views/MessageBubbleView.swift
 git commit -m "feat(liquid-glass): add geometry reporting to MessageBubbleView"
 ```
 
@@ -2128,7 +2128,7 @@ git commit -m "feat(liquid-glass): add geometry reporting to MessageBubbleView"
 ## Task 11: 修改 InputAreaView 透明背景
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/MultiTurn/Views/InputAreaView.swift`
+- Modify: `platforms/macos/Aleph/Sources/MultiTurn/Views/InputAreaView.swift`
 
 **Step 1: 修改 InputAreaView**
 
@@ -2174,7 +2174,7 @@ git commit -m "feat(liquid-glass): add geometry reporting to MessageBubbleView"
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/MultiTurn/Views/InputAreaView.swift
+git add platforms/macos/Aleph/Sources/MultiTurn/Views/InputAreaView.swift
 git commit -m "feat(liquid-glass): make InputAreaView transparent for Metal rendering"
 ```
 
@@ -2183,12 +2183,12 @@ git commit -m "feat(liquid-glass): make InputAreaView transparent for Metal rend
 ## Task 12: 添加 Metal 文件到 Xcode 项目
 
 **Files:**
-- Modify: `platforms/macos/Aether/project.yml` (如果使用 XcodeGen)
+- Modify: `platforms/macos/Aleph/project.yml` (如果使用 XcodeGen)
 - 或手动添加到 Xcode 项目
 
 **Step 1: 检查项目配置方式**
 
-Run: `ls platforms/macos/Aether/*.xcodeproj 2>/dev/null || ls platforms/macos/*.xcodeproj 2>/dev/null || echo "No xcodeproj found"`
+Run: `ls platforms/macos/Aleph/*.xcodeproj 2>/dev/null || ls platforms/macos/*.xcodeproj 2>/dev/null || echo "No xcodeproj found"`
 
 **Step 2: 如果使用 XcodeGen，更新 project.yml**
 

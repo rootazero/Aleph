@@ -1,4 +1,4 @@
-// Aether/core/src/permission/error.rs
+// Aleph/core/src/permission/error.rs
 //! Permission error types.
 
 use super::rule::PermissionRule;

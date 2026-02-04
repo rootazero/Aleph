@@ -682,7 +682,7 @@ async fn test_compactor_integration_with_loop() {
     };
 
     // Publish event
-    bus.publish(AetherEvent::LoopContinue(loop_state)).await;
+    bus.publish(AlephEvent::LoopContinue(loop_state)).await;
 
     // Should trigger compaction check
     // (Full integration would check for SessionCompacted event)
@@ -709,9 +709,9 @@ impl EventHandler for SessionCompactor {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Check if auto-compaction is enabled
         if !self.config.auto_compact {
             return Ok(vec![]);
@@ -727,7 +727,7 @@ impl EventHandler for SessionCompactor {
                     if let Some(session) = ctx.get_session(&loop_state.session_id).await {
                         let mut session = session.write().await;
                         if let Some(info) = self.check_and_compact(&mut session).await {
-                            return Ok(vec![AetherEvent::SessionCompacted(info)]);
+                            return Ok(vec![AlephEvent::SessionCompacted(info)]);
                         }
                     }
                 }
@@ -805,7 +805,7 @@ if session.iteration_count > 0 {
         compactor.compact(&mut session);
 
         // Publish event
-        event_bus.publish(AetherEvent::SessionCompacted(CompactionInfo {
+        event_bus.publish(AlephEvent::SessionCompacted(CompactionInfo {
             session_id: session.id.clone(),
             tokens_before: session.total_tokens,
             tokens_after: compactor.recalculate_tokens(&session),

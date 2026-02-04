@@ -1,6 +1,6 @@
 //! Configuration structures
 //!
-//! This module defines the core configuration structures for Aether.
+//! This module defines the core configuration structures for Aleph.
 
 use crate::config::types::*;
 use schemars::JsonSchema;

@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether needs a platform-agnostic core library that can be consumed by native UI clients (Swift on macOS, C# on Windows, GTK on Linux). The core must:
+Aleph needs a platform-agnostic core library that can be consumed by native UI clients (Swift on macOS, C# on Windows, GTK on Linux). The core must:
 1. Expose a clean FFI boundary via UniFFI
 2. Handle system-level operations (hotkeys, clipboard)
 3. Support async operations without blocking
@@ -24,7 +24,7 @@ Aether needs a platform-agnostic core library that can be consumed by native UI 
 **Goals:**
 - ✅ Create working hotkey detection (detect Cmd+~ press)
 - ✅ Create working clipboard reading (read text/image content)
-- ✅ Define UniFFI interface for callbacks (AetherEventHandler trait)
+- ✅ Define UniFFI interface for callbacks (AlephEventHandler trait)
 - ✅ Establish trait-based architecture for modularity
 - ✅ Set up async runtime (tokio) for future async operations
 - ✅ Prove FFI boundary works (generate Swift bindings successfully)
@@ -102,20 +102,20 @@ Aether needs a platform-agnostic core library that can be consumed by native UI 
 ```rust
 // Define traits for swappable components
 trait HotkeyListener {
-    fn start_listening(&self) -> Result<(), AetherError>;
-    fn stop_listening(&self) -> Result<(), AetherError>;
+    fn start_listening(&self) -> Result<(), AlephError>;
+    fn stop_listening(&self) -> Result<(), AlephError>;
 }
 
 trait ClipboardManager {
-    fn read_text(&self) -> Result<String, AetherError>;
-    fn write_text(&self, content: &str) -> Result<(), AetherError>;
+    fn read_text(&self) -> Result<String, AlephError>;
+    fn write_text(&self, content: &str) -> Result<(), AlephError>;
 }
 
-// AetherCore composes these traits
-pub struct AetherCore {
+// AlephCore composes these traits
+pub struct AlephCore {
     hotkey_listener: Arc<dyn HotkeyListener>,
     clipboard_manager: Arc<dyn ClipboardManager>,
-    event_handler: Arc<dyn AetherEventHandler>,
+    event_handler: Arc<dyn AlephEventHandler>,
 }
 ```
 
@@ -149,9 +149,9 @@ core/
 ├── uniffi.toml                 # UniFFI configuration
 └── src/
     ├── lib.rs                  # UniFFI exports, public API
-    ├── aether.udl              # UniFFI interface definition
-    ├── core.rs                 # AetherCore struct
-    ├── event_handler.rs        # AetherEventHandler trait
+    ├── aleph.udl              # UniFFI interface definition
+    ├── core.rs                 # AlephCore struct
+    ├── event_handler.rs        # AlephEventHandler trait
     ├── error.rs                # Custom error types
     ├── config.rs               # Config struct (stub for Phase 1)
     ├── hotkey/
@@ -169,13 +169,13 @@ core/
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Swift Client (Future Proposal #2)                      │
-│  - Implements AetherEventHandler protocol              │
-│  - Calls AetherCore methods via UniFFI bindings        │
+│  - Implements AlephEventHandler protocol              │
+│  - Calls AlephCore methods via UniFFI bindings        │
 └─────────────────┬───────────────────────────────────────┘
                   │ UniFFI Bridge
                   ↓
 ┌─────────────────────────────────────────────────────────┐
-│  AetherCore (lib.rs)                                    │
+│  AlephCore (lib.rs)                                    │
 │  - init(event_handler)                                  │
 │  - start_listening() → spawns hotkey listener thread   │
 │  - stop_listening()                                     │
@@ -199,20 +199,20 @@ core/
    ↓
 3. User presses: Cmd + ~
    ↓
-4. rdev detects keypress → callback to AetherCore
+4. rdev detects keypress → callback to AlephCore
    ↓
-5. AetherCore reads clipboard via arboard
+5. AlephCore reads clipboard via arboard
    ↓
-6. AetherCore calls: event_handler.on_hotkey_detected(clipboard_content)
+6. AlephCore calls: event_handler.on_hotkey_detected(clipboard_content)
    ↓
 7. Swift receives callback → updates UI
 ```
 
-## UniFFI Interface Definition (aether.udl)
+## UniFFI Interface Definition (aleph.udl)
 
 ```idl
-namespace aether {
-  AetherCore init(AetherEventHandler handler);
+namespace aleph {
+  AlephCore init(AlephEventHandler handler);
 };
 
 enum ProcessingState {
@@ -223,14 +223,14 @@ enum ProcessingState {
   "Error"
 };
 
-interface AetherCore {
-  constructor(AetherEventHandler handler);
+interface AlephCore {
+  constructor(AlephEventHandler handler);
   void start_listening();
   void stop_listening();
   string get_clipboard_text();
 };
 
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
   void on_state_changed(ProcessingState state);
   void on_hotkey_detected(string clipboard_content);
   void on_error(string message);
@@ -246,7 +246,7 @@ dictionary Config {
 **Custom Error Type:**
 ```rust
 #[derive(Debug, thiserror::Error)]
-pub enum AetherError {
+pub enum AlephError {
     #[error("Hotkey listener error: {0}")]
     HotkeyError(String),
 
@@ -259,7 +259,7 @@ pub enum AetherError {
 ```
 
 **Propagation:**
-- All public API methods return `Result<T, AetherError>`
+- All public API methods return `Result<T, AlephError>`
 - UniFFI converts Rust errors to Swift exceptions
 - Never panic in library code (use Result/unwrap_or)
 
@@ -276,7 +276,7 @@ mod tests {
         calls: Arc<Mutex<Vec<String>>>,
     }
 
-    impl AetherEventHandler for MockEventHandler {
+    impl AlephEventHandler for MockEventHandler {
         fn on_hotkey_detected(&self, content: String) {
             self.calls.lock().unwrap().push(content);
         }
@@ -363,7 +363,7 @@ N/A (initial implementation, no existing code to migrate)
 ✅ **Phase 1 is successful when:**
 1. `cargo build --release` produces `libaethecore.dylib`
 2. `cargo test` passes all unit tests
-3. `uniffi-bindgen generate src/aether.udl --language swift` generates valid Swift bindings
+3. `uniffi-bindgen generate src/aleph.udl --language swift` generates valid Swift bindings
 4. Manual test: Pressing Cmd+~ triggers callback with clipboard content
 5. Manual test: Reading clipboard returns correct text
 6. No panics or crashes during operation

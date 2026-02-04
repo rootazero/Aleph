@@ -1,6 +1,6 @@
 //
 //  SidebarWithTrafficLights.swift
-//  Aether
+//  Aleph
 //
 //  Rounded sidebar with integrated traffic light buttons for macOS 26 design.
 //  Combines window controls with navigation in a unified visual element.

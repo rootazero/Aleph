@@ -41,12 +41,12 @@ git commit -m "build(core): add toml crate for TOML manifest support"
 ### Task 1.2: Define TOML Manifest Types
 
 **Files:**
-- Create: `core/src/extension/manifest/aether_plugin_toml.rs`
+- Create: `core/src/extension/manifest/aleph_plugin_toml.rs`
 
 **Step 1: Create the TOML types file**
 
 ```rust
-//! TOML-based plugin manifest parser (aether_plugin.toml)
+//! TOML-based plugin manifest parser (aleph_plugin.toml)
 //!
 //! This is the V2 manifest format, preferred over JSON.
 
@@ -62,7 +62,7 @@ use super::types::{
 use super::{sanitize_plugin_id, validate_plugin_id};
 use crate::AlephError;
 
-/// Root structure for aether_plugin.toml
+/// Root structure for aleph_plugin.toml
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AlephPluginToml {
     pub plugin: PluginSection,
@@ -226,41 +226,41 @@ pub struct CapabilitiesSection {
     pub dynamic_hooks: Vec<String>,
 }
 
-/// Parse aether_plugin.toml from a directory
-pub async fn parse_aether_plugin_toml(dir: &Path) -> Result<PluginManifest, AlephError> {
-    let toml_path = dir.join("aether_plugin.toml");
+/// Parse aleph_plugin.toml from a directory
+pub async fn parse_aleph_plugin_toml(dir: &Path) -> Result<PluginManifest, AlephError> {
+    let toml_path = dir.join("aleph_plugin.toml");
     let content = fs::read_to_string(&toml_path).await.map_err(|e| {
         AlephError::PluginLoad(format!(
-            "Failed to read aether_plugin.toml at {}: {}",
+            "Failed to read aleph_plugin.toml at {}: {}",
             toml_path.display(),
             e
         ))
     })?;
 
-    parse_aether_plugin_toml_content(&content, dir)
+    parse_aleph_plugin_toml_content(&content, dir)
 }
 
-/// Parse aether_plugin.toml content synchronously
-pub fn parse_aether_plugin_toml_sync(dir: &Path) -> Result<PluginManifest, AlephError> {
-    let toml_path = dir.join("aether_plugin.toml");
+/// Parse aleph_plugin.toml content synchronously
+pub fn parse_aleph_plugin_toml_sync(dir: &Path) -> Result<PluginManifest, AlephError> {
+    let toml_path = dir.join("aleph_plugin.toml");
     let content = std::fs::read_to_string(&toml_path).map_err(|e| {
         AlephError::PluginLoad(format!(
-            "Failed to read aether_plugin.toml at {}: {}",
+            "Failed to read aleph_plugin.toml at {}: {}",
             toml_path.display(),
             e
         ))
     })?;
 
-    parse_aether_plugin_toml_content(&content, dir)
+    parse_aleph_plugin_toml_content(&content, dir)
 }
 
 /// Parse TOML content into PluginManifest
-pub fn parse_aether_plugin_toml_content(
+pub fn parse_aleph_plugin_toml_content(
     content: &str,
     plugin_dir: &Path,
 ) -> Result<PluginManifest, AlephError> {
     let toml: AlephPluginToml = toml::from_str(content).map_err(|e| {
-        AlephError::PluginLoad(format!("Failed to parse aether_plugin.toml: {}", e))
+        AlephError::PluginLoad(format!("Failed to parse aleph_plugin.toml: {}", e))
     })?;
 
     // Validate or sanitize plugin ID
@@ -368,7 +368,7 @@ mod tests {
 [plugin]
 id = "test-plugin"
 "#;
-        let manifest = parse_aether_plugin_toml_content(content, Path::new("/tmp")).unwrap();
+        let manifest = parse_aleph_plugin_toml_content(content, Path::new("/tmp")).unwrap();
         assert_eq!(manifest.id, "test-plugin");
         assert_eq!(manifest.kind, PluginKind::Static);
     }
@@ -403,7 +403,7 @@ kind = "interceptor"
 handler = "onBeforeToolCall"
 priority = "high"
 "#;
-        let manifest = parse_aether_plugin_toml_content(content, Path::new("/tmp")).unwrap();
+        let manifest = parse_aleph_plugin_toml_content(content, Path::new("/tmp")).unwrap();
         assert_eq!(manifest.id, "com.example.sql-explorer");
         assert_eq!(manifest.kind, PluginKind::NodeJs);
         assert_eq!(manifest.permissions.len(), 3);
@@ -415,13 +415,13 @@ priority = "high"
 
 **Step 2: Run tests**
 
-Run: `cd core && cargo test aether_plugin_toml`
+Run: `cd core && cargo test aleph_plugin_toml`
 Expected: All tests pass
 
 **Step 3: Commit**
 
 ```bash
-git add core/src/extension/manifest/aether_plugin_toml.rs
+git add core/src/extension/manifest/aleph_plugin_toml.rs
 git commit -m "feat(extension): add TOML manifest parser types"
 ```
 
@@ -438,32 +438,32 @@ Add these fields to the `PluginManifest` struct (around line 270, before the clo
 
 ```rust
     // ═══════════════════════════════════════════
-    // V2 Extension fields (from aether_plugin.toml)
+    // V2 Extension fields (from aleph_plugin.toml)
     // ═══════════════════════════════════════════
 
     /// V2: Static tool declarations from TOML
     #[serde(skip)]
-    pub tools_v2: Option<Vec<crate::extension::manifest::aether_plugin_toml::ToolSection>>,
+    pub tools_v2: Option<Vec<crate::extension::manifest::aleph_plugin_toml::ToolSection>>,
 
     /// V2: Typed hook declarations from TOML
     #[serde(skip)]
-    pub hooks_v2: Option<Vec<crate::extension::manifest::aether_plugin_toml::HookSection>>,
+    pub hooks_v2: Option<Vec<crate::extension::manifest::aleph_plugin_toml::HookSection>>,
 
     /// V2: Direct command declarations from TOML
     #[serde(skip)]
-    pub commands_v2: Option<Vec<crate::extension::manifest::aether_plugin_toml::CommandSection>>,
+    pub commands_v2: Option<Vec<crate::extension::manifest::aleph_plugin_toml::CommandSection>>,
 
     /// V2: Background service declarations from TOML
     #[serde(skip)]
-    pub services_v2: Option<Vec<crate::extension::manifest::aether_plugin_toml::ServiceSection>>,
+    pub services_v2: Option<Vec<crate::extension::manifest::aleph_plugin_toml::ServiceSection>>,
 
     /// V2: Global prompt configuration
     #[serde(skip)]
-    pub prompt_v2: Option<crate::extension::manifest::aether_plugin_toml::PromptSection>,
+    pub prompt_v2: Option<crate::extension::manifest::aleph_plugin_toml::PromptSection>,
 
     /// V2: Dynamic capability declarations
     #[serde(skip)]
-    pub capabilities_v2: Option<crate::extension::manifest::aether_plugin_toml::CapabilitiesSection>,
+    pub capabilities_v2: Option<crate::extension::manifest::aleph_plugin_toml::CapabilitiesSection>,
 ```
 
 **Step 2: Update Default impl if needed**
@@ -494,9 +494,9 @@ git commit -m "feat(extension): add V2 fields to PluginManifest"
 At the top of the file (around line 10, with other mod declarations), add:
 
 ```rust
-mod aether_plugin_toml;
-pub use aether_plugin_toml::{
-    parse_aether_plugin_toml, parse_aether_plugin_toml_content, parse_aether_plugin_toml_sync,
+mod aleph_plugin_toml;
+pub use aleph_plugin_toml::{
+    parse_aleph_plugin_toml, parse_aleph_plugin_toml_content, parse_aleph_plugin_toml_sync,
     AlephPluginToml, CapabilitiesSection, CommandSection, HookSection, PermissionsSection,
     PromptSection, ServiceSection, ToolSection,
 };
@@ -509,18 +509,18 @@ Find `parse_manifest_from_dir()` (around line 200) and update the detection logi
 ```rust
 pub async fn parse_manifest_from_dir(dir: &Path) -> Result<PluginManifest, AlephError> {
     // V2: TOML format (preferred)
-    let toml_path = dir.join("aether_plugin.toml");
+    let toml_path = dir.join("aleph_plugin.toml");
     if toml_path.exists() {
-        return parse_aether_plugin_toml(dir).await;
+        return parse_aleph_plugin_toml(dir).await;
     }
 
     // V1: JSON format
-    let json_path = dir.join("aether.plugin.json");
+    let json_path = dir.join("aleph.plugin.json");
     if json_path.exists() {
-        return parse_aether_plugin(dir).await;
+        return parse_aleph_plugin(dir).await;
     }
 
-    // Legacy: package.json with "aether" field
+    // Legacy: package.json with "aleph" field
     let package_json_path = dir.join("package.json");
     if package_json_path.exists() {
         return parse_package_json(dir).await;
@@ -529,11 +529,11 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> Result<PluginManifest, Aleph
     // Legacy: .claude-plugin/plugin.json
     let legacy_path = dir.join(".claude-plugin").join("plugin.json");
     if legacy_path.exists() {
-        return parse_aether_plugin(&dir.join(".claude-plugin")).await;
+        return parse_aleph_plugin(&dir.join(".claude-plugin")).await;
     }
 
     Err(AlephError::PluginLoad(format!(
-        "No plugin manifest found in {}. Expected aether_plugin.toml, aether.plugin.json, or package.json with 'aether' field.",
+        "No plugin manifest found in {}. Expected aleph_plugin.toml, aleph.plugin.json, or package.json with 'aleph' field.",
         dir.display()
     )))
 }
@@ -546,18 +546,18 @@ Find `parse_manifest_from_dir_sync()` (around line 244) and apply the same TOML-
 ```rust
 pub fn parse_manifest_from_dir_sync(dir: &Path) -> Result<PluginManifest, AlephError> {
     // V2: TOML format (preferred)
-    let toml_path = dir.join("aether_plugin.toml");
+    let toml_path = dir.join("aleph_plugin.toml");
     if toml_path.exists() {
-        return parse_aether_plugin_toml_sync(dir);
+        return parse_aleph_plugin_toml_sync(dir);
     }
 
     // V1: JSON format
-    let json_path = dir.join("aether.plugin.json");
+    let json_path = dir.join("aleph.plugin.json");
     if json_path.exists() {
-        return parse_aether_plugin_sync(dir);
+        return parse_aleph_plugin_sync(dir);
     }
 
-    // Legacy: package.json with "aether" field
+    // Legacy: package.json with "aleph" field
     let package_json_path = dir.join("package.json");
     if package_json_path.exists() {
         return parse_package_json_sync(dir);
@@ -566,11 +566,11 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> Result<PluginManifest, AlephE
     // Legacy: .claude-plugin/plugin.json
     let legacy_path = dir.join(".claude-plugin").join("plugin.json");
     if legacy_path.exists() {
-        return parse_aether_plugin_sync(&dir.join(".claude-plugin"));
+        return parse_aleph_plugin_sync(&dir.join(".claude-plugin"));
     }
 
     Err(AlephError::PluginLoad(format!(
-        "No plugin manifest found in {}. Expected aether_plugin.toml, aether.plugin.json, or package.json with 'aether' field.",
+        "No plugin manifest found in {}. Expected aleph_plugin.toml, aleph.plugin.json, or package.json with 'aleph' field.",
         dir.display()
     )))
 }
@@ -982,7 +982,7 @@ Find `impl ExtensionManager` and add this method:
     /// Convert V2 TOML hook declarations to HookConfig
     fn convert_v2_hooks(
         &self,
-        hooks: &[crate::extension::manifest::aether_plugin_toml::HookSection],
+        hooks: &[crate::extension::manifest::aleph_plugin_toml::HookSection],
         plugin_name: &str,
         plugin_root: &Path,
     ) -> Vec<HookConfig> {
@@ -1339,7 +1339,7 @@ use tempfile::TempDir;
 use std::fs;
 
 use alephcore::extension::manifest::{
-    parse_aether_plugin_toml_content, parse_manifest_from_dir_sync,
+    parse_aleph_plugin_toml_content, parse_manifest_from_dir_sync,
 };
 use alephcore::extension::types::{HookKind, HookPriority, PromptScope};
 
@@ -1348,7 +1348,7 @@ fn create_test_plugin(toml_content: &str, skill_content: Option<&str>) -> TempDi
     let dir = TempDir::new().unwrap();
 
     // Write TOML manifest
-    fs::write(dir.path().join("aether_plugin.toml"), toml_content).unwrap();
+    fs::write(dir.path().join("aleph_plugin.toml"), toml_content).unwrap();
 
     // Write SKILL.md if provided
     if let Some(content) = skill_content {
@@ -1364,7 +1364,7 @@ fn test_v2_manifest_priority_over_json() {
 
     // Write both TOML and JSON
     fs::write(
-        dir.path().join("aether_plugin.toml"),
+        dir.path().join("aleph_plugin.toml"),
         r#"
 [plugin]
 id = "toml-plugin"
@@ -1372,7 +1372,7 @@ id = "toml-plugin"
     ).unwrap();
 
     fs::write(
-        dir.path().join("aether.plugin.json"),
+        dir.path().join("aleph.plugin.json"),
         r#"{"id": "json-plugin"}"#,
     ).unwrap();
 
@@ -1398,7 +1398,7 @@ instruction_file = "docs/INSTRUCTIONS.md"
 type = "object"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let tools = manifest.tools_v2.unwrap();
     assert_eq!(tools.len(), 1);
@@ -1426,7 +1426,7 @@ kind = "observer"
 handler = "onAfterTool"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let hooks = manifest.hooks_v2.unwrap();
     assert_eq!(hooks.len(), 2);
@@ -1449,7 +1449,7 @@ file = "SKILL.md"
 scope = "system"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let prompt = manifest.prompt_v2.unwrap();
     assert_eq!(prompt.file, "SKILL.md");
@@ -1469,7 +1469,7 @@ env = ["DATABASE_URL", "API_*"]
 shell = false
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     assert!(!manifest.permissions.is_empty());
     // Verify network permissions converted
@@ -1487,7 +1487,7 @@ dynamic_tools = true
 dynamic_hooks = ["after_*"]
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let caps = manifest.capabilities_v2.unwrap();
     assert!(caps.dynamic_tools);
@@ -1512,7 +1512,7 @@ description = "Show status"
 handler = "handleStatus"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let services = manifest.services_v2.unwrap();
     assert_eq!(services.len(), 1);
@@ -1552,7 +1552,7 @@ Add a new section documenting the V2 features:
 ```markdown
 ## Extension SDK V2
 
-### Manifest Format (aether_plugin.toml)
+### Manifest Format (aleph_plugin.toml)
 
 V2 plugins use TOML format for better readability and Rust ecosystem alignment.
 

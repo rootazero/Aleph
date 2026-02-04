@@ -1,8 +1,8 @@
 /*
   Localizable.strings (English)
-  Aether
+  Aleph
 
-  English base localization strings for Aether macOS application.
+  English base localization strings for Aleph macOS application.
   All UI text should use these keys via NSLocalizedString() or LocalizedStringKey.
 */
 
@@ -35,7 +35,7 @@
 "user_input.placeholder" = "Enter your response...";
 
 // MARK: - Settings Window - Sidebar
-"settings.sidebar.title" = "Aether";
+"settings.sidebar.title" = "Aleph";
 
 // MARK: - Settings Window - General Tab
 "settings.general.title" = "General";
@@ -49,18 +49,18 @@
 "settings.general.sound_effects" = "Sound Effects";
 "settings.general.startup" = "Startup";
 "settings.general.launch_at_login" = "Launch at Login";
-"settings.general.launch_at_login_description" = "Automatically start Aether when you log in to your Mac.";
+"settings.general.launch_at_login_description" = "Automatically start Aleph when you log in to your Mac.";
 "settings.general.launch_at_login_error" = "Failed to change launch at login setting";
 "settings.general.language" = "Language";
 "settings.general.language_preference" = "Preferred Language";
 "settings.general.language_system_default" = "System Default";
 "settings.general.language_restart_title" = "Restart Required";
-"settings.general.language_restart_message" = "Language will change after restarting Aether. Restart now?";
+"settings.general.language_restart_message" = "Language will change after restarting Aleph. Restart now?";
 "settings.general.language_restart_now" = "Restart Now";
 "settings.general.language_restart_later" = "Later";
 "settings.general.updates" = "Updates";
 "settings.general.check_updates" = "Check for Updates";
-"settings.general.check_updates_help" = "Check for Aether updates";
+"settings.general.check_updates_help" = "Check for Aleph updates";
 "settings.general.logs" = "Logs";
 "settings.general.view_logs" = "View Logs";
 "settings.general.view_logs_help" = "View application logs";
@@ -208,9 +208,9 @@
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "Keyboard Shortcuts";
-"settings.shortcuts.description" = "Configure global keyboard shortcuts for Aether.";
+"settings.shortcuts.description" = "Configure global keyboard shortcuts for Aleph.";
 "settings.shortcuts.global_hotkey" = "Global Hotkey";
-"settings.shortcuts.summon_label" = "Summon Aether:";
+"settings.shortcuts.summon_label" = "Summon Aleph:";
 "settings.shortcuts.cancel_hotkey" = "Cancel Hotkey";
 "settings.shortcuts.record_instruction" = "Press any key combination to record...";
 "settings.shortcuts.press_escape" = "Press Escape to cancel";
@@ -218,7 +218,7 @@
 "settings.shortcuts.preset_button" = "Choose Preset...";
 "settings.shortcuts.saved" = "Saved!";
 "settings.shortcuts.permission_required" = "Permission Required";
-"settings.shortcuts.permission_description" = "Aether requires **Accessibility** permission to detect global hotkeys.";
+"settings.shortcuts.permission_description" = "Aleph requires **Accessibility** permission to detect global hotkeys.";
 "settings.shortcuts.why_needed" = "Why this is needed:";
 "settings.shortcuts.permission_detect" = "Detect double-tap Shift hotkey in any app (default)";
 "settings.shortcuts.permission_read" = "Read clipboard content";
@@ -228,9 +228,9 @@
 "settings.shortcuts.preset_sheet_description" = "Select a common keyboard shortcut combination:";
 "settings.shortcuts.use_this_button" = "Use This";
 "settings.shortcuts.current_hotkey" = "Current:";
-"settings.shortcuts.double_tap_shift_description" = "Quickly press the Shift key twice to summon Aether. This is the recommended method as it avoids input method conflicts.";
-"settings.shortcuts.double_tap_description" = "Double-tap the designated key to summon Aether. This method bypasses input method interception.";
-"settings.shortcuts.modifier_combo_description" = "Use modifier keys combined with another key to summon Aether. Ensure this doesn't conflict with system or application shortcuts.";
+"settings.shortcuts.double_tap_shift_description" = "Quickly press the Shift key twice to summon Aleph. This is the recommended method as it avoids input method conflicts.";
+"settings.shortcuts.double_tap_description" = "Double-tap the designated key to summon Aleph. This method bypasses input method interception.";
+"settings.shortcuts.modifier_combo_description" = "Use modifier keys combined with another key to summon Aleph. Ensure this doesn't conflict with system or application shortcuts.";
 "settings.shortcuts.reset_default" = "Reset to Default";
 "settings.shortcuts.custom_hotkey" = "Custom Hotkey";
 "settings.shortcuts.presets" = "Preset Shortcuts";
@@ -257,11 +257,11 @@
 
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "Behavior";
-"settings.behavior.description" = "Configure how Aether captures input and delivers output.";
+"settings.behavior.description" = "Configure how Aleph captures input and delivers output.";
 "settings.behavior.input_mode" = "Input Mode";
-"settings.behavior.input_mode_description" = "How should Aether capture your selected text?";
+"settings.behavior.input_mode_description" = "How should Aleph capture your selected text?";
 "settings.behavior.output_mode" = "Output Mode";
-"settings.behavior.output_mode_description" = "How should Aether deliver AI responses?";
+"settings.behavior.output_mode_description" = "How should Aleph deliver AI responses?";
 "settings.behavior.typing_speed" = "Typing Speed";
 "settings.behavior.typing_speed_label" = "Speed:";
 "settings.behavior.speed_slow" = "Slow";
@@ -327,7 +327,7 @@
 "settings.mcp.enable" = "Enable MCP Capability";
 "settings.mcp.enable_description" = "Allow AI models to access configured MCP tools for enhanced capabilities.";
 "settings.mcp.builtin_services" = "Builtin Services";
-"settings.mcp.builtin_services_description" = "Built-in services run directly in Aether without external dependencies.";
+"settings.mcp.builtin_services_description" = "Built-in services run directly in Aleph without external dependencies.";
 "settings.mcp.service.fs" = "Filesystem";
 "settings.mcp.service.fs_description" = "Read, write, and list files within allowed directories.";
 "settings.mcp.service.git" = "Git";
@@ -351,7 +351,7 @@
 "settings.mcp.no_tools" = "No tools available. Enable services to see available tools.";
 "settings.mcp.requires_confirmation" = "Requires Confirmation";
 "settings.mcp.restart_title" = "Restart Required";
-"settings.mcp.restart_message" = "MCP service changes will take effect after restarting Aether.";
+"settings.mcp.restart_message" = "MCP service changes will take effect after restarting Aleph.";
 
 // Master-Detail UI (redesign-mcp-settings-ui)
 "settings.mcp.server_list.builtin" = "SYSTEM TOOLS";
@@ -427,7 +427,7 @@
 "settings.plugins.install_first" = "Install Your First Plugin";
 "settings.plugins.loading" = "Loading plugins...";
 "settings.plugins.empty_title" = "No Plugins Installed";
-"settings.plugins.empty_description" = "Plugins extend Aether's capabilities with skills, agents, hooks, and MCP servers.\nInstall plugins from GitHub repositories or ZIP files.";
+"settings.plugins.empty_description" = "Plugins extend Aleph's capabilities with skills, agents, hooks, and MCP servers.\nInstall plugins from GitHub repositories or ZIP files.";
 "settings.plugins.git_url" = "Git Repository URL";
 "settings.plugins.git_url_placeholder" = "https://github.com/user/plugin-repo";
 "settings.plugins.git_url_example" = "Example: https://github.com/user/my-plugin.git";
@@ -448,7 +448,7 @@
 
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "Memory Management";
-"settings.memory.description" = "Aether remembers past interactions to provide context-aware responses. All data is stored locally and never leaves your device.";
+"settings.memory.description" = "Aleph remembers past interactions to provide context-aware responses. All data is stored locally and never leaves your device.";
 "settings.memory.enabled" = "Enable Memory";
 "settings.memory.configuration" = "Configuration";
 "settings.memory.retention_policy" = "Retention Policy:";
@@ -475,7 +475,7 @@
 "settings.memory.clear_all_button" = "Clear All";
 "settings.memory.loading_memories" = "Loading memories...";
 "settings.memory.no_memories" = "No memories stored yet";
-"settings.memory.no_memories_message" = "Memories will appear here after you use Aether with memory enabled.";
+"settings.memory.no_memories_message" = "Memories will appear here after you use Aleph with memory enabled.";
 "settings.memory.delete_memory" = "Delete Memory";
 "settings.memory.delete_memory_message" = "Are you sure you want to delete this memory? This action cannot be undone.";
 "settings.memory.delete_memory_help" = "Delete this memory";
@@ -502,8 +502,8 @@
 
 // MARK: - Menu Bar
 "menu.settings" = "Settings...";
-"menu.quit" = "Quit Aether";
-"menu.about" = "About Aether";
+"menu.quit" = "Quit Aleph";
+"menu.about" = "About Aleph";
 "menu.show_conversation" = "Show Conversation Window";
 "menu.default_provider" = "Default Provider";
 "menu.no_providers" = "No providers available";
@@ -526,18 +526,18 @@
 
 // MARK: - Permissions
 "permission.accessibility.title" = "Accessibility Permission Required";
-"permission.accessibility.description" = "Aether needs Accessibility permission to detect global hotkeys and simulate keyboard input.";
+"permission.accessibility.description" = "Aleph needs Accessibility permission to detect global hotkeys and simulate keyboard input.";
 "permission.screen_recording.title" = "Screen Recording Permission Required";
-"permission.screen_recording.description" = "Aether needs Screen Recording permission for OCR and screen capture features.";
+"permission.screen_recording.description" = "Aleph needs Screen Recording permission for OCR and screen capture features.";
 "permission.input_monitoring.title" = "Input Monitoring Permission Required";
-"permission.input_monitoring.description" = "Aether needs Input Monitoring permission to capture keyboard events.";
+"permission.input_monitoring.description" = "Aleph needs Input Monitoring permission to capture keyboard events.";
 "permission.open_settings" = "Open System Settings";
 "permission.grant_instruction" = "Please grant permission in System Settings and return to this app.";
 "permission.button.later" = "Set Up Later";
 "permission.instruction.step1" = "Click the \"Open System Settings\" button below";
 "permission.instruction.step2" = "Find \"Privacy & Security\" → \"Accessibility\"";
-"permission.instruction.step3" = "Find Aether in the list and check it";
-"permission.instruction.step4" = "Return to Aether, hotkey will automatically work";
+"permission.instruction.step3" = "Find Aleph in the list and check it";
+"permission.instruction.step4" = "Return to Aleph, hotkey will automatically work";
 
 // MARK: - Permission Gate View
 "permission.gate.step1_title" = "Step 1/3: Accessibility Permission";
@@ -546,13 +546,13 @@
 "permission.gate.accessibility_short" = "Accessibility";
 "permission.gate.screen_recording_short" = "Screen Recording";
 "permission.gate.input_monitoring_short" = "Input Monitoring";
-"permission.gate.accessibility_description" = "Aether needs Accessibility permission to capture window context and simulate keyboard input to paste AI responses into your applications.";
-"permission.gate.screen_recording_description" = "Aether needs Screen Recording permission for OCR text recognition and screen capture features.";
-"permission.gate.input_monitoring_description" = "Aether needs Input Monitoring permission to detect global hotkeys (default: double-tap Shift), allowing you to quickly summon the AI assistant in any app.\n\n⚠️ Important: After granting all permissions, click \"Enter Aether\" to restart the app.";
+"permission.gate.accessibility_description" = "Aleph needs Accessibility permission to capture window context and simulate keyboard input to paste AI responses into your applications.";
+"permission.gate.screen_recording_description" = "Aleph needs Screen Recording permission for OCR text recognition and screen capture features.";
+"permission.gate.input_monitoring_description" = "Aleph needs Input Monitoring permission to detect global hotkeys (default: double-tap Shift), allowing you to quickly summon the AI assistant in any app.\n\n⚠️ Important: After granting all permissions, click \"Enter Aleph\" to restart the app.";
 "permission.gate.status_granted" = "Granted ✓";
 "permission.gate.status_waiting" = "Waiting for authorization...";
 "permission.gate.button.continue" = "Continue";
-"permission.gate.button.enter_aether" = "Enter Aether";
+"permission.gate.button.enter_aether" = "Enter Aleph";
 
 // MARK: - Error Messages
 "error.provider.invalid_api_key" = "Invalid API key. Please check your credentials.";
@@ -563,7 +563,7 @@
 "error.permission.input_monitoring_denied" = "Input Monitoring permission denied.";
 "error.general.unknown" = "An unknown error occurred.";
 "error.title" = "Error";
-"error.aether" = "Aether Error";
+"error.aether" = "Aleph Error";
 "error.no_clipboard_text" = "No text in clipboard";
 "error.no_clipboard_text.suggestion" = "Please select text first";
 "error.no_text_in_window" = "No text content in current window";
@@ -593,21 +593,21 @@
 "logs.help.close" = "Close log viewer";
 
 // MARK: - Log Viewer Empty State
-"logs.empty.first_run" = "No log files found. Logs will appear here after Aether performs operations.";
-"logs.empty.no_logs" = "No log files found. Logs will appear here after Aether performs operations.";
+"logs.empty.first_run" = "No log files found. Logs will appear here after Aleph performs operations.";
+"logs.empty.no_logs" = "No log files found. Logs will appear here after Aleph performs operations.";
 
 // MARK: - About Dialog
-"alert.about.title" = "Aether";
+"alert.about.title" = "Aleph";
 "alert.about.message" = "AI Middleware for macOS\nVersion %@\n\nBrings AI intelligence to your cursor.";
 
 // MARK: - Context Capture Alerts
 "alert.context.accessibility_title" = "Accessibility Permission Required";
-"alert.context.accessibility_message" = "Aether needs Accessibility permission to capture window context for memory features.\n\nPlease grant permission in:\nSystem Settings → Privacy & Security → Accessibility";
+"alert.context.accessibility_message" = "Aleph needs Accessibility permission to capture window context for memory features.\n\nPlease grant permission in:\nSystem Settings → Privacy & Security → Accessibility";
 "alert.context.open_settings" = "Open Settings";
 
 // MARK: - Restart Alerts
 "alert.restart.failed_title" = "Application Restart Failed";
-"alert.restart.failed_message" = "Aether could not restart automatically after permission was granted.\n\nError: %@\n\nPlease manually relaunch Aether from Applications folder.";
+"alert.restart.failed_message" = "Aleph could not restart automatically after permission was granted.\n\nError: %@\n\nPlease manually relaunch Aleph from Applications folder.";
 
 // MARK: - Halo Overlay
 "halo.state.idle" = "Idle";
@@ -688,7 +688,7 @@
 "unified.enter_to_send" = "Enter to send";
 "unified.command_mode" = "Command mode";
 "unified.focus_warning.title" = "Click on input field first";
-"unified.focus_warning.message" = "Move cursor to an input field before invoking Aether";
+"unified.focus_warning.message" = "Move cursor to an input field before invoking Aleph";
 "unified.accessibility_warning.title" = "Accessibility Permission Required";
 "unified.accessibility_warning.message" = "Please grant Accessibility permission in System Settings for better experience";
 
@@ -901,7 +901,7 @@
 
 // MARK: - Settings Window - Policies Tab
 "settings.policies.title" = "Policies";
-"settings.policies.description" = "Configure behavioral parameters that control how Aether operates. These settings allow you to tune system behavior without code changes.";
+"settings.policies.description" = "Configure behavioral parameters that control how Aleph operates. These settings allow you to tune system behavior without code changes.";
 
 // Policies Sections
 "settings.policies.intent_detection" = "Intent Detection";

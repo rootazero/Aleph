@@ -28,7 +28,7 @@ Aleph is a Monorepo with platform-specific directories:
 ## Complete Directory Tree
 
 ```
-aether/
+aleph/
 ├── .github/
 │   └── workflows/
 │       ├── rust-core.yml              # Rust CI (test, lint, build)
@@ -45,7 +45,7 @@ aether/
 │   ├── tests/                         # Integration tests
 │   └── src/
 │       ├── lib.rs                     # Public API, UniFFI scaffolding
-│       ├── aether.udl                 # UniFFI interface definition
+│       ├── aleph.udl                 # UniFFI interface definition
 │       ├── ffi_cabi.rs                # Windows C ABI exports
 │       ├── error.rs                   # Error types
 │       ├── event_handler.rs           # Event callback traits
@@ -212,7 +212,7 @@ aether/
 │       │
 │       ├── extension/                 # Extension system v2 (async FFI via UniFFI 0.31+)
 │       │   ├── mod.rs, loader.rs, registry.rs, types.rs
-│       │   ├── config/                # aether.jsonc configuration
+│       │   ├── config/                # aleph.jsonc configuration
 │       │   ├── hooks/                 # HookExecutor
 │       │   ├── runtime/               # Node.js plugin runtime
 │       │   └── sync_api.rs            # SyncExtensionManager (legacy)
@@ -289,9 +289,9 @@ aether/
 │   │   │       ├── AppDelegate.swift  # Menu bar lifecycle
 │   │   │       ├── AlephBridgingHeader.h
 │   │   │       ├── Generated/         # UniFFI Swift bindings
-│   │   │       │   ├── aether.swift
-│   │   │       │   ├── aetherFFI.h
-│   │   │       │   └── aetherFFI.modulemap
+│   │   │       │   ├── aleph.swift
+│   │   │       │   ├── alephFFI.h
+│   │   │       │   └── alephFFI.modulemap
 │   │   │       ├── Components/
 │   │   │       │   ├── Atoms/         # Basic UI elements
 │   │   │       │   ├── Molecules/     # Composed components

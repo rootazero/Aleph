@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the architectural decisions for adding a comprehensive Search Settings UI to Aether, enabling users to configure search providers through a graphical interface instead of manual TOML editing.
+This document outlines the architectural decisions for adding a comprehensive Search Settings UI to Aleph, enabling users to configure search providers through a graphical interface instead of manual TOML editing.
 
 ## Context
 
@@ -26,7 +26,7 @@ This document outlines the architectural decisions for adding a comprehensive Se
 
 ### Problem
 
-1. **Configuration Complexity**: Users must manually edit `~/.aether/config.toml` to configure search providers
+1. **Configuration Complexity**: Users must manually edit `~/.aleph/config.toml` to configure search providers
 2. **No Validation Feedback**: No way to test if API keys and endpoints are valid
 3. **Command Ambiguity**: Slash commands like `/search` can conflict with custom commands like `/se` due to prefix matching
 4. **Scattered UI**: Search-related PII settings are in Behavior tab, not with other search configuration
@@ -128,7 +128,7 @@ impl Router {
 **Options Considered**:
 
 A. **Rust Core with UniFFI Export** (Chosen)
-   - Add `test_search_provider(name: String) -> ProviderTestResult` to `AetherCore`
+   - Add `test_search_provider(name: String) -> ProviderTestResult` to `AlephCore`
    - Export via UniFFI to Swift
    - Reuse existing `SearchRegistry` infrastructure
 
@@ -152,7 +152,7 @@ enum ProviderTestResult {
   "InvalidConfig" { message: string }
 };
 
-interface AetherCore {
+interface AlephCore {
   async ProviderTestResult test_search_provider(string provider_name);
 };
 ```
@@ -302,7 +302,7 @@ Swift: Update status badge, show toast
 ```
 User types "/search query"
     ↓
-AetherCore processes clipboard
+AlephCore processes clipboard
     ↓
 Router::validate_command_format(input)
     ↓ (if no space after slash)
@@ -324,7 +324,7 @@ Swift: Auto-dismiss hint
 ### Phase 2: Command Validation
 - Add `validate_command_format()` to `Router`
 - Add `ValidationError` type
-- Integrate into `AetherCore::process_clipboard()`
+- Integrate into `AlephCore::process_clipboard()`
 - Add Halo hint callback
 
 ### Phase 3: Swift UI Components
@@ -350,7 +350,7 @@ Swift: Auto-dismiss hint
 
 **Risk**: UniFFI async functions may have callback limitations with Swift Concurrency
 **Mitigation**: Use `Task {}` wrapper in Swift to handle async UniFFI calls
-**Fallback**: Implement callback-based approach with `AetherEventHandler`
+**Fallback**: Implement callback-based approach with `AlephEventHandler`
 
 ### Risk 2: Provider Test Quota Limits
 

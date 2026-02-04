@@ -1,7 +1,7 @@
 [book]
-title = "Aether Documentation"
-authors = ["Aether Team"]
-description = "Comprehensive documentation for Aether - the Rust-based personal AI assistant"
+title = "Aleph Documentation"
+authors = ["Aleph Team"]
+description = "Comprehensive documentation for Aleph - the Rust-based personal AI assistant"
 language = "en"
 multilingual = false
 src = "src"

@@ -12,7 +12,7 @@ The UnifiedSaveBar pattern provides a consistent save/cancel experience across a
 
 ## Reference Implementation
 
-See `Aether/Sources/BehaviorSettingsView.swift` for a complete working example.
+See `Aleph/Sources/BehaviorSettingsView.swift` for a complete working example.
 
 ## Step-by-Step Implementation
 
@@ -214,10 +214,10 @@ After implementing the pattern, verify:
 
 ## Related Files
 
-- **Component**: `Aether/Sources/Components/Molecules/UnifiedSaveBar.swift`
-- **Reference**: `Aether/Sources/BehaviorSettingsView.swift`
-- **Protocol**: `Aether/Sources/Utils/FormState.swift` (optional)
-- **Guard**: `Aether/Sources/Utils/NavigationGuard.swift` (Phase 4)
+- **Component**: `Aleph/Sources/Components/Molecules/UnifiedSaveBar.swift`
+- **Reference**: `Aleph/Sources/BehaviorSettingsView.swift`
+- **Protocol**: `Aleph/Sources/Utils/FormState.swift` (optional)
+- **Guard**: `Aleph/Sources/Utils/NavigationGuard.swift` (Phase 4)
 
 ## Questions?
 

@@ -13,7 +13,7 @@ Phase 9 (The Brain) adds a relational memory graph and a background Dream Daemon
   - Full knowledge-graph reasoning or SPARQL-style queries in Phase 9.
 
 ## Decisions
-- Store graph tables in the existing `~/.aether/memory.db` SQLite database to avoid new dependencies.
+- Store graph tables in the existing `~/.aleph/memory.db` SQLite database to avoid new dependencies.
 - Represent relationships with lightweight edges and an alias index for name resolution.
 - Use memory compression/fact extraction outputs as the primary signal for graph updates.
 - DreamDaemon runs only when memory is enabled and user is idle, with strict time budgets and cancellation.

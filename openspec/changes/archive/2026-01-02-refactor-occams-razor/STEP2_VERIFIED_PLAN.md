@@ -34,7 +34,7 @@
 
 **Action**:
 1. Remove `tokio-util` from `Cargo.toml`
-2. Remove `cancellation_token: CancellationToken` field from `AetherCore`
+2. Remove `cancellation_token: CancellationToken` field from `AlephCore`
 3. Remove related imports
 4. Run `cargo build` to verify
 
@@ -70,7 +70,7 @@
 - `#[inline(always)]` prevents performance regression
 
 **Action**:
-1. Add private helper methods to `AetherCore`:
+1. Add private helper methods to `AlephCore`:
    ```rust
    #[inline(always)]
    fn lock_config(&self) -> std::sync::MutexGuard<'_, Config> {
@@ -114,7 +114,7 @@
    #[inline(always)]
    fn require_memory_db(&self) -> Result<&Arc<VectorDatabase>> {
        self.memory_db.as_ref()
-           .ok_or_else(|| AetherError::config("Memory database not initialized"))
+           .ok_or_else(|| AlephError::config("Memory database not initialized"))
    }
    ```
 2. Replace all `memory_db` null checks with `self.require_memory_db()?`
@@ -133,7 +133,7 @@
 - No state management changes
 
 **Action**:
-1. Create `Aether/Sources/Utils/AlertHelper.swift`:
+1. Create `Aleph/Sources/Utils/AlertHelper.swift`:
    ```swift
    import AppKit
 
@@ -239,13 +239,13 @@
 **Action**:
 1. Extract error handler:
    ```rust
-   fn handle_processing_error(&self, error: AetherError) -> AetherException {
+   fn handle_processing_error(&self, error: AlephError) -> AlephException {
        let friendly_message = error.user_friendly_message();
        let suggestion = error.suggestion().map(|s| s.to_string());
        error!(error = ?error, user_message = %friendly_message, "AI processing failed");
        self.event_handler.on_error(friendly_message, suggestion);
        self.event_handler.on_state_changed(ProcessingState::Error);
-       AetherException::Error
+       AlephException::Error
    }
    ```
 2. Replace error handling in `process_input()` and `process_with_ai()`

@@ -311,7 +311,7 @@ pub struct CronTool {
 - Agent invocation on schedule
 - Run history logging
 - Enable/disable jobs
-- CLI: `aether cron list/create/delete`
+- CLI: `aleph cron list/create/delete`
 
 **Crates**:
 ```toml

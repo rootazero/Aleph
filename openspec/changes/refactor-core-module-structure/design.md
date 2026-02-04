@@ -4,7 +4,7 @@
 
 The `core.rs` file has grown to 4492 lines, containing:
 - Type definitions (structs, enums)
-- AetherCore struct with 15+ fields
+- AlephCore struct with 15+ fields
 - 80+ methods spanning 8 distinct functional areas
 - Unit tests
 
@@ -34,7 +34,7 @@ This violates Rust community best practices for module organization and makes th
 - **NOT** changing any public API signatures
 - **NOT** adding new features or capabilities
 - **NOT** changing any business logic
-- **NOT** modifying UniFFI interface definition (`aether.udl`)
+- **NOT** modifying UniFFI interface definition (`aleph.udl`)
 - **NOT** reorganizing other modules (config/, mcp/, etc.)
 
 ## Decisions
@@ -58,7 +58,7 @@ This violates Rust community best practices for module organization and makes th
 
 ```
 core/
-├── mod.rs           # AetherCore struct + new() + core lifecycle
+├── mod.rs           # AlephCore struct + new() + core lifecycle
 ├── types.rs         # Shared type definitions
 ├── memory.rs        # Memory operations
 ├── config_ops.rs    # Config management
@@ -79,29 +79,29 @@ core/
 - Split by visibility (pub/private) - rejected: doesn't match mental model
 - Split by async/sync - rejected: arbitrary, methods often mix both
 
-### Decision 3: Keep AetherCore Struct in mod.rs
+### Decision 3: Keep AlephCore Struct in mod.rs
 
-**What**: The main `AetherCore` struct stays in `mod.rs`, with `impl` blocks distributed across submodules.
+**What**: The main `AlephCore` struct stays in `mod.rs`, with `impl` blocks distributed across submodules.
 
 **Why**:
-- Rust allows multiple `impl` blocks for same struct in different modules (with `use super::AetherCore`)
+- Rust allows multiple `impl` blocks for same struct in different modules (with `use super::AlephCore`)
 - Avoids complex trait-based splitting
 - Keeps struct definition in one place
 
 **Pattern**:
 ```rust
 // core/mod.rs
-pub struct AetherCore { ... }
+pub struct AlephCore { ... }
 
-impl AetherCore {
+impl AlephCore {
     pub fn new(...) -> Self { ... }
     // Core lifecycle methods
 }
 
 // core/memory.rs
-use super::AetherCore;
+use super::AlephCore;
 
-impl AetherCore {
+impl AlephCore {
     pub fn store_interaction_memory(...) { ... }
     // Other memory methods
 }
@@ -119,7 +119,7 @@ impl AetherCore {
 **Example**:
 ```rust
 // core/config_ops.rs
-impl AetherCore {
+impl AlephCore {
     // Public (UniFFI exposed)
     pub fn load_config(&self) -> Result<FullConfig> { ... }
 

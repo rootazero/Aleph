@@ -11,7 +11,7 @@
 ## 完成的任务
 
 ### ✅ Task 1.1: Define AiProvider Trait
-**文件**: `Aether/core/src/providers/mod.rs`
+**文件**: `Aleph/core/src/providers/mod.rs`
 
 **实现内容**:
 - 定义了 `AiProvider` trait，提供统一的 AI 提供商接口
@@ -28,7 +28,7 @@
 ---
 
 ### ✅ Task 1.2: Extend Error Types
-**文件**: `Aether/core/src/error.rs`, `Aether/core/src/aether.udl`
+**文件**: `Aleph/core/src/error.rs`, `Aleph/core/src/aleph.udl`
 
 **新增错误类型**:
 - `NetworkError(String)` - 网络连接错误
@@ -49,7 +49,7 @@
 ---
 
 ### ✅ Task 1.3: Create Mock Provider
-**文件**: `Aether/core/src/providers/mock.rs`
+**文件**: `Aleph/core/src/providers/mock.rs`
 
 **实现内容**:
 - `MockProvider` 结构体，用于测试 AI 功能而无需真实 API 调用
@@ -68,7 +68,7 @@
 ---
 
 ### ✅ Task 1.4: Add Provider Configuration Structs
-**文件**: `Aether/core/src/config.rs`
+**文件**: `Aleph/core/src/config.rs`
 
 **新增结构体**:
 1. **`GeneralConfig`**
@@ -93,7 +93,7 @@
 ---
 
 ### ✅ Task 1.5: Add Provider Registry
-**文件**: `Aether/core/src/providers/registry.rs`
+**文件**: `Aleph/core/src/providers/registry.rs`
 
 **实现内容**:
 - `ProviderRegistry` 结构体，管理 AI 提供商的注册表
@@ -139,7 +139,7 @@ cargo test config --lib      # 8 passed
 Aleph/core/src/
 ├── error.rs                     # ✅ 扩展了 7 个新错误类型
 ├── config.rs                    # ✅ 新增 GeneralConfig 和 ProviderConfig
-├── aether.udl                   # ✅ 更新 UniFFI 定义
+├── aleph.udl                   # ✅ 更新 UniFFI 定义
 └── providers/
     ├── mod.rs                   # ✅ AiProvider trait 定义
     ├── mock.rs                  # ✅ MockProvider 实现
@@ -155,7 +155,7 @@ async-trait = "0.1"  # 用于 async trait 方法
 
 ## UniFFI 更新
 
-**`aether.udl` 变更**:
+**`aleph.udl` 变更**:
 - 新增 7 个错误类型到 `AlephError` enum
 - 新增 `GeneralConfig` dictionary
 - `Config` dictionary 不再直接暴露（因 HashMap 限制）
@@ -182,16 +182,16 @@ async-trait = "0.1"  # 用于 async trait 方法
 ## 文件清单
 
 **新增文件** (3):
-- `Aether/core/src/providers/mod.rs` (180 行)
-- `Aether/core/src/providers/mock.rs` (250 行)
-- `Aether/core/src/providers/registry.rs` (310 行)
+- `Aleph/core/src/providers/mod.rs` (180 行)
+- `Aleph/core/src/providers/mock.rs` (250 行)
+- `Aleph/core/src/providers/registry.rs` (310 行)
 
 **修改文件** (3):
-- `Aether/core/src/error.rs` (+100 行)
-- `Aether/core/src/config.rs` (+80 行)
-- `Aether/core/src/aether.udl` (+7 行)
-- `Aether/core/src/lib.rs` (+3 行)
-- `Aether/core/Cargo.toml` (+1 依赖)
+- `Aleph/core/src/error.rs` (+100 行)
+- `Aleph/core/src/config.rs` (+80 行)
+- `Aleph/core/src/aleph.udl` (+7 行)
+- `Aleph/core/src/lib.rs` (+3 行)
+- `Aleph/core/Cargo.toml` (+1 依赖)
 
 **代码总量**: ~920 行新增代码
 

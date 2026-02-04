@@ -14,16 +14,16 @@ fn test_knowledge_creation() {
 
 #[test]
 fn test_entity_creation() {
-    let entity = Entity::new("project", "Aether");
+    let entity = Entity::new("project", "Aleph");
     assert_eq!(entity.entity_type, "project");
-    assert_eq!(entity.value, "Aether");
+    assert_eq!(entity.value, "Aleph");
 }
 
 #[test]
 fn test_user_intent_creation() {
     let intent = UserIntent::new("Help me deploy the project")
         .understood_as("Deploy current project to remote server")
-        .with_entity(Entity::new("project", "Aether"))
+        .with_entity(Entity::new("project", "Aleph"))
         .with_expectation("Don't break existing service");
 
     assert_eq!(intent.raw_input, "Help me deploy the project");

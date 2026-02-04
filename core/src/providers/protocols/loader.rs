@@ -179,7 +179,7 @@ impl ProtocolLoader {
         let home = std::env::var("HOME").map_err(|_| {
             AlephError::invalid_config("HOME environment variable not set".to_string())
         })?;
-        let protocols_dir = PathBuf::from(home).join(".aether").join("protocols");
+        let protocols_dir = PathBuf::from(home).join(".aleph").join("protocols");
 
         // Check if directory exists
         if !protocols_dir.exists() {

@@ -1,4 +1,4 @@
-// Aether/core/src/event/question.rs
+// Aleph/core/src/event/question.rs
 //! Question-related event types for structured user interaction.
 //!
 //! These events enable structured Q&A between the agent loop and UI layer,

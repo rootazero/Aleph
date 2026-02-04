@@ -22,7 +22,7 @@ def main():
         # Generate Swift bindings
         result = subprocess.run([
             python_path, "-m", "uniffi_bindgen", "generate",
-            "src/aether.udl",
+            "src/aleph.udl",
             "--language", "swift",
             "--out-dir", "bindings"
         ], check=True, capture_output=True, text=True)

@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether's capability system currently supports Memory (local vector search) and Search (web search). Users want to analyze YouTube video content directly through the hotkey workflow. This design adds a new `Video` capability that extracts transcripts from YouTube videos.
+Aleph's capability system currently supports Memory (local vector search) and Search (web search). Users want to analyze YouTube video content directly through the hotkey workflow. This design adds a new `Video` capability that extracts transcripts from YouTube videos.
 
 **Stakeholders:**
 - End users: Want frictionless video content analysis
@@ -76,7 +76,7 @@ struct VideoTranscript {
 ### Module Structure
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── video/
 │   ├── mod.rs              # Module exports, VideoCapability trait
 │   ├── youtube.rs          # YouTube-specific extraction logic
@@ -178,7 +178,7 @@ pub struct YouTubeExtractor {
 impl YouTubeExtractor {
     pub fn new(config: VideoConfig) -> Self {
         let client = reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (compatible; Aether/1.0)")
+            .user_agent("Mozilla/5.0 (compatible; Aleph/1.0)")
             .timeout(Duration::from_secs(10))
             .build()
             .expect("Failed to create HTTP client");
@@ -230,22 +230,22 @@ impl YouTubeExtractor {
         YOUTUBE_REGEX.captures(url)
             .and_then(|caps| caps.get(1))
             .map(|m| m.as_str())
-            .ok_or_else(|| AetherError::video("Invalid YouTube URL"))
+            .ok_or_else(|| AlephError::video("Invalid YouTube URL"))
     }
 
     fn extract_player_response(html: &str) -> Result<serde_json::Value> {
         // Find ytInitialPlayerResponse in script tags
         let start_marker = "var ytInitialPlayerResponse = ";
         let start = html.find(start_marker)
-            .ok_or_else(|| AetherError::video("Player response not found"))?;
+            .ok_or_else(|| AlephError::video("Player response not found"))?;
 
         let json_start = start + start_marker.len();
         let json_end = html[json_start..].find(";</script>")
-            .ok_or_else(|| AetherError::video("Failed to parse player response"))?;
+            .ok_or_else(|| AlephError::video("Failed to parse player response"))?;
 
         let json_str = &html[json_start..json_start + json_end];
         serde_json::from_str(json_str)
-            .map_err(|e| AetherError::video(format!("Failed to parse JSON: {}", e)))
+            .map_err(|e| AlephError::video(format!("Failed to parse JSON: {}", e)))
     }
 
     fn find_caption_url(player_response: &serde_json::Value, preferred_lang: &str) -> Result<String> {
@@ -254,18 +254,18 @@ impl YouTubeExtractor {
             .and_then(|c| c.get("playerCaptionsTracklistRenderer"))
             .and_then(|r| r.get("captionTracks"))
             .and_then(|t| t.as_array())
-            .ok_or_else(|| AetherError::video("No captions available for this video"))?;
+            .ok_or_else(|| AlephError::video("No captions available for this video"))?;
 
         // Try preferred language first, then fall back to first available
         let track = caption_tracks.iter()
             .find(|t| t.get("languageCode").and_then(|l| l.as_str()) == Some(preferred_lang))
             .or_else(|| caption_tracks.first())
-            .ok_or_else(|| AetherError::video("No caption tracks found"))?;
+            .ok_or_else(|| AlephError::video("No caption tracks found"))?;
 
         track.get("baseUrl")
             .and_then(|u| u.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| AetherError::video("Caption URL not found"))
+            .ok_or_else(|| AlephError::video("Caption URL not found"))
     }
 
     fn parse_transcript_xml(xml: &str) -> Result<Vec<TranscriptSegment>> {

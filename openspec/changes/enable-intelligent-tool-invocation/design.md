@@ -2,7 +2,7 @@
 
 ## Overview
 
-本设计文档详细描述如何实现统一工具执行层，使 Aether 能够像 Claude Code 一样根据用户需求智能调用工具。
+本设计文档详细描述如何实现统一工具执行层，使 Aleph 能够像 Claude Code 一样根据用户需求智能调用工具。
 
 ## Architecture
 
@@ -10,7 +10,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          AetherCore                                      │
+│                          AlephCore                                      │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  IntentRoutingPipeline                                                   │
 │  ├── L1 Regex: /search, /youtube, /chat                                 │
@@ -41,7 +41,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          AetherCore                                      │
+│                          AlephCore                                      │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  IntentRoutingPipeline                                                   │
 │  ├── L1 Regex: /search, /youtube, /chat, /fetch                         │
@@ -73,7 +73,7 @@
 
 ### 1. WebFetchTool
 
-**Location**: `Aether/core/src/tools/web/mod.rs`
+**Location**: `Aleph/core/src/tools/web/mod.rs`
 
 ```rust
 use async_trait::async_trait;
@@ -104,7 +104,7 @@ impl Default for WebFetchConfig {
         Self {
             max_content_bytes: 50 * 1024, // 50KB
             timeout_seconds: 30,
-            user_agent: "AetherBot/1.0 (+https://github.com/aether)".to_string(),
+            user_agent: "AlephBot/1.0 (+https://github.com/aleph)".to_string(),
             allowed_patterns: vec![],
             blocked_domains: vec![],
         }
@@ -230,7 +230,7 @@ impl WebFetchTool {
 
 ### 2. UnifiedToolExecutor
 
-**Location**: `Aether/core/src/core/tool_executor.rs`
+**Location**: `Aleph/core/src/core/tool_executor.rs`
 
 ```rust
 use crate::capability::CapabilityExecutor;
@@ -334,10 +334,10 @@ impl UnifiedToolExecutor {
             }
             Some(ToolSource::Skill) => {
                 // Future: skill execution
-                Err(AetherError::other("Skills not yet implemented"))
+                Err(AlephError::other("Skills not yet implemented"))
             }
             None => {
-                Err(AetherError::tool_not_found(tool_name))
+                Err(AlephError::tool_not_found(tool_name))
             }
         };
 
@@ -378,7 +378,7 @@ impl UnifiedToolExecutor {
             "search" => Capability::Search,
             "video" | "youtube" => Capability::Video,
             "memory" => Capability::Memory,
-            _ => return Err(AetherError::tool_not_found(tool_name)),
+            _ => return Err(AlephError::tool_not_found(tool_name)),
         };
 
         // Extract query from parameters
@@ -402,19 +402,19 @@ impl UnifiedToolExecutor {
             Capability::Search => {
                 payload.context.search_results
                     .map(|r| format!("Search results:\n{}", serde_json::to_string_pretty(&r).unwrap_or_default()))
-                    .ok_or_else(|| AetherError::other("Search returned no results"))
+                    .ok_or_else(|| AlephError::other("Search returned no results"))
             }
             Capability::Video => {
                 payload.context.video_transcript
                     .map(|t| format!("Video transcript:\n{}", t))
-                    .ok_or_else(|| AetherError::other("Video transcript not available"))
+                    .ok_or_else(|| AlephError::other("Video transcript not available"))
             }
             Capability::Memory => {
                 payload.context.memory_snippets
                     .map(|m| format!("Memory snippets:\n{}", serde_json::to_string_pretty(&m).unwrap_or_default()))
-                    .ok_or_else(|| AetherError::other("No memory found"))
+                    .ok_or_else(|| AlephError::other("No memory found"))
             }
-            _ => Err(AetherError::other("Unsupported capability")),
+            _ => Err(AlephError::other("Unsupported capability")),
         }
     }
 
@@ -429,7 +429,7 @@ impl UnifiedToolExecutor {
         if result.success {
             Ok(result.output)
         } else {
-            Err(AetherError::other(result.error.unwrap_or_else(|| "Tool execution failed".to_string())))
+            Err(AlephError::other(result.error.unwrap_or_else(|| "Tool execution failed".to_string())))
         }
     }
 
@@ -439,15 +439,15 @@ impl UnifiedToolExecutor {
         parameters: serde_json::Value,
     ) -> Result<String> {
         let client = self.mcp_client.as_ref()
-            .ok_or_else(|| AetherError::other("MCP client not available"))?;
+            .ok_or_else(|| AlephError::other("MCP client not available"))?;
 
         let result = client.call_tool(tool_name, parameters).await?;
 
         if result.success {
             serde_json::to_string_pretty(&result.content)
-                .map_err(|e| AetherError::other(format!("Failed to serialize MCP result: {}", e)))
+                .map_err(|e| AlephError::other(format!("Failed to serialize MCP result: {}", e)))
         } else {
-            Err(AetherError::other(result.error.unwrap_or_else(|| "MCP tool failed".to_string())))
+            Err(AlephError::other(result.error.unwrap_or_else(|| "MCP tool failed".to_string())))
         }
     }
 
@@ -494,7 +494,7 @@ impl UnifiedToolExecutor {
 
 ### 3. Updated Processing Flow
 
-**Location**: `Aether/core/src/core/processing.rs`
+**Location**: `Aleph/core/src/core/processing.rs`
 
 ```rust
 // Replace execute_matched_tool with:
@@ -523,7 +523,7 @@ fn execute_matched_tool(
     )?;
 
     if !result.success {
-        return Err(AetherError::other(
+        return Err(AlephError::other(
             result.error.unwrap_or_else(|| "Tool execution failed".to_string())
         ));
     }
@@ -536,7 +536,7 @@ fn execute_matched_tool(
 
     // Now make AI call with tool result
     let provider = self.get_default_provider_instance()
-        .ok_or_else(|| AetherError::NoProviderAvailable {
+        .ok_or_else(|| AlephError::NoProviderAvailable {
             suggestion: Some("No AI provider available".to_string()),
         })?;
 
@@ -574,7 +574,7 @@ fn execute_matched_tool(
 
 ### 4. L3 Prompt Enhancement
 
-**Location**: `Aether/core/src/routing/l3_enhanced.rs`
+**Location**: `Aleph/core/src/routing/l3_enhanced.rs`
 
 ```rust
 fn build_routing_prompt(&self, input: &str, tools: &[UnifiedTool]) -> String {
@@ -630,7 +630,7 @@ fn build_routing_prompt(&self, input: &str, tools: &[UnifiedTool]) -> String {
 
 3. PipelineResult::ToolMatched { tool_name: "web_fetch", parameters: {url: "..."} }
 
-4. AetherCore.execute_matched_tool("web_fetch", params)
+4. AlephCore.execute_matched_tool("web_fetch", params)
    ├── UnifiedToolExecutor.execute("web_fetch", params)
    │   ├── resolve_source("web_fetch") → Native
    │   └── native_registry.execute("web_fetch", args)
@@ -658,7 +658,7 @@ enabled = true
 enabled = true
 max_content_bytes = 51200  # 50KB
 timeout_seconds = 30
-user_agent = "AetherBot/1.0"
+user_agent = "AlephBot/1.0"
 # Optional: URL restrictions
 allowed_patterns = []
 blocked_domains = ["localhost", "127.0.0.1", "0.0.0.0"]

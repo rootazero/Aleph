@@ -1,6 +1,6 @@
 //
 //  ConditionalDragArea.swift
-//  Aether
+//  Aleph
 //
 //  Smart window drag area that enables dragging in blank/padding areas.
 //  Automatically detects if mouse is over interactive content.

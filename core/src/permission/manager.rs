@@ -1,11 +1,11 @@
-// Aether/core/src/permission/manager.rs
+// Aleph/core/src/permission/manager.rs
 //! Permission manager for handling permission requests.
 
 use super::config::{config_to_ruleset, default_config, PermissionConfigMap};
 use super::error::PermissionError;
 use super::rule::{PermissionEvaluator, Ruleset};
 use crate::event::permission::{PermissionReply, PermissionRequest};
-use crate::event::{AetherEvent, EventBus};
+use crate::event::{AlephEvent, EventBus};
 use crate::extension::PermissionAction;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -137,7 +137,7 @@ impl PermissionManager {
 
         // Publish event
         self.event_bus
-            .publish(AetherEvent::PermissionAsked(request))
+            .publish(AlephEvent::PermissionAsked(request))
             .await;
 
         // Wait for response with optional timeout
@@ -178,7 +178,7 @@ impl PermissionManager {
 
         // Publish reply event
         self.event_bus
-            .publish(AetherEvent::PermissionReplied {
+            .publish(AlephEvent::PermissionReplied {
                 session_id: session_id.clone(),
                 request_id: request_id.to_string(),
                 reply: reply.clone(),
@@ -263,7 +263,7 @@ impl PermissionManager {
 
                 // Publish reply event
                 self.event_bus
-                    .publish(AetherEvent::PermissionReplied {
+                    .publish(AlephEvent::PermissionReplied {
                         session_id: session_id.to_string(),
                         request_id: id,
                         reply: PermissionReply::Always,
@@ -294,7 +294,7 @@ impl PermissionManager {
 
                 // Publish reply event
                 self.event_bus
-                    .publish(AetherEvent::PermissionReplied {
+                    .publish(AlephEvent::PermissionReplied {
                         session_id: session_id.to_string(),
                         request_id: id,
                         reply: PermissionReply::Reject,

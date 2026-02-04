@@ -1,17 +1,17 @@
 //! Markdown Skill Parser
 //!
-//! Parses SKILL.md files with YAML frontmatter into AetherSkillSpec.
+//! Parses SKILL.md files with YAML frontmatter into AlephSkillSpec.
 
 use anyhow::{Context, Result};
-use super::spec::AetherSkillSpec;
+use super::spec::AlephSkillSpec;
 
-/// Parse a SKILL.md file into AetherSkillSpec
-pub fn parse_skill_file(content: &str) -> Result<AetherSkillSpec> {
+/// Parse a SKILL.md file into AlephSkillSpec
+pub fn parse_skill_file(content: &str) -> Result<AlephSkillSpec> {
     // 1. Split frontmatter and content
     let (frontmatter, markdown) = extract_frontmatter(content)?;
 
     // 2. Parse YAML frontmatter
-    let mut spec: AetherSkillSpec = serde_yaml::from_str(frontmatter)
+    let mut spec: AlephSkillSpec = serde_yaml::from_str(frontmatter)
         .context("Failed to parse skill frontmatter")?;
 
     // 3. Attach markdown content
@@ -44,7 +44,7 @@ fn extract_frontmatter(content: &str) -> Result<(&str, &str)> {
 }
 
 /// Validate spec has required fields
-fn validate_spec(spec: &AetherSkillSpec) -> Result<()> {
+fn validate_spec(spec: &AlephSkillSpec) -> Result<()> {
     if spec.name.is_empty() {
         anyhow::bail!("Skill name cannot be empty");
     }

@@ -93,7 +93,7 @@ GPU (Final Composite)
 
 ### 1. 统一对话窗口 (UnifiedConversationWindow)
 
-**文件:** `platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationWindow.swift`
+**文件:** `platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationWindow.swift`
 
 #### 职责
 - 管理对话窗口的生命周期和定位
@@ -168,7 +168,7 @@ Hide:
 
 **文件路径:**
 ```
-platforms/macos/Aether/Sources/LiquidGlass/
+platforms/macos/Aleph/Sources/LiquidGlass/
 ├── Metal/
 │   ├── Shaders/
 │   │   ├── LiquidGlassShaders.metal      # 三层 Shader 实现
@@ -296,7 +296,7 @@ if isHovered {
 
 ### 3. 输入区域 (InputAreaView)
 
-**文件:** `platforms/macos/Aether/Sources/MultiTurn/Views/InputAreaView.swift`
+**文件:** `platforms/macos/Aleph/Sources/MultiTurn/Views/InputAreaView.swift`
 
 #### 布局结构
 ```
@@ -372,7 +372,7 @@ enum AttachmentType {
 
 ### 4. 对话消息列表 (ConversationAreaView)
 
-**文件:** `platforms/macos/Aether/Sources/MultiTurn/Views/ConversationAreaView.swift`
+**文件:** `platforms/macos/Aleph/Sources/MultiTurn/Views/ConversationAreaView.swift`
 
 #### 布局结构
 ```
@@ -501,7 +501,7 @@ ScrollViewReader { proxy in
 
 ### 5. 命令列表 (/CommandListView)
 
-**文件:** `platforms/macos/Aether/Sources/MultiTurn/Views/CommandListView.swift`
+**文件:** `platforms/macos/Aleph/Sources/MultiTurn/Views/CommandListView.swift`
 
 #### 布局结构
 ```
@@ -563,7 +563,7 @@ struct Command: Identifiable {
 
 ### 6. 主题列表 (//TopicListView)
 
-**文件:** `platforms/macos/Aether/Sources/MultiTurn/Views/TopicListView.swift` (需新建)
+**文件:** `platforms/macos/Aleph/Sources/MultiTurn/Views/TopicListView.swift` (需新建)
 
 #### 布局结构
 ```
@@ -629,7 +629,7 @@ struct Topic: Identifiable {
 
 ### 7. Halo 状态窗口 (HaloWindow)
 
-**文件:** `platforms/macos/Aether/Sources/HaloWindow.swift`
+**文件:** `platforms/macos/Aleph/Sources/HaloWindow.swift`
 
 #### 定位策略
 - **level**: .floating (总是在最上层)

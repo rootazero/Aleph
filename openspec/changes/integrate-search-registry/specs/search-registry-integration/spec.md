@@ -1,6 +1,6 @@
 # Search Registry Integration Spec
 
-**Capability**: Persistent SearchRegistry in AetherCore with hot-reload support
+**Capability**: Persistent SearchRegistry in AlephCore with hot-reload support
 
 **Relates to**: `search-capability`, `config-management`, `ai-routing`
 
@@ -8,9 +8,9 @@
 
 ## ADDED Requirements
 
-### Requirement: AetherCore maintains persistent SearchRegistry
+### Requirement: AlephCore maintains persistent SearchRegistry
 
-The AetherCore SHALL maintain a persistent SearchRegistry instance initialized from configuration.
+The AlephCore SHALL maintain a persistent SearchRegistry instance initialized from configuration.
 
 **Rationale**: 避免每次请求重复创建 SearchRegistry 和 providers，提供 provider 测试 API 访问
 
@@ -19,7 +19,7 @@ The AetherCore SHALL maintain a persistent SearchRegistry instance initialized f
 #### Scenario: SearchRegistry initializes from config
 
 - **GIVEN** config has `[search]` section with `enabled = true`
-- **WHEN** AetherCore is constructed
+- **WHEN** AlephCore is constructed
 - **THEN** SearchRegistry is created from search config
 - **AND** all configured backends are initialized as providers
 - **AND** default provider is set from `search.default_provider`
@@ -28,22 +28,22 @@ The AetherCore SHALL maintain a persistent SearchRegistry instance initialized f
 #### Scenario: SearchRegistry is None when search disabled
 
 - **GIVEN** config has `[search]` section with `enabled = false`
-- **WHEN** AetherCore is constructed
+- **WHEN** AlephCore is constructed
 - **THEN** search_registry field is `None`
 - **AND** no providers are initialized
 
 #### Scenario: SearchRegistry handles missing config
 
 - **GIVEN** config has no `[search]` section
-- **WHEN** AetherCore is constructed
+- **WHEN** AlephCore is constructed
 - **THEN** search_registry field is `None`
 - **AND** no errors are raised
 
 ---
 
-### Requirement: AetherCore provides provider testing API
+### Requirement: AlephCore provides provider testing API
 
-The AetherCore SHALL expose an async method to test search provider connections via UniFFI.
+The AlephCore SHALL expose an async method to test search provider connections via UniFFI.
 
 **Rationale**: 允许 Swift UI 验证 provider 配置并显示状态
 
@@ -51,7 +51,7 @@ The AetherCore SHALL expose an async method to test search provider connections 
 
 #### Scenario: test_search_provider() succeeds with valid provider
 
-- **GIVEN** AetherCore has initialized SearchRegistry
+- **GIVEN** AlephCore has initialized SearchRegistry
 - **WHEN** Swift calls `await core.testSearchProvider("tavily")`
 - **THEN** SearchRegistry.test_search_provider() is called
 - **AND** result contains success=true and latency_ms > 0
@@ -59,7 +59,7 @@ The AetherCore SHALL expose an async method to test search provider connections 
 
 #### Scenario: test_search_provider() fails when search disabled
 
-- **GIVEN** AetherCore has search_registry = None
+- **GIVEN** AlephCore has search_registry = None
 - **WHEN** Swift calls `await core.testSearchProvider("tavily")`
 - **THEN** result contains success=false
 - **AND** error_type = "config"
@@ -76,7 +76,7 @@ The AetherCore SHALL expose an async method to test search provider connections 
 
 ### Requirement: SearchRegistry supports config hot-reload
 
-The AetherCore SHALL rebuild SearchRegistry when search configuration changes.
+The AlephCore SHALL rebuild SearchRegistry when search configuration changes.
 
 **Rationale**: 配置热重载时更新 provider 列表，无需重启应用
 
@@ -84,7 +84,7 @@ The AetherCore SHALL rebuild SearchRegistry when search configuration changes.
 
 #### Scenario: Config change triggers registry rebuild
 
-- **GIVEN** AetherCore is running with SearchRegistry
+- **GIVEN** AlephCore is running with SearchRegistry
 - **WHEN** config watcher detects search config change
 - **AND** `on_config_changed()` callback is triggered
 - **THEN** SearchRegistry is rebuilt from new config
@@ -131,7 +131,7 @@ let executor = CapabilityExecutor::new(
 
 ## Validation Criteria
 
-- [ ] AetherCore initializes SearchRegistry from config
+- [ ] AlephCore initializes SearchRegistry from config
 - [ ] `test_search_provider()` works from Swift
 - [ ] Provider test results are cached correctly
 - [ ] Config hot-reload rebuilds SearchRegistry

@@ -2,7 +2,7 @@
 
 ## Why
 
-当前的Aether设置界面使用了基础的SwiftUI组件，虽然功能完整，但视觉呈现相对传统，缺乏现代化macOS应用的精致感和专业性。参考uisample.png中展示的现代化UI设计，我们需要对整个设置界面进行视觉升级，以提供更优秀的用户体验。
+当前的Aleph设置界面使用了基础的SwiftUI组件，虽然功能完整，但视觉呈现相对传统，缺乏现代化macOS应用的精致感和专业性。参考uisample.png中展示的现代化UI设计，我们需要对整个设置界面进行视觉升级，以提供更优秀的用户体验。
 
 **Current Problems:**
 - 侧边栏使用默认样式，缺乏视觉层次感
@@ -12,7 +12,7 @@
 - 缺少细节面板，信息展示不够直观
 
 **Opportunity:**
-- 提升品牌形象，展现Aether作为高端AI中间件的专业性
+- 提升品牌形象，展现Aleph作为高端AI中间件的专业性
 - 改善用户体验，使配置流程更直观、高效
 - 遵循最新macOS设计规范，与系统原生应用保持一致性
 
@@ -81,14 +81,14 @@
 - New capability needed: `settings-ui-design-system`
 
 **Affected Code:**
-- `Aether/Sources/SettingsView.swift`
-- `Aether/Sources/ProvidersView.swift`
-- `Aether/Sources/RoutingView.swift`
-- `Aether/Sources/ShortcutsView.swift`
-- `Aether/Sources/BehaviorSettingsView.swift`
-- `Aether/Sources/GeneralSettingsView.swift`
-- `Aether/Sources/MemoryView.swift`
-- New files in `Aether/Sources/Components/` directory
+- `Aleph/Sources/SettingsView.swift`
+- `Aleph/Sources/ProvidersView.swift`
+- `Aleph/Sources/RoutingView.swift`
+- `Aleph/Sources/ShortcutsView.swift`
+- `Aleph/Sources/BehaviorSettingsView.swift`
+- `Aleph/Sources/GeneralSettingsView.swift`
+- `Aleph/Sources/MemoryView.swift`
+- New files in `Aleph/Sources/Components/` directory
 
 **Breaking Changes:**
 - **NONE** - This is a pure UI refactor with no API or behavior changes

@@ -2,13 +2,13 @@
 
 ## Summary
 
-Restructure the Aether project from its current macOS-centric layout to a Monorepo architecture that enables Windows platform support while maintaining full macOS functionality. This change establishes the foundation for cross-platform development with shared Rust core and platform-specific native UIs.
+Restructure the Aleph project from its current macOS-centric layout to a Monorepo architecture that enables Windows platform support while maintaining full macOS functionality. This change establishes the foundation for cross-platform development with shared Rust core and platform-specific native UIs.
 
 ## Motivation
 
 ### Current State
-- Project structure is macOS-centric with `Aether/` containing both Swift sources and Rust core
-- Rust core (`Aether/core/`) is tightly coupled with macOS directory structure
+- Project structure is macOS-centric with `Aleph/` containing both Swift sources and Rust core
+- Rust core (`Aleph/core/`) is tightly coupled with macOS directory structure
 - No clear separation between platform-specific and shared code
 - Build scripts assume macOS-only workflow
 
@@ -45,12 +45,12 @@ Restructure the Aether project from its current macOS-centric layout to a Monore
 
 ### Phase 1: Prepare (Non-Breaking)
 - Add Cargo workspace configuration at root
-- Add feature flags to `core/Cargo.toml` (currently `Aether/core/Cargo.toml`)
+- Add feature flags to `core/Cargo.toml` (currently `Aleph/core/Cargo.toml`)
 - Create placeholder directories
 
 ### Phase 2: Migrate
-- Move `Aether/core/` to `core/`
-- Move `Aether/` to `platforms/macos/Aether/`
+- Move `Aleph/core/` to `core/`
+- Move `Aleph/` to `platforms/macos/Aleph/`
 - Update all path references (XcodeGen, scripts, imports)
 - Create `shared/` for common resources
 
@@ -96,6 +96,6 @@ Restructure the Aether project from its current macOS-centric layout to a Monore
 
 ## References
 
-- [Aether Architecture](../../docs/ARCHITECTURE.md)
+- [Aleph Architecture](../../docs/ARCHITECTURE.md)
 - [XcodeGen Workflow](../../docs/XCODEGEN_README.md)
 - [csbindgen documentation](https://github.com/Cysharp/csbindgen)

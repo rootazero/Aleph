@@ -281,7 +281,7 @@ description = "Clear screen"
 handler = "handleClear"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let commands = manifest.commands_v2.unwrap();
     assert_eq!(commands.len(), 2);
@@ -829,7 +829,7 @@ start_handler = "startSync"
 stop_handler = "stopSync"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let services = manifest.services_v2.unwrap();
     assert_eq!(services.len(), 2);
@@ -1539,7 +1539,7 @@ handler = "handleSlackChannel"
 token = { type = "string", sensitive = true }
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
     // Verify parsing (channels_v2 field if added)
 }
 
@@ -1560,7 +1560,7 @@ handler = "handleChat"
 api_key = { type = "string", sensitive = true }
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
     // Verify parsing (providers_v2 field if added)
 }
 
@@ -1582,7 +1582,7 @@ methods = ["GET", "PUT", "DELETE"]
 handler = "handleItem"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
     // Verify parsing (http_routes_v2 field if added)
 }
 

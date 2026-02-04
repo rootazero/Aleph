@@ -1,4 +1,4 @@
-// Aether/core/src/event/tests/integration.rs
+// Aleph/core/src/event/tests/integration.rs
 //! Integration tests for the enhanced event system.
 //!
 //! These tests verify that:
@@ -11,7 +11,7 @@ mod tests {
     use crate::event::bus::EventBus;
     use crate::event::filter::EventFilter;
     use crate::event::global_bus::GlobalBus;
-    use crate::event::types::{AetherEvent, EventType, InputEvent, StopReason, TokenUsage, ToolCallResult};
+    use crate::event::types::{AlephEvent, EventType, InputEvent, StopReason, TokenUsage, ToolCallResult};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -65,7 +65,7 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Publish events from each bus
-        bus1.publish(AetherEvent::InputReceived(InputEvent {
+        bus1.publish(AlephEvent::InputReceived(InputEvent {
             text: "Hello from agent 1".to_string(),
             topic_id: None,
             context: None,
@@ -73,7 +73,7 @@ mod tests {
         }))
         .await;
 
-        bus2.publish(AetherEvent::InputReceived(InputEvent {
+        bus2.publish(AlephEvent::InputReceived(InputEvent {
             text: "Hello from agent 2".to_string(),
             topic_id: None,
             context: None,
@@ -81,9 +81,9 @@ mod tests {
         }))
         .await;
 
-        bus2.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        bus2.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
 
-        bus3.publish(AetherEvent::InputReceived(InputEvent {
+        bus3.publish(AlephEvent::InputReceived(InputEvent {
             text: "Hello from agent 3".to_string(),
             topic_id: None,
             context: None,
@@ -139,9 +139,9 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Publish events
-        bus_a.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
-        bus_a.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
-        bus_b.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        bus_a.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
+        bus_a.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
+        bus_b.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -181,7 +181,7 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Publish different event types
-        bus.publish(AetherEvent::ToolCallCompleted(ToolCallResult {
+        bus.publish(AlephEvent::ToolCallCompleted(ToolCallResult {
             call_id: "call-1".to_string(),
             tool: "search".to_string(),
             input: serde_json::json!({}),
@@ -193,8 +193,8 @@ mod tests {
         }))
         .await;
 
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
-        bus.publish(AetherEvent::LoopStop(StopReason::UserAborted)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::UserAborted)).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -237,15 +237,15 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Publish events
-        bus_match.publish(AetherEvent::LoopStop(StopReason::Completed)).await; // Should match
-        bus_match.publish(AetherEvent::InputReceived(InputEvent { // Wrong event type
+        bus_match.publish(AlephEvent::LoopStop(StopReason::Completed)).await; // Should match
+        bus_match.publish(AlephEvent::InputReceived(InputEvent { // Wrong event type
             text: "test".to_string(),
             topic_id: None,
             context: None,
             timestamp: 0,
         })).await;
-        bus_wrong_agent.publish(AetherEvent::LoopStop(StopReason::Completed)).await; // Wrong agent
-        bus_wrong_session.publish(AetherEvent::LoopStop(StopReason::Completed)).await; // Wrong session
+        bus_wrong_agent.publish(AlephEvent::LoopStop(StopReason::Completed)).await; // Wrong agent
+        bus_wrong_session.publish(AlephEvent::LoopStop(StopReason::Completed)).await; // Wrong session
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -283,7 +283,7 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Child completes its work
-        child_bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        child_bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -358,7 +358,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Publish event
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
 
         // Verify receiver got the event
         let received = receive_task.await.unwrap();
@@ -389,7 +389,7 @@ mod tests {
 
         // Publish multiple events
         for _ in 0..5 {
-            bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+            bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -455,7 +455,7 @@ mod tests {
         let event = crate::event::global_bus::GlobalEvent::new(
             "agent-1",
             "session-1",
-            AetherEvent::LoopStop(StopReason::Completed),
+            AlephEvent::LoopStop(StopReason::Completed),
             0,
         );
 

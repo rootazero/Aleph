@@ -72,7 +72,7 @@
 
 ### 修复 #1: 在错误处理时清除剪贴板历史
 
-**修改文件**: `Aether/Sources/AppDelegate.swift`
+**修改文件**: `Aleph/Sources/AppDelegate.swift`
 
 **位置**: Line 878 `catch` 块
 
@@ -129,7 +129,7 @@ AI 输出：关于 "hello" 的正常回复（正确！）
 ### 测试场景 1: 剪贴板上下文污染修复
 
 **步骤**：
-1. 触发一个错误（比如断网后使用 Aether）
+1. 触发一个错误（比如断网后使用 Aleph）
 2. 复制错误弹窗的错误消息
 3. 打开 Notes.app，输入 "hello world"
 4. 选中 "hello world"
@@ -141,7 +141,7 @@ AI 输出：关于 "hello" 的正常回复（正确！）
 - ✅ AI 返回关于 "hello world" 的正常回复
 
 **验证方法**：
-- 查看控制台日志：`log stream --predicate 'process == "Aether"' --level debug`
+- 查看控制台日志：`log stream --predicate 'process == "Aleph"' --level debug`
 - 搜索 `Sending to AI` 确认输入内容
 - 搜索 `Cleared clipboard monitor history` 确认清理执行
 
@@ -169,7 +169,7 @@ AI 输出：关于 "hello" 的正常回复（正确！）
 ### 测试场景 3: Mutex Poison 恢复
 
 **步骤**：
-1. 正常使用 Aether
+1. 正常使用 Aleph
 2. 观察是否有 Mutex poison 恢复的日志
 
 **预期结果**：
@@ -182,12 +182,12 @@ AI 输出：关于 "hello" 的正常回复（正确！）
 ## 📁 修改的文件
 
 ### Swift 层
-- **`Aether/Sources/AppDelegate.swift`**
+- **`Aleph/Sources/AppDelegate.swift`**
   - Line 882-883: 添加 `ClipboardMonitor.shared.clearHistory()` 调用
   - Line 883: 添加日志输出
 
 ### Rust 层（之前 Phase 1 已修复）
-- **`Aether/core/src/core.rs`**
+- **`Aleph/core/src/core.rs`**
   - 11 处 Mutex unwrap 替换为 unwrap_or_else
   - 已在 Phase 1 完成
 
@@ -224,8 +224,8 @@ AI 输出：关于 "hello" 的正常回复（正确！）
 
 ```bash
 # 回滚 Swift 代码
-git diff HEAD Aether/Sources/AppDelegate.swift
-git checkout HEAD -- Aether/Sources/AppDelegate.swift
+git diff HEAD Aleph/Sources/AppDelegate.swift
+git checkout HEAD -- Aleph/Sources/AppDelegate.swift
 
 # 在 Xcode 中重新构建
 Cmd+Shift+K && Cmd+B && Cmd+R
@@ -261,7 +261,7 @@ Cmd+Shift+K && Cmd+B && Cmd+R
 **建议**：
 - 这是系统行为，无法完全消除
 - 用户应该：
-  1. 选中文本后使用 Aether（最佳实践）
+  1. 选中文本后使用 Aleph（最佳实践）
   2. 或者容忍一次系统警告音（Accessibility API 会静默读取）
 
 ---

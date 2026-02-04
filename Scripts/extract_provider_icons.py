@@ -64,7 +64,7 @@ PROVIDERS = {
 }
 
 LOBE_ICONS_PATH = os.path.expanduser("~/workspace/lobe-icons/src")
-OUTPUT_DIR = os.path.expanduser("~/Workspace/Aether/Aether/Resources/ProviderIcons")
+OUTPUT_DIR = os.path.expanduser("~/Workspace/Aleph/Aleph/Resources/ProviderIcons")
 
 
 def extract_svg_from_tsx(tsx_path, provider_name):

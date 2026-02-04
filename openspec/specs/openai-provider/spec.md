@@ -34,7 +34,7 @@ The system SHALL configure `reqwest` client with appropriate settings for OpenAI
 - **WHEN** creating HTTP request
 - **THEN** `Authorization` header is set to `Bearer {api_key}`
 - **AND** `Content-Type` header is set to `application/json`
-- **AND** `User-Agent` header includes "Aether/{version}"
+- **AND** `User-Agent` header includes "Aleph/{version}"
 - **AND** headers are sent with every request
 
 #### Scenario: Configure timeout
@@ -42,14 +42,14 @@ The system SHALL configure `reqwest` client with appropriate settings for OpenAI
 - **THEN** timeout is set from config `timeout_seconds` field
 - **AND** default timeout is 30 seconds if not specified
 - **AND** timeout applies to entire request (connect + read)
-- **AND** timeout error returns `AetherError::Timeout`
+- **AND** timeout error returns `AlephError::Timeout`
 
 #### Scenario: Enable TLS verification
 - **WHEN** making HTTPS requests
 - **THEN** TLS 1.2+ is used
 - **AND** certificate verification is enabled
 - **AND** invalid certificates cause connection failure
-- **AND** error is `AetherError::NetworkError`
+- **AND** error is `AlephError::NetworkError`
 
 ### Requirement: Request Parameters
 The system SHALL support configurable request parameters for OpenAI API.
@@ -78,34 +78,34 @@ The system SHALL handle all OpenAI API error responses appropriately.
 
 #### Scenario: Handle 401 Unauthorized
 - **WHEN** API returns 401 status
-- **THEN** error type is `AetherError::AuthenticationError`
+- **THEN** error type is `AlephError::AuthenticationError`
 - **AND** error message suggests checking API key
 - **AND** no retry is attempted
 - **AND** user is notified via callback
 
 #### Scenario: Handle 429 Rate Limit
 - **WHEN** API returns 429 status
-- **THEN** error type is `AetherError::RateLimitError`
+- **THEN** error type is `AlephError::RateLimitError`
 - **AND** `Retry-After` header is parsed if present
 - **AND** error message includes retry delay
 - **AND** no automatic retry occurs
 
 #### Scenario: Handle 500+ Server Errors
 - **WHEN** API returns 500, 502, 503, or 504 status
-- **THEN** error type is `AetherError::ProviderError`
+- **THEN** error type is `AlephError::ProviderError`
 - **AND** error message includes status code
 - **AND** retry can be attempted by caller
 - **AND** exponential backoff is recommended
 
 #### Scenario: Handle network failures
 - **WHEN** DNS lookup fails or connection refused
-- **THEN** error type is `AetherError::NetworkError`
+- **THEN** error type is `AlephError::NetworkError`
 - **AND** error message includes underlying cause
 - **AND** user is notified of connectivity issue
 
 #### Scenario: Handle malformed responses
 - **WHEN** API returns invalid JSON or missing fields
-- **THEN** error type is `AetherError::ProviderError`
+- **THEN** error type is `AlephError::ProviderError`
 - **AND** error message indicates "Invalid API response"
 - **AND** raw response is logged for debugging
 

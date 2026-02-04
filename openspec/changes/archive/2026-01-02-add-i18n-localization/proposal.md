@@ -10,7 +10,7 @@
 
 ## Why
 
-Aether currently has all UI text hardcoded in English within Swift source files. This limits accessibility for non-English users and makes the application less inclusive. To support a global user base, we need to:
+Aleph currently has all UI text hardcoded in English within Swift source files. This limits accessibility for non-English users and makes the application less inclusive. To support a global user base, we need to:
 
 - Enable UI text to follow the user's system language preference
 - Maintain English as fallback when translations are unavailable
@@ -78,11 +78,11 @@ This change implements a robust i18n system using Apple's native localization in
 - **NEW**: `i18n-localization` - Internationalization and localization system
 
 **Affected code:**
-- `Aether/Sources/**/*.swift` - Replace all hardcoded strings with `NSLocalizedString()`
-- `Aether/Resources/en.lproj/Localizable.strings` - **NEW** English base strings
-- `Aether/Resources/zh-Hans.lproj/Localizable.strings` - **NEW** Simplified Chinese strings
-- `Aether/Resources/Info.plist` - Add `CFBundleLocalizations` key
-- `Aether/Info.plist` - Localize app metadata
+- `Aleph/Sources/**/*.swift` - Replace all hardcoded strings with `NSLocalizedString()`
+- `Aleph/Resources/en.lproj/Localizable.strings` - **NEW** English base strings
+- `Aleph/Resources/zh-Hans.lproj/Localizable.strings` - **NEW** Simplified Chinese strings
+- `Aleph/Resources/Info.plist` - Add `CFBundleLocalizations` key
+- `Aleph/Info.plist` - Localize app metadata
 - `project.yml` - Add localization configuration for XcodeGen
 
 **Dependencies:**

@@ -106,7 +106,7 @@ pub struct McpServerStatusInfo {
 ### 1.3 UniFFI 接口扩展
 
 ```idl
-// aether.udl
+// aleph.udl
 
 dictionary McpServerConfig {
     string id;
@@ -146,7 +146,7 @@ enum McpServerStatus {
     "Error",
 };
 
-interface AetherCore {
+interface AlephCore {
     // ... existing methods ...
 
     // MCP Server Management
@@ -154,26 +154,26 @@ interface AetherCore {
     McpServerConfig? get_mcp_server(string id);
     McpServerStatusInfo get_mcp_server_status(string id);
 
-    [Throws=AetherException]
+    [Throws=AlephException]
     void add_mcp_server(McpServerConfig config);
 
-    [Throws=AetherException]
+    [Throws=AlephException]
     void update_mcp_server(McpServerConfig config);
 
-    [Throws=AetherException]
+    [Throws=AlephException]
     void delete_mcp_server(string id);
 
-    [Throws=AetherException]
+    [Throws=AlephException]
     void start_mcp_server(string id);
 
-    [Throws=AetherException]
+    [Throws=AlephException]
     void stop_mcp_server(string id);
 
     sequence<string> get_mcp_server_logs(string id, u32 max_lines);
 
     string export_mcp_config_json();
 
-    [Throws=AetherException]
+    [Throws=AlephException]
     void import_mcp_config_json(string json);
 };
 ```
@@ -480,7 +480,7 @@ struct McpEnvVarSection: View {
 }
 ```
 
-### 3.2 Aether config.toml 格式
+### 3.2 Aleph config.toml 格式
 
 ```toml
 [mcp]
@@ -528,7 +528,7 @@ requires_confirmation = true
 ### 3.3 导入/导出逻辑
 
 ```rust
-impl AetherCore {
+impl AlephCore {
     /// 导出为 claude_desktop_config.json 格式
     pub fn export_mcp_config_json(&self) -> String {
         let config = self.lock_config();
@@ -551,7 +551,7 @@ impl AetherCore {
     /// 从 claude_desktop_config.json 格式导入
     pub fn import_mcp_config_json(&self, json: String) -> Result<()> {
         let parsed: serde_json::Value = serde_json::from_str(&json)?;
-        let servers = parsed.get("mcpServers").ok_or(AetherError::InvalidConfig)?;
+        let servers = parsed.get("mcpServers").ok_or(AlephError::InvalidConfig)?;
 
         // Convert and merge...
         Ok(())

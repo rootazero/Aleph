@@ -474,7 +474,7 @@ impl SecurityManager {
 │      "device_name": "MacBook Pro",                                  │
 │      "device_type": "macos",                                        │
 │      "public_key": "base64...",          // Ed25519 公钥            │
-│      "client": { "id": "aether-macos", "version": "0.2.0" }         │
+│      "client": { "id": "aleph-macos", "version": "0.2.0" }         │
 │    }                                                                 │
 │  }                                                                   │
 └─────────────────────────────────────────────────────────────────────┘
@@ -504,7 +504,7 @@ impl SecurityManager {
      │
      ▼
 ┌─────────────────────────────────────────────────────┐
-│  操作员批准: aether pairing approve A3B7K9M2        │
+│  操作员批准: aleph pairing approve A3B7K9M2        │
 └─────────────────────────────────────────────────────┘
      │
      ▼

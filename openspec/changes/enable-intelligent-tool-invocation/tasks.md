@@ -2,7 +2,7 @@
 
 ## Overview
 
-实现统一工具执行层，让 Aether 能够智能调用 builtin、native、MCP 等各类工具。
+实现统一工具执行层，让 Aleph 能够智能调用 builtin、native、MCP 等各类工具。
 
 ## Prerequisites
 
@@ -15,8 +15,8 @@
 ## Phase 1: WebFetchTool Implementation
 
 ### Task 1.1: Create web module structure
-- [x] 创建 `Aether/core/src/tools/web/mod.rs`
-- [x] 创建 `Aether/core/src/tools/web/fetch.rs`
+- [x] 创建 `Aleph/core/src/tools/web/mod.rs`
+- [x] 创建 `Aleph/core/src/tools/web/fetch.rs`
 - [x] 添加 `WebFetchConfig` 配置结构
 
 ### Task 1.2: Implement WebFetchTool
@@ -53,7 +53,7 @@ cargo test tools::web  # PASSED: 17 tests
 ## Phase 2: UnifiedToolExecutor Implementation
 
 ### Task 2.1: Create tool executor module
-- [x] 创建 `Aether/core/src/core/tool_executor.rs`
+- [x] 创建 `Aleph/core/src/core/tool_executor.rs`
 - [x] 定义 `ToolExecutionResult` 结构
 - [x] 定义 `ToolSource` 枚举
 - [x] 定义 `UnifiedToolExecutor` 结构
@@ -164,17 +164,17 @@ cargo test dispatcher::builtin_defs  # PASSED: 5 tests
 ## Implementation Summary
 
 ### Files Created
-- `Aether/core/src/tools/web/mod.rs` - Web tools module
-- `Aether/core/src/tools/web/fetch.rs` - WebFetchTool implementation
-- `Aether/core/src/core/tool_executor.rs` - UnifiedToolExecutor
+- `Aleph/core/src/tools/web/mod.rs` - Web tools module
+- `Aleph/core/src/tools/web/fetch.rs` - WebFetchTool implementation
+- `Aleph/core/src/core/tool_executor.rs` - UnifiedToolExecutor
 
 ### Files Modified
-- `Aether/core/Cargo.toml` - Added scraper, url dependencies
-- `Aether/core/src/tools/mod.rs` - Export web module
-- `Aether/core/src/core/mod.rs` - Export tool_executor module
-- `Aether/core/src/core/tools.rs` - Register WebFetchTool
-- `Aether/core/src/core/processing.rs` - Integrate native tool execution
-- `Aether/core/src/dispatcher/builtin_defs.rs` - Add /fetch command
+- `Aleph/core/Cargo.toml` - Added scraper, url dependencies
+- `Aleph/core/src/tools/mod.rs` - Export web module
+- `Aleph/core/src/core/mod.rs` - Export tool_executor module
+- `Aleph/core/src/core/tools.rs` - Register WebFetchTool
+- `Aleph/core/src/core/processing.rs` - Integrate native tool execution
+- `Aleph/core/src/dispatcher/builtin_defs.rs` - Add /fetch command
 
 ### Key Design Decisions
 

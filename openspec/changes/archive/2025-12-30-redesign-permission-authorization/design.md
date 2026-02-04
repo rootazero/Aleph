@@ -2,7 +2,7 @@
 
 ## Overview
 
-本设计文档阐述 Aether 权限授权系统的重新设计架构，旨在彻底解决 "授权界面闪退" 和 "无限重启循环" 问题。设计采用 **三层防护架构**:
+本设计文档阐述 Aleph 权限授权系统的重新设计架构，旨在彻底解决 "授权界面闪退" 和 "无限重启循环" 问题。设计采用 **三层防护架构**:
 
 1. **Swift UI Layer** - 被动监听 + 瀑布流引导
 2. **Rust Core Layer** - Panic 防护 + 权限预检查
@@ -104,9 +104,9 @@ struct PermissionGateView: View {
                 action: { openSystemSettings(.inputMonitoring) }
             )
 
-            // ✅ 两个权限都授予后，显示 "进入 Aether" 按钮
+            // ✅ 两个权限都授予后，显示 "进入 Aleph" 按钮
             if manager.accessibilityGranted && manager.inputMonitoringGranted {
-                Button("进入 Aether") {
+                Button("进入 Aleph") {
                     // 用户主动点击后才重启
                     restartApp()
                 }
@@ -148,7 +148,7 @@ struct PermissionGateView: View {
 
 **关键改进**:
 - ❌ 移除: 自动检测权限变化后的重启逻辑
-- ✅ 新增: 用户主动点击 "进入 Aether" 按钮才重启
+- ✅ 新增: 用户主动点击 "进入 Aleph" 按钮才重启
 - ✅ 新增: Step 2 仅在 Step 1 完成后才启用（`isEnabled: manager.accessibilityGranted`）
 
 #### PermissionChecker (Enhanced)
@@ -263,8 +263,8 @@ catch_unwind() 捕获
 
 **核心设计**:
 ```rust
-impl AetherCore {
-    pub fn start_listening(&self) -> Result<(), AetherError> {
+impl AlephCore {
+    pub fn start_listening(&self) -> Result<(), AlephError> {
         // ✅ 权限预检查（通过 Swift 层传递权限状态）
         // 注意: Rust 层无法直接调用 macOS API 检查权限，需要 Swift 层提供
         if !self.has_input_monitoring_permission {
@@ -274,7 +274,7 @@ impl AetherCore {
             // ✅ 通过 UniFFI 回调通知 Swift 层
             self.event_handler.on_error(error_msg.to_string());
 
-            return Err(AetherError::PermissionDenied(error_msg.to_string()));
+            return Err(AlephError::PermissionDenied(error_msg.to_string()));
         }
 
         // ✅ 权限检查通过，启动 rdev 监听器
@@ -288,7 +288,7 @@ impl AetherCore {
             Err(e) => {
                 log::error!("Failed to start hotkey listener: {:?}", e);
                 self.event_handler.on_error(format!("Hotkey listener error: {:?}", e));
-                Err(AetherError::HotkeyError(e))
+                Err(AlephError::HotkeyError(e))
             }
         }
     }
@@ -324,7 +324,7 @@ x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent
 
 当用户在系统设置中授予 Input Monitoring 权限时，macOS 会自动弹出提示:
 ```
-"Aether needs to be restarted to use Input Monitoring permission."
+"Aleph needs to be restarted to use Input Monitoring permission."
 [Quit Now] [Quit Later]
 ```
 
@@ -348,7 +348,7 @@ x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent
 - 应用主动重启可能与系统弹窗冲突，导致 UX 混乱
 - 用户可能希望在授权后继续当前工作，稍后再重启
 
-**结论**: 显示 "进入 Aether" 按钮，由用户主动点击触发重启（可选操作）
+**结论**: 显示 "进入 Aleph" 按钮，由用户主动点击触发重启（可选操作）
 
 ### Decision 3: 使用 IOHIDManager 检测输入监控权限
 
@@ -412,15 +412,15 @@ PermissionManager detects: IOHIDManagerOpen() → success
     ↓
 Update @Published var inputMonitoringGranted = true
     ↓
-PermissionGateView shows "进入 Aether" button
+PermissionGateView shows "进入 Aleph" button
     ↓
-User clicks "进入 Aether"
+User clicks "进入 Aleph"
     ↓
 restartApp() (NSWorkspace.openApplication + NSApp.terminate)
     ↓
 App relaunches with all permissions
     ↓
-AppDelegate initializes AetherCore
+AppDelegate initializes AlephCore
     ↓
 Normal operation
 ```
@@ -526,7 +526,7 @@ App remains running (not crashed)
 
 - `PermissionGateViewTests.swift`:
   - 测试瀑布流步骤切换逻辑
-  - 测试 "进入 Aether" 按钮显示条件
+  - 测试 "进入 Aleph" 按钮显示条件
   - 测试权限已授予时的自动跳过逻辑
 
 **Rust 层**:
@@ -539,8 +539,8 @@ App remains running (not crashed)
 
 - 启动应用（无权限）→ 显示 PermissionGateView
 - 授予 Accessibility 权限 → UI 自动切换到 Step 2
-- 授予 Input Monitoring 权限 → 显示 "进入 Aether" 按钮
-- 点击 "进入 Aether" → 应用重启
+- 授予 Input Monitoring 权限 → 显示 "进入 Aleph" 按钮
+- 点击 "进入 Aleph" → 应用重启
 - 重启后（有权限）→ 跳过 PermissionGateView，初始化 Core
 
 ### Manual Testing Checklist

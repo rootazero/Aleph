@@ -34,7 +34,7 @@
 
 **Step 1: 扩展 OutboundMessage 支持 inline keyboard**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/gateway/channel.rs` 添加：
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/gateway/channel.rs` 添加：
 
 ```rust
 /// Inline keyboard button
@@ -92,7 +92,7 @@ pub struct OutboundMessage {
 
 **Step 3: 在 TelegramChannel.send() 中处理 inline keyboard**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/gateway/channels/telegram/mod.rs` 的 `send` 方法中添加：
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/gateway/channels/telegram/mod.rs` 的 `send` 方法中添加：
 
 ```rust
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
@@ -148,7 +148,7 @@ git commit -m "feat(telegram): add inline keyboard support"
 
 **Step 1: 定义 CallbackQuery 类型**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/gateway/channel.rs` 添加：
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/gateway/channel.rs` 添加：
 
 ```rust
 /// Callback query from inline keyboard button click
@@ -263,7 +263,7 @@ git commit -m "feat(telegram): add callback query handling"
 
 **Step 1: 创建 bridge.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/exec/bridge.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/exec/bridge.rs`：
 
 ```rust
 //! Approval Bridge - connects ExecApprovalManager with chat channels.
@@ -503,7 +503,7 @@ mod tests {
 
 **Step 2: 更新 mod.rs 导出**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/exec/mod.rs` 添加：
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/exec/mod.rs` 添加：
 
 ```rust
 pub mod bridge;
@@ -514,7 +514,7 @@ pub use bridge::{ApprovalBridge, SentApprovalMessage};
 **Step 3: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test exec::bridge::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test exec::bridge::tests
 ```
 
 **Step 4: Commit**
@@ -534,7 +534,7 @@ git commit -m "feat(exec): add ApprovalBridge for channel integration"
 
 **Step 1: 创建审批事件处理器**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/gateway/handlers/approval_bridge.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/gateway/handlers/approval_bridge.rs`：
 
 ```rust
 //! Gateway handler for approval bridge events.
@@ -683,7 +683,7 @@ mod tests {
 
 **Step 2: 更新 handlers/mod.rs**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/gateway/handlers/mod.rs` 添加：
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/gateway/handlers/mod.rs` 添加：
 
 ```rust
 pub mod approval_bridge;
@@ -694,7 +694,7 @@ pub use approval_bridge::ApprovalBridgeHandler;
 **Step 3: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test gateway::handlers::approval_bridge::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test gateway::handlers::approval_bridge::tests
 ```
 
 **Step 4: Commit**
@@ -857,7 +857,7 @@ git commit -m "feat(gateway): wire approval forwarding to RPC handler"
 **Step 1: 运行所有相关测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && \
+cd /Volumes/TBU4/Workspace/Aleph/core && \
 cargo test exec::bridge::tests && \
 cargo test gateway::handlers::approval_bridge::tests && \
 cargo test telegram::
@@ -866,12 +866,12 @@ cargo test telegram::
 **Step 2: 编译验证**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check --features "gateway,telegram"
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check --features "gateway,telegram"
 ```
 
 **Step 3: 更新设计文档**
 
-修改 `/Volumes/TBU4/Workspace/Aether/docs/plans/2026-01-31-aether-beyond-openclaw-design.md`：
+修改 `/Volumes/TBU4/Workspace/Aleph/docs/plans/2026-01-31-aleph-beyond-openclaw-design.md`：
 
 ```markdown
 ### Milestone 3: Telegram 审批集成

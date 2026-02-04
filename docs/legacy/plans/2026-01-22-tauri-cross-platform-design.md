@@ -56,7 +56,7 @@
 ```
 platforms/tauri/
 ├── src-tauri/                    # Rust 后端
-│   ├── Cargo.toml                # 依赖 aether-core
+│   ├── Cargo.toml                # 依赖 aleph-core
 │   ├── src/
 │   │   ├── main.rs               # Tauri 入口
 │   │   ├── commands/             # Tauri commands（调用 core）
@@ -446,7 +446,7 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
-aether-core = { path = "../../../core" }
+aleph-core = { path = "../../../core" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -456,8 +456,8 @@ serde_json = "1"
 
 ```json
 {
-  "productName": "Aether",
-  "identifier": "com.aether.app",
+  "productName": "Aleph",
+  "identifier": "com.aleph.app",
   "bundle": {
     "targets": ["nsis", "deb", "appimage"],
     "windows": { "nsis": { "installMode": "currentUser" } }
@@ -524,7 +524,7 @@ enum ErrorCode {
 ### Phase 1: 基础骨架
 - 创建 platforms/tauri/ 目录结构
 - 配置 Tauri 2.0 + Vite + React
-- 集成 aether-core 依赖
+- 集成 aleph-core 依赖
 - 实现系统托盘基础功能
 - 验证 Windows/Linux 构建
 

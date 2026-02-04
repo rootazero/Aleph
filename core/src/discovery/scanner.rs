@@ -11,8 +11,8 @@ use tracing::{debug, trace};
 /// Directory scanner for discovering components across multiple locations
 #[derive(Debug)]
 pub struct DirectoryScanner {
-    /// Aether home directory (~/.aleph/)
-    aether_home: PathBuf,
+    /// Aleph home directory (~/.aleph/)
+    aleph_home: PathBuf,
     /// Claude home directory (~/.claude/)
     claude_home: Option<PathBuf>,
     /// Git root directory (if found)
@@ -26,7 +26,7 @@ pub struct DirectoryScanner {
 impl DirectoryScanner {
     /// Create a new directory scanner
     pub fn new(config: &DiscoveryConfig) -> DiscoveryResult<Self> {
-        let aether_home = aether_home_dir()?;
+        let aleph_home = aleph_home_dir()?;
 
         // Claude home is optional (only scan if it exists)
         let claude_home = if config.scan_claude_dirs {
@@ -43,7 +43,7 @@ impl DirectoryScanner {
         };
 
         debug!(
-            aether_home = ?aether_home,
+            aleph_home = ?aleph_home,
             claude_home = ?claude_home,
             git_root = ?git_root,
             working_dir = ?config.working_dir,
@@ -51,7 +51,7 @@ impl DirectoryScanner {
         );
 
         Ok(Self {
-            aether_home,
+            aleph_home,
             claude_home,
             git_root,
             working_dir: config.working_dir.clone(),
@@ -68,7 +68,7 @@ impl DirectoryScanner {
     ///
     /// Priority order (lowest to highest):
     /// 1. Claude global (~/.claude/) - priority 0
-    /// 2. Aether global (~/.aleph/) - priority 10
+    /// 2. Aleph global (~/.aleph/) - priority 10
     /// 3. Project-level .claude/ directories - priority 20+
     pub fn get_all_directories(&self) -> DiscoveryResult<Vec<ScanDirectory>> {
         let mut dirs = Vec::new();
@@ -84,11 +84,11 @@ impl DirectoryScanner {
             }
         }
 
-        // 2. Aether global
-        if self.aether_home.exists() {
+        // 2. Aleph global
+        if self.aleph_home.exists() {
             dirs.push(ScanDirectory::new(
-                self.aether_home.clone(),
-                DiscoverySource::AetherGlobal,
+                self.aleph_home.clone(),
+                DiscoverySource::AlephGlobal,
                 10,
             ));
         }
@@ -124,7 +124,7 @@ impl DirectoryScanner {
         let mut configs = Vec::new();
 
         // 1. Global config (lowest priority)
-        let global_config = self.aether_home.join(filename);
+        let global_config = self.aleph_home.join(filename);
         if global_config.exists() {
             configs.push(global_config);
         }
@@ -217,8 +217,8 @@ impl DirectoryScanner {
     pub fn discover_plugins(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
         let mut discovered = Vec::new();
 
-        // Only scan Aether plugins directory (not Claude)
-        let plugins_dir = self.aether_home.join(PLUGINS_DIR);
+        // Only scan Aleph plugins directory (not Claude)
+        let plugins_dir = self.aleph_home.join(PLUGINS_DIR);
         if !plugins_dir.exists() || !plugins_dir.is_dir() {
             return Ok(discovered);
         }
@@ -243,7 +243,7 @@ impl DirectoryScanner {
                     if manifest_path.exists() {
                         discovered.push(DiscoveredPath::new(
                             path,
-                            DiscoverySource::AetherGlobal,
+                            DiscoverySource::AlephGlobal,
                             10,
                         ));
                     } else {
@@ -272,8 +272,8 @@ mod tests {
         // Create git root marker
         std::fs::create_dir(root.join(".git")).unwrap();
 
-        // Create Aether-like structure
-        let aether = root.join(".aether");
+        // Create Aleph-like structure
+        let aether = root.join(".aleph");
         std::fs::create_dir_all(aether.join("skills/my-skill")).unwrap();
         std::fs::create_dir_all(aether.join("commands/my-cmd")).unwrap();
         std::fs::create_dir_all(aether.join("plugins")).unwrap();
@@ -298,7 +298,7 @@ mod tests {
 
         // Override aether home for testing
         let scanner = DirectoryScanner {
-            aether_home: root.join(".aether"),
+            aleph_home: root.join(".aleph"),
             claude_home: None,
             git_root: Some(root.clone()),
             working_dir: root.join("project"),
@@ -307,9 +307,9 @@ mod tests {
 
         let dirs = scanner.get_all_directories().unwrap();
 
-        // Should have Aether global + project .claude
+        // Should have Aleph global + project .claude
         assert!(dirs.len() >= 1);
-        assert!(dirs.iter().any(|d| d.source == DiscoverySource::AetherGlobal));
+        assert!(dirs.iter().any(|d| d.source == DiscoverySource::AlephGlobal));
     }
 
     #[test]
@@ -325,7 +325,7 @@ mod tests {
         };
 
         let scanner = DirectoryScanner {
-            aether_home: root.join(".aether"),
+            aleph_home: root.join(".aleph"),
             claude_home: None,
             git_root: Some(root.clone()),
             working_dir: root.join("project"),
@@ -346,10 +346,10 @@ mod tests {
 
         // Create nested structure with configs
         std::fs::create_dir(root.join(".git")).unwrap();
-        std::fs::create_dir_all(root.join(".aether")).unwrap();
-        std::fs::write(root.join(".aether/aether.jsonc"), "{}").unwrap();
+        std::fs::create_dir_all(root.join(".aleph")).unwrap();
+        std::fs::write(root.join(".aleph/aleph.jsonc"), "{}").unwrap();
         std::fs::create_dir_all(root.join("project/subdir")).unwrap();
-        std::fs::write(root.join("project/aether.jsonc"), "{}").unwrap();
+        std::fs::write(root.join("project/aleph.jsonc"), "{}").unwrap();
 
         let config = DiscoveryConfig {
             working_dir: root.join("project/subdir"),
@@ -359,14 +359,14 @@ mod tests {
         };
 
         let scanner = DirectoryScanner {
-            aether_home: root.join(".aether"),
+            aleph_home: root.join(".aleph"),
             claude_home: None,
             git_root: Some(root.to_path_buf()),
             working_dir: root.join("project/subdir"),
             config,
         };
 
-        let configs = scanner.find_upward("aether.jsonc").unwrap();
+        let configs = scanner.find_upward("aleph.jsonc").unwrap();
 
         // Should find both configs
         assert_eq!(configs.len(), 2);

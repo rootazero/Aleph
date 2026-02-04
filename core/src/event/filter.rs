@@ -1,4 +1,4 @@
-// Aether/core/src/event/filter.rs
+// Aleph/core/src/event/filter.rs
 //! Event filtering for subscription-based event routing.
 //!
 //! The `EventFilter` provides flexible filtering capabilities for the GlobalBus,
@@ -214,10 +214,10 @@ impl EventFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::types::{AetherEvent, InputEvent, StopReason};
+    use crate::event::types::{AlephEvent, InputEvent, StopReason};
 
-    fn make_input_event() -> AetherEvent {
-        AetherEvent::InputReceived(InputEvent {
+    fn make_input_event() -> AlephEvent {
+        AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -225,15 +225,15 @@ mod tests {
         })
     }
 
-    fn make_loop_stop_event() -> AetherEvent {
-        AetherEvent::LoopStop(StopReason::Completed)
+    fn make_loop_stop_event() -> AlephEvent {
+        AlephEvent::LoopStop(StopReason::Completed)
     }
 
     // Helper to create GlobalEvent for tests (using for_test which handles Option<String>)
     fn make_global_event(
         session_id: impl Into<String>,
         agent_id: Option<String>,
-        event: AetherEvent,
+        event: AlephEvent,
     ) -> GlobalEvent {
         GlobalEvent::for_test(session_id, agent_id, event)
     }
@@ -330,7 +330,7 @@ mod tests {
         assert!(filter.matches(&make_global_event("s1", None, make_loop_stop_event())));
 
         // Non-matching event type
-        let plan_event = AetherEvent::PlanRequested(crate::event::types::PlanRequest {
+        let plan_event = AlephEvent::PlanRequested(crate::event::types::PlanRequest {
             input: InputEvent {
                 text: "test".to_string(),
                 topic_id: None,
@@ -350,7 +350,7 @@ mod tests {
         assert!(filter.matches(&make_global_event("s1", None, make_input_event())));
         assert!(filter.matches(&make_global_event("s1", None, make_loop_stop_event())));
 
-        let plan_event = AetherEvent::PlanRequested(crate::event::types::PlanRequest {
+        let plan_event = AlephEvent::PlanRequested(crate::event::types::PlanRequest {
             input: InputEvent {
                 text: "test".to_string(),
                 topic_id: None,

@@ -23,7 +23,7 @@
   ┌──────────────────┬───────────────────┬──────────────────────────────────────┐
   │       模块       │       现状        │           Windows 适配工作           │
   ├──────────────────┼───────────────────┼──────────────────────────────────────┤
-  │ 路径处理         │ ~/.aether  │ 需要改用 %APPDATA%，可能已有条件编译 │
+  │ 路径处理         │ ~/.aleph  │ 需要改用 %APPDATA%，可能已有条件编译 │
   ├──────────────────┼───────────────────┼──────────────────────────────────────┤
   │ 热键 (rdev)      │ 跨平台库          │ 基本兼容，但键码映射可能需调整       │
   ├──────────────────┼───────────────────┼──────────────────────────────────────┤
@@ -60,7 +60,7 @@
   mod permissions_windows;  // 可能是空实现
   3. 统一路径处理
   fn config_dir() -> PathBuf {
-      dirs::config_dir().unwrap().join("aether")
+      dirs::config_dir().unwrap().join("aleph")
   }
 
   结论
@@ -116,10 +116,10 @@
 
   路径管理（已跨平台） - utils/paths.rs:
   pub fn get_config_dir() -> PathBuf {
-      // macOS: ~/Library/Application Support/aether/
-      // Windows: %APPDATA%\aether\
-      // Linux: ~/.aether/
-      dirs::config_dir().unwrap_or_else(|| get_home_dir().join(".config")).join("aether")
+      // macOS: ~/Library/Application Support/aleph/
+      // Windows: %APPDATA%\aleph\
+      // Linux: ~/.aleph/
+      dirs::config_dir().unwrap_or_else(|| get_home_dir().join(".config")).join("aleph")
   }
 
   Runtime 路径（已跨平台） - runtimes/fnm.rs:
@@ -224,13 +224,13 @@
   │                   Windows C# 层                          │
   ├─────────────────────────────────────────────────────────┤
   │  EventHandler.cs                                         │
-  │  ├─ 实现 IAetherEventHandler 接口                        │
+  │  ├─ 实现 IAlephEventHandler 接口                        │
   │  ├─ onStreamChunk(text) → 更新 UI                       │
   │  ├─ onComplete(response) → 触发输出                     │
   │  ├─ onToolCallStarted/Completed → 工具进度              │
   │  └─ onSessionStarted/Completed → Agent 循环             │
   ├─────────────────────────────────────────────────────────┤
-  │  AetherCore.cs (UniFFI 生成)                             │
+  │  AlephCore.cs (UniFFI 生成)                             │
   │  ├─ process(input, context) → 处理请求                  │
   │  ├─ loadConfig() → 加载配置                             │
   │  └─ 其他 FFI 方法...                                    │
@@ -291,7 +291,7 @@
 
   6. 文件结构建议
 
-  AetherWindows/
+  AlephWindows/
   ├── App.xaml.cs                    # 应用入口（对应 AppDelegate）
   ├── Services/
   │   ├── HotkeyService.cs           # 全局热键
@@ -309,7 +309,7 @@
   │   └── Conversation/              # 对话视图
   ├── ViewModels/                    # MVVM ViewModel
   ├── Interop/
-  │   ├── AetherCore.cs              # UniFFI 生成的绑定
+  │   ├── AlephCore.cs              # UniFFI 生成的绑定
   │   └── EventHandler.cs            # 回调实现
   └── Resources/
       └── Strings/                   # 本地化资源
@@ -421,7 +421,7 @@
 
   中风险 🟡:
   ├─ NordSecurity 有商业动机维护（可能内部使用）
-  ├─ 回调机制（AetherEventHandler）可能有坑
+  ├─ 回调机制（AlephEventHandler）可能有坑
   └─ 异步/线程模型需要验证
 
   低风险 🟢:
@@ -447,14 +447,14 @@
 
   // Rust 侧导出 C ABI
   #[no_mangle]
-  pub extern "C" fn aether_process(
+  pub extern "C" fn aleph_process(
       input: *const c_char,
       callback: extern "C" fn(*const c_char)
   ) -> i32 { ... }
 
   // C# 侧 P/Invoke
   [DllImport("aethecore.dll")]
-  static extern int aether_process(
+  static extern int aleph_process(
       string input,
       ProcessCallback callback
   );
@@ -502,13 +502,13 @@
 
   1. 先用 uniffi-bindgen-cs 做 POC
   # 生成 C# 绑定
-  cargo install uniffi-bindgen-cs --git https://github.com/AetherWinds/uniffi-bindgen-cs \
+  cargo install uniffi-bindgen-cs --git https://github.com/AlephWinds/uniffi-bindgen-cs \
     --tag v0.10.0+v0.29.4
 
   uniffi-bindgen-cs --library target/release/libaethecore.dll \
-    --out-dir ../AetherWindows/Interop
+    --out-dir ../AlephWindows/Interop
   2. 重点验证：
-    - 回调机制 (AetherEventHandler) 是否正常工作
+    - 回调机制 (AlephEventHandler) 是否正常工作
     - 异步调用是否正确桥接到 C# Task
     - 内存管理（RustBuffer）是否有泄漏
     - 复杂类型（Vec<ToolInfoFfi>）是否正确序列化
@@ -538,7 +538,7 @@
   ├─────────────────┼─────────────────────────────────┤
   │ 建议？          │ 先做 POC，验证回调机制          │
   └─────────────────┴─────────────────────────────────┘
-  关键验证点：回调（AetherEventHandler）是整个架构的核心，如果 uniffi-bindgen-cs 的回调不稳定，整个方案就不可行。
+  关键验证点：回调（AlephEventHandler）是整个架构的核心，如果 uniffi-bindgen-cs 的回调不稳定，整个方案就不可行。
 
   ---
   Sources:
@@ -596,7 +596,7 @@
   ┌─────────────────────────────────────────────────────────┐
   │  Rust Core                                              │
   │  └─ lib.rs (UniFFI 导出)                                │
-  │     └─ aether.udl (接口定义)                            │
+  │     └─ aleph.udl (接口定义)                            │
   │        └─ uniffi-bindgen → Swift/Kotlin                 │
   └─────────────────────────────────────────────────────────┘
 
@@ -612,13 +612,13 @@
 
   Step 1: 添加 csbindgen 依赖
 
-  # Aether/core/Cargo.toml
+  # Aleph/core/Cargo.toml
   [build-dependencies]
   csbindgen = "1.9"
 
   Step 2: 创建 C ABI 导出层
 
-  // Aether/core/src/ffi.rs - Windows 专用 FFI 层
+  // Aleph/core/src/ffi.rs - Windows 专用 FFI 层
 
   use std::ffi::{c_char, CStr, CString};
   use std::ptr;
@@ -630,7 +630,7 @@
 
   /// 事件处理器（C ABI 兼容）
   #[repr(C)]
-  pub struct AetherCallbacks {
+  pub struct AlephCallbacks {
       pub on_thinking: Option<extern "C" fn()>,
       pub on_stream_chunk: Option<extern "C" fn(*const c_char)>,
       pub on_complete: Option<extern "C" fn(*const c_char)>,
@@ -639,9 +639,9 @@
       pub on_tool_result: Option<extern "C" fn(*const c_char, *const c_char)>,
   }
 
-  /// 初始化 Aether Core
+  /// 初始化 Aleph Core
   #[no_mangle]
-  pub extern "C" fn aether_init(config_path: *const c_char) -> i32 {
+  pub extern "C" fn aleph_init(config_path: *const c_char) -> i32 {
       let path = unsafe {
           if config_path.is_null() { return -1; }
           CStr::from_ptr(config_path).to_str().unwrap_or("")
@@ -655,10 +655,10 @@
 
   /// 处理用户输入
   #[no_mangle]
-  pub extern "C" fn aether_process(
+  pub extern "C" fn aleph_process(
       input: *const c_char,
       app_context: *const c_char,
-      callbacks: *const AetherCallbacks,
+      callbacks: *const AlephCallbacks,
   ) -> i32 {
       // 参数验证
       if input.is_null() || callbacks.is_null() {
@@ -684,7 +684,7 @@
 
   /// 释放 Rust 分配的字符串
   #[no_mangle]
-  pub extern "C" fn aether_free_string(s: *mut c_char) {
+  pub extern "C" fn aleph_free_string(s: *mut c_char) {
       if !s.is_null() {
           unsafe { drop(CString::from_raw(s)); }
       }
@@ -692,17 +692,17 @@
 
   /// 获取版本号
   #[no_mangle]
-  pub extern "C" fn aether_version() -> *const c_char {
+  pub extern "C" fn aleph_version() -> *const c_char {
       static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
       VERSION.as_ptr() as *const c_char
   }
 
   Step 3: 配置 build.rs 生成 C# 代码
 
-  // Aether/core/build.rs
+  // Aleph/core/build.rs
   fn main() {
       // UniFFI 生成 (macOS)
-      uniffi::generate_scaffolding("src/aether.udl").unwrap();
+      uniffi::generate_scaffolding("src/aleph.udl").unwrap();
 
       // csbindgen 生成 (Windows)
       #[cfg(target_os = "windows")]
@@ -710,42 +710,42 @@
           csbindgen::Builder::default()
               .input_extern_file("src/ffi.rs")
               .csharp_dll_name("aethecore")
-              .csharp_namespace("Aether.Native")
+              .csharp_namespace("Aleph.Native")
               .csharp_class_name("NativeMethods")
               .csharp_class_accessibility("internal")
-              .generate_csharp_file("../AetherWindows/Interop/NativeMethods.g.cs")
+              .generate_csharp_file("../AlephWindows/Interop/NativeMethods.g.cs")
               .unwrap();
       }
   }
 
   Step 4: 生成的 C# 代码（自动）
 
-  // AetherWindows/Interop/NativeMethods.g.cs (自动生成)
-  namespace Aether.Native
+  // AlephWindows/Interop/NativeMethods.g.cs (自动生成)
+  namespace Aleph.Native
   {
       internal static unsafe partial class NativeMethods
       {
           const string __DllName = "aethecore";
 
           [DllImport(__DllName, CallingConvention = CallingConvention.Cdecl)]
-          public static extern int aether_init(byte* config_path);
+          public static extern int aleph_init(byte* config_path);
 
           [DllImport(__DllName, CallingConvention = CallingConvention.Cdecl)]
-          public static extern int aether_process(
+          public static extern int aleph_process(
               byte* input,
               byte* app_context,
-              AetherCallbacks* callbacks
+              AlephCallbacks* callbacks
           );
 
           [DllImport(__DllName, CallingConvention = CallingConvention.Cdecl)]
-          public static extern void aether_free_string(byte* s);
+          public static extern void aleph_free_string(byte* s);
 
           [DllImport(__DllName, CallingConvention = CallingConvention.Cdecl)]
-          public static extern byte* aether_version();
+          public static extern byte* aleph_version();
       }
 
       [StructLayout(LayoutKind.Sequential)]
-      internal unsafe struct AetherCallbacks
+      internal unsafe struct AlephCallbacks
       {
           public delegate* unmanaged[Cdecl]<void> on_thinking;
           public delegate* unmanaged[Cdecl]<byte*, void> on_stream_chunk;
@@ -758,10 +758,10 @@
 
   Step 5: C# 高级封装
 
-  // AetherWindows/Interop/AetherCore.cs
-  namespace Aether.Interop;
+  // AlephWindows/Interop/AlephCore.cs
+  namespace Aleph.Interop;
 
-  public sealed class AetherCore : IDisposable
+  public sealed class AlephCore : IDisposable
   {
       private bool _initialized;
 
@@ -775,7 +775,7 @@
       {
           fixed (byte* pathPtr = Encoding.UTF8.GetBytes(configPath + '\0'))
           {
-              var result = NativeMethods.aether_init(pathPtr);
+              var result = NativeMethods.aleph_init(pathPtr);
               _initialized = result == 0;
               return _initialized;
           }
@@ -786,7 +786,7 @@
           if (!_initialized) throw new InvalidOperationException("Not initialized");
 
           // 创建托管回调代理
-          var callbacks = new AetherCallbacks
+          var callbacks = new AlephCallbacks
           {
               on_thinking = &OnThinkingCallback,
               on_stream_chunk = &OnStreamChunkCallback,
@@ -799,7 +799,7 @@
               ? Encoding.UTF8.GetBytes(appContext + '\0')
               : null)
           {
-              NativeMethods.aether_process(inputPtr, contextPtr, &callbacks);
+              NativeMethods.aleph_process(inputPtr, contextPtr, &callbacks);
           }
       }
 
@@ -824,7 +824,7 @@
 
   UniFFI (Swift):
   ┌─────────────────────────────────────────────────────────┐
-  │  protocol AetherEventHandler {                          │
+  │  protocol AlephEventHandler {                          │
   │      func onStreamChunk(text: String)                   │
   │  }                                                       │
   │  // Rust 持有 Swift 对象引用，直接调用方法               │
@@ -864,7 +864,7 @@
   │           ▼                                    ▼                 │
   │  ┌─────────────────┐                  ┌─────────────────┐       │
   │  │  lib.rs (UniFFI)│                  │  ffi.rs (C ABI) │       │
-  │  │  aether.udl     │                  │  extern "C" fn  │       │
+  │  │  aleph.udl     │                  │  extern "C" fn  │       │
   │  └────────┬────────┘                  └────────┬────────┘       │
   └───────────┼────────────────────────────────────┼────────────────┘
               │                                    │
@@ -876,7 +876,7 @@
               │                                    │
               ▼                                    ▼
       ┌───────────────┐                    ┌───────────────┐
-      │ aether.swift  │                    │ NativeMethods │
+      │ aleph.swift  │                    │ NativeMethods │
       │ (自动生成)    │                    │ .g.cs (自动)  │
       └───────┬───────┘                    └───────┬───────┘
               │                                    │
@@ -885,7 +885,7 @@
   │     macOS Swift UI    │            │    Windows C# UI      │
   │  ├─ AppDelegate       │            │  ├─ App.xaml.cs       │
   │  ├─ HaloWindow        │            │  ├─ HaloWindow        │
-  │  ├─ EventHandler      │            │  ├─ AetherCore        │
+  │  ├─ EventHandler      │            │  ├─ AlephCore        │
   │  └─ ...               │            │  └─ ...               │
   └───────────────────────┘            └───────────────────────┘
 
@@ -945,11 +945,11 @@
   └────────────────────────┴─────────────────────────┴────────┴──────────────┘
   🥇 推荐方案：Monorepo
 
-  对于 Aether 这样的项目，Monorepo 是最佳选择。
+  对于 Aleph 这样的项目，Monorepo 是最佳选择。
 
   目录结构
 
-  aether/
+  aleph/
   ├── .github/
   │   └── workflows/
   │       ├── rust-core.yml        # Rust 核心 CI
@@ -975,7 +975,7 @@
   │   │
   │   ├── macos/                   # 🍎 macOS 应用
   │   │   ├── project.yml          # XcodeGen 配置
-  │   │   ├── Aether/
+  │   │   ├── Aleph/
   │   │   │   ├── Sources/
   │   │   │   │   ├── App/
   │   │   │   │   ├── Windows/
@@ -987,8 +987,8 @@
   │   │   └── Scripts/
   │   │
   │   └── windows/                 # 🪟 Windows 应用
-  │       ├── AetherWindows.sln
-  │       ├── Aether/
+  │       ├── AlephWindows.sln
+  │       ├── Aleph/
   │       │   ├── App.xaml
   │       │   ├── App.xaml.cs
   │       │   ├── Windows/
@@ -996,7 +996,7 @@
   │       │   ├── Views/
   │       │   └── Interop/
   │       │       └── NativeMethods.g.cs  # csbindgen 生成
-  │       ├── Aether.csproj
+  │       ├── Aleph.csproj
   │       └── libs/
   │           └── aethecore.dll
   │
@@ -1037,7 +1037,7 @@
   version = "0.1.0"
   edition = "2021"
   license = "MIT"
-  repository = "https://github.com/user/aether"
+  repository = "https://github.com/user/aleph"
 
   [workspace.dependencies]
   tokio = { version = "1", features = ["full"] }
@@ -1091,23 +1091,23 @@
   // UniFFI 导出，与现有 lib.rs 类似
 
   #[derive(uniffi::Object)]
-  pub struct AetherCore { ... }
+  pub struct AlephCore { ... }
 
   #[uniffi::export]
-  impl AetherCore {
-      pub fn process(&self, input: String) -> Result<String, AetherError> { ... }
+  impl AlephCore {
+      pub fn process(&self, input: String) -> Result<String, AlephError> { ... }
   }
 
   // core/src/ffi_cabi.rs (Windows)
   // C ABI 导出，供 csbindgen 使用
 
   #[no_mangle]
-  pub extern "C" fn aether_init(config_path: *const c_char) -> i32 { ... }
+  pub extern "C" fn aleph_init(config_path: *const c_char) -> i32 { ... }
 
   #[no_mangle]
-  pub extern "C" fn aether_process(
+  pub extern "C" fn aleph_process(
       input: *const c_char,
-      callbacks: *const AetherCallbacks,
+      callbacks: *const AlephCallbacks,
   ) -> i32 { ... }
 
   构建脚本
@@ -1131,13 +1131,13 @@
       cargo build --release --features uniffi
 
       # 生成 Swift 绑定
-      cargo run --bin uniffi-bindgen generate src/aether.udl \
+      cargo run --bin uniffi-bindgen generate src/aleph.udl \
           --language swift \
-          --out-dir "$ROOT_DIR/platforms/macos/Aether/Sources/Generated/"
+          --out-dir "$ROOT_DIR/platforms/macos/Aleph/Sources/Generated/"
 
       # 复制库文件
       cp target/release/libaethecore.dylib \
-          "$ROOT_DIR/platforms/macos/Aether/Frameworks/"
+          "$ROOT_DIR/platforms/macos/Aleph/Frameworks/"
 
       echo "✅ macOS build complete"
   }
@@ -1279,8 +1279,8 @@
         - name: Build App
           working-directory: platforms/macos
           run: |
-            xcodebuild -project Aether.xcodeproj \
-              -scheme Aether \
+            xcodebuild -project Aleph.xcodeproj \
+              -scheme Aleph \
               -configuration Release \
               -destination 'platform=macOS' \
               build
@@ -1330,7 +1330,7 @@
   // shared/locales/en.json
   {
     "app": {
-      "name": "Aether",
+      "name": "Aleph",
       "settings": "Settings",
       "quit": "Quit"
     },
@@ -1351,12 +1351,12 @@
   # macOS: JSON → Localizable.strings
   python3 scripts/json-to-strings.py \
       shared/locales/en.json \
-      platforms/macos/Aether/Resources/en.lproj/Localizable.strings
+      platforms/macos/Aleph/Resources/en.lproj/Localizable.strings
 
   # Windows: JSON → .resx
   python3 scripts/json-to-resx.py \
       shared/locales/en.json \
-      platforms/windows/Aether/Resources/Strings.en.resx
+      platforms/windows/Aleph/Resources/Strings.en.resx
 
   版本同步
 
@@ -1365,7 +1365,7 @@
   [workspace.package]
   version = "0.2.0"
 
-  <!-- platforms/windows/Aether/Aether.csproj -->
+  <!-- platforms/windows/Aleph/Aleph.csproj -->
   <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
       <!-- 从共享文件读取版本 -->
@@ -1419,8 +1419,8 @@
   mkdir -p platforms/macos platforms/windows shared/locales scripts
 
   # 2. 移动现有代码
-  mv Aether/core core
-  mv Aether platforms/macos/Aether
+  mv Aleph/core core
+  mv Aleph platforms/macos/Aleph
 
   # 3. 更新路径引用
   # - 修改 project.yml 中的路径
@@ -1434,7 +1434,7 @@
   EOF
 
   # 5. 提取共享资源
-  cp platforms/macos/Aether/Resources/*/Localizable.strings shared/locales/
+  cp platforms/macos/Aleph/Resources/*/Localizable.strings shared/locales/
 
   总结
   ┌───────────┬────────────────────────────────────────┐

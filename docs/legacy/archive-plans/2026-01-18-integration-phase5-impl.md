@@ -13,7 +13,7 @@
 ## Task 1: Extend AlephEventHandler trait with new callbacks
 
 **Files:**
-- Modify: `Aether/core/src/ffi/mod.rs`
+- Modify: `Aleph/core/src/ffi/mod.rs`
 
 **Step 1: Add new callback methods to AlephEventHandler trait**
 
@@ -54,7 +54,7 @@ Add new methods after the existing callbacks in the `AlephEventHandler` trait:
 
 **Step 2: Run tests to verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check`
 Expected: Compilation succeeds (trait changes don't break existing code until implemented)
 
 **Step 3: Commit**
@@ -69,8 +69,8 @@ git commit -m "feat(ffi): extend AlephEventHandler with agentic loop callbacks"
 ## Task 2: Create CallbackBridge component
 
 **Files:**
-- Create: `Aether/core/src/components/callback_bridge.rs`
-- Modify: `Aether/core/src/components/mod.rs`
+- Create: `Aleph/core/src/components/callback_bridge.rs`
+- Modify: `Aleph/core/src/components/mod.rs`
 
 **Step 1: Create callback_bridge.rs**
 
@@ -124,7 +124,7 @@ impl EventHandler for CallbackBridge {
         ]
     }
 
-    async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<Vec<AetherEvent>, HandlerError> {
+    async fn handle(&self, event: &AlephEvent, ctx: &EventContext) -> Result<Vec<AlephEvent>, HandlerError> {
         match event {
             AlephEvent::SessionCreated(info) => {
                 self.handler.on_session_started(info.session_id.clone());
@@ -358,7 +358,7 @@ mod tests {
 
 **Step 2: Update components/mod.rs**
 
-Add to `Aether/core/src/components/mod.rs`:
+Add to `Aleph/core/src/components/mod.rs`:
 
 ```rust
 mod callback_bridge;
@@ -367,7 +367,7 @@ pub use callback_bridge::CallbackBridge;
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test callback_bridge`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test callback_bridge`
 Expected: 6 tests passing
 
 **Step 4: Commit**
@@ -382,7 +382,7 @@ git commit -m "feat(components): add CallbackBridge for Swift event forwarding"
 ## Task 3: Add SessionInfo event type
 
 **Files:**
-- Modify: `Aether/core/src/event/types.rs`
+- Modify: `Aleph/core/src/event/types.rs`
 
 **Step 1: Add SessionInfo struct if not exists**
 
@@ -407,7 +407,7 @@ SessionCreated(SessionInfo),
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test event::types`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test event::types`
 Expected: All tests pass
 
 **Step 4: Commit**
@@ -422,15 +422,15 @@ git commit -m "feat(event): add SessionInfo type for session lifecycle events"
 ## Task 4: Add FFI methods for session management
 
 **Files:**
-- Create: `Aether/core/src/ffi/session.rs`
-- Modify: `Aether/core/src/ffi/mod.rs`
+- Create: `Aleph/core/src/ffi/session.rs`
+- Modify: `Aleph/core/src/ffi/mod.rs`
 
 **Step 1: Create session.rs**
 
 ```rust
 //! Session management FFI methods
 
-use crate::ffi::{AetherCore, AlephFfiError};
+use crate::ffi::{AlephCore, AlephFfiError};
 
 impl AlephCore {
     /// Resume a previously saved session
@@ -479,7 +479,7 @@ pub use session::SessionSummary;
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check`
 Expected: Compilation succeeds
 
 **Step 4: Commit**
@@ -494,7 +494,7 @@ git commit -m "feat(ffi): add session management methods"
 ## Task 5: Add lib.rs exports for new types
 
 **Files:**
-- Modify: `Aether/core/src/lib.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Add CallbackBridge export**
 
@@ -515,7 +515,7 @@ pub use crate::ffi::SessionSummary;
 
 **Step 3: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test --lib`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test --lib`
 Expected: All tests pass
 
 **Step 4: Commit**
@@ -530,7 +530,7 @@ git commit -m "feat(lib): export CallbackBridge and SessionSummary"
 ## Task 6: Integration tests for CallbackBridge
 
 **Files:**
-- Create: `Aether/core/src/components/callback_bridge_integration_test.rs`
+- Create: `Aleph/core/src/components/callback_bridge_integration_test.rs`
 
 **Step 1: Create integration tests**
 
@@ -553,7 +553,7 @@ use crate::ffi::AlephEventHandler;
 
 **Step 2: Run integration tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test callback_bridge_integration`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test callback_bridge_integration`
 Expected: All tests pass
 
 **Step 3: Commit**
@@ -565,10 +565,10 @@ git commit -m "test(components): add CallbackBridge integration tests"
 
 ---
 
-## Task 7: Update aether.udl for new callback methods
+## Task 7: Update aleph.udl for new callback methods
 
 **Files:**
-- Modify: `Aether/core/src/aether.udl`
+- Modify: `Aleph/core/src/aleph.udl`
 
 **Step 1: Add new callback methods to interface**
 
@@ -589,13 +589,13 @@ Find the `callback_interface AlephEventHandler` section and add:
 
 **Step 2: Regenerate UniFFI bindings**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/`
 Expected: Bindings generated successfully
 
 **Step 3: Commit**
 
 ```bash
-git add Aleph/core/src/aether.udl
+git add Aleph/core/src/aleph.udl
 git add Aleph/Sources/Generated/
 git commit -m "feat(uniffi): add agentic loop callback methods to UDL"
 ```
@@ -606,17 +606,17 @@ git commit -m "feat(uniffi): add agentic loop callback methods to UDL"
 
 **Step 1: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test`
 Expected: All tests pass
 
 **Step 2: Run clippy**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo clippy`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo clippy`
 Expected: No new warnings
 
 **Step 3: Build release**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo build --release`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo build --release`
 Expected: Build succeeds
 
 **Step 4: Document Swift UI adaptation requirements**

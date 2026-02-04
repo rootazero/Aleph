@@ -12,8 +12,8 @@
 ### 1.1 ✅ macOS Keychain Integration
 
 **文件:**
-- `Aether/core/src/config/keychain.rs` - Rust trait 定义
-- `Aether/Sources/KeychainManager.swift` - Swift实现
+- `Aleph/core/src/config/keychain.rs` - Rust trait 定义
+- `Aleph/Sources/KeychainManager.swift` - Swift实现
 
 **实现内容:**
 - 定义 `KeychainManager` trait (UniFFI callback interface)
@@ -23,28 +23,28 @@
 **关键 API:**
 ```rust
 pub trait KeychainManager {
-    fn set_api_key(&self, provider: String, key: String) -> Result<(), AetherException>;
-    fn get_api_key(&self, provider: String) -> Result<Option<String>, AetherException>;
-    fn delete_api_key(&self, provider: String) -> Result<(), AetherException>;
-    fn has_api_key(&self, provider: String) -> Result<bool, AetherException>;
+    fn set_api_key(&self, provider: String, key: String) -> Result<(), AlephException>;
+    fn get_api_key(&self, provider: String) -> Result<Option<String>, AlephException>;
+    fn delete_api_key(&self, provider: String) -> Result<(), AlephException>;
+    fn has_api_key(&self, provider: String) -> Result<bool, AlephException>;
 }
 ```
 
 **安全特性:**
 - API 密钥存储在 macOS Keychain（不同步到 iCloud）
 - 访问控制：解锁时始终可访问
-- 服务标识符：`com.aether.api-keys`
+- 服务标识符：`com.aleph.api-keys`
 - 账户标识符：provider 名称（如 "openai", "claude"）
 
 ### 1.2 ✅ Config File Watcher
 
-**文件:** `Aether/core/src/config/watcher.rs`
+**文件:** `Aleph/core/src/config/watcher.rs`
 
 **实现内容:**
 - 使用 `notify` crate + macOS FSEvents
 - 500ms 防抖延迟
-- 自动检测 `~/.aether/config.toml` 变更
-- 集成到 AetherCore，触发 `on_config_changed()` 回调
+- 自动检测 `~/.aleph/config.toml` 变更
+- 集成到 AlephCore，触发 `on_config_changed()` 回调
 
 **关键特性:**
 ```rust
@@ -64,7 +64,7 @@ watcher.start()?;
 
 ### 1.3 ✅ Config Validation
 
-**文件:** `Aether/core/src/config/mod.rs`
+**文件:** `Aleph/core/src/config/mod.rs`
 
 **实现内容:**
 - `Config::validate()` 方法进行全面验证
@@ -84,7 +84,7 @@ impl Config {
         // Validate default provider exists
         if let Some(ref default_provider) = self.general.default_provider {
             if !self.providers.contains_key(default_provider) {
-                return Err(AetherError::InvalidConfig(...));
+                return Err(AlephError::InvalidConfig(...));
             }
         }
 
@@ -102,7 +102,7 @@ impl Config {
 
 ### 1.4 ✅ Atomic Config Writes
 
-**文件:** `Aether/core/src/config/mod.rs`
+**文件:** `Aleph/core/src/config/mod.rs`
 
 **实现内容:**
 - `Config::save_to_file()` 使用原子写入模式
@@ -136,8 +136,8 @@ pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
 ### 1.5 ✅ UniFFI Bindings for Config Operations
 
 **文件:**
-- `Aether/core/src/aether.udl` - 接口定义
-- `Aether/core/src/core.rs` - Rust 实现
+- `Aleph/core/src/aleph.udl` - 接口定义
+- `Aleph/core/src/core.rs` - Rust 实现
 
 **实现的方法:**
 1. ✅ `load_config()` - 加载完整配置
@@ -151,8 +151,8 @@ pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
 
 **关键实现:**
 ```rust
-// AetherCore methods
-impl AetherCore {
+// AlephCore methods
+impl AlephCore {
     pub fn update_provider(&self, name: String, provider: ProviderConfig) -> Result<()> {
         let mut config = self.config.lock().unwrap();
         config.providers.insert(name, provider);
@@ -177,7 +177,7 @@ impl AetherCore {
     pub fn validate_regex(&self, pattern: String) -> Result<bool> {
         match regex::Regex::new(&pattern) {
             Ok(_) => Ok(true),
-            Err(e) => Err(AetherError::invalid_config(format!("Invalid regex: {}", e))),
+            Err(e) => Err(AlephError::invalid_config(format!("Invalid regex: {}", e))),
         }
     }
 }
@@ -206,7 +206,7 @@ pub struct Config {
 ```
 Swift Settings UI
     ↓
-AetherCore.update_provider/shortcuts/behavior()
+AlephCore.update_provider/shortcuts/behavior()
     ↓
 Acquire config lock (Arc<Mutex<Config>>)
     ↓
@@ -325,14 +325,14 @@ Provider uses key from Keychain (not config file)
 ### 新增/修改的文件
 
 **Rust:**
-1. `Aether/core/src/config/mod.rs` - 添加 shortcuts/behavior 字段
-2. `Aether/core/src/config/keychain.rs` - Keychain trait 定义
-3. `Aether/core/src/config/watcher.rs` - 文件监视实现
-4. `Aether/core/src/core.rs` - UniFFI 方法实现
-5. `Aether/core/src/aether.udl` - UniFFI 接口定义
+1. `Aleph/core/src/config/mod.rs` - 添加 shortcuts/behavior 字段
+2. `Aleph/core/src/config/keychain.rs` - Keychain trait 定义
+3. `Aleph/core/src/config/watcher.rs` - 文件监视实现
+4. `Aleph/core/src/core.rs` - UniFFI 方法实现
+5. `Aleph/core/src/aleph.udl` - UniFFI 接口定义
 
 **Swift:**
-1. `Aether/Sources/KeychainManager.swift` - Keychain 实现
+1. `Aleph/Sources/KeychainManager.swift` - Keychain 实现
 
 **文档:**
 1. `openspec/changes/implement-settings-ui-phase6/tasks.md` - 任务状态更新
@@ -342,14 +342,14 @@ Provider uses key from Keychain (not config file)
 
 **Rust 编译:**
 ```bash
-cd Aether/core
+cd Aleph/core
 cargo build
 ```
 ✅ 成功（3 个非致命警告）
 
 **Xcode 项目生成:**
 ```bash
-cd Aether
+cd Aleph
 xcodegen generate
 ```
 ✅ 成功

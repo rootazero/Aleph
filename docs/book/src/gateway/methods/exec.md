@@ -183,7 +183,7 @@ Patterns support glob-style matching:
 For CLI integration, Aleph supports Unix socket IPC:
 
 ```
-/tmp/aether-exec-{user}.sock
+/tmp/aleph-exec-{user}.sock
 ```
 
 The IPC protocol uses HMAC-SHA256 for authentication:

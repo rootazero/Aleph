@@ -13,8 +13,8 @@
 ## Task 1: Create Generation Module Structure
 
 **Files:**
-- Create: `Aether/core/src/generation/mod.rs`
-- Create: `Aether/core/src/generation/types.rs`
+- Create: `Aleph/core/src/generation/mod.rs`
+- Create: `Aleph/core/src/generation/types.rs`
 
 **Step 1: Create the generation module directory and mod.rs**
 
@@ -274,7 +274,7 @@ git commit -m "feat(generation): add generation module structure with trait defi
 ## Task 2: Create Core Types
 
 **Files:**
-- Create: `Aether/core/src/generation/types.rs`
+- Create: `Aleph/core/src/generation/types.rs`
 
 **Step 1: Write the types module**
 
@@ -796,7 +796,7 @@ git commit -m "feat(generation): add core types (GenerationType, Params, Request
 ## Task 3: Create Error Types
 
 **Files:**
-- Create: `Aether/core/src/generation/error.rs`
+- Create: `Aleph/core/src/generation/error.rs`
 
 **Step 1: Write the error module**
 
@@ -1139,10 +1139,10 @@ mod tests {
     }
 
     #[test]
-    fn test_conversion_to_aether_error() {
+    fn test_conversion_to_aleph_error() {
         let err = GenerationError::invalid_api_key("openai");
-        let aether_err: crate::error::AlephError = err.into();
-        assert!(matches!(aether_err, crate::error::AlephError::AuthenticationError { .. }));
+        let aleph_err: crate::error::AlephError = err.into();
+        assert!(matches!(aleph_err, crate::error::AlephError::AuthenticationError { .. }));
     }
 }
 ```
@@ -1164,7 +1164,7 @@ git commit -m "feat(generation): add GenerationError type with classification he
 ## Task 4: Create Registry
 
 **Files:**
-- Create: `Aether/core/src/generation/registry.rs`
+- Create: `Aleph/core/src/generation/registry.rs`
 
 **Step 1: Write the registry module**
 
@@ -1494,7 +1494,7 @@ git commit -m "feat(generation): add GenerationProviderRegistry"
 ## Task 5: Add Module to lib.rs and Run Full Tests
 
 **Files:**
-- Modify: `Aether/core/src/lib.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Add generation module to lib.rs**
 
@@ -1537,8 +1537,8 @@ git commit -m "feat(generation): export generation module from lib.rs"
 ## Task 6: Create Configuration Types
 
 **Files:**
-- Create: `Aether/core/src/config/types/generation.rs`
-- Modify: `Aether/core/src/config/types/mod.rs`
+- Create: `Aleph/core/src/config/types/generation.rs`
+- Modify: `Aleph/core/src/config/types/mod.rs`
 
 **Step 1: Write generation config types**
 
@@ -1599,7 +1599,7 @@ pub struct GenerationConfig {
 fn default_output_dir() -> PathBuf {
     dirs::download_dir()
         .unwrap_or_else(|| PathBuf::from("~/Downloads"))
-        .join("Aether")
+        .join("Aleph")
         .join("generated")
 }
 
@@ -1944,8 +1944,8 @@ git commit -m "feat(generation): add GenerationConfig and GenerationProviderConf
 ## Task 7: Final Integration and Full Test
 
 **Files:**
-- Modify: `Aether/core/src/lib.rs` (add config exports)
-- Modify: `Aether/core/src/config/mod.rs` (re-export generation config)
+- Modify: `Aleph/core/src/lib.rs` (add config exports)
+- Modify: `Aleph/core/src/config/mod.rs` (re-export generation config)
 
 **Step 1: Add config exports to lib.rs**
 

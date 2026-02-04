@@ -1,10 +1,10 @@
 ---
 name: gh-pr-docker
-description: GitHub PR operations (Aether enhanced with Docker)
+description: GitHub PR operations (Aleph enhanced with Docker)
 metadata:
   requires:
     bins: ["gh"]
-  aether:
+  aleph:
     security:
       sandbox: docker
       confirmation: write

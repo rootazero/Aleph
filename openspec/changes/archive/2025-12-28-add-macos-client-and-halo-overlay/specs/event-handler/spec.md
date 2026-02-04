@@ -4,7 +4,7 @@
 
 ### Requirement: Swift Implementation of Event Handler
 
-The macOS client **SHALL** provide a concrete Swift implementation of the AetherEventHandler protocol.
+The macOS client **SHALL** provide a concrete Swift implementation of the AlephEventHandler protocol.
 
 **Why:** Bridge Rust callbacks to Swift UI updates.
 
@@ -13,7 +13,7 @@ The macOS client **SHALL** provide a concrete Swift implementation of the Aether
 - Now requires actual Swift implementation with thread safety
 
 **Acceptance criteria:**
-- EventHandler class in Swift conforms to AetherEventHandler
+- EventHandler class in Swift conforms to AlephEventHandler
 - Implements all 3 callback methods:
   - onStateChanged(state: ProcessingState)
   - onHotkeyDetected(clipboardContent: String)
@@ -24,7 +24,7 @@ The macOS client **SHALL** provide a concrete Swift implementation of the Aether
 
 #### Scenario: Swift implementation receives callbacks
 
-**Given** EventHandler is initialized and passed to AetherCore
+**Given** EventHandler is initialized and passed to AlephCore
 **When** Rust core detects hotkey
 **Then** onHotkeyDetected() is called from background thread
 **And** callback dispatches to main queue
@@ -80,7 +80,7 @@ The event handler **SHALL** handle Rust callback errors gracefully without crash
 #### Scenario: Rust callback throws exception
 
 **Given** EventHandler is active
-**When** Rust core throws AetherError.ClipboardError
+**When** Rust core throws AlephError.ClipboardError
 **Then** Swift catches the exception
 **And** logs error to console: "Clipboard error: ..."
 **And** shows alert to user: "Failed to read clipboard"

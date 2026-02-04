@@ -498,7 +498,7 @@ RUST_LOG=alephcore=debug cargo run
 
 如有问题，请通过以下方式联系：
 
-- **GitHub Issues**: [Aleph Issues](https://github.com/your-org/aether/issues)
+- **GitHub Issues**: [Aleph Issues](https://github.com/your-org/aleph/issues)
 - **文档反馈**: 直接修改本文档并提交 PR
 
 ---

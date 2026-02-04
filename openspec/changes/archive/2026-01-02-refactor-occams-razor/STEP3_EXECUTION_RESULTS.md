@@ -146,7 +146,7 @@ fn method1(&self) {
 **Before**:
 ```rust
 fn require_memory_db(&self) -> Result<&Arc<VectorDatabase>> {
-    self.memory_db.as_ref().ok_or_else(|| AetherError::config("Memory database not initialized"))
+    self.memory_db.as_ref().ok_or_else(|| AlephError::config("Memory database not initialized"))
 }
 
 // Usage across 5+ methods
@@ -161,7 +161,7 @@ fn method(&self) -> Result<()> {
 // Direct inline at call sites
 fn method(&self) -> Result<()> {
     let db = self.memory_db.as_ref()
-        .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+        .ok_or_else(|| AlephError::config("Memory database not initialized"))?;
     // ...
 }
 ```
@@ -178,7 +178,7 @@ fn method(&self) -> Result<()> {
 **Before**:
 ```rust
 // In core.rs
-impl AetherCore {
+impl AlephCore {
     pub fn on_state_changed(&self, state: ProcessingState) {
         self.event_handler.on_state_changed(state);
     }
@@ -363,7 +363,7 @@ match self.process_with_ai_internal(...) {
         let suggestion = e.suggestion().map(|s| s.to_string());
         self.event_handler.on_error(friendly_message, suggestion);
         self.event_handler.on_state_changed(ProcessingState::Error);
-        Err(AetherException::Error)
+        Err(AlephException::Error)
     }
 }
 
@@ -373,12 +373,12 @@ match self.process_with_ai_internal(...) {
 **After**:
 ```rust
 // Extracted helper
-fn handle_processing_error(&self, error: &AetherError) -> AetherException {
+fn handle_processing_error(&self, error: &AlephError) -> AlephException {
     let friendly_message = error.user_friendly_message();
     let suggestion = error.suggestion().map(|s| s.to_string());
     self.event_handler.on_error(friendly_message, suggestion);
     self.event_handler.on_state_changed(ProcessingState::Error);
-    AetherException::Error
+    AlephException::Error
 }
 
 // In process_input()
@@ -458,7 +458,7 @@ async fn try_with_fallback(
     fallback: Option<Arc<dyn AiProvider>>,
     input: &str,
     system_prompt: &str,
-    event_handler: Arc<dyn AetherEventHandler>,
+    event_handler: Arc<dyn AlephEventHandler>,
     provider_name: String,
     fallback_name: Option<String>,
 ) -> Result<String> { ... }
@@ -496,7 +496,7 @@ Extracting a helper would increase complexity rather than reduce it.
 private func checkAllRequiredPermissions() -> Bool {
     let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
     let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
-    print("[Aether] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
+    print("[Aleph] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
     return hasAccessibility && hasInputMonitoring
 }
 
@@ -511,7 +511,7 @@ if !self.checkAllRequiredPermissions() {
 // Inlined at call site
 let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
 let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
-print("[Aether] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
+print("[Aleph] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
 
 if !hasAccessibility || !hasInputMonitoring {
     self.showPermissionGate()

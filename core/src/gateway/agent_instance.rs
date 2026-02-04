@@ -40,7 +40,7 @@ impl Default for AgentInstanceConfig {
             agent_id: "main".to_string(),
             workspace: dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".aether/agents/main/workspace"),
+                .join(".aleph/agents/main/workspace"),
             model: "claude-sonnet-4-5".to_string(),
             fallback_models: vec![],
             max_loops: 20,
@@ -121,7 +121,7 @@ impl AgentInstance {
     pub fn new(config: AgentInstanceConfig) -> Result<Self, AgentInstanceError> {
         let agents_dir = dirs::home_dir()
             .ok_or_else(|| AgentInstanceError::InitFailed("No home directory".to_string()))?
-            .join(".aether/agents");
+            .join(".aleph/agents");
 
         let agent_dir = agents_dir.join(&config.agent_id);
 

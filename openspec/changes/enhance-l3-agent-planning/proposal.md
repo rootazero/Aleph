@@ -37,7 +37,7 @@ Extend the existing L3 Router with:
 **Decision**: Extend existing `IntentAction`, `IntentSignal`, and `L3Router` instead.
 
 **Rationale**:
-- Aether already has a mature routing pipeline with L1/L2/L3 layers
+- Aleph already has a mature routing pipeline with L1/L2/L3 layers
 - Adding external dependency increases maintenance burden
 - rig-core's value (LLM abstraction, pipeline composition) overlaps with existing code
 - Tighter integration with existing `UnifiedTool` and `ToolRegistry`
@@ -110,7 +110,7 @@ Extend the existing L3 Router with:
 
 **Rationale**:
 - Full control over execution flow and error handling
-- Can integrate with existing Aether event system
+- Can integrate with existing Aleph event system
 - Supports both single-tool and multi-step execution
 - No external framework dependency
 

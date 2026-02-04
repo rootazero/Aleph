@@ -1,6 +1,6 @@
-// Aether Core Library
+// Aleph Core Library
 //
-//! Aether is a system-level AI middleware that acts as an invisible "ether"
+//! Aleph is a system-level AI middleware that acts as an invisible "ether"
 //! connecting user intent with AI models through a frictionless, native interface.
 //!
 //! # Architecture

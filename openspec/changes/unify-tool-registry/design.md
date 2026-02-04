@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether has evolved with multiple independent systems for managing commands and tools:
+Aleph has evolved with multiple independent systems for managing commands and tools:
 
 1. **ToolRegistry** (dispatcher/registry.rs) - Aggregates tools for L3 intent detection
 2. **CommandRegistry** (command/registry.rs) - Provides command completion
@@ -269,20 +269,20 @@ impl CommandRegistry {
 
 **Options:**
 - A) Expose ToolRegistry directly via UniFFI
-- B) Create dedicated API methods on AetherCore
+- B) Create dedicated API methods on AlephCore
 - C) Create separate ToolAPI interface
 
-**Decision: Option B** - Create dedicated API methods on AetherCore
+**Decision: Option B** - Create dedicated API methods on AlephCore
 
 **Rationale:**
-- AetherCore is the existing entry point for all Swift calls
+- AlephCore is the existing entry point for all Swift calls
 - Keeps UniFFI interface simple
 - Can apply business logic before returning data
 
 **New UniFFI Methods:**
 ```rust
-// In aether.udl
-interface AetherCore {
+// In aleph.udl
+interface AlephCore {
     // ... existing methods ...
 
     // Tool Registry APIs
@@ -340,7 +340,7 @@ enum ToolSourceType {
 **Rationale:**
 - Swift already has `LocalizedStringKey` infrastructure
 - Rust doesn't need to know about all languages
-- Consistent with existing Aether localization pattern
+- Consistent with existing Aleph localization pattern
 - Keys like `tool.search.hint` map to Localizable.strings
 
 **Implementation:**
@@ -400,7 +400,7 @@ extension UnifiedToolInfo {
 ### Initialization Flow
 
 ```
-AetherCore::init()
+AlephCore::init()
     │
     ├── Config::load()
     │       └── Parse user-defined [[rules]]
@@ -517,7 +517,7 @@ McpClient connects to new server
 4. Keep existing code working
 
 ### Phase 2: Add UniFFI APIs
-1. Add new methods to AetherCore
+1. Add new methods to AlephCore
 2. Add UnifiedToolInfo type to UDL
 3. Generate bindings
 4. Write unit tests

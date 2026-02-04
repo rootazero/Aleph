@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::event::{
-    AetherEvent,
+    AlephEvent,
     // Event data types
     AiResponse,
     EventContext,
@@ -284,42 +284,42 @@ impl SessionRecorder {
         Ok(id)
     }
 
-    /// Convert an AetherEvent to a SessionPart
+    /// Convert an AlephEvent to a SessionPart
     ///
     /// Returns None for events that don't map to session parts.
-    pub fn event_to_part(event: &AetherEvent) -> Option<SessionPart> {
+    pub fn event_to_part(event: &AlephEvent) -> Option<SessionPart> {
         match event {
-            AetherEvent::InputReceived(input) => Some(Self::input_to_part(input)),
-            AetherEvent::ToolCallCompleted(result) => Some(Self::tool_result_to_part(result)),
-            AetherEvent::ToolCallFailed(error) => Some(Self::tool_error_to_part(error)),
-            AetherEvent::AiResponseGenerated(response) => Some(Self::ai_response_to_part(response)),
-            AetherEvent::PlanCreated(plan) => Some(Self::plan_to_part(plan)),
+            AlephEvent::InputReceived(input) => Some(Self::input_to_part(input)),
+            AlephEvent::ToolCallCompleted(result) => Some(Self::tool_result_to_part(result)),
+            AlephEvent::ToolCallFailed(error) => Some(Self::tool_error_to_part(error)),
+            AlephEvent::AiResponseGenerated(response) => Some(Self::ai_response_to_part(response)),
+            AlephEvent::PlanCreated(plan) => Some(Self::plan_to_part(plan)),
             // Events that don't map to session parts
-            AetherEvent::PlanRequested(_)
-            | AetherEvent::ToolCallRequested(_)
-            | AetherEvent::ToolCallStarted(_)
-            | AetherEvent::ToolCallRetrying(_)
-            | AetherEvent::LoopContinue(_)
-            | AetherEvent::LoopStop(_)
-            | AetherEvent::SessionCreated(_)
-            | AetherEvent::SessionUpdated(_)
-            | AetherEvent::SessionResumed(_)
-            | AetherEvent::SessionCompacted(_)
-            | AetherEvent::SubAgentStarted(_)
-            | AetherEvent::SubAgentCompleted(_)
-            | AetherEvent::UserQuestionAsked(_)
-            | AetherEvent::UserResponseReceived(_)
+            AlephEvent::PlanRequested(_)
+            | AlephEvent::ToolCallRequested(_)
+            | AlephEvent::ToolCallStarted(_)
+            | AlephEvent::ToolCallRetrying(_)
+            | AlephEvent::LoopContinue(_)
+            | AlephEvent::LoopStop(_)
+            | AlephEvent::SessionCreated(_)
+            | AlephEvent::SessionUpdated(_)
+            | AlephEvent::SessionResumed(_)
+            | AlephEvent::SessionCompacted(_)
+            | AlephEvent::SubAgentStarted(_)
+            | AlephEvent::SubAgentCompleted(_)
+            | AlephEvent::UserQuestionAsked(_)
+            | AlephEvent::UserResponseReceived(_)
             // Permission system events (handled separately)
-            | AetherEvent::PermissionAsked(_)
-            | AetherEvent::PermissionReplied { .. }
+            | AlephEvent::PermissionAsked(_)
+            | AlephEvent::PermissionReplied { .. }
             // Question system events (handled separately)
-            | AetherEvent::QuestionAsked(_)
-            | AetherEvent::QuestionReplied { .. }
-            | AetherEvent::QuestionRejected { .. }
+            | AlephEvent::QuestionAsked(_)
+            | AlephEvent::QuestionReplied { .. }
+            | AlephEvent::QuestionRejected { .. }
             // Part update events are meta-events, not session parts themselves
-            | AetherEvent::PartAdded(_)
-            | AetherEvent::PartUpdated(_)
-            | AetherEvent::PartRemoved(_) => None,
+            | AlephEvent::PartAdded(_)
+            | AlephEvent::PartUpdated(_)
+            | AlephEvent::PartRemoved(_) => None,
         }
     }
 
@@ -468,15 +468,15 @@ impl EventHandler for SessionRecorder {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Get session ID from context
         let session_id = ctx.get_session_id().await;
 
         // Handle special session events
         match event {
-            AetherEvent::SessionCreated(info) => {
+            AlephEvent::SessionCreated(info) => {
                 // Create new session record
                 if let Err(e) = self.create_session_with_options(
                     &info.id,
@@ -488,7 +488,7 @@ impl EventHandler for SessionRecorder {
                 }
                 return Ok(vec![]);
             }
-            AetherEvent::LoopContinue(_) => {
+            AlephEvent::LoopContinue(_) => {
                 // Update session iteration count
                 if let Some(ref sid) = session_id {
                     if let Err(e) = self.update_session(sid) {
@@ -497,7 +497,7 @@ impl EventHandler for SessionRecorder {
                 }
                 return Ok(vec![]);
             }
-            AetherEvent::SessionUpdated(diff) => {
+            AlephEvent::SessionUpdated(diff) => {
                 // Apply session diff
                 if let Err(e) = self.update_session_full(
                     &diff.session_id,
@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_event_to_part_input() {
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "Hello".to_string(),
             topic_id: Some("topic-1".to_string()),
             context: Some(InputContext {
@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn test_event_to_part_tool_completed() {
-        let event = AetherEvent::ToolCallCompleted(ToolCallResult {
+        let event = AlephEvent::ToolCallCompleted(ToolCallResult {
             call_id: "call-001".to_string(),
             tool: "web_search".to_string(),
             input: serde_json::json!({"query": "rust programming"}),
@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn test_event_to_part_tool_failed() {
-        let event = AetherEvent::ToolCallFailed(ToolCallError {
+        let event = AlephEvent::ToolCallFailed(ToolCallError {
             call_id: "call-002".to_string(),
             tool: "file_read".to_string(),
             error: "File not found".to_string(),
@@ -833,7 +833,7 @@ mod tests {
 
     #[test]
     fn test_event_to_part_ai_response() {
-        let event = AetherEvent::AiResponseGenerated(AiResponse {
+        let event = AlephEvent::AiResponseGenerated(AiResponse {
             content: "Here is my response".to_string(),
             reasoning: Some("I thought about it carefully".to_string()),
             is_final: true,
@@ -857,7 +857,7 @@ mod tests {
 
     #[test]
     fn test_event_to_part_plan_created() {
-        let event = AetherEvent::PlanCreated(TaskPlan {
+        let event = AlephEvent::PlanCreated(TaskPlan {
             id: "plan-001".to_string(),
             steps: vec![
                 PlanStep {
@@ -897,7 +897,7 @@ mod tests {
     #[test]
     fn test_event_to_part_returns_none_for_internal_events() {
         // ToolCallRequested should not create a part
-        let event = AetherEvent::ToolCallRequested(crate::event::ToolCallRequest {
+        let event = AlephEvent::ToolCallRequested(crate::event::ToolCallRequest {
             tool: "test".to_string(),
             parameters: serde_json::json!({}),
             plan_step_id: None,
@@ -905,7 +905,7 @@ mod tests {
         assert!(SessionRecorder::event_to_part(&event).is_none());
 
         // LoopContinue should not create a part
-        let event = AetherEvent::LoopContinue(crate::event::LoopState {
+        let event = AlephEvent::LoopContinue(crate::event::LoopState {
             session_id: "test".to_string(),
             iteration: 1,
             total_tokens: 100,
@@ -940,7 +940,7 @@ mod tests {
         let bus = EventBus::new();
         let ctx = EventContext::new(bus);
 
-        let event = AetherEvent::SessionCreated(crate::event::SessionInfo {
+        let event = AlephEvent::SessionCreated(crate::event::SessionInfo {
             id: "session-from-event".to_string(),
             parent_id: None,
             agent_id: "main".to_string(),
@@ -969,7 +969,7 @@ mod tests {
         ctx.set_session_id("test-session".to_string()).await;
 
         // Handle input event
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "Test input".to_string(),
             topic_id: None,
             context: None,
@@ -995,7 +995,7 @@ mod tests {
         ctx.set_session_id("test-session".to_string()).await;
 
         // Handle loop continue event
-        let event = AetherEvent::LoopContinue(crate::event::LoopState {
+        let event = AlephEvent::LoopContinue(crate::event::LoopState {
             session_id: "test-session".to_string(),
             iteration: 1,
             total_tokens: 100,

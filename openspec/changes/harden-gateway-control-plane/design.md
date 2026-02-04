@@ -245,4 +245,4 @@ auto_start_channels = true
 | `gateway/handlers/auth.rs` | Connect handshake, device management |
 | `gateway/inbound_router.rs` | Unified routing with AgentRouter |
 | `gateway/router.rs` | AgentRouter bindings and resolution |
-| `bin/aether_gateway.rs` | Startup, handler registration |
+| `bin/aleph_gateway.rs` | Startup, handler registration |

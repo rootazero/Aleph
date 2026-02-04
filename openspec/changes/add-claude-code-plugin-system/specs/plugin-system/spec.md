@@ -2,7 +2,7 @@
 
 ### Requirement: Plugin Discovery
 
-The system SHALL discover plugins from the configured plugins directory (`~/.aether/plugins/` by default).
+The system SHALL discover plugins from the configured plugins directory (`~/.aleph/plugins/` by default).
 
 #### Scenario: Plugin directory scanning
 - **WHEN** the plugin manager initializes
@@ -71,7 +71,7 @@ The system SHALL process hooks defined in `hooks/hooks.json`.
 
 #### Scenario: Event mapping
 - **WHEN** a Claude Code hook event (e.g., PostToolUse) is registered
-- **THEN** it SHALL be mapped to the corresponding Aether EventType (e.g., ToolCallCompleted)
+- **THEN** it SHALL be mapped to the corresponding Aleph EventType (e.g., ToolCallCompleted)
 
 #### Scenario: Matcher filtering
 - **WHEN** a hook has a `matcher` pattern like "Write|Edit"
@@ -103,7 +103,7 @@ The system SHALL parse and register agents from `agents/` directory.
 
 #### Scenario: Agent registration
 - **WHEN** a plugin agent is loaded
-- **THEN** it SHALL be converted to Aether's AgentDef format
+- **THEN** it SHALL be converted to Aleph's AgentDef format
 - **AND** registered with the AgentRegistry
 - **AND** the agent ID SHALL be namespaced as "plugin-name:agent-name"
 
@@ -119,15 +119,15 @@ The system SHALL start MCP servers defined in `.mcp.json`.
 
 #### Scenario: Runtime path resolution
 - **WHEN** an MCP server command is "npx" or "node"
-- **THEN** the command path SHALL be resolved to Aether's fnm-managed Node.js installation
+- **THEN** the command path SHALL be resolved to Aleph's fnm-managed Node.js installation
 
 #### Scenario: Python runtime resolution
 - **WHEN** an MCP server command is "uvx", "python", or "python3"
-- **THEN** the command path SHALL be resolved to Aether's uv-managed Python installation
+- **THEN** the command path SHALL be resolved to Aleph's uv-managed Python installation
 
 #### Scenario: MCP server startup
 - **WHEN** plugin MCP servers are configured
-- **THEN** they SHALL be started via Aether's existing McpClient
+- **THEN** they SHALL be started via Aleph's existing McpClient
 
 ---
 

@@ -16,8 +16,8 @@ This guide helps verify that the critical crash fix (rdev upgrade from 0.5.x to 
 - **Fix**: Upgraded rdev from 0.5.x to 0.6.0 (git main branch)
 - **Commit**: `f2d764a` - "fix(crash): upgrade rdev to fix macOS main thread assertion crash"
 - **Files Changed**:
-  - `Aether/core/Cargo.toml` - Updated rdev dependency
-  - `Aether/Frameworks/libalephcore.dylib` - Rebuilt with new rdev
+  - `Aleph/core/Cargo.toml` - Updated rdev dependency
+  - `Aleph/Frameworks/libalephcore.dylib` - Rebuilt with new rdev
 
 ---
 
@@ -141,7 +141,7 @@ If a crash still occurs, gather diagnostic information:
 
 ### Console.app Logs
 ```bash
-# Open Console.app and filter for "Aether"
+# Open Console.app and filter for "Aleph"
 # Look for errors containing:
 # - "_dispatch_assert_queue_fail"
 # - "TSMGetInputSourceProperty"
@@ -222,8 +222,8 @@ rdev = { git = "https://github.com/Narsil/rdev.git", branch = "main" }
 ## Related Files
 
 - **Crash Fix Commit**: `f2d764a`
-- **Cargo.toml**: `Aether/core/Cargo.toml`
-- **Library**: `Aether/Frameworks/libalephcore.dylib`
+- **Cargo.toml**: `Aleph/core/Cargo.toml`
+- **Library**: `Aleph/Frameworks/libalephcore.dylib`
 - **Tasks**: `openspec/changes/redesign-permission-authorization/tasks.md`
 
 ---

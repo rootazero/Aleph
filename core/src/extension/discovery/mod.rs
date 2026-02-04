@@ -77,7 +77,7 @@ impl DiscoveryConfig {
 ///
 /// Scans all 4 layers in order:
 /// 1. Config-specified paths (highest priority)
-/// 2. Workspace `.aether/extensions` and `.claude/extensions`
+/// 2. Workspace `.aleph/extensions` and `.claude/extensions`
 /// 3. Global `~/.aleph/extensions` and `~/.claude/extensions`
 /// 4. Bundled plugins (lowest priority)
 ///
@@ -99,7 +99,7 @@ pub fn discover_all(config: &DiscoveryConfig) -> ExtensionResult<ResolvedPlugins
 
     // Priority 2: Workspace local
     if let Some(workspace) = &config.workspace_dir {
-        for subdir in [".aether/extensions", ".claude/extensions"] {
+        for subdir in [".aleph/extensions", ".claude/extensions"] {
             let path = workspace.join(subdir);
             debug!("Scanning workspace path: {:?}", path);
             let results = scan_directory(&path, PluginOrigin::Workspace);
@@ -119,7 +119,7 @@ pub fn discover_all(config: &DiscoveryConfig) -> ExtensionResult<ResolvedPlugins
         .or_else(dirs::home_dir)
         .unwrap_or_default();
 
-    for subdir in [".aether/extensions", ".claude/extensions"] {
+    for subdir in [".aleph/extensions", ".claude/extensions"] {
         let path = home.join(subdir);
         debug!("Scanning global path: {:?}", path);
         let results = scan_directory(&path, PluginOrigin::Global);
@@ -169,12 +169,12 @@ mod tests {
         let workspace = tempdir().unwrap();
 
         // Create global plugin
-        let global_ext = home.path().join(".aether/extensions/global-plugin");
+        let global_ext = home.path().join(".aleph/extensions/global-plugin");
         fs::create_dir_all(&global_ext).unwrap();
         fs::write(global_ext.join("SKILL.md"), "# Global").unwrap();
 
         // Create workspace plugin
-        let ws_ext = workspace.path().join(".aether/extensions/ws-plugin");
+        let ws_ext = workspace.path().join(".aleph/extensions/ws-plugin");
         fs::create_dir_all(&ws_ext).unwrap();
         fs::write(ws_ext.join("SKILL.md"), "# Workspace").unwrap();
 
@@ -194,11 +194,11 @@ mod tests {
         let workspace = tempdir().unwrap();
 
         // Create same-named plugin in both locations
-        let global_ext = home.path().join(".aether/extensions/same-plugin");
+        let global_ext = home.path().join(".aleph/extensions/same-plugin");
         fs::create_dir_all(&global_ext).unwrap();
         fs::write(global_ext.join("SKILL.md"), "# Global").unwrap();
 
-        let ws_ext = workspace.path().join(".aether/extensions/same-plugin");
+        let ws_ext = workspace.path().join(".aleph/extensions/same-plugin");
         fs::create_dir_all(&ws_ext).unwrap();
         fs::write(ws_ext.join("SKILL.md"), "# Workspace").unwrap();
 
@@ -221,7 +221,7 @@ mod tests {
         let config_path = tempdir().unwrap();
 
         // Create plugin in workspace
-        let ws_ext = workspace.path().join(".aether/extensions/my-plugin");
+        let ws_ext = workspace.path().join(".aleph/extensions/my-plugin");
         fs::create_dir_all(&ws_ext).unwrap();
         fs::write(ws_ext.join("SKILL.md"), "# Workspace").unwrap();
 

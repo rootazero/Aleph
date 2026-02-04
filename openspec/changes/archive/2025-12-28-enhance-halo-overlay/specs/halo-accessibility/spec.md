@@ -10,7 +10,7 @@ VoiceOver SHALL announce Halo state changes with descriptive, user-friendly mess
 **Given** VoiceOver is enabled on macOS
 **And** user presses hotkey (Cmd+~)
 **When** Halo transitions to .listening state
-**Then** VoiceOver speaks "Aether listening"
+**Then** VoiceOver speaks "Aleph listening"
 **And** announcement uses low priority (non-intrusive)
 **And** announcement does not interrupt current VoiceOver context
 

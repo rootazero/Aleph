@@ -337,7 +337,7 @@ impl GatewayConfig {
     pub fn load_default() -> Result<Self, ConfigError> {
         let config_path = dirs::home_dir()
             .ok_or_else(|| ConfigError::LoadFailed("No home directory".to_string()))?
-            .join(".aether/config.toml");
+            .join(".aleph/config.toml");
 
         if config_path.exists() {
             Self::load(&config_path)

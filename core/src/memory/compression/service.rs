@@ -317,7 +317,7 @@ impl CompressionService {
 
     /// Start background compression task with external runtime
     ///
-    /// This method is used during AetherCore initialization when we have a runtime
+    /// This method is used during AlephCore initialization when we have a runtime
     /// but are not yet inside its context (so tokio::spawn won't work).
     ///
     /// Triggers:

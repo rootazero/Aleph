@@ -47,7 +47,7 @@ struct GatewayClientConfig {
     }
 }
 
-/// WebSocket client for communicating with the Aether Gateway
+/// WebSocket client for communicating with the Aleph Gateway
 @MainActor
 final class GatewayClient: ObservableObject {
     // MARK: - Published Properties
@@ -58,7 +58,7 @@ final class GatewayClient: ObservableObject {
     // MARK: - Private Properties
 
     private let config: GatewayClientConfig
-    private let logger = Logger(subsystem: "com.aether", category: "GatewayClient")
+    private let logger = Logger(subsystem: "com.aleph", category: "GatewayClient")
 
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?

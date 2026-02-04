@@ -26,7 +26,7 @@ ls -lh Aleph/Resources/Sounds/
 
 ### 3. Build and Run
 ```bash
-cd /Users/zouguojun/Workspace/Aether
+cd /Users/zouguojun/Workspace/Aleph
 xcodegen generate
 open Aleph.xcodeproj
 # Click Run (Cmd+R) in Xcode

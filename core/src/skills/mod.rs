@@ -311,7 +311,7 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 pub fn list_installed_skills() -> Result<Vec<SkillInfo>> {
     // Use multi-location discovery to support both ~/.aleph/skills and ~/.claude/skills
     // This enables Claude Code compatibility by scanning:
-    // - Project level: .aether/skills/, .claude/skills/
+    // - Project level: .aleph/skills/, .claude/skills/
     // - Global level: ~/.aleph/skills, ~/.claude/skills
     let registry = SkillsRegistry::with_auto_discover(None)?;
     registry.load_all()?;

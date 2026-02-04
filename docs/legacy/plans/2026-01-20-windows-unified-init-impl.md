@@ -141,7 +141,7 @@ Add before the `// Tests` section (around line 2258):
 /// * `1` if initialization is needed
 /// * `0` if already initialized
 #[no_mangle]
-pub extern "C" fn aether_needs_first_time_init() -> c_int {
+pub extern "C" fn aleph_needs_first_time_init() -> c_int {
     match crate::init_unified::needs_initialization() {
         Ok(true) => 1,
         Ok(false) => 0,
@@ -158,7 +158,7 @@ pub extern "C" fn aether_needs_first_time_init() -> c_int {
 /// * `1` if model exists
 /// * `0` if model does not exist
 #[no_mangle]
-pub extern "C" fn aether_check_embedding_model_exists() -> c_int {
+pub extern "C" fn aleph_check_embedding_model_exists() -> c_int {
     use crate::memory::EmbeddingModel;
 
     match EmbeddingModel::get_default_model_path() {
@@ -196,7 +196,7 @@ pub extern "C" fn aether_check_embedding_model_exists() -> c_int {
 /// # Safety
 /// All callback function pointers must be valid for the duration of initialization.
 #[no_mangle]
-pub unsafe extern "C" fn aether_register_init_callbacks(
+pub unsafe extern "C" fn aleph_register_init_callbacks(
     on_phase_started: InitPhaseStartedCallback,
     on_phase_progress: InitPhaseProgressCallback,
     on_phase_completed: InitPhaseCompletedCallback,
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn aether_register_init_callbacks(
 
 /// Clear initialization callbacks
 #[no_mangle]
-pub extern "C" fn aether_clear_init_callbacks() {
+pub extern "C" fn aleph_clear_init_callbacks() {
     if let Ok(mut cbs) = CALLBACKS.lock() {
         cbs.init_phase_started = None;
         cbs.init_phase_progress = None;
@@ -291,7 +291,7 @@ impl crate::init_unified::InitProgressHandler for CAbiProgressHandler {
 /// * `0` on success
 /// * Negative error code on failure
 #[no_mangle]
-pub extern "C" fn aether_run_first_time_init() -> c_int {
+pub extern "C" fn aleph_run_first_time_init() -> c_int {
     use crate::init_unified::InitializationCoordinator;
     use std::sync::Arc;
 
@@ -352,7 +352,7 @@ git commit -m "feat(ffi): add first-time initialization C ABI functions"
 
 **Files:**
 - Build output: `target/release/alephcore.dll`
-- Generated: `platforms/windows/Aether/Interop/NativeMethods.g.cs`
+- Generated: `platforms/windows/Aleph/Interop/NativeMethods.g.cs`
 
 **Step 1: Build the Rust core with cabi feature**
 
@@ -363,14 +363,14 @@ Expected: Build succeeds, produces `target/release/libalephcore.dll` (or `.so` o
 
 The build.rs should automatically regenerate NativeMethods.g.cs. Check:
 ```bash
-grep -n "aether_needs_first_time_init" platforms/windows/Aether/Interop/NativeMethods.g.cs
+grep -n "aleph_needs_first_time_init" platforms/windows/Aleph/Interop/NativeMethods.g.cs
 ```
 Expected: Find the new function declarations
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/windows/Aether/Interop/NativeMethods.g.cs
+git add platforms/windows/Aleph/Interop/NativeMethods.g.cs
 git commit -m "build: regenerate Windows P/Invoke bindings with init functions"
 ```
 
@@ -379,7 +379,7 @@ git commit -m "build: regenerate Windows P/Invoke bindings with init functions"
 ## Task 5: Add IInitProgressHandler Interface to AlephCore.cs
 
 **Files:**
-- Modify: `platforms/windows/Aether/Interop/AetherCore.cs`
+- Modify: `platforms/windows/Aleph/Interop/AlephCore.cs`
 
 **Step 1: Add the interface definition**
 
@@ -418,13 +418,13 @@ public interface IInitProgressHandler
 
 **Step 2: Verify C# syntax**
 
-Run: `~/.uv/python3/bin/python scripts/verify_csharp_syntax.py platforms/windows/Aether/Interop/AetherCore.cs` (or manual review)
+Run: `~/.uv/python3/bin/python scripts/verify_csharp_syntax.py platforms/windows/Aleph/Interop/AlephCore.cs` (or manual review)
 Expected: No syntax errors
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/windows/Aether/Interop/AetherCore.cs
+git add platforms/windows/Aleph/Interop/AlephCore.cs
 git commit -m "feat(windows): add IInitProgressHandler interface"
 ```
 
@@ -433,7 +433,7 @@ git commit -m "feat(windows): add IInitProgressHandler interface"
 ## Task 6: Add Initialization Methods to AlephCore.cs
 
 **Files:**
-- Modify: `platforms/windows/Aether/Interop/AetherCore.cs`
+- Modify: `platforms/windows/Aleph/Interop/AlephCore.cs`
 
 **Step 1: Add static callback storage for initialization**
 
@@ -457,7 +457,7 @@ public static bool NeedsFirstTimeInit()
 {
     try
     {
-        return NativeMethods.aether_needs_first_time_init() == 1;
+        return NativeMethods.aleph_needs_first_time_init() == 1;
     }
     catch (DllNotFoundException)
     {
@@ -473,7 +473,7 @@ public static bool CheckEmbeddingModelExists()
 {
     try
     {
-        return NativeMethods.aether_check_embedding_model_exists() == 1;
+        return NativeMethods.aleph_check_embedding_model_exists() == 1;
     }
     catch
     {
@@ -492,7 +492,7 @@ public static unsafe bool RunFirstTimeInit(IInitProgressHandler handler)
     try
     {
         // Register callbacks
-        NativeMethods.aether_register_init_callbacks(
+        NativeMethods.aleph_register_init_callbacks(
             &OnInitPhaseStarted,
             &OnInitPhaseProgress,
             &OnInitPhaseCompleted,
@@ -501,19 +501,19 @@ public static unsafe bool RunFirstTimeInit(IInitProgressHandler handler)
         );
 
         // Run initialization (blocking)
-        int result = NativeMethods.aether_run_first_time_init();
+        int result = NativeMethods.aleph_run_first_time_init();
 
         return result == 0;
     }
     catch (Exception ex)
     {
-        System.Diagnostics.Debug.WriteLine($"[AetherCore] Init error: {ex.Message}");
+        System.Diagnostics.Debug.WriteLine($"[AlephCore] Init error: {ex.Message}");
         return false;
     }
     finally
     {
         // Clear callbacks
-        NativeMethods.aether_clear_init_callbacks();
+        NativeMethods.aleph_clear_init_callbacks();
         _initHandler = null;
     }
 }
@@ -580,7 +580,7 @@ private static unsafe void OnInitError(byte* phase, byte* message, int isRetryab
 **Step 3: Commit**
 
 ```bash
-git add platforms/windows/Aether/Interop/AetherCore.cs
+git add platforms/windows/Aleph/Interop/AlephCore.cs
 git commit -m "feat(windows): add first-time initialization methods to AlephCore"
 ```
 
@@ -589,7 +589,7 @@ git commit -m "feat(windows): add first-time initialization methods to AlephCore
 ## Task 7: Create InitializationDialog.xaml
 
 **Files:**
-- Create: `platforms/windows/Aether/Windows/InitializationDialog.xaml`
+- Create: `platforms/windows/Aleph/Windows/InitializationDialog.xaml`
 
 **Step 1: Create the XAML file**
 
@@ -654,7 +654,7 @@ git commit -m "feat(windows): add first-time initialization methods to AlephCore
 **Step 2: Commit**
 
 ```bash
-git add platforms/windows/Aether/Windows/InitializationDialog.xaml
+git add platforms/windows/Aleph/Windows/InitializationDialog.xaml
 git commit -m "feat(windows): create InitializationDialog XAML"
 ```
 
@@ -663,7 +663,7 @@ git commit -m "feat(windows): create InitializationDialog XAML"
 ## Task 8: Create InitializationDialog.xaml.cs
 
 **Files:**
-- Create: `platforms/windows/Aether/Windows/InitializationDialog.xaml.cs`
+- Create: `platforms/windows/Aleph/Windows/InitializationDialog.xaml.cs`
 
 **Step 1: Create the code-behind file**
 
@@ -833,7 +833,7 @@ public sealed partial class InitializationDialog : ContentDialog, IInitProgressH
 **Step 2: Commit**
 
 ```bash
-git add platforms/windows/Aether/Windows/InitializationDialog.xaml.cs
+git add platforms/windows/Aleph/Windows/InitializationDialog.xaml.cs
 git commit -m "feat(windows): implement InitializationDialog code-behind"
 ```
 
@@ -842,7 +842,7 @@ git commit -m "feat(windows): implement InitializationDialog code-behind"
 ## Task 9: Refactor App.xaml.cs Startup Flow
 
 **Files:**
-- Modify: `platforms/windows/Aether/App.xaml.cs`
+- Modify: `platforms/windows/Aleph/App.xaml.cs`
 
 **Step 1: Remove Directory.CreateDirectory from GetConfigPath**
 
@@ -856,7 +856,7 @@ private static string GetConfigPath()
     var configDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".config",
-        "aether"
+        "aleph"
     );
     return Path.Combine(configDir, "config.toml");
 }
@@ -865,7 +865,7 @@ private static string GetConfigPath()
 **Step 2: Commit**
 
 ```bash
-git add platforms/windows/Aether/App.xaml.cs
+git add platforms/windows/Aleph/App.xaml.cs
 git commit -m "refactor(windows): remove Directory.CreateDirectory from GetConfigPath"
 ```
 
@@ -874,7 +874,7 @@ git commit -m "refactor(windows): remove Directory.CreateDirectory from GetConfi
 ## Task 10: Add First-Time Init Check to App.xaml.cs
 
 **Files:**
-- Modify: `platforms/windows/Aether/App.xaml.cs`
+- Modify: `platforms/windows/Aleph/App.xaml.cs`
 
 **Step 1: Add init dialog field**
 
@@ -894,7 +894,7 @@ protected override async void OnLaunched(LaunchActivatedEventArgs args)
     _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
     // Check if first-time initialization is needed
-    if (AetherCore.NeedsFirstTimeInit())
+    if (AlephCore.NeedsFirstTimeInit())
     {
         await RunFirstTimeInitializationAsync();
     }
@@ -995,7 +995,7 @@ private void ContinueStartup()
 
 **Step 3: Simplify InitializeServices**
 
-The initialization of `_aetherCore` should now assume directories exist. Update `InitializeServices`:
+The initialization of `_alephCore` should now assume directories exist. Update `InitializeServices`:
 
 ```csharp
 private void InitializeServices()
@@ -1012,8 +1012,8 @@ private void InitializeServices()
         _screenCaptureService = new ScreenCaptureService();
 
         // 4. Initialize Rust core (directories already created by first-time init)
-        _aetherCore = new AlephCore(_dispatcherQueue!);
-        if (!_aetherCore.Initialize())
+        _alephCore = new AlephCore(_dispatcherQueue!);
+        if (!_alephCore.Initialize())
         {
             System.Diagnostics.Debug.WriteLine("Warning: Aleph core initialization failed");
         }
@@ -1048,7 +1048,7 @@ using Aleph.Windows;
 **Step 5: Commit**
 
 ```bash
-git add platforms/windows/Aether/App.xaml.cs
+git add platforms/windows/Aleph/App.xaml.cs
 git commit -m "feat(windows): add first-time initialization check to startup"
 ```
 
@@ -1057,7 +1057,7 @@ git commit -m "feat(windows): add first-time initialization check to startup"
 ## Task 11: Update AlephCore.Initialize to Remove configPath
 
 **Files:**
-- Modify: `platforms/windows/Aether/Interop/AetherCore.cs`
+- Modify: `platforms/windows/Aleph/Interop/AlephCore.cs`
 
 **Step 1: Simplify Initialize method**
 
@@ -1081,13 +1081,13 @@ public unsafe bool Initialize()
         // Register callbacks BEFORE init
         RegisterCallbacks();
 
-        // Call aether_init with default path
+        // Call aleph_init with default path
         var configPath = GetDefaultConfigPath();
         var pathBytes = Encoding.UTF8.GetBytes(configPath + '\0');
         int result;
         fixed (byte* pathPtr = pathBytes)
         {
-            result = NativeMethods.aether_init(pathPtr);
+            result = NativeMethods.aleph_init(pathPtr);
         }
 
         if (result == 0)
@@ -1119,7 +1119,7 @@ public unsafe bool Initialize()
 **Step 2: Commit**
 
 ```bash
-git add platforms/windows/Aether/Interop/AetherCore.cs
+git add platforms/windows/Aleph/Interop/AlephCore.cs
 git commit -m "refactor(windows): simplify AlephCore.Initialize"
 ```
 
@@ -1140,7 +1140,7 @@ dotnet build Aleph.sln
 
 **Step 2: Manual test first-time initialization**
 
-1. Delete `%USERPROFILE%\.config\aether` directory
+1. Delete `%USERPROFILE%\.config\aleph` directory
 2. Run the application
 3. Verify initialization dialog appears
 4. Verify 6 phases complete
@@ -1177,13 +1177,13 @@ Closes #XXX"
 | 2 | Add callback storage | `ffi_cabi.rs` |
 | 3 | Add FFI functions | `ffi_cabi.rs` |
 | 4 | Build & generate bindings | `NativeMethods.g.cs` |
-| 5 | Add interface | `AetherCore.cs` |
-| 6 | Add init methods | `AetherCore.cs` |
+| 5 | Add interface | `AlephCore.cs` |
+| 6 | Add init methods | `AlephCore.cs` |
 | 7 | Create dialog XAML | `InitializationDialog.xaml` |
 | 8 | Create dialog code | `InitializationDialog.xaml.cs` |
 | 9 | Remove old code | `App.xaml.cs` |
 | 10 | Add init check | `App.xaml.cs` |
-| 11 | Simplify Initialize | `AetherCore.cs` |
+| 11 | Simplify Initialize | `AlephCore.cs` |
 | 12 | Integration test | Manual testing |
 
 Total: 12 tasks, ~15-20 commits

@@ -281,10 +281,10 @@ impl SyncExtensionManager {
         })
     }
 
-    /// Get the Aether home directory
-    pub fn aether_home(&self) -> ExtensionResult<PathBuf> {
+    /// Get the Aleph home directory
+    pub fn aleph_home(&self) -> ExtensionResult<PathBuf> {
         self.runtime.block_on(async {
-            self.inner.read().await.aether_home()
+            self.inner.read().await.aleph_home()
         })
     }
 }

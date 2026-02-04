@@ -8,25 +8,25 @@ This document provides test cases for the Config Hot-Reload feature implemented 
 
 ### Components Implemented
 
-1. **Rust Core (AetherCore)**
-   - File: `Aether/core/src/core.rs`
+1. **Rust Core (AlephCore)**
+   - File: `Aleph/core/src/core.rs`
    - Added `ConfigWatcher` integration
-   - Watches `~/.aether/config.toml` for changes
+   - Watches `~/.aleph/config.toml` for changes
    - Debounces file events (500ms delay)
    - Automatically reloads config on external modification
 
 2. **UniFFI Callback**
-   - File: `Aether/core/src/aether.udl`
-   - Added `on_config_changed()` callback to `AetherEventHandler`
+   - File: `Aleph/core/src/aleph.udl`
+   - Added `on_config_changed()` callback to `AlephEventHandler`
 
 3. **Swift Event Handler**
-   - File: `Aether/Sources/EventHandler.swift`
+   - File: `Aleph/Sources/EventHandler.swift`
    - Implemented `onConfigChanged()` callback
-   - Posts `NSNotification.Name("AetherConfigDidChange")`
+   - Posts `NSNotification.Name("AlephConfigDidChange")`
    - Shows user notification toast
 
 4. **Settings UI Observer**
-   - File: `Aether/Sources/SettingsView.swift`
+   - File: `Aleph/Sources/SettingsView.swift`
    - Added `.onReceive()` NotificationCenter observer
    - Implements `handleConfigChange()` to reload providers
    - Uses `configReloadTrigger` to force UI refresh
@@ -36,11 +36,11 @@ This document provides test cases for the Config Hot-Reload feature implemented 
 ### Test 1: Basic Config File Change Detection
 
 **Prerequisites:**
-- Aether app is running
+- Aleph app is running
 - Settings window is open
 
 **Steps:**
-1. Open `~/.aether/config.toml` in a text editor
+1. Open `~/.aleph/config.toml` in a text editor
 2. Modify a simple field (e.g., change `default_hotkey = "Command+Grave"` to `default_hotkey = "Command+Shift+A"`)
 3. Save the file
 
@@ -48,19 +48,19 @@ This document provides test cases for the Config Hot-Reload feature implemented 
 - ✅ Rust logs show: "Config file changed, reloading configuration"
 - ✅ Swift logs show: "[EventHandler] Config file changed externally"
 - ✅ Swift logs show: "[SettingsView] Config change notification received, reloading..."
-- ✅ User sees notification: "Aether - Settings updated from file"
+- ✅ User sees notification: "Aleph - Settings updated from file"
 - ✅ Settings UI refreshes automatically
 
 **Validation:**
 ```bash
 # Monitor logs while testing
-log stream --predicate 'subsystem == "com.aether.app"' --level debug
+log stream --predicate 'subsystem == "com.aleph.app"' --level debug
 ```
 
 ### Test 2: Provider Configuration Change
 
 **Prerequisites:**
-- Aether app is running
+- Aleph app is running
 - Settings window open on Providers tab
 
 **Steps:**
@@ -82,7 +82,7 @@ timeout_seconds = 30
 ### Test 3: Routing Rules Change
 
 **Prerequisites:**
-- Aether app running
+- Aleph app running
 - Settings window open on Routing tab
 
 **Steps:**
@@ -103,14 +103,14 @@ system_prompt = "You are a test assistant."
 ### Test 4: Multiple Rapid Changes (Debouncing)
 
 **Prerequisites:**
-- Aether app running
+- Aleph app running
 - Settings window open
 
 **Steps:**
 1. Use a script to rapidly modify `config.toml` multiple times:
 ```bash
 for i in {1..10}; do
-  echo "# Modified at $(date)" >> ~/.aether/config.toml
+  echo "# Modified at $(date)" >> ~/.aleph/config.toml
   sleep 0.1
 done
 ```
@@ -123,7 +123,7 @@ done
 ### Test 5: Invalid Config Change (Error Handling)
 
 **Prerequisites:**
-- Aether app running
+- Aleph app running
 - Settings window open
 
 **Steps:**
@@ -143,10 +143,10 @@ api_key = "sk-test  # Missing closing quote
 ### Test 6: Config File Deletion and Recreation
 
 **Prerequisites:**
-- Aether app running
+- Aleph app running
 
 **Steps:**
-1. Delete `~/.aether/config.toml`
+1. Delete `~/.aleph/config.toml`
 2. Wait 1 second
 3. Restore the file (copy from `config.example.toml`)
 
@@ -158,7 +158,7 @@ api_key = "sk-test  # Missing closing quote
 ### Test 7: Cross-Tab Consistency
 
 **Prerequisites:**
-- Aether app running
+- Aleph app running
 - Settings window open on Providers tab
 
 **Steps:**
@@ -189,10 +189,10 @@ api_key = "sk-test  # Missing closing quote
 sudo fs_usage -w -f filesys | grep config.toml
 
 # Monitor Rust logs
-cd Aether/core && RUST_LOG=debug cargo run
+cd Aleph/core && RUST_LOG=debug cargo run
 
 # Monitor Swift logs
-log stream --predicate 'process == "Aether"' --level debug
+log stream --predicate 'process == "Aleph"' --level debug
 ```
 
 ## Known Limitations
@@ -215,7 +215,7 @@ log stream --predicate 'process == "Aether"' --level debug
 
 **Solution:**
 - Check if watcher started successfully: `Config watcher started successfully` in logs
-- Verify config path: `~/.aether/config.toml`
+- Verify config path: `~/.aleph/config.toml`
 - Ensure file permissions allow reading
 
 ### Issue: UI not updating
@@ -244,18 +244,18 @@ All test cases pass with the following outcomes:
 ## Implementation Files
 
 ### Modified Files
-- `Aether/core/src/core.rs` - Added ConfigWatcher integration
-- `Aether/Sources/EventHandler.swift` - Added onConfigChanged callback
-- `Aether/Sources/SettingsView.swift` - Added config change observer
+- `Aleph/core/src/core.rs` - Added ConfigWatcher integration
+- `Aleph/Sources/EventHandler.swift` - Added onConfigChanged callback
+- `Aleph/Sources/SettingsView.swift` - Added config change observer
 
 ### Dependencies
 - `notify` crate (Rust) - File system watcher using FSEvents
 - `notify-debouncer-full` (Rust) - Debouncing wrapper
 
 ### Configuration
-- Watch path: `~/.aether/config.toml`
+- Watch path: `~/.aleph/config.toml`
 - Debounce delay: 500ms
-- Notification name: `"AetherConfigDidChange"`
+- Notification name: `"AlephConfigDidChange"`
 
 ## Next Steps
 

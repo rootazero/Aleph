@@ -15,7 +15,7 @@
 ### Task 1.1: 定义新的 StreamingContext 类型
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/Components/HaloStreamingTypes.swift`
+- Create: `platforms/macos/Aleph/Sources/Components/HaloStreamingTypes.swift`
 
 **Step 1: 创建新的流式状态类型文件**
 
@@ -323,14 +323,14 @@ struct HistoryTopic: Equatable, Identifiable {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds or only unrelated warnings
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Components/HaloStreamingTypes.swift
+git add platforms/macos/Aleph/Sources/Components/HaloStreamingTypes.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): add new streaming types for simplified state model
 
@@ -348,7 +348,7 @@ EOF
 ### Task 1.2: 定义新的 HaloStateV2 枚举
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/HaloState.swift` (add new enum, keep old)
+- Modify: `platforms/macos/Aleph/Sources/HaloState.swift` (add new enum, keep old)
 
 **Step 1: Add HaloStateV2 enum to existing file**
 
@@ -570,14 +570,14 @@ extension ErrorType {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/HaloState.swift
+git add platforms/macos/Aleph/Sources/HaloState.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): add HaloStateV2 with 6 simplified states
 
@@ -598,7 +598,7 @@ EOF
 ### Task 2.1: 创建 HaloStreamingView 组件
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/Components/HaloStreamingView.swift`
+- Create: `platforms/macos/Aleph/Sources/Components/HaloStreamingView.swift`
 
 **Step 1: Create the streaming view component**
 
@@ -761,14 +761,14 @@ struct HaloStreamingView_Previews: PreviewProvider {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Components/HaloStreamingView.swift
+git add platforms/macos/Aleph/Sources/Components/HaloStreamingView.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): add HaloStreamingView for unified streaming display
 
@@ -787,7 +787,7 @@ EOF
 ### Task 2.2: 创建 HaloResultView 组件
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/Components/HaloResultView.swift`
+- Create: `platforms/macos/Aleph/Sources/Components/HaloResultView.swift`
 
 **Step 1: Create the result view component**
 
@@ -881,7 +881,7 @@ struct HaloResultView: View {
         case .partial:
             return L("halo.partial_complete")
         case .error:
-            return L("error.aether")
+            return L("error.aleph")
         }
     }
 
@@ -955,14 +955,14 @@ struct HaloResultView_Previews: PreviewProvider {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Components/HaloResultView.swift
+git add platforms/macos/Aleph/Sources/Components/HaloResultView.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): add HaloResultView for run completion display
 
@@ -982,7 +982,7 @@ EOF
 ### Task 2.3: 创建 HaloHistoryListView 组件
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/Components/HaloHistoryListView.swift`
+- Create: `platforms/macos/Aleph/Sources/Components/HaloHistoryListView.swift`
 
 **Step 1: Create the history list view component**
 
@@ -1174,14 +1174,14 @@ struct HaloHistoryListView_Previews: PreviewProvider {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Components/HaloHistoryListView.swift
+git add platforms/macos/Aleph/Sources/Components/HaloHistoryListView.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): add HaloHistoryListView for // command
 
@@ -1203,7 +1203,7 @@ EOF
 ### Task 3.1: 创建 HaloViewV2 组件
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/Components/HaloViewV2.swift`
+- Create: `platforms/macos/Aleph/Sources/Components/HaloViewV2.swift`
 
 **Step 1: Create the new HaloView**
 
@@ -1395,7 +1395,7 @@ struct HaloErrorViewV2: View {
                 Image(systemName: context.type.iconName)
                     .font(.title2)
                     .foregroundColor(.red)
-                Text(L("error.aether"))
+                Text(L("error.aleph"))
                     .font(.headline)
             }
 
@@ -1484,14 +1484,14 @@ struct HaloViewV2_Previews: PreviewProvider {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Components/HaloViewV2.swift
+git add platforms/macos/Aleph/Sources/Components/HaloViewV2.swift
 git commit -m "$(cat <<'EOF'
 feat(halo): add HaloViewV2 with simplified 6-state switch
 
@@ -1514,12 +1514,12 @@ EOF
 ### Task 4.1: 删除 MultiTurn 目录
 
 **Files:**
-- Delete: `platforms/macos/Aether/Sources/MultiTurn/` (entire directory)
+- Delete: `platforms/macos/Aleph/Sources/MultiTurn/` (entire directory)
 
 **Step 1: Remove the MultiTurn directory**
 
 ```bash
-rm -rf /Volumes/TBU4/Workspace/Aether/platforms/macos/Aether/Sources/MultiTurn
+rm -rf /Volumes/TBU4/Workspace/Aleph/platforms/macos/Aleph/Sources/MultiTurn
 ```
 
 **Step 2: Update project.yml to remove MultiTurn references**
@@ -1528,7 +1528,7 @@ Search for and remove any references to MultiTurn files in `platforms/macos/proj
 
 **Step 3: Verify build still works**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -30`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -30`
 
 Expected: Build may fail due to missing references - this is expected, we'll fix in next task
 
@@ -1557,7 +1557,7 @@ EOF
 ### Task 4.2: 更新 EventHandler 移除 MultiTurn 引用
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/EventHandler.swift`
+- Modify: `platforms/macos/Aleph/Sources/EventHandler.swift`
 
 **Step 1: Remove MultiTurn mode checks and forwarding**
 
@@ -1570,12 +1570,12 @@ Key changes:
 
 **Step 2: Verify build**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/EventHandler.swift
+git add platforms/macos/Aleph/Sources/EventHandler.swift
 git commit -m "$(cat <<'EOF'
 refactor(halo): remove MultiTurn mode from EventHandler
 
@@ -1592,7 +1592,7 @@ EOF
 ### Task 4.3: 切换 HaloWindow 到 V2
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/HaloWindow.swift`
+- Modify: `platforms/macos/Aleph/Sources/HaloWindow.swift`
 
 **Step 1: Update HaloWindow to use HaloViewModelV2**
 
@@ -1604,12 +1604,12 @@ Replace:
 
 **Step 2: Verify build**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 **Step 3: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/HaloWindow.swift
+git add platforms/macos/Aleph/Sources/HaloWindow.swift
 git commit -m "$(cat <<'EOF'
 refactor(halo): switch HaloWindow to V2 state model
 
@@ -1628,7 +1628,7 @@ EOF
 ### Task 4.4: 清理旧 HaloState 枚举
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/HaloState.swift`
+- Modify: `platforms/macos/Aleph/Sources/HaloState.swift`
 
 **Step 1: Remove old HaloState enum**
 
@@ -1643,12 +1643,12 @@ Search and replace `HaloStateV2` → `HaloState` across the codebase
 
 **Step 3: Verify build**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 **Step 4: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/HaloState.swift
+git add platforms/macos/Aleph/Sources/HaloState.swift
 git commit -m "$(cat <<'EOF'
 refactor(halo): replace HaloState with simplified V2 version
 
@@ -1752,7 +1752,7 @@ impl GatewayEventEmitter {
 
 **Step 2: Run tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test gateway::event_emitter`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test gateway::event_emitter`
 
 **Step 3: Commit**
 

@@ -107,7 +107,7 @@ pub async fn handle_set_level(request: JsonRpcRequest) -> JsonRpcResponse {
 /// # Example Response
 ///
 /// ```json
-/// {"jsonrpc":"2.0","result":{"directory":"/Users/user/.aether/logs"},"id":1}
+/// {"jsonrpc":"2.0","result":{"directory":"/Users/user/.aleph/logs"},"id":1}
 /// ```
 pub async fn handle_get_directory(request: JsonRpcRequest) -> JsonRpcResponse {
     match get_log_directory() {

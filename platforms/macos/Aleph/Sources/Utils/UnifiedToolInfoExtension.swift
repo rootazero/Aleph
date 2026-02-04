@@ -1,6 +1,6 @@
 //
 //  UnifiedToolInfoExtension.swift
-//  Aether
+//  Aleph
 //
 //  Created by unify-tool-registry proposal
 //  Extension to make UnifiedToolInfo work with Settings UI

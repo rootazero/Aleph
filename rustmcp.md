@@ -3,17 +3,17 @@
 
 在 Rust 中，“安装 MCP 协议”并不是像安装一个 .exe 或者 npm install 那么简单。因为 MCP 是一个协议标准 (Specification)，不是一个单一的软件包。
 
-对于你的 Aether（作为主程序，即 MCP Client/Host），“安装”实际上意味着：引入能够处理异步 IO 和 JSON 序列化的 Rust 依赖库，并实现 MCP 的通信流程。
+对于你的 Aleph（作为主程序，即 MCP Client/Host），“安装”实际上意味着：引入能够处理异步 IO 和 JSON 序列化的 Rust 依赖库，并实现 MCP 的通信流程。
 
 鉴于目前 MCP 的 Rust 生态还在快速发展中，最稳健的方式是引入基础依赖自己封装 Client，或者使用社区验证过的 SDK。
 
-以下是为 Aether 构建 Rust MCP Client 的**“安装”与实现指南**。
+以下是为 Aleph 构建 Rust MCP Client 的**“安装”与实现指南**。
 
 第一步：修改 Cargo.toml (引入依赖)
 
 你不需要一个庞大的 "mcp-framework"，你需要的是处理 JSON-RPC 和 异步进程通信 的能力。
 
-在你的 crates/aether-core/Cargo.toml 中添加：
+在你的 crates/aleph-core/Cargo.toml 中添加：
 
 Ini, TOML
 [dependencies]
@@ -34,7 +34,7 @@ async-trait = "0.1"
 # 但对于系统级 Agent，建议用上面的基础库自己封装 Transport 层以获得最大控制权。
 第二步：实现 MCP Client (核心代码)
 
-Aether 作为 Host，需要启动外部的 MCP Server（比如 Node.js 写的 Linear 工具），并通过标准输入输出 (Stdio) 与其对话。
+Aleph 作为 Host，需要启动外部的 MCP Server（比如 Node.js 写的 Linear 工具），并通过标准输入输出 (Stdio) 与其对话。
 
 这是一个最小化的、强健的 MCP Client 实现蓝图：
 
@@ -65,7 +65,7 @@ pub struct JsonRpcResponse {
 }
 2. 实现传输层 (Transport)
 
-这是最关键的一步：Aether 需要“寄生”在子进程的 Stdio 上。
+这是最关键的一步：Aleph 需要“寄生”在子进程的 Stdio 上。
 
 Rust
 // src/mcp/client.rs
@@ -141,7 +141,7 @@ impl McpClient {
 }
 第三步：实现握手流程 (Lifecycle)
 
-安装好上述代码后，Aether 需要在使用任何工具前执行 握手 (Handshake)。
+安装好上述代码后，Aleph 需要在使用任何工具前执行 握手 (Handshake)。
 
 Rust
 impl McpClient {
@@ -155,7 +155,7 @@ impl McpClient {
                 "sampling": {}
             },
             "clientInfo": {
-                "name": "Aether",
+                "name": "Aleph",
                 "version": "1.0.0"
             }
         });
@@ -183,7 +183,7 @@ impl McpClient {
         self.call("tools/call", Some(params)).await
     }
 }
-第四步：如何在 Aether 中组装使用
+第四步：如何在 Aleph 中组装使用
 
 回到你的主程序逻辑（Rust Core），这就是“安装”后的使用方式：
 
@@ -192,7 +192,7 @@ Rust
 
 async fn main() -> Result<()> {
     // 1. 定义一个外部的 MCP Server (例如 Node.js 版的 Linear 工具)
-    // 注意：这里我们调用了 node，但 Aether 自身不需要依赖 node，只是启动它
+    // 注意：这里我们调用了 node，但 Aleph 自身不需要依赖 node，只是启动它
     let mut client = McpClient::connect(
         "node", 
         &["/path/to/mcp-server-linear/index.js".to_string()],
@@ -211,7 +211,7 @@ async fn main() -> Result<()> {
     // 假设 LLM 返回了： "请帮我调用 linear_create_issue"
     let result = client.call_tool(
         "linear_create_issue", 
-        serde_json::json!({ "title": "Aether Bug", "description": "Fix UI" })
+        serde_json::json!({ "title": "Aleph Bug", "description": "Fix UI" })
     ).await?;
 
     println!("工具执行结果: {:?}", result);
@@ -228,4 +228,4 @@ async fn main() -> Result<()> {
 
 本质是进程通信：你在 Rust 里写的代码，本质上是一个JSON-RPC 客户端，它负责 spawn 子进程，并往它的 stdin 写 JSON，从 stdout 读 JSON。
 
-这就是最硬核、性能最好、最适合系统级 Agent 的“安装”方式。这能让你完全掌控 Aether 的生命周期，不会因为第三方 SDK 的更新而崩溃。
+这就是最硬核、性能最好、最适合系统级 Agent 的“安装”方式。这能让你完全掌控 Aleph 的生命周期，不会因为第三方 SDK 的更新而崩溃。

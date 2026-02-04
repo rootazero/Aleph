@@ -27,7 +27,7 @@ final class RTFDExtractor: ContentExtractor {
 
     let supportedTypes: [NSPasteboard.PasteboardType] = [.rtfd]
 
-    private let logger = Logger(subsystem: "com.aether", category: "RTFDExtractor")
+    private let logger = Logger(subsystem: "com.aleph", category: "RTFDExtractor")
 
     // MARK: - Extraction
 

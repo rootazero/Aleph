@@ -1,10 +1,10 @@
-# Aether - macOS Client
+# Aleph - macOS Client
 
 **Native AI Middleware for macOS** - Brings AI intelligence directly to your cursor in ANY application.
 
 ## Overview
 
-Aether is a system-level AI middleware that acts as an invisible "ether" connecting user intent with AI models through a frictionless, native interface. No webviews, no permanent windows—only ephemeral UI that appears when summoned.
+Aleph is a system-level AI middleware that acts as an invisible "ether" connecting user intent with AI models through a frictionless, native interface. No webviews, no permanent windows—only ephemeral UI that appears when summoned.
 
 ### Architecture
 
@@ -19,7 +19,7 @@ Aether is a system-level AI middleware that acts as an invisible "ether" connect
 │                    macOS Swift Client                    │
 │  ┌──────────────────────────────────────────────────┐  │
 │  │  AppDelegate (Menu Bar + Lifecycle)              │  │
-│  │  EventHandler (AetherEventHandler protocol)      │  │
+│  │  EventHandler (AlephEventHandler protocol)      │  │
 │  │  HaloWindow (Transparent NSWindow overlay)       │  │
 │  │  SettingsView (SwiftUI configuration UI)         │  │
 │  └──────────────────┬───────────────────────────────┘  │
@@ -29,7 +29,7 @@ Aether is a system-level AI middleware that acts as an invisible "ether" connect
 ┌─────────────────────────────────────────────────────────┐
 │                  Rust Core (libaethecore.dylib)         │
 │  ┌──────────────────────────────────────────────────┐  │
-│  │  AetherCore (Main orchestrator)                  │  │
+│  │  AlephCore (Main orchestrator)                  │  │
 │  │  Hotkey Detection (rdev)                         │  │
 │  │  Clipboard Management (arboard)                  │  │
 │  │  Input Simulation (enigo)                        │  │
@@ -59,16 +59,16 @@ Aether is a system-level AI middleware that acts as an invisible "ether" connect
 ### 1. Build Rust Core
 
 ```bash
-cd Aether/core
+cd Aleph/core
 cargo build --release
 ```
 
-The output library will be at: `Aether/core/target/release/libaethecore.dylib`
+The output library will be at: `Aleph/core/target/release/libaethecore.dylib`
 
 ### 2. Generate UniFFI Bindings (if needed)
 
 ```bash
-cd Aether/core
+cd Aleph/core
 cargo run --bin uniffi-bindgen generate src/aether.udl \
   --language swift \
   --out-dir ../Sources/Generated/
@@ -78,19 +78,19 @@ cargo run --bin uniffi-bindgen generate src/aether.udl \
 
 Option A: **Using Xcode IDE** (Recommended)
 ```bash
-open Aether.xcodeproj
+open Aleph.xcodeproj
 # Press Cmd+B to build, or Cmd+R to run
 ```
 
 Option B: **Command Line Build**
 ```bash
-xcodebuild -project Aether.xcodeproj \
-  -scheme Aether \
+xcodebuild -project Aleph.xcodeproj \
+  -scheme Aleph \
   -configuration Release \
   build
 ```
 
-The built app will be at: `DerivedData/Aether/Build/Products/Release/Aether.app`
+The built app will be at: `DerivedData/Aleph/Build/Products/Release/Aleph.app`
 
 ### Automated Build Script
 
@@ -105,13 +105,13 @@ This script runs automatically as an Xcode build phase.
 
 ### Accessibility Permission (Required)
 
-Aether requires **Accessibility** permission to simulate keyboard input (for pasting AI responses).
+Aleph requires **Accessibility** permission to simulate keyboard input (for pasting AI responses).
 
 **How to grant permission:**
-1. Launch Aether
+1. Launch Aleph
 2. A permission prompt will appear automatically
 3. Click "Open System Settings"
-4. In **Privacy & Security → Accessibility**, enable Aether
+4. In **Privacy & Security → Accessibility**, enable Aleph
 5. The app will automatically detect the permission grant
 
 **Why this permission is needed:**
@@ -119,15 +119,15 @@ Aether requires **Accessibility** permission to simulate keyboard input (for pas
 - To simulate `Cmd+V` (paste AI response)
 - To simulate keyboard input for "typewriter" output mode
 
-**Note**: Aether never records keystrokes or monitors your activity. It only simulates specific keyboard events when explicitly triggered.
+**Note**: Aleph never records keystrokes or monitors your activity. It only simulates specific keyboard events when explicitly triggered.
 
 ## User Guide
 
 ### Basic Usage
 
-1. **Launch Aether**: The app appears in the menu bar (no Dock icon)
+1. **Launch Aleph**: The app appears in the menu bar (no Dock icon)
 2. **Select text** in any application
-3. **Press `Cmd + ~`** to trigger Aether
+3. **Press `Cmd + ~`** to trigger Aleph
 4. **Halo overlay appears** at your cursor showing processing state
 5. **AI response** is pasted back (Phase 4 feature - coming soon)
 
@@ -135,7 +135,7 @@ Aether requires **Accessibility** permission to simulate keyboard input (for pas
 
 - **Settings**: Configure providers, routing rules, shortcuts
 - **About**: Version information
-- **Quit**: Exit Aether
+- **Quit**: Exit Aleph
 
 ### Settings
 
@@ -151,9 +151,9 @@ Currently, the Settings UI shows placeholders for future features:
 ### Project Structure
 
 ```
-Aether/
+Aleph/
 ├── Sources/                     # Swift source files
-│   ├── AetherApp.swift          # App entry point
+│   ├── AlephApp.swift          # App entry point
 │   ├── AppDelegate.swift        # Menu bar + Rust integration
 │   ├── HaloWindow.swift         # Transparent overlay window
 │   ├── HaloView.swift           # SwiftUI Halo animations
@@ -175,7 +175,7 @@ Aether/
     ├── src/
     │   ├── lib.rs               # UniFFI exports
     │   ├── aether.udl           # UniFFI interface definition
-    │   ├── core.rs              # AetherCore struct
+    │   ├── core.rs              # AlephCore struct
     │   ├── event_handler.rs     # Callback trait
     │   ├── hotkey/              # Global hotkey detection
     │   ├── clipboard/           # Clipboard management
@@ -188,18 +188,18 @@ Aether/
 **Swift Layer (UI)**:
 - `AppDelegate`: Menu bar lifecycle, Rust core initialization
 - `HaloWindow`: Borderless, transparent, floating overlay
-- `EventHandler`: Implements `AetherEventHandler` protocol for Rust callbacks
+- `EventHandler`: Implements `AlephEventHandler` protocol for Rust callbacks
 - `PermissionManager`: Handles Accessibility permission flow
 
 **Rust Layer (Core Logic)**:
-- `AetherCore`: Main orchestrator, exposes API via UniFFI
+- `AlephCore`: Main orchestrator, exposes API via UniFFI
 - `HotkeyDetector`: Listens for `Cmd+~` globally (using `rdev`)
 - `ClipboardManager`: Reads/writes clipboard (using `arboard`)
 - `InputSimulator`: Simulates keyboard events (using `enigo`)
 
 **Communication**:
-- Rust → Swift: Callbacks via `AetherEventHandler` trait
-- Swift → Rust: Direct method calls on `AetherCore` instance
+- Rust → Swift: Callbacks via `AlephEventHandler` trait
+- Swift → Rust: Direct method calls on `AlephCore` instance
 - UniFFI handles all FFI binding generation automatically
 
 ### Testing
@@ -215,7 +215,7 @@ Aether/
 - [ ] App runs for 30+ minutes without crashes
 
 **Automated Tests**:
-- Rust core: `cd Aether/core && cargo test`
+- Rust core: `cd Aleph/core && cargo test`
 - Swift UI: Use Xcode Test Navigator (Cmd+U)
 
 ### Debugging
@@ -232,18 +232,18 @@ cargo run --bin uniffi-bindgen generate src/aether.udl --language swift
 **Swift Debugging**:
 - Use Xcode breakpoints in `EventHandler.swift` for callback inspection
 - Check Console.app for error logs
-- Use `print("[Aether] ...")` for debug output
+- Use `print("[Aleph] ...")` for debug output
 
 **FFI Boundary Issues**:
 ```bash
 # Verify dylib is in app bundle
-ls -la Aether.app/Contents/Frameworks/
+ls -la Aleph.app/Contents/Frameworks/
 
 # Check dylib install name
-otool -L Aether.app/Contents/Frameworks/libaethecore.dylib
+otool -L Aleph.app/Contents/Frameworks/libaethecore.dylib
 
 # Verify app links to correct library
-otool -L Aether.app/Contents/MacOS/Aether | grep libaethecore
+otool -L Aleph.app/Contents/MacOS/Aleph | grep libaethecore
 ```
 
 ## Known Limitations
@@ -268,9 +268,9 @@ otool -L Aether.app/Contents/MacOS/Aether | grep libaethecore
 **Symptom**: App crashes on launch with `dyld: Library not loaded: libaethecore.dylib`
 
 **Solution**:
-1. Verify Rust core is built: `ls Aether/core/target/release/libaethecore.dylib`
+1. Verify Rust core is built: `ls Aleph/core/target/release/libaethecore.dylib`
 2. Rebuild the Xcode project to trigger the copy script
-3. Check the dylib is in the bundle: `ls Aether.app/Contents/Frameworks/libaethecore.dylib`
+3. Check the dylib is in the bundle: `ls Aleph.app/Contents/Frameworks/libaethecore.dylib`
 
 ### Halo Doesn't Appear
 
@@ -294,8 +294,8 @@ otool -L Aether.app/Contents/MacOS/Aether | grep libaethecore
 
 **Solution**:
 1. Manually open System Settings → Privacy & Security → Accessibility
-2. Add Aether to the list (click the `+` button)
-3. Enable the toggle for Aether
+2. Add Aleph to the list (click the `+` button)
+3. Enable the toggle for Aleph
 
 ## Roadmap
 
@@ -312,7 +312,7 @@ This project is under active development. Contributions are welcome after Phase 
 
 ## License
 
-Copyright © 2025 Aether. All rights reserved.
+Copyright © 2025 Aleph. All rights reserved.
 
 ---
 

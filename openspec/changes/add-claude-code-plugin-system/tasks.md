@@ -30,7 +30,7 @@
 ## 4. Agent Support (Phase 4) ✅
 - [x] 4.1 Implement `components/agent.rs` for agent.md parsing
 - [x] 4.2 Parse YAML frontmatter (description, capabilities)
-- [x] 4.3 Convert PluginAgent to Aether's AgentDef format
+- [x] 4.3 Convert PluginAgent to Aleph's AgentDef format
 - [x] 4.4 Integrate with AgentRegistry for agent registration
 
 ## 5. MCP Integration (Phase 5) ✅
@@ -53,10 +53,10 @@
 - [x] 7.2 Export list_plugins() function
 - [x] 7.3 Export enable_plugin/disable_plugin() functions
 - [x] 7.4 Export execute_plugin_skill() function
-- [x] 7.5 Update UniFFI bindings (aether.udl)
+- [x] 7.5 Update UniFFI bindings (aleph.udl)
 
 ## 8. Configuration (Phase 8) ✅
-- [x] 8.1 Plugin directory at ~/.aether/plugins/
+- [x] 8.1 Plugin directory at ~/.aleph/plugins/
 - [x] 8.2 Implement plugins.json for plugin state persistence
 - [x] 8.3 Add plugin directory configuration (default_plugins_dir)
 - [x] 8.4 Add dev_paths for development plugin loading
@@ -82,6 +82,6 @@ Total: 50 tests passing
 
 - 12 Rust modules in `core/src/plugins/`
 - FFI exports in `core/src/ffi/plugins.rs`
-- UniFFI definitions in `core/src/aether.udl`
+- UniFFI definitions in `core/src/aleph.udl`
 - 50 passing tests
 - Comprehensive documentation

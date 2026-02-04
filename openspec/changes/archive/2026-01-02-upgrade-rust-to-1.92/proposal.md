@@ -41,14 +41,14 @@ This change upgrades the Rust codebase to version 1.92 and migrates from externa
 - `config/mod.rs`: Add `ProviderConfig::test_config()` helper function
 
 **Generated Artifacts**:
-- Regenerate UniFFI Swift bindings (`aether.swift`, FFI headers)
+- Regenerate UniFFI Swift bindings (`aleph.swift`, FFI headers)
 - Rebuild release library (`libaethecore.dylib`)
 
 ## Overview
 
 ### Problem Statement
 
-The Aether codebase currently targets Rust 1.70 (as specified in `Cargo.toml:5`) but the development environment already has Rust 1.92 available. This creates several issues:
+The Aleph codebase currently targets Rust 1.70 (as specified in `Cargo.toml:5`) but the development environment already has Rust 1.92 available. This creates several issues:
 
 1. **Outdated Dependencies**: The codebase uses external crates for functionality now available in the standard library:
    - `once_cell` (1.19) → Stabilized in Rust 1.70+ as `std::sync::OnceLock`, `LazyLock`, `std::cell::OnceCell`
@@ -70,7 +70,7 @@ The Aether codebase currently targets Rust 1.70 (as specified in `Cargo.toml:5`)
 
 ### Current State Analysis
 
-**Dependencies to Remove** (from `Aether/core/Cargo.toml`):
+**Dependencies to Remove** (from `Aleph/core/Cargo.toml`):
 ```toml
 once_cell = "1.19"          # Line 27 - Use std::sync::OnceLock/LazyLock instead
 async-trait = "0.1"         # Line 29 - Use native async fn in traits
@@ -191,7 +191,7 @@ If issues arise during migration:
 ## Implementation Notes
 
 ### Critical Safety Checks
-1. **UniFFI Compatibility**: Verify `aether.udl` schema remains valid with UniFFI 0.28
+1. **UniFFI Compatibility**: Verify `aleph.udl` schema remains valid with UniFFI 0.28
 2. **Trait Object Safety**: Ensure `dyn AiProvider` still works with native async traits
 3. **Swift Binding Generation**: Confirm `uniffi-bindgen generate` produces identical output
 4. **FFI Boundary**: No changes to memory layout or public API signatures

@@ -40,7 +40,7 @@ impl Default for ConfigWatcherConfig {
     fn default() -> Self {
         Self {
             config_path: dirs::home_dir()
-                .map(|h| h.join(".aether/config.toml"))
+                .map(|h| h.join(".aleph/config.toml"))
                 .unwrap_or_else(|| PathBuf::from("config.toml")),
             debounce_duration: Duration::from_millis(500),
             channel_capacity: 16,

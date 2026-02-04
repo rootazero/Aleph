@@ -9,7 +9,7 @@ Aleph uses a JSON5 configuration file at `~/.aleph/config.json`.
   // Agent configuration
   agents: {
     defaults: {
-      workspace: "~/aether-workspace",
+      workspace: "~/aleph-workspace",
       model: "anthropic/claude-sonnet-4",
       thinking: "medium",
     },
@@ -89,7 +89,7 @@ agents: {
     // Group chat behavior
     groupChat: {
       requireMention: true,
-      prefix: "@aether"
+      prefix: "@aleph"
     }
   }]
 }
@@ -193,24 +193,24 @@ Configuration changes are automatically detected and applied:
 
 ```bash
 # Manual reload
-aether config reload
+aleph config reload
 
 # Watch for changes
-aether gateway run --watch-config
+aleph gateway run --watch-config
 ```
 
 ## CLI Configuration
 
 ```bash
 # Get a value
-aether config get gateway.port
+aleph config get gateway.port
 
 # Set a value
-aether config set gateway.port 18790
+aleph config set gateway.port 18790
 
 # Open in editor
-aether config edit
+aleph config edit
 
 # Validate configuration
-aether config validate
+aleph config validate
 ```

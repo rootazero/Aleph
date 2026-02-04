@@ -6,16 +6,16 @@
 The macOS client **SHALL** respond to config change notifications from Rust core and update UI accordingly.
 
 #### Scenario: Subscribe to config change events
-- **GIVEN** AppDelegate initializes AetherCore with EventHandler
+- **GIVEN** AppDelegate initializes AlephCore with EventHandler
 - **WHEN** Rust config watcher detects external config.toml modification
 - **THEN** Rust calls `handler.onConfigChanged(new_config)` callback
 - **AND** EventHandler receives callback on background thread
 - **AND** dispatches to main queue with `DispatchQueue.main.async`
-- **AND** posts `NSNotification.Name("AetherConfigDidChange")` with new config
+- **AND** posts `NSNotification.Name("AlephConfigDidChange")` with new config
 
 #### Scenario: Settings window observes config changes
 - **GIVEN** Settings window is open displaying providers list
-- **WHEN** `AetherConfigDidChange` notification is posted
+- **WHEN** `AlephConfigDidChange` notification is posted
 - **THEN** SettingsView receives notification via `.onReceive(NotificationCenter.publisher)`
 - **AND** calls `core.getConfig()` to fetch updated config
 - **AND** all tabs (General, Providers, Routing, Shortcuts, Behavior) refresh with new values
@@ -66,7 +66,7 @@ The macOS client **SHALL** display user-friendly error messages when config oper
 - **AND** Keychain access is denied (e.g., app not authorized)
 - **THEN** Swift catches Keychain error
 - **AND** displays alert with title "Keychain Access Denied"
-- **AND** message: "Aether needs permission to store API keys securely. Please allow access in System Settings."
+- **AND** message: "Aleph needs permission to store API keys securely. Please allow access in System Settings."
 - **AND** "Open System Settings" button to open Security & Privacy pane
 
 ---

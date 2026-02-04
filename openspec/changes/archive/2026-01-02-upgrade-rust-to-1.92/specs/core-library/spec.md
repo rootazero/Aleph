@@ -27,7 +27,7 @@ The system SHALL provide a library-based Rust core that can be compiled as a dyn
 The system SHALL initialize a tokio async runtime to support non-blocking operations for AI API calls, utilizing native async trait implementations without external macro dependencies.
 
 #### Scenario: Runtime initialization
-- **WHEN** AetherCore is initialized
+- **WHEN** AlephCore is initialized
 - **THEN** tokio runtime is created successfully
 - **AND** supports multi-threaded execution
 - **AND** allows spawning async tasks
@@ -82,7 +82,7 @@ The system SHALL use standard library's `Arc::new_zeroed` and `Box::new_zeroed` 
 The system SHALL use UniFFI 0.28 or higher for FFI binding generation, leveraging modern performance optimizations and C string literal support.
 
 #### Scenario: Generate Swift bindings with UniFFI 0.28
-- **WHEN** developer runs `cargo run --bin uniffi-bindgen generate src/aether.udl --language swift`
+- **WHEN** developer runs `cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift`
 - **THEN** the system uses UniFFI 0.28 binding generator
 - **AND** generates Swift bindings compatible with existing UDL schema
 - **AND** utilizes C string literals (c"...") for improved performance where applicable
@@ -91,7 +91,7 @@ The system SHALL use UniFFI 0.28 or higher for FFI binding generation, leveragin
 - **WHEN** UniFFI bindings are regenerated with version 0.28
 - **THEN** the generated Swift API surface SHALL remain unchanged
 - **AND** existing Swift code continues to compile without modifications
-- **AND** no breaking changes to `AetherCore`, `AetherEventHandler`, or exposed types
+- **AND** no breaking changes to `AlephCore`, `AlephEventHandler`, or exposed types
 
 #### Scenario: Verify UniFFI build integration
 - **WHEN** cargo build executes

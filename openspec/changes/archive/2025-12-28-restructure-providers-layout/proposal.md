@@ -59,11 +59,11 @@
 - `settings-ui-layout` - Providers Tab 的布局结构、工具栏、视觉容器
 
 ### Affected Code
-- `Aether/Sources/ProvidersView.swift` - 主要修改
+- `Aleph/Sources/ProvidersView.swift` - 主要修改
   - 添加左侧工具栏布局
   - 添加圆角边框和背景容器
   - 添加 "Add Custom Provider" 按钮处理逻辑
-- `Aether/Sources/Components/Atoms/` - 可能需要新的工具栏组件（如果复用 ActionButton 则不需要）
+- `Aleph/Sources/Components/Atoms/` - 可能需要新的工具栏组件（如果复用 ActionButton 则不需要）
 
 ### Breaking Changes
 无。此变更仅优化 UI 布局，不影响数据模型或配置文件格式。

@@ -1,15 +1,15 @@
-# Aether Logo 图标集成总结
+# Aleph Logo 图标集成总结
 
 ## ✅ 已完成的工作
 
 ### 1. SVG Logo 提取 ✓
-从 `~/Workspace/Aether.html` 提取了 4 种 SVG 变体：
-- **AetherLogo.svg** - 完整彩色 logo（带渐变）
-- **AetherAppIcon.svg** - 应用图标版本（1024x1024，带深色背景）
-- **AetherMenuBar.svg** - 菜单栏图标（单色，template 模式）
-- **AetherSimple.svg** - 简化版（仅主星）
+从 `~/Workspace/Aleph.html` 提取了 4 种 SVG 变体：
+- **AlephLogo.svg** - 完整彩色 logo（带渐变）
+- **AlephAppIcon.svg** - 应用图标版本（1024x1024，带深色背景）
+- **AlephMenuBar.svg** - 菜单栏图标（单色，template 模式）
+- **AlephSimple.svg** - 简化版（仅主星）
 
-**位置**: `Aether/Resources/AppIcon/`
+**位置**: `Aleph/Resources/AppIcon/`
 
 ---
 
@@ -48,7 +48,7 @@
 - ✅ 彩色 logo SVG 已添加
 - ✅ Original rendering 模式
 
-**位置**: `Aether/Assets.xcassets/`
+**位置**: `Aleph/Assets.xcassets/`
 
 ---
 
@@ -63,13 +63,13 @@
 ## 📦 生成的文件清单
 
 ```
-Aether/
+Aleph/
 ├── Resources/
 │   └── AppIcon/
-│       ├── AetherLogo.svg           # 主 logo（彩色）
-│       ├── AetherAppIcon.svg        # 应用图标源文件
-│       ├── AetherMenuBar.svg        # 菜单栏图标
-│       ├── AetherSimple.svg         # 简化版
+│       ├── AlephLogo.svg           # 主 logo（彩色）
+│       ├── AlephAppIcon.svg        # 应用图标源文件
+│       ├── AlephMenuBar.svg        # 菜单栏图标
+│       ├── AlephSimple.svg         # 简化版
 │       ├── AppIcon.icns             # macOS 图标包
 │       ├── AppIcon.iconset/         # PNG 文件目录
 │       ├── IconUsageExamples.swift  # SwiftUI 使用示例
@@ -82,10 +82,10 @@ Aether/
 │   │   ├── ... (共 13 个 PNG 文件)
 │   │   └── Contents.json
 │   ├── MenuBarIcon.imageset/        # 菜单栏图标
-│   │   ├── AetherMenuBar.svg
+│   │   ├── AlephMenuBar.svg
 │   │   └── Contents.json
 │   └── AppLogo.imageset/            # UI logo
-│       ├── AetherLogo.svg
+│       ├── AlephLogo.svg
 │       └── Contents.json
 │
 └── Scripts/
@@ -144,7 +144,7 @@ Image("AppLogo")
 ```
 
 ### 示例代码
-详见 `Aether/Resources/AppIcon/IconUsageExamples.swift`
+详见 `Aleph/Resources/AppIcon/IconUsageExamples.swift`
 
 ---
 
@@ -164,14 +164,14 @@ bash Scripts/generate_app_icon.sh
 python Scripts/setup_app_icons.py
 
 # 4. 手动复制 PNG 到 appiconset
-cp Aether/Resources/AppIcon/AppIcon.iconset/*.png \
-   Aether/Assets.xcassets/AppIcon.appiconset/
+cp Aleph/Resources/AppIcon/AppIcon.iconset/*.png \
+   Aleph/Assets.xcassets/AppIcon.appiconset/
 
 # 5. 重新生成 Xcode 项目
 xcodegen generate
 
 # 6. 构建
-xcodebuild -project Aether.xcodeproj -scheme Aether build
+xcodebuild -project Aleph.xcodeproj -scheme Aleph build
 ```
 
 ---
@@ -192,8 +192,8 @@ xcodebuild -project Aether.xcodeproj -scheme Aether build
 
 ## 📚 相关文档
 
-- `Aether/Resources/AppIcon/README.md` - 图标集成详细指南
-- `Aether/Resources/AppIcon/IconUsageExamples.swift` - SwiftUI 代码示例
+- `Aleph/Resources/AppIcon/README.md` - 图标集成详细指南
+- `Aleph/Resources/AppIcon/IconUsageExamples.swift` - SwiftUI 代码示例
 - `Scripts/extract_aether_logo.py` - SVG 提取脚本源码
 - `Scripts/generate_app_icon.sh` - PNG 生成脚本源码
 

@@ -130,7 +130,7 @@ A similarity-based caching layer using text embeddings:
   - `core/src/dispatcher/model_router/orchestrated_router.rs` - Integration
   - `core/src/dispatcher/model_router/matcher.rs` - Feature-aware routing
   - `core/src/lib.rs` - UniFFI exports for cache stats
-  - `platforms/macos/Aether/Sources/` - Cache statistics UI
+  - `platforms/macos/Aleph/Sources/` - Cache statistics UI
 - **Dependencies**:
   - `tiktoken-rs` - Token counting
   - `sqlite-vec` - Vector similarity search (already in project)

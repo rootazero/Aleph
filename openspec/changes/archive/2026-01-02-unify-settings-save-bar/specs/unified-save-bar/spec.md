@@ -210,7 +210,7 @@ Each settings tab SHALL implement the `FormStateful` protocol to track unsaved c
 - **GIVEN** a settings tab loads
 - **WHEN** the view appears
 - **THEN** the tab SHALL:
-  - Load `savedState` from `AetherCore.loadConfig()`
+  - Load `savedState` from `AlephCore.loadConfig()`
   - Initialize `workingCopy` as a copy of `savedState`
   - Set `hasUnsavedChanges` to `false` initially
 - **AND** when user edits any form field:
@@ -222,7 +222,7 @@ Each settings tab SHALL implement the `FormStateful` protocol to track unsaved c
 - **GIVEN** the user clicks Save
 - **WHEN** the save operation executes
 - **THEN** the tab SHALL:
-  - Call `AetherCore.updateConfig(workingCopy)` (or equivalent API)
+  - Call `AlephCore.updateConfig(workingCopy)` (or equivalent API)
   - Update `savedState = workingCopy` on success
   - Set `hasUnsavedChanges` to `false`
   - Disable Save/Cancel buttons

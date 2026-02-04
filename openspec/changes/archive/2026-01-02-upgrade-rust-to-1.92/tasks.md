@@ -21,7 +21,7 @@
 - **Estimated Time**: 5 minutes
 
 ### Task 1.3: Establish Baseline Metrics
-- [ ] Run full test suite: `cd Aether/core && cargo test`
+- [ ] Run full test suite: `cd Aleph/core && cargo test`
 - [ ] Measure build time: `cargo clean && time cargo build --release`
 - [ ] Capture binary size: `ls -lh target/release/libaethecore.dylib`
 - [ ] Document metrics in commit message or notes
@@ -107,14 +107,14 @@
 ## Phase 3: UniFFI Bindings & Build Verification
 
 ### Task 3.1: Regenerate UniFFI Bindings
-- [ ] Navigate to core directory: `cd Aether/core`
+- [ ] Navigate to core directory: `cd Aleph/core`
 - [ ] Regenerate Swift bindings:
   ```bash
-  cargo run --bin uniffi-bindgen generate src/aether.udl \
+  cargo run --bin uniffi-bindgen generate src/aleph.udl \
     --language swift \
     --out-dir ../Sources/Generated/
   ```
-- [ ] Compare generated `aether.swift` with previous version
+- [ ] Compare generated `aleph.swift` with previous version
 - [ ] Verify no breaking API changes in generated Swift code
 - [ ] Check for new UniFFI 0.28 optimizations (C string literals)
 - **Validation**: Swift bindings regenerate successfully, no breaking changes
@@ -132,11 +132,11 @@
 - **Estimated Time**: 5 minutes
 
 ### Task 3.3: Build macOS Client
-- [ ] Navigate to project root: `cd /Users/zouguojun/Workspace/Aether`
+- [ ] Navigate to project root: `cd /Users/zouguojun/Workspace/Aleph`
 - [ ] Regenerate Xcode project: `xcodegen generate`
 - [ ] Build from command line:
   ```bash
-  xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build
+  xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Release build
   ```
 - [ ] Verify no Swift compilation errors
 - [ ] Check for any UniFFI-related warnings
@@ -181,7 +181,7 @@
 ## Phase 5: Final Validation
 
 ### Task 5.1: Manual Testing (macOS)
-- [ ] Launch Aether app
+- [ ] Launch Aleph app
 - [ ] Verify hotkey detection works (Cmd+~)
 - [ ] Test clipboard operations (text and images)
 - [ ] Test AI provider integration (OpenAI, Claude, Ollama)

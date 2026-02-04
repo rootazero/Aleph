@@ -95,7 +95,7 @@ impl StateSnapshot {
 /// 3. Creating and restoring snapshots for rollback
 ///
 /// The Worker trait is designed to be implemented by different backends:
-/// - `AgentLoopWorker`: Integrates with the Aether agent loop
+/// - `AgentLoopWorker`: Integrates with the Aleph agent loop
 /// - `MockWorker`: For testing POE orchestration logic
 #[async_trait]
 pub trait Worker: Send + Sync {
@@ -327,7 +327,7 @@ impl LoopCallback for PoeLoopCallback {
 // AgentLoopWorker
 // ============================================================================
 
-/// Worker implementation that integrates with the Aether AgentLoop.
+/// Worker implementation that integrates with the Aleph AgentLoop.
 ///
 /// This worker executes instructions through the real AgentLoop, tracking
 /// artifacts and supporting abort/cancellation via watch channels.

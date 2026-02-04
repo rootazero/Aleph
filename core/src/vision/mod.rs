@@ -1,4 +1,4 @@
-//! Vision capability for Aether
+//! Vision capability for Aleph
 //!
 //! This module provides native screen understanding capabilities using AI vision models.
 //! It supports OCR text extraction and image description using the user's configured

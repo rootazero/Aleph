@@ -1,4 +1,4 @@
-//! Agent Loop - Core execution engine for Aether
+//! Agent Loop - Core execution engine for Aleph
 //!
 //! This module implements the Agent Loop architecture, a unified
 //! observe-think-act-feedback cycle for executing user tasks.

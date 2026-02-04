@@ -12,11 +12,11 @@ This document summarizes the implementation of **Section 4: Audio Feedback Syste
 ### 1. Audio Assets (Task 4.1)
 
 #### Created Files:
-- `Aether/Resources/Sounds/listening.aiff` - Placeholder (Pop.aiff)
-- `Aether/Resources/Sounds/processing.aiff` - Placeholder (Tink.aiff)
-- `Aether/Resources/Sounds/success.aiff` - Placeholder (Glass.aiff)
-- `Aether/Resources/Sounds/error.aiff` - Placeholder (Basso.aiff)
-- `Aether/Resources/Sounds/README.md` - Production requirements doc
+- `Aleph/Resources/Sounds/listening.aiff` - Placeholder (Pop.aiff)
+- `Aleph/Resources/Sounds/processing.aiff` - Placeholder (Tink.aiff)
+- `Aleph/Resources/Sounds/success.aiff` - Placeholder (Glass.aiff)
+- `Aleph/Resources/Sounds/error.aiff` - Placeholder (Basso.aiff)
+- `Aleph/Resources/Sounds/README.md` - Production requirements doc
 
 #### Specifications:
 - **Format**: AIFF (Audio Interchange File Format)
@@ -33,7 +33,7 @@ Current sounds are functional placeholders. For production:
 
 ### 2. AudioManager Implementation (Task 4.2)
 
-**File**: `Aether/Sources/Audio/AudioManager.swift`
+**File**: `Aleph/Sources/Audio/AudioManager.swift`
 
 #### Architecture:
 ```swift
@@ -82,7 +82,7 @@ class AudioManager {
 
 ### 3. State Transition Integration (Task 4.3)
 
-**File**: `Aether/Sources/EventHandler.swift` (modified)
+**File**: `Aleph/Sources/EventHandler.swift` (modified)
 
 #### Changes:
 Added audio playback calls in `handleStateChange()` and `handleTypedError()`:
@@ -116,7 +116,7 @@ case .error:
 
 ### 4. Menu Bar Toggle (Task 4.4)
 
-**File**: `Aether/Sources/AppDelegate.swift` (modified)
+**File**: `Aleph/Sources/AppDelegate.swift` (modified)
 
 #### UI Changes:
 Added menu item to status bar dropdown:
@@ -216,18 +216,18 @@ AppDelegate
 ## Files Modified/Created
 
 ### Created:
-- `Aether/Sources/Audio/AudioManager.swift` ✨
-- `Aether/Resources/Sounds/listening.aiff`
-- `Aether/Resources/Sounds/processing.aiff`
-- `Aether/Resources/Sounds/success.aiff`
-- `Aether/Resources/Sounds/error.aiff`
-- `Aether/Resources/Sounds/README.md`
+- `Aleph/Sources/Audio/AudioManager.swift` ✨
+- `Aleph/Resources/Sounds/listening.aiff`
+- `Aleph/Resources/Sounds/processing.aiff`
+- `Aleph/Resources/Sounds/success.aiff`
+- `Aleph/Resources/Sounds/error.aiff`
+- `Aleph/Resources/Sounds/README.md`
 - `AUDIO_TESTING_GUIDE.md` ✨
 
 ### Modified:
-- `Aether/Sources/EventHandler.swift`
+- `Aleph/Sources/EventHandler.swift`
   - Added AudioManager calls in state handlers
-- `Aether/Sources/AppDelegate.swift`
+- `Aleph/Sources/AppDelegate.swift`
   - Added sound toggle menu item
   - Added toggle handler
 
@@ -371,7 +371,7 @@ All tasks from Section 4 (halo-audio-feedback) are implemented:
 
 1. **Build and Run**:
    ```bash
-   cd /Users/zouguojun/Workspace/Aether
+   cd /Users/zouguojun/Workspace/Aleph
    xcodegen generate
    open Aleph.xcodeproj
    # Click Run (Cmd+R)

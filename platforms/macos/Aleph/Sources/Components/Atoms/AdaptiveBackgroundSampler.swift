@@ -1,6 +1,6 @@
 //
 //  AdaptiveBackgroundSampler.swift
-//  Aether
+//  Aleph
 //
 //  Adaptive background sampling for Liquid Glass windows.
 //  Uses system appearance and simplified detection for adaptive overlay opacity.

@@ -2,7 +2,7 @@
 
 ## Why
 
-Aether currently has **two disconnected execution systems**:
+Aleph currently has **two disconnected execution systems**:
 
 1. **Agent Loop** (`agent_loop/mod.rs`) - Single-tool sequential execution via `Decision::UseTool`
 2. **DAG Scheduler** (`dispatcher/scheduler/dag.rs`) - Full DAG parallel execution, but only accessible via FFI
@@ -32,7 +32,7 @@ This architecture gap prevents the LLM from leveraging parallel execution capabi
 
 ### New Tool: batch_execute
 
-Add `batch_execute` as a native AetherTool that allows LLM to:
+Add `batch_execute` as a native AlephTool that allows LLM to:
 - Execute multiple tool calls in parallel (up to 25)
 - Aggregate results and return them in a structured format
 

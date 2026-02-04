@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document details the technical design for enhancing Aether's routing rule system to support context-aware matching, per-rule system prompts, and clear fallback behavior.
+This document details the technical design for enhancing Aleph's routing rule system to support context-aware matching, per-rule system prompts, and clear fallback behavior.
 
 ## Architecture
 
@@ -55,7 +55,7 @@ AI Provider processes with final prompt
 
 ### 1. Context String Builder
 
-**Location**: `Aether/core/src/core.rs`
+**Location**: `Aleph/core/src/core.rs`
 
 **Method**: `build_routing_context(window_context: &CapturedContext, clipboard: &str) -> String`
 
@@ -87,7 +87,7 @@ fn extract_app_name(bundle_id: &str) -> &str {
 
 **Example Outputs**:
 ```
-Discuss Q1 roadmap for Aether project
+Discuss Q1 roadmap for Aleph project
 ---
 [Notes] Meeting Notes.txt
 
@@ -97,7 +97,7 @@ Discuss Q1 roadmap for Aether project
 
 fn process_clipboard() { ... }
 ---
-[VSCode] main.rs - Aether
+[VSCode] main.rs - Aleph
 ```
 
 **Matching Rules**:
@@ -107,7 +107,7 @@ fn process_clipboard() { ... }
 
 ### 2. Router Enhancement
 
-**Location**: `Aether/core/src/router/mod.rs`
+**Location**: `Aleph/core/src/router/mod.rs`
 
 #### 2.1 Updated `Router::route()` Method
 
@@ -190,7 +190,7 @@ async fn process(
 
 #### 3.1 Rule Management API
 
-**Location**: `Aether/core/src/config/mod.rs`
+**Location**: `Aleph/core/src/config/mod.rs`
 
 **New Methods**:
 ```rust
@@ -206,7 +206,7 @@ impl Config {
             self.rules.remove(index);
             Ok(())
         } else {
-            Err(AetherError::invalid_config(
+            Err(AlephError::invalid_config(
                 format!("Rule index {} out of bounds", index)
             ))
         }
@@ -215,7 +215,7 @@ impl Config {
     /// Move rule from one index to another
     pub fn move_rule(&mut self, from: usize, to: usize) -> Result<()> {
         if from >= self.rules.len() || to >= self.rules.len() {
-            return Err(AetherError::invalid_config("Invalid rule indices"));
+            return Err(AlephError::invalid_config("Invalid rule indices"));
         }
         let rule = self.rules.remove(from);
         self.rules.insert(to, rule);
@@ -231,7 +231,7 @@ impl Config {
 
 #### 3.2 Enhanced Validation
 
-**Location**: `Aether/core/src/config/mod.rs`
+**Location**: `Aleph/core/src/config/mod.rs`
 
 **Addition to `Config::validate()`**:
 ```rust
@@ -254,7 +254,7 @@ if self.rules.is_empty() {
 
 ### 4. UniFFI Interface Updates
 
-**Location**: `Aether/core/src/aether.udl`
+**Location**: `Aleph/core/src/aleph.udl`
 
 **Current `CapturedContext` Dictionary**:
 ```idl
@@ -436,7 +436,7 @@ default_provider = "claude"
 
 **Scenario**: No rules match and `default_provider` is not configured
 - **Result**: `Router::route()` returns `None`
-- **Error**: `AetherError::NoProviderAvailable`
+- **Error**: `AlephError::NoProviderAvailable`
 - **User Experience**: Error notification shown, no AI processing
 
 ### Edge Case 4: Rule Matches but Provider Disabled
@@ -490,7 +490,7 @@ debug!(duration_us = duration.as_micros(), "Routing completed");
 
 ### Unit Tests
 
-**Test File**: `Aether/core/src/router/mod.rs`
+**Test File**: `Aleph/core/src/router/mod.rs`
 
 **Test Cases**:
 ```rust
@@ -526,13 +526,13 @@ fn test_route_system_prompt_priority() {
 
 ### Integration Tests
 
-**Test File**: `Aether/core/src/core.rs`
+**Test File**: `Aleph/core/src/core.rs`
 
 **Test Cases**:
 ```rust
 #[tokio::test]
 async fn test_end_to_end_routing() {
-    // 1. Create AetherCore with config
+    // 1. Create AlephCore with config
     // 2. Set window context
     // 3. Set clipboard content
     // 4. Call process_clipboard()
@@ -644,7 +644,7 @@ provider = "openai"
 
 **Potential CLI Command**:
 ```bash
-aether test-route "[Notes] Doc.txt\nHello world"
+aleph test-route "[Notes] Doc.txt\nHello world"
 # Output: Matched Rule 2 (^\\[Notes\\]) → Provider: openai
 ```
 

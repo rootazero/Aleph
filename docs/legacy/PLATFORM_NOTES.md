@@ -19,7 +19,7 @@ This entitlement is required for simulating keyboard input via Apple Events.
 
 ### Info.plist Configuration
 
-Configure in `Aether/Info.plist`:
+Configure in `Aleph/Info.plist`:
 
 ```xml
 <!-- Hide Dock icon, Menu Bar only -->
@@ -58,8 +58,8 @@ Aleph requires macOS Accessibility permission to:
 - Missing permissions block Rust core initialization
 
 **Files:**
-- `Aether/Sources/Components/PermissionPromptView.swift` - Permission prompt UI
-- `Aether/Sources/AppDelegate.swift` - Permission checking logic (lines 45-68)
+- `Aleph/Sources/Components/PermissionPromptView.swift` - Permission prompt UI
+- `Aleph/Sources/AppDelegate.swift` - Permission checking logic (lines 45-68)
 
 ---
 
@@ -69,7 +69,7 @@ Configure menu bar icon in `AppDelegate`:
 
 ```swift
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-statusItem.button?.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether")
+statusItem.button?.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aleph")
 statusItem.menu = createMenu()
 ```
 
@@ -216,5 +216,5 @@ pub trait InputSimulator {
 ## Related Documentation
 
 - See `docs/TESTING_GUIDE.md` for platform-specific testing procedures
-- See `Aether/core/src/` for platform abstraction implementations
+- See `Aleph/core/src/` for platform abstraction implementations
 - See `docs/accessibility-testing-checklist.md` for permission testing

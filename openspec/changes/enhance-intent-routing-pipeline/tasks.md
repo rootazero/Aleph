@@ -306,16 +306,16 @@ Implementation tasks for the enhanced intent routing pipeline. Tasks are ordered
 
 ---
 
-## Phase 8: AetherCore Integration
+## Phase 8: AlephCore Integration
 
-### Task 8.1: Add Pipeline to AetherCore
+### Task 8.1: Add Pipeline to AlephCore
 **File**: `core/src/core.rs`
 
-- [x] Add `IntentRoutingPipeline` field to `AetherCore`
+- [x] Add `IntentRoutingPipeline` field to `AlephCore`
 - [x] Initialize pipeline in `new()` based on config
 - [x] Add feature flag for pipeline enable/disable
 
-**Validation**: Pipeline initializes with AetherCore
+**Validation**: Pipeline initializes with AlephCore
 
 ### Task 8.2: Route Through Pipeline
 **File**: `core/src/core.rs`

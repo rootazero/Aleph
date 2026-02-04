@@ -9,7 +9,7 @@
 
 ## 🎯 Executive Summary
 
-Successfully implemented a complete default provider management system for Aether, enabling users to:
+Successfully implemented a complete default provider management system for Aleph, enabling users to:
 1. Set a default AI provider from Settings UI
 2. Switch default provider from menu bar with one click
 3. View visual indicators for the current default provider
@@ -29,20 +29,20 @@ Successfully implemented a complete default provider management system for Aethe
 
 ### Code Changes
 
-#### Rust Core (`Aether/core/`)
+#### Rust Core (`Aleph/core/`)
 - ✅ `src/config/mod.rs`: Added `get_default_provider()` and `set_default_provider()`
 - ✅ `src/router/mod.rs`: Updated to use validated default provider with fallback
 - ✅ `src/core.rs`: Exposed default provider methods via UniFFI
-- ✅ `src/aether.udl`: Updated UniFFI interface definition
+- ✅ `src/aleph.udl`: Updated UniFFI interface definition
 - ✅ Regenerated UniFFI bindings for Swift
 
-#### Swift UI (`Aether/Sources/`)
+#### Swift UI (`Aleph/Sources/`)
 - ✅ `ProvidersView.swift`: Added default provider state tracking and `isDefault()` helper
 - ✅ `Components/Molecules/SimpleProviderCard.swift`: Added "Default" badge display
 - ✅ `Components/Organisms/ProviderEditPanel.swift`: Added "Set as Default" button
 - ✅ `AppDelegate.swift`: Implemented dynamic menu bar provider list with quick switch
 
-#### Localization (`Aether/Resources/`)
+#### Localization (`Aleph/Resources/`)
 - ✅ `en.lproj/Localizable.strings`: Added 13 new English strings
 - ✅ `zh-Hans.lproj/Localizable.strings`: Added 13 new Chinese translations
 
@@ -74,7 +74,7 @@ Successfully implemented a complete default provider management system for Aethe
 └─────────────────┬───────────────────┘
                   │ File I/O
 ┌─────────────────▼───────────────────┐
-│  Config File (~/.aether/     │
+│  Config File (~/.aleph/     │
 │              config.toml)           │
 │  [general]                          │
 │  default_provider = "openai"        │
@@ -172,7 +172,7 @@ All 6 success criteria **ACHIEVED** ✅:
 1. ✅ **Users can set default provider in Settings UI** - "Set as Default" button in ProviderEditPanel
 2. ✅ **Users can switch default provider from menu bar** - Dynamic provider list with checkmarks
 3. ✅ **Visual indicator shows current default** - Blue "Default" badge in provider cards
-4. ✅ **Config persists across restarts** - Saved to `~/.aether/config.toml`
+4. ✅ **Config persists across restarts** - Saved to `~/.aleph/config.toml`
 5. ✅ **Disabled providers cannot be set as default** - Validation in Rust Core
 6. ✅ **Graceful fallback when default is unavailable** - Router falls back to first enabled provider
 
@@ -204,7 +204,7 @@ All 6 success criteria **ACHIEVED** ✅:
 ## 📝 Implementation Statistics
 
 ### Files Modified
-- **Rust**: 4 files (config/mod.rs, router/mod.rs, core.rs, aether.udl)
+- **Rust**: 4 files (config/mod.rs, router/mod.rs, core.rs, aleph.udl)
 - **Swift**: 4 files (ProvidersView, SimpleProviderCard, ProviderEditPanel, AppDelegate)
 - **Localization**: 2 files (en.lproj, zh-Hans.lproj)
 - **Documentation**: 3 new files (INTEGRATION_TEST_REPORT.md, CODE_REVIEW_CHECKLIST.md, IMPLEMENTATION_SUMMARY.md)
@@ -226,7 +226,7 @@ All 6 success criteria **ACHIEVED** ✅:
 
 ## 🎉 Conclusion
 
-The default provider selection feature is **fully implemented and ready for deployment**. All code has been written, tested (automated + manual checklist), documented, and reviewed. The implementation follows Aether's architectural principles:
+The default provider selection feature is **fully implemented and ready for deployment**. All code has been written, tested (automated + manual checklist), documented, and reviewed. The implementation follows Aleph's architectural principles:
 
 - ✅ **Native-First**: No webviews, pure SwiftUI
 - ✅ **Rust Core**: Business logic in Rust for safety and performance

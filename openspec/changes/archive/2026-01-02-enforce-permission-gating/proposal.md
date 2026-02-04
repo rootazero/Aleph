@@ -10,7 +10,7 @@
 
 ## Why
 
-Aether requires both **Accessibility** and **Input Monitoring** permissions to function correctly. Currently, users can dismiss permission prompts and access settings without granting these permissions, leading to a broken experience where core functionality (global hotkeys, clipboard operations) fails silently.
+Aleph requires both **Accessibility** and **Input Monitoring** permissions to function correctly. Currently, users can dismiss permission prompts and access settings without granting these permissions, leading to a broken experience where core functionality (global hotkeys, clipboard operations) fails silently.
 
 Without mandatory permission gating, we face:
 - Users attempting to use features that require permissions but haven't granted them
@@ -60,12 +60,12 @@ This change enforces a blocking permission setup flow at app launch, ensuring us
 - **MODIFIED**: `event-handler` - Add permission status monitoring callbacks
 
 **Affected code:**
-- `Aether/Sources/AppDelegate.swift` - Add permission gate logic before settings window
-- `Aether/Sources/Components/PermissionPromptView.swift` - Reuse for individual permission prompts
-- `Aether/Sources/AetherApp.swift` - May need to handle permission gate window
-- `Aether/Info.plist` - Add NSAppleEventsUsageDescription for Input Monitoring
-- **NEW**: `Aether/Sources/Components/PermissionGateView.swift`
-- **NEW**: `Aether/Sources/Utils/PermissionStatusMonitor.swift`
+- `Aleph/Sources/AppDelegate.swift` - Add permission gate logic before settings window
+- `Aleph/Sources/Components/PermissionPromptView.swift` - Reuse for individual permission prompts
+- `Aleph/Sources/AlephApp.swift` - May need to handle permission gate window
+- `Aleph/Info.plist` - Add NSAppleEventsUsageDescription for Input Monitoring
+- **NEW**: `Aleph/Sources/Components/PermissionGateView.swift`
+- **NEW**: `Aleph/Sources/Utils/PermissionStatusMonitor.swift`
 
 **Dependencies:**
 - macOS 13+ (for IOHIDRequestAccess API for Input Monitoring)

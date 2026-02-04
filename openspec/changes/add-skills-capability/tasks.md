@@ -51,8 +51,8 @@
 - [ ] 3.1.4 Add default values for SkillsConfig
 - [ ] 3.1.5 Update config loading/parsing
 
-### 3.2 AetherCore Integration
-- [ ] 3.2.1 Add `SkillsRegistry` initialization in `AetherCore::new()`
+### 3.2 AlephCore Integration
+- [ ] 3.2.1 Add `SkillsRegistry` initialization in `AlephCore::new()`
 - [ ] 3.2.2 Register `SkillsStrategy` with `CompositeCapabilityExecutor`
 - [ ] 3.2.3 Pass `SkillsConfig` to strategy creation
 - [ ] 3.2.4 Add skills directory creation on first launch
@@ -122,8 +122,8 @@
 ## Phase 7: UniFFI Interface
 
 ### 7.1 UDL Definitions
-- [ ] 7.1.1 Add `SkillInfo` dictionary type to `aether.udl`
-- [ ] 7.1.2 Add `list_skills()` method to AetherCore
+- [ ] 7.1.1 Add `SkillInfo` dictionary type to `aleph.udl`
+- [ ] 7.1.2 Add `list_skills()` method to AlephCore
 - [ ] 7.1.3 Add `get_skill(id)` method
 - [ ] 7.1.4 Add `reload_skills()` method
 
@@ -135,7 +135,7 @@
 
 ### 7.3 Generate Bindings
 - [ ] 7.3.1 Run `uniffi-bindgen generate` to update Swift bindings
-- [ ] 7.3.2 Verify generated `aether.swift` compiles
+- [ ] 7.3.2 Verify generated `aleph.swift` compiles
 - [ ] 7.3.3 Test Swift calls to new methods
 
 ## Phase 8: Module Exports and lib.rs

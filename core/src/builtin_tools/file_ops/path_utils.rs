@@ -15,7 +15,7 @@ pub fn get_denied_paths() -> Vec<String> {
         "~/.aws".to_string(),
     ];
 
-    // Add specific Aether config files (not the entire directory)
+    // Add specific Aleph config files (not the entire directory)
     // We allow the output directory but deny sensitive config files
     if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
         info!(config_dir = %config_dir.display(), "FileOpsTool: config_dir for denied_paths");

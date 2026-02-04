@@ -470,7 +470,7 @@ Configure web fetching behavior.
 |-------|------|---------|-------------|
 | `max_content_length` | Integer | `10000` | Max extracted content length |
 | `min_content_length` | Integer | `100` | Min content to accept selector match |
-| `user_agent` | String | `"Aether/1.0"` | User agent string |
+| `user_agent` | String | `"Aleph/1.0"` | User agent string |
 | `timeout_seconds` | Integer | `30` | Request timeout |
 
 #### [policies.text]
@@ -607,7 +607,7 @@ Configure media generation providers for image, video, audio, and speech generat
 | `default_video_provider` | String | `null` | Default provider for video generation |
 | `default_audio_provider` | String | `null` | Default provider for audio generation |
 | `default_speech_provider` | String | `null` | Default provider for speech/TTS |
-| `output_dir` | String | `~/Downloads/aether-gen` | Output directory for generated files |
+| `output_dir` | String | `~/Downloads/aleph-gen` | Output directory for generated files |
 | `auto_paste_threshold_mb` | Integer | `5` | Files larger than this are saved to disk |
 | `background_task_threshold_seconds` | Integer | `30` | Duration threshold for background tasks |
 | `smart_routing_enabled` | Boolean | `true` | Enable smart routing based on capabilities |
@@ -636,7 +636,7 @@ Configure media generation providers for image, video, audio, and speech generat
 ```toml
 [generation]
 default_image_provider = "dalle"
-output_dir = "~/Downloads/aether-gen"
+output_dir = "~/Downloads/aleph-gen"
 auto_paste_threshold_mb = 5
 smart_routing_enabled = true
 

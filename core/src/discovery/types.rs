@@ -6,8 +6,8 @@ use std::path::PathBuf;
 /// Source of a discovered component
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DiscoverySource {
-    /// Aether native global (~/.aleph/)
-    AetherGlobal,
+    /// Aleph native global (~/.aleph/)
+    AlephGlobal,
     /// Claude Code global (~/.claude/)
     ClaudeGlobal,
     /// Project-level (./.claude/ in project directory)
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_discovery_source_read_only() {
-        assert!(!DiscoverySource::AetherGlobal.is_read_only());
+        assert!(!DiscoverySource::AlephGlobal.is_read_only());
         assert!(DiscoverySource::ClaudeGlobal.is_read_only());
         assert!(DiscoverySource::Project.is_read_only());
         assert!(!DiscoverySource::Plugin.is_read_only());
@@ -216,7 +216,7 @@ mod tests {
     fn test_discovered_component_qualified_name() {
         let path_info = DiscoveredPath::new(
             PathBuf::from("/path/to/my-skill"),
-            DiscoverySource::AetherGlobal,
+            DiscoverySource::AlephGlobal,
             0,
         );
 

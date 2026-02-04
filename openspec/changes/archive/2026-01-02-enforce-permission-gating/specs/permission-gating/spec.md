@@ -121,7 +121,7 @@ The system SHALL prevent access to settings window and all app features until pe
 
 #### Scenario: Block core functionality
 - **WHEN** permission gate is active
-- **THEN** the system does not initialize AetherCore
+- **THEN** the system does not initialize AlephCore
 - **AND** global hotkeys are not registered
 - **AND** clipboard monitoring is disabled
 - **AND** menu bar shows "waiting for permissions" state

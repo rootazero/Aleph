@@ -1,8 +1,8 @@
-# Design: Intelligent Dispatcher Layer (Aether Cortex)
+# Design: Intelligent Dispatcher Layer (Aleph Cortex)
 
 ## Context
 
-Aether currently has a functional routing system (`Router`) that matches user input against regex rules. However, it lacks:
+Aleph currently has a functional routing system (`Router`) that matches user input against regex rules. However, it lacks:
 
 1. **Unified tool discovery** - Tools are scattered across McpClient, SkillsRegistry, and hardcoded Native handlers
 2. **Intelligent intent detection** - No LLM-based fallback for ambiguous inputs

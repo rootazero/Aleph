@@ -1,6 +1,6 @@
 /*
   Localizable.strings (Simplified Chinese)
-  Aether
+  Aleph
 
   简体中文本地化字符串。
   所有 UI 文本应通过 NSLocalizedString() 或 LocalizedStringKey 使用这些键。
@@ -35,7 +35,7 @@
 "user_input.placeholder" = "输入您的回复...";
 
 // MARK: - Settings Window - Sidebar
-"settings.sidebar.title" = "Aether";
+"settings.sidebar.title" = "Aleph";
 
 // MARK: - Settings Window - General Tab
 "settings.general.title" = "通用";
@@ -49,18 +49,18 @@
 "settings.general.sound_effects" = "音效";
 "settings.general.startup" = "启动";
 "settings.general.launch_at_login" = "登录时启动";
-"settings.general.launch_at_login_description" = "登录 Mac 时自动启动 Aether。";
+"settings.general.launch_at_login_description" = "登录 Mac 时自动启动 Aleph。";
 "settings.general.launch_at_login_error" = "更改登录启动设置失败";
 "settings.general.language" = "语言";
 "settings.general.language_preference" = "首选语言";
 "settings.general.language_system_default" = "跟随系统";
 "settings.general.language_restart_title" = "需要重启";
-"settings.general.language_restart_message" = "语言将在重启 Aether 后更改。是否立即重启？";
+"settings.general.language_restart_message" = "语言将在重启 Aleph 后更改。是否立即重启？";
 "settings.general.language_restart_now" = "立即重启";
 "settings.general.language_restart_later" = "稍后";
 "settings.general.updates" = "更新";
 "settings.general.check_updates" = "检查更新";
-"settings.general.check_updates_help" = "检查 Aether 更新";
+"settings.general.check_updates_help" = "检查 Aleph 更新";
 "settings.general.logs" = "日志";
 "settings.general.view_logs" = "查看日志";
 "settings.general.view_logs_help" = "查看应用程序日志";
@@ -208,9 +208,9 @@
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "快捷键";
-"settings.shortcuts.description" = "配置 Aether 的全局快捷键。";
+"settings.shortcuts.description" = "配置 Aleph 的全局快捷键。";
 "settings.shortcuts.global_hotkey" = "全局热键";
-"settings.shortcuts.summon_label" = "召唤 Aether：";
+"settings.shortcuts.summon_label" = "召唤 Aleph：";
 "settings.shortcuts.cancel_hotkey" = "取消热键";
 "settings.shortcuts.record_instruction" = "按任意组合键来录制...";
 "settings.shortcuts.press_escape" = "按 Escape 取消";
@@ -218,7 +218,7 @@
 "settings.shortcuts.preset_button" = "选择预设...";
 "settings.shortcuts.saved" = "已保存！";
 "settings.shortcuts.permission_required" = "需要权限";
-"settings.shortcuts.permission_description" = "Aether 需要**辅助功能**权限来检测全局热键。";
+"settings.shortcuts.permission_description" = "Aleph 需要**辅助功能**权限来检测全局热键。";
 "settings.shortcuts.why_needed" = "为什么需要此权限：";
 "settings.shortcuts.permission_detect" = "在任意应用中检测双击 Shift 热键（默认）";
 "settings.shortcuts.permission_read" = "读取剪贴板内容";
@@ -228,9 +228,9 @@
 "settings.shortcuts.preset_sheet_description" = "选择一个常用的快捷键组合：";
 "settings.shortcuts.use_this_button" = "使用此项";
 "settings.shortcuts.current_hotkey" = "当前：";
-"settings.shortcuts.double_tap_shift_description" = "快速按两次 Shift 键来召唤 Aether。这是推荐的方式，可以避免输入法冲突。";
-"settings.shortcuts.double_tap_description" = "双击指定的键来召唤 Aether。此方法可绕过输入法拦截。";
-"settings.shortcuts.modifier_combo_description" = "使用修饰键组合其他键来召唤 Aether。请确保不与系统或应用程序快捷键冲突。";
+"settings.shortcuts.double_tap_shift_description" = "快速按两次 Shift 键来召唤 Aleph。这是推荐的方式，可以避免输入法冲突。";
+"settings.shortcuts.double_tap_description" = "双击指定的键来召唤 Aleph。此方法可绕过输入法拦截。";
+"settings.shortcuts.modifier_combo_description" = "使用修饰键组合其他键来召唤 Aleph。请确保不与系统或应用程序快捷键冲突。";
 "settings.shortcuts.reset_default" = "恢复默认";
 "settings.shortcuts.custom_hotkey" = "自定义热键";
 "settings.shortcuts.presets" = "预设快捷键";
@@ -257,11 +257,11 @@
 
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "行为";
-"settings.behavior.description" = "配置 Aether 如何捕获输入和传递输出。";
+"settings.behavior.description" = "配置 Aleph 如何捕获输入和传递输出。";
 "settings.behavior.input_mode" = "输入模式";
-"settings.behavior.input_mode_description" = "Aether 应该如何捕获您选中的文本？";
+"settings.behavior.input_mode_description" = "Aleph 应该如何捕获您选中的文本？";
 "settings.behavior.output_mode" = "输出模式";
-"settings.behavior.output_mode_description" = "Aether 应该如何传递 AI 响应？";
+"settings.behavior.output_mode_description" = "Aleph 应该如何传递 AI 响应？";
 "settings.behavior.typing_speed" = "打字速度";
 "settings.behavior.typing_speed_label" = "速度：";
 "settings.behavior.speed_slow" = "慢";
@@ -327,7 +327,7 @@
 "settings.mcp.enable" = "启用 MCP 能力";
 "settings.mcp.enable_description" = "允许 AI 模型访问已配置的 MCP 工具以增强功能。";
 "settings.mcp.builtin_services" = "内置服务";
-"settings.mcp.builtin_services_description" = "内置服务直接在 Aether 中运行，无需外部依赖。";
+"settings.mcp.builtin_services_description" = "内置服务直接在 Aleph 中运行，无需外部依赖。";
 "settings.mcp.service.fs" = "文件系统";
 "settings.mcp.service.fs_description" = "在允许的目录中读取、写入和列出文件。";
 "settings.mcp.service.git" = "Git";
@@ -351,7 +351,7 @@
 "settings.mcp.no_tools" = "暂无可用工具。启用服务以查看可用工具。";
 "settings.mcp.requires_confirmation" = "需要确认";
 "settings.mcp.restart_title" = "需要重启";
-"settings.mcp.restart_message" = "MCP 服务更改将在重启 Aether 后生效。";
+"settings.mcp.restart_message" = "MCP 服务更改将在重启 Aleph 后生效。";
 
 // Master-Detail UI (redesign-mcp-settings-ui)
 "settings.mcp.server_list.builtin" = "系统工具";
@@ -427,7 +427,7 @@
 "settings.plugins.install_first" = "安装第一个插件";
 "settings.plugins.loading" = "正在加载插件...";
 "settings.plugins.empty_title" = "暂无已安装的插件";
-"settings.plugins.empty_description" = "插件可以通过技能、智能体、钩子和 MCP 服务器扩展 Aether 的能力。\n从 Git 仓库或 ZIP 文件安装插件。";
+"settings.plugins.empty_description" = "插件可以通过技能、智能体、钩子和 MCP 服务器扩展 Aleph 的能力。\n从 Git 仓库或 ZIP 文件安装插件。";
 "settings.plugins.git_url" = "Git 仓库 URL";
 "settings.plugins.git_url_placeholder" = "https://github.com/user/plugin-repo";
 "settings.plugins.git_url_example" = "示例：https://github.com/user/my-plugin.git";
@@ -448,7 +448,7 @@
 
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "记忆管理";
-"settings.memory.description" = "Aether 会记住过去的交互以提供上下文感知的响应。所有数据都存储在本地，永远不会离开您的设备。";
+"settings.memory.description" = "Aleph 会记住过去的交互以提供上下文感知的响应。所有数据都存储在本地，永远不会离开您的设备。";
 "settings.memory.enabled" = "启用记忆";
 "settings.memory.configuration" = "配置";
 "settings.memory.retention_policy" = "保留策略：";
@@ -475,7 +475,7 @@
 "settings.memory.clear_all_button" = "清除全部";
 "settings.memory.loading_memories" = "加载记忆中...";
 "settings.memory.no_memories" = "尚无存储的记忆";
-"settings.memory.no_memories_message" = "启用记忆功能后使用 Aether，记忆将显示在此处。";
+"settings.memory.no_memories_message" = "启用记忆功能后使用 Aleph，记忆将显示在此处。";
 "settings.memory.delete_memory" = "删除记忆";
 "settings.memory.delete_memory_message" = "您确定要删除此记忆吗？此操作无法撤销。";
 "settings.memory.delete_memory_help" = "删除此记忆";
@@ -502,8 +502,8 @@
 
 // MARK: - Menu Bar
 "menu.settings" = "设置...";
-"menu.quit" = "退出 Aether";
-"menu.about" = "关于 Aether";
+"menu.quit" = "退出 Aleph";
+"menu.about" = "关于 Aleph";
 "menu.show_conversation" = "显示对话窗口";
 "menu.default_provider" = "默认提供商";
 "menu.no_providers" = "无可用提供商";
@@ -526,18 +526,18 @@
 
 // MARK: - Permissions
 "permission.accessibility.title" = "需要辅助功能权限";
-"permission.accessibility.description" = "Aether 需要辅助功能权限来检测全局快捷键并模拟键盘输入。";
+"permission.accessibility.description" = "Aleph 需要辅助功能权限来检测全局快捷键并模拟键盘输入。";
 "permission.screen_recording.title" = "需要屏幕录制权限";
-"permission.screen_recording.description" = "Aether 需要屏幕录制权限来支持 OCR 文字识别和屏幕截图功能。";
+"permission.screen_recording.description" = "Aleph 需要屏幕录制权限来支持 OCR 文字识别和屏幕截图功能。";
 "permission.input_monitoring.title" = "需要输入监控权限";
-"permission.input_monitoring.description" = "Aether 需要输入监控权限来捕获键盘事件。";
+"permission.input_monitoring.description" = "Aleph 需要输入监控权限来捕获键盘事件。";
 "permission.open_settings" = "打开系统设置";
 "permission.grant_instruction" = "请在系统设置中授予权限，然后返回此应用。";
 "permission.button.later" = "稍后设置";
 "permission.instruction.step1" = "点击下方「打开系统设置」按钮";
 "permission.instruction.step2" = "找到「隐私与安全性」→「辅助功能」";
-"permission.instruction.step3" = "在列表中找到 Aether 并勾选";
-"permission.instruction.step4" = "返回 Aether，热键将自动生效";
+"permission.instruction.step3" = "在列表中找到 Aleph 并勾选";
+"permission.instruction.step4" = "返回 Aleph，热键将自动生效";
 
 // MARK: - Permission Gate View
 "permission.gate.step1_title" = "步骤 1/3：辅助功能权限";
@@ -546,13 +546,13 @@
 "permission.gate.accessibility_short" = "辅助功能";
 "permission.gate.screen_recording_short" = "屏幕录制";
 "permission.gate.input_monitoring_short" = "输入监控";
-"permission.gate.accessibility_description" = "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入，以便将 AI 响应粘贴到您的应用程序中。";
-"permission.gate.screen_recording_description" = "Aether 需要屏幕录制权限来支持 OCR 文字识别和屏幕截图功能。";
-"permission.gate.input_monitoring_description" = "Aether 需要输入监控权限来检测全局热键（默认：双击 Shift 键），让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予所有权限后，请点击「进入 Aether」按钮重启应用。";
+"permission.gate.accessibility_description" = "Aleph 需要辅助功能权限来捕获窗口上下文和模拟键盘输入，以便将 AI 响应粘贴到您的应用程序中。";
+"permission.gate.screen_recording_description" = "Aleph 需要屏幕录制权限来支持 OCR 文字识别和屏幕截图功能。";
+"permission.gate.input_monitoring_description" = "Aleph 需要输入监控权限来检测全局热键（默认：双击 Shift 键），让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予所有权限后，请点击「进入 Aleph」按钮重启应用。";
 "permission.gate.status_granted" = "已授权 ✓";
 "permission.gate.status_waiting" = "等待授权...";
 "permission.gate.button.continue" = "继续";
-"permission.gate.button.enter_aether" = "进入 Aether";
+"permission.gate.button.enter_aether" = "进入 Aleph";
 
 // MARK: - Error Messages
 "error.provider.invalid_api_key" = "无效的 API 密钥。请检查您的凭据。";
@@ -563,7 +563,7 @@
 "error.permission.input_monitoring_denied" = "输入监控权限被拒绝。";
 "error.general.unknown" = "发生未知错误。";
 "error.title" = "错误";
-"error.aether" = "Aether 错误";
+"error.aether" = "Aleph 错误";
 "error.no_clipboard_text" = "剪贴板中没有文本";
 "error.no_clipboard_text.suggestion" = "请先选择要处理的文本";
 "error.no_text_in_window" = "当前窗口没有文本内容";
@@ -593,21 +593,21 @@
 "logs.help.close" = "关闭日志查看器";
 
 // MARK: - Log Viewer Empty State
-"logs.empty.first_run" = "未找到日志文件。Aether 执行操作后，日志将显示在此处。";
-"logs.empty.no_logs" = "未找到日志文件。Aether 执行操作后，日志将显示在此处。";
+"logs.empty.first_run" = "未找到日志文件。Aleph 执行操作后，日志将显示在此处。";
+"logs.empty.no_logs" = "未找到日志文件。Aleph 执行操作后，日志将显示在此处。";
 
 // MARK: - About Dialog
-"alert.about.title" = "Aether";
+"alert.about.title" = "Aleph";
 "alert.about.message" = "macOS AI 中间件\n版本 %@\n\n将 AI 智能带到您的光标。";
 
 // MARK: - Context Capture Alerts
 "alert.context.accessibility_title" = "需要辅助功能权限";
-"alert.context.accessibility_message" = "Aether 需要辅助功能权限以捕获窗口上下文用于记忆功能。\n\n请在以下位置授予权限：\n系统设置 → 隐私与安全性 → 辅助功能";
+"alert.context.accessibility_message" = "Aleph 需要辅助功能权限以捕获窗口上下文用于记忆功能。\n\n请在以下位置授予权限：\n系统设置 → 隐私与安全性 → 辅助功能";
 "alert.context.open_settings" = "打开设置";
 
 // MARK: - Restart Alerts
 "alert.restart.failed_title" = "应用重启失败";
-"alert.restart.failed_message" = "在授予权限后 Aether 无法自动重启。\n\n错误：%@\n\n请从应用程序文件夹手动重新启动 Aether。";
+"alert.restart.failed_message" = "在授予权限后 Aleph 无法自动重启。\n\n错误：%@\n\n请从应用程序文件夹手动重新启动 Aleph。";
 
 // MARK: - Halo Overlay
 "halo.state.idle" = "空闲";
@@ -688,7 +688,7 @@
 "unified.enter_to_send" = "Enter 发送";
 "unified.command_mode" = "命令模式";
 "unified.focus_warning.title" = "请先点击输入框";
-"unified.focus_warning.message" = "将光标移动到输入框后再呼出 Aether";
+"unified.focus_warning.message" = "将光标移动到输入框后再呼出 Aleph";
 "unified.accessibility_warning.title" = "需要辅助功能权限";
 "unified.accessibility_warning.message" = "请在系统设置中授予辅助功能权限以获得更好的体验";
 

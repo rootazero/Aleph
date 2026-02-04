@@ -1,6 +1,6 @@
 //
 //  UnifiedSaveBar.swift
-//  Aether
+//  Aleph
 //
 //  Unified save/cancel bar component for all settings tabs.
 //  Displays at bottom of content area with status message and action buttons.

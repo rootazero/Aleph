@@ -1,4 +1,4 @@
-# SwiftLint Configuration for Aether macOS
+# SwiftLint Configuration for Aleph macOS
 # https://github.com/realm/SwiftLint
 
 # ============================================================================
@@ -6,12 +6,12 @@
 # ============================================================================
 
 included:
-  - Aether/Sources
+  - Aleph/Sources
 
 excluded:
-  - Aether/Sources/Generated  # UniFFI generated code
-  - AetherTests
-  - AetherUITests
+  - Aleph/Sources/Generated  # UniFFI generated code
+  - AlephTests
+  - AlephUITests
   - .build
   - Pods
   - Carthage

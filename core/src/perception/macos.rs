@@ -348,7 +348,7 @@ fn default_snapshot_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| {
         AlephError::tool("Failed to resolve home directory for snapshots")
     })?;
-    Ok(home.join(".aether").join("snapshots"))
+    Ok(home.join(".aleph").join("snapshots"))
 }
 
 fn image_dimensions(data: &[u8]) -> (u32, u32) {

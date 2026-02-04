@@ -25,8 +25,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] ThemeEngine initializes with default theme (zen)
 
 **Files**:
-- `Aether/Sources/Themes/Theme.swift` (new)
-- `Aether/Sources/Themes/ThemeEngine.swift` (new)
+- `Aleph/Sources/Themes/Theme.swift` (new)
+- `Aleph/Sources/Themes/ThemeEngine.swift` (new)
 
 ---
 
@@ -47,7 +47,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] Animation runs smoothly at 60fps
 
 **Files**:
-- `Aether/Sources/Themes/ZenTheme.swift` (new)
+- `Aleph/Sources/Themes/ZenTheme.swift` (new)
 
 ---
 
@@ -68,8 +68,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] Scanline overlay visible but subtle
 
 **Files**:
-- `Aether/Sources/Themes/CyberpunkTheme.swift` (new)
-- `Aether/Sources/Themes/Effects/GlitchOverlay.swift` (new)
+- `Aleph/Sources/Themes/CyberpunkTheme.swift` (new)
+- `Aleph/Sources/Themes/Effects/GlitchOverlay.swift` (new)
 
 ---
 
@@ -90,8 +90,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] Core pulsing animation smooth
 
 **Files**:
-- `Aether/Sources/Themes/JarvisTheme.swift` (new)
-- `Aether/Sources/Themes/Shapes/HexSegment.swift` (new)
+- `Aleph/Sources/Themes/JarvisTheme.swift` (new)
+- `Aleph/Sources/Themes/Shapes/HexSegment.swift` (new)
 
 ---
 
@@ -112,8 +112,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] No crashes when switching themes during animation
 
 **Files**:
-- `Aether/Sources/HaloWindow.swift` (modify)
-- `Aether/Sources/HaloView.swift` (modify)
+- `Aleph/Sources/HaloWindow.swift` (modify)
+- `Aleph/Sources/HaloView.swift` (modify)
 
 ---
 
@@ -134,8 +134,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] Selection persists after app restart
 
 **Files**:
-- `Aether/Sources/SettingsView.swift` (modify)
-- `Aether/Assets.xcassets/ThemePreviews/` (new)
+- `Aleph/Sources/SettingsView.swift` (modify)
+- `Aleph/Assets.xcassets/ThemePreviews/` (new)
 
 ---
 
@@ -155,8 +155,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] Snapshot tests capture all 3 themes in all states
 
 **Files**:
-- `AetherTests/Themes/ThemeEngineTests.swift` (new)
-- `AetherTests/Themes/ThemeSnapshotTests.swift` (new)
+- `AlephTests/Themes/ThemeEngineTests.swift` (new)
+- `AlephTests/Themes/ThemeSnapshotTests.swift` (new)
 
 ---
 
@@ -167,9 +167,9 @@ Tasks are organized by capability, with clear dependencies and validation criter
 **Parallelizable**: Yes
 
 **Work**:
-- Add `on_response_chunk(text: String)` callback to `aether.udl`
+- Add `on_response_chunk(text: String)` callback to `aleph.udl`
 - Regenerate Swift bindings
-- Update `AetherEventHandler` trait in Rust
+- Update `AlephEventHandler` trait in Rust
 
 **Validation**:
 - [x] UniFFI bindings generate without errors
@@ -177,9 +177,9 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] Rust trait updated with new method
 
 **Files**:
-- `Aether/core/src/aether.udl` (modify)
-- `Aether/core/src/event_handler.rs` (modify)
-- `Aether/Sources/Generated/aether.swift` (regenerated)
+- `Aleph/core/src/aleph.udl` (modify)
+- `Aleph/core/src/event_handler.rs` (modify)
+- `Aleph/Sources/Generated/aleph.swift` (regenerated)
 
 ---
 
@@ -198,7 +198,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] No breaking changes to existing state transitions
 
 **Files**:
-- `Aether/Sources/HaloState.swift` (modify)
+- `Aleph/Sources/HaloState.swift` (modify)
 
 ---
 
@@ -219,7 +219,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] Monospace font for code, sans-serif for prose
 
 **Files**:
-- `Aether/Sources/Components/StreamingTextView.swift` (new)
+- `Aleph/Sources/Components/StreamingTextView.swift` (new)
 
 ---
 
@@ -240,7 +240,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] No layout issues on multi-monitor setups
 
 **Files**:
-- `Aether/Sources/HaloView.swift` (modify)
+- `Aleph/Sources/HaloView.swift` (modify)
 
 ---
 
@@ -261,7 +261,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] Edge case: empty chunks handled gracefully
 
 **Files**:
-- `Aether/Sources/EventHandler.swift` (modify)
+- `Aleph/Sources/EventHandler.swift` (modify)
 
 ---
 
@@ -282,8 +282,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] No memory leaks or crashes
 
 **Files**:
-- `Aether/core/src/core.rs` (modify - add test method)
-- `Aether/core/src/aether.udl` (modify - add test method)
+- `Aleph/core/src/core.rs` (modify - add test method)
+- `Aleph/core/src/aleph.udl` (modify - add test method)
 
 ---
 
@@ -303,7 +303,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [x] No flicker or visual glitches in tests
 
 **Files**:
-- `AetherTests/Streaming/StreamingTextTests.swift` (new)
+- `AlephTests/Streaming/StreamingTextTests.swift` (new)
 
 ---
 
@@ -314,7 +314,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 **Parallelizable**: Yes
 
 **Work**:
-- Add `ErrorType` enum to `aether.udl` (Network, Permission, Quota, Timeout, Unknown)
+- Add `ErrorType` enum to `aleph.udl` (Network, Permission, Quota, Timeout, Unknown)
 - Add `on_error_typed(ErrorType, String)` callback
 - Regenerate Swift bindings
 
@@ -324,8 +324,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Rust can instantiate all error types
 
 **Files**:
-- `Aether/core/src/aether.udl` (modify)
-- `Aether/Sources/Generated/aether.swift` (regenerated)
+- `Aleph/core/src/aleph.udl` (modify)
+- `Aleph/Sources/Generated/aleph.swift` (regenerated)
 
 ---
 
@@ -343,7 +343,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] No breaking changes to existing error handling
 
 **Files**:
-- `Aether/Sources/HaloState.swift` (modify)
+- `Aleph/Sources/HaloState.swift` (modify)
 
 ---
 
@@ -364,8 +364,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Error message wraps properly
 
 **Files**:
-- `Aether/Sources/Components/ErrorActionView.swift` (new)
-- `Aether/Sources/Styles/HaloButtonStyle.swift` (new)
+- `Aleph/Sources/Components/ErrorActionView.swift` (new)
+- `Aleph/Sources/Styles/HaloButtonStyle.swift` (new)
 
 ---
 
@@ -386,8 +386,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Shake animation plays on error state
 
 **Files**:
-- `Aether/Sources/HaloView.swift` (modify)
-- `Aether/Sources/EventHandler.swift` (modify - add retry method)
+- `Aleph/Sources/HaloView.swift` (modify)
+- `Aleph/Sources/EventHandler.swift` (modify - add retry method)
 
 ---
 
@@ -396,7 +396,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 **Parallelizable**: Yes
 
 **Work**:
-- Add `retry_last_request()` method to `AetherCore`
+- Add `retry_last_request()` method to `AlephCore`
 - Store last request context (clipboard content, provider)
 - Implement retry with exponential backoff (2s, 4s, 8s)
 - Max 2 auto-retries, then manual retry only
@@ -408,8 +408,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] State transitions correctly on retry success/failure
 
 **Files**:
-- `Aether/core/src/core.rs` (modify)
-- `Aether/core/src/aether.udl` (modify - add method)
+- `Aleph/core/src/core.rs` (modify)
+- `Aleph/core/src/aleph.udl` (modify - add method)
 
 ---
 
@@ -444,7 +444,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - Design/source 4 sound effects (listening, processing, success, error)
 - Format as 16-bit PCM AIFF files
 - Keep duration < 200ms (except processing loop)
-- Add to `Aether/Resources/Sounds/`
+- Add to `Aleph/Resources/Sounds/`
 
 **Validation**:
 - [ ] All 4 sound files present
@@ -453,10 +453,10 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Files load in macOS QuickTime Player
 
 **Files**:
-- `Aether/Resources/Sounds/listening.aiff` (new)
-- `Aether/Resources/Sounds/processing.aiff` (new)
-- `Aether/Resources/Sounds/success.aiff` (new)
-- `Aether/Resources/Sounds/error.aiff` (new)
+- `Aleph/Resources/Sounds/listening.aiff` (new)
+- `Aleph/Resources/Sounds/processing.aiff` (new)
+- `Aleph/Resources/Sounds/success.aiff` (new)
+- `Aleph/Resources/Sounds/error.aiff` (new)
 
 ---
 
@@ -478,7 +478,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Volume set to 30% (not system volume)
 
 **Files**:
-- `Aether/Sources/Audio/AudioManager.swift` (new)
+- `Aleph/Sources/Audio/AudioManager.swift` (new)
 
 ---
 
@@ -498,7 +498,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Disabling sound in settings works immediately
 
 **Files**:
-- `Aether/Sources/EventHandler.swift` (modify)
+- `Aleph/Sources/EventHandler.swift` (modify)
 
 ---
 
@@ -519,7 +519,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Setting persists across app restarts
 
 **Files**:
-- `Aether/Sources/AppDelegate.swift` (modify)
+- `Aleph/Sources/AppDelegate.swift` (modify)
 
 ---
 
@@ -563,7 +563,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Works across all macOS versions (13+)
 
 **Files**:
-- `Aether/Sources/Performance/PerformanceMonitor.swift` (new)
+- `Aleph/Sources/Performance/PerformanceMonitor.swift` (new)
 
 ---
 
@@ -584,7 +584,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Manual override works (for testing)
 
 **Files**:
-- `Aether/Sources/Performance/PerformanceManager.swift` (new)
+- `Aleph/Sources/Performance/PerformanceManager.swift` (new)
 
 ---
 
@@ -605,9 +605,9 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Quality degradation triggers automatically
 
 **Files**:
-- `Aether/Sources/Themes/CyberpunkTheme.swift` (modify)
-- `Aether/Sources/Themes/ZenTheme.swift` (modify)
-- `Aether/Sources/Themes/JarvisTheme.swift` (modify)
+- `Aleph/Sources/Themes/CyberpunkTheme.swift` (modify)
+- `Aleph/Sources/Themes/ZenTheme.swift` (modify)
+- `Aleph/Sources/Themes/JarvisTheme.swift` (modify)
 
 ---
 
@@ -628,7 +628,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] CPU usage < 5% during animation
 
 **Files**:
-- `Aether/Sources/HaloView.swift` (modify - optimizations)
+- `Aleph/Sources/HaloView.swift` (modify - optimizations)
 
 ---
 
@@ -666,13 +666,13 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - Map states to user-friendly text
 
 **Validation**:
-- [ ] VoiceOver announces "Aether listening" on hotkey
+- [ ] VoiceOver announces "Aleph listening" on hotkey
 - [ ] VoiceOver announces "Processing with OpenAI"
 - [ ] VoiceOver announces "Complete" on success
 - [ ] VoiceOver announces "Error: [message]" on error
 
 **Files**:
-- `Aether/Sources/HaloWindow.swift` (modify)
+- `Aleph/Sources/HaloWindow.swift` (modify)
 
 ---
 
@@ -691,7 +691,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Label updates dynamically with state changes
 
 **Files**:
-- `Aether/Sources/HaloWindow.swift` (modify)
+- `Aleph/Sources/HaloWindow.swift` (modify)
 
 ---
 
@@ -733,7 +733,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Encoding/decoding works correctly
 
 **Files**:
-- `Aether/Sources/Models/HaloPreferences.swift` (new)
+- `Aleph/Sources/Models/HaloPreferences.swift` (new)
 
 ---
 
@@ -754,7 +754,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] No crashes on corrupted UserDefaults data
 
 **Files**:
-- `Aether/Sources/Managers/PreferencesManager.swift` (new)
+- `Aleph/Sources/Managers/PreferencesManager.swift` (new)
 
 ---
 
@@ -775,8 +775,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Preferences applied correctly on app launch
 
 **Files**:
-- `Aether/Sources/HaloView.swift` (modify)
-- `Aether/Sources/HaloWindow.swift` (modify - inject manager)
+- `Aleph/Sources/HaloView.swift` (modify)
+- `Aleph/Sources/HaloWindow.swift` (modify - inject manager)
 
 ---
 
@@ -797,7 +797,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Reset button restores defaults
 
 **Files**:
-- `Aether/Sources/SettingsView.swift` (modify)
+- `Aleph/Sources/SettingsView.swift` (modify)
 
 ---
 
@@ -839,7 +839,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] isProcessing defaults to false
 
 **Files**:
-- `Aether/Sources/EventHandler.swift` (modify)
+- `Aleph/Sources/EventHandler.swift` (modify)
 
 ---
 
@@ -860,7 +860,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Operations process sequentially (FIFO)
 
 **Files**:
-- `Aether/Sources/EventHandler.swift` (modify)
+- `Aleph/Sources/EventHandler.swift` (modify)
 
 ---
 
@@ -881,8 +881,8 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Fade animation smooth
 
 **Files**:
-- `Aether/Sources/Components/QueueBadge.swift` (new)
-- `Aether/Sources/HaloView.swift` (modify - add badge)
+- `Aleph/Sources/Components/QueueBadge.swift` (new)
+- `Aleph/Sources/HaloView.swift` (modify - add badge)
 
 ---
 
@@ -1093,7 +1093,7 @@ Tasks are organized by capability, with clear dependencies and validation criter
 - [ ] Screenshots/GIFs added (optional)
 
 **Files**:
-- `Aether/README.md` (modify)
+- `Aleph/README.md` (modify)
 
 ---
 
@@ -1210,7 +1210,7 @@ The critical path for Phase 3 delivery is:
 
 ## Notes
 
-- All file paths are relative to project root (`/Users/zouguojun/Workspace/Aether/`)
+- All file paths are relative to project root (`/Users/zouguojun/Workspace/Aleph/`)
 - "(new)" indicates file creation; "(modify)" indicates editing existing file
 - Manual tests should be documented in TESTING_GUIDE.md with checkbox format
 - Each task should result in a working, testable increment

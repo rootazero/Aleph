@@ -146,7 +146,7 @@
   - `test_missing_context_error()`
   - `test_retrieve_and_augment_with_memory_disabled()`
   - `test_retrieve_and_augment_without_context()`
-  - `test_full_aether_core_memory_pipeline()`
+  - `test_full_aleph_core_memory_pipeline()`
 - [ ] 10.2 Update test imports to reference new module paths
 - [ ] 10.3 Verify tests pass: `cargo test`
 
@@ -155,7 +155,7 @@
 - [ ] 11.1 Create `src/core/mod.rs` with:
   - Module declarations (`mod types; mod memory; ...`)
   - Re-exports (`pub use types::*;`)
-  - `AetherCore` struct definition
+  - `AlephCore` struct definition
   - `new()` constructor
   - `get_router()`, `get_search_registry()` helper methods
   - Remaining core methods not extracted
@@ -171,7 +171,7 @@
 
 - [ ] 12.1 Replace `src/core.rs` content with:
   ```rust
-  //! AetherCore module - Main entry point for the Aether library
+  //! AlephCore module - Main entry point for the Aleph library
   //!
   //! This module is split into submodules for better organization:
   //! - `types`: Shared type definitions
@@ -195,12 +195,12 @@
   #[cfg(test)]
   mod tests;
 
-  // Re-export public types and AetherCore
+  // Re-export public types and AlephCore
   pub use types::*;
 
   // Include the main module implementation
   mod core_impl;
-  pub use core_impl::AetherCore;
+  pub use core_impl::AlephCore;
   ```
 - [ ] 12.2 Or use Rust 2018 `core/mod.rs` pattern (preferred)
 

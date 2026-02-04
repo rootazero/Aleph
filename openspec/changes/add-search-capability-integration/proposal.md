@@ -9,7 +9,7 @@
 
 ## Summary
 
-Implement real-time web search capability for Aether Agent, enabling AI to access up-to-date information beyond training data cutoff. This change integrates multiple third-party search providers (Google, Bing, Tavily, Exa.ai, SearXNG, Brave) through a unified abstraction layer.
+Implement real-time web search capability for Aleph Agent, enabling AI to access up-to-date information beyond training data cutoff. This change integrates multiple third-party search providers (Google, Bing, Tavily, Exa.ai, SearXNG, Brave) through a unified abstraction layer.
 
 **Business Value**:
 - ✅ **Information Timeliness**: Access to latest news, real-time data, current events
@@ -25,7 +25,7 @@ Implement real-time web search capability for Aether Agent, enabling AI to acces
 
 The Structured Context Protocol implementation (change: `implement-structured-context-protocol`) has already **reserved the Search capability interface**:
 
-- ✅ `Capability::Search` enum variant defined in `Aether/core/src/payload/capability.rs`
+- ✅ `Capability::Search` enum variant defined in `Aleph/core/src/payload/capability.rs`
 - ✅ `Intent::BuiltinSearch` for `/search` command classification
 - ✅ `AgentContext.search_results` field reserved (currently `Option<Vec<SearchResult>>`)
 - ⚠️ `SearchResult` struct **not yet defined** (needs creation)

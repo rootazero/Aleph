@@ -20,7 +20,7 @@
 │                    配置系统架构                              │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  ~/.aleph/config.toml          workspace/aether.toml       │
+│  ~/.aleph/config.toml          workspace/aleph.toml       │
 │         │                              │                    │
 │         ▼                              ▼                    │
 │  ┌─────────────┐                ┌─────────────┐            │
@@ -54,17 +54,17 @@
 ## Part 1: Extension Config Migration (JSONC → TOML)
 
 ### Current State
-- `aether.jsonc` in workspace root
+- `aleph.jsonc` in workspace root
 
 ### Target State
-- `aether.toml` in workspace root
+- `aleph.toml` in workspace root
 
 ### File Format Comparison
 
-**Old (aether.jsonc):**
+**Old (aleph.jsonc):**
 ```jsonc
 {
-  "$schema": "https://aether.ai/config.json",
+  "$schema": "https://aleph.ai/config.json",
   "model": "anthropic/claude-opus-4-5",
   "plugin": ["npm:@anthropic/mcp-server-filesystem"],
   "agent": {
@@ -73,10 +73,10 @@
 }
 ```
 
-**New (aether.toml):**
+**New (aleph.toml):**
 ```toml
 # Aleph 项目配置
-# schema: https://aether.ai/config.json
+# schema: https://aleph.ai/config.json
 
 model = "anthropic/claude-opus-4-5"
 plugins = ["npm:@anthropic/mcp-server-filesystem"]
@@ -90,9 +90,9 @@ temperature = 0.7
 
 | Step | Action |
 |------|--------|
-| 1 | New code supports both `aether.toml` and `aether.jsonc` |
-| 2 | Priority: `aether.toml` > `aether.jsonc` > `aether.json` |
-| 3 | Provide `aether config migrate` command for auto-conversion |
+| 1 | New code supports both `aleph.toml` and `aleph.jsonc` |
+| 2 | Priority: `aleph.toml` > `aleph.jsonc` > `aleph.json` |
+| 3 | Provide `aleph config migrate` command for auto-conversion |
 | 4 | Remove JSONC support after 1-2 versions |
 
 ### Code Changes
@@ -183,7 +183,7 @@ pub fn generate_config_schema() -> schemars::schema::RootSchema {
 | `config/types/provider.rs` | `ProviderConfig` |
 | `config/types/general.rs` | `GeneralConfig`, `MemoryConfig` |
 | `config/types/routing.rs` | `RoutingRuleConfig` |
-| `extension/config/types.rs` | `AetherConfig`, `AgentConfigOverride` |
+| `extension/config/types.rs` | `AlephConfig`, `AgentConfigOverride` |
 
 Approximately 20 core structs need `#[derive(JsonSchema)]`.
 
@@ -545,5 +545,5 @@ schemars = { version = "0.8", features = ["chrono"] }
 - [ ] `config.schema` RPC returns valid JSON Schema Draft-07
 - [ ] UI Hints cover all user-facing config fields
 - [ ] Hot reload works for non-gateway config changes
-- [ ] `aether config migrate` converts JSONC to TOML
+- [ ] `aleph config migrate` converts JSONC to TOML
 - [ ] All existing tests pass

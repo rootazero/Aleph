@@ -17,23 +17,23 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 ### ✅ Phase 1: Rust Core - Provider Testing API (Completed via integrate-search-registry)
 
 **Tasks Completed**:
-- [x] Created `ProviderTestResult` struct in `Aether/core/src/search/mod.rs`
+- [x] Created `ProviderTestResult` struct in `Aleph/core/src/search/mod.rs`
 - [x] Implemented `test_search_provider()` method in `SearchRegistry`
   - [x] Minimal test query execution (`"test"` with `max_results = 1`)
   - [x] Latency measurement with `Instant::now()`
   - [x] 5-minute TTL caching to avoid API quota abuse
   - [x] Error classification (auth, network, config)
 - [x] Exported `ProviderTestResult` via UniFFI (dictionary definition in `.udl`)
-- [x] Integrated `SearchRegistry` into `AetherCore` as persistent field
-- [x] Implemented `test_search_provider()` method in `AetherCore`
+- [x] Integrated `SearchRegistry` into `AlephCore` as persistent field
+- [x] Implemented `test_search_provider()` method in `AlephCore`
 - [x] Regenerated Swift bindings with `uniffi-bindgen generate`
 
 **Files Modified**:
-- `Aether/core/src/search/mod.rs` - Added `ProviderTestResult` struct
-- `Aether/core/src/search/registry.rs` - Implemented `test_search_provider()`
-- `Aether/core/src/core.rs` - Added `search_registry` field and `test_search_provider()` method
-- `Aether/core/src/aether.udl` - Added `ProviderTestResult` dictionary and async method
-- `Aether/core/src/lib.rs` - Exported `ProviderTestResult`
+- `Aleph/core/src/search/mod.rs` - Added `ProviderTestResult` struct
+- `Aleph/core/src/search/registry.rs` - Implemented `test_search_provider()`
+- `Aleph/core/src/core.rs` - Added `search_registry` field and `test_search_provider()` method
+- `Aleph/core/src/aleph.udl` - Added `ProviderTestResult` dictionary and async method
+- `Aleph/core/src/lib.rs` - Exported `ProviderTestResult`
 
 **Commits**: 1f28fa6, 47aea26 (via integrate-search-registry)
 
@@ -52,10 +52,10 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 - [x] Exported `PIIConfig` via UniFFI
 
 **Files Modified**:
-- `Aether/core/src/config/mod.rs` - Added `PIIConfig`, migration logic
-- `Aether/core/src/core.rs` - Updated PII config reading
-- `Aether/core/src/aether.udl` - Added `PIIConfig` dictionary
-- `Aether/core/src/lib.rs` - Exported `PIIConfig`
+- `Aleph/core/src/config/mod.rs` - Added `PIIConfig`, migration logic
+- `Aleph/core/src/core.rs` - Updated PII config reading
+- `Aleph/core/src/aleph.udl` - Added `PIIConfig` dictionary
+- `Aleph/core/src/lib.rs` - Exported `PIIConfig`
 
 **Commits**: 6853f15 (via integrate-search-registry)
 
@@ -78,7 +78,7 @@ This document tracks the implementation status of the `add-search-settings-ui` p
   - `context_format = "markdown"` for prompt assembly
 
 **Files Modified**:
-- `Aether/core/src/config/mod.rs` - Updated `Config::default()` to include 3 preset rules
+- `Aleph/core/src/config/mod.rs` - Updated `Config::default()` to include 3 preset rules
 
 **Commit**: bc20fa4
 
@@ -102,7 +102,7 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 - [x] Added icons and colors for each provider
 
 **Files Created**:
-- `Aether/Sources/Models/SearchProviderPreset.swift`
+- `Aleph/Sources/Models/SearchProviderPreset.swift`
 
 **Commits**: 7101141, cf3ce75
 
@@ -141,10 +141,10 @@ This document tracks the implementation status of the `add-search-settings-ui` p
   - Fixed Sendable protocol errors with async closures
 
 **Files Created/Modified**:
-- `Aether/Sources/Components/Molecules/SearchProviderCard.swift` (created)
-- `Aether/Sources/SearchSettingsView.swift` (created)
-- `Aether/Sources/BehaviorSettingsView.swift` (PII removed)
-- `Aether/Sources/DesignSystem/DesignTokens.swift` (borderHover added)
+- `Aleph/Sources/Components/Molecules/SearchProviderCard.swift` (created)
+- `Aleph/Sources/SearchSettingsView.swift` (created)
+- `Aleph/Sources/BehaviorSettingsView.swift` (PII removed)
+- `Aleph/Sources/DesignSystem/DesignTokens.swift` (borderHover added)
 
 **Commits**: 0ca7c32, d501df5
 
@@ -161,8 +161,8 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 - [ ] Implement `validate_command_format()` in `Router`
   - Parse slash commands with whitespace requirement
   - Return `ValidationError::MissingSpace` if no space after command
-- [ ] Add `on_validation_hint()` callback to `AetherEventHandler` in `.udl`
-- [ ] Integrate validation into `AetherCore::process_input()`
+- [ ] Add `on_validation_hint()` callback to `AlephEventHandler` in `.udl`
+- [ ] Integrate validation into `AlephCore::process_input()`
 - [ ] Unit tests for command validation logic
 
 **Estimated Time**: 4 hours
@@ -214,7 +214,7 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 1. **Phase 2: Rust Core - Command Validation** (4h)
    - Add ValidationError type to error.rs
    - Implement validate_command_format() in Router
-   - Add on_validation_hint() callback to AetherEventHandler
+   - Add on_validation_hint() callback to AlephEventHandler
    - Integrate validation into process_input()
    - Unit tests for command validation
 
@@ -242,8 +242,8 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 
 **Current Architecture** (after integrate-search-registry):
 ```rust
-pub struct AetherCore {
-    event_handler: Arc<dyn AetherEventHandler>,
+pub struct AlephCore {
+    event_handler: Arc<dyn AlephEventHandler>,
     runtime: Arc<Runtime>,
     config: Arc<Mutex<Config>>,
     memory_db: Option<Arc<VectorDatabase>>,
@@ -251,7 +251,7 @@ pub struct AetherCore {
     search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>, // ✅ ADDED
 }
 
-impl AetherCore {
+impl AlephCore {
     // ✅ Async method for provider testing
     pub async fn test_search_provider(&self, provider_name: String) -> ProviderTestResult {
         let registry_arc = {

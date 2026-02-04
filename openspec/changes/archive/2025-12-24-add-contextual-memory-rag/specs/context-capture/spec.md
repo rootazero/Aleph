@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The context-capture capability enables Aether to capture the active application and window context (app bundle ID + window title) at the moment of user interaction, providing context anchors for memory storage and retrieval.
+The context-capture capability enables Aleph to capture the active application and window context (app bundle ID + window title) at the moment of user interaction, providing context anchors for memory storage and retrieval.
 
 ## ADDED Requirements
 

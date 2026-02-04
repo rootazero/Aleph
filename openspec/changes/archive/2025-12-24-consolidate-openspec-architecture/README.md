@@ -8,7 +8,7 @@
 
 当前项目存在多个 OpenSpec 目录，导致混乱：
 - `/openspec/` - 主目录
-- `/Aether/openspec/` - 重复副本
+- `/Aleph/openspec/` - 重复副本
 - 深度嵌套的 openspec 结构（4-5 层）
 
 ## 解决方案
@@ -21,7 +21,7 @@
 
 ## 影响范围
 
-- **删除**: `/Aether/openspec/` 整个目录
+- **删除**: `/Aleph/openspec/` 整个目录
 - **清理**: 嵌套的 openspec、.DS_Store 文件
 - **更新**: .gitignore、文档引用
 - **不影响**: 功能代码、CLI 工具

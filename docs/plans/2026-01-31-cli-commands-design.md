@@ -15,7 +15,7 @@
 ## Command Structure
 
 ```
-aether
+aleph
 ├── start                    # 启动 Gateway (已有)
 ├── stop                     # 停止 Gateway (已有)
 ├── status                   # Gateway 状态 (已有)
@@ -117,39 +117,39 @@ All commands support `--json` flag for machine-readable output.
 
 ```bash
 # Usage
-aether gateway call <method> [--params <json>] [--url <ws://...>] [--timeout <ms>]
+aleph gateway call <method> [--params <json>] [--url <ws://...>] [--timeout <ms>]
 
 # Examples
-aether gateway call health
-aether gateway call config.get --params '{"path": "general"}'
-aether gateway call agent.run --params '{"message": "Hello"}' --timeout 30000
+aleph gateway call health
+aleph gateway call config.get --params '{"path": "general"}'
+aleph gateway call agent.run --params '{"message": "Hello"}' --timeout 30000
 ```
 
 ### config commands
 
 ```bash
 # Get all config
-aether config get [--json]
+aleph config get [--json]
 
 # Get specific path
-aether config get general.language
-aether config get providers.openai
+aleph config get general.language
+aleph config get providers.openai
 
 # Set value
-aether config set general.language "zh-Hans"
-aether config set providers.openai.model "gpt-4o"
+aleph config set general.language "zh-Hans"
+aleph config set providers.openai.model "gpt-4o"
 
 # Edit in $EDITOR
-aether config edit
+aleph config edit
 
 # Validate
-aether config validate
+aleph config validate
 
 # Hot reload
-aether config reload
+aleph config reload
 
 # Output JSON Schema
-aether config schema [--output <file>]
+aleph config schema [--output <file>]
 ```
 
 **RPC Mapping:**
@@ -166,11 +166,11 @@ aether config schema [--output <file>]
 
 ```bash
 # List all channels
-aether channels list [--json]
+aleph channels list [--json]
 # Output: name, type, status, connected_at
 
 # Channel status
-aether channels status telegram
+aleph channels status telegram
 ```
 
 **RPC Mapping:**
@@ -184,14 +184,14 @@ aether channels status telegram
 
 ```bash
 # List cron jobs
-aether cron list [--json]
+aleph cron list [--json]
 # Output: id, schedule, description, last_run, next_run
 
 # Cron service status
-aether cron status
+aleph cron status
 
 # Trigger job manually
-aether cron run <job-id>
+aleph cron run <job-id>
 ```
 
 **RPC Mapping:**
@@ -231,11 +231,11 @@ core/src/
 
 ## Success Criteria
 
-- [ ] `aether gateway call health` returns Gateway health
-- [ ] `aether config get` shows full configuration
-- [ ] `aether config set` modifies config via RPC
-- [ ] `aether config schema` outputs JSON Schema
-- [ ] `aether channels list` shows channel status
-- [ ] `aether cron list` shows scheduled jobs
+- [ ] `aleph gateway call health` returns Gateway health
+- [ ] `aleph config get` shows full configuration
+- [ ] `aleph config set` modifies config via RPC
+- [ ] `aleph config schema` outputs JSON Schema
+- [ ] `aleph channels list` shows channel status
+- [ ] `aleph cron list` shows scheduled jobs
 - [ ] All commands support `--json` output
 - [ ] Error handling with clear messages

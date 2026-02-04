@@ -1,6 +1,6 @@
 //
 //  AgentProgressView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI component for displaying Agent execution progress.
 //  Shows current operation, overall progress, and completion status.

@@ -1,6 +1,6 @@
 //
 //  PluginsSettingsView.swift
-//  Aether
+//  Aleph
 //
 //  Claude Code compatible plugins management UI.
 //  Supports installing plugins from Git repositories or ZIP files.
@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 
 struct PluginsSettingsView: View {
     // Dependencies
-    let core: AetherCore
+    let core: AlephCore
     @Binding var hasUnsavedChanges: Bool
 
     // State

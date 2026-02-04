@@ -216,7 +216,7 @@ impl ToolRegistry {
         if let Some(bridge) = self.mcp_tools.get(name) {
             return bridge.execute(args).await;
         }
-        Err(AetherError::ToolNotFound(name.to_string()))
+        Err(AlephError::ToolNotFound(name.to_string()))
     }
 }
 ```

@@ -390,7 +390,7 @@ pub async fn start_worldmodel(
 ) -> Result<Arc<WorldModel>> {
     let persistence = Arc::new(StatePersistence::new(
         config.state_path.unwrap_or_else(|| {
-            dirs::home_dir().unwrap().join(".aether/worldmodel_state.json")
+            dirs::home_dir().unwrap().join(".aleph/worldmodel_state.json")
         })
     ));
 

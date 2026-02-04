@@ -1,6 +1,6 @@
 //
 //  AlertHelper.swift
-//  Aether
+//  Aleph
 //
 //  Utility functions for showing common alert dialogs
 //  (refactor-occams-razor-v2: Consolidated NSAlert creation patterns)

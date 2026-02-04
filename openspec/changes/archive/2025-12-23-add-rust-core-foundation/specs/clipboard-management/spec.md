@@ -50,8 +50,8 @@ The system SHALL define a `ClipboardManager` trait to enable swappable implement
 #### Scenario: Implement ClipboardManager trait
 - **WHEN** creating a new clipboard backend
 - **THEN** it must implement `read_text()` and `write_text()`
-- **AND** methods return `Result<T, AetherError>`
-- **AND** trait supports dependency injection into AetherCore
+- **AND** methods return `Result<T, AlephError>`
+- **AND** trait supports dependency injection into AlephCore
 
 #### Scenario: Mock clipboard in tests
 - **WHEN** testing clipboard-dependent logic
@@ -79,7 +79,7 @@ The system SHALL handle all clipboard operation errors gracefully without panick
 
 #### Scenario: Clipboard access denied
 - **WHEN** system denies clipboard access (e.g., sandboxing)
-- **THEN** operation returns `AetherError::ClipboardError`
+- **THEN** operation returns `AlephError::ClipboardError`
 - **AND** error message indicates permission issue
 - **AND** application continues running
 

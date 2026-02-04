@@ -17,12 +17,12 @@ The system SHALL define routing rules that map input patterns to AI providers.
 - **WHEN** loading `[[rules]]` array from config.toml
 - **THEN** each rule is parsed into `RoutingRule` struct
 - **AND** rules are stored in order (first-match priority)
-- **AND** invalid regex causes `AetherError::InvalidConfig`
+- **AND** invalid regex causes `AlephError::InvalidConfig`
 
 #### Scenario: Validate rule provider references
 - **WHEN** rule references a provider name
 - **THEN** provider must exist in `[providers]` section
-- **AND** missing provider causes `AetherError::InvalidConfig`
+- **AND** missing provider causes `AlephError::InvalidConfig`
 - **AND** error message lists available providers
 
 ### Requirement: Router Initialization
@@ -72,7 +72,7 @@ The system SHALL match input against rules using regex.
 - **WHEN** no rule matches the input
 - **AND** no default provider is configured
 - **THEN** `route()` returns `None`
-- **AND** caller receives `AetherError::NoProviderAvailable`
+- **AND** caller receives `AlephError::NoProviderAvailable`
 
 ### Requirement: Provider Selection
 The system SHALL return the appropriate provider for matched input.
@@ -136,13 +136,13 @@ The system SHALL handle routing errors gracefully.
 
 #### Scenario: Invalid regex in config
 - **WHEN** rule regex is syntactically invalid
-- **THEN** `Router::new()` returns `AetherError::InvalidConfig`
+- **THEN** `Router::new()` returns `AlephError::InvalidConfig`
 - **AND** error message includes regex pattern
 - **AND** error message includes regex parse error
 
 #### Scenario: Provider not found
 - **WHEN** rule references non-existent provider
-- **THEN** `Router::new()` returns `AetherError::InvalidConfig`
+- **THEN** `Router::new()` returns `AlephError::InvalidConfig`
 - **AND** error message lists available providers
 - **AND** error message includes rule pattern
 
@@ -178,12 +178,12 @@ The system SHALL validate routing configuration at load time.
 
 #### Scenario: Detect duplicate provider names
 - **WHEN** config has duplicate `[providers.name]` sections
-- **THEN** error type is `AetherError::InvalidConfig`
+- **THEN** error type is `AlephError::InvalidConfig`
 - **AND** error message lists duplicate names
 
 #### Scenario: Validate required rule fields
 - **WHEN** rule is missing `regex` or `provider` field
-- **THEN** error type is `AetherError::InvalidConfig`
+- **THEN** error type is `AlephError::InvalidConfig`
 - **AND** error message indicates missing field
 
 #### Scenario: Warn on unreachable rules

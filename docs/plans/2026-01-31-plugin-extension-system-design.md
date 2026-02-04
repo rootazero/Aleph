@@ -15,7 +15,7 @@ This document describes the design for Aleph's Plugin & Extension system, enabli
 | Runtime Model | **Hybrid** (WASM + Node.js IPC) | Native performance + npm ecosystem |
 | API Scope | **Full** (9 registration types) | Complete Moltbot compatibility |
 | Discovery Layers | **4 layers** (config > workspace > global > bundled) | Flexible override mechanism |
-| Manifest Format | **Dual** (package.json / aether.plugin.json) | npm + standalone support |
+| Manifest Format | **Dual** (package.json / aleph.plugin.json) | npm + standalone support |
 | Node.js IPC | **JSON-RPC over stdio** | Simple, debuggable, reliable |
 | WASM Runtime | **Extism** | Purpose-built for plugins |
 
@@ -64,7 +64,7 @@ Priority 1 (highest): Config-specified paths
   config.plugins.extra_paths: ["/custom/plugins"]
 
 Priority 2: Workspace local
-  ./.aether/extensions/
+  ./.aleph/extensions/
   ./.claude/extensions/     (Claude Code compatibility)
 
 Priority 3: Global user-level
@@ -72,7 +72,7 @@ Priority 3: Global user-level
   ~/.claude/extensions/     (compatibility)
 
 Priority 4 (lowest): Bundled
-  <aether-binary>/bundled/
+  <aleph-binary>/bundled/
 ```
 
 ### Discovery Types
@@ -95,8 +95,8 @@ pub enum PluginOrigin {
 }
 
 pub enum PluginKind {
-    Wasm,       // .wasm file + aether.plugin.json
-    NodeJs,     // package.json + "aether" field
+    Wasm,       // .wasm file + aleph.plugin.json
+    NodeJs,     // package.json + "aleph" field
     Static,     // SKILL.md / COMMAND.md / AGENT.md
 }
 ```
@@ -113,10 +113,10 @@ Same-ID plugins: keep highest priority origin, mark others as `overridden`.
 
 ```json
 {
-  "name": "@aether/my-plugin",
+  "name": "@aleph/my-plugin",
   "version": "1.0.0",
   "main": "dist/index.js",
-  "aether": {
+  "aleph": {
     "extensions": ["src/index.ts"],
     "configSchema": {
       "type": "object",
@@ -131,7 +131,7 @@ Same-ID plugins: keep highest priority origin, mark others as `overridden`.
 }
 ```
 
-### Format B: aether.plugin.json (WASM/standalone plugins)
+### Format B: aleph.plugin.json (WASM/standalone plugins)
 
 ```json
 {
@@ -333,9 +333,9 @@ impl WasmRuntime {
 
 ```rust
 // SDK for plugin authors
-use aether_plugin_sdk::*;
+use aleph_plugin_sdk::*;
 
-#[aether_plugin]
+#[aleph_plugin]
 pub fn register(api: &mut PluginApi) {
     api.register_tool(Tool {
         name: "hello",
@@ -354,16 +354,16 @@ fn hello_handler(input: ToolInput) -> ToolOutput {
 
 ```rust
 // Host capabilities callable by WASM plugins
-host_fn!(pub fn aether_log(level: i32, msg: &str));
-host_fn!(pub fn aether_http_get(url: &str) -> String);
-host_fn!(pub fn aether_read_file(path: &str) -> String);  // requires permission
-host_fn!(pub fn aether_emit_event(event: &str, data: &str));
+host_fn!(pub fn aleph_log(level: i32, msg: &str));
+host_fn!(pub fn aleph_http_get(url: &str) -> String);
+host_fn!(pub fn aleph_read_file(path: &str) -> String);  // requires permission
+host_fn!(pub fn aleph_emit_event(event: &str, data: &str));
 ```
 
 ### Permission Sandbox
 
 - WASM has no filesystem/network access by default
-- `permissions: ["network"]` required for `aether_http_get`
+- `permissions: ["network"]` required for `aleph_http_get`
 - `permissions: ["filesystem:read"]` required for file reading
 
 ---
@@ -453,8 +453,8 @@ core/src/extension/
 │   └── resolver.rs          # Conflict resolution, priority
 ├── manifest/
 │   ├── mod.rs               # Unified manifest parsing
-│   ├── package_json.rs      # package.json + aether field
-│   ├── aether_plugin.rs     # aether.plugin.json
+│   ├── package_json.rs      # package.json + aleph field
+│   ├── aleph_plugin.rs     # aleph.plugin.json
 │   └── static_plugin.rs     # SKILL.md/COMMAND.md (existing)
 ├── registry/
 │   ├── mod.rs               # PluginRegistry (new)
@@ -517,8 +517,8 @@ plugin-all = ["plugin-wasm", "plugin-nodejs"]
   - [ ] Host functions (log/http/file/event)
   - [ ] Permission sandbox
 - [ ] WASM Plugin SDK
-  - [ ] aether-plugin-sdk crate
-  - [ ] proc macros (#[aether_plugin], #[tool_handler])
+  - [ ] aleph-plugin-sdk crate
+  - [ ] proc macros (#[aleph_plugin], #[tool_handler])
 - [ ] Example WASM plugin
 
 ### Phase 3: Node.js Runtime (Week 3)
@@ -543,8 +543,8 @@ plugin-all = ["plugin-wasm", "plugin-nodejs"]
   - [ ] plugins.* RPC methods
   - [ ] Plugin status queries
 - [ ] CLI commands
-  - [ ] aether plugins list/install/disable
-  - [ ] aether plugins create (scaffolding)
+  - [ ] aleph plugins list/install/disable
+  - [ ] aleph plugins create (scaffolding)
 - [ ] Complete test suite
 
 ---

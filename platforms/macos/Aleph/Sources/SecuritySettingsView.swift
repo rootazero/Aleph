@@ -1,6 +1,6 @@
 //
 //  SecuritySettingsView.swift
-//  Aether
+//  Aleph
 //
 //  Security & Permissions configuration UI.
 //  Controls AI access to file system and code execution.
@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 /// Security settings view for file operations and code execution permissions
 struct SecuritySettingsView: View {
     // Dependencies
-    let core: AetherCore?
+    let core: AlephCore?
     @Binding var hasUnsavedChanges: Bool
 
     // Code execution configuration state

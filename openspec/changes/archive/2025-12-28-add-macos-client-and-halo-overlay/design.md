@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether's "Ghost" aesthetic requires a macOS application that:
+Aleph's "Ghost" aesthetic requires a macOS application that:
 1. Has NO permanent windows (only ephemeral Halo overlay)
 2. Lives exclusively in the menu bar (no Dock icon)
 3. NEVER steals focus from the active application
@@ -103,7 +103,7 @@ struct HaloView: View {
 
 **Implementation:**
 ```swift
-class EventHandler: AetherEventHandler {
+class EventHandler: AlephEventHandler {
     func onStateChanged(state: ProcessingState) {
         DispatchQueue.main.async {
             // Update UI safely
@@ -130,7 +130,7 @@ class EventHandler: AetherEventHandler {
 AppDelegate (NSApplicationDelegate)
 ├── Menu Bar (NSStatusItem)
 ├── Settings Window (NSWindow with SwiftUI)
-└── AetherCore (Rust)
+└── AlephCore (Rust)
     └── Callbacks → EventHandler
         └── HaloWindow (NSWindow with SwiftUI)
 ```
@@ -165,11 +165,11 @@ let screenFrame = NSScreen.main?.frame ?? .zero
 
 ```
 clients/macos/
-├── Aether.xcodeproj/           # Xcode project
+├── Aleph.xcodeproj/           # Xcode project
 ├── Sources/
-│   ├── AetherApp.swift         # @main entry point
+│   ├── AlephApp.swift         # @main entry point
 │   ├── AppDelegate.swift       # Menu bar lifecycle
-│   ├── EventHandler.swift      # Implements AetherEventHandler
+│   ├── EventHandler.swift      # Implements AlephEventHandler
 │   ├── HaloWindow.swift        # NSWindow wrapper
 │   ├── HaloView.swift          # SwiftUI animation
 │   ├── HaloState.swift         # State machine enum
@@ -178,13 +178,13 @@ clients/macos/
 │   ├── RoutingView.swift       # Routing rules tab
 │   ├── ShortcutsView.swift     # Hotkey config tab
 │   └── Generated/
-│       └── AetherFFI.swift     # UniFFI bindings (copied from core/bindings/)
+│       └── AlephFFI.swift     # UniFFI bindings (copied from core/bindings/)
 ├── Resources/
 │   ├── Assets.xcassets/        # App icon, menu bar icons
 │   └── Info.plist              # LSUIElement=YES, permissions
 ├── Frameworks/
 │   └── libaethecore.dylib      # Rust library (copied from core/target/release/)
-├── Aether.entitlements         # Accessibility permissions
+├── Aleph.entitlements         # Accessibility permissions
 └── Scripts/
     └── copy_rust_libs.sh       # Build phase script
 ```
@@ -449,13 +449,13 @@ class HaloStateTests: XCTestCase {
 3. **Error Handling:** What should Halo show if AI API fails?
    - **Recommendation:** Red X icon with shake animation
 
-4. **Menu Bar Icon:** Should it reflect Aether state (idle/listening/processing)?
+4. **Menu Bar Icon:** Should it reflect Aleph state (idle/listening/processing)?
    - **Recommendation:** Yes, use SF Symbols with color tint
 
 ## Success Criteria
 
 ✅ **Phase 2 is successful when:**
-1. User can launch Aether.app and see menu bar icon
+1. User can launch Aleph.app and see menu bar icon
 2. Pressing Cmd+~ shows Halo at cursor location
 3. Halo animates through states smoothly
 4. Halo never steals focus from active application

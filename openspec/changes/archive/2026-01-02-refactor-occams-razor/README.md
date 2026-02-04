@@ -10,7 +10,7 @@
 
 ## 📋 提案概述
 
-基于"奥卡姆剃刀"原则("实体不应被无必要地增加")对 Aether 代码库进行系统性重构,消除**18个已识别的代码复杂度违规**,涉及约**480行代码**。
+基于"奥卡姆剃刀"原则("实体不应被无必要地增加")对 Aleph 代码库进行系统性重构,消除**18个已识别的代码复杂度违规**,涉及约**480行代码**。
 
 ### 核心目标
 - **减少代码重复**: 消除 DRY 违规
@@ -134,13 +134,13 @@ let config = self.lock_config();
 ```rust
 // 之前 (重复 10+ 次)
 let db = self.memory_db.as_ref()
-    .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+    .ok_or_else(|| AlephError::config("Memory database not initialized"))?;
 
 // 之后 (集中化)
 #[inline(always)]
 fn require_memory_db(&self) -> Result<&Arc<VectorDatabase>> {
     self.memory_db.as_ref()
-        .ok_or_else(|| AetherError::config("Memory database not initialized"))
+        .ok_or_else(|| AlephError::config("Memory database not initialized"))
 }
 let db = self.require_memory_db()?;
 ```

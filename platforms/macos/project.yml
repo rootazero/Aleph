@@ -262,7 +262,7 @@ targets:
         PRODUCT_NAME: $(TARGET_NAME)
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: Aether
+        TEST_TARGET_NAME: Aleph
         SWIFT_EMIT_LOC_STRINGS: NO
     dependencies:
       - target: Aleph

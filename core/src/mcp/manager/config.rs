@@ -73,7 +73,7 @@ impl McpPersistentConfig {
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aether")
+            .join(".aleph")
             .join("mcp_config.json")
     }
 
@@ -261,7 +261,7 @@ mod tests {
     fn test_default_path() {
         let path = McpPersistentConfig::default_path();
         assert!(path.ends_with("mcp_config.json"));
-        assert!(path.to_string_lossy().contains(".aether"));
+        assert!(path.to_string_lossy().contains(".aleph"));
     }
 
     #[test]

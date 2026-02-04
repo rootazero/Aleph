@@ -1,6 +1,6 @@
 //
 //  DependencyContainer.swift
-//  Aether
+//  Aleph
 //
 //  Dependency Injection container for managing shared services lifecycle.
 //  This replaces global singletons with explicit dependency injection.
@@ -184,7 +184,7 @@ final class DependencyContainer: ObservableObject {
     // MARK: - Core Services (initialized after permissions)
 
     /// Rust core instance (- rig-core based, unified interface)
-    private(set) var core: AetherCore?
+    private(set) var core: AlephCore?
 
     /// Event handler for Rust callbacks
     private(set) var eventHandler: EventHandler?
@@ -264,7 +264,7 @@ final class DependencyContainer: ObservableObject {
     /// Get the path to the configuration file
     private func getConfigPath() -> String {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        let configDir = homeDir.appendingPathComponent(".aether")
+        let configDir = homeDir.appendingPathComponent(".aleph")
 
         // Create config directory if it doesn't exist
         try? FileManager.default.createDirectory(
@@ -334,7 +334,7 @@ final class DependencyContainer: ObservableObject {
     // MARK: - Convenience Accessors
 
     /// Get core, throwing if not initialized
-    func requireCore() throws -> AetherCore {
+    func requireCore() throws -> AlephCore {
         guard let core = core else {
             throw DependencyError.coreNotInitialized
         }
@@ -362,7 +362,7 @@ enum DependencyError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .coreNotInitialized:
-            return "AetherCore has not been initialized. Call initializeCoreServices() first."
+            return "AlephCore has not been initialized. Call initializeCoreServices() first."
         case .eventHandlerNotInitialized:
             return "EventHandler has not been initialized. Call initializeCoreServices() first."
         case .coordinatorNotInitialized(let name):

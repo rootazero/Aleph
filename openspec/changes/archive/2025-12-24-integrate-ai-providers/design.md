@@ -5,7 +5,7 @@
 ### Component Diagram
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        AetherCore                            │
+│                        AlephCore                            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                               │
 │  ┌──────────────┐      ┌──────────────┐                     │
@@ -43,7 +43,7 @@
 ```
 1. User presses Cmd+~ (hotkey detected)
    ↓
-2. AetherCore reads clipboard content
+2. AlephCore reads clipboard content
    ↓
 3. Memory module retrieves relevant context
    ↓
@@ -59,7 +59,7 @@
    ↓
 9. Response parsed and returned
    ↓
-10. AetherCore writes result to clipboard
+10. AlephCore writes result to clipboard
     ↓
 11. Memory module stores interaction (async)
     ↓
@@ -85,7 +85,7 @@ pub trait AiProvider: Send + Sync {
         &self,
         input: &str,
         system_prompt: Option<&str>,
-    ) -> Result<String, AetherError>;
+    ) -> Result<String, AlephError>;
 
     /// Get provider name (for logging/debugging)
     fn name(&self) -> &str;
@@ -170,10 +170,10 @@ impl Router {
 ```
 
 **Error Handling**:
-- Network errors → `AetherError::NetworkError`
-- 401/403 → `AetherError::AuthenticationError`
-- 429 → `AetherError::RateLimitError`
-- 500+ → `AetherError::ProviderError`
+- Network errors → `AlephError::NetworkError`
+- 401/403 → `AlephError::AuthenticationError`
+- 429 → `AlephError::RateLimitError`
+- 500+ → `AlephError::ProviderError`
 
 **Timeout**: 30 seconds (configurable)
 
@@ -226,7 +226,7 @@ impl AiProvider for OllamaProvider {
         if output.status.success() {
             Ok(String::from_utf8(output.stdout)?)
         } else {
-            Err(AetherError::ProviderError(
+            Err(AlephError::ProviderError(
                 String::from_utf8_lossy(&output.stderr).to_string()
             ))
         }
@@ -330,7 +330,7 @@ pub async fn process_with_memory(
     // 3. Route to AI provider
     let (provider, system_prompt) = self.router
         .route(&augmented_prompt)
-        .ok_or(AetherError::NoProviderAvailable)?;
+        .ok_or(AlephError::NoProviderAvailable)?;
 
     // 4. Process with AI
     let response = provider.process(&augmented_prompt, system_prompt).await?;
@@ -359,7 +359,7 @@ pub async fn process_with_memory(
 
 ### Error Types Hierarchy
 ```rust
-pub enum AetherError {
+pub enum AlephError {
     // Network/API errors
     NetworkError(String),
     AuthenticationError(String),
@@ -395,10 +395,10 @@ pub enum AetherError {
 ## UniFFI Integration
 
 ### New Callback Events
-扩展 `AetherEventHandler` trait：
+扩展 `AlephEventHandler` trait：
 
 ```idl
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
     // Existing callbacks
     void on_state_changed(ProcessingState state);
     void on_hotkey_detected(string content);
@@ -475,7 +475,7 @@ fn test_router_regex_matching() {
 ```rust
 #[tokio::test]
 async fn test_end_to_end_ai_processing() {
-    let core = AetherCore::new_with_mock_provider(handler);
+    let core = AlephCore::new_with_mock_provider(handler);
     core.start_listening().unwrap();
 
     // Simulate clipboard content
@@ -500,7 +500,7 @@ async fn test_end_to_end_ai_processing() {
 ## Security Considerations
 
 ### API Key Storage
-- **Phase 5**: 明文存储在 `~/.aether/config.toml`
+- **Phase 5**: 明文存储在 `~/.aleph/config.toml`
 - 文件权限：`600` (仅当前用户可读写)
 - **Phase 6**: 迁移到 macOS Keychain
 

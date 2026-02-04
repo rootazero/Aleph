@@ -15,14 +15,14 @@
 
 2. **构建 Rust Core**:
    ```bash
-   cd Aether/core
+   cd Aleph/core
    cargo build
    cd ../..
    ```
 
 3. **打开 Xcode**:
    ```bash
-   open Aether.xcodeproj
+   open Aleph.xcodeproj
    ```
 
 4. **运行应用**: 在 Xcode 中按 `Cmd+R` 启动应用
@@ -266,8 +266,8 @@
 2. 更新 `proposal.md`,标记 Approval Checklist 项目
 3. 创建 Git commit:
    ```bash
-   git add Aether/Sources/Components/Organisms/ProviderEditPanel.swift
-   git add Aether/Sources/Components/Molecules/ProviderCard.swift
+   git add Aleph/Sources/Components/Organisms/ProviderEditPanel.swift
+   git add Aleph/Sources/Components/Molecules/ProviderCard.swift
    git commit -m "feat: Redesign Providers UI with bottom-right button layout
 
    - Refactor ProviderEditPanel body to two-layer structure (ScrollView + fixed footer)

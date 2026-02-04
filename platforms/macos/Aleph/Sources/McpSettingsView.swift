@@ -1,6 +1,6 @@
 //
 //  McpSettingsView.swift
-//  Aether
+//  Aleph
 //
 //  MCP Settings View with Master-Detail layout.
 //  Redesigned per redesign-mcp-settings-ui proposal.
@@ -11,7 +11,7 @@ import SwiftUI
 /// MCP settings view with Master-Detail layout
 struct McpSettingsView: View {
     // Dependencies
-    let core: AetherCore
+    let core: AlephCore
     @Binding var hasUnsavedChanges: Bool
 
     // Server selection state
@@ -801,7 +801,7 @@ private struct CommandsListEditor: View {
 
 /// Add Server Sheet
 private struct AddServerSheet: View {
-    let core: AetherCore
+    let core: AlephCore
     let onComplete: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -881,7 +881,7 @@ private struct AddServerSheet: View {
 
 /// Server Logs Sheet
 private struct ServerLogsSheet: View {
-    let core: AetherCore
+    let core: AlephCore
     let serverId: String
 
     @Environment(\.dismiss) private var dismiss

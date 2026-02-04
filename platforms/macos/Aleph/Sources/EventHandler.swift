@@ -1,9 +1,9 @@
 //
 //  EventHandler.swift
-//  Aether
+//  Aleph
 //
 //  Implements AlephEventHandler protocol to receive callbacks from Rust core.
-//  This handler works with the rig-core based AetherCore.
+//  This handler works with the rig-core based AlephCore.
 //
 
 import AppKit
@@ -29,8 +29,8 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
     // Weak reference to Halo window to avoid retain cycle
     private weak var haloWindow: HaloWindow?
 
-    // Weak reference to AetherCore for cancellation functionality
-    private weak var core: AetherCore?
+    // Weak reference to AlephCore for cancellation functionality
+    private weak var core: AlephCore?
 
 
     // MARK: - State
@@ -80,8 +80,8 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
         self.haloWindow = haloWindow
     }
 
-    // Set AetherCore reference after initialization
-    func setCore(_ core: AetherCore) {
+    // Set AlephCore reference after initialization
+    func setCore(_ core: AlephCore) {
         self.core = core
     }
 
@@ -721,7 +721,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
 
     /// Show a confirmation dialog for the DAG task plan (Halo mode)
     @MainActor
-    private func showPlanConfirmationDialogWithInfo(planId: String, planInfo: PlanConfirmationInfo, core: AetherCore) {
+    private func showPlanConfirmationDialogWithInfo(planId: String, planInfo: PlanConfirmationInfo, core: AlephCore) {
         // Create a simple alert for confirmation
         let alert = NSAlert()
         alert.messageText = L("dag.confirm_title")
@@ -819,7 +819,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
 
     /// Show a user input dialog in Halo mode
     @MainActor
-    private func showUserInputDialog(requestId: String, question: String, options: [String], core: AetherCore) {
+    private func showUserInputDialog(requestId: String, question: String, options: [String], core: AlephCore) {
         if options.isEmpty {
             // Free-form text input
             let alert = NSAlert()
@@ -871,7 +871,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
 
     /// Send user input response via Gateway RPC with FFI fallback
     @MainActor
-    private func sendUserInputResponse(requestId: String, response: String, core: AetherCore) {
+    private func sendUserInputResponse(requestId: String, response: String, core: AlephCore) {
         if useGateway() {
             Task {
                 do {

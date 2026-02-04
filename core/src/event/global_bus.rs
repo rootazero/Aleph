@@ -1,4 +1,4 @@
-// Aether/core/src/event/global_bus.rs
+// Aleph/core/src/event/global_bus.rs
 //! Global event bus for cross-agent event aggregation.
 //!
 //! The `GlobalBus` provides a singleton event bus that aggregates events from
@@ -31,7 +31,7 @@
 
 use crate::event::bus::EventBus;
 use crate::event::filter::EventFilter;
-use crate::event::types::AetherEvent;
+use crate::event::types::AlephEvent;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -53,7 +53,7 @@ const DEFAULT_BUFFER_SIZE: usize = 1024;
 
 /// Global event wrapper for cross-agent event routing.
 ///
-/// Wraps an `AetherEvent` with source tracking metadata to enable
+/// Wraps an `AlephEvent` with source tracking metadata to enable
 /// cross-agent event filtering and routing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalEvent {
@@ -62,7 +62,7 @@ pub struct GlobalEvent {
     /// The source session that emitted this event
     pub source_session_id: String,
     /// The actual event payload
-    pub event: AetherEvent,
+    pub event: AlephEvent,
     /// Timestamp when the event was emitted (epoch millis)
     pub timestamp: i64,
     /// Monotonic sequence number for ordering
@@ -74,7 +74,7 @@ impl GlobalEvent {
     pub fn new(
         source_agent_id: impl Into<String>,
         source_session_id: impl Into<String>,
-        event: AetherEvent,
+        event: AlephEvent,
         sequence: u64,
     ) -> Self {
         Self {
@@ -91,7 +91,7 @@ impl GlobalEvent {
     pub fn for_test(
         source_session_id: impl Into<String>,
         source_agent_id: Option<String>,
-        event: AetherEvent,
+        event: AlephEvent,
     ) -> Self {
         Self {
             source_agent_id: source_agent_id.unwrap_or_default(),
@@ -216,7 +216,7 @@ impl GlobalBus {
     /// * `agent_id` - The source agent ID
     /// * `session_id` - The source session ID
     /// * `event` - The event to broadcast
-    pub async fn broadcast(&self, agent_id: &str, session_id: &str, event: AetherEvent) {
+    pub async fn broadcast(&self, agent_id: &str, session_id: &str, event: AlephEvent) {
         let sequence = self.next_sequence();
         let global_event = GlobalEvent::new(agent_id, session_id, event, sequence);
 
@@ -378,8 +378,8 @@ mod tests {
     use crate::event::EventType;
     use std::sync::atomic::AtomicUsize;
 
-    fn make_input_event() -> AetherEvent {
-        AetherEvent::InputReceived(InputEvent {
+    fn make_input_event() -> AlephEvent {
+        AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -387,8 +387,8 @@ mod tests {
         })
     }
 
-    fn make_loop_stop_event() -> AetherEvent {
-        AetherEvent::LoopStop(StopReason::Completed)
+    fn make_loop_stop_event() -> AlephEvent {
+        AlephEvent::LoopStop(StopReason::Completed)
     }
 
     #[test]

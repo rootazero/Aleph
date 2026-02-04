@@ -16,7 +16,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError, InputEvent, PlanRequest,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, InputEvent, PlanRequest,
     ToolCallRequest,
 };
 use crate::intent::{ExecutionIntent, IntentClassifier};
@@ -397,12 +397,12 @@ impl EventHandler for IntentAnalyzer {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Only handle InputReceived events
         let input = match event {
-            AetherEvent::InputReceived(input) => input,
+            AlephEvent::InputReceived(input) => input,
             _ => return Ok(vec![]),
         };
 
@@ -432,13 +432,13 @@ impl EventHandler for IntentAnalyzer {
                     detected_steps,
                 };
 
-                Ok(vec![AetherEvent::PlanRequested(plan_request)])
+                Ok(vec![AlephEvent::PlanRequested(plan_request)])
             }
             Complexity::Simple => {
                 // Build direct tool call
                 let tool_call = self.build_direct_call(&intent, input);
 
-                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
             }
         }
     }
@@ -451,7 +451,7 @@ impl IntentAnalyzer {
     async fn handle_with_unified_decider(
         &self,
         input: &InputEvent,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Build context signals from input context
         let context_signals = input.context.as_ref().map(|ctx| ContextSignals {
             selected_file: ctx.selected_text.clone(),
@@ -482,7 +482,7 @@ impl IntentAnalyzer {
                     }),
                     plan_step_id: None,
                 };
-                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
             }
             ExecutionMode::Skill(skill) => {
                 // Skill command - run agent with skill instructions injected
@@ -497,7 +497,7 @@ impl IntentAnalyzer {
                     }),
                     plan_step_id: None,
                 };
-                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
             }
             ExecutionMode::Mcp(mcp) => {
                 // MCP command - route to MCP server
@@ -511,7 +511,7 @@ impl IntentAnalyzer {
                     }),
                     plan_step_id: None,
                 };
-                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
             }
             ExecutionMode::Custom(custom) => {
                 // Custom command - run agent with custom system prompt
@@ -526,7 +526,7 @@ impl IntentAnalyzer {
                     }),
                     plan_step_id: None,
                 };
-                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
             }
             ExecutionMode::Execute(category) => {
                 // Determine if planning is needed based on complexity
@@ -540,7 +540,7 @@ impl IntentAnalyzer {
                             intent_type: Some(category.as_str().to_string()),
                             detected_steps,
                         };
-                        Ok(vec![AetherEvent::PlanRequested(plan_request)])
+                        Ok(vec![AlephEvent::PlanRequested(plan_request)])
                     }
                     Complexity::Simple => {
                         let tool_call = ToolCallRequest {
@@ -552,7 +552,7 @@ impl IntentAnalyzer {
                             }),
                             plan_step_id: None,
                         };
-                        Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+                        Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
                     }
                 }
             }
@@ -566,7 +566,7 @@ impl IntentAnalyzer {
                     }),
                     plan_step_id: None,
                 };
-                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
             }
         }
     }
@@ -858,7 +858,7 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         // LoopStop event should be ignored
-        let event = AetherEvent::LoopStop(StopReason::Completed);
+        let event = AlephEvent::LoopStop(StopReason::Completed);
         let result = analyzer.handle(&event, &ctx).await.unwrap();
 
         assert!(result.is_empty());
@@ -873,11 +873,11 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         let input = create_test_input("你好");
-        let event = AetherEvent::InputReceived(input);
+        let event = AlephEvent::InputReceived(input);
         let result = analyzer.handle(&event, &ctx).await.unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AetherEvent::ToolCallRequested(_)));
+        assert!(matches!(result[0], AlephEvent::ToolCallRequested(_)));
     }
 
     #[tokio::test]
@@ -889,13 +889,13 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         let input = create_test_input("打开文件然后复制内容接着保存到新位置");
-        let event = AetherEvent::InputReceived(input);
+        let event = AlephEvent::InputReceived(input);
         let result = analyzer.handle(&event, &ctx).await.unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AetherEvent::PlanRequested(_)));
+        assert!(matches!(result[0], AlephEvent::PlanRequested(_)));
 
-        if let AetherEvent::PlanRequested(plan_req) = &result[0] {
+        if let AlephEvent::PlanRequested(plan_req) = &result[0] {
             assert!(!plan_req.detected_steps.is_empty());
         }
     }
@@ -909,11 +909,11 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         let input = create_test_input("1. 创建目录\n2. 复制文件\n3. 清理临时文件");
-        let event = AetherEvent::InputReceived(input);
+        let event = AlephEvent::InputReceived(input);
         let result = analyzer.handle(&event, &ctx).await.unwrap();
 
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AetherEvent::PlanRequested(_)));
+        assert!(matches!(result[0], AlephEvent::PlanRequested(_)));
     }
 
     #[test]

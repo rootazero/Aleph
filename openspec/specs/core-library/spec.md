@@ -25,12 +25,12 @@ The system SHALL provide a library-based Rust core that can be compiled as a dyn
 - **AND** the error message directs the user to update Rust toolchain
 
 ### Requirement: Core Lifecycle Management
-The system SHALL provide an `AetherCore` struct that manages the lifecycle of all core components with robust permission handling and error recovery.
+The system SHALL provide an `AlephCore` struct that manages the lifecycle of all core components with robust permission handling and error recovery.
 
 #### Scenario: Start listening for system events (MODIFIED)
 - **WHEN** client calls `core.start_listening()`
 - **THEN** the system performs permission pre-check (new step)
-- **AND** if permission is NOT granted, returns `Err(AetherError::PermissionDenied)` immediately
+- **AND** if permission is NOT granted, returns `Err(AlephError::PermissionDenied)` immediately
 - **AND** if permission IS granted, wraps `rdev::listen()` in `catch_unwind()` (new protection)
 - **AND** the hotkey listener spawns a background thread
 - **AND** begins monitoring for global hotkey events
@@ -39,7 +39,7 @@ The system SHALL provide an `AetherCore` struct that manages the lifecycle of al
 #### Scenario: Handle initialization error (MODIFIED)
 - **WHEN** core initialization fails (e.g., hotkey listener cannot start or panics)
 - **THEN** the constructor catches any panics via `catch_unwind()`
-- **AND** returns an `AetherError` with descriptive message
+- **AND** returns an `AlephError` with descriptive message
 - **AND** provides actionable guidance (e.g., "Input Monitoring permission required")
 - **AND** does NOT crash the application
 
@@ -58,7 +58,7 @@ The system SHALL provide comprehensive error handling and logging for all permis
 #### Scenario: Hotkey listener error (MODIFIED)
 - **WHEN** hotkey listener fails to start (e.g., permissions denied or rdev panic)
 - **THEN** catches panic via `catch_unwind()` if rdev panics
-- **AND** returns `AetherError::HotkeyError` or `AetherError::PermissionDenied` with descriptive message
+- **AND** returns `AlephError::HotkeyError` or `AlephError::PermissionDenied` with descriptive message
 - **AND** error can be propagated through Result<T, E>
 - **AND** logs detailed error information for debugging
 
@@ -89,7 +89,7 @@ The system SHALL provide comprehensive error handling and logging for all permis
 The system SHALL initialize a tokio async runtime to support non-blocking operations for AI API calls, utilizing native async trait implementations without external macro dependencies.
 
 #### Scenario: Runtime initialization
-- **WHEN** AetherCore is initialized
+- **WHEN** AlephCore is initialized
 - **THEN** tokio runtime is created successfully
 - **AND** supports multi-threaded execution
 - **AND** allows spawning async tasks
@@ -108,13 +108,13 @@ The system SHALL define traits for all core components (HotkeyListener, Clipboar
 #### Scenario: Swap clipboard implementation
 - **WHEN** developer wants to use a different clipboard backend
 - **THEN** they implement the ClipboardManager trait
-- **AND** pass the new implementation to AetherCore
+- **AND** pass the new implementation to AlephCore
 - **AND** no changes to core logic are required
 
 #### Scenario: Mock components in tests
-- **WHEN** writing unit tests for AetherCore
+- **WHEN** writing unit tests for AlephCore
 - **THEN** developer creates mock implementations of traits
-- **AND** injects mocks into AetherCore constructor
+- **AND** injects mocks into AlephCore constructor
 - **AND** tests core logic in isolation
 
 ### Requirement: Panic Protection for rdev Hotkey Listener
@@ -136,7 +136,7 @@ The Rust core SHALL protect against panics from the rdev library that occur when
 #### Scenario: Graceful degradation after panic
 - **WHEN** hotkey listener fails to start due to panic
 - **THEN** the system does NOT terminate the application
-- **AND** AetherCore remains in a valid state (core.is_listening = false)
+- **AND** AlephCore remains in a valid state (core.is_listening = false)
 - **AND** notifies Swift layer via `event_handler.on_error()` callback
 - **AND** user can retry after granting permission or use other features
 
@@ -146,7 +146,7 @@ The Rust core SHALL verify Input Monitoring permission status before attempting 
 #### Scenario: Check permission before calling rdev::listen()
 - **WHEN** Swift layer calls `core.start_listening()`
 - **THEN** the system checks `self.has_input_monitoring_permission` flag
-- **AND** if permission is NOT granted, returns `Err(AetherError::PermissionDenied)` immediately
+- **AND** if permission is NOT granted, returns `Err(AlephError::PermissionDenied)` immediately
 - **AND** does NOT call `rdev::listen()` at all
 - **AND** logs warning: "Input Monitoring permission not granted. Cannot start hotkey listener."
 
@@ -167,14 +167,14 @@ The Rust core SHALL propagate permission-related errors to Swift layer via UniFF
 
 #### Scenario: Return permission error via Result type
 - **WHEN** `start_listening()` fails due to missing permission
-- **THEN** the function returns `Err(AetherError::PermissionDenied(message))`
+- **THEN** the function returns `Err(AlephError::PermissionDenied(message))`
 - **AND** Swift layer receives the error via UniFFI binding
 - **AND** Swift can display error alert or update UI status
 
 #### Scenario: Notify Swift via event handler callback
 - **WHEN** permission error occurs
 - **THEN** Rust calls `self.event_handler.on_error(error_message)`
-- **AND** Swift's `AetherEventHandler` implementation receives the callback
+- **AND** Swift's `AlephEventHandler` implementation receives the callback
 - **AND** Swift can show real-time error notification or update permission gate UI
 
 #### Scenario: Error message includes actionable guidance
@@ -240,7 +240,7 @@ The system SHALL use standard library's `Arc::new_zeroed` and `Box::new_zeroed` 
 The system SHALL use UniFFI 0.28 or higher for FFI binding generation, leveraging modern performance optimizations and C string literal support.
 
 #### Scenario: Generate Swift bindings with UniFFI 0.28
-- **WHEN** developer runs `cargo run --bin uniffi-bindgen generate src/aether.udl --language swift`
+- **WHEN** developer runs `cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift`
 - **THEN** the system uses UniFFI 0.28 binding generator
 - **AND** generates Swift bindings compatible with existing UDL schema
 - **AND** utilizes C string literals (c"...") for improved performance where applicable
@@ -249,7 +249,7 @@ The system SHALL use UniFFI 0.28 or higher for FFI binding generation, leveragin
 - **WHEN** UniFFI bindings are regenerated with version 0.28
 - **THEN** the generated Swift API surface SHALL remain unchanged
 - **AND** existing Swift code continues to compile without modifications
-- **AND** no breaking changes to `AetherCore`, `AetherEventHandler`, or exposed types
+- **AND** no breaking changes to `AlephCore`, `AlephEventHandler`, or exposed types
 
 #### Scenario: Verify UniFFI build integration
 - **WHEN** cargo build executes

@@ -3,10 +3,10 @@
 ## Phase 1: 数据模型统一 (Rust Core)
 
 ### 1.1 定义统一数据模型
-- [ ] 在 `aether.udl` 中定义 `SkillType` 枚举
-- [ ] 在 `aether.udl` 中定义 `UnifiedSkillConfig` 结构
-- [ ] 在 `aether.udl` 中定义 `SkillPermissions` 结构
-- [ ] 在 `aether.udl` 中定义 `SkillStatus` 枚举
+- [ ] 在 `aleph.udl` 中定义 `SkillType` 枚举
+- [ ] 在 `aleph.udl` 中定义 `UnifiedSkillConfig` 结构
+- [ ] 在 `aleph.udl` 中定义 `SkillPermissions` 结构
+- [ ] 在 `aleph.udl` 中定义 `SkillStatus` 枚举
 
 ### 1.2 实现 Rust 数据结构
 - [ ] 创建 `src/skills/mod.rs` 模块
@@ -33,7 +33,7 @@
 
 ### 1.5 生成 Swift 绑定
 - [ ] 运行 `uniffi-bindgen generate`
-- [ ] 验证生成的 `aether.swift` 包含新类型
+- [ ] 验证生成的 `aleph.swift` 包含新类型
 - [ ] 编译验证无错误
 
 ---
@@ -41,7 +41,7 @@
 ## Phase 2: Swift 组件库
 
 ### 2.1 创建组件目录结构
-- [x] 创建 `Aether/Sources/Components/Skills/` 目录
+- [x] 创建 `Aleph/Sources/Components/Skills/` 目录
 - [x] 创建组件索引文件
 
 ### 2.2 UnifiedSkillCard 组件 (renamed from SkillCard to avoid conflict)
@@ -141,8 +141,8 @@
 - [ ] 实现导入/导出按钮
 
 ### 3.6 删除旧视图
-- [ ] 删除 `Aether/Sources/McpSettingsView.swift`
-- [ ] 删除 `Aether/Sources/SkillsSettingsView.swift` (原版)
+- [ ] 删除 `Aleph/Sources/McpSettingsView.swift`
+- [ ] 删除 `Aleph/Sources/SkillsSettingsView.swift` (原版)
 - [ ] 更新 `SettingsView.swift` 移除旧 Tab
 
 ### 3.7 更新导航

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Command Registry provides a unified tree-based data structure for discovering and executing commands in Aether. It aggregates commands from multiple sources (builtins, MCP tools, user prompts) into a navigable hierarchy.
+The Command Registry provides a unified tree-based data structure for discovering and executing commands in Aleph. It aggregates commands from multiple sources (builtins, MCP tools, user prompts) into a navigable hierarchy.
 
 ## ADDED Requirements
 

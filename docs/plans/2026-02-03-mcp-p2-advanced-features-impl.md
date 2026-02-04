@@ -159,7 +159,7 @@ Add to `mod tests`:
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test jsonrpc::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test jsonrpc::tests
 ```
 
 **Step 4: Commit**
@@ -322,7 +322,7 @@ pub use sse_events::{SseEvent, SseNotification, SseRequest};
 **Step 4: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test sse_events
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test sse_events
 ```
 
 **Step 5: Commit**
@@ -553,7 +553,7 @@ In `SseTransport::new()`, add:
 **Step 6: Run cargo check**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 7: Commit**
@@ -755,7 +755,7 @@ pub use sampling::{SamplingCallback, SamplingHandler, sampling_messages_to_chat}
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test sampling
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test sampling
 ```
 
 **Step 4: Commit**
@@ -851,7 +851,7 @@ Note: This requires adding `as_any()` to McpTransport trait for downcasting.
 **Step 5: Run cargo check**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 6: Commit**
@@ -936,7 +936,7 @@ Add field to `SseTransport`:
 **Step 3: Run cargo check**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 4: Commit**
@@ -1027,7 +1027,7 @@ Add field to actor struct:
 **Step 4: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test mcp::manager
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test mcp::manager
 ```
 
 **Step 5: Commit**

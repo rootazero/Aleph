@@ -32,7 +32,7 @@ pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
 
     // Use reqwest for cross-platform download
     let client = reqwest::Client::builder()
-        .user_agent("Aether/1.0")
+        .user_agent("Aleph/1.0")
         .build()
         .map_err(|e| {
             AlephError::runtime("download", format!("Failed to create HTTP client: {}", e))
@@ -365,7 +365,7 @@ pub async fn get_github_latest_version(owner: &str, repo: &str) -> Result<String
     );
 
     let client = reqwest::Client::builder()
-        .user_agent("Aether/1.0")
+        .user_agent("Aleph/1.0")
         .build()
         .map_err(|e| AlephError::runtime("github", format!("Failed to create client: {}", e)))?;
 

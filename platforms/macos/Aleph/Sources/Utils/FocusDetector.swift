@@ -1,6 +1,6 @@
 //
 //  FocusDetector.swift
-//  Aether
+//  Aleph
 //
 //  Detects whether cursor is focused in a text input field before showing Halo.
 //  Uses Accessibility API to query focused element and extract caret position.

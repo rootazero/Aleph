@@ -1,5 +1,5 @@
 // AttachmentMerger.swift
-// Aether
+// Aleph
 //
 // Centralized logic for merging media attachments from multiple sources.
 // Implements the data order rule from CLAUDE.md:

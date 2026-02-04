@@ -2,19 +2,19 @@
 
 ## 1. UniFFI Interface Definition
 
-- [x] 1.1 Add `MediaAttachment` dictionary to `aether.udl`:
+- [x] 1.1 Add `MediaAttachment` dictionary to `aleph.udl`:
   - `media_type: string`
   - `mime_type: string`
   - `data: string` (Base64)
   - `filename: string?`
   - `size_bytes: u64`
 
-- [x] 1.2 Modify `CapturedContext` dictionary in `aether.udl`:
+- [x] 1.2 Modify `CapturedContext` dictionary in `aleph.udl`:
   - Add `attachments: sequence<MediaAttachment>?`
 
 - [x] 1.3 Regenerate UniFFI bindings:
-  - Run `cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/`
-  - Copy updated `aether.swift` to Swift project
+  - Run `cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/`
+  - Copy updated `aleph.swift` to Swift project
 
 ## 2. Content Extractor Architecture (Extensible Plugin System)
 

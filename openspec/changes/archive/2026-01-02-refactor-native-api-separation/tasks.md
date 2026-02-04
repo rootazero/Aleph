@@ -2,7 +2,7 @@
 
 ## Overview
 
-本文档定义了将 Aether 从 "Rust 统一系统 API" 架构重构到 "原生 API + Rust 纯计算核心" 架构的详细任务列表。
+本文档定义了将 Aleph 从 "Rust 统一系统 API" 架构重构到 "原生 API + Rust 纯计算核心" 架构的详细任务列表。
 
 ## Task Breakdown
 
@@ -14,7 +14,7 @@
 **负责人**: Frontend developer
 
 **子任务**:
-- [x] 创建 `Aether/Sources/Utils/ClipboardManager.swift`
+- [x] 创建 `Aleph/Sources/Utils/ClipboardManager.swift`
 - [ ] 实现文本操作 (`getText()`, `setText()`)
 - [ ] 实现图片操作 (`getImage()`, `setImage()`, `hasImage()`)
 - [ ] 实现 `changeCount()` 用于检测剪贴板变化
@@ -34,7 +34,7 @@
 **负责人**: Frontend developer
 
 **子任务**:
-- [ ] 创建 `Aether/Sources/Utils/KeyboardSimulator.swift`
+- [ ] 创建 `Aleph/Sources/Utils/KeyboardSimulator.swift`
 - [ ] 实现 `simulateCut()` (Cmd+X)
 - [ ] 实现 `simulateCopy()` (Cmd+C)
 - [ ] 实现 `simulatePaste()` (Cmd+V)
@@ -112,7 +112,7 @@
 **负责人**: Backend developer
 
 **子任务**:
-- [ ] 修改 `Aether/core/src/aether.udl`:
+- [ ] 修改 `Aleph/core/src/aleph.udl`:
   - [ ] 删除 `start_listening()` / `stop_listening()`
   - [ ] 删除 `is_listening()`
   - [ ] 删除 `get_clipboard_text()`
@@ -121,7 +121,7 @@
   - [ ] 删除 `on_hotkey_detected()` 回调
   - [ ] 添加新接口 `process_input(string, CapturedContext)`
 - [ ] 运行 `uniffi-bindgen` 重新生成 Swift bindings
-- [ ] 验证生成的 `aether.swift` 正确
+- [ ] 验证生成的 `aleph.swift` 正确
 
 **验收标准**:
 - [ ] UniFFI 验证通过（无错误）
@@ -129,14 +129,14 @@
 
 ---
 
-#### Task 2.2: 实现简化的 AetherCore.process_input()
+#### Task 2.2: 实现简化的 AlephCore.process_input()
 **估时**: 2 days
 **依赖**: Task 2.1
 **负责人**: Backend developer
 **状态**: ✅ **已完成** (2024-12-30)
 
 **子任务**:
-- [x] 创建新方法 `AetherCore::process_input(user_input, context)` (core.rs:893-909)
+- [x] 创建新方法 `AlephCore::process_input(user_input, context)` (core.rs:893-909)
 - [x] 集成现有管线:
   - [x] PII 过滤 (现有实现复用)
   - [x] 记忆检索（如果启用）(process_with_ai_internal)
@@ -174,13 +174,13 @@
 **状态**: ✅ **已完成** (2024-12-30)
 
 **子任务**:
-- [x] 删除 `Aether/core/src/hotkey/rdev_listener.rs`
-- [x] 删除 `Aether/core/src/clipboard/arboard_manager.rs`
-- [x] 删除 `Aether/core/src/input/enigo_simulator.rs`
-- [x] 删除 `Aether/core/src/hotkey/mod.rs` 中的 trait 定义
-- [x] 删除 `Aether/core/src/clipboard/mod.rs` 中的 trait 定义 (保留 ImageData/ImageFormat)
-- [x] 删除 `Aether/core/src/input/mod.rs` 中的 trait 定义
-- [x] 修改 `Aether/core/src/core.rs` 移除相关字段 (clipboard_manager, input_simulator)
+- [x] 删除 `Aleph/core/src/hotkey/rdev_listener.rs`
+- [x] 删除 `Aleph/core/src/clipboard/arboard_manager.rs`
+- [x] 删除 `Aleph/core/src/input/enigo_simulator.rs`
+- [x] 删除 `Aleph/core/src/hotkey/mod.rs` 中的 trait 定义
+- [x] 删除 `Aleph/core/src/clipboard/mod.rs` 中的 trait 定义 (保留 ImageData/ImageFormat)
+- [x] 删除 `Aleph/core/src/input/mod.rs` 中的 trait 定义
+- [x] 修改 `Aleph/core/src/core.rs` 移除相关字段 (clipboard_manager, input_simulator)
 
 **验收标准**:
 - [x] `cargo build` 通过
@@ -312,7 +312,7 @@
   - [ ] GlobalHotkeyMonitorTests
   - [ ] EventHandlerTests
 - [ ] Rust 层测试:
-  - [ ] AetherCore::process_input() tests
+  - [ ] AlephCore::process_input() tests
   - [ ] 确保现有测试仍通过
 - [ ] 运行 `cargo test`
 - [ ] 运行 `xcodebuild test`

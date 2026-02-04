@@ -289,7 +289,7 @@ pub mod exec; // Command execution security
 
 **Step 4: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check 2>&1 | head -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check 2>&1 | head -30`
 
 **Step 5: Commit**
 
@@ -526,7 +526,7 @@ pub use config::{
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib exec 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib exec 2>&1 | tail -30`
 
 **Step 4: Commit**
 
@@ -958,7 +958,7 @@ pub use parser::{analyze_shell_command, tokenize_segment};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib exec 2>&1 | tail -40`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib exec 2>&1 | tail -40`
 
 **Step 4: Commit**
 
@@ -1202,7 +1202,7 @@ pub use parser::{analyze_shell_command, tokenize_segment};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib exec 2>&1 | tail -40`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib exec 2>&1 | tail -40`
 
 **Step 4: Commit**
 
@@ -1553,7 +1553,7 @@ pub use parser::{analyze_shell_command, tokenize_segment};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib exec 2>&1 | tail -40`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib exec 2>&1 | tail -40`
 
 **Step 4: Commit**
 
@@ -1803,7 +1803,7 @@ pub use socket::{ApprovalDecisionType, ApprovalRequestPayload, SegmentInfo, Sock
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib exec 2>&1 | tail -40`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib exec 2>&1 | tail -40`
 
 **Step 4: Commit**
 
@@ -1821,7 +1821,7 @@ git commit -m "exec: add socket protocol types for approval communication"
 
 **Step 1: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib exec 2>&1 | tail -50`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib exec 2>&1 | tail -50`
 
 **Step 2: Add exports to lib.rs**
 
@@ -1848,7 +1848,7 @@ pub use crate::exec::{
 
 **Step 3: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check 2>&1 | tail -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check 2>&1 | tail -20`
 
 **Step 4: Final commit**
 
