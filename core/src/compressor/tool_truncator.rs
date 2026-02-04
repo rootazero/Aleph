@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn test_truncate_includes_summary_in_content() {
         let truncator = ToolTruncator::new(200);
-        let output = "First line\n".to_string() + &"x".repeat(1000);
+        let output = format!("First line\n{}", "x".repeat(1000));
 
         let result = truncator.truncate(&output, "read_file");
 
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn test_truncate_preserves_first_line_preview() {
         let truncator = ToolTruncator::new(200);
-        let output = "This is the first line preview\nSecond line\n".to_string() + &"x".repeat(1000);
+        let output = format!("This is the first line preview\nSecond line\n{}", "x".repeat(1000));
 
         let result = truncator.truncate(&output, "test_tool");
 
@@ -358,7 +358,7 @@ mod tests {
     fn test_truncate_long_first_line_capped_at_50_chars() {
         let truncator = ToolTruncator::new(200);
         let long_first_line = "a".repeat(100);
-        let output = long_first_line.clone() + "\nMore content\n" + &"x".repeat(1000);
+        let output = format!("{}\nMore content\n{}", long_first_line, "x".repeat(1000));
 
         let result = truncator.truncate(&output, "test_tool");
 
@@ -400,7 +400,7 @@ mod tests {
     fn test_custom_template_with_preview() {
         let truncator = ToolTruncator::new(200)
             .with_summary_template("Truncated {tool_name}: '{preview}'");
-        let output = "Important first line\n".to_string() + &"x".repeat(500);
+        let output = format!("Important first line\n{}", "x".repeat(500));
 
         let result = truncator.truncate(&output, "read_file");
 
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn test_truncate_with_multiline_content() {
         let truncator = ToolTruncator::new(100);
-        let output = "Line 1\nLine 2\nLine 3\n".to_string() + &"x".repeat(500);
+        let output = format!("Line 1\nLine 2\nLine 3\n{}", "x".repeat(500));
 
         let result = truncator.truncate(&output, "test_tool");
 
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn test_truncate_content_with_only_newlines() {
         let truncator = ToolTruncator::new(10);
-        let output = "\n\n\n\n".to_string() + &"x".repeat(100);
+        let output = format!("\n\n\n\n{}", "x".repeat(100));
 
         let result = truncator.truncate(&output, "test_tool");
 
@@ -511,20 +511,21 @@ mod tests {
         let truncator = ToolTruncator::new(500);
 
         // Simulate a large file read output
-        let file_content = r#"// Large source file
-pub struct LargeStruct {
+        let file_content = format!(r#"// Large source file
+pub struct LargeStruct {{
     field1: String,
     field2: i32,
     // ... many more fields
-}
+}}
 
-impl LargeStruct {
-    pub fn new() -> Self {
+impl LargeStruct {{
+    pub fn new() -> Self {{
         // Implementation details
-    }
+    }}
 
     // Many more methods follow...
-"#.to_string() + &"// More code\n".repeat(100);
+{}
+"#, "// More code\n".repeat(100));
 
         let result = truncator.truncate(&file_content, "read_file");
 
@@ -539,8 +540,8 @@ impl LargeStruct {
         let truncator = ToolTruncator::new(300);
 
         // Simulate a large JSON API response
-        let json_output = r#"{"status":"success","data":[{"id":1,"name":"Item 1"},{"id":2,"name":"Item 2"},"#.to_string()
-            + &r#"{"id":3,"name":"Item 3"},"#.repeat(50);
+        let json_output = format!(r#"{{"status":"success","data":[{{"id":1,"name":"Item 1"}},{{"id":2,"name":"Item 2"}},{}
+"#, r#"{"id":3,"name":"Item 3"},"#.repeat(50));
 
         let result = truncator.truncate(&json_output, "api_call");
 
