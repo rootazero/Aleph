@@ -269,11 +269,7 @@ impl ToolFilter {
 
 /// Extract tool name from action type string (e.g., "tool:search" -> "search")
 fn extract_tool_name(action_type: &str) -> Option<String> {
-    if action_type.starts_with("tool:") {
-        Some(action_type[5..].to_string())
-    } else {
-        None
-    }
+    action_type.strip_prefix("tool:").map(|s| s.to_string())
 }
 
 #[cfg(test)]
