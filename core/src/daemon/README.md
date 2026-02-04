@@ -22,6 +22,25 @@ The Daemon module provides system service management for Aether, enabling it to 
 └─────────────────────────────────────────────┘
 ```
 
+## Perception Layer (Phase 2)
+
+The Perception Layer continuously monitors OS-level events and publishes them to the `DaemonEventBus`. See [`perception/README.md`](perception/README.md) for details.
+
+**Key Features:**
+- 4 configurable Watchers (Process, File, Time, System)
+- Level 0/1 tiering for adaptive resource management
+- <5% CPU, <50MB RAM resource budget
+- Independent event system (DaemonEvent vs Agent events)
+
+**Quick Start:**
+```bash
+# Run daemon with perception layer
+cargo run -p aethecore -- daemon run
+
+# Check configuration
+cat ~/.aether/perception.toml
+```
+
 ## Components
 
 ### ServiceManager
