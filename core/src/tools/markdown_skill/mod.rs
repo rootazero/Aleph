@@ -9,6 +9,7 @@ mod loader;
 mod parser;
 mod spec;
 mod tool_adapter;
+mod watcher;
 
 pub use generator::{MarkdownSkillGenerator, MarkdownSkillGeneratorConfig};
 pub use loader::{load_skills_from_dir, SkillLoader};
@@ -17,3 +18,4 @@ pub use spec::{
     NetworkMode, RequiresSpec, SandboxMode, SecuritySpec, SkillMetadata,
 };
 pub use tool_adapter::{MarkdownCliTool, MarkdownToolOutput};
+pub use watcher::{ReloadCallback, SkillEvent, SkillWatcher, SkillWatcherConfig};
