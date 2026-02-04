@@ -179,7 +179,7 @@ impl IpcServer {
         // Step 1: Send challenge
         let mut nonce = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut nonce);
-        let nonce_hex = hex::encode(&nonce);
+        let nonce_hex = hex::encode(nonce);
 
         let challenge = IpcMessage::Challenge {
             nonce: nonce_hex.clone(),

@@ -137,7 +137,7 @@ impl GraphStore {
             if !trimmed.is_empty() {
                 let mut fallback = trimmed.chars().take(40).collect::<String>();
                 if trimmed.chars().count() > 40 {
-                    fallback.push_str("…");
+                    fallback.push('…');
                 }
                 candidates.push(fallback);
             }
@@ -681,8 +681,7 @@ impl GraphStore {
 
         // Create co-occurrence edges
         let context_key = fact
-            .source_memory_ids
-            .get(0)
+            .source_memory_ids.first()
             .and_then(|id| context_map.get(id))
             .cloned()
             .unwrap_or_default();

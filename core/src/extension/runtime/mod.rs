@@ -311,12 +311,11 @@ pub struct InstalledPackage {
 /// Returns (name, version) tuple.
 pub fn parse_package_spec(spec: &str) -> (String, String) {
     // Handle scoped packages (@scope/package@version)
-    if spec.starts_with('@') {
+    if let Some(after_scope) = spec.strip_prefix('@') {
         // Find the @ that separates name from version (not the scope @)
-        if let Some(at_pos) = spec[1..].find('@') {
-            // at_pos is relative to spec[1..], so add 1 to get position in spec
-            let name = spec[..at_pos + 1].to_string();
-            let version = spec[at_pos + 2..].to_string();
+        if let Some(at_pos) = after_scope.find('@') {
+            let name = format!("@{}", &after_scope[..at_pos]);
+            let version = after_scope[at_pos + 1..].to_string();
             return (name, version);
         }
         return (spec.to_string(), "latest".to_string());

@@ -11,20 +11,17 @@ use std::sync::Arc;
 
 /// Strategy for merging facts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum MergeStrategy {
     /// Generalize: "likes Rust" + "likes Go" → "likes systems languages"
     Generalize,
     /// Specialize: "likes coffee" + "likes dark roast" → "likes dark roast coffee"
     Specialize,
     /// Enumerate: "likes Rust, Go, and Zig"
+    #[default]
     Enumerate,
 }
 
-impl Default for MergeStrategy {
-    fn default() -> Self {
-        Self::Enumerate
-    }
-}
 
 /// Result of conflict resolution
 #[derive(Debug, Clone)]

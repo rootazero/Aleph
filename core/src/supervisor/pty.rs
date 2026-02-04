@@ -88,11 +88,11 @@ impl ClaudeSupervisor {
         let reader = pair
             .master
             .try_clone_reader()
-            .map_err(|e| SupervisorError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| SupervisorError::Io(std::io::Error::other(e.to_string())))?;
         let writer = pair
             .master
             .take_writer()
-            .map_err(|e| SupervisorError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| SupervisorError::Io(std::io::Error::other(e.to_string())))?;
 
         self.master = Some(pair.master);
         self.writer = Some(writer);

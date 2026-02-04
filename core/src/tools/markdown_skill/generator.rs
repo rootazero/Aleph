@@ -3,14 +3,14 @@
 //! Generates SKILL.md files from Evolution Loop solidification suggestions.
 //! This enables automatic skill creation from detected usage patterns.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::{debug, info};
 
 use crate::error::Result;
 use crate::skill_evolution::types::SolidificationSuggestion;
 
 use super::spec::{
-    AetherExtensions, AetherSkillSpec, ConfirmationMode, DockerConfig, EvolutionMeta,
+    AetherExtensions, AetherSkillSpec, ConfirmationMode, EvolutionMeta,
     InputHint, NetworkMode, RequiresSpec, SandboxMode, SecuritySpec, SkillMetadata,
 };
 

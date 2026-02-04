@@ -159,7 +159,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     let repo_name = params
         .url
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or("plugin")
         .trim_end_matches(".git");
     let dest_path = plugins_dir.join(repo_name);

@@ -24,6 +24,7 @@ use regex::Regex;
 /// assert_eq!(risk, aethecore::exec::RiskLevel::Safe);
 /// ```
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct SecurityKernel {
     /// Custom blocked patterns (in addition to defaults)
     custom_blocked: Vec<Regex>,
@@ -33,15 +34,6 @@ pub struct SecurityKernel {
     custom_safe: Vec<Regex>,
 }
 
-impl Default for SecurityKernel {
-    fn default() -> Self {
-        Self {
-            custom_blocked: Vec::new(),
-            custom_danger: Vec::new(),
-            custom_safe: Vec::new(),
-        }
-    }
-}
 
 impl SecurityKernel {
     /// Create a new security kernel with default patterns.

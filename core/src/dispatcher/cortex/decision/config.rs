@@ -14,6 +14,7 @@ use std::path::Path;
 /// parameters for the dispatcher. Each subsystem has its own config
 /// struct with sensible defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct DecisionConfig {
     /// Routing configuration (confidence thresholds)
     pub routing: RoutingConfig,
@@ -23,15 +24,6 @@ pub struct DecisionConfig {
     pub execution: ExecutionConfig,
 }
 
-impl Default for DecisionConfig {
-    fn default() -> Self {
-        Self {
-            routing: RoutingConfig::default(),
-            confirmation: ConfirmationConfig::default(),
-            execution: ExecutionConfig::default(),
-        }
-    }
-}
 
 impl DecisionConfig {
     /// Determine the decision action based on confidence score

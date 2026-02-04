@@ -249,7 +249,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
                     .iter()
                     .map(|def| UnifiedTool::new(
-                        &format!("builtin:{}", def.name),
+                        format!("builtin:{}", def.name),
                         def.name,
                         def.description,
                         ToolSource::Builtin,

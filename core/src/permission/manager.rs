@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 
 /// Configuration for the permission manager
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct PermissionManagerConfig {
     /// Default timeout for permission requests (0 = no timeout)
     pub timeout_ms: u64,
@@ -22,14 +23,6 @@ pub struct PermissionManagerConfig {
     pub persist_approvals: bool,
 }
 
-impl Default for PermissionManagerConfig {
-    fn default() -> Self {
-        Self {
-            timeout_ms: 0, // No timeout by default (like Claude Code)
-            persist_approvals: false, // Don't persist yet (like OpenCode TODO)
-        }
-    }
-}
 
 /// A pending permission request waiting for user response
 pub struct PendingPermission {

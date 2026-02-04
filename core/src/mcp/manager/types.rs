@@ -182,6 +182,7 @@ pub struct McpServerInfo {
 /// Health status for circuit breaker pattern
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
+#[derive(Default)]
 pub enum HealthStatus {
     /// Server is healthy
     Healthy,
@@ -200,14 +201,10 @@ pub enum HealthStatus {
     /// Server is dead (max restarts exceeded)
     Dead,
     /// Server is stopped (intentionally)
+    #[default]
     Stopped,
 }
 
-impl Default for HealthStatus {
-    fn default() -> Self {
-        Self::Stopped
-    }
-}
 
 impl std::fmt::Display for HealthStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

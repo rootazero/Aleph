@@ -8,12 +8,7 @@ pub fn match_allowlist<'a>(
     allowlist: &'a [AllowlistEntry],
     resolution: &CommandResolution,
 ) -> Option<&'a AllowlistEntry> {
-    for entry in allowlist {
-        if matches_entry(entry, resolution) {
-            return Some(entry);
-        }
-    }
-    None
+    allowlist.iter().find(|&entry| matches_entry(entry, resolution)).map(|v| v as _)
 }
 
 /// Check if a resolution matches a single entry

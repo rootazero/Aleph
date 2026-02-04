@@ -116,7 +116,7 @@ impl From<&ToolCallRecord> for ToolCallSummary {
             "error"
         };
         Self {
-            id: format!("{}_{}", record.name, uuid::Uuid::new_v4().to_string()[..8].to_string()),
+            id: format!("{}_{}", record.name, &uuid::Uuid::new_v4().to_string()[..8]),
             tool: record.name.clone(),
             state: ToolCallState {
                 status: status.to_string(),

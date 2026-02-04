@@ -44,8 +44,10 @@ impl DeviceType {
 /// Device role - determines permissions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DeviceRole {
     /// Full control (CLI, macOS App, Web UI)
+    #[default]
     Operator,
     /// Limited execution (iOS/Android nodes)
     Node,
@@ -68,11 +70,6 @@ impl DeviceRole {
     }
 }
 
-impl Default for DeviceRole {
-    fn default() -> Self {
-        DeviceRole::Operator
-    }
-}
 
 /// An approved device
 #[derive(Debug, Clone, Serialize, Deserialize)]

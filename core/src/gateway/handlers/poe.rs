@@ -1017,7 +1017,7 @@ impl<W: Worker + 'static> PoeContractService<W> {
             .run_manager
             .start_run(run_params)
             .await
-            .map_err(|e| AetherError::other(e))?;
+            .map_err(AetherError::other)?;
 
         Ok(SignResult {
             task_id: run_result.task_id,

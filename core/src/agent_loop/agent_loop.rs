@@ -434,7 +434,7 @@ where
                 }
                 Decision::AskUserMultigroup { question, groups } => {
                     let response = callback
-                        .on_user_multigroup_required(question, &groups)
+                        .on_user_multigroup_required(question, groups)
                         .await;
 
                     // Record user interaction as a step

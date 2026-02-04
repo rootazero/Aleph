@@ -134,7 +134,7 @@ impl SecurityStore {
              FROM devices WHERE device_id = ?1",
         )?;
 
-        let result = stmt.query_row(params![device_id], |row| DeviceRow::from_row(row));
+        let result = stmt.query_row(params![device_id], DeviceRow::from_row);
 
         match result {
             Ok(device) => Ok(Some(device)),
@@ -152,7 +152,7 @@ impl SecurityStore {
              FROM devices WHERE fingerprint = ?1 AND revoked_at IS NULL",
         )?;
 
-        let result = stmt.query_row(params![fingerprint], |row| DeviceRow::from_row(row));
+        let result = stmt.query_row(params![fingerprint], DeviceRow::from_row);
 
         match result {
             Ok(device) => Ok(Some(device)),
@@ -182,7 +182,7 @@ impl SecurityStore {
         )?;
 
         let devices = stmt
-            .query_map([], |row| DeviceRow::from_row(row))?
+            .query_map([], DeviceRow::from_row)?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -250,7 +250,7 @@ impl SecurityStore {
              WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2",
         )?;
 
-        let result = stmt.query_row(params![token_hash, now], |row| TokenRow::from_row(row));
+        let result = stmt.query_row(params![token_hash, now], TokenRow::from_row);
 
         match result {
             Ok(token) => Ok(Some(token)),
@@ -347,7 +347,7 @@ impl SecurityStore {
              WHERE code = ?1 AND expires_at > ?2",
         )?;
 
-        let result = stmt.query_row(params![code, now], |row| PairingRequestRow::from_row(row));
+        let result = stmt.query_row(params![code, now], PairingRequestRow::from_row);
 
         match result {
             Ok(req) => Ok(Some(req)),
@@ -377,7 +377,7 @@ impl SecurityStore {
         )?;
 
         let requests = stmt
-            .query_map(params![now], |row| PairingRequestRow::from_row(row))?
+            .query_map(params![now], PairingRequestRow::from_row)?
             .filter_map(|r| r.ok())
             .collect();
 

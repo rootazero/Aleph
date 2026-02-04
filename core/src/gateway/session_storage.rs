@@ -87,10 +87,7 @@ impl SessionStorage {
     fn session_file_path(&self, session_key: &str) -> PathBuf {
         // Sanitize the session key for use as filename
         let safe_name = session_key
-            .replace(':', "_")
-            .replace('/', "_")
-            .replace('\\', "_")
-            .replace('\0', "_");
+            .replace([':', '/', '\\', '\0'], "_");
         self.sessions_dir.join(format!("{}.jsonl", safe_name))
     }
 
@@ -297,9 +294,7 @@ impl SessionStorage {
 
         let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
         let safe_name = session_key
-            .replace(':', "_")
-            .replace('/', "_")
-            .replace('\\', "_");
+            .replace([':', '/', '\\'], "_");
         let archive_name = format!("{}_{}.jsonl", safe_name, timestamp);
         let archive_path = archive_dir.join(archive_name);
 

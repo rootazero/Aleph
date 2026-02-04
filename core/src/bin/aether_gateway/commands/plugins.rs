@@ -58,7 +58,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     // Extract repo name from URL
     let repo_name = url
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or("plugin")
         .trim_end_matches(".git");
     let dest_path = plugins_dir.join(repo_name);

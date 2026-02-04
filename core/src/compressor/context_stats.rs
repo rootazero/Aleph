@@ -219,8 +219,10 @@ impl WarningLevel {
 
 /// Compression focus options
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum CompressionFocus {
     /// Default compression - balanced approach
+    #[default]
     Balanced,
     /// Preserve tool outputs and file changes
     PreserveTools,
@@ -232,11 +234,6 @@ pub enum CompressionFocus {
     PreserveConversation,
 }
 
-impl Default for CompressionFocus {
-    fn default() -> Self {
-        Self::Balanced
-    }
-}
 
 impl CompressionFocus {
     /// Get description of this focus

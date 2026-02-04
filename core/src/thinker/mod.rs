@@ -56,6 +56,7 @@ use crate::providers::AiProvider;
 
 /// Configuration for Thinker
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ThinkerConfig {
     /// Prompt configuration
     pub prompt: PromptConfig,
@@ -69,17 +70,6 @@ pub struct ThinkerConfig {
     pub think_level: ThinkLevel,
 }
 
-impl Default for ThinkerConfig {
-    fn default() -> Self {
-        Self {
-            prompt: PromptConfig::default(),
-            tool_filter: ToolFilterConfig::default(),
-            model_routing: ModelRoutingConfig::default(),
-            compression: CompressionConfig::default(),
-            think_level: ThinkLevel::default(),
-        }
-    }
-}
 
 /// Provider registry for model routing
 pub trait ProviderRegistry: Send + Sync {

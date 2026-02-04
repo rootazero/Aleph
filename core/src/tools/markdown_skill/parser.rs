@@ -11,7 +11,7 @@ pub fn parse_skill_file(content: &str) -> Result<AetherSkillSpec> {
     let (frontmatter, markdown) = extract_frontmatter(content)?;
 
     // 2. Parse YAML frontmatter
-    let mut spec: AetherSkillSpec = serde_yaml::from_str(&frontmatter)
+    let mut spec: AetherSkillSpec = serde_yaml::from_str(frontmatter)
         .context("Failed to parse skill frontmatter")?;
 
     // 3. Attach markdown content

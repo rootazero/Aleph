@@ -227,7 +227,7 @@ impl ToolFilter {
         if observation
             .attachments
             .iter()
-            .any(|a| a.mime_type.contains("url") || a.filename.as_ref().map_or(false, |f| f.starts_with("http")))
+            .any(|a| a.mime_type.contains("url") || a.filename.as_ref().is_some_and(|f| f.starts_with("http")))
         {
             categories.push(TaskCategory::WebFetch);
         }

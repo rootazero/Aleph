@@ -14,7 +14,7 @@ use crate::error::Result;
 pub async fn capture_snapshot(args: SnapshotCaptureArgs) -> Result<PerceptionSnapshot> {
     #[cfg(target_os = "macos")]
     {
-        return macos::capture_snapshot(args).await;
+        macos::capture_snapshot(args).await
     }
 
     #[cfg(not(target_os = "macos"))]

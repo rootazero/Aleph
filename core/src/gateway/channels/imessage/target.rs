@@ -13,8 +13,10 @@ use std::fmt;
 
 /// Service type for message delivery
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum Service {
     /// Auto-detect (prefer iMessage, fall back to SMS)
+    #[default]
     Auto,
     /// Force iMessage
     IMessage,
@@ -22,11 +24,6 @@ pub enum Service {
     Sms,
 }
 
-impl Default for Service {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
 
 impl fmt::Display for Service {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -209,7 +206,7 @@ pub fn normalize_phone(phone: &str) -> String {
 #[allow(dead_code)]
 pub fn is_phone_number(s: &str) -> bool {
     let digits: usize = s.chars().filter(|c| c.is_ascii_digit()).count();
-    digits >= 10 && digits <= 15
+    (10..=15).contains(&digits)
 }
 
 /// Check if a string looks like an email

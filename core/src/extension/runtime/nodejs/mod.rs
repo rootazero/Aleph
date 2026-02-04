@@ -107,7 +107,7 @@ impl NodeJsRuntime {
 
         let registrations: PluginRegistrationParams = response
             .result
-            .map(|r| serde_json::from_value(r))
+            .map(serde_json::from_value)
             .transpose()
             .map_err(|e| ExtensionError::Runtime(format!("Invalid registration: {}", e)))?
             .unwrap_or_else(|| PluginRegistrationParams {

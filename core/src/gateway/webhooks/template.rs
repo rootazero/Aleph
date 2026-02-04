@@ -97,11 +97,11 @@ pub fn render_template(template: &str, context: &TemplateContext) -> String {
 /// Returns a list of variable names found in the template.
 pub fn extract_variables(template: &str) -> Vec<String> {
     let mut variables = Vec::new();
-    let mut chars = template.chars().peekable();
+    let chars = template.chars().peekable();
     let mut current_var = String::new();
     let mut in_var = false;
 
-    while let Some(c) = chars.next() {
+    for c in chars {
         if c == '{' {
             in_var = true;
             current_var.clear();

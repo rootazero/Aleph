@@ -9,20 +9,17 @@ use std::fmt;
 /// DM session isolation strategy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum DmScope {
     /// All DMs share main session
     Main,
     /// Per-user isolation (cross-channel)
+    #[default]
     PerPeer,
     /// Per-channel per-user isolation
     PerChannelPeer,
 }
 
-impl Default for DmScope {
-    fn default() -> Self {
-        Self::PerPeer
-    }
-}
 
 /// Peer type for group sessions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

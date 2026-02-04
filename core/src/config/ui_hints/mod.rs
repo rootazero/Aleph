@@ -104,11 +104,10 @@ impl ConfigUiHints {
         let mut best_match: Option<(&str, &FieldHint)> = None;
 
         for (pattern, hint) in &self.fields {
-            if Self::matches_pattern(pattern, &parts) {
-                if best_match.is_none() || pattern.len() > best_match.unwrap().0.len() {
+            if Self::matches_pattern(pattern, &parts)
+                && (best_match.is_none() || pattern.len() > best_match.unwrap().0.len()) {
                     best_match = Some((pattern.as_str(), hint));
                 }
-            }
         }
 
         best_match.map(|(_, hint)| hint)

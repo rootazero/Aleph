@@ -250,7 +250,7 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
 
     // Find git root to limit traversal
     let git_root = find_git_root(&start_dir);
-    let stop_at = git_root.as_ref().map(|p| p.as_path());
+    let stop_at = git_root.as_deref();
 
     // 1. Project level: traverse up from start to git root
     let mut current = start_dir.clone();

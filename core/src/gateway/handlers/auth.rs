@@ -371,7 +371,7 @@ pub async fn handle_pairing_approve(
         }
         PairingRequest::Channel { channel, sender_id, .. } => {
             // Channel pairing approved - approve the sender via SecurityStore
-            if let Err(e) = ctx.security_store.approve_sender(&channel, &sender_id) {
+            if let Err(e) = ctx.security_store.approve_sender(channel, sender_id) {
                 warn!(error = %e, "Failed to approve sender");
                 return JsonRpcResponse::error(request.id, -32603, format!("Failed to approve sender: {}", e));
             }

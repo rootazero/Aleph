@@ -315,8 +315,8 @@ async fn handle_connection(
                                     let conns = connections.read().await;
                                     let state = conns.get(&conn_id);
                                     (
-                                        state.map_or(true, |s| s.first_message),
-                                        state.map_or(false, |s| s.authenticated),
+                                        state.is_none_or(|s| s.first_message),
+                                        state.is_some_and(|s| s.authenticated),
                                     )
                                 };
 

@@ -7,9 +7,9 @@ use std::path::PathBuf;
 
 /// Expand ~ to home directory
 pub fn expand_path(path: &str) -> PathBuf {
-    if path.starts_with("~/") {
+    if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            return home.join(&path[2..]);
+            return home.join(stripped);
         }
     }
     PathBuf::from(path)
@@ -90,7 +90,7 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
 /// Handle status command
 pub fn handle_status(pid_file: &str, json: bool) -> Result<(), Box<dyn std::error::Error>> {
     let pid = read_pid_file(pid_file);
-    let running = pid.map(|p| is_process_running(p)).unwrap_or(false);
+    let running = pid.map(is_process_running).unwrap_or(false);
 
     if json {
         let status = serde_json::json!({

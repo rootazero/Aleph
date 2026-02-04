@@ -10,8 +10,7 @@ use std::time::Instant;
 /// - Converts to lowercase
 /// - Removes common punctuation
 pub fn normalize_text(text: &str) -> String {
-    text.trim()
-        .split_whitespace()
+    text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
