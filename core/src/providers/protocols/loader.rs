@@ -1,10 +1,45 @@
 // core/src/providers/protocols/loader.rs
 
 //! Protocol loader for YAML-based protocols
+//!
+//! This module provides hot-reload functionality for protocol definitions stored as YAML files.
+//!
+//! # Architecture
+//!
+//! Uses the `notify-debouncer-full` crate to watch `~/.aether/protocols/` for changes:
+//! - **Debouncing**: 500ms delay to avoid rapid-fire reloads on single file writes
+//! - **Event filtering**: Only reacts to .yaml/.yml file changes
+//! - **Auto-reload**: Modified files are automatically re-loaded into ProtocolRegistry
+//!
+//! # Integration
+//!
+//! The `start_watching()` function returns a `Debouncer` that must be kept alive by the caller.
+//! When the Debouncer is dropped, file watching stops automatically.
+//!
+//! **Gateway/Server integration example:**
+//! ```rust,ignore
+//! struct Server {
+//!     protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
+//! }
+//!
+//! impl Server {
+//!     fn new() -> Self {
+//!         let watcher = ProtocolLoader::start_watching().ok().flatten();
+//!         Self { protocol_watcher: watcher }
+//!     }
+//! }
+//! ```
+//!
+//! # Pattern Consistency
+//!
+//! This implementation follows the same debouncer pattern as:
+//! - `core/src/config/watcher.rs` (config file hot-reload)
+//! - `core/src/extension/watcher.rs` (extension file hot-reload)
 
 use crate::error::{AetherError, Result};
 use crate::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, ProtocolRegistry};
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -106,7 +141,40 @@ impl ProtocolLoader {
     }
 
     /// Start hot reload watcher for ~/.aether/protocols
-    pub fn start_watching() -> Result<Option<RecommendedWatcher>> {
+    ///
+    /// # Watcher Lifecycle
+    ///
+    /// The returned Debouncer must be kept alive by the caller. When dropped,
+    /// file watching stops automatically.
+    ///
+    /// # Architecture
+    ///
+    /// Uses notify-debouncer-full to:
+    /// - Debounce file events (500ms delay) to avoid rapid-fire reloads
+    /// - Handle file system quirks on macOS/Linux/Windows
+    /// - Filter duplicate events from a single file write
+    ///
+    /// # Integration
+    ///
+    /// This is a foundational implementation. For production use:
+    /// 1. Call this during Gateway/Server startup
+    /// 2. Store the returned Debouncer in a long-lived struct
+    /// 3. Keep the Debouncer alive for the lifetime of the server
+    ///
+    /// Example:
+    /// ```rust,ignore
+    /// struct Server {
+    ///     protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
+    /// }
+    ///
+    /// impl Server {
+    ///     fn new() -> Self {
+    ///         let watcher = ProtocolLoader::start_watching().ok().flatten();
+    ///         Self { protocol_watcher: watcher }
+    ///     }
+    /// }
+    /// ```
+    pub fn start_watching() -> Result<Option<Debouncer<RecommendedWatcher, FileIdMap>>> {
         // Get ~/.aether/protocols path
         let home = std::env::var("HOME").map_err(|_| {
             AetherError::invalid_config("HOME environment variable not set".to_string())
@@ -131,25 +199,50 @@ impl ProtocolLoader {
     }
 
     /// Start watching a specific directory for protocol file changes
-    fn start_watching_dir(dir: &Path) -> Result<Option<RecommendedWatcher>> {
+    ///
+    /// Uses debouncer pattern matching config/watcher.rs and extension/watcher.rs.
+    /// Returns Debouncer that must be kept alive by caller.
+    fn start_watching_dir(dir: &Path) -> Result<Option<Debouncer<RecommendedWatcher, FileIdMap>>> {
         let dir = dir.to_path_buf();
         let dir_for_closure = dir.clone();
 
-        // Create watcher with 2-second poll interval
-        let config = Config::default().with_poll_interval(Duration::from_secs(2));
-
-        let mut watcher = RecommendedWatcher::new(
-            move |event_result| {
-                if let Ok(event) = event_result {
-                    Self::handle_fs_event(event, &dir_for_closure);
+        // Create debounced watcher with 500ms delay (standard across codebase)
+        let mut debouncer = new_debouncer(
+            Duration::from_millis(500),
+            None,
+            move |result: DebounceEventResult| {
+                match result {
+                    Ok(events) => {
+                        // Process each debounced event
+                        for event in events {
+                            for path in &event.paths {
+                                // Check if it's a YAML file
+                                if let Some(ext) = path.extension() {
+                                    if (ext == "yaml" || ext == "yml") && path.starts_with(&dir_for_closure) {
+                                        info!(
+                                            path = ?path,
+                                            kind = ?event.kind,
+                                            "Protocol file changed, reloading"
+                                        );
+                                        Self::reload_protocol(path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(errors) => {
+                        for error in &errors {
+                            error!(?error, "Protocol file watcher error");
+                        }
+                    }
                 }
             },
-            config,
         )
         .map_err(|e| AetherError::invalid_config(format!("Failed to create watcher: {}", e)))?;
 
         // Watch directory non-recursively
-        watcher
+        debouncer
+            .watcher()
             .watch(&dir, RecursiveMode::NonRecursive)
             .map_err(|e| {
                 AetherError::invalid_config(format!("Failed to watch directory {:?}: {}", dir, e))
@@ -160,51 +253,7 @@ impl ProtocolLoader {
             "Successfully started watching protocols directory"
         );
 
-        Ok(Some(watcher))
-    }
-
-    /// Handle file system event
-    fn handle_fs_event(event: Event, dir: &Path) {
-        match event.kind {
-            EventKind::Create(_) | EventKind::Modify(_) => {
-                // Handle Create and Modify events
-                for path in event.paths {
-                    // Check if it's a YAML file
-                    if let Some(ext) = path.extension() {
-                        if ext == "yaml" || ext == "yml" {
-                            if path.starts_with(dir) {
-                                info!(
-                                    path = ?path,
-                                    event = ?event.kind,
-                                    "Protocol file changed, reloading"
-                                );
-                                Self::reload_protocol(&path);
-                            }
-                        }
-                    }
-                }
-            }
-            EventKind::Remove(_) => {
-                // Handle Remove events
-                for path in event.paths {
-                    // Check if it's a YAML file
-                    if let Some(ext) = path.extension() {
-                        if ext == "yaml" || ext == "yml" {
-                            if path.starts_with(dir) {
-                                info!(
-                                    path = ?path,
-                                    "Protocol file removed, unregistering"
-                                );
-                                Self::unregister_protocol(&path);
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {
-                // Ignore other events
-            }
-        }
+        Ok(Some(debouncer))
     }
 
     /// Reload a protocol from file
