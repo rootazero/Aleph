@@ -35,10 +35,13 @@ differences:
       default: 1.0
       range: [0.0, 1.0]
 
-  # Model name mapping (if Groq uses different model identifiers)
-  model_aliases:
-    llama-3-70b: llama3-70b-8192
-    mixtral-8x7b: mixtral-8x7b-32768
+  # =============================================================================
+  # FUTURE FEATURES (Not yet implemented)
+  # =============================================================================
+  # # Model name mapping (if Groq uses different model identifiers)
+  # model_aliases:
+  #   llama-3-70b: llama3-70b-8192
+  #   mixtral-8x7b: mixtral-8x7b-32768
 
 # Usage:
 # 1. Copy this file to ~/.aether/protocols/groq-custom.yaml

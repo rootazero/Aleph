@@ -46,23 +46,26 @@ This mode defines a completely custom protocol from scratch:
 
 ```yaml
 name: exotic-ai
-protocol_type: custom
 base_url: https://api.exotic.ai
 
-auth:
-  type: header
-  header: X-API-Token
-  value_template: "{{config.api_key}}"
+custom:
+  auth:
+    type: header
+    header: X-API-Token
+    value_template: "{{config.api_key}}"
 
-request_template:
-  model_name: "{{config.model}}"
-  input_text: "{{input}}"
-  parameters:
-    temperature: "{{config.temperature}}"
+  endpoints:
+    chat: "/v2/completions"
 
-response_mapping:
-  content: "$.output.generated_text"
-  error: "$.error.message"
+  request_template:
+    model_name: "{{config.model}}"
+    input_text: "{{input}}"
+    parameters:
+      temperature: "{{config.temperature}}"
+
+  response_mapping:
+    content: "$.output.generated_text"
+    error: "$.error.message"
 ```
 
 **Benefits**:
@@ -161,15 +164,26 @@ RUST_LOG=debug aether chat --provider my-provider "Test"
 ### Optional Sections
 
 - **stream_config**: Streaming configuration (SSE or NDJSON)
-- **request_fields**: Parameter defaults and validation
-- **model_aliases**: Model name mapping
-- **rate_limits**: Rate limiting hints
-- **retry**: Retry configuration
 
 ### For Extended Protocols Only
 
 - **extends**: Base protocol to extend (e.g., `openai`)
 - **differences**: Only the fields that differ from base protocol
+  - **auth**: Authentication configuration override
+  - **request_fields**: Parameter defaults and validation (supported in differences only)
+
+### Future Features (Not Yet Implemented)
+
+The following features are documented in examples but not yet implemented:
+- **model_aliases**: Model name mapping
+- **rate_limits**: Rate limiting hints
+- **retry**: Retry configuration
+- **content_alternatives**: Fallback response paths
+- **finish_reason mapping**: Provider-specific finish reason translation
+- **usage metadata extraction**: Token usage tracking
+- **content_mode**: Delta vs. full content streaming
+
+These are commented out in the example files and will be added in future versions.
 
 ## Template Variables
 
@@ -274,10 +288,9 @@ response_mapping:
 
 ## Additional Resources
 
-- **Full Documentation**: See `docs/PROTOCOL_ADAPTER_USER_GUIDE.md` (Task 9)
+- **Full Documentation**: See `docs/PROTOCOL_ADAPTER_USER_GUIDE.md` (coming soon - Task 9)
 - **Built-in Protocols**: `core/src/providers/protocols/` directory
-- **Protocol Validation**: `aether protocol validate <name>`
-- **Protocol Listing**: `aether protocol list`
+- **Architecture Documentation**: See `docs/ARCHITECTURE.md` for system overview
 
 ## Contributing
 

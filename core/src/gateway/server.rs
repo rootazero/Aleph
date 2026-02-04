@@ -18,6 +18,9 @@ use super::handlers::HandlerRegistry;
 use super::handlers::events::{
     SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list,
 };
+use crate::providers::protocols::ProtocolLoader;
+use notify::{RecommendedWatcher, Watcher};
+use notify_debouncer_full::{Debouncer, FileIdMap};
 
 /// State for an individual WebSocket connection
 pub struct ConnectionState {
@@ -102,11 +105,23 @@ pub struct GatewayServer {
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     /// Subscription manager for per-connection event filtering
     subscription_manager: Arc<SubscriptionManager>,
+    /// Protocol file watcher for hot-reload (None if watching disabled/failed)
+    protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
 }
 
 impl GatewayServer {
     /// Create a new Gateway server with default configuration
     pub fn new(addr: SocketAddr) -> Self {
+        // Start protocol file watcher for hot-reload
+        // If it fails (e.g., no ~/.aether/protocols), log and continue without watching
+        let protocol_watcher = match ProtocolLoader::start_watching() {
+            Ok(watcher) => watcher,
+            Err(e) => {
+                warn!("Failed to start protocol watcher: {}", e);
+                None
+            }
+        };
+
         Self {
             addr,
             config: GatewayConfig::default(),
@@ -114,11 +129,21 @@ impl GatewayServer {
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             subscription_manager: Arc::new(SubscriptionManager::new()),
+            protocol_watcher,
         }
     }
 
     /// Create a Gateway server with custom configuration
     pub fn with_config(addr: SocketAddr, config: GatewayConfig) -> Self {
+        // Start protocol file watcher for hot-reload
+        let protocol_watcher = match ProtocolLoader::start_watching() {
+            Ok(watcher) => watcher,
+            Err(e) => {
+                warn!("Failed to start protocol watcher: {}", e);
+                None
+            }
+        };
+
         Self {
             addr,
             config,
@@ -126,6 +151,7 @@ impl GatewayServer {
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             subscription_manager: Arc::new(SubscriptionManager::new()),
+            protocol_watcher,
         }
     }
 

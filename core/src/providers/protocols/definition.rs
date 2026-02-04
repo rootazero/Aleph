@@ -157,4 +157,63 @@ differences:
         assert_eq!(def.name, "custom-auth");
         assert!(def.differences.is_some());
     }
+
+    #[test]
+    fn test_parse_groq_custom_example() {
+        // Test parsing the actual groq-custom.yaml example
+        let yaml = std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../examples/protocols/groq-custom.yaml"),
+        )
+        .expect("Failed to read groq-custom.yaml");
+
+        let def: ProtocolDefinition =
+            serde_yaml::from_str(&yaml).expect("Failed to parse groq-custom.yaml");
+        assert_eq!(def.name, "groq-custom");
+        assert_eq!(def.extends, Some("openai".to_string()));
+        assert_eq!(
+            def.base_url,
+            Some("https://api.groq.com/openai/v1".to_string())
+        );
+        assert!(def.differences.is_some());
+
+        let diff = def.differences.unwrap();
+        assert!(diff.auth.is_some());
+        assert!(diff.request_fields.is_some());
+
+        let auth = diff.auth.unwrap();
+        assert_eq!(auth.header, "X-API-Key");
+        assert_eq!(auth.prefix, Some("".to_string()));
+    }
+
+    #[test]
+    fn test_parse_exotic_ai_example() {
+        // Test parsing the actual exotic-ai.yaml example
+        let yaml = std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../examples/protocols/exotic-ai.yaml"),
+        )
+        .expect("Failed to read exotic-ai.yaml");
+
+        let def: ProtocolDefinition =
+            serde_yaml::from_str(&yaml).expect("Failed to parse exotic-ai.yaml");
+        assert_eq!(def.name, "exotic-ai");
+        assert_eq!(
+            def.base_url,
+            Some("https://api.exotic.ai".to_string())
+        );
+        assert!(def.custom.is_some());
+
+        let custom = def.custom.unwrap();
+        assert_eq!(custom.auth.auth_type, "header");
+        assert_eq!(custom.endpoints.chat, "/v2/completions");
+        assert!(custom.endpoints.stream.is_some());
+        assert_eq!(custom.endpoints.stream.unwrap(), "/v2/completions/stream");
+        assert_eq!(custom.response_mapping.content, "$.output.generated_text");
+        assert!(custom.stream_config.is_some());
+
+        let stream = custom.stream_config.unwrap();
+        assert_eq!(stream.format, "sse");
+        assert_eq!(stream.content_path, "$.chunk.text");
+    }
 }
