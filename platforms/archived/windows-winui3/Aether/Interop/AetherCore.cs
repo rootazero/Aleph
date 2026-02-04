@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.UI.Dispatching;
 
-namespace Aether.Interop;
+namespace Aleph.Interop;
 
 #region Initialization Progress Interface
 
@@ -31,7 +31,7 @@ public interface IInitProgressHandler
 #endregion
 
 /// <summary>
-/// High-level wrapper for Aether Rust core.
+/// High-level wrapper for Aleph Rust core.
 ///
 /// Handles:
 /// - UTF-8 string marshaling
@@ -41,9 +41,9 @@ public interface IInitProgressHandler
 /// CRITICAL: Callbacks from Rust may fire on any thread.
 /// We use DispatcherQueue to marshal calls to the UI thread.
 /// </summary>
-public sealed class AetherCore : IDisposable
+public sealed class AlephCore : IDisposable
 {
-    private static AetherCore? _instance;
+    private static AlephCore? _instance;
     private static IInitProgressHandler? _initHandler;
     private readonly DispatcherQueue _dispatcherQueue;
     private bool _initialized = false;
@@ -79,15 +79,15 @@ public sealed class AetherCore : IDisposable
     /// <summary>Gets whether the core is initialized.</summary>
     public bool IsInitialized => _initialized;
 
-    /// <summary>Gets the version of the Aether core library.</summary>
+    /// <summary>Gets the version of the Aleph core library.</summary>
     public string? Version => GetVersion();
 
     /// <summary>Gets whether the current operation is cancelled.</summary>
-    public bool IsCancelled => NativeMethods.aether_is_cancelled() != 0;
+    public bool IsCancelled => NativeMethods.aleph_is_cancelled() != 0;
 
     #endregion
 
-    public AetherCore(DispatcherQueue dispatcherQueue)
+    public AlephCore(DispatcherQueue dispatcherQueue)
     {
         _dispatcherQueue = dispatcherQueue;
         _instance = this;
@@ -112,13 +112,13 @@ public sealed class AetherCore : IDisposable
             // Register callbacks BEFORE init
             RegisterCallbacks();
 
-            // Call aether_init with default path
+            // Call aleph_init with default path
             var configPath = GetDefaultConfigPath();
             var pathBytes = Encoding.UTF8.GetBytes(configPath + '\0');
             int result;
             fixed (byte* pathPtr = pathBytes)
             {
-                result = NativeMethods.aether_init(pathPtr);
+                result = NativeMethods.aleph_init(pathPtr);
             }
 
             if (result == 0)
@@ -148,9 +148,9 @@ public sealed class AetherCore : IDisposable
 
     private static string GetDefaultConfigPath()
     {
-        // Use ~/.config/aether/ for cross-platform consistency
+        // Use ~/.config/aleph/ for cross-platform consistency
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(userProfile, ".config", "aether", "config.toml");
+        return Path.Combine(userProfile, ".config", "aleph", "config.toml");
     }
 
     /// <summary>
@@ -160,7 +160,7 @@ public sealed class AetherCore : IDisposable
     {
         try
         {
-            byte* versionPtr = NativeMethods.aether_version();
+            byte* versionPtr = NativeMethods.aleph_version();
             if (versionPtr == null) return null;
             return Marshal.PtrToStringUTF8((IntPtr)versionPtr);
         }
@@ -204,7 +204,7 @@ public sealed class AetherCore : IDisposable
             fixed (byte* titlePtr = titleBytes)
             fixed (byte* topicPtr = topicBytes)
             {
-                int result = NativeMethods.aether_process(inputPtr, contextPtr, titlePtr, topicPtr, stream ? 1 : 0);
+                int result = NativeMethods.aleph_process(inputPtr, contextPtr, titlePtr, topicPtr, stream ? 1 : 0);
                 if (result != 0)
                 {
                     var errorMsg = GetErrorMessage(result);
@@ -227,7 +227,7 @@ public sealed class AetherCore : IDisposable
     public void Cancel()
     {
         if (!_initialized) return;
-        int result = NativeMethods.aether_cancel();
+        int result = NativeMethods.aleph_cancel();
         if (result != 0)
         {
             Log($"Cancel failed: {GetErrorMessage(result)}");
@@ -250,7 +250,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_load_config(&jsonPtr, &len);
+            int result = NativeMethods.aleph_load_config(&jsonPtr, &len);
             if (result != 0)
             {
                 Log($"LoadConfig failed: {GetErrorMessage(result)}");
@@ -264,7 +264,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -280,7 +280,7 @@ public sealed class AetherCore : IDisposable
     public void ReloadConfig()
     {
         if (!_initialized) return;
-        int result = NativeMethods.aether_reload_config();
+        int result = NativeMethods.aleph_reload_config();
         if (result != 0)
         {
             Log($"ReloadConfig failed: {GetErrorMessage(result)}");
@@ -297,7 +297,7 @@ public sealed class AetherCore : IDisposable
         try
         {
             byte* providerPtr = null;
-            int result = NativeMethods.aether_get_default_provider(&providerPtr);
+            int result = NativeMethods.aleph_get_default_provider(&providerPtr);
             if (result != 0) return null;
 
             try
@@ -307,7 +307,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (providerPtr != null)
-                    NativeMethods.aether_free_string(providerPtr);
+                    NativeMethods.aleph_free_string(providerPtr);
             }
         }
         catch (Exception ex)
@@ -329,7 +329,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(providerName + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_set_default_provider(ptr);
+                int result = NativeMethods.aleph_set_default_provider(ptr);
                 return result == 0;
             }
         }
@@ -355,7 +355,7 @@ public sealed class AetherCore : IDisposable
             fixed (byte* namePtr = nameBytes)
             fixed (byte* configPtr = configBytes)
             {
-                int result = NativeMethods.aether_update_provider(namePtr, configPtr);
+                int result = NativeMethods.aleph_update_provider(namePtr, configPtr);
                 return result == 0;
             }
         }
@@ -378,7 +378,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(name + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_delete_provider(ptr);
+                int result = NativeMethods.aleph_delete_provider(ptr);
                 return result == 0;
             }
         }
@@ -406,7 +406,7 @@ public sealed class AetherCore : IDisposable
             fixed (byte* namePtr = nameBytes)
             fixed (byte* configPtr = configBytes)
             {
-                int result = NativeMethods.aether_test_provider_connection(namePtr, configPtr, &success, &messagePtr);
+                int result = NativeMethods.aleph_test_provider_connection(namePtr, configPtr, &success, &messagePtr);
                 if (result != 0)
                 {
                     return (false, GetErrorMessage(result));
@@ -420,7 +420,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (messagePtr != null)
-                        NativeMethods.aether_free_string(messagePtr);
+                        NativeMethods.aleph_free_string(messagePtr);
                 }
             }
         }
@@ -449,7 +449,7 @@ public sealed class AetherCore : IDisposable
 
             fixed (byte* queryPtr = queryBytes)
             {
-                int result = NativeMethods.aether_search_memory(queryPtr, limit, &jsonPtr, &len);
+                int result = NativeMethods.aleph_search_memory(queryPtr, limit, &jsonPtr, &len);
                 if (result != 0) return null;
 
                 try
@@ -459,7 +459,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (jsonPtr != null)
-                        NativeMethods.aether_free_string(jsonPtr);
+                        NativeMethods.aleph_free_string(jsonPtr);
                 }
             }
         }
@@ -476,7 +476,7 @@ public sealed class AetherCore : IDisposable
     public bool ClearMemory()
     {
         if (!_initialized) return false;
-        int result = NativeMethods.aether_clear_memory();
+        int result = NativeMethods.aleph_clear_memory();
         return result == 0;
     }
 
@@ -492,7 +492,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_get_memory_stats(&jsonPtr, &len);
+            int result = NativeMethods.aleph_get_memory_stats(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -502,7 +502,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -528,7 +528,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_list_tools(&jsonPtr, &len);
+            int result = NativeMethods.aleph_list_tools(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -538,7 +538,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -560,7 +560,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_get_root_commands(&jsonPtr, &len);
+            int result = NativeMethods.aleph_get_root_commands(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -570,7 +570,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -590,7 +590,7 @@ public sealed class AetherCore : IDisposable
     /// <param name="level">0=Error, 1=Warn, 2=Info, 3=Debug, 4=Trace</param>
     public void SetLogLevel(int level)
     {
-        NativeMethods.aether_set_log_level(level);
+        NativeMethods.aleph_set_log_level(level);
     }
 
     /// <summary>
@@ -601,7 +601,7 @@ public sealed class AetherCore : IDisposable
         try
         {
             byte* pathPtr = null;
-            int result = NativeMethods.aether_get_log_directory(&pathPtr);
+            int result = NativeMethods.aleph_get_log_directory(&pathPtr);
             if (result != 0) return null;
 
             try
@@ -611,7 +611,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (pathPtr != null)
-                    NativeMethods.aether_free_string(pathPtr);
+                    NativeMethods.aleph_free_string(pathPtr);
             }
         }
         catch (Exception ex)
@@ -629,12 +629,12 @@ public sealed class AetherCore : IDisposable
     {
         Log("Registering callbacks...");
 
-        NativeMethods.aether_register_state_callback(&OnStateChangeCallback);
-        NativeMethods.aether_register_stream_callback(&OnStreamCallback);
-        NativeMethods.aether_register_complete_callback(&OnCompleteCallback);
-        NativeMethods.aether_register_error_callback(&OnErrorCallback);
-        NativeMethods.aether_register_tool_callback(&OnToolCallback);
-        NativeMethods.aether_register_memory_stored_callback(&OnMemoryStoredCallback);
+        NativeMethods.aleph_register_state_callback(&OnStateChangeCallback);
+        NativeMethods.aleph_register_stream_callback(&OnStreamCallback);
+        NativeMethods.aleph_register_complete_callback(&OnCompleteCallback);
+        NativeMethods.aleph_register_error_callback(&OnErrorCallback);
+        NativeMethods.aleph_register_tool_callback(&OnToolCallback);
+        NativeMethods.aleph_register_memory_stored_callback(&OnMemoryStoredCallback);
 
         Log("Callbacks registered");
     }
@@ -781,7 +781,7 @@ public sealed class AetherCore : IDisposable
         try
         {
             byte* messagePtr = null;
-            int result = NativeMethods.aether_get_last_error(&messagePtr);
+            int result = NativeMethods.aleph_get_last_error(&messagePtr);
             if (result != 0) return null;
 
             try
@@ -791,7 +791,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (messagePtr != null)
-                    NativeMethods.aether_free_string(messagePtr);
+                    NativeMethods.aleph_free_string(messagePtr);
             }
         }
         catch
@@ -816,7 +816,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_list_mcp_servers(&jsonPtr, &len);
+            int result = NativeMethods.aleph_list_mcp_servers(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -826,7 +826,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -848,7 +848,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_add_mcp_server(ptr);
+                int result = NativeMethods.aleph_add_mcp_server(ptr);
                 return result == 0;
             }
         }
@@ -871,7 +871,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_update_mcp_server(ptr);
+                int result = NativeMethods.aleph_update_mcp_server(ptr);
                 return result == 0;
             }
         }
@@ -894,7 +894,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(serverId + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_delete_mcp_server(ptr);
+                int result = NativeMethods.aleph_delete_mcp_server(ptr);
                 return result == 0;
             }
         }
@@ -920,7 +920,7 @@ public sealed class AetherCore : IDisposable
 
             fixed (byte* idPtr = idBytes)
             {
-                int result = NativeMethods.aether_get_mcp_server_status(idPtr, &jsonPtr, &len);
+                int result = NativeMethods.aleph_get_mcp_server_status(idPtr, &jsonPtr, &len);
                 if (result != 0) return null;
 
                 try
@@ -930,7 +930,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (jsonPtr != null)
-                        NativeMethods.aether_free_string(jsonPtr);
+                        NativeMethods.aleph_free_string(jsonPtr);
                 }
             }
         }
@@ -953,7 +953,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_export_mcp_config(&jsonPtr, &len);
+            int result = NativeMethods.aleph_export_mcp_config(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -963,7 +963,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -985,7 +985,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(json + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_import_mcp_config(ptr);
+                int result = NativeMethods.aleph_import_mcp_config(ptr);
                 return result == 0;
             }
         }
@@ -1012,7 +1012,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_list_skills(&jsonPtr, &len);
+            int result = NativeMethods.aleph_list_skills(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -1022,7 +1022,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -1047,7 +1047,7 @@ public sealed class AetherCore : IDisposable
 
             fixed (byte* urlPtr = urlBytes)
             {
-                int result = NativeMethods.aether_install_skill(urlPtr, &jsonPtr, &len);
+                int result = NativeMethods.aleph_install_skill(urlPtr, &jsonPtr, &len);
                 if (result != 0) return null;
 
                 try
@@ -1057,7 +1057,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (jsonPtr != null)
-                        NativeMethods.aether_free_string(jsonPtr);
+                        NativeMethods.aleph_free_string(jsonPtr);
                 }
             }
         }
@@ -1083,7 +1083,7 @@ public sealed class AetherCore : IDisposable
 
             fixed (byte* pathPtr = pathBytes)
             {
-                int result = NativeMethods.aether_install_skills_from_zip(pathPtr, &jsonPtr, &len);
+                int result = NativeMethods.aleph_install_skills_from_zip(pathPtr, &jsonPtr, &len);
                 if (result != 0) return null;
 
                 try
@@ -1093,7 +1093,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (jsonPtr != null)
-                        NativeMethods.aether_free_string(jsonPtr);
+                        NativeMethods.aleph_free_string(jsonPtr);
                 }
             }
         }
@@ -1116,7 +1116,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(skillId + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_delete_skill(ptr);
+                int result = NativeMethods.aleph_delete_skill(ptr);
                 return result == 0;
             }
         }
@@ -1135,7 +1135,7 @@ public sealed class AetherCore : IDisposable
         try
         {
             byte* pathPtr = null;
-            int result = NativeMethods.aether_get_skills_dir(&pathPtr);
+            int result = NativeMethods.aleph_get_skills_dir(&pathPtr);
             if (result != 0) return null;
 
             try
@@ -1145,7 +1145,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (pathPtr != null)
-                    NativeMethods.aether_free_string(pathPtr);
+                    NativeMethods.aleph_free_string(pathPtr);
             }
         }
         catch (Exception ex)
@@ -1161,7 +1161,7 @@ public sealed class AetherCore : IDisposable
     public bool RefreshSkills()
     {
         if (!_initialized) return false;
-        int result = NativeMethods.aether_refresh_skills();
+        int result = NativeMethods.aleph_refresh_skills();
         return result == 0;
     }
 
@@ -1181,7 +1181,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_list_generation_providers(&jsonPtr, &len);
+            int result = NativeMethods.aleph_list_generation_providers(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -1191,7 +1191,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -1216,7 +1216,7 @@ public sealed class AetherCore : IDisposable
 
             fixed (byte* idPtr = idBytes)
             {
-                int result = NativeMethods.aether_get_generation_provider_config(idPtr, &jsonPtr, &len);
+                int result = NativeMethods.aleph_get_generation_provider_config(idPtr, &jsonPtr, &len);
                 if (result != 0) return null;
 
                 try
@@ -1226,7 +1226,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (jsonPtr != null)
-                        NativeMethods.aether_free_string(jsonPtr);
+                        NativeMethods.aleph_free_string(jsonPtr);
                 }
             }
         }
@@ -1252,7 +1252,7 @@ public sealed class AetherCore : IDisposable
             fixed (byte* idPtr = idBytes)
             fixed (byte* configPtr = configBytes)
             {
-                int result = NativeMethods.aether_update_generation_provider(idPtr, configPtr);
+                int result = NativeMethods.aleph_update_generation_provider(idPtr, configPtr);
                 return result == 0;
             }
         }
@@ -1280,7 +1280,7 @@ public sealed class AetherCore : IDisposable
             fixed (byte* idPtr = idBytes)
             fixed (byte* keyPtr = keyBytes)
             {
-                int result = NativeMethods.aether_test_generation_provider(idPtr, keyPtr, &success, &messagePtr);
+                int result = NativeMethods.aleph_test_generation_provider(idPtr, keyPtr, &success, &messagePtr);
                 if (result != 0)
                 {
                     return (false, GetErrorMessage(result));
@@ -1294,7 +1294,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (messagePtr != null)
-                        NativeMethods.aether_free_string(messagePtr);
+                        NativeMethods.aleph_free_string(messagePtr);
                 }
             }
         }
@@ -1320,7 +1320,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_get_routing_config(&jsonPtr, &len);
+            int result = NativeMethods.aleph_get_routing_config(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -1330,7 +1330,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -1352,7 +1352,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_update_routing_config(ptr);
+                int result = NativeMethods.aleph_update_routing_config(ptr);
                 return result == 0;
             }
         }
@@ -1379,7 +1379,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_get_behavior_config(&jsonPtr, &len);
+            int result = NativeMethods.aleph_get_behavior_config(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -1389,7 +1389,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -1411,7 +1411,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_update_behavior_config(ptr);
+                int result = NativeMethods.aleph_update_behavior_config(ptr);
                 return result == 0;
             }
         }
@@ -1438,7 +1438,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_list_search_providers(&jsonPtr, &len);
+            int result = NativeMethods.aleph_list_search_providers(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -1448,7 +1448,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -1473,7 +1473,7 @@ public sealed class AetherCore : IDisposable
 
             fixed (byte* idPtr = idBytes)
             {
-                int result = NativeMethods.aether_get_search_provider_config(idPtr, &jsonPtr, &len);
+                int result = NativeMethods.aleph_get_search_provider_config(idPtr, &jsonPtr, &len);
                 if (result != 0) return null;
 
                 try
@@ -1483,7 +1483,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (jsonPtr != null)
-                        NativeMethods.aether_free_string(jsonPtr);
+                        NativeMethods.aleph_free_string(jsonPtr);
                 }
             }
         }
@@ -1509,7 +1509,7 @@ public sealed class AetherCore : IDisposable
             fixed (byte* idPtr = idBytes)
             fixed (byte* configPtr = configBytes)
             {
-                int result = NativeMethods.aether_update_search_provider(idPtr, configPtr);
+                int result = NativeMethods.aleph_update_search_provider(idPtr, configPtr);
                 return result == 0;
             }
         }
@@ -1537,7 +1537,7 @@ public sealed class AetherCore : IDisposable
             fixed (byte* idPtr = idBytes)
             fixed (byte* keyPtr = keyBytes)
             {
-                int result = NativeMethods.aether_test_search_provider(idPtr, keyPtr, &success, &messagePtr);
+                int result = NativeMethods.aleph_test_search_provider(idPtr, keyPtr, &success, &messagePtr);
                 if (result != 0)
                 {
                     return (false, GetErrorMessage(result));
@@ -1551,7 +1551,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (messagePtr != null)
-                        NativeMethods.aether_free_string(messagePtr);
+                        NativeMethods.aleph_free_string(messagePtr);
                 }
             }
         }
@@ -1577,7 +1577,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_get_cowork_config(&jsonPtr, &len);
+            int result = NativeMethods.aleph_get_cowork_config(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -1587,7 +1587,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -1609,7 +1609,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_update_cowork_config(ptr);
+                int result = NativeMethods.aleph_update_cowork_config(ptr);
                 return result == 0;
             }
         }
@@ -1636,7 +1636,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_get_policies(&jsonPtr, &len);
+            int result = NativeMethods.aleph_get_policies(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -1646,7 +1646,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -1672,7 +1672,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_list_runtimes(&jsonPtr, &len);
+            int result = NativeMethods.aleph_list_runtimes(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -1682,7 +1682,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -1704,7 +1704,7 @@ public sealed class AetherCore : IDisposable
             var bytes = Encoding.UTF8.GetBytes(runtimeId + '\0');
             fixed (byte* ptr = bytes)
             {
-                int result = NativeMethods.aether_is_runtime_installed(ptr);
+                int result = NativeMethods.aleph_is_runtime_installed(ptr);
                 return result == 1;
             }
         }
@@ -1729,7 +1729,7 @@ public sealed class AetherCore : IDisposable
 
             fixed (byte* idPtr = idBytes)
             {
-                int result = NativeMethods.aether_install_runtime(idPtr, &messagePtr);
+                int result = NativeMethods.aleph_install_runtime(idPtr, &messagePtr);
 
                 try
                 {
@@ -1741,7 +1741,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (messagePtr != null)
-                        NativeMethods.aether_free_string(messagePtr);
+                        NativeMethods.aleph_free_string(messagePtr);
                 }
             }
         }
@@ -1763,7 +1763,7 @@ public sealed class AetherCore : IDisposable
             byte* jsonPtr = null;
             nuint len = 0;
 
-            int result = NativeMethods.aether_check_runtime_updates(&jsonPtr, &len);
+            int result = NativeMethods.aleph_check_runtime_updates(&jsonPtr, &len);
             if (result != 0) return null;
 
             try
@@ -1773,7 +1773,7 @@ public sealed class AetherCore : IDisposable
             finally
             {
                 if (jsonPtr != null)
-                    NativeMethods.aether_free_string(jsonPtr);
+                    NativeMethods.aleph_free_string(jsonPtr);
             }
         }
         catch (Exception ex)
@@ -1797,7 +1797,7 @@ public sealed class AetherCore : IDisposable
 
             fixed (byte* idPtr = idBytes)
             {
-                int result = NativeMethods.aether_update_runtime(idPtr, &messagePtr);
+                int result = NativeMethods.aleph_update_runtime(idPtr, &messagePtr);
 
                 try
                 {
@@ -1809,7 +1809,7 @@ public sealed class AetherCore : IDisposable
                 finally
                 {
                     if (messagePtr != null)
-                        NativeMethods.aether_free_string(messagePtr);
+                        NativeMethods.aleph_free_string(messagePtr);
                 }
             }
         }
@@ -1825,7 +1825,7 @@ public sealed class AetherCore : IDisposable
     public bool SetRuntimeAutoUpdate(bool enabled)
     {
         if (!_initialized) return false;
-        int result = NativeMethods.aether_set_runtime_auto_update(enabled ? 1 : 0);
+        int result = NativeMethods.aleph_set_runtime_auto_update(enabled ? 1 : 0);
         return result == 0;
     }
 
@@ -1835,7 +1835,7 @@ public sealed class AetherCore : IDisposable
 
     private void Log(string message)
     {
-        System.Diagnostics.Debug.WriteLine($"[AetherCore] {message}");
+        System.Diagnostics.Debug.WriteLine($"[AlephCore] {message}");
         _dispatcherQueue.TryEnqueue(() =>
         {
             LogMessage?.Invoke(message);
@@ -1853,7 +1853,7 @@ public sealed class AetherCore : IDisposable
     {
         try
         {
-            return NativeMethods.aether_needs_first_time_init() == 1;
+            return NativeMethods.aleph_needs_first_time_init() == 1;
         }
         catch (DllNotFoundException)
         {
@@ -1868,7 +1868,7 @@ public sealed class AetherCore : IDisposable
     {
         try
         {
-            return NativeMethods.aether_check_embedding_model_exists() == 1;
+            return NativeMethods.aleph_check_embedding_model_exists() == 1;
         }
         catch
         {
@@ -1886,7 +1886,7 @@ public sealed class AetherCore : IDisposable
 
         try
         {
-            NativeMethods.aether_register_init_callbacks(
+            NativeMethods.aleph_register_init_callbacks(
                 &OnInitPhaseStarted,
                 &OnInitPhaseProgress,
                 &OnInitPhaseCompleted,
@@ -1894,17 +1894,17 @@ public sealed class AetherCore : IDisposable
                 &OnInitError
             );
 
-            int result = NativeMethods.aether_run_first_time_init();
+            int result = NativeMethods.aleph_run_first_time_init();
             return result == 0;
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[AetherCore] Init error: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"[AlephCore] Init error: {ex.Message}");
             return false;
         }
         finally
         {
-            NativeMethods.aether_clear_init_callbacks();
+            NativeMethods.aleph_clear_init_callbacks();
             _initHandler = null;
         }
     }
@@ -1978,8 +1978,8 @@ public sealed class AetherCore : IDisposable
         {
             try
             {
-                NativeMethods.aether_clear_callbacks();
-                NativeMethods.aether_free();
+                NativeMethods.aleph_clear_callbacks();
+                NativeMethods.aleph_free();
                 Log("Resources freed");
             }
             catch (Exception ex)
@@ -1995,14 +1995,14 @@ public sealed class AetherCore : IDisposable
 }
 
 /// <summary>
-/// Exception thrown when an Aether core operation fails.
+/// Exception thrown when an Aleph core operation fails.
 /// </summary>
-public class AetherException : Exception
+public class AlephException : Exception
 {
     /// <summary>Gets the error code from the native library.</summary>
     public int ErrorCode { get; }
 
-    public AetherException(int errorCode, string message) : base(message)
+    public AlephException(int errorCode, string message) : base(message)
     {
         ErrorCode = errorCode;
     }

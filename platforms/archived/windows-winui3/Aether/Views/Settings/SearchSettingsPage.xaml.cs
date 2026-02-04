@@ -1,12 +1,12 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Aether.ViewModels;
-using Aether.Interop;
+using Aleph.ViewModels;
+using Aleph.Interop;
 using System.Collections.ObjectModel;
 using System.Text.Json;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// Search Settings page - Search provider configuration.
@@ -20,7 +20,7 @@ public sealed partial class SearchSettingsPage : UserControl
     private SearchProviderItem? _selectedProvider;
     private bool _hasUnsavedChanges;
     private bool _isLoading = true;
-    private AetherCore? _core;
+    private AlephCore? _core;
 
     public SearchSettingsPage()
     {
@@ -258,7 +258,7 @@ public sealed partial class SearchSettingsPage : UserControl
                 return;
             }
 
-            // Call AetherCore to test connection
+            // Call AlephCore to test connection
             var result = await Task.Run(() => _core?.TestSearchProvider(_selectedProvider.Id, ApiKeyBox.Password));
 
             if (result?.Success == true)
@@ -316,7 +316,7 @@ public sealed partial class SearchSettingsPage : UserControl
             ? new SolidColorBrush(Microsoft.UI.Colors.Gray)
             : new SolidColorBrush(Microsoft.UI.Colors.Green);
 
-        // Save to AetherCore
+        // Save to AlephCore
         var configJson = JsonSerializer.Serialize(new
         {
             api_key = _selectedProvider.ApiKey,

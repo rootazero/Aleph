@@ -1,10 +1,10 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Aether.ViewModels;
+using Aleph.ViewModels;
 using System.Collections.ObjectModel;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// Generation Settings page - Media generation provider configuration.
@@ -173,7 +173,7 @@ public sealed partial class GenerationSettingsPage : UserControl
 
         try
         {
-            // TODO: Call AetherCore to test connection
+            // TODO: Call AlephCore to test connection
             await Task.Delay(1000); // Simulate test
 
             var hasApiKey = !string.IsNullOrWhiteSpace(ApiKeyBox.Password);
@@ -216,7 +216,7 @@ public sealed partial class GenerationSettingsPage : UserControl
             ? new SolidColorBrush(Microsoft.UI.Colors.Gray)
             : new SolidColorBrush(Microsoft.UI.Colors.Green);
 
-        // TODO: Save to AetherCore
+        // TODO: Save to AlephCore
         _hasUnsavedChanges = false;
         SaveButton.IsEnabled = false;
 

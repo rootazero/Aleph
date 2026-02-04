@@ -1,7 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
-namespace Aether.Views.Halo;
+namespace Aleph.Views.Halo;
 
 /// <summary>
 /// Streaming text display view with typewriter effect and cursor.

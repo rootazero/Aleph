@@ -10,7 +10,7 @@ namespace POC.RustFFI;
 /// </summary>
 public sealed partial class MainWindow : Window
 {
-    private AetherCore? _aetherCore;
+    private AlephCore? _alephCore;
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue;
 
     public MainWindow()
@@ -28,31 +28,31 @@ public sealed partial class MainWindow : Window
 
         Log("Ready. Click 'Initialize Core' to begin.");
         Log("");
-        Log("Note: aethecore.dll must be present in the output directory.");
+        Log("Note: alephcore.dll must be present in the output directory.");
         Log("Build with: cd core && cargo build --release --features cabi");
     }
 
     private void InitButton_Click(object sender, RoutedEventArgs e)
     {
-        Log("Initializing AetherCore...");
+        Log("Initializing AlephCore...");
 
         try
         {
-            _aetherCore = new AetherCore(_dispatcherQueue);
+            _alephCore = new AlephCore(_dispatcherQueue);
 
             // Subscribe to events
-            _aetherCore.LogMessage += msg => Log($"[Core] {msg}");
-            _aetherCore.StateChanged += state => Log($"[Callback] State changed to: {state}");
-            _aetherCore.StreamReceived += text => Log($"[Callback] Stream: {text}");
-            _aetherCore.ErrorOccurred += (msg, code) => Log($"[Callback] Error: {msg} (code: {code})");
+            _alephCore.LogMessage += msg => Log($"[Core] {msg}");
+            _alephCore.StateChanged += state => Log($"[Callback] State changed to: {state}");
+            _alephCore.StreamReceived += text => Log($"[Callback] Stream: {text}");
+            _alephCore.ErrorOccurred += (msg, code) => Log($"[Callback] Error: {msg} (code: {code})");
 
             // Try to initialize
-            if (_aetherCore.Initialize())
+            if (_alephCore.Initialize())
             {
                 DllStatus.Text = "Loaded successfully";
                 DllStatus.Foreground = new SolidColorBrush(Colors.Green);
 
-                var version = _aetherCore.GetVersion();
+                var version = _alephCore.GetVersion();
                 CoreVersion.Text = version ?? "Unknown";
 
                 CallbackStatus.Text = "Registered";
@@ -78,7 +78,7 @@ public sealed partial class MainWindow : Window
             Log("");
             Log("To fix this:");
             Log("1. Build the Rust core: cargo build --release --features cabi");
-            Log("2. Copy aethecore.dll to the output directory");
+            Log("2. Copy alephcore.dll to the output directory");
         }
         catch (Exception ex)
         {
@@ -97,7 +97,7 @@ public sealed partial class MainWindow : Window
         Log("For POC validation, we verify:");
         Log("  1. Callback registration succeeded (no crash)");
         Log("  2. Function pointers are correctly formatted");
-        Log("  3. AetherCore wrapper handles threading correctly");
+        Log("  3. AlephCore wrapper handles threading correctly");
         Log("");
         Log("To fully test callbacks, the Rust core would need to:");
         Log("  - Call state_callback(state) during state transitions");
@@ -112,9 +112,9 @@ public sealed partial class MainWindow : Window
 
         // Simulate what would happen if Rust called back
         Log("Simulating callbacks (as if called from Rust):");
-        _aetherCore?.StateChanged?.Invoke(1); // Thinking
-        _aetherCore?.StreamReceived?.Invoke("Hello from simulated callback");
-        _aetherCore?.StateChanged?.Invoke(2); // Complete
+        _alephCore?.StateChanged?.Invoke(1); // Thinking
+        _alephCore?.StreamReceived?.Invoke("Hello from simulated callback");
+        _alephCore?.StateChanged?.Invoke(2); // Complete
 
         Log("");
         Log("If you see the callback messages above, the mechanism works!");
@@ -125,8 +125,8 @@ public sealed partial class MainWindow : Window
         Log("");
         Log("Cleaning up...");
 
-        _aetherCore?.Dispose();
-        _aetherCore = null;
+        _alephCore?.Dispose();
+        _alephCore = null;
 
         DllStatus.Text = "Unloaded";
         DllStatus.Foreground = new SolidColorBrush(Colors.Gray);

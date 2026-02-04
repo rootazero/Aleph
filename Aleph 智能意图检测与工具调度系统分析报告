@@ -1,8 +1,8 @@
-Aether 智能意图检测与工具调度系统分析报告
+Aleph 智能意图检测与工具调度系统分析报告
 
   📋 执行摘要
 
-  本报告对 Aether 项目的智能意图检测、工具调度中心、AI 自动调取工具功能进行了全面分析，重点关注发送给 AI 的数据清洗、数据处理和数据格式。
+  本报告对 Aleph 项目的智能意图检测、工具调度中心、AI 自动调取工具功能进行了全面分析，重点关注发送给 AI 的数据清洗、数据处理和数据格式。
 
   总体评价：系统架构清晰，模块职责明确，但存在若干数据处理问题需要优化。
   ┌───────────────┬────────────────────┬──────────┐
@@ -164,7 +164,7 @@ Aether 智能意图检测与工具调度系统分析报告
 
   let response = tokio::time::timeout(self.timeout, ...)
       .await
-      .map_err(|_| AetherError::Timeout { ... })?;  // ← 直接返回错误
+      .map_err(|_| AlephError::Timeout { ... })?;  // ← 直接返回错误
 
   // 没有降级到 Ok(None)
 
@@ -576,8 +576,8 @@ Aether 智能意图检测与工具调度系统分析报告
   报告完成时间：2026-01-10
 
   分析范围：
-  - Aether/core/src/dispatcher/ 全部模块
-  - Aether/core/src/utils/pii.rs
-  - Aether/core/src/core/processing.rs
+  - Aleph/core/src/dispatcher/ 全部模块
+  - Aleph/core/src/utils/pii.rs
+  - Aleph/core/src/core/processing.rs
   - 相关配置和类型定义
 

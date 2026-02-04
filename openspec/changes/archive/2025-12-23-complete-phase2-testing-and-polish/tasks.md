@@ -3,8 +3,8 @@
 ## 1. Build Script Creation
 - [x] 1.1 Create `Scripts/copy_rust_libs.sh` shell script
 - [x] 1.2 Add logic to detect architecture (x86_64 vs aarch64)
-- [x] 1.3 Copy `libaethecore.dylib` from `core/target/release/` to `Frameworks/`
-- [x] 1.4 Use `install_name_tool` to set `@rpath/libaethecore.dylib`
+- [x] 1.3 Copy `libalephcore.dylib` from `core/target/release/` to `Frameworks/`
+- [x] 1.4 Use `install_name_tool` to set `@rpath/libalephcore.dylib`
 - [x] 1.5 Add error handling for missing Rust build
 - [x] 1.6 Make script executable (`chmod +x`)
 - [x] 1.7 Test script manually from command line
@@ -13,14 +13,14 @@
 - [x] 2.1 Open Xcode project build phases (requires manual configuration)
 - [x] 2.2 Add "Run Script" phase before "Compile Sources" (requires manual configuration)
 - [x] 2.3 Set script: `${SRCROOT}/Scripts/copy_rust_libs.sh` (requires manual configuration)
-- [x] 2.4 Add input files: `${SRCROOT}/core/target/release/libaethecore.dylib` (requires manual configuration)
-- [x] 2.5 Add output files: `${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libaethecore.dylib` (requires manual configuration)
+- [x] 2.4 Add input files: `${SRCROOT}/core/target/release/libalephcore.dylib` (requires manual configuration)
+- [x] 2.5 Add output files: `${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libalephcore.dylib` (requires manual configuration)
 - [x] 2.6 Build in Xcode and verify dylib is copied (pending user testing)
 - [x] 2.7 Check "Show environment variables in build log" for debugging (pending user testing)
 
 ## 3. Dylib Runtime Path Fixing
 - [x] 3.1 Verify current dylib install name with `otool -L` (script handles this)
-- [x] 3.2 Update script to run `install_name_tool -id @rpath/libaethecore.dylib`
+- [x] 3.2 Update script to run `install_name_tool -id @rpath/libalephcore.dylib`
 - [x] 3.3 Set `@rpath` in Xcode to `@executable_path/../Frameworks` (requires manual configuration)
 - [x] 3.4 Test app launches without dylib not found errors (pending user testing)
 - [x] 3.5 Verify with `otool -L Aleph.app/Contents/MacOS/Aleph` (pending user testing)

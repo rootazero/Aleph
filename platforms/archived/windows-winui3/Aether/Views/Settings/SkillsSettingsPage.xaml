@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <UserControl
-    x:Class="Aether.Views.Settings.SkillsSettingsPage"
+    x:Class="Aleph.Views.Settings.SkillsSettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
@@ -65,7 +65,7 @@
                                    Style="{StaticResource SubtitleTextBlockStyle}"
                                    HorizontalAlignment="Center"/>
 
-                        <TextBlock Text="Skills extend Aether with specialized capabilities.&#x0a;Install skills to enhance your AI assistant."
+                        <TextBlock Text="Skills extend Aleph with specialized capabilities.&#x0a;Install skills to enhance your AI assistant."
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                    TextAlignment="Center"
                                    TextWrapping="Wrap"/>
@@ -155,7 +155,7 @@
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        FontSize="12"/>
                             <TextBlock x:Name="SkillsDirectoryText"
-                                       Text="%APPDATA%\Aether\skills"
+                                       Text="%APPDATA%\Aleph\skills"
                                        FontFamily="Consolas"
                                        FontSize="12"
                                        TextTrimming="CharacterEllipsis"/>

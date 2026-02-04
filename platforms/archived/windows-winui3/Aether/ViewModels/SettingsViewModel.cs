@@ -1,7 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
-namespace Aether.ViewModels;
+namespace Aleph.ViewModels;
 
 /// <summary>
 /// ViewModel for SettingsWindow.
@@ -172,11 +172,11 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     public void OpenConfigFolder()
     {
-        // Use ~/.config/aether/ for cross-platform consistency
+        // Use ~/.config/aleph/ for cross-platform consistency
         var configPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".config",
-            "aether"
+            "aleph"
         );
 
         if (Directory.Exists(configPath))
@@ -287,14 +287,14 @@ public static class SettingsTabExtensions
         SettingsTab.Providers => "Configure AI providers, API keys, and model parameters for routing",
         SettingsTab.Generation => "Configure image, video, audio, and speech generation providers",
         SettingsTab.Routing => "Define how content is routed to AI providers based on patterns",
-        SettingsTab.Shortcuts => "Configure global keyboard shortcuts for Aether",
-        SettingsTab.Behavior => "Configure how Aether captures input and delivers output",
-        SettingsTab.Memory => "Aether remembers past interactions to provide context-aware responses",
+        SettingsTab.Shortcuts => "Configure global keyboard shortcuts for Aleph",
+        SettingsTab.Behavior => "Configure how Aleph captures input and delivers output",
+        SettingsTab.Memory => "Aleph remembers past interactions to provide context-aware responses",
         SettingsTab.Search => "Configure web search providers for AI-augmented information retrieval",
         SettingsTab.Mcp => "Configure Model Context Protocol services for AI tool access",
         SettingsTab.Skills => "Install and manage Claude Agent Skills for enhanced AI capabilities",
         SettingsTab.Cowork => "Configure Cowork task orchestration for complex requests",
-        SettingsTab.Policies => "Configure behavioral parameters that control how Aether operates",
+        SettingsTab.Policies => "Configure behavioral parameters that control how Aleph operates",
         _ => ""
     };
 }

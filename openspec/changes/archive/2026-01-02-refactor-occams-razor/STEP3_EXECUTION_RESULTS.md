@@ -68,8 +68,8 @@ Successfully completed 10/13 planned refactoring tasks from the **Occam's Razor*
 **Measurement** (on Apple Silicon M-series Mac):
 - **Release build time**: 31.63s (from clean)
 - **Binary size**:
-  - `libaethecore.dylib`: 10 MB
-  - `libaethecore.a`: 52 MB
+  - `libalephcore.dylib`: 10 MB
+  - `libalephcore.a`: 52 MB
 - **Direct dependencies**: 23 crates
 
 **Note**: Build time baseline not captured before refactoring, but no measurable regression observed during development.
@@ -422,7 +422,7 @@ match self.process_with_ai_internal(...) {
 ```bash
 $ cargo tree -i futures-util
 futures-util v0.3.31
-├── aethecore v0.1.0 (direct)
+├── alephcore v0.1.0 (direct)
 ├── reqwest v0.11.27 (transitive)
 ├── hyper v0.14.32 (transitive)
 └── h2 v0.3.27 (transitive)

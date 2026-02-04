@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Streams;
 
-namespace Aether.Services;
+namespace Aleph.Services;
 
 /// <summary>
 /// Clipboard service for reading and writing various content types.

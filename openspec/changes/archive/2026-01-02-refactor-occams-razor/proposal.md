@@ -185,7 +185,7 @@ This refactoring affects multiple specs but maintains compatibility:
 1. Run full test suite: `cargo test && xcodebuild test`
 2. Capture baseline metrics:
    - Build time: `cargo build --release --timings`
-   - Binary size: `ls -lh target/release/libaethecore.dylib`
+   - Binary size: `ls -lh target/release/libalephcore.dylib`
    - Test coverage: `cargo tarpaulin` (if available)
 
 ### Post-Refactoring Checks (After Each Phase)

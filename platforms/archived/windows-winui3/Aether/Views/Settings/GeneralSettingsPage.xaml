@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <UserControl
-    x:Class="Aether.Views.Settings.GeneralSettingsPage"
+    x:Class="Aleph.Views.Settings.GeneralSettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
@@ -30,7 +30,7 @@
                             Header="Launch at Windows startup"
                             IsOn="{x:Bind ViewModel.LaunchAtStartup, Mode=TwoWay}"/>
                         <TextBlock
-                            Text="Aether will start automatically when you sign in to Windows."
+                            Text="Aleph will start automatically when you sign in to Windows."
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             FontSize="12"
                             TextWrapping="Wrap"/>
@@ -105,7 +105,7 @@
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         </StackPanel>
                         <TextBlock
-                            Text="Aether - System-level AI middleware"
+                            Text="Aleph - System-level AI middleware"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             FontSize="12"/>
                     </StackPanel>

@@ -2,7 +2,7 @@
 # Test file scanning functionality
 
 # Create a test directory to simulate working directory
-TEST_DIR="$HOME/.aether/output/test-scan-$(date +%s)"
+TEST_DIR="$HOME/.aleph/output/test-scan-$(date +%s)"
 mkdir -p "$TEST_DIR"
 
 echo "Test directory created: $TEST_DIR"

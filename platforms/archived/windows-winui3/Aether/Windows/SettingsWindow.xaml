@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Window
-    x:Class="Aether.Windows.SettingsWindow"
+    x:Class="Aleph.Windows.SettingsWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:Aether.ViewModels">
+    xmlns:vm="using:Aleph.ViewModels">
 
     <Grid>
         <Grid.RowDefinitions>

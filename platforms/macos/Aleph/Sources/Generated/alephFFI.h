@@ -243,163 +243,163 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureRes
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD0
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD0
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod0)(uint64_t, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD0
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod0)(uint64_t, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD1
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD1
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod1)(uint64_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD1
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD1
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod1)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD2
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD2
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod2)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD2
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD2
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod2)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD3
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD3
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod3)(uint64_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD3
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD3
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod3)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD4
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD4
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod4)(uint64_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD4
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD4
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod4)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD5
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD5
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod5)(uint64_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD5
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD5
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod5)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD6
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD6
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod6)(uint64_t, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD6
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD6
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod6)(uint64_t, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD7
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD7
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod7)(uint64_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD7
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD7
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod7)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD8
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD8
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod8)(uint64_t, uint32_t, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD8
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD8
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod8)(uint64_t, uint32_t, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD9
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD9
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod9)(uint64_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD9
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD9
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod9)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD10
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD10
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod10)(uint64_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD10
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD10
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod10)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD11
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD11
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod11)(uint64_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD11
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD11
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod11)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD12
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD12
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod12)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD12
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD12
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod12)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD13
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD13
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod13)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD13
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD13
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod13)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD14
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD14
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod14)(uint64_t, RustBuffer, RustBuffer, int8_t, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD14
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD14
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod14)(uint64_t, RustBuffer, RustBuffer, int8_t, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD15
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD15
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod15)(uint64_t, RustBuffer, uint32_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD15
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD15
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod15)(uint64_t, RustBuffer, uint32_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD16
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD16
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod16)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD16
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD16
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod16)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD17
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD17
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod17)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD17
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD17
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod17)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD18
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD18
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod18)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD18
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD18
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod18)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD19
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD19
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod19)(uint64_t, RustBuffer, int8_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD19
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD19
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod19)(uint64_t, RustBuffer, int8_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD20
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD20
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod20)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD20
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD20
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod20)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD21
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD21
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod21)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD21
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD21
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod21)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD22
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD22
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod22)(uint64_t, RustBuffer, void* _Nonnull, 
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD22
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER_METHOD22
+typedef void (*UniffiCallbackInterfaceAlephrEventHandlerMethod22)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -453,35 +453,35 @@ typedef void (*UniffiCallbackInterfaceEventSubscriptionHandlerMethod0)(uint64_t,
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER
-#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER
-typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_ALEPHR_EVENT_HANDLER
+typedef struct UniffiVTableCallbackInterfaceAlephrEventHandler {
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
     UniffiCallbackInterfaceClone _Nonnull uniffiClone;
-    UniffiCallbackInterfaceAetherEventHandlerMethod0 _Nonnull onThinking;
-    UniffiCallbackInterfaceAetherEventHandlerMethod1 _Nonnull onToolStart;
-    UniffiCallbackInterfaceAetherEventHandlerMethod2 _Nonnull onToolResult;
-    UniffiCallbackInterfaceAetherEventHandlerMethod3 _Nonnull onStreamChunk;
-    UniffiCallbackInterfaceAetherEventHandlerMethod4 _Nonnull onComplete;
-    UniffiCallbackInterfaceAetherEventHandlerMethod5 _Nonnull onError;
-    UniffiCallbackInterfaceAetherEventHandlerMethod6 _Nonnull onMemoryStored;
-    UniffiCallbackInterfaceAetherEventHandlerMethod7 _Nonnull onAgentModeDetected;
-    UniffiCallbackInterfaceAetherEventHandlerMethod8 _Nonnull onToolsChanged;
-    UniffiCallbackInterfaceAetherEventHandlerMethod9 _Nonnull onMcpStartupComplete;
-    UniffiCallbackInterfaceAetherEventHandlerMethod10 _Nonnull onRuntimeUpdatesAvailable;
-    UniffiCallbackInterfaceAetherEventHandlerMethod11 _Nonnull onSessionStarted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod12 _Nonnull onToolCallStarted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod13 _Nonnull onToolCallCompleted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod14 _Nonnull onToolCallFailed;
-    UniffiCallbackInterfaceAetherEventHandlerMethod15 _Nonnull onLoopProgress;
-    UniffiCallbackInterfaceAetherEventHandlerMethod16 _Nonnull onPlanCreated;
-    UniffiCallbackInterfaceAetherEventHandlerMethod17 _Nonnull onSessionCompleted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod18 _Nonnull onSubagentStarted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod19 _Nonnull onSubagentCompleted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod20 _Nonnull onPlanConfirmationRequired;
-    UniffiCallbackInterfaceAetherEventHandlerMethod21 _Nonnull onUserInputRequest;
-    UniffiCallbackInterfaceAetherEventHandlerMethod22 _Nonnull onPartUpdate;
-} UniffiVTableCallbackInterfaceAetherEventHandler;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod0 _Nonnull onThinking;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod1 _Nonnull onToolStart;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod2 _Nonnull onToolResult;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod3 _Nonnull onStreamChunk;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod4 _Nonnull onComplete;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod5 _Nonnull onError;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod6 _Nonnull onMemoryStored;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod7 _Nonnull onAgentModeDetected;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod8 _Nonnull onToolsChanged;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod9 _Nonnull onMcpStartupComplete;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod10 _Nonnull onRuntimeUpdatesAvailable;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod11 _Nonnull onSessionStarted;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod12 _Nonnull onToolCallStarted;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod13 _Nonnull onToolCallCompleted;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod14 _Nonnull onToolCallFailed;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod15 _Nonnull onLoopProgress;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod16 _Nonnull onPlanCreated;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod17 _Nonnull onSessionCompleted;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod18 _Nonnull onSubagentStarted;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod19 _Nonnull onSubagentCompleted;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod20 _Nonnull onPlanConfirmationRequired;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod21 _Nonnull onUserInputRequest;
+    UniffiCallbackInterfaceAlephrEventHandlerMethod22 _Nonnull onPartUpdate;
+} UniffiVTableCallbackInterfaceAlephrEventHandler;
 
 #endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AGENT_PROGRESS_HANDLER
@@ -515,2119 +515,2119 @@ typedef struct UniffiVTableCallbackInterfaceEventSubscriptionHandler {
 } UniffiVTableCallbackInterfaceEventSubscriptionHandler;
 
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_CLONE_AETHERCORE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_CLONE_AETHERCORE
-uint64_t uniffi_aethecore_fn_clone_aethercore(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_CLONE_ALEPHRCORE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_CLONE_ALEPHRCORE
+uint64_t uniffi_alephcore_fn_clone_alephrcore(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FREE_AETHERCORE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FREE_AETHERCORE
-void uniffi_aethecore_fn_free_aethercore(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FREE_ALEPHRCORE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FREE_ALEPHRCORE
+void uniffi_alephcore_fn_free_alephrcore(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_ADD_MCP_SERVER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_ADD_MCP_SERVER
-void uniffi_aethecore_fn_method_aethercore_add_mcp_server(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_ADD_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_ADD_MCP_SERVER
+void uniffi_alephcore_fn_method_alephrcore_add_mcp_server(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_CANCEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_CANCEL
-void uniffi_aethecore_fn_method_aethercore_agent_cancel(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_CANCEL
+void uniffi_alephcore_fn_method_alephrcore_agent_cancel(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_DELETE_MODEL_PROFILE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_DELETE_MODEL_PROFILE
-void uniffi_aethecore_fn_method_aethercore_agent_delete_model_profile(uint64_t ptr, RustBuffer profile_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_DELETE_MODEL_PROFILE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_DELETE_MODEL_PROFILE
+void uniffi_alephcore_fn_method_alephrcore_agent_delete_model_profile(uint64_t ptr, RustBuffer profile_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_DELETE_ROUTING_RULE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_DELETE_ROUTING_RULE
-void uniffi_aethecore_fn_method_aethercore_agent_delete_routing_rule(uint64_t ptr, RustBuffer task_type, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_DELETE_ROUTING_RULE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_DELETE_ROUTING_RULE
+void uniffi_alephcore_fn_method_alephrcore_agent_delete_routing_rule(uint64_t ptr, RustBuffer task_type, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_EXECUTE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_EXECUTE
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_execute(uint64_t ptr, RustBuffer graph, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_EXECUTE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_EXECUTE
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_execute(uint64_t ptr, RustBuffer graph, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_LIMIT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_LIMIT
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_budget_limit(uint64_t ptr, RustBuffer limit_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_LIMIT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_LIMIT
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_budget_limit(uint64_t ptr, RustBuffer limit_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_budget_status(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_STATUS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_budget_status(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_budget_status_for_scope(uint64_t ptr, RustBuffer scope_type, RustBuffer scope_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_budget_status_for_scope(uint64_t ptr, RustBuffer scope_type, RustBuffer scope_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_CODE_EXEC_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_CODE_EXEC_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_code_exec_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_CODE_EXEC_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_CODE_EXEC_CONFIG
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_code_exec_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_FILE_OPS_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_FILE_OPS_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_file_ops_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_FILE_OPS_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_FILE_OPS_CONFIG
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_file_ops_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_HEALTH_STATISTICS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_HEALTH_STATISTICS
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_health_statistics(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_HEALTH_STATISTICS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_HEALTH_STATISTICS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_health_statistics(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_model_health(uint64_t ptr, RustBuffer model_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_MODEL_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_MODEL_HEALTH
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_model_health(uint64_t ptr, RustBuffer model_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_model_health_summaries(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_model_health_summaries(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_PROFILES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_MODEL_PROFILES
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_model_profiles(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_MODEL_PROFILES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_MODEL_PROFILES
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_model_profiles(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_ROUTING_RULES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_ROUTING_RULES
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_routing_rules(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_ROUTING_RULES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_ROUTING_RULES
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_routing_rules(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_STATE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_GET_STATE
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_get_state(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_STATE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_GET_STATE
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_get_state(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_IS_CANCELLED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_IS_CANCELLED
-int8_t uniffi_aethecore_fn_method_aethercore_agent_is_cancelled(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_IS_CANCELLED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_IS_CANCELLED
+int8_t uniffi_alephcore_fn_method_alephrcore_agent_is_cancelled(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_IS_PAUSED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_IS_PAUSED
-int8_t uniffi_aethecore_fn_method_aethercore_agent_is_paused(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_IS_PAUSED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_IS_PAUSED
+int8_t uniffi_alephcore_fn_method_alephrcore_agent_is_paused(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_PAUSE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_PAUSE
-void uniffi_aethecore_fn_method_aethercore_agent_pause(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_PAUSE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_PAUSE
+void uniffi_alephcore_fn_method_alephrcore_agent_pause(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_PLAN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_PLAN
-RustBuffer uniffi_aethecore_fn_method_aethercore_agent_plan(uint64_t ptr, RustBuffer request, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_PLAN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_PLAN
+RustBuffer uniffi_alephcore_fn_method_alephrcore_agent_plan(uint64_t ptr, RustBuffer request, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_RESUME
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_RESUME
-void uniffi_aethecore_fn_method_aethercore_agent_resume(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_RESUME
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_RESUME
+void uniffi_alephcore_fn_method_alephrcore_agent_resume(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_SUBSCRIBE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_SUBSCRIBE
-void uniffi_aethecore_fn_method_aethercore_agent_subscribe(uint64_t ptr, uint64_t handler, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_SUBSCRIBE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_SUBSCRIBE
+void uniffi_alephcore_fn_method_alephrcore_agent_subscribe(uint64_t ptr, uint64_t handler, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
-void uniffi_aethecore_fn_method_aethercore_agent_update_code_exec_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
+void uniffi_alephcore_fn_method_alephrcore_agent_update_code_exec_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_COST_STRATEGY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_COST_STRATEGY
-void uniffi_aethecore_fn_method_aethercore_agent_update_cost_strategy(uint64_t ptr, RustBuffer strategy, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_COST_STRATEGY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_COST_STRATEGY
+void uniffi_alephcore_fn_method_alephrcore_agent_update_cost_strategy(uint64_t ptr, RustBuffer strategy, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_DEFAULT_MODEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_DEFAULT_MODEL
-void uniffi_aethecore_fn_method_aethercore_agent_update_default_model(uint64_t ptr, RustBuffer model_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_DEFAULT_MODEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_DEFAULT_MODEL
+void uniffi_alephcore_fn_method_alephrcore_agent_update_default_model(uint64_t ptr, RustBuffer model_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_FILE_OPS_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_FILE_OPS_CONFIG
-void uniffi_aethecore_fn_method_aethercore_agent_update_file_ops_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_FILE_OPS_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_FILE_OPS_CONFIG
+void uniffi_alephcore_fn_method_alephrcore_agent_update_file_ops_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_MODEL_PROFILE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_MODEL_PROFILE
-void uniffi_aethecore_fn_method_aethercore_agent_update_model_profile(uint64_t ptr, RustBuffer profile, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_MODEL_PROFILE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_MODEL_PROFILE
+void uniffi_alephcore_fn_method_alephrcore_agent_update_model_profile(uint64_t ptr, RustBuffer profile, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_ROUTING_RULE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_AGENT_UPDATE_ROUTING_RULE
-void uniffi_aethecore_fn_method_aethercore_agent_update_routing_rule(uint64_t ptr, RustBuffer task_type, RustBuffer model_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_ROUTING_RULE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_AGENT_UPDATE_ROUTING_RULE
+void uniffi_alephcore_fn_method_alephrcore_agent_update_routing_rule(uint64_t ptr, RustBuffer task_type, RustBuffer model_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL
-void uniffi_aethecore_fn_method_aethercore_cancel(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CANCEL
+void uniffi_alephcore_fn_method_alephrcore_cancel(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_GENERATION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_GENERATION
-void uniffi_aethecore_fn_method_aethercore_cancel_generation(uint64_t ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CANCEL_GENERATION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CANCEL_GENERATION
+void uniffi_alephcore_fn_method_alephrcore_cancel_generation(uint64_t ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_SESSION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_SESSION
-int8_t uniffi_aethecore_fn_method_aethercore_cancel_session(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CANCEL_SESSION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CANCEL_SESSION
+int8_t uniffi_alephcore_fn_method_alephrcore_cancel_session(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
-RustBuffer uniffi_aethecore_fn_method_aethercore_check_generation_progress(uint64_t ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CHECK_GENERATION_PROGRESS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CHECK_GENERATION_PROGRESS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_check_generation_progress(uint64_t ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
-RustBuffer uniffi_aethecore_fn_method_aethercore_check_runtime_updates(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CHECK_RUNTIME_UPDATES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CHECK_RUNTIME_UPDATES
+RustBuffer uniffi_alephcore_fn_method_alephrcore_check_runtime_updates(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_FACTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_FACTS
-uint64_t uniffi_aethecore_fn_method_aethercore_clear_facts(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CLEAR_FACTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CLEAR_FACTS
+uint64_t uniffi_alephcore_fn_method_alephrcore_clear_facts(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORIES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORIES
-uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(uint64_t ptr, RustBuffer app_bundle_id, RustBuffer window_title, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CLEAR_MEMORIES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CLEAR_MEMORIES
+uint64_t uniffi_alephcore_fn_method_alephrcore_clear_memories(uint64_t ptr, RustBuffer app_bundle_id, RustBuffer window_title, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORY
-void uniffi_aethecore_fn_method_aethercore_clear_memory(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CLEAR_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CLEAR_MEMORY
+void uniffi_alephcore_fn_method_alephrcore_clear_memory(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
-int8_t uniffi_aethecore_fn_method_aethercore_confirm_task_plan(uint64_t ptr, RustBuffer plan_id, int8_t confirmed, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CONFIRM_TASK_PLAN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_CONFIRM_TASK_PLAN
+int8_t uniffi_alephcore_fn_method_alephrcore_confirm_task_plan(uint64_t ptr, RustBuffer plan_id, int8_t confirmed, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_GENERATION_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_GENERATION_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_delete_generation_provider(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_GENERATION_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_GENERATION_PROVIDER
+void uniffi_alephcore_fn_method_alephrcore_delete_generation_provider(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MCP_SERVER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MCP_SERVER
-void uniffi_aethecore_fn_method_aethercore_delete_mcp_server(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_MCP_SERVER
+void uniffi_alephcore_fn_method_alephrcore_delete_mcp_server(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORIES_BY_TOPIC_ID
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORIES_BY_TOPIC_ID
-uint64_t uniffi_aethecore_fn_method_aethercore_delete_memories_by_topic_id(uint64_t ptr, RustBuffer topic_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_MEMORIES_BY_TOPIC_ID
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_MEMORIES_BY_TOPIC_ID
+uint64_t uniffi_alephcore_fn_method_alephrcore_delete_memories_by_topic_id(uint64_t ptr, RustBuffer topic_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORY
-void uniffi_aethecore_fn_method_aethercore_delete_memory(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_MEMORY
+void uniffi_alephcore_fn_method_alephrcore_delete_memory(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_delete_provider(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_PROVIDER
+void uniffi_alephcore_fn_method_alephrcore_delete_provider(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_SKILL
-void uniffi_aethecore_fn_method_aethercore_delete_skill(uint64_t ptr, RustBuffer skill_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DELETE_SKILL
+void uniffi_alephcore_fn_method_alephrcore_delete_skill(uint64_t ptr, RustBuffer skill_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DISABLE_PLUGIN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DISABLE_PLUGIN
-void uniffi_aethecore_fn_method_aethercore_disable_plugin(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DISABLE_PLUGIN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_DISABLE_PLUGIN
+void uniffi_alephcore_fn_method_alephrcore_disable_plugin(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EDIT_IMAGE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EDIT_IMAGE
-RustBuffer uniffi_aethecore_fn_method_aethercore_edit_image(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_EDIT_IMAGE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_EDIT_IMAGE
+RustBuffer uniffi_alephcore_fn_method_alephrcore_edit_image(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_ENABLE_PLUGIN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_ENABLE_PLUGIN
-void uniffi_aethecore_fn_method_aethercore_enable_plugin(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_ENABLE_PLUGIN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_ENABLE_PLUGIN
+void uniffi_alephcore_fn_method_alephrcore_enable_plugin(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXECUTE_PLUGIN_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXECUTE_PLUGIN_SKILL
-RustBuffer uniffi_aethecore_fn_method_aethercore_execute_plugin_skill(uint64_t ptr, RustBuffer plugin_name, RustBuffer skill_name, RustBuffer arguments, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_EXECUTE_PLUGIN_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_EXECUTE_PLUGIN_SKILL
+RustBuffer uniffi_alephcore_fn_method_alephrcore_execute_plugin_skill(uint64_t ptr, RustBuffer plugin_name, RustBuffer skill_name, RustBuffer arguments, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
-RustBuffer uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_EXPORT_MCP_CONFIG_JSON
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_EXPORT_MCP_CONFIG_JSON
+RustBuffer uniffi_alephcore_fn_method_alephrcore_export_mcp_config_json(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXTRACT_TEXT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXTRACT_TEXT
-RustBuffer uniffi_aethecore_fn_method_aethercore_extract_text(uint64_t ptr, RustBuffer image_data, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_EXTRACT_TEXT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_EXTRACT_TEXT
+RustBuffer uniffi_alephcore_fn_method_alephrcore_extract_text(uint64_t ptr, RustBuffer image_data, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate(uint64_t ptr, RustBuffer provider_name, RustBuffer generation_type, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE
+RustBuffer uniffi_alephcore_fn_method_alephrcore_generate(uint64_t ptr, RustBuffer provider_name, RustBuffer generation_type, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_AUDIO
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_AUDIO
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_audio(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_AUDIO
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_AUDIO
+RustBuffer uniffi_alephcore_fn_method_alephrcore_generate_audio(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_IMAGE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_IMAGE
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_image(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_IMAGE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_IMAGE
+RustBuffer uniffi_alephcore_fn_method_alephrcore_generate_image(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_SPEECH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_SPEECH
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_speech(uint64_t ptr, RustBuffer provider_name, RustBuffer text, RustBuffer params, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_SPEECH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_SPEECH
+RustBuffer uniffi_alephcore_fn_method_alephrcore_generate_speech(uint64_t ptr, RustBuffer provider_name, RustBuffer text, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_topic_title(uint64_t ptr, RustBuffer user_input, RustBuffer ai_response, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_TOPIC_TITLE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_TOPIC_TITLE
+RustBuffer uniffi_alephcore_fn_method_alephrcore_generate_topic_title(uint64_t ptr, RustBuffer user_input, RustBuffer ai_response, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_VIDEO
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_VIDEO
-RustBuffer uniffi_aethecore_fn_method_aethercore_generate_video(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_VIDEO
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GENERATE_VIDEO
+RustBuffer uniffi_alephcore_fn_method_alephrcore_generate_video(uint64_t ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_COMPRESSION_STATS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_COMPRESSION_STATS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_compression_stats(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_COMPRESSION_STATS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_COMPRESSION_STATS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_compression_stats(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_CURRENT_SESSION_ID
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_CURRENT_SESSION_ID
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_current_session_id(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_CURRENT_SESSION_ID
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_CURRENT_SESSION_ID
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_current_session_id(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_DEFAULT_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_DEFAULT_PROVIDER
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_default_provider(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_DEFAULT_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_DEFAULT_PROVIDER
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_default_provider(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ENABLED_PROVIDERS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ENABLED_PROVIDERS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_enabled_providers(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_ENABLED_PROVIDERS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_ENABLED_PROVIDERS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_enabled_providers(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_GENERATION_PROVIDER_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_GENERATION_PROVIDER_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_generation_provider_config(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_GENERATION_PROVIDER_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_GENERATION_PROVIDER_CONFIG
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_generation_provider_config(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_LOG_DIRECTORY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_LOG_DIRECTORY
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_directory(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_LOG_DIRECTORY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_LOG_DIRECTORY
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_log_directory(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_LOG_LEVEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_LOG_LEVEL
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_level(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_LOG_LEVEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_LOG_LEVEL
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_log_level(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MCP_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MCP_CONFIG
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_mcp_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_server(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MCP_SERVER
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_mcp_server(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER_LOGS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER_LOGS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_server_logs(uint64_t ptr, RustBuffer id, uint32_t max_lines, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MCP_SERVER_LOGS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MCP_SERVER_LOGS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_mcp_server_logs(uint64_t ptr, RustBuffer id, uint32_t max_lines, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER_STATUS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MCP_SERVER_STATUS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_mcp_server_status(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MCP_SERVER_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MCP_SERVER_STATUS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_mcp_server_status(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_APP_LIST
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_APP_LIST
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_app_list(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MEMORY_APP_LIST
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MEMORY_APP_LIST
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_memory_app_list(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MEMORY_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MEMORY_CONFIG
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_memory_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_STATS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_STATS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MEMORY_STATS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_MEMORY_STATS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_memory_stats(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NODE_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NODE_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_node_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_NODE_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_NODE_PATH
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_node_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NPM_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NPM_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_npm_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_NPM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_NPM_PATH
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_npm_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_plugin_skill_instructions(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_plugin_skill_instructions(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PLUGINS_DIR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PLUGINS_DIR
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_plugins_dir(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_PLUGINS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_PLUGINS_DIR
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_plugins_dir(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_providers_for_type(uint64_t ptr, RustBuffer generation_type, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_PROVIDERS_FOR_TYPE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_PROVIDERS_FOR_TYPE
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_providers_for_type(uint64_t ptr, RustBuffer generation_type, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PYTHON_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PYTHON_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_python_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_PYTHON_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_PYTHON_PATH
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_python_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_root_commands_from_registry(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_SKILLS_DIR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_SKILLS_DIR
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_skills_dir(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_SKILLS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_SKILLS_DIR
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_skills_dir(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_YTDLP_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_YTDLP_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_ytdlp_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_YTDLP_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_GET_YTDLP_PATH
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_ytdlp_path(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
-void uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(uint64_t ptr, RustBuffer json, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_IMPORT_MCP_CONFIG_JSON
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_IMPORT_MCP_CONFIG_JSON
+void uniffi_alephcore_fn_method_alephrcore_import_mcp_config_json(uint64_t ptr, RustBuffer json, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_PLUGIN_FROM_GIT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_PLUGIN_FROM_GIT
-RustBuffer uniffi_aethecore_fn_method_aethercore_install_plugin_from_git(uint64_t ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_PLUGIN_FROM_GIT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_PLUGIN_FROM_GIT
+RustBuffer uniffi_alephcore_fn_method_alephrcore_install_plugin_from_git(uint64_t ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_PLUGINS_FROM_ZIP
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_PLUGINS_FROM_ZIP
-RustBuffer uniffi_aethecore_fn_method_aethercore_install_plugins_from_zip(uint64_t ptr, RustBuffer zip_path, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_PLUGINS_FROM_ZIP
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_PLUGINS_FROM_ZIP
+RustBuffer uniffi_alephcore_fn_method_alephrcore_install_plugins_from_zip(uint64_t ptr, RustBuffer zip_path, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_RUNTIME
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_RUNTIME
-void uniffi_aethecore_fn_method_aethercore_install_runtime(uint64_t ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_RUNTIME
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_RUNTIME
+void uniffi_alephcore_fn_method_alephrcore_install_runtime(uint64_t ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILL
-RustBuffer uniffi_aethecore_fn_method_aethercore_install_skill(uint64_t ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_SKILL
+RustBuffer uniffi_alephcore_fn_method_alephrcore_install_skill(uint64_t ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
-RustBuffer uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(uint64_t ptr, RustBuffer zip_path, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_SKILLS_FROM_ZIP
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_INSTALL_SKILLS_FROM_ZIP
+RustBuffer uniffi_alephcore_fn_method_alephrcore_install_skills_from_zip(uint64_t ptr, RustBuffer zip_path, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_CANCELLED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_CANCELLED
-int8_t uniffi_aethecore_fn_method_aethercore_is_cancelled(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_IS_CANCELLED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_IS_CANCELLED
+int8_t uniffi_alephcore_fn_method_alephrcore_is_cancelled(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
-int8_t uniffi_aethecore_fn_method_aethercore_is_runtime_installed(uint64_t ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_IS_RUNTIME_INSTALLED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_IS_RUNTIME_INSTALLED
+int8_t uniffi_alephcore_fn_method_alephrcore_is_runtime_installed(uint64_t ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_builtin_tools(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_BUILTIN_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_BUILTIN_TOOLS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_list_builtin_tools(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_generation_providers(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_GENERATION_PROVIDERS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_GENERATION_PROVIDERS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_list_generation_providers(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_MCP_SERVERS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_MCP_SERVERS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_mcp_servers(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_MCP_SERVERS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_MCP_SERVERS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_list_mcp_servers(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PLUGIN_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PLUGIN_SKILLS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_plugin_skills(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_PLUGIN_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_PLUGIN_SKILLS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_list_plugin_skills(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PLUGINS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PLUGINS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_plugins(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_PLUGINS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_PLUGINS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_list_plugins(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_recent_sessions(uint64_t ptr, uint32_t limit, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_RECENT_SESSIONS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_RECENT_SESSIONS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_list_recent_sessions(uint64_t ptr, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RUNTIMES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RUNTIMES
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_runtimes(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_RUNTIMES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_RUNTIMES
+RustBuffer uniffi_alephcore_fn_method_alephrcore_list_runtimes(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_SKILLS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_skills(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_SKILLS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_list_skills(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS
-RustBuffer uniffi_aethecore_fn_method_aethercore_list_tools(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LIST_TOOLS
+RustBuffer uniffi_alephcore_fn_method_alephrcore_list_tools(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_load_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LOAD_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LOAD_CONFIG
+RustBuffer uniffi_alephcore_fn_method_alephrcore_load_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_PLUGIN_FROM_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_PLUGIN_FROM_PATH
-RustBuffer uniffi_aethecore_fn_method_aethercore_load_plugin_from_path(uint64_t ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LOAD_PLUGIN_FROM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_LOAD_PLUGIN_FROM_PATH
+RustBuffer uniffi_alephcore_fn_method_alephrcore_load_plugin_from_path(uint64_t ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS
-void uniffi_aethecore_fn_method_aethercore_process(uint64_t ptr, RustBuffer input, RustBuffer options, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_PROCESS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_PROCESS
+void uniffi_alephcore_fn_method_alephrcore_process(uint64_t ptr, RustBuffer input, RustBuffer options, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
-int8_t uniffi_aethecore_fn_method_aethercore_provider_supports_image_editing(uint64_t ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
+int8_t uniffi_alephcore_fn_method_alephrcore_provider_supports_image_editing(uint64_t ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_PLUGINS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_PLUGINS
-uint32_t uniffi_aethecore_fn_method_aethercore_refresh_plugins(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_REFRESH_PLUGINS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_REFRESH_PLUGINS
+uint32_t uniffi_alephcore_fn_method_alephrcore_refresh_plugins(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_SKILLS
-void uniffi_aethecore_fn_method_aethercore_refresh_skills(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_REFRESH_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_REFRESH_SKILLS
+void uniffi_alephcore_fn_method_alephrcore_refresh_skills(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RELOAD_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RELOAD_CONFIG
-void uniffi_aethecore_fn_method_aethercore_reload_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_RELOAD_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_RELOAD_CONFIG
+void uniffi_alephcore_fn_method_alephrcore_reload_config(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
-int8_t uniffi_aethecore_fn_method_aethercore_respond_to_user_input(uint64_t ptr, RustBuffer request_id, RustBuffer response, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_RESPOND_TO_USER_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_RESPOND_TO_USER_INPUT
+int8_t uniffi_alephcore_fn_method_alephrcore_respond_to_user_input(uint64_t ptr, RustBuffer request_id, RustBuffer response, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESUME_SESSION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RESUME_SESSION
-void uniffi_aethecore_fn_method_aethercore_resume_session(uint64_t ptr, RustBuffer session_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_RESUME_SESSION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_RESUME_SESSION
+void uniffi_alephcore_fn_method_alephrcore_resume_session(uint64_t ptr, RustBuffer session_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORIES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORIES
-RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(uint64_t ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_SEARCH_MEMORIES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_SEARCH_MEMORIES
+RustBuffer uniffi_alephcore_fn_method_alephrcore_search_memories(uint64_t ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORY
-RustBuffer uniffi_aethecore_fn_method_aethercore_search_memory(uint64_t ptr, RustBuffer query, uint32_t limit, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_SEARCH_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_SEARCH_MEMORY
+RustBuffer uniffi_alephcore_fn_method_alephrcore_search_memory(uint64_t ptr, RustBuffer query, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_DEFAULT_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_DEFAULT_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_set_default_provider(uint64_t ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_SET_DEFAULT_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_SET_DEFAULT_PROVIDER
+void uniffi_alephcore_fn_method_alephrcore_set_default_provider(uint64_t ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_LOG_LEVEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_LOG_LEVEL
-void uniffi_aethecore_fn_method_aethercore_set_log_level(uint64_t ptr, RustBuffer level, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_SET_LOG_LEVEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_SET_LOG_LEVEL
+void uniffi_alephcore_fn_method_alephrcore_set_log_level(uint64_t ptr, RustBuffer level, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_GENERATION_PROVIDER_CONNECTION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_GENERATION_PROVIDER_CONNECTION
-RustBuffer uniffi_aethecore_fn_method_aethercore_test_generation_provider_connection(uint64_t ptr, RustBuffer provider_type, RustBuffer api_key, RustBuffer base_url, RustBuffer model, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_TEST_GENERATION_PROVIDER_CONNECTION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_TEST_GENERATION_PROVIDER_CONNECTION
+RustBuffer uniffi_alephcore_fn_method_alephrcore_test_generation_provider_connection(uint64_t ptr, RustBuffer provider_type, RustBuffer api_key, RustBuffer base_url, RustBuffer model, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_test_provider_connection_with_config(uint64_t ptr, RustBuffer provider_name, RustBuffer provider_config, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
+RustBuffer uniffi_alephcore_fn_method_alephrcore_test_provider_connection_with_config(uint64_t ptr, RustBuffer provider_name, RustBuffer provider_config, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
-RustBuffer uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
+RustBuffer uniffi_alephcore_fn_method_alephrcore_test_search_provider_with_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TRIGGER_COMPRESSION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_TRIGGER_COMPRESSION
-RustBuffer uniffi_aethecore_fn_method_aethercore_trigger_compression(uint64_t ptr, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_TRIGGER_COMPRESSION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_TRIGGER_COMPRESSION
+RustBuffer uniffi_alephcore_fn_method_alephrcore_trigger_compression(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UNINSTALL_PLUGIN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UNINSTALL_PLUGIN
-void uniffi_aethecore_fn_method_aethercore_uninstall_plugin(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UNINSTALL_PLUGIN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UNINSTALL_PLUGIN
+void uniffi_alephcore_fn_method_alephrcore_uninstall_plugin(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_BEHAVIOR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_BEHAVIOR
-void uniffi_aethecore_fn_method_aethercore_update_behavior(uint64_t ptr, RustBuffer behavior, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_BEHAVIOR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_BEHAVIOR
+void uniffi_alephcore_fn_method_alephrcore_update_behavior(uint64_t ptr, RustBuffer behavior, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_general_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_GENERAL_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_GENERAL_CONFIG
+void uniffi_alephcore_fn_method_alephrcore_update_general_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERATION_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERATION_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_update_generation_provider(uint64_t ptr, RustBuffer name, RustBuffer provider, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_GENERATION_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_GENERATION_PROVIDER
+void uniffi_alephcore_fn_method_alephrcore_update_generation_provider(uint64_t ptr, RustBuffer name, RustBuffer provider, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MCP_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MCP_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_mcp_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_MCP_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_MCP_CONFIG
+void uniffi_alephcore_fn_method_alephrcore_update_mcp_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MCP_SERVER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MCP_SERVER
-void uniffi_aethecore_fn_method_aethercore_update_mcp_server(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_MCP_SERVER
+void uniffi_alephcore_fn_method_alephrcore_update_mcp_server(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_memory_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_MEMORY_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_MEMORY_CONFIG
+void uniffi_alephcore_fn_method_alephrcore_update_memory_config(uint64_t ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_POLICIES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_POLICIES
-void uniffi_aethecore_fn_method_aethercore_update_policies(uint64_t ptr, RustBuffer policies, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_POLICIES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_POLICIES
+void uniffi_alephcore_fn_method_alephrcore_update_policies(uint64_t ptr, RustBuffer policies, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_PROVIDER
-void uniffi_aethecore_fn_method_aethercore_update_provider(uint64_t ptr, RustBuffer name, RustBuffer provider, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_PROVIDER
+void uniffi_alephcore_fn_method_alephrcore_update_provider(uint64_t ptr, RustBuffer name, RustBuffer provider, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_ROUTING_RULES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_ROUTING_RULES
-void uniffi_aethecore_fn_method_aethercore_update_routing_rules(uint64_t ptr, RustBuffer rules, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_ROUTING_RULES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_ROUTING_RULES
+void uniffi_alephcore_fn_method_alephrcore_update_routing_rules(uint64_t ptr, RustBuffer rules, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_RUNTIME
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_RUNTIME
-void uniffi_aethecore_fn_method_aethercore_update_runtime(uint64_t ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_RUNTIME
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_RUNTIME
+void uniffi_alephcore_fn_method_alephrcore_update_runtime(uint64_t ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_SEARCH_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_SEARCH_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_search_config(uint64_t ptr, RustBuffer search, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_SEARCH_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_SEARCH_CONFIG
+void uniffi_alephcore_fn_method_alephrcore_update_search_config(uint64_t ptr, RustBuffer search, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_SHORTCUTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_SHORTCUTS
-void uniffi_aethecore_fn_method_aethercore_update_shortcuts(uint64_t ptr, RustBuffer shortcuts, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_SHORTCUTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_SHORTCUTS
+void uniffi_alephcore_fn_method_alephrcore_update_shortcuts(uint64_t ptr, RustBuffer shortcuts, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
-void uniffi_aethecore_fn_method_aethercore_update_trigger_config(uint64_t ptr, RustBuffer trigger, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_TRIGGER_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_UPDATE_TRIGGER_CONFIG
+void uniffi_alephcore_fn_method_alephrcore_update_trigger_config(uint64_t ptr, RustBuffer trigger, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_VALIDATE_REGEX
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_VALIDATE_REGEX
-int8_t uniffi_aethecore_fn_method_aethercore_validate_regex(uint64_t ptr, RustBuffer pattern, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_VALIDATE_REGEX
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_METHOD_ALEPHRCORE_VALIDATE_REGEX
+int8_t uniffi_alephcore_fn_method_alephrcore_validate_regex(uint64_t ptr, RustBuffer pattern, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AETHEREVENTHANDLER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AETHEREVENTHANDLER
-void uniffi_aethecore_fn_init_callback_vtable_aethereventhandler(const UniffiVTableCallbackInterfaceAetherEventHandler* _Nonnull vtable
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_INIT_CALLBACK_VTABLE_ALEPHREVENTHANDLER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_INIT_CALLBACK_VTABLE_ALEPHREVENTHANDLER
+void uniffi_alephcore_fn_init_callback_vtable_alephreventhandler(const UniffiVTableCallbackInterfaceAlephrEventHandler* _Nonnull vtable
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AGENTPROGRESSHANDLER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AGENTPROGRESSHANDLER
-void uniffi_aethecore_fn_init_callback_vtable_agentprogresshandler(const UniffiVTableCallbackInterfaceAgentProgressHandler* _Nonnull vtable
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_INIT_CALLBACK_VTABLE_AGENTPROGRESSHANDLER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_INIT_CALLBACK_VTABLE_AGENTPROGRESSHANDLER
+void uniffi_alephcore_fn_init_callback_vtable_agentprogresshandler(const UniffiVTableCallbackInterfaceAgentProgressHandler* _Nonnull vtable
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_INITPROGRESSHANDLERFFI
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_INITPROGRESSHANDLERFFI
-void uniffi_aethecore_fn_init_callback_vtable_initprogresshandlerffi(const UniffiVTableCallbackInterfaceInitProgressHandlerFfi* _Nonnull vtable
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_INIT_CALLBACK_VTABLE_INITPROGRESSHANDLERFFI
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_INIT_CALLBACK_VTABLE_INITPROGRESSHANDLERFFI
+void uniffi_alephcore_fn_init_callback_vtable_initprogresshandlerffi(const UniffiVTableCallbackInterfaceInitProgressHandlerFfi* _Nonnull vtable
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_EVENTSUBSCRIPTIONHANDLER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_EVENTSUBSCRIPTIONHANDLER
-void uniffi_aethecore_fn_init_callback_vtable_eventsubscriptionhandler(const UniffiVTableCallbackInterfaceEventSubscriptionHandler* _Nonnull vtable
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_INIT_CALLBACK_VTABLE_EVENTSUBSCRIPTIONHANDLER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_INIT_CALLBACK_VTABLE_EVENTSUBSCRIPTIONHANDLER
+void uniffi_alephcore_fn_init_callback_vtable_eventsubscriptionhandler(const UniffiVTableCallbackInterfaceEventSubscriptionHandler* _Nonnull vtable
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_GET_SKILLS_DIR_STRING
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_GET_SKILLS_DIR_STRING
-RustBuffer uniffi_aethecore_fn_func_get_skills_dir_string(RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_GET_SKILLS_DIR_STRING
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_GET_SKILLS_DIR_STRING
+RustBuffer uniffi_alephcore_fn_func_get_skills_dir_string(RustCallStatus *_Nonnull out_status
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INIT_CORE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INIT_CORE
-uint64_t uniffi_aethecore_fn_func_init_core(RustBuffer config_path, uint64_t handler, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_INIT_CORE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_INIT_CORE
+uint64_t uniffi_alephcore_fn_func_init_core(RustBuffer config_path, uint64_t handler, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
-void uniffi_aethecore_fn_func_initialize_builtin_skills_ffi(RustBuffer bundle_skills_dir, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
+void uniffi_alephcore_fn_func_initialize_builtin_skills_ffi(RustBuffer bundle_skills_dir, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_LIST_INSTALLED_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_LIST_INSTALLED_SKILLS
-RustBuffer uniffi_aethecore_fn_func_list_installed_skills(RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_LIST_INSTALLED_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_LIST_INSTALLED_SKILLS
+RustBuffer uniffi_alephcore_fn_func_list_installed_skills(RustCallStatus *_Nonnull out_status
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_EXECUTE_COMMAND
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_EXECUTE_COMMAND
-uint64_t uniffi_aethecore_fn_func_extension_execute_command(RustBuffer name, RustBuffer arguments
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_EXECUTE_COMMAND
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_EXECUTE_COMMAND
+uint64_t uniffi_alephcore_fn_func_extension_execute_command(RustBuffer name, RustBuffer arguments
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_EXECUTE_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_EXECUTE_SKILL
-uint64_t uniffi_aethecore_fn_func_extension_execute_skill(RustBuffer qualified_name, RustBuffer arguments
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_EXECUTE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_EXECUTE_SKILL
+uint64_t uniffi_alephcore_fn_func_extension_execute_skill(RustBuffer qualified_name, RustBuffer arguments
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_AUTO_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_AUTO_SKILLS
-uint64_t uniffi_aethecore_fn_func_extension_get_auto_skills(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_AUTO_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_AUTO_SKILLS
+uint64_t uniffi_alephcore_fn_func_extension_get_auto_skills(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_DEFAULT_MODEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_DEFAULT_MODEL
-uint64_t uniffi_aethecore_fn_func_extension_get_default_model(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_DEFAULT_MODEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_DEFAULT_MODEL
+uint64_t uniffi_alephcore_fn_func_extension_get_default_model(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_INSTRUCTIONS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_INSTRUCTIONS
-uint64_t uniffi_aethecore_fn_func_extension_get_instructions(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_INSTRUCTIONS
+uint64_t uniffi_alephcore_fn_func_extension_get_instructions(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_PLUGINS_DIR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_PLUGINS_DIR
-RustBuffer uniffi_aethecore_fn_func_extension_get_plugins_dir(RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_PLUGINS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_PLUGINS_DIR
+RustBuffer uniffi_alephcore_fn_func_extension_get_plugins_dir(RustCallStatus *_Nonnull out_status
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
-uint64_t uniffi_aethecore_fn_func_extension_get_skill_instructions(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
+uint64_t uniffi_alephcore_fn_func_extension_get_skill_instructions(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
-int8_t uniffi_aethecore_fn_func_extension_is_valid_plugin_dir(RustBuffer path, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
+int8_t uniffi_alephcore_fn_func_extension_is_valid_plugin_dir(RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LIST_PLUGINS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LIST_PLUGINS
-uint64_t uniffi_aethecore_fn_func_extension_list_plugins(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_LIST_PLUGINS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_LIST_PLUGINS
+uint64_t uniffi_alephcore_fn_func_extension_list_plugins(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LIST_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LIST_SKILLS
-uint64_t uniffi_aethecore_fn_func_extension_list_skills(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_LIST_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_LIST_SKILLS
+uint64_t uniffi_alephcore_fn_func_extension_list_skills(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LOAD_ALL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LOAD_ALL
-uint64_t uniffi_aethecore_fn_func_extension_load_all(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_LOAD_ALL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_LOAD_ALL
+uint64_t uniffi_alephcore_fn_func_extension_load_all(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
-uint64_t uniffi_aethecore_fn_func_extension_load_plugin_from_path(RustBuffer path
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
+uint64_t uniffi_alephcore_fn_func_extension_load_plugin_from_path(RustBuffer path
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_CHECK_EMBEDDING_MODEL_EXISTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_CHECK_EMBEDDING_MODEL_EXISTS
-int8_t uniffi_aethecore_fn_func_check_embedding_model_exists(RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_CHECK_EMBEDDING_MODEL_EXISTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_CHECK_EMBEDDING_MODEL_EXISTS
+int8_t uniffi_alephcore_fn_func_check_embedding_model_exists(RustCallStatus *_Nonnull out_status
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_NEEDS_FIRST_TIME_INIT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_NEEDS_FIRST_TIME_INIT
-int8_t uniffi_aethecore_fn_func_needs_first_time_init(RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_NEEDS_FIRST_TIME_INIT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_NEEDS_FIRST_TIME_INIT
+int8_t uniffi_alephcore_fn_func_needs_first_time_init(RustCallStatus *_Nonnull out_status
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_RUN_INITIALIZATION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_RUN_INITIALIZATION
-RustBuffer uniffi_aethecore_fn_func_run_initialization(uint64_t handler, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_RUN_INITIALIZATION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_RUN_INITIALIZATION
+RustBuffer uniffi_alephcore_fn_func_run_initialization(uint64_t handler, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_SUBSCRIBE_EVENTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_SUBSCRIBE_EVENTS
-RustBuffer uniffi_aethecore_fn_func_subscribe_events(RustBuffer session_id, RustBuffer event_types, uint64_t handler, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_SUBSCRIBE_EVENTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_SUBSCRIBE_EVENTS
+RustBuffer uniffi_alephcore_fn_func_subscribe_events(RustBuffer session_id, RustBuffer event_types, uint64_t handler, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_UNSUBSCRIBE_EVENTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_UNSUBSCRIBE_EVENTS
-void uniffi_aethecore_fn_func_unsubscribe_events(RustBuffer subscription_id, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_UNSUBSCRIBE_EVENTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_FN_FUNC_UNSUBSCRIBE_EVENTS
+void uniffi_alephcore_fn_func_unsubscribe_events(RustBuffer subscription_id, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUSTBUFFER_ALLOC
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUSTBUFFER_ALLOC
-RustBuffer ffi_aethecore_rustbuffer_alloc(uint64_t size, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUSTBUFFER_ALLOC
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUSTBUFFER_ALLOC
+RustBuffer ffi_alephcore_rustbuffer_alloc(uint64_t size, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUSTBUFFER_FROM_BYTES
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUSTBUFFER_FROM_BYTES
-RustBuffer ffi_aethecore_rustbuffer_from_bytes(ForeignBytes bytes, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUSTBUFFER_FROM_BYTES
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUSTBUFFER_FROM_BYTES
+RustBuffer ffi_alephcore_rustbuffer_from_bytes(ForeignBytes bytes, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUSTBUFFER_FREE
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUSTBUFFER_FREE
-void ffi_aethecore_rustbuffer_free(RustBuffer buf, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUSTBUFFER_FREE
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUSTBUFFER_FREE
+void ffi_alephcore_rustbuffer_free(RustBuffer buf, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUSTBUFFER_RESERVE
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUSTBUFFER_RESERVE
-RustBuffer ffi_aethecore_rustbuffer_reserve(RustBuffer buf, uint64_t additional, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUSTBUFFER_RESERVE
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUSTBUFFER_RESERVE
+RustBuffer ffi_alephcore_rustbuffer_reserve(RustBuffer buf, uint64_t additional, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_U8
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_U8
-void ffi_aethecore_rust_future_poll_u8(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_U8
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_U8
+void ffi_alephcore_rust_future_poll_u8(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_U8
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_U8
-void ffi_aethecore_rust_future_cancel_u8(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_U8
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_U8
+void ffi_alephcore_rust_future_cancel_u8(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_U8
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_U8
-void ffi_aethecore_rust_future_free_u8(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_U8
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_U8
+void ffi_alephcore_rust_future_free_u8(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_U8
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_U8
-uint8_t ffi_aethecore_rust_future_complete_u8(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_U8
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_U8
+uint8_t ffi_alephcore_rust_future_complete_u8(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_I8
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_I8
-void ffi_aethecore_rust_future_poll_i8(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_I8
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_I8
+void ffi_alephcore_rust_future_poll_i8(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_I8
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_I8
-void ffi_aethecore_rust_future_cancel_i8(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_I8
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_I8
+void ffi_alephcore_rust_future_cancel_i8(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_I8
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_I8
-void ffi_aethecore_rust_future_free_i8(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_I8
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_I8
+void ffi_alephcore_rust_future_free_i8(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_I8
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_I8
-int8_t ffi_aethecore_rust_future_complete_i8(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_I8
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_I8
+int8_t ffi_alephcore_rust_future_complete_i8(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_U16
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_U16
-void ffi_aethecore_rust_future_poll_u16(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_U16
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_U16
+void ffi_alephcore_rust_future_poll_u16(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_U16
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_U16
-void ffi_aethecore_rust_future_cancel_u16(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_U16
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_U16
+void ffi_alephcore_rust_future_cancel_u16(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_U16
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_U16
-void ffi_aethecore_rust_future_free_u16(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_U16
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_U16
+void ffi_alephcore_rust_future_free_u16(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_U16
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_U16
-uint16_t ffi_aethecore_rust_future_complete_u16(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_U16
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_U16
+uint16_t ffi_alephcore_rust_future_complete_u16(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_I16
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_I16
-void ffi_aethecore_rust_future_poll_i16(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_I16
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_I16
+void ffi_alephcore_rust_future_poll_i16(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_I16
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_I16
-void ffi_aethecore_rust_future_cancel_i16(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_I16
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_I16
+void ffi_alephcore_rust_future_cancel_i16(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_I16
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_I16
-void ffi_aethecore_rust_future_free_i16(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_I16
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_I16
+void ffi_alephcore_rust_future_free_i16(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_I16
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_I16
-int16_t ffi_aethecore_rust_future_complete_i16(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_I16
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_I16
+int16_t ffi_alephcore_rust_future_complete_i16(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_U32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_U32
-void ffi_aethecore_rust_future_poll_u32(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_U32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_U32
+void ffi_alephcore_rust_future_poll_u32(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_U32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_U32
-void ffi_aethecore_rust_future_cancel_u32(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_U32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_U32
+void ffi_alephcore_rust_future_cancel_u32(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_U32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_U32
-void ffi_aethecore_rust_future_free_u32(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_U32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_U32
+void ffi_alephcore_rust_future_free_u32(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_U32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_U32
-uint32_t ffi_aethecore_rust_future_complete_u32(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_U32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_U32
+uint32_t ffi_alephcore_rust_future_complete_u32(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_I32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_I32
-void ffi_aethecore_rust_future_poll_i32(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_I32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_I32
+void ffi_alephcore_rust_future_poll_i32(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_I32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_I32
-void ffi_aethecore_rust_future_cancel_i32(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_I32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_I32
+void ffi_alephcore_rust_future_cancel_i32(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_I32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_I32
-void ffi_aethecore_rust_future_free_i32(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_I32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_I32
+void ffi_alephcore_rust_future_free_i32(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_I32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_I32
-int32_t ffi_aethecore_rust_future_complete_i32(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_I32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_I32
+int32_t ffi_alephcore_rust_future_complete_i32(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_U64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_U64
-void ffi_aethecore_rust_future_poll_u64(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_U64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_U64
+void ffi_alephcore_rust_future_poll_u64(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_U64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_U64
-void ffi_aethecore_rust_future_cancel_u64(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_U64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_U64
+void ffi_alephcore_rust_future_cancel_u64(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_U64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_U64
-void ffi_aethecore_rust_future_free_u64(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_U64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_U64
+void ffi_alephcore_rust_future_free_u64(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_U64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_U64
-uint64_t ffi_aethecore_rust_future_complete_u64(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_U64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_U64
+uint64_t ffi_alephcore_rust_future_complete_u64(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_I64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_I64
-void ffi_aethecore_rust_future_poll_i64(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_I64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_I64
+void ffi_alephcore_rust_future_poll_i64(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_I64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_I64
-void ffi_aethecore_rust_future_cancel_i64(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_I64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_I64
+void ffi_alephcore_rust_future_cancel_i64(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_I64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_I64
-void ffi_aethecore_rust_future_free_i64(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_I64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_I64
+void ffi_alephcore_rust_future_free_i64(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_I64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_I64
-int64_t ffi_aethecore_rust_future_complete_i64(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_I64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_I64
+int64_t ffi_alephcore_rust_future_complete_i64(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_F32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_F32
-void ffi_aethecore_rust_future_poll_f32(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_F32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_F32
+void ffi_alephcore_rust_future_poll_f32(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_F32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_F32
-void ffi_aethecore_rust_future_cancel_f32(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_F32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_F32
+void ffi_alephcore_rust_future_cancel_f32(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_F32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_F32
-void ffi_aethecore_rust_future_free_f32(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_F32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_F32
+void ffi_alephcore_rust_future_free_f32(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_F32
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_F32
-float ffi_aethecore_rust_future_complete_f32(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_F32
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_F32
+float ffi_alephcore_rust_future_complete_f32(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_F64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_F64
-void ffi_aethecore_rust_future_poll_f64(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_F64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_F64
+void ffi_alephcore_rust_future_poll_f64(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_F64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_F64
-void ffi_aethecore_rust_future_cancel_f64(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_F64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_F64
+void ffi_alephcore_rust_future_cancel_f64(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_F64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_F64
-void ffi_aethecore_rust_future_free_f64(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_F64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_F64
+void ffi_alephcore_rust_future_free_f64(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_F64
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_F64
-double ffi_aethecore_rust_future_complete_f64(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_F64
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_F64
+double ffi_alephcore_rust_future_complete_f64(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_RUST_BUFFER
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_RUST_BUFFER
-void ffi_aethecore_rust_future_poll_rust_buffer(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_RUST_BUFFER
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_RUST_BUFFER
+void ffi_alephcore_rust_future_poll_rust_buffer(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_RUST_BUFFER
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_RUST_BUFFER
-void ffi_aethecore_rust_future_cancel_rust_buffer(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_RUST_BUFFER
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_RUST_BUFFER
+void ffi_alephcore_rust_future_cancel_rust_buffer(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_RUST_BUFFER
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_RUST_BUFFER
-void ffi_aethecore_rust_future_free_rust_buffer(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_RUST_BUFFER
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_RUST_BUFFER
+void ffi_alephcore_rust_future_free_rust_buffer(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_RUST_BUFFER
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_RUST_BUFFER
-RustBuffer ffi_aethecore_rust_future_complete_rust_buffer(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_RUST_BUFFER
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_RUST_BUFFER
+RustBuffer ffi_alephcore_rust_future_complete_rust_buffer(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_VOID
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_POLL_VOID
-void ffi_aethecore_rust_future_poll_void(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_VOID
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_POLL_VOID
+void ffi_alephcore_rust_future_poll_void(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_VOID
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_CANCEL_VOID
-void ffi_aethecore_rust_future_cancel_void(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_VOID
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_CANCEL_VOID
+void ffi_alephcore_rust_future_cancel_void(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_VOID
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_FREE_VOID
-void ffi_aethecore_rust_future_free_void(uint64_t handle
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_VOID
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_FREE_VOID
+void ffi_alephcore_rust_future_free_void(uint64_t handle
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_VOID
-#define UNIFFI_FFIDEF_FFI_AETHECORE_RUST_FUTURE_COMPLETE_VOID
-void ffi_aethecore_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_VOID
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_RUST_FUTURE_COMPLETE_VOID
+void ffi_alephcore_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_GET_SKILLS_DIR_STRING
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_GET_SKILLS_DIR_STRING
-uint16_t uniffi_aethecore_checksum_func_get_skills_dir_string(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_GET_SKILLS_DIR_STRING
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_GET_SKILLS_DIR_STRING
+uint16_t uniffi_alephcore_checksum_func_get_skills_dir_string(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INIT_CORE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INIT_CORE
-uint16_t uniffi_aethecore_checksum_func_init_core(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_INIT_CORE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_INIT_CORE
+uint16_t uniffi_alephcore_checksum_func_init_core(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
-uint16_t uniffi_aethecore_checksum_func_initialize_builtin_skills_ffi(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
+uint16_t uniffi_alephcore_checksum_func_initialize_builtin_skills_ffi(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_LIST_INSTALLED_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_LIST_INSTALLED_SKILLS
-uint16_t uniffi_aethecore_checksum_func_list_installed_skills(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_LIST_INSTALLED_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_LIST_INSTALLED_SKILLS
+uint16_t uniffi_alephcore_checksum_func_list_installed_skills(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_COMMAND
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_COMMAND
-uint16_t uniffi_aethecore_checksum_func_extension_execute_command(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_COMMAND
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_COMMAND
+uint16_t uniffi_alephcore_checksum_func_extension_execute_command(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_SKILL
-uint16_t uniffi_aethecore_checksum_func_extension_execute_skill(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_EXECUTE_SKILL
+uint16_t uniffi_alephcore_checksum_func_extension_execute_skill(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_AUTO_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_AUTO_SKILLS
-uint16_t uniffi_aethecore_checksum_func_extension_get_auto_skills(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_AUTO_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_AUTO_SKILLS
+uint16_t uniffi_alephcore_checksum_func_extension_get_auto_skills(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_DEFAULT_MODEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_DEFAULT_MODEL
-uint16_t uniffi_aethecore_checksum_func_extension_get_default_model(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_DEFAULT_MODEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_DEFAULT_MODEL
+uint16_t uniffi_alephcore_checksum_func_extension_get_default_model(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_INSTRUCTIONS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_INSTRUCTIONS
-uint16_t uniffi_aethecore_checksum_func_extension_get_instructions(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_INSTRUCTIONS
+uint16_t uniffi_alephcore_checksum_func_extension_get_instructions(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_PLUGINS_DIR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_PLUGINS_DIR
-uint16_t uniffi_aethecore_checksum_func_extension_get_plugins_dir(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_PLUGINS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_PLUGINS_DIR
+uint16_t uniffi_alephcore_checksum_func_extension_get_plugins_dir(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
-uint16_t uniffi_aethecore_checksum_func_extension_get_skill_instructions(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_GET_SKILL_INSTRUCTIONS
+uint16_t uniffi_alephcore_checksum_func_extension_get_skill_instructions(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
-uint16_t uniffi_aethecore_checksum_func_extension_is_valid_plugin_dir(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_IS_VALID_PLUGIN_DIR
+uint16_t uniffi_alephcore_checksum_func_extension_is_valid_plugin_dir(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LIST_PLUGINS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LIST_PLUGINS
-uint16_t uniffi_aethecore_checksum_func_extension_list_plugins(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_LIST_PLUGINS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_LIST_PLUGINS
+uint16_t uniffi_alephcore_checksum_func_extension_list_plugins(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LIST_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LIST_SKILLS
-uint16_t uniffi_aethecore_checksum_func_extension_list_skills(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_LIST_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_LIST_SKILLS
+uint16_t uniffi_alephcore_checksum_func_extension_list_skills(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LOAD_ALL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LOAD_ALL
-uint16_t uniffi_aethecore_checksum_func_extension_load_all(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_LOAD_ALL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_LOAD_ALL
+uint16_t uniffi_alephcore_checksum_func_extension_load_all(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
-uint16_t uniffi_aethecore_checksum_func_extension_load_plugin_from_path(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_EXTENSION_LOAD_PLUGIN_FROM_PATH
+uint16_t uniffi_alephcore_checksum_func_extension_load_plugin_from_path(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_CHECK_EMBEDDING_MODEL_EXISTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_CHECK_EMBEDDING_MODEL_EXISTS
-uint16_t uniffi_aethecore_checksum_func_check_embedding_model_exists(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_CHECK_EMBEDDING_MODEL_EXISTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_CHECK_EMBEDDING_MODEL_EXISTS
+uint16_t uniffi_alephcore_checksum_func_check_embedding_model_exists(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_NEEDS_FIRST_TIME_INIT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_NEEDS_FIRST_TIME_INIT
-uint16_t uniffi_aethecore_checksum_func_needs_first_time_init(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_NEEDS_FIRST_TIME_INIT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_NEEDS_FIRST_TIME_INIT
+uint16_t uniffi_alephcore_checksum_func_needs_first_time_init(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_RUN_INITIALIZATION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_RUN_INITIALIZATION
-uint16_t uniffi_aethecore_checksum_func_run_initialization(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_RUN_INITIALIZATION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_RUN_INITIALIZATION
+uint16_t uniffi_alephcore_checksum_func_run_initialization(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_SUBSCRIBE_EVENTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_SUBSCRIBE_EVENTS
-uint16_t uniffi_aethecore_checksum_func_subscribe_events(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_SUBSCRIBE_EVENTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_SUBSCRIBE_EVENTS
+uint16_t uniffi_alephcore_checksum_func_subscribe_events(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_UNSUBSCRIBE_EVENTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_UNSUBSCRIBE_EVENTS
-uint16_t uniffi_aethecore_checksum_func_unsubscribe_events(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_UNSUBSCRIBE_EVENTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_FUNC_UNSUBSCRIBE_EVENTS
+uint16_t uniffi_alephcore_checksum_func_unsubscribe_events(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_ADD_MCP_SERVER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_ADD_MCP_SERVER
-uint16_t uniffi_aethecore_checksum_method_aethercore_add_mcp_server(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_ADD_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_ADD_MCP_SERVER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_add_mcp_server(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_CANCEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_CANCEL
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_cancel(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_CANCEL
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_cancel(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_DELETE_MODEL_PROFILE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_DELETE_MODEL_PROFILE
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_delete_model_profile(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_DELETE_MODEL_PROFILE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_DELETE_MODEL_PROFILE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_delete_model_profile(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_DELETE_ROUTING_RULE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_DELETE_ROUTING_RULE
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_delete_routing_rule(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_DELETE_ROUTING_RULE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_DELETE_ROUTING_RULE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_delete_routing_rule(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_EXECUTE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_EXECUTE
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_execute(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_EXECUTE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_EXECUTE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_execute(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_BUDGET_LIMIT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_BUDGET_LIMIT
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_budget_limit(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_LIMIT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_LIMIT
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_budget_limit(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_budget_status(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_STATUS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_budget_status(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_budget_status_for_scope(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_BUDGET_STATUS_FOR_SCOPE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_budget_status_for_scope(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_CODE_EXEC_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_CODE_EXEC_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_code_exec_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_CODE_EXEC_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_CODE_EXEC_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_code_exec_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_FILE_OPS_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_FILE_OPS_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_file_ops_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_FILE_OPS_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_FILE_OPS_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_file_ops_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_HEALTH_STATISTICS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_HEALTH_STATISTICS
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_health_statistics(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_HEALTH_STATISTICS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_HEALTH_STATISTICS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_health_statistics(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_model_health(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_MODEL_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_MODEL_HEALTH
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_model_health(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_model_health_summaries(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_MODEL_HEALTH_SUMMARIES
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_model_health_summaries(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_MODEL_PROFILES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_MODEL_PROFILES
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_model_profiles(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_MODEL_PROFILES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_MODEL_PROFILES
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_model_profiles(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_ROUTING_RULES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_ROUTING_RULES
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_routing_rules(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_ROUTING_RULES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_ROUTING_RULES
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_routing_rules(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_STATE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_GET_STATE
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_get_state(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_STATE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_GET_STATE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_get_state(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_IS_CANCELLED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_IS_CANCELLED
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_is_cancelled(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_IS_CANCELLED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_IS_CANCELLED
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_is_cancelled(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_IS_PAUSED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_IS_PAUSED
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_is_paused(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_IS_PAUSED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_IS_PAUSED
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_is_paused(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_PAUSE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_PAUSE
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_pause(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_PAUSE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_PAUSE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_pause(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_PLAN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_PLAN
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_plan(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_PLAN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_PLAN
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_plan(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_RESUME
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_RESUME
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_resume(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_RESUME
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_RESUME
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_resume(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_SUBSCRIBE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_SUBSCRIBE
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_subscribe(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_SUBSCRIBE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_SUBSCRIBE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_subscribe(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_update_code_exec_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_CODE_EXEC_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_update_code_exec_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_COST_STRATEGY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_COST_STRATEGY
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_update_cost_strategy(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_COST_STRATEGY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_COST_STRATEGY
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_update_cost_strategy(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_DEFAULT_MODEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_DEFAULT_MODEL
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_update_default_model(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_DEFAULT_MODEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_DEFAULT_MODEL
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_update_default_model(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_FILE_OPS_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_FILE_OPS_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_update_file_ops_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_FILE_OPS_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_FILE_OPS_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_update_file_ops_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_MODEL_PROFILE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_MODEL_PROFILE
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_update_model_profile(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_MODEL_PROFILE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_MODEL_PROFILE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_update_model_profile(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_ROUTING_RULE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_AGENT_UPDATE_ROUTING_RULE
-uint16_t uniffi_aethecore_checksum_method_aethercore_agent_update_routing_rule(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_ROUTING_RULE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_AGENT_UPDATE_ROUTING_RULE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_agent_update_routing_rule(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL
-uint16_t uniffi_aethecore_checksum_method_aethercore_cancel(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CANCEL
+uint16_t uniffi_alephcore_checksum_method_alephrcore_cancel(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL_GENERATION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL_GENERATION
-uint16_t uniffi_aethecore_checksum_method_aethercore_cancel_generation(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CANCEL_GENERATION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CANCEL_GENERATION
+uint16_t uniffi_alephcore_checksum_method_alephrcore_cancel_generation(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL_SESSION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL_SESSION
-uint16_t uniffi_aethecore_checksum_method_aethercore_cancel_session(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CANCEL_SESSION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CANCEL_SESSION
+uint16_t uniffi_alephcore_checksum_method_alephrcore_cancel_session(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
-uint16_t uniffi_aethecore_checksum_method_aethercore_check_generation_progress(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CHECK_GENERATION_PROGRESS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CHECK_GENERATION_PROGRESS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_check_generation_progress(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
-uint16_t uniffi_aethecore_checksum_method_aethercore_check_runtime_updates(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CHECK_RUNTIME_UPDATES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CHECK_RUNTIME_UPDATES
+uint16_t uniffi_alephcore_checksum_method_alephrcore_check_runtime_updates(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_FACTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_FACTS
-uint16_t uniffi_aethecore_checksum_method_aethercore_clear_facts(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CLEAR_FACTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CLEAR_FACTS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_clear_facts(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_MEMORIES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_MEMORIES
-uint16_t uniffi_aethecore_checksum_method_aethercore_clear_memories(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CLEAR_MEMORIES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CLEAR_MEMORIES
+uint16_t uniffi_alephcore_checksum_method_alephrcore_clear_memories(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_MEMORY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_MEMORY
-uint16_t uniffi_aethecore_checksum_method_aethercore_clear_memory(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CLEAR_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CLEAR_MEMORY
+uint16_t uniffi_alephcore_checksum_method_alephrcore_clear_memory(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONFIRM_TASK_PLAN
-uint16_t uniffi_aethecore_checksum_method_aethercore_confirm_task_plan(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CONFIRM_TASK_PLAN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_CONFIRM_TASK_PLAN
+uint16_t uniffi_alephcore_checksum_method_alephrcore_confirm_task_plan(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_GENERATION_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_GENERATION_PROVIDER
-uint16_t uniffi_aethecore_checksum_method_aethercore_delete_generation_provider(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_GENERATION_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_GENERATION_PROVIDER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_delete_generation_provider(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_MCP_SERVER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_MCP_SERVER
-uint16_t uniffi_aethecore_checksum_method_aethercore_delete_mcp_server(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_MCP_SERVER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_delete_mcp_server(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_MEMORIES_BY_TOPIC_ID
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_MEMORIES_BY_TOPIC_ID
-uint16_t uniffi_aethecore_checksum_method_aethercore_delete_memories_by_topic_id(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_MEMORIES_BY_TOPIC_ID
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_MEMORIES_BY_TOPIC_ID
+uint16_t uniffi_alephcore_checksum_method_alephrcore_delete_memories_by_topic_id(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_MEMORY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_MEMORY
-uint16_t uniffi_aethecore_checksum_method_aethercore_delete_memory(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_MEMORY
+uint16_t uniffi_alephcore_checksum_method_alephrcore_delete_memory(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_PROVIDER
-uint16_t uniffi_aethecore_checksum_method_aethercore_delete_provider(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_PROVIDER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_delete_provider(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_SKILL
-uint16_t uniffi_aethecore_checksum_method_aethercore_delete_skill(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DELETE_SKILL
+uint16_t uniffi_alephcore_checksum_method_alephrcore_delete_skill(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DISABLE_PLUGIN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DISABLE_PLUGIN
-uint16_t uniffi_aethecore_checksum_method_aethercore_disable_plugin(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DISABLE_PLUGIN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_DISABLE_PLUGIN
+uint16_t uniffi_alephcore_checksum_method_alephrcore_disable_plugin(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EDIT_IMAGE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EDIT_IMAGE
-uint16_t uniffi_aethecore_checksum_method_aethercore_edit_image(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_EDIT_IMAGE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_EDIT_IMAGE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_edit_image(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_ENABLE_PLUGIN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_ENABLE_PLUGIN
-uint16_t uniffi_aethecore_checksum_method_aethercore_enable_plugin(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_ENABLE_PLUGIN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_ENABLE_PLUGIN
+uint16_t uniffi_alephcore_checksum_method_alephrcore_enable_plugin(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXECUTE_PLUGIN_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXECUTE_PLUGIN_SKILL
-uint16_t uniffi_aethecore_checksum_method_aethercore_execute_plugin_skill(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_EXECUTE_PLUGIN_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_EXECUTE_PLUGIN_SKILL
+uint16_t uniffi_alephcore_checksum_method_alephrcore_execute_plugin_skill(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
-uint16_t uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_EXPORT_MCP_CONFIG_JSON
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_EXPORT_MCP_CONFIG_JSON
+uint16_t uniffi_alephcore_checksum_method_alephrcore_export_mcp_config_json(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXTRACT_TEXT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXTRACT_TEXT
-uint16_t uniffi_aethecore_checksum_method_aethercore_extract_text(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_EXTRACT_TEXT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_EXTRACT_TEXT
+uint16_t uniffi_alephcore_checksum_method_alephrcore_extract_text(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE
-uint16_t uniffi_aethecore_checksum_method_aethercore_generate(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_generate(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_AUDIO
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_AUDIO
-uint16_t uniffi_aethecore_checksum_method_aethercore_generate_audio(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_AUDIO
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_AUDIO
+uint16_t uniffi_alephcore_checksum_method_alephrcore_generate_audio(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_IMAGE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_IMAGE
-uint16_t uniffi_aethecore_checksum_method_aethercore_generate_image(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_IMAGE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_IMAGE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_generate_image(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_SPEECH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_SPEECH
-uint16_t uniffi_aethecore_checksum_method_aethercore_generate_speech(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_SPEECH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_SPEECH
+uint16_t uniffi_alephcore_checksum_method_alephrcore_generate_speech(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
-uint16_t uniffi_aethecore_checksum_method_aethercore_generate_topic_title(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_TOPIC_TITLE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_TOPIC_TITLE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_generate_topic_title(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_VIDEO
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_VIDEO
-uint16_t uniffi_aethecore_checksum_method_aethercore_generate_video(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_VIDEO
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GENERATE_VIDEO
+uint16_t uniffi_alephcore_checksum_method_alephrcore_generate_video(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_COMPRESSION_STATS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_COMPRESSION_STATS
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_compression_stats(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_COMPRESSION_STATS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_COMPRESSION_STATS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_compression_stats(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_CURRENT_SESSION_ID
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_CURRENT_SESSION_ID
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_current_session_id(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_CURRENT_SESSION_ID
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_CURRENT_SESSION_ID
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_current_session_id(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_DEFAULT_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_DEFAULT_PROVIDER
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_default_provider(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_DEFAULT_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_DEFAULT_PROVIDER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_default_provider(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_ENABLED_PROVIDERS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_ENABLED_PROVIDERS
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_enabled_providers(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_ENABLED_PROVIDERS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_ENABLED_PROVIDERS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_enabled_providers(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_GENERATION_PROVIDER_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_GENERATION_PROVIDER_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_generation_provider_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_GENERATION_PROVIDER_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_GENERATION_PROVIDER_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_generation_provider_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_LOG_DIRECTORY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_LOG_DIRECTORY
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_log_directory(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_LOG_DIRECTORY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_LOG_DIRECTORY
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_log_directory(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_LOG_LEVEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_LOG_LEVEL
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_log_level(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_LOG_LEVEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_LOG_LEVEL
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_log_level(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MCP_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MCP_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_mcp_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MCP_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MCP_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_mcp_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MCP_SERVER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MCP_SERVER
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_mcp_server(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MCP_SERVER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_mcp_server(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MCP_SERVER_LOGS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MCP_SERVER_LOGS
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_mcp_server_logs(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MCP_SERVER_LOGS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MCP_SERVER_LOGS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_mcp_server_logs(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MCP_SERVER_STATUS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MCP_SERVER_STATUS
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_mcp_server_status(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MCP_SERVER_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MCP_SERVER_STATUS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_mcp_server_status(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MEMORY_APP_LIST
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MEMORY_APP_LIST
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_app_list(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MEMORY_APP_LIST
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MEMORY_APP_LIST
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_memory_app_list(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MEMORY_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MEMORY_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MEMORY_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MEMORY_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_memory_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MEMORY_STATS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MEMORY_STATS
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_stats(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MEMORY_STATS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_MEMORY_STATS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_memory_stats(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_NODE_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_NODE_PATH
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_node_path(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_NODE_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_NODE_PATH
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_node_path(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_NPM_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_NPM_PATH
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_npm_path(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_NPM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_NPM_PATH
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_npm_path(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_plugin_skill_instructions(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_PLUGIN_SKILL_INSTRUCTIONS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_plugin_skill_instructions(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PLUGINS_DIR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PLUGINS_DIR
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_plugins_dir(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_PLUGINS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_PLUGINS_DIR
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_plugins_dir(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_providers_for_type(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_PROVIDERS_FOR_TYPE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_PROVIDERS_FOR_TYPE
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_providers_for_type(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PYTHON_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PYTHON_PATH
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_python_path(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_PYTHON_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_PYTHON_PATH
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_python_path(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_root_commands_from_registry(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_SKILLS_DIR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_SKILLS_DIR
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_skills_dir(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_SKILLS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_SKILLS_DIR
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_skills_dir(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_YTDLP_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_YTDLP_PATH
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_ytdlp_path(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_YTDLP_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_GET_YTDLP_PATH
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_ytdlp_path(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
-uint16_t uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_IMPORT_MCP_CONFIG_JSON
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_IMPORT_MCP_CONFIG_JSON
+uint16_t uniffi_alephcore_checksum_method_alephrcore_import_mcp_config_json(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_PLUGIN_FROM_GIT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_PLUGIN_FROM_GIT
-uint16_t uniffi_aethecore_checksum_method_aethercore_install_plugin_from_git(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_PLUGIN_FROM_GIT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_PLUGIN_FROM_GIT
+uint16_t uniffi_alephcore_checksum_method_alephrcore_install_plugin_from_git(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_PLUGINS_FROM_ZIP
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_PLUGINS_FROM_ZIP
-uint16_t uniffi_aethecore_checksum_method_aethercore_install_plugins_from_zip(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_PLUGINS_FROM_ZIP
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_PLUGINS_FROM_ZIP
+uint16_t uniffi_alephcore_checksum_method_alephrcore_install_plugins_from_zip(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_RUNTIME
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_RUNTIME
-uint16_t uniffi_aethecore_checksum_method_aethercore_install_runtime(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_RUNTIME
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_RUNTIME
+uint16_t uniffi_alephcore_checksum_method_alephrcore_install_runtime(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_SKILL
-uint16_t uniffi_aethecore_checksum_method_aethercore_install_skill(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_SKILL
+uint16_t uniffi_alephcore_checksum_method_alephrcore_install_skill(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
-uint16_t uniffi_aethecore_checksum_method_aethercore_install_skills_from_zip(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_SKILLS_FROM_ZIP
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_INSTALL_SKILLS_FROM_ZIP
+uint16_t uniffi_alephcore_checksum_method_alephrcore_install_skills_from_zip(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IS_CANCELLED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IS_CANCELLED
-uint16_t uniffi_aethecore_checksum_method_aethercore_is_cancelled(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_IS_CANCELLED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_IS_CANCELLED
+uint16_t uniffi_alephcore_checksum_method_alephrcore_is_cancelled(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
-uint16_t uniffi_aethecore_checksum_method_aethercore_is_runtime_installed(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_IS_RUNTIME_INSTALLED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_IS_RUNTIME_INSTALLED
+uint16_t uniffi_alephcore_checksum_method_alephrcore_is_runtime_installed(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
-uint16_t uniffi_aethecore_checksum_method_aethercore_list_builtin_tools(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_BUILTIN_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_BUILTIN_TOOLS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_list_builtin_tools(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
-uint16_t uniffi_aethecore_checksum_method_aethercore_list_generation_providers(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_GENERATION_PROVIDERS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_GENERATION_PROVIDERS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_list_generation_providers(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_MCP_SERVERS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_MCP_SERVERS
-uint16_t uniffi_aethecore_checksum_method_aethercore_list_mcp_servers(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_MCP_SERVERS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_MCP_SERVERS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_list_mcp_servers(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_PLUGIN_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_PLUGIN_SKILLS
-uint16_t uniffi_aethecore_checksum_method_aethercore_list_plugin_skills(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_PLUGIN_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_PLUGIN_SKILLS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_list_plugin_skills(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_PLUGINS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_PLUGINS
-uint16_t uniffi_aethecore_checksum_method_aethercore_list_plugins(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_PLUGINS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_PLUGINS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_list_plugins(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
-uint16_t uniffi_aethecore_checksum_method_aethercore_list_recent_sessions(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_RECENT_SESSIONS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_RECENT_SESSIONS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_list_recent_sessions(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_RUNTIMES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_RUNTIMES
-uint16_t uniffi_aethecore_checksum_method_aethercore_list_runtimes(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_RUNTIMES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_RUNTIMES
+uint16_t uniffi_alephcore_checksum_method_alephrcore_list_runtimes(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_SKILLS
-uint16_t uniffi_aethecore_checksum_method_aethercore_list_skills(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_SKILLS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_list_skills(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_TOOLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_TOOLS
-uint16_t uniffi_aethecore_checksum_method_aethercore_list_tools(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LIST_TOOLS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_list_tools(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LOAD_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LOAD_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_load_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LOAD_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LOAD_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_load_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LOAD_PLUGIN_FROM_PATH
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LOAD_PLUGIN_FROM_PATH
-uint16_t uniffi_aethecore_checksum_method_aethercore_load_plugin_from_path(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LOAD_PLUGIN_FROM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_LOAD_PLUGIN_FROM_PATH
+uint16_t uniffi_alephcore_checksum_method_alephrcore_load_plugin_from_path(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS
-uint16_t uniffi_aethecore_checksum_method_aethercore_process(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_PROCESS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_PROCESS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_process(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
-uint16_t uniffi_aethecore_checksum_method_aethercore_provider_supports_image_editing(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
+uint16_t uniffi_alephcore_checksum_method_alephrcore_provider_supports_image_editing(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_REFRESH_PLUGINS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_REFRESH_PLUGINS
-uint16_t uniffi_aethecore_checksum_method_aethercore_refresh_plugins(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_REFRESH_PLUGINS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_REFRESH_PLUGINS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_refresh_plugins(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_REFRESH_SKILLS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_REFRESH_SKILLS
-uint16_t uniffi_aethecore_checksum_method_aethercore_refresh_skills(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_REFRESH_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_REFRESH_SKILLS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_refresh_skills(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RELOAD_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RELOAD_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_reload_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_RELOAD_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_RELOAD_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_reload_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RESPOND_TO_USER_INPUT
-uint16_t uniffi_aethecore_checksum_method_aethercore_respond_to_user_input(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_RESPOND_TO_USER_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_RESPOND_TO_USER_INPUT
+uint16_t uniffi_alephcore_checksum_method_alephrcore_respond_to_user_input(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RESUME_SESSION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_RESUME_SESSION
-uint16_t uniffi_aethecore_checksum_method_aethercore_resume_session(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_RESUME_SESSION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_RESUME_SESSION
+uint16_t uniffi_alephcore_checksum_method_alephrcore_resume_session(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SEARCH_MEMORIES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SEARCH_MEMORIES
-uint16_t uniffi_aethecore_checksum_method_aethercore_search_memories(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_SEARCH_MEMORIES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_SEARCH_MEMORIES
+uint16_t uniffi_alephcore_checksum_method_alephrcore_search_memories(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SEARCH_MEMORY
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SEARCH_MEMORY
-uint16_t uniffi_aethecore_checksum_method_aethercore_search_memory(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_SEARCH_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_SEARCH_MEMORY
+uint16_t uniffi_alephcore_checksum_method_alephrcore_search_memory(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SET_DEFAULT_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SET_DEFAULT_PROVIDER
-uint16_t uniffi_aethecore_checksum_method_aethercore_set_default_provider(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_SET_DEFAULT_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_SET_DEFAULT_PROVIDER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_set_default_provider(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SET_LOG_LEVEL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SET_LOG_LEVEL
-uint16_t uniffi_aethecore_checksum_method_aethercore_set_log_level(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_SET_LOG_LEVEL
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_SET_LOG_LEVEL
+uint16_t uniffi_alephcore_checksum_method_alephrcore_set_log_level(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_TEST_GENERATION_PROVIDER_CONNECTION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_TEST_GENERATION_PROVIDER_CONNECTION
-uint16_t uniffi_aethecore_checksum_method_aethercore_test_generation_provider_connection(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_TEST_GENERATION_PROVIDER_CONNECTION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_TEST_GENERATION_PROVIDER_CONNECTION
+uint16_t uniffi_alephcore_checksum_method_alephrcore_test_generation_provider_connection(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_TEST_PROVIDER_CONNECTION_WITH_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_test_provider_connection_with_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_test_search_provider_with_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_TEST_SEARCH_PROVIDER_WITH_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_test_search_provider_with_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_TRIGGER_COMPRESSION
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_TRIGGER_COMPRESSION
-uint16_t uniffi_aethecore_checksum_method_aethercore_trigger_compression(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_TRIGGER_COMPRESSION
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_TRIGGER_COMPRESSION
+uint16_t uniffi_alephcore_checksum_method_alephrcore_trigger_compression(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UNINSTALL_PLUGIN
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UNINSTALL_PLUGIN
-uint16_t uniffi_aethecore_checksum_method_aethercore_uninstall_plugin(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UNINSTALL_PLUGIN
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UNINSTALL_PLUGIN
+uint16_t uniffi_alephcore_checksum_method_alephrcore_uninstall_plugin(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_BEHAVIOR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_BEHAVIOR
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_behavior(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_BEHAVIOR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_BEHAVIOR
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_behavior(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_general_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_GENERAL_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_GENERAL_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_general_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_GENERATION_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_GENERATION_PROVIDER
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_generation_provider(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_GENERATION_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_GENERATION_PROVIDER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_generation_provider(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_MCP_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_MCP_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_mcp_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_MCP_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_MCP_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_mcp_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_MCP_SERVER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_MCP_SERVER
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_mcp_server(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_MCP_SERVER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_mcp_server(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_memory_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_MEMORY_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_MEMORY_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_memory_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_POLICIES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_POLICIES
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_policies(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_POLICIES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_POLICIES
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_policies(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_PROVIDER
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_PROVIDER
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_provider(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_PROVIDER
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_PROVIDER
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_provider(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_ROUTING_RULES
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_ROUTING_RULES
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_routing_rules(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_ROUTING_RULES
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_ROUTING_RULES
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_routing_rules(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_RUNTIME
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_RUNTIME
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_runtime(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_RUNTIME
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_RUNTIME
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_runtime(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_SEARCH_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_SEARCH_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_search_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_SEARCH_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_SEARCH_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_search_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_SHORTCUTS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_SHORTCUTS
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_shortcuts(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_SHORTCUTS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_SHORTCUTS
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_shortcuts(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_trigger_config(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_TRIGGER_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_UPDATE_TRIGGER_CONFIG
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_trigger_config(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_VALIDATE_REGEX
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_VALIDATE_REGEX
-uint16_t uniffi_aethecore_checksum_method_aethercore_validate_regex(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_VALIDATE_REGEX
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHRCORE_VALIDATE_REGEX
+uint16_t uniffi_alephcore_checksum_method_alephrcore_validate_regex(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_THINKING
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_THINKING
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_thinking(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_THINKING
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_THINKING
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_thinking(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_START
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_START
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tool_start(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_START
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_START
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_tool_start(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_RESULT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_RESULT
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tool_result(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_RESULT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_RESULT
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_tool_result(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_STREAM_CHUNK
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_STREAM_CHUNK
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_stream_chunk(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_STREAM_CHUNK
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_STREAM_CHUNK
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_stream_chunk(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_COMPLETE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_COMPLETE
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_complete(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_COMPLETE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_COMPLETE
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_complete(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_ERROR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_ERROR
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_error(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_ERROR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_ERROR
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_error(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MEMORY_STORED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MEMORY_STORED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_memory_stored(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_MEMORY_STORED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_MEMORY_STORED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_memory_stored(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_MODE_DETECTED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_MODE_DETECTED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_agent_mode_detected(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_AGENT_MODE_DETECTED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_AGENT_MODE_DETECTED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_agent_mode_detected(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOLS_CHANGED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOLS_CHANGED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOLS_CHANGED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOLS_CHANGED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_tools_changed(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MCP_STARTUP_COMPLETE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MCP_STARTUP_COMPLETE
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_MCP_STARTUP_COMPLETE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_MCP_STARTUP_COMPLETE
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_mcp_startup_complete(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_RUNTIME_UPDATES_AVAILABLE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_RUNTIME_UPDATES_AVAILABLE
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_runtime_updates_available(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_RUNTIME_UPDATES_AVAILABLE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_RUNTIME_UPDATES_AVAILABLE
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_runtime_updates_available(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SESSION_STARTED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SESSION_STARTED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_session_started(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_SESSION_STARTED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_SESSION_STARTED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_session_started(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_CALL_STARTED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_CALL_STARTED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_started(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_CALL_STARTED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_CALL_STARTED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_tool_call_started(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_CALL_COMPLETED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_CALL_COMPLETED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_completed(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_CALL_COMPLETED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_CALL_COMPLETED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_tool_call_completed(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_CALL_FAILED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOL_CALL_FAILED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_failed(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_CALL_FAILED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_TOOL_CALL_FAILED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_tool_call_failed(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_LOOP_PROGRESS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_LOOP_PROGRESS
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_loop_progress(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_LOOP_PROGRESS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_LOOP_PROGRESS
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_loop_progress(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PLAN_CREATED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PLAN_CREATED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_plan_created(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_PLAN_CREATED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_PLAN_CREATED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_plan_created(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SESSION_COMPLETED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SESSION_COMPLETED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_session_completed(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_SESSION_COMPLETED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_SESSION_COMPLETED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_session_completed(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SUBAGENT_STARTED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SUBAGENT_STARTED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_started(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_SUBAGENT_STARTED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_SUBAGENT_STARTED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_subagent_started(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SUBAGENT_COMPLETED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_SUBAGENT_COMPLETED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_completed(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_SUBAGENT_COMPLETED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_SUBAGENT_COMPLETED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_subagent_completed(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PLAN_CONFIRMATION_REQUIRED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PLAN_CONFIRMATION_REQUIRED
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_plan_confirmation_required(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_PLAN_CONFIRMATION_REQUIRED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_PLAN_CONFIRMATION_REQUIRED
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_plan_confirmation_required(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_USER_INPUT_REQUEST
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_USER_INPUT_REQUEST
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_user_input_request(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_USER_INPUT_REQUEST
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_USER_INPUT_REQUEST
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_user_input_request(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PART_UPDATE
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_PART_UPDATE
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_part_update(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_PART_UPDATE
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_ALEPHREVENTHANDLER_ON_PART_UPDATE
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_part_update(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AGENTPROGRESSHANDLER_ON_PROGRESS_EVENT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AGENTPROGRESSHANDLER_ON_PROGRESS_EVENT
-uint16_t uniffi_aethecore_checksum_method_agentprogresshandler_on_progress_event(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_AGENTPROGRESSHANDLER_ON_PROGRESS_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_AGENTPROGRESSHANDLER_ON_PROGRESS_EVENT
+uint16_t uniffi_alephcore_checksum_method_agentprogresshandler_on_progress_event(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_STARTED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_STARTED
-uint16_t uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_started(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_STARTED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_STARTED
+uint16_t uniffi_alephcore_checksum_method_initprogresshandlerffi_on_phase_started(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_PROGRESS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_PROGRESS
-uint16_t uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_progress(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_PROGRESS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_PROGRESS
+uint16_t uniffi_alephcore_checksum_method_initprogresshandlerffi_on_phase_progress(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_COMPLETED
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_COMPLETED
-uint16_t uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_completed(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_COMPLETED
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_PHASE_COMPLETED
+uint16_t uniffi_alephcore_checksum_method_initprogresshandlerffi_on_phase_completed(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_DOWNLOAD_PROGRESS
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_DOWNLOAD_PROGRESS
-uint16_t uniffi_aethecore_checksum_method_initprogresshandlerffi_on_download_progress(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_DOWNLOAD_PROGRESS
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_DOWNLOAD_PROGRESS
+uint16_t uniffi_alephcore_checksum_method_initprogresshandlerffi_on_download_progress(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_ERROR
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_ERROR
-uint16_t uniffi_aethecore_checksum_method_initprogresshandlerffi_on_error(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_ERROR
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_INITPROGRESSHANDLERFFI_ON_ERROR
+uint16_t uniffi_alephcore_checksum_method_initprogresshandlerffi_on_error(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_EVENTSUBSCRIPTIONHANDLER_ON_EVENT
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_EVENTSUBSCRIPTIONHANDLER_ON_EVENT
-uint16_t uniffi_aethecore_checksum_method_eventsubscriptionhandler_on_event(void
+#ifndef UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_EVENTSUBSCRIPTIONHANDLER_ON_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_ALEPHCORE_CHECKSUM_METHOD_EVENTSUBSCRIPTIONHANDLER_ON_EVENT
+uint16_t uniffi_alephcore_checksum_method_eventsubscriptionhandler_on_event(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_AETHECORE_UNIFFI_CONTRACT_VERSION
-#define UNIFFI_FFIDEF_FFI_AETHECORE_UNIFFI_CONTRACT_VERSION
-uint32_t ffi_aethecore_uniffi_contract_version(void
+#ifndef UNIFFI_FFIDEF_FFI_ALEPHCORE_UNIFFI_CONTRACT_VERSION
+#define UNIFFI_FFIDEF_FFI_ALEPHCORE_UNIFFI_CONTRACT_VERSION
+uint32_t ffi_alephcore_uniffi_contract_version(void
     
 );
 #endif

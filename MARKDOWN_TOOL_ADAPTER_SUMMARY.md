@@ -271,7 +271,7 @@ git add README.md && git commit -m 'update docs'
 
 **Usage**:
 ```rust
-use aethecore::tools::markdown_skill::{SkillWatcher, ReloadCallback};
+use alephcore::tools::markdown_skill::{SkillWatcher, ReloadCallback};
 
 let callback: ReloadCallback = Arc::new(|tools| {
     for tool in tools {
@@ -417,7 +417,7 @@ impl AlephToolDyn for MarkdownCliTool {
 ### Load Existing OpenClaw Skills
 
 ```rust
-use aethecore::tools::markdown_skill::load_skills_from_dir;
+use alephcore::tools::markdown_skill::load_skills_from_dir;
 
 let tools = load_skills_from_dir("/path/to/openclaw/skills/gh-pr").await;
 for tool in tools {
@@ -428,8 +428,8 @@ for tool in tools {
 ### Generate Skills from Evolution
 
 ```rust
-use aethecore::tools::markdown_skill::MarkdownSkillGenerator;
-use aethecore::skill_evolution::SolidificationSuggestion;
+use alephcore::tools::markdown_skill::MarkdownSkillGenerator;
+use alephcore::skill_evolution::SolidificationSuggestion;
 
 let generator = MarkdownSkillGenerator::new();
 let skill_path = generator.generate(&suggestion)?;
@@ -440,7 +440,7 @@ let tools = load_skills_from_dir(skill_path.parent().unwrap()).await;
 ### Enable Hot Reload
 
 ```rust
-use aethecore::tools::markdown_skill::SkillWatcher;
+use alephcore::tools::markdown_skill::SkillWatcher;
 
 let callback: ReloadCallback = Arc::new(|tools| {
     for tool in tools {

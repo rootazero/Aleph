@@ -182,7 +182,7 @@ The Aleph codebase has accumulated **19 identified violations** of Occam's Razor
 ```bash
 # Capture baseline metrics
 cargo build --release --timings
-ls -lh target/release/libaethecore.dylib
+ls -lh target/release/libalephcore.dylib
 cargo test 2>&1 | grep "running\|passed\|failed"
 ```
 

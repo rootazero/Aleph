@@ -5,7 +5,7 @@ using Microsoft.UI.Dispatching;
 namespace POC.RustFFI;
 
 /// <summary>
-/// High-level wrapper for Aether Rust core.
+/// High-level wrapper for Aleph Rust core.
 ///
 /// Handles:
 /// - UTF-8 string marshaling
@@ -15,9 +15,9 @@ namespace POC.RustFFI;
 /// CRITICAL: Callbacks from Rust may fire on any thread.
 /// We use DispatcherQueue to marshal calls to the UI thread.
 /// </summary>
-public sealed class AetherCore : IDisposable
+public sealed class AlephCore : IDisposable
 {
-    private static AetherCore? _instance;
+    private static AlephCore? _instance;
     private readonly DispatcherQueue _dispatcherQueue;
     private bool _initialized = false;
     private bool _disposed = false;
@@ -28,7 +28,7 @@ public sealed class AetherCore : IDisposable
     public event Action<string, int>? ErrorOccurred;
     public event Action<string>? LogMessage;
 
-    public AetherCore(DispatcherQueue dispatcherQueue)
+    public AlephCore(DispatcherQueue dispatcherQueue)
     {
         _dispatcherQueue = dispatcherQueue;
         _instance = this;
@@ -50,18 +50,18 @@ public sealed class AetherCore : IDisposable
             // Register callbacks BEFORE init
             RegisterCallbacks();
 
-            // Call aether_init
+            // Call aleph_init
             int result;
             if (string.IsNullOrEmpty(configPath))
             {
-                result = NativeMethods.aether_init(null);
+                result = NativeMethods.aleph_init(null);
             }
             else
             {
                 var pathBytes = Encoding.UTF8.GetBytes(configPath + '\0');
                 fixed (byte* pathPtr = pathBytes)
                 {
-                    result = NativeMethods.aether_init(pathPtr);
+                    result = NativeMethods.aleph_init(pathPtr);
                 }
             }
 
@@ -80,7 +80,7 @@ public sealed class AetherCore : IDisposable
         catch (DllNotFoundException ex)
         {
             Log($"DLL not found: {ex.Message}");
-            Log("Make sure aethecore.dll is in the output directory");
+            Log("Make sure alephcore.dll is in the output directory");
             return false;
         }
         catch (Exception ex)
@@ -97,7 +97,7 @@ public sealed class AetherCore : IDisposable
     {
         try
         {
-            byte* versionPtr = NativeMethods.aether_version();
+            byte* versionPtr = NativeMethods.aleph_version();
             if (versionPtr == null) return null;
             return Marshal.PtrToStringUTF8((IntPtr)versionPtr);
         }
@@ -112,9 +112,9 @@ public sealed class AetherCore : IDisposable
     {
         Log("Registering callbacks...");
 
-        NativeMethods.aether_register_state_callback(&OnStateChangeCallback);
-        NativeMethods.aether_register_stream_callback(&OnStreamCallback);
-        NativeMethods.aether_register_error_callback(&OnErrorCallback);
+        NativeMethods.aleph_register_state_callback(&OnStateChangeCallback);
+        NativeMethods.aleph_register_stream_callback(&OnStreamCallback);
+        NativeMethods.aleph_register_error_callback(&OnErrorCallback);
 
         Log("Callbacks registered");
     }
@@ -198,7 +198,7 @@ public sealed class AetherCore : IDisposable
         {
             try
             {
-                NativeMethods.aether_free();
+                NativeMethods.aleph_free();
                 Log("Resources freed");
             }
             catch (Exception ex)

@@ -20,7 +20,7 @@
 
   <!-- App General -->
   <data name="AppName" xml:space="preserve">
-    <value>Aether</value>
+    <value>Aleph</value>
   </data>
   <data name="AppDescription" xml:space="preserve">
     <value>系统级 AI 中间件</value>
@@ -28,7 +28,7 @@
 
   <!-- x:Uid bindings for Settings Window -->
   <data name="SettingsWindowTitle" xml:space="preserve">
-    <value>Aether 设置</value>
+    <value>Aleph 设置</value>
   </data>
   <data name="NavItem_General.Content" xml:space="preserve">
     <value>通用</value>
@@ -156,7 +156,7 @@
     <value>开机自启动</value>
   </data>
   <data name="Settings_General_LaunchAtStartupDesc" xml:space="preserve">
-    <value>登录 Windows 时自动启动 Aether。</value>
+    <value>登录 Windows 时自动启动 Aleph。</value>
   </data>
   <data name="Settings_General_Language" xml:space="preserve">
     <value>语言</value>
@@ -290,7 +290,7 @@
 
   <!-- Conversation Window -->
   <data name="Conversation_Title" xml:space="preserve">
-    <value>Aether 对话</value>
+    <value>Aleph 对话</value>
   </data>
   <data name="Conversation_NewConversation" xml:space="preserve">
     <value>新对话</value>
@@ -305,7 +305,7 @@
     <value>正在输出...</value>
   </data>
   <data name="Conversation_Typing" xml:space="preserve">
-    <value>Aether 正在输入...</value>
+    <value>Aleph 正在输入...</value>
   </data>
   <data name="Conversation_Stop" xml:space="preserve">
     <value>停止</value>
@@ -323,7 +323,7 @@
     <value>确定要清除对话历史吗？</value>
   </data>
   <data name="Conversation_Welcome" xml:space="preserve">
-    <value>欢迎使用 Aether。有什么可以帮您的吗？</value>
+    <value>欢迎使用 Aleph。有什么可以帮您的吗？</value>
   </data>
   <data name="Conversation_Cleared" xml:space="preserve">
     <value>对话已清除。有什么可以帮您的吗？</value>
@@ -333,8 +333,8 @@
   <data name="Role_You" xml:space="preserve">
     <value>你</value>
   </data>
-  <data name="Role_Aether" xml:space="preserve">
-    <value>Aether</value>
+  <data name="Role_Aleph" xml:space="preserve">
+    <value>Aleph</value>
   </data>
   <data name="Role_System" xml:space="preserve">
     <value>系统</value>

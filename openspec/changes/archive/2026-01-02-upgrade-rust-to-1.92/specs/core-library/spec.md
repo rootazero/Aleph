@@ -8,13 +8,13 @@ The system SHALL provide a library-based Rust core that can be compiled as a dyn
 #### Scenario: Build dynamic library for macOS with Rust 1.92
 - **WHEN** developer runs `cargo build --release --target aarch64-apple-darwin`
 - **THEN** the build uses Rust 1.92 or higher as specified in Cargo.toml
-- **AND** the build produces `libaethecore.dylib` in target/release/
+- **AND** the build produces `libalephcore.dylib` in target/release/
 - **AND** the library exports C-compatible symbols for FFI
 - **AND** the library uses standard library features (OnceLock, native async traits) instead of external crates
 
 #### Scenario: Build static library
 - **WHEN** developer runs `cargo build --release --lib`
-- **THEN** the build produces `libaethecore.a` for static linking
+- **THEN** the build produces `libalephcore.a` for static linking
 - **AND** the library contains all required dependencies
 - **AND** the library does NOT include removed dependencies (once_cell, async-trait)
 

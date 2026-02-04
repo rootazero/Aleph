@@ -1,8 +1,8 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Aether.Interop;
+using Aleph.Interop;
 
-namespace Aether.Windows;
+namespace Aleph.Windows;
 
 /// <summary>
 /// Dialog for first-time initialization progress.

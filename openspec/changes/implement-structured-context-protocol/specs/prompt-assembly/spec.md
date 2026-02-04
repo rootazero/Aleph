@@ -13,7 +13,7 @@ The system MUST provide `PromptAssembler::new(format)` that accepts a `ContextFo
 #### Scenario: Creating assembler with Markdown format
 
 ```rust
-use aethecore::payload::{PromptAssembler, ContextFormat};
+use alephcore::payload::{PromptAssembler, ContextFormat};
 
 let assembler = PromptAssembler::new(ContextFormat::Markdown);
 ```

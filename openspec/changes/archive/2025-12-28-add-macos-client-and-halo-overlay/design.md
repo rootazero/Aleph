@@ -183,7 +183,7 @@ clients/macos/
 │   ├── Assets.xcassets/        # App icon, menu bar icons
 │   └── Info.plist              # LSUIElement=YES, permissions
 ├── Frameworks/
-│   └── libaethecore.dylib      # Rust library (copied from core/target/release/)
+│   └── libalephcore.dylib      # Rust library (copied from core/target/release/)
 ├── Aleph.entitlements         # Accessibility permissions
 └── Scripts/
     └── copy_rust_libs.sh       # Build phase script
@@ -197,7 +197,7 @@ clients/macos/
 └────────────────────┬────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────┐
-│  Rust Core (libaethecore.dylib)                         │
+│  Rust Core (libalephcore.dylib)                         │
 │  - rdev detects hotkey                                  │
 │  - Reads clipboard via arboard                          │
 │  - Invokes callback: handler.on_hotkey_detected()      │

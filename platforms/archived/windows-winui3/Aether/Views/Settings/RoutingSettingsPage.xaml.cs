@@ -1,9 +1,9 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Aether.ViewModels;
+using Aleph.ViewModels;
 using System.Collections.ObjectModel;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// Routing Settings page - Model routing rules configuration.
@@ -47,7 +47,7 @@ public sealed partial class RoutingSettingsPage : UserControl
     {
         _isLoading = true;
 
-        // TODO: Load from AetherCore
+        // TODO: Load from AlephCore
         // Set default values
         CostStrategyPicker.SelectedIndex = 1; // Balanced
         DefaultModelComboBox.SelectedIndex = 0; // Claude 3.5 Sonnet
@@ -100,7 +100,7 @@ public sealed partial class RoutingSettingsPage : UserControl
             defaultModel = modelTag;
         }
 
-        // TODO: Save to AetherCore
+        // TODO: Save to AlephCore
         System.Diagnostics.Debug.WriteLine($"Saving routing config: strategy={selectedStrategy}, default={defaultModel}, pipeline={PipelineToggle.IsOn}");
 
         _hasUnsavedChanges = false;

@@ -108,8 +108,8 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
    cd Aleph/core
    cargo clean
    cargo build --release
-   cargo run --bin uniffi-bindgen -- generate --library target/release/libaethecore.dylib --language swift --out-dir ../Sources/Generated/
-   cp target/release/libaethecore.dylib ../Frameworks/
+   cargo run --bin uniffi-bindgen -- generate --library target/release/libalephcore.dylib --language swift --out-dir ../Sources/Generated/
+   cp target/release/libalephcore.dylib ../Frameworks/
    ```
 
 5. **在 Xcode 中重新构建并测试**
@@ -238,7 +238,7 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 
 ### Q: 如果修复后还有问题怎么办？
 **A**: 我们可以：
-1. 回退到之前的 `libaethecore.dylib`（修复前先备份）
+1. 回退到之前的 `libalephcore.dylib`（修复前先备份）
 2. 查看详细日志定位新问题
 3. 创建针对性的 hotfix
 

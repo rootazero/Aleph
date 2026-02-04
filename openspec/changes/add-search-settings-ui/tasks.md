@@ -35,7 +35,7 @@
   };
   ```
 - [ ] Regenerate Swift bindings: `cargo run --bin uniffi-bindgen generate ...`
-- [ ] Copy `libaethecore.dylib` to `Aleph/Frameworks/`
+- [ ] Copy `libalephcore.dylib` to `Aleph/Frameworks/`
 
 **Validation**: Swift can call `await core.testSearchProvider("tavily")`
 

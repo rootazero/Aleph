@@ -1,7 +1,7 @@
 using Microsoft.UI.Xaml.Controls;
-using Aether.ViewModels;
+using Aleph.ViewModels;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// Placeholder settings page for tabs not yet implemented.
@@ -30,7 +30,7 @@ public sealed partial class PlaceholderSettingsPage : UserControl
         SettingsTab.Behavior => "Customize input/output modes, typewriter effects, and clipboard integration behavior.",
         SettingsTab.Search => "Configure web search providers like Brave Search, DuckDuckGo, and Google.",
         SettingsTab.Mcp => "Manage Model Context Protocol (MCP) servers for external tool integration.",
-        SettingsTab.Skills => "Browse, install, and manage skills that extend Aether's capabilities.",
+        SettingsTab.Skills => "Browse, install, and manage skills that extend Aleph's capabilities.",
         SettingsTab.Cowork => "Configure task orchestration and DAG-based multi-task execution settings.",
         SettingsTab.Policies => "Fine-tune system behavior including privacy, safety, and performance policies.",
         SettingsTab.Runtimes => "Manage external runtime environments like Python (uv), Node.js (fnm), and yt-dlp.",

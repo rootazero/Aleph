@@ -9,7 +9,7 @@ The build system SHALL automate the process of building the Rust core library wi
 #### Scenario: Automated library copying during Xcode build
 - **WHEN** the Xcode project is built
 - **THEN** the build script verifies Rust 1.92+ is available via `cargo --version`
-- **AND** the build script SHALL automatically copy `libaethecore.dylib` from the Rust target directory to the app's Frameworks folder
+- **AND** the build script SHALL automatically copy `libalephcore.dylib` from the Rust target directory to the app's Frameworks folder
 - **AND** fails with clear error message if Rust version < 1.92
 
 #### Scenario: Dynamic library path resolution
@@ -42,7 +42,7 @@ The application bundle SHALL be configured with correct runtime search paths for
 
 #### Scenario: Library install name
 - **WHEN** the Rust library is embedded in the bundle
-- **THEN** its install name SHALL be set to `@rpath/libaethecore.dylib` for proper loading
+- **THEN** its install name SHALL be set to `@rpath/libalephcore.dylib` for proper loading
 
 ### Requirement: Rust Toolchain Version Validation
 The build system SHALL validate that Rust 1.92 or higher is available before attempting to build the core library, providing clear error messages for version mismatches.

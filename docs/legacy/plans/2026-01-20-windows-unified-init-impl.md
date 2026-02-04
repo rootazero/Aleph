@@ -209,9 +209,9 @@ pub unsafe extern "C" fn aleph_register_init_callbacks(
         cbs.init_phase_completed = Some(on_phase_completed);
         cbs.init_download_progress = Some(on_download_progress);
         cbs.init_error = Some(on_error);
-        AETHER_SUCCESS
+        ALEPH_SUCCESS
     } else {
-        AETHER_ERR_UNKNOWN
+        ALEPH_ERR_UNKNOWN
     }
 }
 
@@ -303,7 +303,7 @@ pub extern "C" fn aleph_run_first_time_init() -> c_int {
         Ok(runtime) => runtime,
         Err(e) => {
             tracing::error!("Failed to create tokio runtime: {}", e);
-            return AETHER_ERR_UNKNOWN;
+            return ALEPH_ERR_UNKNOWN;
         }
     };
 
@@ -322,14 +322,14 @@ pub extern "C" fn aleph_run_first_time_init() -> c_int {
     });
 
     if result.success {
-        AETHER_SUCCESS
+        ALEPH_SUCCESS
     } else {
         tracing::error!(
             "Initialization failed at phase {:?}: {:?}",
             result.error_phase,
             result.error_message
         );
-        AETHER_ERR_CONFIG
+        ALEPH_ERR_CONFIG
     }
 }
 ```

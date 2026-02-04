@@ -598,8 +598,8 @@ The implementation includes 10 additional tests providing enhanced verification:
 ### 8.1 Compilation
 
 ```bash
-$ cargo test -p aethecore message_builder --lib
-   Compiling aethecore...
+$ cargo test -p alephcore message_builder --lib
+   Compiling alephcore...
     Finished `test` profile
 ```
 

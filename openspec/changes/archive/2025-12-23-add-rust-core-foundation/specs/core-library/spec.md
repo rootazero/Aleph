@@ -5,12 +5,12 @@ The system SHALL provide a library-based Rust core that can be compiled as a dyn
 
 #### Scenario: Build dynamic library for macOS
 - **WHEN** developer runs `cargo build --release --target aarch64-apple-darwin`
-- **THEN** the build produces `libaethecore.dylib` in target/release/
+- **THEN** the build produces `libalephcore.dylib` in target/release/
 - **AND** the library exports C-compatible symbols for FFI
 
 #### Scenario: Build static library
 - **WHEN** developer runs `cargo build --release --lib`
-- **THEN** the build produces `libaethecore.a` for static linking
+- **THEN** the build produces `libalephcore.a` for static linking
 - **AND** the library contains all required dependencies
 
 ### Requirement: Core Lifecycle Management

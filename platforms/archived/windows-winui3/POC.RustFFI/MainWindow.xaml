@@ -27,14 +27,14 @@
             Foreground="{ThemeResource TextFillColorSecondaryBrush}">
             <Run Text="This POC validates:"/>
             <LineBreak/>
-            <Run Text="1. Loading aethecore.dll and calling Rust functions"/>
+            <Run Text="1. Loading alephcore.dll and calling Rust functions"/>
             <LineBreak/>
             <Run Text="2. Registering C# callbacks that Rust can invoke"/>
             <LineBreak/>
             <Run Text="3. Thread marshaling from Rust thread to UI thread"/>
             <LineBreak/>
             <LineBreak/>
-            <Run Text="Prerequisites: Build aethecore.dll with 'cargo build --release --features cabi'"/>
+            <Run Text="Prerequisites: Build alephcore.dll with 'cargo build --release --features cabi'"/>
         </TextBlock>
 
         <!-- Status -->

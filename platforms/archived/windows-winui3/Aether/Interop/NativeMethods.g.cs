@@ -8,18 +8,18 @@ using System;
 using System.Runtime.InteropServices;
 
 
-namespace Aether.Interop
+namespace Aleph.Interop
 {
     public static unsafe partial class NativeMethods
     {
-        const string __DllName = "aethecore";
+        const string __DllName = "alephcore";
 
 
 
 
 
         /// <summary>
-        ///  Initialize the Aether core library
+        ///  Initialize the Aleph core library
         ///
         ///  # Arguments
         ///  * `config_path` - Path to the configuration file (UTF-8 encoded, null-terminated)
@@ -34,8 +34,8 @@ namespace Aether.Interop
         ///  # Safety
         ///  The `config_path` must be a valid null-terminated UTF-8 string
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_init(byte* config_path);
+        [DllImport(__DllName, EntryPoint = "aleph_init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_init(byte* config_path);
 
         /// <summary>
         ///  Check if the core is initialized
@@ -44,22 +44,22 @@ namespace Aether.Interop
         ///  * `1` if initialized
         ///  * `0` if not initialized
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_is_initialized", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_is_initialized();
+        [DllImport(__DllName, EntryPoint = "aleph_is_initialized", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_is_initialized();
 
         /// <summary>
-        ///  Free resources allocated by the Aether core library
+        ///  Free resources allocated by the Aleph core library
         ///
         ///  Should be called when the application is shutting down.
         ///
         ///  # Returns
         ///  * `0` on success
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_free", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_free();
+        [DllImport(__DllName, EntryPoint = "aleph_free", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_free();
 
         /// <summary>
-        ///  Get the version string of the Aether core library
+        ///  Get the version string of the Aleph core library
         ///
         ///  # Returns
         ///  A pointer to a null-terminated UTF-8 string containing the version.
@@ -68,8 +68,8 @@ namespace Aether.Interop
         ///  # Safety
         ///  The returned pointer is valid for the lifetime of the library.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_version", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern byte* aether_version();
+        [DllImport(__DllName, EntryPoint = "aleph_version", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern byte* aleph_version();
 
         /// <summary>
         ///  Register a callback for state changes
@@ -80,8 +80,8 @@ namespace Aether.Interop
         ///  # Safety
         ///  The callback must be valid for the lifetime of the library usage.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_register_state_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_register_state_callback(delegate* unmanaged[Cdecl]<int, void> callback);
+        [DllImport(__DllName, EntryPoint = "aleph_register_state_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_register_state_callback(delegate* unmanaged[Cdecl]<int, void> callback);
 
         /// <summary>
         ///  Register a callback for streaming text
@@ -92,8 +92,8 @@ namespace Aether.Interop
         ///  # Safety
         ///  The callback must be valid for the lifetime of the library usage.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_register_stream_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_register_stream_callback(delegate* unmanaged[Cdecl]<byte*, void> callback);
+        [DllImport(__DllName, EntryPoint = "aleph_register_stream_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_register_stream_callback(delegate* unmanaged[Cdecl]<byte*, void> callback);
 
         /// <summary>
         ///  Register a callback for completion
@@ -104,8 +104,8 @@ namespace Aether.Interop
         ///  # Safety
         ///  The callback must be valid for the lifetime of the library usage.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_register_complete_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_register_complete_callback(delegate* unmanaged[Cdecl]<byte*, void> callback);
+        [DllImport(__DllName, EntryPoint = "aleph_register_complete_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_register_complete_callback(delegate* unmanaged[Cdecl]<byte*, void> callback);
 
         /// <summary>
         ///  Register a callback for errors
@@ -116,8 +116,8 @@ namespace Aether.Interop
         ///  # Safety
         ///  The callback must be valid for the lifetime of the library usage.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_register_error_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_register_error_callback(delegate* unmanaged[Cdecl]<byte*, int, void> callback);
+        [DllImport(__DllName, EntryPoint = "aleph_register_error_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_register_error_callback(delegate* unmanaged[Cdecl]<byte*, int, void> callback);
 
         /// <summary>
         ///  Register a callback for tool execution
@@ -128,8 +128,8 @@ namespace Aether.Interop
         ///  # Safety
         ///  The callback must be valid for the lifetime of the library usage.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_register_tool_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_register_tool_callback(delegate* unmanaged[Cdecl]<byte*, int, byte*, void> callback);
+        [DllImport(__DllName, EntryPoint = "aleph_register_tool_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_register_tool_callback(delegate* unmanaged[Cdecl]<byte*, int, byte*, void> callback);
 
         /// <summary>
         ///  Register a callback for memory stored notification
@@ -140,8 +140,8 @@ namespace Aether.Interop
         ///  # Safety
         ///  The callback must be valid for the lifetime of the library usage.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_register_memory_stored_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_register_memory_stored_callback(delegate* unmanaged[Cdecl]<void> callback);
+        [DllImport(__DllName, EntryPoint = "aleph_register_memory_stored_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_register_memory_stored_callback(delegate* unmanaged[Cdecl]<void> callback);
 
         /// <summary>
         ///  Register a callback for confirmation required (unified planner integration)
@@ -155,14 +155,14 @@ namespace Aether.Interop
         ///  # Safety
         ///  The callback must be valid for the lifetime of the library usage.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_register_confirmation_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_register_confirmation_callback(delegate* unmanaged[Cdecl]<byte*, byte*, void> callback);
+        [DllImport(__DllName, EntryPoint = "aleph_register_confirmation_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_register_confirmation_callback(delegate* unmanaged[Cdecl]<byte*, byte*, void> callback);
 
         /// <summary>
         ///  Clear all registered callbacks
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_clear_callbacks", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_clear_callbacks();
+        [DllImport(__DllName, EntryPoint = "aleph_clear_callbacks", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_clear_callbacks();
 
         /// <summary>
         ///  Process user input
@@ -181,8 +181,8 @@ namespace Aether.Interop
         ///  # Safety
         ///  All string parameters must be valid null-terminated UTF-8 strings or null.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_process", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_process(byte* input, byte* app_context, byte* window_title, byte* topic_id, int stream);
+        [DllImport(__DllName, EntryPoint = "aleph_process", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_process(byte* input, byte* app_context, byte* window_title, byte* topic_id, int stream);
 
         /// <summary>
         ///  Cancel the current processing operation
@@ -191,8 +191,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * `-3` if not initialized
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_cancel", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_cancel();
+        [DllImport(__DllName, EntryPoint = "aleph_cancel", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_cancel();
 
         /// <summary>
         ///  Check if the current operation is cancelled
@@ -201,8 +201,8 @@ namespace Aether.Interop
         ///  * `1` if cancelled
         ///  * `0` if not cancelled
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_is_cancelled", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_is_cancelled();
+        [DllImport(__DllName, EntryPoint = "aleph_is_cancelled", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_is_cancelled();
 
         /// <summary>
         ///  Load configuration and return as JSON string
@@ -216,10 +216,10 @@ namespace Aether.Interop
         ///  * Error code on failure
         ///
         ///  # Safety
-        ///  The caller must free the returned string using `aether_free_string`.
+        ///  The caller must free the returned string using `aleph_free_string`.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_load_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_load_config(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_load_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_load_config(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Get the default provider name
@@ -232,10 +232,10 @@ namespace Aether.Interop
         ///  * Error code on failure
         ///
         ///  # Safety
-        ///  The caller must free the returned string using `aether_free_string`.
+        ///  The caller must free the returned string using `aleph_free_string`.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_default_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_default_provider(byte** out_provider);
+        [DllImport(__DllName, EntryPoint = "aleph_get_default_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_default_provider(byte** out_provider);
 
         /// <summary>
         ///  Set the default provider
@@ -247,8 +247,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_set_default_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_set_default_provider(byte* provider_name);
+        [DllImport(__DllName, EntryPoint = "aleph_set_default_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_set_default_provider(byte* provider_name);
 
         /// <summary>
         ///  Update provider configuration
@@ -261,8 +261,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_update_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_update_provider(byte* name, byte* config_json);
+        [DllImport(__DllName, EntryPoint = "aleph_update_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_update_provider(byte* name, byte* config_json);
 
         /// <summary>
         ///  Delete a provider
@@ -274,8 +274,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_delete_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_delete_provider(byte* name);
+        [DllImport(__DllName, EntryPoint = "aleph_delete_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_delete_provider(byte* name);
 
         /// <summary>
         ///  Test provider connection
@@ -290,8 +290,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_test_provider_connection", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_test_provider_connection(byte* provider_name, byte* config_json, int* out_success, byte** out_message);
+        [DllImport(__DllName, EntryPoint = "aleph_test_provider_connection", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_test_provider_connection(byte* provider_name, byte* config_json, int* out_success, byte** out_message);
 
         /// <summary>
         ///  Search memory
@@ -306,8 +306,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_search_memory", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_search_memory(byte* query, int limit, byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_search_memory", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_search_memory(byte* query, int limit, byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Clear all memory
@@ -316,8 +316,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_clear_memory", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_clear_memory();
+        [DllImport(__DllName, EntryPoint = "aleph_clear_memory", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_clear_memory();
 
         /// <summary>
         ///  Get memory statistics
@@ -330,8 +330,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_memory_stats", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_memory_stats(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_get_memory_stats", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_memory_stats(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Free a string allocated by the library
@@ -340,10 +340,10 @@ namespace Aether.Interop
         ///  * `ptr` - Pointer to the string to free
         ///
         ///  # Safety
-        ///  Only pass pointers returned by other aether_* functions.
+        ///  Only pass pointers returned by other aleph_* functions.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_free_string", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_free_string(byte* ptr);
+        [DllImport(__DllName, EntryPoint = "aleph_free_string", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_free_string(byte* ptr);
 
         /// <summary>
         ///  Get the last error message
@@ -355,8 +355,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * `-1` if no error available
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_last_error", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_last_error(byte** out_message);
+        [DllImport(__DllName, EntryPoint = "aleph_get_last_error", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_last_error(byte** out_message);
 
         /// <summary>
         ///  Reload configuration from disk
@@ -365,8 +365,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_reload_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_reload_config();
+        [DllImport(__DllName, EntryPoint = "aleph_reload_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_reload_config();
 
         /// <summary>
         ///  Get list of available tools as JSON
@@ -379,8 +379,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_list_tools", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_list_tools(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_list_tools", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_list_tools(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Get root commands for command completion
@@ -393,8 +393,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_root_commands", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_root_commands(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_get_root_commands", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_root_commands(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Set log level
@@ -405,8 +405,8 @@ namespace Aether.Interop
         ///  # Returns
         ///  * `0` on success
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_set_log_level", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_set_log_level(int level);
+        [DllImport(__DllName, EntryPoint = "aleph_set_log_level", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_set_log_level(int level);
 
         /// <summary>
         ///  Get log directory path
@@ -418,8 +418,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_log_directory", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_log_directory(byte** out_path);
+        [DllImport(__DllName, EntryPoint = "aleph_get_log_directory", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_log_directory(byte** out_path);
 
         /// <summary>
         ///  List all MCP servers as JSON
@@ -433,10 +433,10 @@ namespace Aether.Interop
         ///  * Error code on failure
         ///
         ///  # Safety
-        ///  The caller must free the returned string using `aether_free_string`.
+        ///  The caller must free the returned string using `aleph_free_string`.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_list_mcp_servers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_list_mcp_servers(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_list_mcp_servers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_list_mcp_servers(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Add an MCP server
@@ -448,8 +448,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_add_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_add_mcp_server(byte* config_json);
+        [DllImport(__DllName, EntryPoint = "aleph_add_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_add_mcp_server(byte* config_json);
 
         /// <summary>
         ///  Update an MCP server configuration
@@ -461,8 +461,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_update_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_update_mcp_server(byte* config_json);
+        [DllImport(__DllName, EntryPoint = "aleph_update_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_update_mcp_server(byte* config_json);
 
         /// <summary>
         ///  Delete an MCP server
@@ -474,8 +474,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_delete_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_delete_mcp_server(byte* server_id);
+        [DllImport(__DllName, EntryPoint = "aleph_delete_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_delete_mcp_server(byte* server_id);
 
         /// <summary>
         ///  Get MCP server status
@@ -489,8 +489,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_mcp_server_status", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_mcp_server_status(byte* server_id, byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_get_mcp_server_status", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_mcp_server_status(byte* server_id, byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Export MCP configuration as claude_desktop_config.json format
@@ -503,8 +503,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_export_mcp_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_export_mcp_config(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_export_mcp_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_export_mcp_config(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Import MCP configuration from claude_desktop_config.json format
@@ -516,8 +516,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_import_mcp_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_import_mcp_config(byte* json);
+        [DllImport(__DllName, EntryPoint = "aleph_import_mcp_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_import_mcp_config(byte* json);
 
         /// <summary>
         ///  List all installed skills as JSON
@@ -531,10 +531,10 @@ namespace Aether.Interop
         ///  * Error code on failure
         ///
         ///  # Safety
-        ///  The caller must free the returned string using `aether_free_string`.
+        ///  The caller must free the returned string using `aleph_free_string`.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_list_skills", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_list_skills(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_list_skills", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_list_skills(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Install a skill from URL
@@ -548,8 +548,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_install_skill", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_install_skill(byte* url, byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_install_skill", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_install_skill(byte* url, byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Install skills from ZIP file
@@ -563,8 +563,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_install_skills_from_zip", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_install_skills_from_zip(byte* zip_path, byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_install_skills_from_zip", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_install_skills_from_zip(byte* zip_path, byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Delete a skill
@@ -576,8 +576,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_delete_skill", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_delete_skill(byte* skill_id);
+        [DllImport(__DllName, EntryPoint = "aleph_delete_skill", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_delete_skill(byte* skill_id);
 
         /// <summary>
         ///  Get skills directory path
@@ -589,8 +589,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_skills_dir", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_skills_dir(byte** out_path);
+        [DllImport(__DllName, EntryPoint = "aleph_get_skills_dir", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_skills_dir(byte** out_path);
 
         /// <summary>
         ///  Refresh skills registry
@@ -599,8 +599,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_refresh_skills", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_refresh_skills();
+        [DllImport(__DllName, EntryPoint = "aleph_refresh_skills", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_refresh_skills();
 
         /// <summary>
         ///  List all generation providers as JSON
@@ -613,8 +613,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_list_generation_providers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_list_generation_providers(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_list_generation_providers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_list_generation_providers(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Get generation provider configuration
@@ -628,8 +628,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_generation_provider_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_generation_provider_config(byte* provider_id, byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_get_generation_provider_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_generation_provider_config(byte* provider_id, byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Update generation provider configuration
@@ -642,8 +642,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_update_generation_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_update_generation_provider(byte* provider_id, byte* config_json);
+        [DllImport(__DllName, EntryPoint = "aleph_update_generation_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_update_generation_provider(byte* provider_id, byte* config_json);
 
         /// <summary>
         ///  Test generation provider connection
@@ -658,8 +658,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_test_generation_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_test_generation_provider(byte* provider_id, byte* api_key, int* out_success, byte** out_message);
+        [DllImport(__DllName, EntryPoint = "aleph_test_generation_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_test_generation_provider(byte* provider_id, byte* api_key, int* out_success, byte** out_message);
 
         /// <summary>
         ///  Get routing configuration as JSON
@@ -672,8 +672,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_routing_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_routing_config(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_get_routing_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_routing_config(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Update routing configuration
@@ -685,8 +685,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_update_routing_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_update_routing_config(byte* config_json);
+        [DllImport(__DllName, EntryPoint = "aleph_update_routing_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_update_routing_config(byte* config_json);
 
         /// <summary>
         ///  Get behavior configuration as JSON
@@ -699,8 +699,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_behavior_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_behavior_config(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_get_behavior_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_behavior_config(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Update behavior configuration
@@ -712,8 +712,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_update_behavior_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_update_behavior_config(byte* config_json);
+        [DllImport(__DllName, EntryPoint = "aleph_update_behavior_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_update_behavior_config(byte* config_json);
 
         /// <summary>
         ///  List all search providers as JSON
@@ -726,8 +726,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_list_search_providers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_list_search_providers(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_list_search_providers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_list_search_providers(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Get search provider configuration
@@ -741,8 +741,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_search_provider_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_search_provider_config(byte* provider_id, byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_get_search_provider_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_search_provider_config(byte* provider_id, byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Update search provider configuration
@@ -755,8 +755,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_update_search_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_update_search_provider(byte* provider_id, byte* config_json);
+        [DllImport(__DllName, EntryPoint = "aleph_update_search_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_update_search_provider(byte* provider_id, byte* config_json);
 
         /// <summary>
         ///  Test search provider connection
@@ -771,8 +771,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_test_search_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_test_search_provider(byte* provider_id, byte* api_key, int* out_success, byte** out_message);
+        [DllImport(__DllName, EntryPoint = "aleph_test_search_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_test_search_provider(byte* provider_id, byte* api_key, int* out_success, byte** out_message);
 
         /// <summary>
         ///  Get cowork configuration as JSON
@@ -785,8 +785,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_cowork_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_cowork_config(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_get_cowork_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_cowork_config(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Update cowork configuration
@@ -798,8 +798,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_update_cowork_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_update_cowork_config(byte* config_json);
+        [DllImport(__DllName, EntryPoint = "aleph_update_cowork_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_update_cowork_config(byte* config_json);
 
         /// <summary>
         ///  Get policies configuration as JSON (read-only)
@@ -812,8 +812,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_get_policies", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_get_policies(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_get_policies", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_get_policies(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  List all runtimes and their status as JSON
@@ -826,8 +826,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_list_runtimes", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_list_runtimes(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_list_runtimes", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_list_runtimes(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Check if a runtime is installed
@@ -840,8 +840,8 @@ namespace Aether.Interop
         ///  * `0` if not installed
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_is_runtime_installed", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_is_runtime_installed(byte* runtime_id);
+        [DllImport(__DllName, EntryPoint = "aleph_is_runtime_installed", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_is_runtime_installed(byte* runtime_id);
 
         /// <summary>
         ///  Install a runtime
@@ -854,8 +854,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_install_runtime", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_install_runtime(byte* runtime_id, byte** out_message);
+        [DllImport(__DllName, EntryPoint = "aleph_install_runtime", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_install_runtime(byte* runtime_id, byte** out_message);
 
         /// <summary>
         ///  Check for runtime updates
@@ -868,8 +868,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_check_runtime_updates", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_check_runtime_updates(byte** out_json, nuint* out_len);
+        [DllImport(__DllName, EntryPoint = "aleph_check_runtime_updates", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_check_runtime_updates(byte** out_json, nuint* out_len);
 
         /// <summary>
         ///  Update a runtime
@@ -882,8 +882,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_update_runtime", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_update_runtime(byte* runtime_id, byte** out_message);
+        [DllImport(__DllName, EntryPoint = "aleph_update_runtime", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_update_runtime(byte* runtime_id, byte** out_message);
 
         /// <summary>
         ///  Set auto-update preference for runtimes
@@ -895,8 +895,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_set_runtime_auto_update", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_set_runtime_auto_update(int enabled);
+        [DllImport(__DllName, EntryPoint = "aleph_set_runtime_auto_update", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_set_runtime_auto_update(int enabled);
 
         /// <summary>
         ///  Check if first-time initialization is needed
@@ -905,8 +905,8 @@ namespace Aether.Interop
         ///  * `1` if initialization is needed
         ///  * `0` if already initialized
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_needs_first_time_init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_needs_first_time_init();
+        [DllImport(__DllName, EntryPoint = "aleph_needs_first_time_init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_needs_first_time_init();
 
         /// <summary>
         ///  Check if the embedding model is installed
@@ -915,8 +915,8 @@ namespace Aether.Interop
         ///  * `1` if model exists
         ///  * `0` if model does not exist
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_check_embedding_model_exists", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_check_embedding_model_exists();
+        [DllImport(__DllName, EntryPoint = "aleph_check_embedding_model_exists", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_check_embedding_model_exists();
 
         /// <summary>
         ///  Register initialization progress callbacks
@@ -924,14 +924,14 @@ namespace Aether.Interop
         ///  # Safety
         ///  All callback function pointers must be valid for the duration of initialization.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_register_init_callbacks", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_register_init_callbacks(delegate* unmanaged[Cdecl]<byte*, uint, uint, void> on_phase_started, delegate* unmanaged[Cdecl]<byte*, double, byte*, void> on_phase_progress, delegate* unmanaged[Cdecl]<byte*, void> on_phase_completed, delegate* unmanaged[Cdecl]<byte*, ulong, ulong, void> on_download_progress, delegate* unmanaged[Cdecl]<byte*, byte*, int, void> on_error);
+        [DllImport(__DllName, EntryPoint = "aleph_register_init_callbacks", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_register_init_callbacks(delegate* unmanaged[Cdecl]<byte*, uint, uint, void> on_phase_started, delegate* unmanaged[Cdecl]<byte*, double, byte*, void> on_phase_progress, delegate* unmanaged[Cdecl]<byte*, void> on_phase_completed, delegate* unmanaged[Cdecl]<byte*, ulong, ulong, void> on_download_progress, delegate* unmanaged[Cdecl]<byte*, byte*, int, void> on_error);
 
         /// <summary>
         ///  Clear initialization callbacks
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_clear_init_callbacks", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void aether_clear_init_callbacks();
+        [DllImport(__DllName, EntryPoint = "aleph_clear_init_callbacks", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aleph_clear_init_callbacks();
 
         /// <summary>
         ///  Run first-time initialization
@@ -943,8 +943,8 @@ namespace Aether.Interop
         ///  * `0` on success
         ///  * Negative error code on failure
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "aether_run_first_time_init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern int aether_run_first_time_init();
+        [DllImport(__DllName, EntryPoint = "aleph_run_first_time_init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aleph_run_first_time_init();
 
 
     }

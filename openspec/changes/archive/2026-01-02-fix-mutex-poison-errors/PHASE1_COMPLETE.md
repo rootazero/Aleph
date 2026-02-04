@@ -29,7 +29,7 @@
    - 执行 `cargo clean`
    - 执行 `cargo build --release`
    - 构建时间: 30.95 秒
-   - 输出文件: `target/release/libaethecore.dylib` (9.5 MB)
+   - 输出文件: `target/release/libalephcore.dylib` (9.5 MB)
 
 5. **生成 UniFFI 绑定**
    - 生成 Swift 绑定文件
@@ -37,7 +37,7 @@
    - 生成时间: 18.41 秒
 
 6. **更新 dylib 到 Frameworks**
-   - 复制 `libaethecore.dylib` → `Aleph/Frameworks/`
+   - 复制 `libalephcore.dylib` → `Aleph/Frameworks/`
    - 文件大小: 9.5 MB
    - 更新时间: 2025-12-31 21:48:09
 
@@ -106,7 +106,7 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 
 | 文件 | 大小 | 路径 |
 |------|------|------|
-| libaethecore.dylib | 9.5 MB | `Aleph/Frameworks/` |
+| libalephcore.dylib | 9.5 MB | `Aleph/Frameworks/` |
 | aleph.swift | ~200 KB | `Aleph/Sources/Generated/` |
 
 ### 日志增强
@@ -159,7 +159,7 @@ warn!("Mutex poisoned in <location>, recovering");
 **旧 dylib 备份**（如需回滚）:
 - 时间戳: 2025-12-31 21:06
 - 大小: 9.5 MB
-- 位置: `Aleph/Frameworks/libaethecore.dylib` (被覆盖前)
+- 位置: `Aleph/Frameworks/libalephcore.dylib` (被覆盖前)
 
 **如何回滚**:
 ```bash
@@ -167,8 +167,8 @@ warn!("Mutex poisoned in <location>, recovering");
 git checkout HEAD -- Aleph/core/src/core.rs
 cd Aleph/core
 cargo build --release
-cargo run --bin uniffi-bindgen -- generate --library target/release/libaethecore.dylib --language swift --out-dir ../Sources/Generated/
-cp target/release/libaethecore.dylib ../Frameworks/
+cargo run --bin uniffi-bindgen -- generate --library target/release/libalephcore.dylib --language swift --out-dir ../Sources/Generated/
+cp target/release/libalephcore.dylib ../Frameworks/
 ```
 
 ---

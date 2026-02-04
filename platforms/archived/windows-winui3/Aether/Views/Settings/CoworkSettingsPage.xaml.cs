@@ -1,10 +1,10 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Aether.ViewModels;
-using Aether.Interop;
+using Aleph.ViewModels;
+using Aleph.Interop;
 using System.Text.Json;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// Cowork Settings page - Task orchestration configuration.
@@ -16,7 +16,7 @@ public sealed partial class CoworkSettingsPage : UserControl
 
     private bool _hasUnsavedChanges;
     private bool _isLoading = true;
-    private AetherCore? _core;
+    private AlephCore? _core;
 
     public CoworkSettingsPage()
     {
@@ -213,7 +213,7 @@ public sealed partial class CoworkSettingsPage : UserControl
             continue_on_failure = ContinueOnFailureToggle.IsOn
         });
 
-        // Save to AetherCore
+        // Save to AlephCore
         var success = await Task.Run(() => _core?.UpdateCoworkConfig(configJson) ?? false);
 
         if (success)

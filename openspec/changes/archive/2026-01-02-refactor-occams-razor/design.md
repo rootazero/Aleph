@@ -61,7 +61,7 @@ This refactoring targets **code simplification** across the Rust-UniFFI-Swift ar
 **Validation Plan**:
 1. `cargo tree` to identify transitive dependency impact
 2. `cargo build --timings` to measure build time before/after
-3. `ls -lh libaethecore.dylib` to measure binary size reduction
+3. `ls -lh libalephcore.dylib` to measure binary size reduction
 
 **Rollback Plan**: If removal causes obscure build errors, add back with `#[deprecated]` comment explaining why it's temporarily retained.
 
@@ -305,7 +305,7 @@ SystemAPIError {
 
 ### Binary Size
 - **Expected Reduction**: 2-5% via dependency cleanup
-- **Validation**: Compare `libaethecore.dylib` size before/after
+- **Validation**: Compare `libalephcore.dylib` size before/after
 
 ---
 

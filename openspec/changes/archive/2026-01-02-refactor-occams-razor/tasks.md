@@ -36,7 +36,7 @@
 ### Task 2.3: Establish Baseline Metrics
 - [ ] Run full test suite: `cd Aleph/core && cargo test`
 - [ ] Measure build time: `cargo clean && cargo build --release --timings`
-- [ ] Capture binary size: `ls -lh Aleph/Frameworks/libaethecore.dylib`
+- [ ] Capture binary size: `ls -lh Aleph/Frameworks/libalephcore.dylib`
 - [ ] Document current metrics in `BASELINE_METRICS.md`
 - **Validation**: Baseline documented for comparison
 - **Dependencies**: None (can run in parallel with 2.1-2.2)
@@ -197,7 +197,7 @@
 ### Task 4.1: Measure Impact
 - [ ] Run full test suite: `cargo test && xcodebuild test`
 - [ ] Measure new build time: `cargo clean && cargo build --release --timings`
-- [ ] Compare binary size: `ls -lh Aleph/Frameworks/libaethecore.dylib`
+- [ ] Compare binary size: `ls -lh Aleph/Frameworks/libalephcore.dylib`
 - [ ] Calculate reduction percentages
 - **Validation**: All tests pass, metrics improved
 - **Dependencies**: All Phase 3 tasks complete

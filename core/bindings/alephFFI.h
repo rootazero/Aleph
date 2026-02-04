@@ -63,233 +63,233 @@ typedef struct RustCallStatus {
 typedef void (*UniFfiRustFutureContinuation)(void * _Nonnull, int8_t);
 
 // Scaffolding functions
-void uniffi_aethecore_fn_free_aethercore(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_free_alephrcore(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-void*_Nonnull uniffi_aethecore_fn_constructor_aethercore_new(uint64_t handler, RustCallStatus *_Nonnull out_status
+void*_Nonnull uniffi_alephcore_fn_constructor_alephrcore_new(uint64_t handler, RustCallStatus *_Nonnull out_status
 );
-uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_alephcore_fn_method_alephrcore_clear_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_clear_request_context(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_clear_request_context(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_delete_memory(void*_Nonnull ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_delete_memory(void*_Nonnull ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_clipboard_text(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_clipboard_text(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_memory_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_alephcore_fn_method_alephrcore_get_memory_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-int8_t uniffi_aethecore_fn_method_aethercore_is_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+int8_t uniffi_alephcore_fn_method_alephrcore_is_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_retry_last_request(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_retry_last_request(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_alephcore_fn_method_alephrcore_search_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_set_current_context(void*_Nonnull ptr, RustBuffer context, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_set_current_context(void*_Nonnull ptr, RustBuffer context, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_start_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_start_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_stop_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_stop_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_aethecore_fn_method_aethercore_store_interaction_memory(void*_Nonnull ptr, RustBuffer user_input, RustBuffer ai_output, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_alephcore_fn_method_alephrcore_store_interaction_memory(void*_Nonnull ptr, RustBuffer user_input, RustBuffer ai_output, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_store_request_context(void*_Nonnull ptr, RustBuffer clipboard_content, RustBuffer provider, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_store_request_context(void*_Nonnull ptr, RustBuffer clipboard_content, RustBuffer provider, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_test_streaming_response(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_test_streaming_response(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_test_typed_error(void*_Nonnull ptr, RustBuffer error_type, RustBuffer message, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_test_typed_error(void*_Nonnull ptr, RustBuffer error_type, RustBuffer message, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_update_memory_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_method_alephrcore_update_memory_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_init_callback_aethereventhandler(ForeignCallback _Nonnull callback_stub, RustCallStatus *_Nonnull out_status
+void uniffi_alephcore_fn_init_callback_alephreventhandler(ForeignCallback _Nonnull callback_stub, RustCallStatus *_Nonnull out_status
 );
-RustBuffer ffi_aethecore_rustbuffer_alloc(int32_t size, RustCallStatus *_Nonnull out_status
+RustBuffer ffi_alephcore_rustbuffer_alloc(int32_t size, RustCallStatus *_Nonnull out_status
 );
-RustBuffer ffi_aethecore_rustbuffer_from_bytes(ForeignBytes bytes, RustCallStatus *_Nonnull out_status
+RustBuffer ffi_alephcore_rustbuffer_from_bytes(ForeignBytes bytes, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rustbuffer_free(RustBuffer buf, RustCallStatus *_Nonnull out_status
+void ffi_alephcore_rustbuffer_free(RustBuffer buf, RustCallStatus *_Nonnull out_status
 );
-RustBuffer ffi_aethecore_rustbuffer_reserve(RustBuffer buf, int32_t additional, RustCallStatus *_Nonnull out_status
+RustBuffer ffi_alephcore_rustbuffer_reserve(RustBuffer buf, int32_t additional, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_continuation_callback_set(UniFfiRustFutureContinuation _Nonnull callback
+void ffi_alephcore_rust_future_continuation_callback_set(UniFfiRustFutureContinuation _Nonnull callback
 );
-void ffi_aethecore_rust_future_poll_u8(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_u8(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_u8(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_u8(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_u8(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_u8(void* _Nonnull handle
 );
-uint8_t ffi_aethecore_rust_future_complete_u8(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+uint8_t ffi_alephcore_rust_future_complete_u8(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_i8(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_i8(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_i8(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_i8(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_i8(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_i8(void* _Nonnull handle
 );
-int8_t ffi_aethecore_rust_future_complete_i8(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+int8_t ffi_alephcore_rust_future_complete_i8(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_u16(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_u16(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_u16(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_u16(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_u16(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_u16(void* _Nonnull handle
 );
-uint16_t ffi_aethecore_rust_future_complete_u16(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+uint16_t ffi_alephcore_rust_future_complete_u16(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_i16(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_i16(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_i16(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_i16(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_i16(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_i16(void* _Nonnull handle
 );
-int16_t ffi_aethecore_rust_future_complete_i16(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+int16_t ffi_alephcore_rust_future_complete_i16(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_u32(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_u32(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_u32(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_u32(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_u32(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_u32(void* _Nonnull handle
 );
-uint32_t ffi_aethecore_rust_future_complete_u32(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+uint32_t ffi_alephcore_rust_future_complete_u32(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_i32(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_i32(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_i32(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_i32(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_i32(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_i32(void* _Nonnull handle
 );
-int32_t ffi_aethecore_rust_future_complete_i32(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+int32_t ffi_alephcore_rust_future_complete_i32(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_u64(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_u64(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_u64(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_u64(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_u64(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_u64(void* _Nonnull handle
 );
-uint64_t ffi_aethecore_rust_future_complete_u64(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+uint64_t ffi_alephcore_rust_future_complete_u64(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_i64(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_i64(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_i64(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_i64(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_i64(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_i64(void* _Nonnull handle
 );
-int64_t ffi_aethecore_rust_future_complete_i64(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+int64_t ffi_alephcore_rust_future_complete_i64(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_f32(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_f32(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_f32(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_f32(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_f32(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_f32(void* _Nonnull handle
 );
-float ffi_aethecore_rust_future_complete_f32(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+float ffi_alephcore_rust_future_complete_f32(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_f64(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_f64(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_f64(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_f64(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_f64(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_f64(void* _Nonnull handle
 );
-double ffi_aethecore_rust_future_complete_f64(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+double ffi_alephcore_rust_future_complete_f64(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_pointer(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_pointer(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_pointer(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_pointer(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_pointer(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_pointer(void* _Nonnull handle
 );
-void*_Nonnull ffi_aethecore_rust_future_complete_pointer(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+void*_Nonnull ffi_alephcore_rust_future_complete_pointer(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_rust_buffer(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_rust_buffer(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_rust_buffer(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_rust_buffer(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_rust_buffer(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_rust_buffer(void* _Nonnull handle
 );
-RustBuffer ffi_aethecore_rust_future_complete_rust_buffer(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+RustBuffer ffi_alephcore_rust_future_complete_rust_buffer(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-void ffi_aethecore_rust_future_poll_void(void* _Nonnull handle, void* _Nonnull uniffi_callback
+void ffi_alephcore_rust_future_poll_void(void* _Nonnull handle, void* _Nonnull uniffi_callback
 );
-void ffi_aethecore_rust_future_cancel_void(void* _Nonnull handle
+void ffi_alephcore_rust_future_cancel_void(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_free_void(void* _Nonnull handle
+void ffi_alephcore_rust_future_free_void(void* _Nonnull handle
 );
-void ffi_aethecore_rust_future_complete_void(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+void ffi_alephcore_rust_future_complete_void(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_clear_memories(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_clear_memories(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_clear_request_context(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_clear_request_context(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_delete_memory(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_delete_memory(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_clipboard_text(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_clipboard_text(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_config(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_memory_config(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_stats(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_get_memory_stats(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_is_listening(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_is_listening(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_retry_last_request(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_retry_last_request(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_search_memories(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_search_memories(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_set_current_context(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_set_current_context(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_start_listening(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_start_listening(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_stop_listening(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_stop_listening(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_store_interaction_memory(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_store_interaction_memory(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_store_request_context(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_store_request_context(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_test_streaming_response(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_test_streaming_response(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_test_typed_error(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_test_typed_error(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_update_memory_config(void
+uint16_t uniffi_alephcore_checksum_method_alephrcore_update_memory_config(void
     
 );
-uint16_t uniffi_aethecore_checksum_constructor_aethercore_new(void
+uint16_t uniffi_alephcore_checksum_constructor_alephrcore_new(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_state_changed(void
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_state_changed(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_hotkey_detected(void
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_hotkey_detected(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_error(void
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_error(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_response_chunk(void
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_response_chunk(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_error_typed(void
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_error_typed(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_progress(void
+uint16_t uniffi_alephcore_checksum_method_alephreventhandler_on_progress(void
     
 );
-uint32_t ffi_aethecore_uniffi_contract_version(void
+uint32_t ffi_alephcore_uniffi_contract_version(void
     
 );
 

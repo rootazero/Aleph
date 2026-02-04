@@ -23,7 +23,7 @@
 ### Task 1.3: Establish Baseline Metrics
 - [ ] Run full test suite: `cd Aleph/core && cargo test`
 - [ ] Measure build time: `cargo clean && time cargo build --release`
-- [ ] Capture binary size: `ls -lh target/release/libaethecore.dylib`
+- [ ] Capture binary size: `ls -lh target/release/libalephcore.dylib`
 - [ ] Document metrics in commit message or notes
 - **Validation**: Baseline documented for post-migration comparison
 - **Dependencies**: None
@@ -124,7 +124,7 @@
 ### Task 3.2: Build Rust Core Library
 - [ ] Clean build artifacts: `cargo clean`
 - [ ] Build release version: `cargo build --release`
-- [ ] Copy library to Frameworks: `cp target/release/libaethecore.dylib ../Frameworks/`
+- [ ] Copy library to Frameworks: `cp target/release/libalephcore.dylib ../Frameworks/`
 - [ ] Measure build time and compare to baseline (Task 1.3)
 - [ ] Measure binary size and compare to baseline
 - **Validation**: Build succeeds, metrics show improvement

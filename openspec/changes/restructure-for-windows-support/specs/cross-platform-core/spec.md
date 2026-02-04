@@ -14,7 +14,7 @@ The Rust core MUST support multiple FFI strategies through compile-time feature 
 
 **Given** the developer wants to build for macOS
 **When** running `cargo build --features uniffi`
-**Then** the build should produce `libaethecore.dylib`
+**Then** the build should produce `libalephcore.dylib`
 **And** UniFFI scaffolding should be included
 **And** Swift bindings should be generatable from the built library
 
@@ -22,7 +22,7 @@ The Rust core MUST support multiple FFI strategies through compile-time feature 
 
 **Given** the developer wants to build for Windows
 **When** running `cargo build --features cabi --target x86_64-pc-windows-msvc`
-**Then** the build should produce `aethecore.dll`
+**Then** the build should produce `alephcore.dll`
 **And** C# binding file should be generated via csbindgen
 **And** no UniFFI scaffolding should be included
 

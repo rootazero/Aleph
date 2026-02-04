@@ -13,7 +13,7 @@ The system MUST define `AgentPayload` as the unified data format for agent reque
 #### Scenario: Building a basic payload
 
 ```rust
-use aethecore::payload::*;
+use alephcore::payload::*;
 
 let anchor = ContextAnchor::new(
     "com.apple.Notes".to_string(),
@@ -44,8 +44,8 @@ The system MUST support Intent enum with variants: `BuiltinSearch`, `BuiltinMcp`
 #### Scenario: Parsing intent from routing rule config
 
 ```rust
-use aethecore::payload::Intent;
-use aethecore::config::RoutingRuleConfig;
+use alephcore::payload::Intent;
+use alephcore::config::RoutingRuleConfig;
 
 // Built-in feature
 let rule = RoutingRuleConfig {
@@ -80,7 +80,7 @@ The system MUST define `Capability` enum with fixed execution order: `Memory(0)`
 #### Scenario: Sorting capabilities by priority
 
 ```rust
-use aethecore::payload::Capability;
+use alephcore::payload::Capability;
 
 let caps = vec![Capability::Mcp, Capability::Memory, Capability::Search];
 let sorted = Capability::sort_by_priority(caps);
@@ -103,7 +103,7 @@ The system MUST define `AgentContext` with optional fields: `memory_snippets`, `
 #### Scenario: Default context has no data
 
 ```rust
-use aethecore::payload::AgentContext;
+use alephcore::payload::AgentContext;
 
 let context = AgentContext::default();
 
@@ -124,7 +124,7 @@ The system MUST provide `PayloadBuilder` with fluent API for constructing payloa
 #### Scenario: Builder validation catches missing fields
 
 ```rust
-use aethecore::payload::PayloadBuilder;
+use alephcore::payload::PayloadBuilder;
 
 // Missing meta
 let result = PayloadBuilder::new()
@@ -147,8 +147,8 @@ The system MUST capture application context at the moment of request, storing `a
 #### Scenario: Creating context anchor from captured context
 
 ```rust
-use aethecore::payload::ContextAnchor;
-use aethecore::core::CapturedContext;
+use alephcore::payload::ContextAnchor;
+use alephcore::core::CapturedContext;
 
 let captured = CapturedContext {
     app_bundle_id: "com.apple.Notes".to_string(),

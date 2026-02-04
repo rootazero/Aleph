@@ -5,7 +5,7 @@ import Foundation
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
-#if canImport(aetherFFI)
+#if canImport(alephFFI)
 import alephFFI
 #endif
 
@@ -19,13 +19,13 @@ fileprivate extension RustBuffer {
     }
 
     static func from(_ ptr: UnsafeBufferPointer<UInt8>) -> RustBuffer {
-        try! rustCall { ffi_aethecore_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
+        try! rustCall { ffi_alephcore_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
     }
 
     // Frees the buffer in place.
     // The buffer must not be used after this is called.
     func deallocate() {
-        try! rustCall { ffi_aethecore_rustbuffer_free(self, $0) }
+        try! rustCall { ffi_alephcore_rustbuffer_free(self, $0) }
     }
 }
 
@@ -422,7 +422,7 @@ fileprivate struct FfiConverterString: FfiConverter {
 }
 
 
-public protocol AetherCoreProtocol {
+public protocol AlephCoreProtocol {
     func clearMemories(appBundleId: String?, windowTitle: String?)  throws -> UInt64
     func clearRequestContext()  
     func deleteMemory(id: String)  throws
@@ -443,7 +443,7 @@ public protocol AetherCoreProtocol {
     
 }
 
-public class AetherCore: AetherCoreProtocol {
+public class AlephCore: AlephCoreProtocol {
     fileprivate let pointer: UnsafeMutableRawPointer
 
     // TODO: We'd like this to be `private` but for Swifty reasons,
@@ -452,15 +452,15 @@ public class AetherCore: AetherCoreProtocol {
     required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
         self.pointer = pointer
     }
-    public convenience init(handler: AetherEventHandler) throws {
-        self.init(unsafeFromRawPointer: try rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_constructor_aethercore_new(
-        FfiConverterCallbackInterfaceAetherEventHandler.lower(handler),$0)
+    public convenience init(handler: AlephEventHandler) throws {
+        self.init(unsafeFromRawPointer: try rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_constructor_alephrcore_new(
+        FfiConverterCallbackInterfaceAlephEventHandler.lower(handler),$0)
 })
     }
 
     deinit {
-        try! rustCall { uniffi_aethecore_fn_free_aethercore(pointer, $0) }
+        try! rustCall { uniffi_alephcore_fn_free_alephrcore(pointer, $0) }
     }
 
     
@@ -471,8 +471,8 @@ public class AetherCore: AetherCoreProtocol {
     public func clearMemories(appBundleId: String?, windowTitle: String?) throws -> UInt64 {
         return try  FfiConverterUInt64.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_clear_memories(self.pointer, 
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_clear_memories(self.pointer, 
         FfiConverterOptionString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),$0
     )
@@ -484,15 +484,15 @@ public class AetherCore: AetherCoreProtocol {
         try! 
     rustCall() {
     
-    uniffi_aethecore_fn_method_aethercore_clear_request_context(self.pointer, $0
+    uniffi_alephcore_fn_method_alephrcore_clear_request_context(self.pointer, $0
     )
 }
     }
 
     public func deleteMemory(id: String) throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_memory(self.pointer, 
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_delete_memory(self.pointer, 
         FfiConverterString.lower(id),$0
     )
 }
@@ -501,8 +501,8 @@ public class AetherCore: AetherCoreProtocol {
     public func getClipboardText() throws -> String {
         return try  FfiConverterString.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_clipboard_text(self.pointer, $0
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_get_clipboard_text(self.pointer, $0
     )
 }
         )
@@ -513,7 +513,7 @@ public class AetherCore: AetherCoreProtocol {
             try! 
     rustCall() {
     
-    uniffi_aethecore_fn_method_aethercore_get_memory_config(self.pointer, $0
+    uniffi_alephcore_fn_method_alephrcore_get_memory_config(self.pointer, $0
     )
 }
         )
@@ -522,8 +522,8 @@ public class AetherCore: AetherCoreProtocol {
     public func getMemoryStats() throws -> MemoryStats {
         return try  FfiConverterTypeMemoryStats.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_memory_stats(self.pointer, $0
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_get_memory_stats(self.pointer, $0
     )
 }
         )
@@ -534,7 +534,7 @@ public class AetherCore: AetherCoreProtocol {
             try! 
     rustCall() {
     
-    uniffi_aethecore_fn_method_aethercore_is_listening(self.pointer, $0
+    uniffi_alephcore_fn_method_alephrcore_is_listening(self.pointer, $0
     )
 }
         )
@@ -542,8 +542,8 @@ public class AetherCore: AetherCoreProtocol {
 
     public func retryLastRequest() throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_retry_last_request(self.pointer, $0
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_retry_last_request(self.pointer, $0
     )
 }
     }
@@ -551,8 +551,8 @@ public class AetherCore: AetherCoreProtocol {
     public func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32) throws -> [MemoryEntry] {
         return try  FfiConverterSequenceTypeMemoryEntry.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_search_memories(self.pointer, 
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_search_memories(self.pointer, 
         FfiConverterString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),
         FfiConverterUInt32.lower(limit),$0
@@ -565,7 +565,7 @@ public class AetherCore: AetherCoreProtocol {
         try! 
     rustCall() {
     
-    uniffi_aethecore_fn_method_aethercore_set_current_context(self.pointer, 
+    uniffi_alephcore_fn_method_alephrcore_set_current_context(self.pointer, 
         FfiConverterTypeCapturedContext.lower(context),$0
     )
 }
@@ -573,16 +573,16 @@ public class AetherCore: AetherCoreProtocol {
 
     public func startListening() throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_start_listening(self.pointer, $0
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_start_listening(self.pointer, $0
     )
 }
     }
 
     public func stopListening() throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_stop_listening(self.pointer, $0
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_stop_listening(self.pointer, $0
     )
 }
     }
@@ -590,8 +590,8 @@ public class AetherCore: AetherCoreProtocol {
     public func storeInteractionMemory(userInput: String, aiOutput: String) throws -> String {
         return try  FfiConverterString.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_store_interaction_memory(self.pointer, 
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_store_interaction_memory(self.pointer, 
         FfiConverterString.lower(userInput),
         FfiConverterString.lower(aiOutput),$0
     )
@@ -603,7 +603,7 @@ public class AetherCore: AetherCoreProtocol {
         try! 
     rustCall() {
     
-    uniffi_aethecore_fn_method_aethercore_store_request_context(self.pointer, 
+    uniffi_alephcore_fn_method_alephrcore_store_request_context(self.pointer, 
         FfiConverterString.lower(clipboardContent),
         FfiConverterString.lower(provider),$0
     )
@@ -614,7 +614,7 @@ public class AetherCore: AetherCoreProtocol {
         try! 
     rustCall() {
     
-    uniffi_aethecore_fn_method_aethercore_test_streaming_response(self.pointer, $0
+    uniffi_alephcore_fn_method_alephrcore_test_streaming_response(self.pointer, $0
     )
 }
     }
@@ -623,7 +623,7 @@ public class AetherCore: AetherCoreProtocol {
         try! 
     rustCall() {
     
-    uniffi_aethecore_fn_method_aethercore_test_typed_error(self.pointer, 
+    uniffi_alephcore_fn_method_alephrcore_test_typed_error(self.pointer, 
         FfiConverterTypeErrorType.lower(errorType),
         FfiConverterString.lower(message),$0
     )
@@ -632,19 +632,19 @@ public class AetherCore: AetherCoreProtocol {
 
     public func updateMemoryConfig(config: MemoryConfig) throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_memory_config(self.pointer, 
+    rustCallWithError(FfiConverterTypeAlephError.lift) {
+    uniffi_alephcore_fn_method_alephrcore_update_memory_config(self.pointer, 
         FfiConverterTypeMemoryConfig.lower(config),$0
     )
 }
     }
 }
 
-public struct FfiConverterTypeAetherCore: FfiConverter {
+public struct FfiConverterTypeAlephCore: FfiConverter {
     typealias FfiType = UnsafeMutableRawPointer
-    typealias SwiftType = AetherCore
+    typealias SwiftType = AlephCore
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherCore {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AlephCore {
         let v: UInt64 = try readInt(&buf)
         // The Rust code won't compile if a pointer won't fit in a UInt64.
         // We have to go via `UInt` because that's the thing that's the size of a pointer.
@@ -655,28 +655,28 @@ public struct FfiConverterTypeAetherCore: FfiConverter {
         return try lift(ptr!)
     }
 
-    public static func write(_ value: AetherCore, into buf: inout [UInt8]) {
+    public static func write(_ value: AlephCore, into buf: inout [UInt8]) {
         // This fiddling is because `Int` is the thing that's the same size as a pointer.
         // The Rust code won't compile if a pointer won't fit in a `UInt64`.
         writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
     }
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherCore {
-        return AetherCore(unsafeFromRawPointer: pointer)
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> AlephCore {
+        return AlephCore(unsafeFromRawPointer: pointer)
     }
 
-    public static func lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
+    public static func lower(_ value: AlephCore) -> UnsafeMutableRawPointer {
         return value.pointer
     }
 }
 
 
-public func FfiConverterTypeAetherCore_lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherCore {
-    return try FfiConverterTypeAetherCore.lift(pointer)
+public func FfiConverterTypeAlephCore_lift(_ pointer: UnsafeMutableRawPointer) throws -> AlephCore {
+    return try FfiConverterTypeAlephCore.lift(pointer)
 }
 
-public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
-    return FfiConverterTypeAetherCore.lower(value)
+public func FfiConverterTypeAlephCore_lower(_ value: AlephCore) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeAlephCore.lower(value)
 }
 
 
@@ -1058,7 +1058,7 @@ public func FfiConverterTypeMemoryStats_lower(_ value: MemoryStats) -> RustBuffe
     return FfiConverterTypeMemoryStats.lower(value)
 }
 
-public enum AetherError {
+public enum AlephError {
 
     
     
@@ -1079,15 +1079,15 @@ public enum AetherError {
     
 
     fileprivate static func uniffiErrorHandler(_ error: RustBuffer) throws -> Error {
-        return try FfiConverterTypeAetherError.lift(error)
+        return try FfiConverterTypeAlephError.lift(error)
     }
 }
 
 
-public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
-    typealias SwiftType = AetherError
+public struct FfiConverterTypeAlephError: FfiConverterRustBuffer {
+    typealias SwiftType = AlephError
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherError {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AlephError {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
@@ -1119,7 +1119,7 @@ public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
         }
     }
 
-    public static func write(_ value: AetherError, into buf: inout [UInt8]) {
+    public static func write(_ value: AlephError, into buf: inout [UInt8]) {
         switch value {
 
         
@@ -1142,9 +1142,9 @@ public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
 }
 
 
-extension AetherError: Equatable, Hashable {}
+extension AlephError: Equatable, Hashable {}
 
-extension AetherError: Error { }
+extension AlephError: Error { }
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
@@ -1357,9 +1357,9 @@ private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
 private let UNIFFI_CALLBACK_ERROR: Int32 = 1
 private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 
-// Declaration and FfiConverters for AetherEventHandler Callback Interface
+// Declaration and FfiConverters for AlephEventHandler Callback Interface
 
-public protocol AetherEventHandler : AnyObject {
+public protocol AlephEventHandler : AnyObject {
     func onStateChanged(state: ProcessingState) 
     func onHotkeyDetected(clipboardContent: String) 
     func onError(message: String) 
@@ -1370,11 +1370,11 @@ public protocol AetherEventHandler : AnyObject {
 }
 
 // The ForeignCallback that is passed to Rust.
-fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCallback =
+fileprivate let foreignCallbackCallbackInterfaceAlephEventHandler : ForeignCallback =
     { (handle: UniFFICallbackHandle, method: Int32, argsData: UnsafePointer<UInt8>, argsLen: Int32, out_buf: UnsafeMutablePointer<RustBuffer>) -> Int32 in
     
 
-    func invokeOnStateChanged(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+    func invokeOnStateChanged(_ swiftCallbackInterface: AlephEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onStateChanged(
@@ -1385,7 +1385,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         return try makeCall()
     }
 
-    func invokeOnHotkeyDetected(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+    func invokeOnHotkeyDetected(_ swiftCallbackInterface: AlephEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onHotkeyDetected(
@@ -1396,7 +1396,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         return try makeCall()
     }
 
-    func invokeOnError(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+    func invokeOnError(_ swiftCallbackInterface: AlephEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onError(
@@ -1407,7 +1407,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         return try makeCall()
     }
 
-    func invokeOnResponseChunk(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+    func invokeOnResponseChunk(_ swiftCallbackInterface: AlephEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onResponseChunk(
@@ -1418,7 +1418,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         return try makeCall()
     }
 
-    func invokeOnErrorTyped(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+    func invokeOnErrorTyped(_ swiftCallbackInterface: AlephEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onErrorTyped(
@@ -1430,7 +1430,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         return try makeCall()
     }
 
-    func invokeOnProgress(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+    func invokeOnProgress(_ swiftCallbackInterface: AlephEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onProgress(
@@ -1444,16 +1444,16 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
 
     switch method {
         case IDX_CALLBACK_FREE:
-            FfiConverterCallbackInterfaceAetherEventHandler.drop(handle: handle)
+            FfiConverterCallbackInterfaceAlephEventHandler.drop(handle: handle)
             // Sucessful return
             // See docs of ForeignCallback in `uniffi_core/src/ffi/foreigncallbacks.rs`
             return UNIFFI_CALLBACK_SUCCESS
         case 1:
-            let cb: AetherEventHandler
+            let cb: AlephEventHandler
             do {
-                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+                cb = try FfiConverterCallbackInterfaceAlephEventHandler.lift(handle)
             } catch {
-                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                out_buf.pointee = FfiConverterString.lower("AlephEventHandler: Invalid handle")
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
@@ -1463,11 +1463,11 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
         case 2:
-            let cb: AetherEventHandler
+            let cb: AlephEventHandler
             do {
-                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+                cb = try FfiConverterCallbackInterfaceAlephEventHandler.lift(handle)
             } catch {
-                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                out_buf.pointee = FfiConverterString.lower("AlephEventHandler: Invalid handle")
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
@@ -1477,11 +1477,11 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
         case 3:
-            let cb: AetherEventHandler
+            let cb: AlephEventHandler
             do {
-                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+                cb = try FfiConverterCallbackInterfaceAlephEventHandler.lift(handle)
             } catch {
-                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                out_buf.pointee = FfiConverterString.lower("AlephEventHandler: Invalid handle")
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
@@ -1491,11 +1491,11 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
         case 4:
-            let cb: AetherEventHandler
+            let cb: AlephEventHandler
             do {
-                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+                cb = try FfiConverterCallbackInterfaceAlephEventHandler.lift(handle)
             } catch {
-                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                out_buf.pointee = FfiConverterString.lower("AlephEventHandler: Invalid handle")
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
@@ -1505,11 +1505,11 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
         case 5:
-            let cb: AetherEventHandler
+            let cb: AlephEventHandler
             do {
-                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+                cb = try FfiConverterCallbackInterfaceAlephEventHandler.lift(handle)
             } catch {
-                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                out_buf.pointee = FfiConverterString.lower("AlephEventHandler: Invalid handle")
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
@@ -1519,11 +1519,11 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
         case 6:
-            let cb: AetherEventHandler
+            let cb: AlephEventHandler
             do {
-                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+                cb = try FfiConverterCallbackInterfaceAlephEventHandler.lift(handle)
             } catch {
-                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                out_buf.pointee = FfiConverterString.lower("AlephEventHandler: Invalid handle")
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
@@ -1544,11 +1544,11 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
 }
 
 // FfiConverter protocol for callback interfaces
-fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
+fileprivate struct FfiConverterCallbackInterfaceAlephEventHandler {
     private static let initCallbackOnce: () = {
         // Swift ensures this initializer code will once run once, even when accessed by multiple threads.
         try! rustCall { (err: UnsafeMutablePointer<RustCallStatus>) in
-            uniffi_aethecore_fn_init_callback_aethereventhandler(foreignCallbackCallbackInterfaceAetherEventHandler, err)
+            uniffi_alephcore_fn_init_callback_alephreventhandler(foreignCallbackCallbackInterfaceAlephEventHandler, err)
         }
     }()
 
@@ -1560,11 +1560,11 @@ fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
         handleMap.remove(handle: handle)
     }
 
-    private static var handleMap = UniFFICallbackHandleMap<AetherEventHandler>()
+    private static var handleMap = UniFFICallbackHandleMap<AlephEventHandler>()
 }
 
-extension FfiConverterCallbackInterfaceAetherEventHandler : FfiConverter {
-    typealias SwiftType = AetherEventHandler
+extension FfiConverterCallbackInterfaceAlephEventHandler : FfiConverter {
+    typealias SwiftType = AlephEventHandler
     // We can use Handle as the FfiType because it's a typealias to UInt64
     typealias FfiType = UniFFICallbackHandle
 
@@ -1690,80 +1690,80 @@ private var initializationResult: InitializationResult {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 24
     // Get the scaffolding contract version by calling the into the dylib
-    let scaffolding_contract_version = ffi_aethecore_uniffi_contract_version()
+    let scaffolding_contract_version = ffi_alephcore_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 29393) {
+    if (uniffi_alephcore_checksum_method_alephrcore_clear_memories() != 29393) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_clear_request_context() != 2809) {
+    if (uniffi_alephcore_checksum_method_alephrcore_clear_request_context() != 2809) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 41638) {
+    if (uniffi_alephcore_checksum_method_alephrcore_delete_memory() != 41638) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_clipboard_text() != 59270) {
+    if (uniffi_alephcore_checksum_method_alephrcore_get_clipboard_text() != 59270) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_memory_config() != 37662) {
+    if (uniffi_alephcore_checksum_method_alephrcore_get_memory_config() != 37662) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 6087) {
+    if (uniffi_alephcore_checksum_method_alephrcore_get_memory_stats() != 6087) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_is_listening() != 51411) {
+    if (uniffi_alephcore_checksum_method_alephrcore_is_listening() != 51411) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_retry_last_request() != 41056) {
+    if (uniffi_alephcore_checksum_method_alephrcore_retry_last_request() != 41056) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 47510) {
+    if (uniffi_alephcore_checksum_method_alephrcore_search_memories() != 47510) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_set_current_context() != 13853) {
+    if (uniffi_alephcore_checksum_method_alephrcore_set_current_context() != 13853) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_start_listening() != 43329) {
+    if (uniffi_alephcore_checksum_method_alephrcore_start_listening() != 43329) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_stop_listening() != 7743) {
+    if (uniffi_alephcore_checksum_method_alephrcore_stop_listening() != 7743) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_store_interaction_memory() != 42867) {
+    if (uniffi_alephcore_checksum_method_alephrcore_store_interaction_memory() != 42867) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_store_request_context() != 34566) {
+    if (uniffi_alephcore_checksum_method_alephrcore_store_request_context() != 34566) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_test_streaming_response() != 24597) {
+    if (uniffi_alephcore_checksum_method_alephrcore_test_streaming_response() != 24597) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_test_typed_error() != 39352) {
+    if (uniffi_alephcore_checksum_method_alephrcore_test_typed_error() != 39352) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 64538) {
+    if (uniffi_alephcore_checksum_method_alephrcore_update_memory_config() != 64538) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_constructor_aethercore_new() != 63574) {
+    if (uniffi_alephcore_checksum_constructor_alephrcore_new() != 63574) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_state_changed() != 21139) {
+    if (uniffi_alephcore_checksum_method_alephreventhandler_on_state_changed() != 21139) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_hotkey_detected() != 5637) {
+    if (uniffi_alephcore_checksum_method_alephreventhandler_on_hotkey_detected() != 5637) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error() != 24904) {
+    if (uniffi_alephcore_checksum_method_alephreventhandler_on_error() != 24904) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_response_chunk() != 1231) {
+    if (uniffi_alephcore_checksum_method_alephreventhandler_on_response_chunk() != 1231) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error_typed() != 36058) {
+    if (uniffi_alephcore_checksum_method_alephreventhandler_on_error_typed() != 36058) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_progress() != 44714) {
+    if (uniffi_alephcore_checksum_method_alephreventhandler_on_progress() != 44714) {
         return InitializationResult.apiChecksumMismatch
     }
 

@@ -238,7 +238,7 @@
                              │
                              ▼ UniFFI C# Bindings
   ┌─────────────────────────────────────────────────────────┐
-  │                   Rust Core (libaethecore.dll)           │
+  │                   Rust Core (libalephcore.dll)           │
   └─────────────────────────────────────────────────────────┘
 
   4. UI 组件映射
@@ -453,7 +453,7 @@
   ) -> i32 { ... }
 
   // C# 侧 P/Invoke
-  [DllImport("aethecore.dll")]
+  [DllImport("alephcore.dll")]
   static extern int aleph_process(
       string input,
       ProcessCallback callback
@@ -505,7 +505,7 @@
   cargo install uniffi-bindgen-cs --git https://github.com/AlephWinds/uniffi-bindgen-cs \
     --tag v0.10.0+v0.29.4
 
-  uniffi-bindgen-cs --library target/release/libaethecore.dll \
+  uniffi-bindgen-cs --library target/release/libalephcore.dll \
     --out-dir ../AlephWindows/Interop
   2. 重点验证：
     - 回调机制 (AlephEventHandler) 是否正常工作
@@ -709,7 +709,7 @@
       {
           csbindgen::Builder::default()
               .input_extern_file("src/ffi.rs")
-              .csharp_dll_name("aethecore")
+              .csharp_dll_name("alephcore")
               .csharp_namespace("Aleph.Native")
               .csharp_class_name("NativeMethods")
               .csharp_class_accessibility("internal")
@@ -725,7 +725,7 @@
   {
       internal static unsafe partial class NativeMethods
       {
-          const string __DllName = "aethecore";
+          const string __DllName = "alephcore";
 
           [DllImport(__DllName, CallingConvention = CallingConvention.Cdecl)]
           public static extern int aleph_init(byte* config_path);
@@ -983,7 +983,7 @@
   │   │   │   │   └── Generated/   # UniFFI 生成
   │   │   │   ├── Resources/
   │   │   │   └── Frameworks/
-  │   │   │       └── libaethecore.dylib
+  │   │   │       └── libalephcore.dylib
   │   │   └── Scripts/
   │   │
   │   └── windows/                 # 🪟 Windows 应用
@@ -998,7 +998,7 @@
   │       │       └── NativeMethods.g.cs  # csbindgen 生成
   │       ├── Aleph.csproj
   │       └── libs/
-  │           └── aethecore.dll
+  │           └── alephcore.dll
   │
   ├── shared/                      # 📦 跨平台共享资源
   │   ├── config/
@@ -1046,7 +1046,7 @@
 
   # /core/Cargo.toml
   [package]
-  name = "aethecore"
+  name = "alephcore"
   version.workspace = true
   edition.workspace = true
 
@@ -1136,7 +1136,7 @@
           --out-dir "$ROOT_DIR/platforms/macos/Aleph/Sources/Generated/"
 
       # 复制库文件
-      cp target/release/libaethecore.dylib \
+      cp target/release/libalephcore.dylib \
           "$ROOT_DIR/platforms/macos/Aleph/Frameworks/"
 
       echo "✅ macOS build complete"
@@ -1181,7 +1181,7 @@
       cargo build --release --features cabi
 
       # 复制 DLL
-      Copy-Item "target/release/aethecore.dll" `
+      Copy-Item "target/release/alephcore.dll" `
           -Destination "$WINDOWS_DIR/libs/" -Force
 
       # csbindgen 已在 build.rs 生成 NativeMethods.g.cs
@@ -1234,8 +1234,8 @@
         - run: cargo build --release --features uniffi
         - uses: actions/upload-artifact@v4
           with:
-            name: libaethecore-macos
-            path: target/release/libaethecore.dylib
+            name: libalephcore-macos
+            path: target/release/libalephcore.dylib
 
     build-windows:
       runs-on: windows-latest
@@ -1245,8 +1245,8 @@
         - run: cargo build --release --features cabi
         - uses: actions/upload-artifact@v4
           with:
-            name: aethecore-windows
-            path: target/release/aethecore.dll
+            name: alephcore-windows
+            path: target/release/alephcore.dll
 
   # .github/workflows/macos-app.yml
   name: macOS App

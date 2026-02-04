@@ -68,7 +68,7 @@ $ cd Aleph/core && cargo clean && cargo build --release --timings
 
 ### Binary Size
 ```bash
-$ ls -lh Aleph/Frameworks/libaethecore.dylib
+$ ls -lh Aleph/Frameworks/libalephcore.dylib
 ```
 
 **Result**: ⏳ Skipped (no binary available due to compilation errors)

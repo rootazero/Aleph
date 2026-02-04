@@ -19,8 +19,8 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.5.240227000" />
   </ItemGroup>
 
-  <!-- Copy aethecore.dll to output directory if it exists -->
+  <!-- Copy alephcore.dll to output directory if it exists -->
   <ItemGroup>
-    <None Include="..\Aether\libs\aethecore.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\Aether\libs\aethecore.dll')" />
+    <None Include="..\Aleph\libs\alephcore.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\Aleph\libs\alephcore.dll')" />
   </ItemGroup>
 </Project>

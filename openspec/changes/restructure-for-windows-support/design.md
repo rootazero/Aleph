@@ -37,7 +37,7 @@ aleph/                              # Repository Root
 │   │   │   │   ├── Generated/       # UniFFI bindings (aleph.swift)
 │   │   │   │   └── ...              # All existing Swift code
 │   │   │   ├── Frameworks/
-│   │   │   │   └── libaethecore.dylib
+│   │   │   │   └── libalephcore.dylib
 │   │   │   └── Resources/
 │   │   ├── AlephTests/
 │   │   └── AlephUITests/
@@ -50,7 +50,7 @@ aleph/                              # Repository Root
 │       │   ├── Interop/
 │       │   │   └── NativeMethods.g.cs  # csbindgen output
 │       │   └── libs/
-│       │       └── aethecore.dll
+│       │       └── alephcore.dll
 │       └── Aleph.Tests/
 │
 ├── shared/                          # 📦 Cross-Platform Resources
@@ -224,13 +224,13 @@ on:
 # rust-core.yml produces artifacts
 - uses: actions/upload-artifact@v4
   with:
-    name: libaethecore-${{ matrix.platform }}
-    path: core/target/release/libaethecore.*
+    name: libalephcore-${{ matrix.platform }}
+    path: core/target/release/libalephcore.*
 
 # macos-app.yml consumes artifacts
 - uses: actions/download-artifact@v4
   with:
-    name: libaethecore-macos
+    name: libalephcore-macos
 ```
 
 ## Migration Path Details
@@ -268,11 +268,11 @@ git mv project.yml platforms/macos/project.yml
 ```yaml
 # Before
 - path: Aleph/Sources
-- framework: Aleph/Frameworks/libaethecore.dylib
+- framework: Aleph/Frameworks/libalephcore.dylib
 
 # After
 - path: platforms/macos/Aleph/Sources
-- framework: platforms/macos/Aleph/Frameworks/libaethecore.dylib
+- framework: platforms/macos/Aleph/Frameworks/libalephcore.dylib
 ```
 
 **Build script paths**:

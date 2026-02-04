@@ -386,7 +386,7 @@
 ### Task 9.1: Generate UniFFI Bindings ✅
 - [x] Run `cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/`
 - [x] Verify `aleph.swift` includes new callbacks and enums
-- [x] Copy updated `libaethecore.dylib` to `Frameworks/`
+- [x] Copy updated `libalephcore.dylib` to `Frameworks/`
 
 **Validation**: ✅ Bindings compile in Xcode
 

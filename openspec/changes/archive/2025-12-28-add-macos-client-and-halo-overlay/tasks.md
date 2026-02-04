@@ -6,7 +6,7 @@
 - [x] 1.3 Set up Info.plist with LSUIElement=YES (no Dock icon)
 - [x] 1.4 Create entitlements file for Accessibility permissions
 - [x] 1.5 Add Swift bindings to project (copy from core/bindings/)
-- [x] 1.6 Add libaethecore.dylib to Frameworks folder
+- [x] 1.6 Add libalephcore.dylib to Frameworks folder
 - [x] 1.7 Configure @rpath for dylib loading
 - [x] 1.8 Create build phase script to copy Rust library
 - [x] 1.9 Test project builds without errors
@@ -154,7 +154,7 @@
 
 ## 19. Build Script Integration
 - [x] 19.1 Create Scripts/copy_rust_libs.sh
-- [x] 19.2 Add build phase to copy libaethecore.dylib
+- [x] 19.2 Add build phase to copy libalephcore.dylib
 - [x] 19.3 Copy from core/target/release/ to Frameworks/
 - [x] 19.4 Set dylib install name with install_name_tool (completed in complete-phase2-testing-and-polish)
 - [x] 19.5 Verify dylib is bundled in .app (script handles this automatically)

@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Aether.Services;
+namespace Aleph.Services;
 
 /// <summary>
 /// Keyboard input simulation using Windows SendInput API.

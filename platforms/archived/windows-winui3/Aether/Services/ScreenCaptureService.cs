@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
 
-namespace Aether.Services;
+namespace Aleph.Services;
 
 /// <summary>
 /// Screen capture service for capturing screen content.

@@ -74,7 +74,7 @@ impl GatewayProviderConfig {
         Self {
             anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
-            default_model: std::env::var("AETHER_MODEL")
+            default_model: std::env::var("ALEPH_MODEL")
                 .unwrap_or_else(|_| "anthropic/claude-sonnet-4".to_string()),
         }
     }

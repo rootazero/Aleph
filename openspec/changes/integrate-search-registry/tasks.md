@@ -124,7 +124,7 @@
 - [ ] Run `cargo build --release` to rebuild Rust library
 - [ ] Run `uniffi-bindgen generate` to regenerate Swift bindings
 - [ ] Copy updated `aleph.swift` to Swift source directory
-- [ ] Copy `libaethecore.dylib` to Frameworks directory
+- [ ] Copy `libalephcore.dylib` to Frameworks directory
 
 **Validation**: Swift project compiles with new bindings
 

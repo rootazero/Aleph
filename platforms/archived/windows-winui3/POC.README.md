@@ -1,6 +1,6 @@
-# Aether Windows POC
+# Aleph Windows POC
 
-This directory contains Proof-of-Concept projects to validate key technical decisions for the Windows version of Aether.
+This directory contains Proof-of-Concept projects to validate key technical decisions for the Windows version of Aleph.
 
 ## Prerequisites
 
@@ -54,7 +54,7 @@ This directory contains Proof-of-Concept projects to validate key technical deci
 **Purpose**: Validate Rust to C# FFI callback mechanism.
 
 **Key Requirements**:
-- Load aethecore.dll successfully
+- Load alephcore.dll successfully
 - Register C# callbacks with Rust
 - Callbacks are invoked on correct thread (UI thread)
 - No memory leaks or crashes
@@ -66,7 +66,7 @@ cd ../../core
 cargo build --release --features cabi
 
 # Copy DLL to POC output directory
-cp target/release/aethecore.dll ../platforms/windows/POC.RustFFI/bin/x64/Release/net8.0-windows10.0.22621.0/
+cp target/release/alephcore.dll ../platforms/windows/POC.RustFFI/bin/x64/Release/net8.0-windows10.0.22621.0/
 ```
 
 **Test Steps**:
@@ -89,7 +89,7 @@ cp target/release/aethecore.dll ../platforms/windows/POC.RustFFI/bin/x64/Release
 ```bash
 # Build all POCs
 cd platforms/windows
-dotnet build Aether.POC.sln -c Release
+dotnet build Aleph.POC.sln -c Release
 
 # Run individual POC
 dotnet run --project POC.HaloWindow
@@ -99,7 +99,7 @@ dotnet run --project POC.RustFFI
 
 ### From Visual Studio
 
-1. Open `Aether.POC.sln`
+1. Open `Aleph.POC.sln`
 2. Set startup project to desired POC
 3. Press F5 to run
 

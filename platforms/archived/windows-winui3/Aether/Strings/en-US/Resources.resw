@@ -20,7 +20,7 @@
 
   <!-- App General -->
   <data name="AppName" xml:space="preserve">
-    <value>Aether</value>
+    <value>Aleph</value>
   </data>
   <data name="AppDescription" xml:space="preserve">
     <value>System-level AI middleware</value>
@@ -28,7 +28,7 @@
 
   <!-- x:Uid bindings for Settings Window -->
   <data name="SettingsWindowTitle" xml:space="preserve">
-    <value>Aether Settings</value>
+    <value>Aleph Settings</value>
   </data>
   <data name="NavItem_General.Content" xml:space="preserve">
     <value>General</value>
@@ -156,7 +156,7 @@
     <value>Launch at Windows startup</value>
   </data>
   <data name="Settings_General_LaunchAtStartupDesc" xml:space="preserve">
-    <value>Aether will start automatically when you sign in to Windows.</value>
+    <value>Aleph will start automatically when you sign in to Windows.</value>
   </data>
   <data name="Settings_General_Language" xml:space="preserve">
     <value>Language</value>
@@ -290,7 +290,7 @@
 
   <!-- Conversation Window -->
   <data name="Conversation_Title" xml:space="preserve">
-    <value>Aether Conversation</value>
+    <value>Aleph Conversation</value>
   </data>
   <data name="Conversation_NewConversation" xml:space="preserve">
     <value>New Conversation</value>
@@ -305,7 +305,7 @@
     <value>Streaming...</value>
   </data>
   <data name="Conversation_Typing" xml:space="preserve">
-    <value>Aether is typing...</value>
+    <value>Aleph is typing...</value>
   </data>
   <data name="Conversation_Stop" xml:space="preserve">
     <value>Stop</value>
@@ -323,7 +323,7 @@
     <value>Are you sure you want to clear the conversation history?</value>
   </data>
   <data name="Conversation_Welcome" xml:space="preserve">
-    <value>Welcome to Aether. How can I help you today?</value>
+    <value>Welcome to Aleph. How can I help you today?</value>
   </data>
   <data name="Conversation_Cleared" xml:space="preserve">
     <value>Conversation cleared. How can I help you?</value>
@@ -333,8 +333,8 @@
   <data name="Role_You" xml:space="preserve">
     <value>You</value>
   </data>
-  <data name="Role_Aether" xml:space="preserve">
-    <value>Aether</value>
+  <data name="Role_Aleph" xml:space="preserve">
+    <value>Aleph</value>
   </data>
   <data name="Role_System" xml:space="preserve">
     <value>System</value>
@@ -345,7 +345,7 @@
     <value>MCP Servers</value>
   </data>
   <data name="Settings_MCP_Description" xml:space="preserve">
-    <value>Model Context Protocol servers extend Aether with external tools and capabilities.</value>
+    <value>Model Context Protocol servers extend Aleph with external tools and capabilities.</value>
   </data>
   <data name="Settings_MCP_NoServers" xml:space="preserve">
     <value>No MCP servers configured</value>
@@ -419,7 +419,7 @@
     <value>Installed Skills</value>
   </data>
   <data name="Settings_Skills_Description" xml:space="preserve">
-    <value>Skills extend Aether with specialized capabilities.</value>
+    <value>Skills extend Aleph with specialized capabilities.</value>
   </data>
   <data name="Settings_Skills_NoSkills" xml:space="preserve">
     <value>No skills installed</value>

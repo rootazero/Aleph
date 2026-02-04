@@ -1,14 +1,14 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Aether.ViewModels;
+using Aleph.ViewModels;
 using System.Collections.ObjectModel;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// MCP Settings page - Model Context Protocol server configuration.
@@ -50,7 +50,7 @@ public sealed partial class McpSettingsPage : UserControl
     {
         _servers.Clear();
 
-        // TODO: Load from AetherCore when integrated
+        // TODO: Load from AlephCore when integrated
         // For now, show empty state
         UpdateEmptyState();
     }
@@ -202,7 +202,7 @@ public sealed partial class McpSettingsPage : UserControl
         UpdateEmptyState();
         ServerListView.SelectedItem = newServer;
 
-        // TODO: Save to AetherCore
+        // TODO: Save to AlephCore
         ShowStatus($"Server '{name}' added", InfoBarSeverity.Success);
     }
 
@@ -231,7 +231,7 @@ public sealed partial class McpSettingsPage : UserControl
             if (serverToRemove != null)
             {
                 _servers.Remove(serverToRemove);
-                // TODO: Delete from AetherCore
+                // TODO: Delete from AlephCore
             }
 
             ClearSelection();
@@ -365,7 +365,7 @@ public sealed partial class McpSettingsPage : UserControl
             _servers[index] = _selectedServer.Clone();
         }
 
-        // TODO: Save to AetherCore
+        // TODO: Save to AlephCore
         _originalServer = _selectedServer.Clone();
         _hasUnsavedChanges = false;
         SaveButton.IsEnabled = false;
