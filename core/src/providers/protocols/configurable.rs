@@ -5,7 +5,9 @@
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
-use crate::providers::protocols::{ProtocolDefinition, ProtocolRegistry, TemplateRenderer};
+use crate::providers::protocols::{
+    extract_value, ProtocolDefinition, ProtocolRegistry, TemplateContext, TemplateRenderer,
+};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use reqwest::Client;
@@ -106,11 +108,100 @@ impl ProtocolAdapter for ConfigurableProtocol {
             return Ok(request);
         }
 
-        // Custom mode: not yet implemented
-        if self.definition.custom.is_some() {
-            return Err(AetherError::provider(
-                "Custom protocol mode not yet implemented (Task 5)",
-            ));
+        // Custom mode: use template rendering
+        if let Some(ref custom) = self.definition.custom {
+            debug!(
+                protocol = %self.definition.name,
+                "Building request using custom mode (template rendering)"
+            );
+
+            // Determine base URL
+            let base_url = self
+                .definition
+                .base_url
+                .as_deref()
+                .ok_or_else(|| AetherError::invalid_config("base_url is required for custom protocols"))?;
+
+            // Determine endpoint
+            let endpoint = if is_streaming {
+                custom.endpoints.stream.as_deref().unwrap_or(&custom.endpoints.chat)
+            } else {
+                &custom.endpoints.chat
+            };
+
+            // Build full URL
+            let url = format!("{}{}", base_url, endpoint);
+
+            debug!(
+                url = %url,
+                is_streaming = is_streaming,
+                "Building custom protocol request"
+            );
+
+            // Build template context
+            let context = TemplateContext::new()
+                .with_config(config)
+                .with_input(payload.input)
+                .with_system_prompt(payload.system_prompt.unwrap_or(""))
+                .build();
+
+            // Render request template as JSON
+            let request_body = if custom.request_template.is_string() {
+                // Template is a string, render it
+                let template_str = custom.request_template.as_str().ok_or_else(|| {
+                    AetherError::invalid_config("request_template string conversion failed")
+                })?;
+                self.renderer.render_json(template_str, &context)?
+            } else {
+                // Template is already a JSON object, render it as string first
+                let template_str = serde_json::to_string(&custom.request_template).map_err(|e| {
+                    AetherError::provider(format!("Failed to serialize request_template: {}", e))
+                })?;
+                self.renderer.render_json(&template_str, &context)?
+            };
+
+            debug!(
+                request_body = ?request_body,
+                "Rendered request template"
+            );
+
+            // Start building request
+            let mut request = self.client.post(&url).json(&request_body);
+
+            // Add authentication
+            let api_key = config
+                .api_key
+                .as_ref()
+                .ok_or_else(|| AetherError::invalid_config("API key is required"))?;
+
+            // Parse auth config
+            if custom.auth.auth_type == "header" {
+                // Extract header name and prefix from config
+                let header = custom.auth.config.get("header")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| AetherError::invalid_config("auth.config.header is required for header auth"))?;
+
+                let prefix = custom.auth.config.get("prefix")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let auth_value = format!("{}{}", prefix, api_key);
+
+                debug!(
+                    header = %header,
+                    has_prefix = !prefix.is_empty(),
+                    "Adding custom auth header"
+                );
+
+                request = request.header(header, auth_value);
+            } else {
+                return Err(AetherError::invalid_config(format!(
+                    "Unsupported auth type: {}",
+                    custom.auth.auth_type
+                )));
+            }
+
+            return Ok(request);
         }
 
         // No base protocol and no custom config = invalid
@@ -130,16 +221,53 @@ impl ProtocolAdapter for ConfigurableProtocol {
             return base.parse_response(response).await;
         }
 
-        // Custom mode: not yet implemented
-        if self.definition.custom.is_some() {
-            return Err(AetherError::provider(
-                "Custom protocol mode not yet implemented (Task 5)",
-            ));
-        }
+        // Custom mode: parse using response mapping
+        if let Some(ref custom) = self.definition.custom {
+            debug!(
+                protocol = %self.definition.name,
+                "Parsing response using custom response mapping"
+            );
 
-        Err(AetherError::invalid_config(
-            "Protocol must either extend a base protocol or provide custom configuration",
-        ))
+            // Read response body as JSON
+            let body = response.text().await.map_err(|e| {
+                AetherError::provider(format!("Failed to read response body: {}", e))
+            })?;
+
+            let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+                AetherError::provider(format!(
+                    "Failed to parse response as JSON: {}. Body: {}",
+                    e, body
+                ))
+            })?;
+
+            // Check for error if error path is specified
+            if let Some(ref error_path) = custom.response_mapping.error {
+                if let Ok(error_msg) = extract_value(&json, error_path) {
+                    // If we successfully extracted an error message, return it as an error
+                    if !error_msg.is_empty() && error_msg != "null" {
+                        return Err(AetherError::provider(format!(
+                            "Provider returned error: {}",
+                            error_msg
+                        )));
+                    }
+                }
+                // If error extraction fails, it means no error field exists, which is fine
+            }
+
+            // Extract content using content path
+            let content = extract_value(&json, &custom.response_mapping.content)?;
+
+            debug!(
+                content_len = content.len(),
+                "Successfully parsed custom protocol response"
+            );
+
+            Ok(content)
+        } else {
+            Err(AetherError::invalid_config(
+                "Protocol must either extend a base protocol or provide custom configuration",
+            ))
+        }
     }
 
     async fn parse_stream(
@@ -156,10 +284,10 @@ impl ProtocolAdapter for ConfigurableProtocol {
             return base.parse_stream(response).await;
         }
 
-        // Custom mode: not yet implemented
+        // Custom mode: streaming not yet implemented (complex feature, defer to later)
         if self.definition.custom.is_some() {
             return Err(AetherError::provider(
-                "Custom protocol mode not yet implemented (Task 5)",
+                "Custom protocol streaming not yet implemented (deferred to future enhancement)",
             ));
         }
 
@@ -280,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_mode_not_implemented() {
+    fn test_custom_mode_build_request() {
         use crate::providers::protocols::definition::{
             AuthConfig, CustomProtocol, EndpointConfig, ResponseMapping,
         };
@@ -290,7 +418,7 @@ mod tests {
         let def = ProtocolDefinition {
             name: "custom-proto".to_string(),
             extends: None,
-            base_url: None,
+            base_url: Some("https://api.example.com".to_string()),
             differences: None,
             custom: Some(CustomProtocol {
                 auth: AuthConfig {
@@ -301,9 +429,9 @@ mod tests {
                     chat: "/v1/chat".to_string(),
                     stream: None,
                 },
-                request_template: json!({}),
+                request_template: json!(r#"{"model": "{{config.model}}", "messages": [{"role": "user", "content": "{{input}}"}]}"#),
                 response_mapping: ResponseMapping {
-                    content: "$.data.content".to_string(),
+                    content: "$.choices[0].message.content".to_string(),
                     error: None,
                 },
                 stream_config: None,
@@ -313,15 +441,18 @@ mod tests {
         let client = reqwest::Client::new();
         let proto = ConfigurableProtocol::new(def, client).expect("Should create protocol");
 
-        let config = ProviderConfig::test_config("test-model");
-        let payload = RequestPayload::new("Test");
+        // Verify it doesn't delegate to base protocol
+        assert!(proto.base_protocol.is_none());
 
-        // Custom mode should return "not yet implemented" error
+        let mut config = ProviderConfig::test_config("test-model");
+        config.api_key = Some("test-key-123".to_string());
+        let payload = RequestPayload::new("Hello, AI!");
+
+        // Build request should work now
         let result = proto.build_request(&payload, &config, false);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("not yet implemented"));
+        assert!(result.is_ok(), "Should build custom request successfully");
+
+        // The request was built (we can't easily inspect the body in unit tests,
+        // but we verified it didn't error which means template rendering worked)
     }
 }
