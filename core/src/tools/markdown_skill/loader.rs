@@ -130,6 +130,7 @@ impl SkillLoader {
         }
     }
 
+    #[allow(dead_code)]
     fn is_skill_file(&self, path: &Path) -> bool {
         Self::is_skill_file_static(path)
     }

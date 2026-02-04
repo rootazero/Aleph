@@ -272,6 +272,7 @@ impl ProtocolLoader {
     }
 
     /// Unregister a protocol based on file path
+    #[allow(dead_code)]
     fn unregister_protocol(path: &Path) {
         // Extract protocol name from filename (without extension)
         if let Some(file_stem) = path.file_stem() {

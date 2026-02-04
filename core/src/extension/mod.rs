@@ -459,6 +459,7 @@ impl ExtensionManager {
     /// # Returns
     ///
     /// A vector of `HookConfig` objects ready for registration with the hook executor.
+    #[allow(dead_code)]
     fn convert_v2_hooks(
         &self,
         hooks: &[crate::extension::manifest::HookSection],

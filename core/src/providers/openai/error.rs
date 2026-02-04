@@ -1,6 +1,8 @@
-/// OpenAI error handling
-///
-/// Error parsing and conversion utilities for OpenAI API responses.
+//! OpenAI error handling
+//!
+//! Error parsing and conversion utilities for OpenAI API responses.
+
+#![allow(dead_code)]
 
 use crate::error::AlephError;
 use tracing::error;

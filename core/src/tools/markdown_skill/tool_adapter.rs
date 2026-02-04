@@ -20,6 +20,7 @@ use super::spec::{AlephSkillSpec, SandboxMode};
 pub struct MarkdownCliTool {
     pub spec: AlephSkillSpec,
     /// Whether usage examples have been injected in current session
+    #[allow(dead_code)]
     context_injected: Arc<AtomicBool>,
 }
 

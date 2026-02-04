@@ -275,6 +275,7 @@ pub fn build_skill_tool_description(skills: &[ExtensionSkill]) -> String {
 /// - `Tool` scope: Only included if the bound tool is in the active tools list
 /// - `Standalone` scope: Never auto-injected (user must explicitly invoke)
 /// - `Disabled` scope: Never included
+#[allow(dead_code)]
 pub fn filter_skills_by_scope<'a>(
     skills: &'a [ExtensionSkill],
     active_tools: Option<&[String]>,
@@ -312,6 +313,7 @@ pub fn filter_skills_by_scope<'a>(
 ///
 /// A formatted string describing the available skills, suitable for injection
 /// into the system prompt. Returns an empty string if no skills pass the filter.
+#[allow(dead_code)]
 pub fn build_skill_tool_description_v2(
     skills: &[ExtensionSkill],
     active_tools: Option<&[String]>,

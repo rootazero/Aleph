@@ -19,7 +19,7 @@ use super::handlers::events::{
     SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list,
 };
 use crate::providers::protocols::ProtocolLoader;
-use notify::{RecommendedWatcher, Watcher};
+use notify::RecommendedWatcher;
 use notify_debouncer_full::{Debouncer, FileIdMap};
 
 /// State for an individual WebSocket connection
@@ -106,6 +106,7 @@ pub struct GatewayServer {
     /// Subscription manager for per-connection event filtering
     subscription_manager: Arc<SubscriptionManager>,
     /// Protocol file watcher for hot-reload (None if watching disabled/failed)
+    #[allow(dead_code)]
     protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
 }
 
