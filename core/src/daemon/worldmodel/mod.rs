@@ -179,14 +179,21 @@ impl WorldModel {
                 };
                 state.last_updated = Utc::now();
 
+                // Create derived event
+                let derived_event = DaemonEvent::Derived(DerivedEvent::ActivityChanged {
+                    timestamp,
+                    old_activity,
+                    new_activity: state.activity.clone(),
+                    confidence: 0.95,
+                });
+
+                // Store in cache
+                let mut cache = self.cache.lock().await;
+                cache.recent_events.push(derived_event.clone());
+                drop(cache);
+
                 // Publish DerivedEvent
-                self.event_bus
-                    .send(DaemonEvent::Derived(DerivedEvent::ActivityChanged {
-                        timestamp,
-                        old_activity,
-                        new_activity: state.activity.clone(),
-                        confidence: 0.95,
-                    }))?;
+                self.event_bus.send(derived_event)?;
 
                 // Persist state change
                 self.persistence.save(&state).await?;
@@ -205,14 +212,21 @@ impl WorldModel {
                 state.activity = ActivityType::Idle;
                 state.last_updated = Utc::now();
 
+                // Create derived event
+                let derived_event = DaemonEvent::Derived(DerivedEvent::ActivityChanged {
+                    timestamp,
+                    old_activity,
+                    new_activity: ActivityType::Idle,
+                    confidence: 1.0,
+                });
+
+                // Store in cache
+                let mut cache = self.cache.lock().await;
+                cache.recent_events.push(derived_event.clone());
+                drop(cache);
+
                 // Publish DerivedEvent
-                self.event_bus
-                    .send(DaemonEvent::Derived(DerivedEvent::ActivityChanged {
-                        timestamp,
-                        old_activity,
-                        new_activity: ActivityType::Idle,
-                        confidence: 1.0,
-                    }))?;
+                self.event_bus.send(derived_event)?;
 
                 // Persist state change
                 self.persistence.save(&state).await?;
@@ -295,12 +309,18 @@ impl WorldModel {
                 duration_since_update.num_minutes()
             );
 
-            self.event_bus
-                .send(DaemonEvent::Derived(DerivedEvent::IdleStateChanged {
-                    timestamp: Utc::now(),
-                    is_idle: true,
-                    idle_duration: Some(duration_since_update),
-                }))?;
+            let derived_event = DaemonEvent::Derived(DerivedEvent::IdleStateChanged {
+                timestamp: Utc::now(),
+                is_idle: true,
+                idle_duration: Some(duration_since_update),
+            });
+
+            // Store in cache
+            let mut cache = self.cache.lock().await;
+            cache.recent_events.push(derived_event.clone());
+            drop(cache);
+
+            self.event_bus.send(derived_event)?;
         }
 
         // Rule 5: Resource pressure detection
@@ -320,15 +340,21 @@ impl WorldModel {
                 new_cpu_level
             );
 
-            self.event_bus
-                .send(DaemonEvent::Derived(
-                    DerivedEvent::ResourcePressureChanged {
-                        timestamp: Utc::now(),
-                        pressure_type: PressureType::Cpu,
-                        old_level: old_cpu_level,
-                        new_level: new_cpu_level,
-                    },
-                ))?;
+            let derived_event = DaemonEvent::Derived(
+                DerivedEvent::ResourcePressureChanged {
+                    timestamp: Utc::now(),
+                    pressure_type: PressureType::Cpu,
+                    old_level: old_cpu_level,
+                    new_level: new_cpu_level,
+                },
+            );
+
+            // Store in cache
+            let mut cache = self.cache.lock().await;
+            cache.recent_events.push(derived_event.clone());
+            drop(cache);
+
+            self.event_bus.send(derived_event)?;
         }
 
         if let Some(battery) = context.system_constraint.battery_level {
@@ -341,15 +367,21 @@ impl WorldModel {
                     new_battery_level
                 );
 
-                self.event_bus
-                    .send(DaemonEvent::Derived(
-                        DerivedEvent::ResourcePressureChanged {
-                            timestamp: Utc::now(),
-                            pressure_type: PressureType::Battery,
-                            old_level: old_battery_level,
-                            new_level: new_battery_level,
-                        },
-                    ))?;
+                let derived_event = DaemonEvent::Derived(
+                    DerivedEvent::ResourcePressureChanged {
+                        timestamp: Utc::now(),
+                        pressure_type: PressureType::Battery,
+                        old_level: old_battery_level,
+                        new_level: new_battery_level,
+                    },
+                );
+
+                // Store in cache
+                let mut cache = self.cache.lock().await;
+                cache.recent_events.push(derived_event.clone());
+                drop(cache);
+
+                self.event_bus.send(derived_event)?;
             }
         }
 
@@ -507,6 +539,67 @@ impl WorldModel {
         }
 
         Ok(updated)
+    }
+
+    /// Query derived events within a time window
+    ///
+    /// For MVP, returns events from InferenceCache's recent_events buffer.
+    /// Phase 5.2 will add persistent event log.
+    ///
+    /// # Arguments
+    /// * `since` - Start of time window
+    /// * `until` - End of time window
+    ///
+    /// # Returns
+    /// Vector of DerivedEvents within the time window
+    pub async fn query_derived_events(
+        &self,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Vec<crate::daemon::events::DerivedEvent> {
+        use crate::daemon::events::DerivedEvent;
+
+        let cache = self.cache.lock().await;
+
+        // Filter events from circular buffer
+        cache.recent_events
+            .iter()
+            .filter_map(|e| {
+                // Extract DerivedEvent from DaemonEvent::Derived variant
+                if let DaemonEvent::Derived(derived) = e {
+                    let ts = Self::event_timestamp(derived);
+                    if ts >= since && ts <= until {
+                        Some(derived.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Extract timestamp from a DerivedEvent
+    fn event_timestamp(event: &crate::daemon::events::DerivedEvent) -> DateTime<Utc> {
+        use crate::daemon::events::DerivedEvent;
+
+        match event {
+            DerivedEvent::ActivityChanged { timestamp, .. } => *timestamp,
+            DerivedEvent::ProgrammingSessionStarted { timestamp, .. } => *timestamp,
+            DerivedEvent::ProgrammingSessionEnded { timestamp, .. } => *timestamp,
+            DerivedEvent::ResourcePressureChanged { timestamp, .. } => *timestamp,
+            DerivedEvent::MeetingStateChanged { timestamp, .. } => *timestamp,
+            DerivedEvent::IdleStateChanged { timestamp, .. } => *timestamp,
+            DerivedEvent::Aggregated { timestamp, .. } => *timestamp,
+        }
+    }
+
+    /// Add event to cache (for testing purposes)
+    #[cfg(test)]
+    pub async fn add_event_to_cache(&self, event: DaemonEvent) {
+        let mut cache = self.cache.lock().await;
+        cache.recent_events.push(event);
     }
 }
 
