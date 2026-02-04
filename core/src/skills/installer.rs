@@ -366,14 +366,14 @@ impl SkillsInstaller {
 
         req.install
             .iter()
-            .find(|cmd| match (&cmd.manager, os) {
-                (PackageManager::Brew, "macos") => true,
-                (PackageManager::Apt, "linux") => true,
-                (PackageManager::Winget, "windows") => true,
-                (PackageManager::Cargo, _) => true,
-                (PackageManager::Pip, _) => true,
-                _ => false,
-            })
+            .find(|cmd| matches!(
+                (&cmd.manager, os),
+                (PackageManager::Brew, "macos")
+                    | (PackageManager::Apt, "linux")
+                    | (PackageManager::Winget, "windows")
+                    | (PackageManager::Cargo, _)
+                    | (PackageManager::Pip, _)
+            ))
             .and_then(Self::format_install_command)
     }
 

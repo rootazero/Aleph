@@ -71,7 +71,7 @@ pub struct SessionListRow {
 }
 
 /// Send message status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SendStatus {
     /// Message sent and reply received
@@ -83,11 +83,12 @@ pub enum SendStatus {
     /// Permission denied
     Forbidden,
     /// Error occurred
+    #[default]
     Error,
 }
 
 /// Spawn status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SpawnStatus {
     /// Spawn accepted
@@ -95,6 +96,7 @@ pub enum SpawnStatus {
     /// Permission denied
     Forbidden,
     /// Error occurred
+    #[default]
     Error,
 }
 

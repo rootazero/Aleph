@@ -69,12 +69,12 @@ pub trait ResilientTask: Send + Sync {
         }
 
         // Check error type
-        match error {
-            crate::error::AetherError::NetworkError { .. } => true,
-            crate::error::AetherError::RateLimitError { .. } => true,
-            crate::error::AetherError::ProviderError { .. } => true,
-            _ => false,
-        }
+        matches!(
+            error,
+            crate::error::AetherError::NetworkError { .. }
+                | crate::error::AetherError::RateLimitError { .. }
+                | crate::error::AetherError::ProviderError { .. }
+        )
     }
 
     /// Called before each execution attempt.
