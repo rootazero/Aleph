@@ -8,8 +8,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::config::ProviderConfig;
-use crate::providers::claude::ClaudeProvider;
-use crate::providers::AiProvider;
+use crate::providers::{create_provider, AiProvider};
 use crate::thinker::SingleProviderRegistry;
 
 /// Error type for provider factory
@@ -83,10 +82,10 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         system_prompt_mode: None,
     };
 
-    let provider = ClaudeProvider::new("claude".to_string(), config)
+    let provider = create_provider("claude", config)
         .map_err(|e| ProviderFactoryError::ProviderCreationFailed(e.to_string()))?;
 
-    Ok(Arc::new(provider))
+    Ok(provider)
 }
 
 /// Create a SingleProviderRegistry from environment
