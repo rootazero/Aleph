@@ -7,9 +7,11 @@ pub mod anthropic;
 pub mod gemini;
 pub mod definition;
 pub mod registry;
+pub mod configurable;
 
 pub use openai::OpenAiProtocol;
 pub use anthropic::AnthropicProtocol;
 pub use gemini::GeminiProtocol;
 pub use definition::ProtocolDefinition;
 pub use registry::{ProtocolRegistry, PROTOCOL_REGISTRY};
+pub use configurable::ConfigurableProtocol;
