@@ -4,7 +4,11 @@
 ///
 /// # Architecture
 ///
-/// Providers are organized by **protocol** (not vendor):
+/// Providers are organized by **protocol** (not vendor), using a registry-based system:
+///
+/// - **ProtocolRegistry**: Central registry for all protocol adapters
+///   - Built-in protocols: OpenAI, Anthropic, Gemini
+///   - Dynamic protocols: Loaded from YAML configurations at runtime
 ///
 /// - **OpenAI Protocol**: Handled by `HttpProvider` + `OpenAiProtocol` adapter
 ///   - Supports: OpenAI, DeepSeek, Moonshot, Doubao, T8Star, and any OpenAI-compatible API
@@ -25,7 +29,7 @@
 ///
 /// To add a new provider that uses an existing protocol:
 /// 1. Add a preset to `presets.rs` with base_url, protocol, and color
-/// 2. That's it! The factory will automatically route to `HttpProvider`
+/// 2. That's it! The factory will automatically route to `HttpProvider` via the registry
 ///
 /// # Example
 ///
@@ -122,6 +126,13 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 /// - `"gemini"` - Google Gemini API (native)
 /// - `"ollama"` - Local Ollama models (native)
 pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn AiProvider>> {
+    // Initialize protocol registry if not already done
+    use crate::providers::protocols::ProtocolRegistry;
+    let registry = ProtocolRegistry::global();
+    if registry.list_protocols().is_empty() {
+        registry.register_builtin();
+    }
+
     let name_lower = name.to_lowercase();
 
     // 1. Apply preset configuration if available
@@ -140,65 +151,33 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
         }
     }
 
-    // 2. Determine protocol
-    let protocol = config.protocol();
+    // 2. Determine protocol name
+    let protocol_name = config.protocol();
 
-    // 3. Route based on protocol
-    match protocol.as_str() {
-        "openai" => {
-            // Use new HttpProvider + OpenAiProtocol
-            use std::time::Duration;
-
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(config.timeout_seconds))
-                .build()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
-
-            let adapter = Arc::new(protocols::OpenAiProtocol::new(client));
-            let provider = HttpProvider::new(name.to_string(), config, adapter)?;
-            Ok(Arc::new(provider))
-        }
-
-        "claude" | "anthropic" => {
-            // Use HttpProvider + AnthropicProtocol
-            use std::time::Duration;
-
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(config.timeout_seconds))
-                .build()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
-
-            let adapter = Arc::new(protocols::AnthropicProtocol::new(client));
-            let provider = HttpProvider::new(name.to_string(), config, adapter)?;
-            Ok(Arc::new(provider))
-        }
-        "gemini" => {
-            // Use HttpProvider + GeminiProtocol
-            use std::time::Duration;
-
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(config.timeout_seconds))
-                .build()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
-
-            let adapter = Arc::new(protocols::GeminiProtocol::new(client));
-            let provider = HttpProvider::new(name.to_string(), config, adapter)?;
-            Ok(Arc::new(provider))
-        }
-        "ollama" => {
-            let provider = OllamaProvider::new(name.to_string(), config)?;
-            Ok(Arc::new(provider))
-        }
-        "mock" => {
-            let provider = MockProvider::new("Mock response".to_string());
-            Ok(Arc::new(provider))
-        }
-
-        unknown => Err(AetherError::invalid_config(format!(
-            "Unknown protocol: '{}'. Supported: openai, claude, anthropic, gemini, ollama, mock.",
-            unknown
-        ))),
+    // 3. Special case: Ollama still uses native implementation
+    if protocol_name == "ollama" {
+        return Ok(Arc::new(OllamaProvider::new(name.to_string(), config)?));
     }
+
+    // Special case: Mock provider for testing
+    if protocol_name == "mock" {
+        return Ok(Arc::new(MockProvider::new("Mock response".to_string())));
+    }
+
+    // 4. Get protocol adapter from registry
+    let adapter = registry
+        .get(&protocol_name)
+        .ok_or_else(|| {
+            AetherError::invalid_config(format!(
+                "Unknown protocol: '{}'. Available: {:?}",
+                protocol_name,
+                registry.list_protocols()
+            ))
+        })?;
+
+    // 5. Use HttpProvider with dynamic protocol
+    let provider = HttpProvider::new(name.to_string(), config, adapter)?;
+    Ok(Arc::new(provider))
 }
 
 /// Unified interface for AI providers
