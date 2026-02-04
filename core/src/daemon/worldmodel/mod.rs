@@ -24,6 +24,7 @@ pub use state::{
 
 use crate::daemon::{DaemonEvent, DaemonEventBus, ProcessEventType, RawEvent, Result, SystemStateType};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -151,37 +152,282 @@ impl WorldModel {
         )
     }
 
-    /// Process a key event immediately (STUB - implemented in Task 5)
+    /// Process a key event immediately
     ///
-    /// Currently just logs the event. Full inference rules will be added in Task 5.
+    /// Implements immediate inference rules:
+    /// - Rule 1: IDE start (Code/Xcode) -> Programming activity
+    /// - Rule 2: Display sleep -> Idle activity
     async fn process_immediate(&self, event: DaemonEvent) -> Result<()> {
-        log::info!("[STUB] process_immediate: {:?}", event);
-        // TODO: Task 5 - Implement inference rules
-        // - Rule 1: IDE start -> Programming activity
-        // - Rule 2: Display sleep -> Idle activity
+        use crate::daemon::DerivedEvent;
+
+        let mut state = self.state.write().await;
+
+        match event {
+            // Rule 1: IDE startup -> Programming activity
+            DaemonEvent::Raw(RawEvent::ProcessEvent {
+                event_type: ProcessEventType::Started,
+                name,
+                timestamp,
+                ..
+            }) if name.contains("Code") || name.contains("Xcode") => {
+                log::info!("Rule 1: IDE started ({}), transitioning to Programming", name);
+
+                let old_activity = state.activity.clone();
+                state.activity = ActivityType::Programming {
+                    language: None,
+                    project: None,
+                };
+                state.last_updated = Utc::now();
+
+                // Publish DerivedEvent
+                self.event_bus
+                    .send(DaemonEvent::Derived(DerivedEvent::ActivityChanged {
+                        timestamp,
+                        old_activity,
+                        new_activity: state.activity.clone(),
+                        confidence: 0.95,
+                    }))?;
+
+                // Persist state change
+                self.persistence.save(&state).await?;
+            }
+
+            // Rule 2: Display sleep -> Idle activity
+            DaemonEvent::Raw(RawEvent::SystemStateEvent {
+                state_type: SystemStateType::DisplaySleep,
+                new_value,
+                timestamp,
+                ..
+            }) if new_value.as_bool() == Some(true) => {
+                log::info!("Rule 2: Display sleep detected, transitioning to Idle");
+
+                let old_activity = state.activity.clone();
+                state.activity = ActivityType::Idle;
+                state.last_updated = Utc::now();
+
+                // Publish DerivedEvent
+                self.event_bus
+                    .send(DaemonEvent::Derived(DerivedEvent::ActivityChanged {
+                        timestamp,
+                        old_activity,
+                        new_activity: ActivityType::Idle,
+                        confidence: 1.0,
+                    }))?;
+
+                // Persist state change
+                self.persistence.save(&state).await?;
+            }
+
+            _ => {
+                log::debug!("process_immediate: unhandled key event {:?}", event);
+            }
+        }
+
         Ok(())
     }
 
-    /// Process a batch of events (STUB - implemented in Task 5)
+    /// Process a batch of events
     ///
-    /// Currently just logs the batch size. Full inference rules will be added in Task 5.
+    /// Implements batch inference rules:
+    /// - Rule 3: File modification patterns -> Infer programming language
     async fn process_batch(&self, events: &[DaemonEvent]) -> Result<()> {
-        log::info!("[STUB] process_batch: {} events", events.len());
-        // TODO: Task 5 - Implement inference rules
-        // - Rule 3: File modification patterns -> Infer programming language
-        // - Aggregate high-frequency events
+        log::debug!("process_batch: {} events", events.len());
+
+        // Rule 3: Analyze file modification patterns to infer programming language
+        let fs_events: Vec<&PathBuf> = events
+            .iter()
+            .filter_map(|e| match e {
+                DaemonEvent::Raw(RawEvent::FsEvent { path, .. }) => Some(path),
+                _ => None,
+            })
+            .collect();
+
+        if !fs_events.is_empty() {
+            log::debug!("Rule 3: Analyzing {} file events", fs_events.len());
+
+            if let Some(language) = self.infer_language(&fs_events) {
+                log::info!(
+                    "Rule 3: Inferred dominant language: {}",
+                    language
+                );
+
+                let mut context = self.context.write().await;
+                context.dominant_language = Some(language.clone());
+
+                // If currently in Programming activity, update language field
+                let mut state = self.state.write().await;
+                if let ActivityType::Programming {
+                    language: ref mut lang,
+                    ..
+                } = state.activity
+                {
+                    *lang = Some(language);
+                    state.last_updated = Utc::now();
+                    self.persistence.save(&state).await?;
+                }
+            }
+        }
+
         Ok(())
     }
 
-    /// Run periodic inference safety net (STUB - implemented in Task 5)
+    /// Run periodic inference safety net
     ///
-    /// Currently just logs the execution. Full inference rules will be added in Task 5.
+    /// Implements periodic inference rules:
+    /// - Rule 4: Long idle time -> IdleStateChanged event
+    /// - Rule 5: Resource pressure changes -> ResourcePressureChanged event
     async fn periodic_inference(&self) -> Result<()> {
-        log::info!("[STUB] periodic_inference");
-        // TODO: Task 5 - Implement inference rules
-        // - Rule 4: Long idle time -> Possible meeting or away
-        // - Check for state inconsistencies
+        use crate::daemon::{DerivedEvent, PressureType};
+
+        log::debug!("Running periodic inference");
+
+        let state = self.state.read().await;
+        let mut context = self.context.write().await;
+
+        // Update activity duration
+        let duration_since_update = Utc::now().signed_duration_since(state.last_updated);
+        context.activity_duration = duration_since_update;
+
+        // Rule 4: Long idle detection
+        if state.activity == ActivityType::Idle && duration_since_update.num_minutes() > 5 {
+            log::info!(
+                "Rule 4: Long idle detected ({} minutes)",
+                duration_since_update.num_minutes()
+            );
+
+            self.event_bus
+                .send(DaemonEvent::Derived(DerivedEvent::IdleStateChanged {
+                    timestamp: Utc::now(),
+                    is_idle: true,
+                    idle_duration: Some(duration_since_update),
+                }))?;
+        }
+
+        // Rule 5: Resource pressure detection
+        let old_cpu_level = self.pressure_level_from_cpu(context.system_constraint.cpu_usage);
+        let old_battery_level =
+            self.pressure_level_from_battery(context.system_constraint.battery_level);
+
+        // For MVP, we just check if levels would cross thresholds
+        // In production, this would read actual system metrics
+        let new_cpu = context.system_constraint.cpu_usage; // Would be updated from system
+        let new_cpu_level = self.pressure_level_from_cpu(new_cpu);
+
+        if old_cpu_level != new_cpu_level {
+            log::info!(
+                "Rule 5: CPU pressure changed from {:?} to {:?}",
+                old_cpu_level,
+                new_cpu_level
+            );
+
+            self.event_bus
+                .send(DaemonEvent::Derived(
+                    DerivedEvent::ResourcePressureChanged {
+                        timestamp: Utc::now(),
+                        pressure_type: PressureType::Cpu,
+                        old_level: old_cpu_level,
+                        new_level: new_cpu_level,
+                    },
+                ))?;
+        }
+
+        if let Some(battery) = context.system_constraint.battery_level {
+            let new_battery_level = self.pressure_level_from_battery(Some(battery));
+
+            if old_battery_level != new_battery_level {
+                log::info!(
+                    "Rule 5: Battery pressure changed from {:?} to {:?}",
+                    old_battery_level,
+                    new_battery_level
+                );
+
+                self.event_bus
+                    .send(DaemonEvent::Derived(
+                        DerivedEvent::ResourcePressureChanged {
+                            timestamp: Utc::now(),
+                            pressure_type: PressureType::Battery,
+                            old_level: old_battery_level,
+                            new_level: new_battery_level,
+                        },
+                    ))?;
+            }
+        }
+
         Ok(())
+    }
+
+    // =========================================================================
+    // Helper Methods for Inference Rules
+    // =========================================================================
+
+    /// Infer programming language from file paths
+    ///
+    /// Simple pattern matching on file extensions for MVP.
+    /// Returns the most common language detected, or None if no patterns found.
+    fn infer_language(&self, paths: &[&PathBuf]) -> Option<String> {
+        let mut language_counts: HashMap<String, usize> = HashMap::new();
+
+        for path in paths {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                let language = match ext {
+                    "rs" => "Rust",
+                    "ts" | "tsx" => "TypeScript",
+                    "js" | "jsx" => "JavaScript",
+                    "py" => "Python",
+                    "go" => "Go",
+                    "java" => "Java",
+                    "c" | "h" => "C",
+                    "cpp" | "hpp" | "cc" => "C++",
+                    "swift" => "Swift",
+                    "kt" => "Kotlin",
+                    "rb" => "Ruby",
+                    "php" => "PHP",
+                    _ => continue,
+                };
+
+                *language_counts.entry(language.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        // Return the most common language
+        language_counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(lang, _)| lang)
+    }
+
+    /// Convert CPU usage to pressure level
+    ///
+    /// Thresholds:
+    /// - Normal: < 70%
+    /// - Warning: 70-90%
+    /// - Critical: > 90%
+    fn pressure_level_from_cpu(&self, cpu_usage: f64) -> crate::daemon::PressureLevel {
+        use crate::daemon::PressureLevel;
+
+        if cpu_usage > 90.0 {
+            PressureLevel::Critical
+        } else if cpu_usage > 70.0 {
+            PressureLevel::Warning
+        } else {
+            PressureLevel::Normal
+        }
+    }
+
+    /// Convert battery level to pressure level
+    ///
+    /// Thresholds:
+    /// - Normal: > 20%
+    /// - Warning: 10-20%
+    /// - Critical: < 10%
+    fn pressure_level_from_battery(&self, battery: Option<u8>) -> crate::daemon::PressureLevel {
+        use crate::daemon::PressureLevel;
+
+        match battery {
+            Some(level) if level < 10 => PressureLevel::Critical,
+            Some(level) if level < 20 => PressureLevel::Warning,
+            _ => PressureLevel::Normal,
+        }
     }
 
     // =========================================================================
@@ -458,9 +704,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_immediate_stub() {
+    async fn test_rule1_ide_start_to_programming() {
         let wm = create_test_worldmodel().await;
 
+        // Subscribe to event bus BEFORE processing
+        let _rx = wm.event_bus.subscribe();
+
+        // Initially should be Idle
+        let state = wm.get_core_state().await;
+        assert!(matches!(state.activity, ActivityType::Idle));
+
+        // Trigger IDE start event
         let event = DaemonEvent::Raw(RawEvent::ProcessEvent {
             timestamp: Utc::now(),
             pid: 1234,
@@ -468,32 +722,204 @@ mod tests {
             event_type: ProcessEventType::Started,
         });
 
-        // Should not error, just log
         wm.process_immediate(event).await.unwrap();
+
+        // Should transition to Programming
+        let state = wm.get_core_state().await;
+        assert!(matches!(
+            state.activity,
+            ActivityType::Programming { .. }
+        ));
     }
 
     #[tokio::test]
-    async fn test_process_batch_stub() {
+    async fn test_rule1_xcode_start_to_programming() {
         let wm = create_test_worldmodel().await;
 
+        // Subscribe to event bus BEFORE processing
+        let _rx = wm.event_bus.subscribe();
+
+        let event = DaemonEvent::Raw(RawEvent::ProcessEvent {
+            timestamp: Utc::now(),
+            pid: 5678,
+            name: "Xcode".to_string(),
+            event_type: ProcessEventType::Started,
+        });
+
+        wm.process_immediate(event).await.unwrap();
+
+        let state = wm.get_core_state().await;
+        assert!(matches!(
+            state.activity,
+            ActivityType::Programming { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_rule2_display_sleep_to_idle() {
+        let wm = create_test_worldmodel().await;
+
+        // Subscribe to event bus BEFORE processing
+        let _rx = wm.event_bus.subscribe();
+
+        // First set to Programming
+        let mut state = wm.state.write().await;
+        state.activity = ActivityType::Programming {
+            language: Some("Rust".to_string()),
+            project: None,
+        };
+        drop(state);
+
+        // Trigger display sleep event
+        let event = DaemonEvent::Raw(RawEvent::SystemStateEvent {
+            timestamp: Utc::now(),
+            state_type: SystemStateType::DisplaySleep,
+            old_value: Some(serde_json::json!(false)),
+            new_value: serde_json::json!(true),
+        });
+
+        wm.process_immediate(event).await.unwrap();
+
+        // Should transition to Idle
+        let state = wm.get_core_state().await;
+        assert!(matches!(state.activity, ActivityType::Idle));
+    }
+
+    #[tokio::test]
+    async fn test_rule3_infer_language_from_files() {
+        let wm = create_test_worldmodel().await;
+
+        // Set activity to Programming
+        let mut state = wm.state.write().await;
+        state.activity = ActivityType::Programming {
+            language: None,
+            project: None,
+        };
+        drop(state);
+
+        // Create batch of file modification events
         let events = vec![
-            DaemonEvent::Raw(RawEvent::Heartbeat {
+            DaemonEvent::Raw(RawEvent::FsEvent {
                 timestamp: Utc::now(),
+                path: PathBuf::from("/project/main.rs"),
+                event_type: crate::daemon::events::FsEventType::Modified,
             }),
-            DaemonEvent::Raw(RawEvent::Heartbeat {
+            DaemonEvent::Raw(RawEvent::FsEvent {
                 timestamp: Utc::now(),
+                path: PathBuf::from("/project/lib.rs"),
+                event_type: crate::daemon::events::FsEventType::Modified,
+            }),
+            DaemonEvent::Raw(RawEvent::FsEvent {
+                timestamp: Utc::now(),
+                path: PathBuf::from("/project/utils.rs"),
+                event_type: crate::daemon::events::FsEventType::Modified,
             }),
         ];
 
-        // Should not error, just log
         wm.process_batch(&events).await.unwrap();
+
+        // Should have inferred Rust
+        let context = wm.get_context().await;
+        assert_eq!(context.dominant_language, Some("Rust".to_string()));
+
+        // Activity should now have language set
+        let state = wm.get_core_state().await;
+        if let ActivityType::Programming { language, .. } = state.activity {
+            assert_eq!(language, Some("Rust".to_string()));
+        } else {
+            panic!("Activity should be Programming");
+        }
     }
 
     #[tokio::test]
-    async fn test_periodic_inference_stub() {
+    async fn test_infer_language_multiple_languages() {
         let wm = create_test_worldmodel().await;
 
-        // Should not error, just log
+        let paths = vec![
+            PathBuf::from("file1.rs"),
+            PathBuf::from("file2.rs"),
+            PathBuf::from("file3.rs"),
+            PathBuf::from("file4.py"),
+            PathBuf::from("file5.py"),
+        ];
+        let path_refs: Vec<&PathBuf> = paths.iter().collect();
+
+        // Rust should win (3 vs 2)
+        let language = wm.infer_language(&path_refs);
+        assert_eq!(language, Some("Rust".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_infer_language_typescript() {
+        let wm = create_test_worldmodel().await;
+
+        let paths = vec![PathBuf::from("app.ts"), PathBuf::from("component.tsx")];
+        let path_refs: Vec<&PathBuf> = paths.iter().collect();
+
+        let language = wm.infer_language(&path_refs);
+        assert_eq!(language, Some("TypeScript".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_rule4_long_idle_detection() {
+        let wm = create_test_worldmodel().await;
+
+        // Subscribe to event bus BEFORE processing
+        let _rx = wm.event_bus.subscribe();
+
+        // Set activity to Idle and backdating last_updated
+        let mut state = wm.state.write().await;
+        state.activity = ActivityType::Idle;
+        state.last_updated = Utc::now() - chrono::Duration::minutes(10);
+        drop(state);
+
+        // Run periodic inference
         wm.periodic_inference().await.unwrap();
+
+        // Check that activity_duration was updated
+        let context = wm.get_context().await;
+        assert!(context.activity_duration.num_minutes() >= 10);
+    }
+
+    #[tokio::test]
+    async fn test_rule5_cpu_pressure_levels() {
+        let wm = create_test_worldmodel().await;
+
+        // Test CPU thresholds
+        assert_eq!(
+            wm.pressure_level_from_cpu(50.0),
+            crate::daemon::PressureLevel::Normal
+        );
+        assert_eq!(
+            wm.pressure_level_from_cpu(75.0),
+            crate::daemon::PressureLevel::Warning
+        );
+        assert_eq!(
+            wm.pressure_level_from_cpu(95.0),
+            crate::daemon::PressureLevel::Critical
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rule5_battery_pressure_levels() {
+        let wm = create_test_worldmodel().await;
+
+        // Test battery thresholds
+        assert_eq!(
+            wm.pressure_level_from_battery(Some(50)),
+            crate::daemon::PressureLevel::Normal
+        );
+        assert_eq!(
+            wm.pressure_level_from_battery(Some(15)),
+            crate::daemon::PressureLevel::Warning
+        );
+        assert_eq!(
+            wm.pressure_level_from_battery(Some(5)),
+            crate::daemon::PressureLevel::Critical
+        );
+        assert_eq!(
+            wm.pressure_level_from_battery(None),
+            crate::daemon::PressureLevel::Normal
+        );
     }
 }

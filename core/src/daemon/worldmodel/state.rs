@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 // Import types from dispatcher module (implemented in Task 2)
-use crate::daemon::dispatcher::policy::{ActionType, NotificationPriority, RiskLevel};
+use crate::daemon::dispatcher::policy::{ActionType, RiskLevel};
+#[cfg(test)]
+use crate::daemon::dispatcher::policy::NotificationPriority;
 
 // =============================================================================
 // Layer 1: CoreState (KB-level, must be persisted)
