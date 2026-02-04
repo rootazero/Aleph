@@ -10,12 +10,12 @@ use super::types::AlephConfig;
 use crate::extension::ExtensionError;
 
 /// Config file priority order (TOML preferred over JSONC).
-const CONFIG_FILES: &[&str] = &["aether.toml", "aleph.jsonc", "aleph.json"];
+const CONFIG_FILES: &[&str] = &["aleph.toml", "aleph.jsonc", "aleph.json"];
 
 /// Find the config file in a directory.
 ///
 /// Returns the path to the first existing config file found,
-/// in priority order: `aether.toml` > `aleph.jsonc` > `aleph.json`.
+/// in priority order: `aleph.toml` > `aleph.jsonc` > `aleph.json`.
 ///
 /// # Arguments
 ///
@@ -221,12 +221,12 @@ mod tests {
         let dir = temp_dir.path();
 
         // Create both files
-        std::fs::write(dir.join("aether.toml"), "").unwrap();
+        std::fs::write(dir.join("aleph.toml"), "").unwrap();
         std::fs::write(dir.join("aleph.jsonc"), "").unwrap();
 
         let found = find_config_file(dir);
         assert!(found.is_some());
-        assert!(found.unwrap().ends_with("aether.toml"));
+        assert!(found.unwrap().ends_with("aleph.toml"));
     }
 
     #[test]
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn test_load_toml_config() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("aether.toml");
+        let path = temp_dir.path().join("aleph.toml");
 
         let toml_content = r#"
 model = "anthropic/claude-4"

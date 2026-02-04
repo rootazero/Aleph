@@ -27,7 +27,7 @@ pub fn register_shortcuts<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
                 });
             }
         })
-        .map_err(|e| crate::error::AetherError::Unknown(e.to_string()))?;
+        .map_err(|e| crate::error::AlephError::Unknown(e.to_string()))?;
 
     tracing::info!("Global shortcuts registered successfully");
     tracing::info!("  - Ctrl+Alt+/: Show Halo");
@@ -41,7 +41,7 @@ pub fn unregister_shortcuts<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     let manager = app.global_shortcut();
     manager
         .unregister_all()
-        .map_err(|e| crate::error::AetherError::Unknown(e.to_string()))?;
+        .map_err(|e| crate::error::AlephError::Unknown(e.to_string()))?;
 
     tracing::info!("Global shortcuts unregistered");
     Ok(())

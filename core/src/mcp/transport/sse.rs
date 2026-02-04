@@ -68,7 +68,7 @@ impl Default for SseTransportConfig {
 /// # Example
 ///
 /// ```ignore
-/// use aether_core::mcp::transport::{SseTransport, SseTransportConfig};
+/// use alephcore::mcp::transport::{SseTransport, SseTransportConfig};
 ///
 /// let config = SseTransportConfig {
 ///     url: "https://api.example.com/mcp".to_string(),

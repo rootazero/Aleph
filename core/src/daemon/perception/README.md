@@ -104,7 +104,7 @@ Control events:
 ## Usage
 
 ```rust
-use aethecore::daemon::{
+use alephcore::daemon::{
     DaemonEventBus, PerceptionConfig, WatcherRegistry,
     perception::watchers::*,
 };
@@ -143,7 +143,7 @@ cargo test --lib daemon::tests::perception_integration
 
 Manual daemon test:
 ```bash
-cargo run -p aethecore -- daemon run
+cargo run -p alephcore -- daemon run
 ```
 
 ## Performance

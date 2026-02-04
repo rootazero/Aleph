@@ -57,8 +57,8 @@ jobs:
         working-directory: core
       - uses: actions/upload-artifact@v4
         with:
-          name: libaethecore-macos
-          path: core/target/release/libaethecore.dylib
+          name: libalephcore-macos
+          path: core/target/release/libalephcore.dylib
 
   build-windows:
     name: Build Windows
@@ -74,5 +74,5 @@ jobs:
         working-directory: core
       - uses: actions/upload-artifact@v4
         with:
-          name: aethecore-windows
-          path: core/target/release/aethecore.dll
+          name: alephcore-windows
+          path: core/target/release/alephcore.dll

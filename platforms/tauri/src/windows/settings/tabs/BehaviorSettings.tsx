@@ -79,7 +79,7 @@ export function BehaviorSettings() {
         <p className="text-caption text-muted-foreground">
           {t(
             'settings.behavior.description',
-            'Control how Aether responds and interacts'
+            'Control how Aleph responds and interacts'
           )}
         </p>
       </div>

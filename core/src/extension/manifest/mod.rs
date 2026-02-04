@@ -10,8 +10,8 @@
 //! # Auto-Detection
 //!
 //! The `parse_manifest_from_dir()` function automatically detects the manifest format:
-//! - If `aether.plugin.toml` exists, parse it as V2 TOML manifest (preferred)
-//! - Otherwise, if `aether.plugin.json` exists, parse it as V1 JSON manifest
+//! - If `aleph.plugin.toml` exists, parse it as V2 TOML manifest (preferred)
+//! - Otherwise, if `aleph.plugin.json` exists, parse it as V1 JSON manifest
 //! - Otherwise, if `package.json` exists with "aleph" field, parse it as Node.js plugin
 //! - Otherwise, if `.claude-plugin/plugin.json` exists, parse it as legacy Claude plugin
 //!
@@ -472,7 +472,7 @@ Body content."#;
 
     #[test]
     fn test_sanitize_plugin_id() {
-        // Tests the consolidated sanitize_plugin_id from aether_plugin.rs
+        // Tests the consolidated sanitize_plugin_id from aleph_plugin.rs
         assert_eq!(sanitize_plugin_id("My Plugin"), "my-plugin");
         assert_eq!(sanitize_plugin_id("my_plugin"), "my-plugin");
         assert_eq!(sanitize_plugin_id("my--plugin"), "my-plugin");
@@ -551,7 +551,7 @@ Body content."#;
 
         let manifest = parse_manifest_from_dir_sync(temp_dir.path()).unwrap();
 
-        // Should prefer aether.plugin.json
+        // Should prefer aleph.plugin.json
         assert_eq!(manifest.id, "aleph-version");
     }
 
@@ -589,7 +589,7 @@ Body content."#;
     }
 
     #[test]
-    fn test_parse_manifest_from_dir_package_json_without_aether() {
+    fn test_parse_manifest_from_dir_package_json_without_aleph() {
         let temp_dir = TempDir::new().unwrap();
 
         std::fs::write(

@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aether_core::compressor::SmartCompactionStrategy;
+//! use alephcore::compressor::SmartCompactionStrategy;
 //!
 //! let strategy = SmartCompactionStrategy::new()
 //!     .with_tool_output_max_chars(2000)

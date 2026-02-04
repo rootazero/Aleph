@@ -4,9 +4,9 @@
 //! Full YAML loading and Rhai integration will be added in Phase 5.2.
 //! For now, we test the hardcoded MVP policies.
 
-use aethecore::daemon::dispatcher::policy::PolicyEngine;
-use aethecore::daemon::events::{DerivedEvent, PressureLevel, PressureType};
-use aethecore::daemon::worldmodel::state::{ActivityType, EnhancedContext, MemoryPressure, SystemLoad};
+use alephcore::daemon::dispatcher::policy::PolicyEngine;
+use alephcore::daemon::events::{DerivedEvent, PressureLevel, PressureType};
+use alephcore::daemon::worldmodel::state::{ActivityType, EnhancedContext, MemoryPressure, SystemLoad};
 use chrono::Utc;
 
 #[test]
@@ -39,7 +39,7 @@ fn test_mvp_policies_meeting_auto_mute() {
         actions.iter().any(|a| {
             matches!(
                 a.action_type,
-                aethecore::daemon::dispatcher::policy::ActionType::MuteSystemAudio
+                alephcore::daemon::dispatcher::policy::ActionType::MuteSystemAudio
             )
         }),
         "Should have MuteSystemAudio action"
@@ -77,7 +77,7 @@ fn test_mvp_policies_low_battery_alert() {
         actions.iter().any(|a| {
             matches!(
                 a.action_type,
-                aethecore::daemon::dispatcher::policy::ActionType::NotifyUser { .. }
+                alephcore::daemon::dispatcher::policy::ActionType::NotifyUser { .. }
             )
         }),
         "Should have NotifyUser action for low battery"

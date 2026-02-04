@@ -16,17 +16,17 @@ echo "📦 Building Rust core..."
 cd "$ROOT_DIR/core"
 if [ "$CONFIG" = "debug" ]; then
     cargo build --features uniffi
-    LIB_PATH="$ROOT_DIR/target/debug/libaethecore.dylib"
+    LIB_PATH="$ROOT_DIR/target/debug/libalephcore.dylib"
 else
     cargo build --release --features uniffi
-    LIB_PATH="$ROOT_DIR/target/release/libaethecore.dylib"
+    LIB_PATH="$ROOT_DIR/target/release/libalephcore.dylib"
 fi
 
 # Step 2: Copy library
 echo "📋 Copying library..."
 cp "$LIB_PATH" "$MACOS_DIR/Aleph/Frameworks/"
-install_name_tool -id "@rpath/libaethecore.dylib" \
-    "$MACOS_DIR/Aleph/Frameworks/libaethecore.dylib"
+install_name_tool -id "@rpath/libalephcore.dylib" \
+    "$MACOS_DIR/Aleph/Frameworks/libalephcore.dylib"
 
 # Step 3: Generate UniFFI bindings
 echo "🔗 Generating UniFFI bindings..."

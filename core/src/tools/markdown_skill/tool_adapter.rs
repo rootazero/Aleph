@@ -38,8 +38,8 @@ impl MarkdownCliTool {
         let mut required_fields = Vec::new();
 
         // If input_hints exist, use them
-        if let Some(aether) = &self.spec.metadata.aleph {
-            for (key, hint) in &aether.input_hints {
+        if let Some(aleph_meta) = &self.spec.metadata.aleph {
+            for (key, hint) in &aleph_meta.input_hints {
                 let mut prop = serde_json::Map::new();
 
                 // Validate and normalize type
@@ -157,9 +157,9 @@ impl MarkdownCliTool {
 
     /// Check if tool requires confirmation
     pub fn requires_confirmation(&self) -> bool {
-        if let Some(aether) = &self.spec.metadata.aleph {
+        if let Some(aleph_meta) = &self.spec.metadata.aleph {
             matches!(
-                aether.security.confirmation,
+                aleph_meta.security.confirmation,
                 super::spec::ConfirmationMode::Always
                     | super::spec::ConfirmationMode::Write
             )

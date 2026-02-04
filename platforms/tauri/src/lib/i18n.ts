@@ -26,7 +26,7 @@ i18n
     },
     detection: {
       order: ['localStorage', 'navigator'],
-      lookupLocalStorage: 'aether-language',
+      lookupLocalStorage: 'aleph-language',
       caches: ['localStorage'],
     },
   });
@@ -40,10 +40,10 @@ export const changeLanguage = (lng: string) => {
       (l) => browserLang.startsWith(l.code.split('-')[0])
     );
     i18n.changeLanguage(matchedLang?.code || 'en');
-    localStorage.removeItem('aether-language');
+    localStorage.removeItem('aleph-language');
   } else {
     i18n.changeLanguage(lng);
-    localStorage.setItem('aether-language', lng);
+    localStorage.setItem('aleph-language', lng);
   }
 };
 

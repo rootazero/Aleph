@@ -1,7 +1,7 @@
 //! Integration test for plugin runtime system
 //!
 //! Tests the full flow:
-//! 1. Create a test Node.js plugin with aether.plugin.json and index.js
+//! 1. Create a test Node.js plugin with aleph.plugin.json and index.js
 //! 2. Load it via ExtensionManager
 //! 3. Call a tool on it
 //! 4. Verify the result
@@ -14,9 +14,9 @@ fn create_test_nodejs_plugin(dir: &std::path::Path) -> PathBuf {
     let plugin_dir = dir.join("test-plugin");
     std::fs::create_dir_all(&plugin_dir).unwrap();
 
-    // Create aether.plugin.json
+    // Create aleph.plugin.json
     std::fs::write(
-        plugin_dir.join("aether.plugin.json"),
+        plugin_dir.join("aleph.plugin.json"),
         r#"{
             "id": "test-plugin",
             "name": "Test Plugin",
@@ -58,8 +58,8 @@ exports.handleEcho = function(args) {
 #[tokio::test]
 #[ignore] // Requires Node.js to be installed and in PATH (run with `cargo test -- --ignored`)
 async fn test_nodejs_plugin_full_flow() {
-    use aethecore::discovery::DiscoveryConfig;
-    use aethecore::extension::{manifest::parse_manifest_from_dir, ExtensionConfig, ExtensionManager};
+    use alephcore::discovery::DiscoveryConfig;
+    use alephcore::extension::{manifest::parse_manifest_from_dir, ExtensionConfig, ExtensionManager};
 
     // Check if Node.js is available
     let node_check = std::process::Command::new("node")
@@ -117,7 +117,7 @@ async fn test_nodejs_plugin_full_flow() {
 
 #[tokio::test]
 async fn test_plugin_not_found() {
-    use aethecore::extension::{ExtensionConfig, ExtensionError, ExtensionManager};
+    use alephcore::extension::{ExtensionConfig, ExtensionError, ExtensionManager};
 
     let config = ExtensionConfig::default();
     let manager = ExtensionManager::new(config)
@@ -150,7 +150,7 @@ async fn test_plugin_not_found() {
 
 #[test]
 fn test_manifest_parsing() {
-    use aethecore::extension::manifest::parse_aether_plugin_content;
+    use alephcore::extension::manifest::parse_aleph_plugin_content;
     use std::path::Path;
 
     let content = r#"{
@@ -161,7 +161,7 @@ fn test_manifest_parsing() {
         "entry": "index.js"
     }"#;
 
-    let manifest = parse_aether_plugin_content(content, Path::new("/test"))
+    let manifest = parse_aleph_plugin_content(content, Path::new("/test"))
         .expect("Failed to parse manifest");
 
     assert_eq!(manifest.id, "test-plugin");
@@ -171,13 +171,13 @@ fn test_manifest_parsing() {
 
 #[test]
 fn test_manifest_parsing_minimal() {
-    use aethecore::extension::manifest::parse_aether_plugin_content;
+    use alephcore::extension::manifest::parse_aleph_plugin_content;
     use std::path::Path;
 
     // Minimal valid manifest - only id is required
     let content = r#"{"id": "minimal-plugin"}"#;
 
-    let manifest = parse_aether_plugin_content(content, Path::new("/test"))
+    let manifest = parse_aleph_plugin_content(content, Path::new("/test"))
         .expect("Failed to parse manifest");
 
     assert_eq!(manifest.id, "minimal-plugin");
@@ -187,38 +187,38 @@ fn test_manifest_parsing_minimal() {
 
 #[test]
 fn test_manifest_parsing_invalid_id() {
-    use aethecore::extension::manifest::parse_aether_plugin_content;
+    use alephcore::extension::manifest::parse_aleph_plugin_content;
     use std::path::Path;
 
     // Invalid plugin id (uppercase)
     let content = r#"{"id": "Invalid-Plugin"}"#;
 
-    let result = parse_aether_plugin_content(content, Path::new("/test"));
+    let result = parse_aleph_plugin_content(content, Path::new("/test"));
     assert!(result.is_err());
 }
 
 #[test]
 fn test_manifest_parsing_missing_id() {
-    use aethecore::extension::manifest::parse_aether_plugin_content;
+    use alephcore::extension::manifest::parse_aleph_plugin_content;
     use std::path::Path;
 
     // Missing required id field
     let content = r#"{"name": "Test Plugin"}"#;
 
-    let result = parse_aether_plugin_content(content, Path::new("/test"));
+    let result = parse_aleph_plugin_content(content, Path::new("/test"));
     assert!(result.is_err());
 }
 
 #[tokio::test]
-async fn test_manifest_from_dir_aether_plugin() {
-    use aethecore::extension::manifest::parse_manifest_from_dir;
+async fn test_manifest_from_dir_aleph_plugin() {
+    use alephcore::extension::manifest::parse_manifest_from_dir;
 
     let temp = TempDir::new().unwrap();
     let plugin_dir = temp.path().join("my-plugin");
     std::fs::create_dir_all(&plugin_dir).unwrap();
 
     std::fs::write(
-        plugin_dir.join("aether.plugin.json"),
+        plugin_dir.join("aleph.plugin.json"),
         r#"{
             "id": "my-plugin",
             "name": "My Plugin",
@@ -240,7 +240,7 @@ async fn test_manifest_from_dir_aether_plugin() {
 
 #[tokio::test]
 async fn test_manifest_from_dir_no_manifest() {
-    use aethecore::extension::manifest::parse_manifest_from_dir;
+    use alephcore::extension::manifest::parse_manifest_from_dir;
 
     let temp = TempDir::new().unwrap();
 
@@ -251,7 +251,7 @@ async fn test_manifest_from_dir_no_manifest() {
 
 #[tokio::test]
 async fn test_extension_manager_registry_access() {
-    use aethecore::extension::{ExtensionConfig, ExtensionManager};
+    use alephcore::extension::{ExtensionConfig, ExtensionManager};
 
     let config = ExtensionConfig::default();
     let manager = ExtensionManager::new(config)
@@ -268,7 +268,7 @@ async fn test_extension_manager_registry_access() {
 
 #[tokio::test]
 async fn test_extension_manager_loader_access() {
-    use aethecore::extension::{ExtensionConfig, ExtensionManager};
+    use alephcore::extension::{ExtensionConfig, ExtensionManager};
 
     let config = ExtensionConfig::default();
     let manager = ExtensionManager::new(config)
@@ -285,7 +285,7 @@ async fn test_extension_manager_loader_access() {
 
 #[tokio::test]
 async fn test_execute_plugin_hook_not_found() {
-    use aethecore::extension::{ExtensionConfig, ExtensionError, ExtensionManager};
+    use alephcore::extension::{ExtensionConfig, ExtensionError, ExtensionManager};
 
     let config = ExtensionConfig::default();
     let manager = ExtensionManager::new(config)
@@ -318,7 +318,7 @@ async fn test_execute_plugin_hook_not_found() {
 
 #[test]
 fn test_plugin_loader_standalone() {
-    use aethecore::extension::PluginLoader;
+    use alephcore::extension::PluginLoader;
 
     let loader = PluginLoader::new();
 
@@ -331,7 +331,7 @@ fn test_plugin_loader_standalone() {
 
 #[test]
 fn test_plugin_loader_unload_nonexistent() {
-    use aethecore::extension::{ExtensionError, PluginLoader};
+    use alephcore::extension::{ExtensionError, PluginLoader};
 
     let mut loader = PluginLoader::new();
 
@@ -348,7 +348,7 @@ fn test_plugin_loader_unload_nonexistent() {
 
 #[test]
 fn test_plugin_registry_standalone() {
-    use aethecore::extension::PluginRegistry;
+    use alephcore::extension::PluginRegistry;
 
     let registry = PluginRegistry::new();
 

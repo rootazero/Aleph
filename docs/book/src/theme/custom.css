@@ -1,9 +1,9 @@
 /* Aleph Documentation Theme */
 
 :root {
-    --aether-primary: #7c3aed;
-    --aether-secondary: #a78bfa;
-    --aether-accent: #c4b5fd;
+    --aleph-primary: #7c3aed;
+    --aleph-secondary: #a78bfa;
+    --aleph-accent: #c4b5fd;
 }
 
 /* Code blocks */
@@ -35,7 +35,7 @@ tr:nth-child(even) {
 
 /* Blockquotes */
 blockquote {
-    border-left: 4px solid var(--aether-primary);
+    border-left: 4px solid var(--aleph-primary);
     padding-left: 1rem;
     margin: 1rem 0;
     font-style: italic;

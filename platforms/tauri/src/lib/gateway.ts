@@ -1,7 +1,7 @@
 /**
  * Gateway WebSocket Client
  *
- * Provides JSON-RPC 2.0 communication with the Aether Gateway server.
+ * Provides JSON-RPC 2.0 communication with the Aleph Gateway server.
  * Used for settings, memory, plugins, skills, MCP, providers, and other operations.
  */
 

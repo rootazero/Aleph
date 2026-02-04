@@ -144,7 +144,7 @@ jobs:
         if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: Aether-macOS
+          name: Aleph-macOS
           path: |
             platforms/tauri/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
             platforms/tauri/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
@@ -154,7 +154,7 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: Aether-Windows
+          name: Aleph-Windows
           path: |
             platforms/tauri/src-tauri/target/release/bundle/nsis/*.exe
             platforms/tauri/src-tauri/target/release/bundle/msi/*.msi
@@ -164,7 +164,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
         with:
-          name: Aether-Linux
+          name: Aleph-Linux
           path: |
             platforms/tauri/src-tauri/target/release/bundle/deb/*.deb
             platforms/tauri/src-tauri/target/release/bundle/appimage/*.AppImage

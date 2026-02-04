@@ -27,7 +27,7 @@ Aleph is a system-level AI middleware that acts as an invisible "ether" connecti
                       │ UniFFI Bindings
                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│                  Rust Core (libaethecore.dylib)         │
+│                  Rust Core (libalephcore.dylib)         │
 │  ┌──────────────────────────────────────────────────┐  │
 │  │  AlephCore (Main orchestrator)                  │  │
 │  │  Hotkey Detection (rdev)                         │  │
@@ -63,13 +63,13 @@ cd Aleph/core
 cargo build --release
 ```
 
-The output library will be at: `Aleph/core/target/release/libaethecore.dylib`
+The output library will be at: `Aleph/core/target/release/libalephcore.dylib`
 
 ### 2. Generate UniFFI Bindings (if needed)
 
 ```bash
 cd Aleph/core
-cargo run --bin uniffi-bindgen generate src/aether.udl \
+cargo run --bin uniffi-bindgen generate src/aleph.udl \
   --language swift \
   --out-dir ../Sources/Generated/
 ```
@@ -95,7 +95,7 @@ The built app will be at: `DerivedData/Aleph/Build/Products/Release/Aleph.app`
 ### Automated Build Script
 
 The project includes `Scripts/copy_rust_libs.sh` which automatically:
-1. Copies `libaethecore.dylib` to the app bundle's Frameworks folder
+1. Copies `libalephcore.dylib` to the app bundle's Frameworks folder
 2. Fixes the library's install name for runtime loading
 3. Verifies the integration
 
@@ -165,16 +165,16 @@ Aleph/
 │   ├── RoutingView.swift        # Routing rules (stub)
 │   ├── ShortcutsView.swift      # Shortcuts config (stub)
 │   └── Generated/
-│       └── aether.swift         # UniFFI bindings
+│       └── aleph.swift         # UniFFI bindings
 ├── Resources/
 │   └── Info.plist               # App metadata
 ├── Assets.xcassets/             # App icons
 ├── Frameworks/
-│   └── libaethecore.dylib       # Rust core (embedded)
+│   └── libalephcore.dylib       # Rust core (embedded)
 └── core/                        # Rust core library
     ├── src/
     │   ├── lib.rs               # UniFFI exports
-    │   ├── aether.udl           # UniFFI interface definition
+    │   ├── aleph.udl           # UniFFI interface definition
     │   ├── core.rs              # AlephCore struct
     │   ├── event_handler.rs     # Callback trait
     │   ├── hotkey/              # Global hotkey detection
@@ -226,7 +226,7 @@ Aleph/
 RUST_LOG=debug cargo run
 
 # Check UniFFI bindings generation
-cargo run --bin uniffi-bindgen generate src/aether.udl --language swift
+cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift
 ```
 
 **Swift Debugging**:
@@ -240,10 +240,10 @@ cargo run --bin uniffi-bindgen generate src/aether.udl --language swift
 ls -la Aleph.app/Contents/Frameworks/
 
 # Check dylib install name
-otool -L Aleph.app/Contents/Frameworks/libaethecore.dylib
+otool -L Aleph.app/Contents/Frameworks/libalephcore.dylib
 
 # Verify app links to correct library
-otool -L Aleph.app/Contents/MacOS/Aleph | grep libaethecore
+otool -L Aleph.app/Contents/MacOS/Aleph | grep libalephcore
 ```
 
 ## Known Limitations
@@ -265,12 +265,12 @@ otool -L Aleph.app/Contents/MacOS/Aleph | grep libaethecore
 
 ### "Library not loaded" Error
 
-**Symptom**: App crashes on launch with `dyld: Library not loaded: libaethecore.dylib`
+**Symptom**: App crashes on launch with `dyld: Library not loaded: libalephcore.dylib`
 
 **Solution**:
-1. Verify Rust core is built: `ls Aleph/core/target/release/libaethecore.dylib`
+1. Verify Rust core is built: `ls Aleph/core/target/release/libalephcore.dylib`
 2. Rebuild the Xcode project to trigger the copy script
-3. Check the dylib is in the bundle: `ls Aleph.app/Contents/Frameworks/libaethecore.dylib`
+3. Check the dylib is in the bundle: `ls Aleph.app/Contents/Frameworks/libalephcore.dylib`
 
 ### Halo Doesn't Appear
 

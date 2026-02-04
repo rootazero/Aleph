@@ -3,8 +3,8 @@
 /// This example shows how to use the PII scrubbing utilities and logging layer.
 ///
 /// Run with: cargo run --example pii_scrubbing_demo
-use aethecore::logging::create_pii_scrubbing_layer;
-use aethecore::utils::pii::scrub_pii;
+use alephcore::logging::create_pii_scrubbing_layer;
+use alephcore::utils::pii::scrub_pii;
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 

@@ -1,7 +1,7 @@
 //! Integration tests for Markdown Skills RPC handlers
 
-use aethecore::gateway::handlers::HandlerRegistry;
-use aethecore::gateway::protocol::JsonRpcRequest;
+use alephcore::gateway::handlers::HandlerRegistry;
+use alephcore::gateway::protocol::JsonRpcRequest;
 use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
@@ -36,7 +36,7 @@ description: Test skill for integration testing
 metadata:
   requires:
     bins: [\"echo\"]
-  aether:
+  aleph:
     security:
       sandbox: host
       confirmation: never
@@ -174,7 +174,7 @@ description: Original description
 metadata:
   requires:
     bins: ["echo"]
-  aether:
+  aleph:
     security:
       sandbox: host
       confirmation: never
@@ -208,7 +208,7 @@ description: Updated description
 metadata:
   requires:
     bins: ["echo"]
-  aether:
+  aleph:
     security:
       sandbox: host
       confirmation: never

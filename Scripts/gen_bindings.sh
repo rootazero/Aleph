@@ -7,8 +7,8 @@ set -e
 BUILD_DIR="target/debug"
 
 # Check if library exists
-if [ ! -f "$BUILD_DIR/libaethecore.dylib" ]; then
-    echo "Error: Library not found at $BUILD_DIR/libaethecore.dylib"
+if [ ! -f "$BUILD_DIR/libalephcore.dylib" ]; then
+    echo "Error: Library not found at $BUILD_DIR/libalephcore.dylib"
     echo "Run 'cargo build' first"
     exit 1
 fi
@@ -20,7 +20,7 @@ mkdir -p "$OUT_DIR"
 # Generate bindings using the library's uniffi metadata
 # This uses the uniffi-bindgen executable from the uniffi_bindgen crate
 cargo run --features=uniffi/cli --bin uniffi-bindgen -- generate \
-    --library "$BUILD_DIR/libaethecore.dylib" \
+    --library "$BUILD_DIR/libalephcore.dylib" \
     --language swift \
     --out-dir "$OUT_DIR" \
     src/aleph.udl

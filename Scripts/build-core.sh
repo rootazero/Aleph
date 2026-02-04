@@ -20,18 +20,18 @@ build_macos() {
     # Generate Swift bindings
     # Note: target directory is at workspace root, not core directory
     cargo run --bin uniffi-bindgen generate \
-        --library "$ROOT_DIR/target/release/libaethecore.dylib" \
+        --library "$ROOT_DIR/target/release/libalephcore.dylib" \
         --language swift \
         --out-dir "$ROOT_DIR/platforms/macos/Aleph/Sources/Generated/"
 
     # Copy library (use /bin/rm and /bin/cp to avoid alias issues)
-    /bin/rm -f "$ROOT_DIR/platforms/macos/Aleph/Frameworks/libaethecore.dylib"
-    /bin/cp "$ROOT_DIR/target/release/libaethecore.dylib" \
+    /bin/rm -f "$ROOT_DIR/platforms/macos/Aleph/Frameworks/libalephcore.dylib"
+    /bin/cp "$ROOT_DIR/target/release/libalephcore.dylib" \
         "$ROOT_DIR/platforms/macos/Aleph/Frameworks/"
 
     # Fix install_name for portability
-    install_name_tool -id "@rpath/libaethecore.dylib" \
-        "$ROOT_DIR/platforms/macos/Aleph/Frameworks/libaethecore.dylib"
+    install_name_tool -id "@rpath/libalephcore.dylib" \
+        "$ROOT_DIR/platforms/macos/Aleph/Frameworks/libalephcore.dylib"
 
     echo "✅ macOS build complete"
 }
@@ -44,11 +44,11 @@ build_windows() {
     # On Windows, omit --target flag
     if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]]; then
         cargo build --release --features cabi
-        cp target/release/aethecore.dll "$ROOT_DIR/platforms/windows/Aleph/libs/"
+        cp target/release/alephcore.dll "$ROOT_DIR/platforms/windows/Aleph/libs/"
     else
         # Cross-compile from macOS/Linux
         cargo build --release --features cabi --target x86_64-pc-windows-msvc
-        cp target/x86_64-pc-windows-msvc/release/aethecore.dll \
+        cp target/x86_64-pc-windows-msvc/release/alephcore.dll \
             "$ROOT_DIR/platforms/windows/Aleph/libs/" 2>/dev/null || \
             echo "⚠️  Windows cross-compile not available on this system"
     fi

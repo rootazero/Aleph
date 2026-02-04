@@ -8,8 +8,8 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Aether brand colors
-        aether: {
+        // Aleph brand colors
+        aleph: {
           50: '#f0f7ff',
           100: '#e0efff',
           200: '#b9dfff',

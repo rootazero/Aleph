@@ -85,7 +85,7 @@ export function useGateway(options: UseGatewayOptions = {}) {
     ws.onopen = () => {
       setStatus('connected')
       reconnectAttemptsRef.current = 0
-      console.log('Connected to Aether Gateway')
+      console.log('Connected to Aleph Gateway')
     }
 
     ws.onclose = () => {

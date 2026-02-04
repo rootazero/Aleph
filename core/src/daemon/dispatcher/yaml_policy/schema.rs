@@ -116,7 +116,7 @@ action:
   type: notify
 risk: low
 metadata:
-  author: "aether-community"
+  author: "aleph-community"
   tags: ["test", "example"]
 "#;
         let rule: YamlRule = serde_yaml::from_str(yaml).unwrap();

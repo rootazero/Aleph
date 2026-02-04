@@ -40,13 +40,13 @@ export function Sidebar({
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-aether-600 flex items-center justify-center">
+              <div className="w-8 h-8 rounded-lg bg-aleph-600 flex items-center justify-center">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-5 h-5">
                   <path fillRule="evenodd" d="M9 4.5a.75.75 0 01.721.544l.813 2.846a3.75 3.75 0 002.576 2.576l2.846.813a.75.75 0 010 1.442l-2.846.813a3.75 3.75 0 00-2.576 2.576l-.813 2.846a.75.75 0 01-1.442 0l-.813-2.846a3.75 3.75 0 00-2.576-2.576l-2.846-.813a.75.75 0 010-1.442l2.846-.813A3.75 3.75 0 007.466 7.89l.813-2.846A.75.75 0 019 4.5z" clipRule="evenodd" />
                 </svg>
               </div>
               <div>
-                <h1 className="font-semibold text-gray-900 dark:text-white">Aether</h1>
+                <h1 className="font-semibold text-gray-900 dark:text-white">Aleph</h1>
                 <div className="flex items-center gap-1.5 text-xs">
                   <span
                     className={`w-2 h-2 rounded-full ${
@@ -76,7 +76,7 @@ export function Sidebar({
             <button
               onClick={onNewChat}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl
-                         bg-aether-600 hover:bg-aether-700 text-white font-medium
+                         bg-aleph-600 hover:bg-aleph-700 text-white font-medium
                          transition-colors"
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
@@ -104,7 +104,7 @@ export function Sidebar({
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left
                                transition-colors ${
                                  currentSession === session.key
-                                   ? 'bg-aether-100 dark:bg-aether-900/30 text-aether-700 dark:text-aether-300'
+                                   ? 'bg-aleph-100 dark:bg-aleph-900/30 text-aleph-700 dark:text-aleph-300'
                                    : 'hover:bg-gray-200 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
                                }`}
                   >
@@ -128,7 +128,7 @@ export function Sidebar({
           {/* Footer */}
           <div className="p-4 border-t border-gray-200 dark:border-gray-700">
             <div className="text-xs text-gray-500 dark:text-gray-400 text-center">
-              Aether Gateway v0.1.0
+              Aleph Gateway v0.1.0
             </div>
           </div>
         </div>

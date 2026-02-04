@@ -197,7 +197,7 @@ export interface WindowPosition {
   height: number;
 }
 
-export interface AetherPaths {
+export interface AlephPaths {
   base: string;
   config: string;
   data: string;
@@ -305,7 +305,7 @@ export const commands = {
   setAutostartEnabled: (enabled: boolean) => invoke('set_autostart_enabled', { enabled }),
 
   // Paths (~/.config/aleph/*)
-  getAetherPaths: () => invoke<AetherPaths>('get_aether_paths'),
+  getAlephPaths: () => invoke<AlephPaths>('get_aleph_paths'),
 
   // ============================================================================
   // AI Processing

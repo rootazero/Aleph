@@ -1,12 +1,12 @@
-//! TauriEventHandler - bridges aethecore callbacks to Tauri window events
+//! TauriEventHandler - bridges alephcore callbacks to Tauri window events
 //!
-//! This handler implements the AetherEventHandler trait from aethecore
+//! This handler implements the AlephEventHandler trait from alephcore
 //! and forwards all callbacks to the Tauri frontend via window.emit().
 
 use tauri::{AppHandle, Emitter, Runtime};
 use tracing::{debug, error, info};
 
-/// Event handler that forwards aethecore callbacks to Tauri frontend
+/// Event handler that forwards alephcore callbacks to Tauri frontend
 pub struct TauriEventHandler<R: Runtime> {
     app: AppHandle<R>,
 }
@@ -25,8 +25,8 @@ impl<R: Runtime> TauriEventHandler<R> {
     }
 }
 
-// Implement AetherEventHandler for any Runtime
-impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHandler<R> {
+// Implement AlephEventHandler for any Runtime
+impl<R: Runtime + 'static> alephcore::ffi::AlephEventHandler for TauriEventHandler<R> {
     /// Called when AI starts processing (thinking)
     fn on_thinking(&self) {
         debug!("AI thinking started");
@@ -72,7 +72,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     }
 
     /// Called when agent execution mode is detected
-    fn on_agent_mode_detected(&self, task: aethecore::intent::ExecutableTaskFFI) {
+    fn on_agent_mode_detected(&self, task: alephcore::intent::ExecutableTaskFFI) {
         info!(task_category = ?task.category, "Agent mode detected");
         self.emit_all(
             "aleph:agent-mode-detected",
@@ -96,7 +96,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     }
 
     /// Called when MCP servers have finished starting
-    fn on_mcp_startup_complete(&self, report: aethecore::McpStartupReportFFI) {
+    fn on_mcp_startup_complete(&self, report: alephcore::McpStartupReportFFI) {
         info!(
             succeeded = report.succeeded_servers.len(),
             failed = report.failed_servers.len(),
@@ -119,7 +119,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     }
 
     /// Called when runtime updates are available
-    fn on_runtime_updates_available(&self, updates: Vec<aethecore::RuntimeUpdateInfo>) {
+    fn on_runtime_updates_available(&self, updates: Vec<alephcore::RuntimeUpdateInfo>) {
         info!(count = updates.len(), "Runtime updates available");
         self.emit_all(
             "aleph:runtime-updates",
@@ -259,7 +259,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     fn on_plan_confirmation_required(
         &self,
         plan_id: String,
-        plan: aethecore::dispatcher::DagTaskPlan,
+        plan: alephcore::dispatcher::DagTaskPlan,
     ) {
         info!(plan_id = %plan_id, tasks = plan.tasks.len(), "Plan confirmation required");
         self.emit_all(

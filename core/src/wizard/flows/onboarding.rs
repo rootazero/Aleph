@@ -371,7 +371,7 @@ impl WizardFlow for OnboardingFlow {
         progress.finish("Configuration saved");
 
         // ===== Stage 10: Complete =====
-        prompter.outro("Aleph is ready! Run 'aether chat' to start.").await?;
+        prompter.outro("Aleph is ready! Run 'aleph chat' to start.").await?;
 
         Ok(())
     }
@@ -417,7 +417,7 @@ impl WizardFlow for QuickSetupFlow {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         progress.finish("Ready");
 
-        prompter.outro("Quick setup complete! Run 'aether chat' to start.").await?;
+        prompter.outro("Quick setup complete! Run 'aleph chat' to start.").await?;
 
         Ok(())
     }

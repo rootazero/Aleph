@@ -1,7 +1,7 @@
 //! Integration tests for Markdown Skill Generator
 
-use aethecore::skill_evolution::types::{SkillMetrics, SolidificationSuggestion};
-use aethecore::tools::markdown_skill::{
+use alephcore::skill_evolution::types::{SkillMetrics, SolidificationSuggestion};
+use alephcore::tools::markdown_skill::{
     load_skills_from_dir, MarkdownSkillGenerator, MarkdownSkillGeneratorConfig,
 };
 use tempfile::TempDir;
@@ -59,8 +59,8 @@ fn test_generate_skill_from_suggestion() {
     assert!(content.contains("bins:"));
     assert!(content.contains("- \"git\"")); // Should detect git from instructions
 
-    // Check Aether extensions
-    assert!(content.contains("aether:"));
+    // Check Aleph extensions
+    assert!(content.contains("aleph:"));
     assert!(content.contains("security:"));
     assert!(content.contains("evolution:"));
     assert!(content.contains("source: \"auto-generated\""));
@@ -119,8 +119,8 @@ async fn test_generated_skill_can_be_loaded() {
     );
 
     // Verify evolution metadata
-    let aether = tool.spec.metadata.aether.as_ref().unwrap();
-    let evolution = aether.evolution.as_ref().unwrap();
+    let aleph_meta = tool.spec.metadata.aleph.as_ref().unwrap();
+    let evolution = aleph_meta.evolution.as_ref().unwrap();
     assert_eq!(evolution.source, "auto-generated");
     // Use approximate equality for float comparison
     assert!((evolution.confidence_score - 0.85).abs() < 0.001);

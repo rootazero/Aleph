@@ -1,5 +1,5 @@
 /**
- * Aether Plugin Host for Node.js
+ * Aleph Plugin Host for Node.js
  *
  * This script runs as a subprocess and communicates with the Rust runtime
  * via JSON-RPC 2.0 over stdin/stdout.
@@ -23,9 +23,9 @@ const { pathToFileURL } = require('url');
 const loadedPlugins = new Map();
 
 // Get allowed plugins directory from environment or default
-const PLUGINS_DIR = process.env.AETHER_PLUGINS_DIR
-    ? path.resolve(process.env.AETHER_PLUGINS_DIR)
-    : path.resolve(process.env.HOME || process.env.USERPROFILE || '', '.aether', 'plugins');
+const PLUGINS_DIR = process.env.ALEPH_PLUGINS_DIR
+    ? path.resolve(process.env.ALEPH_PLUGINS_DIR)
+    : path.resolve(process.env.HOME || process.env.USERPROFILE || '', '.aleph', 'plugins');
 
 // JSON-RPC 2.0 error codes
 const ERROR_CODES = {

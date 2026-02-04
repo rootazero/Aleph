@@ -55,7 +55,7 @@ impl Default for HttpTransportConfig {
 /// # Example
 ///
 /// ```ignore
-/// use aether_core::mcp::transport::{HttpTransport, HttpTransportConfig};
+/// use alephcore::mcp::transport::{HttpTransport, HttpTransportConfig};
 ///
 /// let config = HttpTransportConfig {
 ///     url: "https://api.example.com/mcp".to_string(),

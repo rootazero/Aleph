@@ -8,15 +8,15 @@ echo ""
 for i in {1..10}; do
     sleep 1
 
-    AETHER_PID=$(pgrep -x "Aleph" | head -1)
+    ALEPH_PID=$(pgrep -x "Aleph" | head -1)
 
-    if [ -n "$AETHER_PID" ]; then
-        echo "✅ Aleph 已启动！(PID: $AETHER_PID)"
+    if [ -n "$ALEPH_PID" ]; then
+        echo "✅ Aleph 已启动！(PID: $ALEPH_PID)"
         echo ""
 
         # Get application path
-        AETHER_PATH=$(ps -p $AETHER_PID -o command= | awk '{print $1}')
-        echo "📦 应用路径: $AETHER_PATH"
+        ALEPH_PATH=$(ps -p $ALEPH_PID -o command= | awk '{print $1}')
+        echo "📦 应用路径: $ALEPH_PATH"
         echo ""
 
         # Wait 2 seconds for full initialization

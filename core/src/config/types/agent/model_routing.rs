@@ -572,7 +572,7 @@ mod tests {
             [[budget.limits]]
             id = "monthly-project"
             scope = "project"
-            scope_value = "aether"
+            scope_value = "aleph"
             period = "monthly"
             reset_day = 1
             reset_hour = 0
@@ -618,7 +618,7 @@ mod tests {
         let limit2 = &config.budget.limits[1];
         assert_eq!(limit2.id, "monthly-project");
         assert_eq!(limit2.scope, "project");
-        assert_eq!(limit2.scope_value, Some("aether".to_string()));
+        assert_eq!(limit2.scope_value, Some("aleph".to_string()));
         assert_eq!(limit2.period, "monthly");
         assert!((limit2.limit_usd - 100.0).abs() < 0.001);
     }

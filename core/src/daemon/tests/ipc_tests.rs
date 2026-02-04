@@ -7,7 +7,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ipc_server_creation() {
-        let socket_path = "/tmp/aether-test.sock";
+        let socket_path = "/tmp/aleph-test.sock";
         let _ = std::fs::remove_file(socket_path); // Clean up if exists
 
         let server = IpcServer::new(socket_path.to_string());

@@ -20,7 +20,7 @@ static mut _GUARD: Option<tracing_appender::non_blocking::WorkerGuard> = None;
 /// - Console output with PII scrubbing
 /// - File output with daily rotation and PII scrubbing
 /// - Log directory: `~/.aleph/logs/`
-/// - Log files: `aether-YYYY-MM-DD.log`
+/// - Log files: `aleph-YYYY-MM-DD.log`
 /// - Environment-based filtering (RUST_LOG)
 /// - Automatic cleanup of old log files
 ///
@@ -34,7 +34,7 @@ static mut _GUARD: Option<tracing_appender::non_blocking::WorkerGuard> = None;
 ///
 /// # Environment Variables
 ///
-/// - `RUST_LOG`: Controls log level (e.g., "debug", "info", "aether=debug")
+/// - `RUST_LOG`: Controls log level (e.g., "debug", "info", "aleph=debug")
 ///
 /// # Panics
 ///
@@ -83,8 +83,8 @@ fn setup_logging(
     std::fs::create_dir_all(&log_dir)?;
 
     // Create rolling file appender (daily rotation)
-    // Creates files like: aether.log.2026-01-01
-    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "aether.log");
+    // Creates files like: aleph.log.2026-01-01
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "aleph.log");
 
     // Create non-blocking writer for async logging
     let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn test_get_log_directory() {
         let log_dir = get_log_directory().unwrap();
-        assert!(log_dir.to_string_lossy().contains("aether"));
+        assert!(log_dir.to_string_lossy().contains("aleph"));
         assert!(log_dir.to_string_lossy().contains("logs"));
     }
 

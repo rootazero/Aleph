@@ -116,7 +116,7 @@ impl NodeProcess {
     fn write_embedded_script(content: &str, plugin_id: &str) -> Result<PathBuf, ExtensionError> {
         let temp_dir = std::env::temp_dir();
         let unique_id = Uuid::new_v4();
-        let file_name = format!("aether-plugin-host-{}-{}.js", plugin_id, unique_id);
+        let file_name = format!("aleph-plugin-host-{}-{}.js", plugin_id, unique_id);
         let temp_path = temp_dir.join(file_name);
 
         fs::write(&temp_path, content)
@@ -376,7 +376,7 @@ mod tests {
 
         // Verify filename contains plugin ID and UUID pattern
         let filename = temp_path.file_name().unwrap().to_str().unwrap();
-        assert!(filename.starts_with("aether-plugin-host-test-plugin-"));
+        assert!(filename.starts_with("aleph-plugin-host-test-plugin-"));
         assert!(filename.ends_with(".js"));
         // UUID is 36 chars (with hyphens), so total filename should be longer
         assert!(filename.len() > 40);

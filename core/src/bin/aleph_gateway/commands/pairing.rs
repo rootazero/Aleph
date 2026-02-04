@@ -17,7 +17,7 @@ pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
     let store_path = get_device_store_path()
         .parent()
         .map(|p| p.join("security.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aether_security.db"));
+        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_security.db"));
     let store = Arc::new(SecurityStore::open(&store_path)?);
     let manager = PairingManager::new(store);
     let pending = manager.list_pending()?;
@@ -134,7 +134,7 @@ pub async fn handle_pairing_reject(code: &str) -> Result<(), Box<dyn std::error:
     let store_path = get_device_store_path()
         .parent()
         .map(|p| p.join("security.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aether_security.db"));
+        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_security.db"));
     let store = Arc::new(SecurityStore::open(&store_path)?);
     let manager = PairingManager::new(store);
 

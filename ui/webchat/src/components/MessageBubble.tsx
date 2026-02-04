@@ -19,7 +19,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <div
         className={`max-w-[85%] md:max-w-[70%] rounded-2xl px-4 py-3 ${
           isUser
-            ? 'bg-aether-600 text-white'
+            ? 'bg-aleph-600 text-white'
             : isSystem
             ? 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
             : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 shadow-sm border border-gray-100 dark:border-gray-700'
@@ -43,7 +43,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 if (isInline) {
                   return (
                     <code
-                      className={`${isUser ? 'bg-aether-700' : 'bg-gray-100 dark:bg-gray-700'} px-1 py-0.5 rounded text-sm`}
+                      className={`${isUser ? 'bg-aleph-700' : 'bg-gray-100 dark:bg-gray-700'} px-1 py-0.5 rounded text-sm`}
                       {...props}
                     >
                       {children}
@@ -86,7 +86,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                     href={href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={isUser ? 'text-aether-200 underline' : 'text-aether-600 dark:text-aether-400 hover:underline'}
+                    className={isUser ? 'text-aleph-200 underline' : 'text-aleph-600 dark:text-aleph-400 hover:underline'}
                   >
                     {children}
                   </a>
@@ -98,7 +98,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           </ReactMarkdown>
         </div>
 
-        <div className={`text-xs mt-2 ${isUser ? 'text-aether-200' : 'text-gray-400'}`}>
+        <div className={`text-xs mt-2 ${isUser ? 'text-aleph-200' : 'text-gray-400'}`}>
           {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
       </div>

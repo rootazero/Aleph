@@ -1,5 +1,5 @@
 #!/bin/bash
-# Aether Tauri Build Script
+# Aleph Tauri Build Script
 # Usage: ./scripts/build.sh [platform] [--release]
 
 set -e
@@ -140,7 +140,7 @@ build_linux() {
 # Main build process
 main() {
     log_info "========================================="
-    log_info "  Aether Tauri Build Script"
+    log_info "  Aleph Tauri Build Script"
     log_info "========================================="
     log_info "Platform: $PLATFORM"
     log_info "Release mode: ${RELEASE_MODE:-debug}"

@@ -975,7 +975,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             _ = hotkeyHandler(event)
         }
 
-        // Local monitor - captures hotkey when AETHER is active
+        // Local monitor - captures hotkey when ALEPH is active
         hotkeyLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if hotkeyHandler(event) {
                 return nil  // Consume the event

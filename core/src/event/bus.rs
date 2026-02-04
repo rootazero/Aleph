@@ -128,7 +128,7 @@ impl EventBus {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aether_core::event::{EventBus, GlobalBus};
+    /// use alephcore::event::{EventBus, GlobalBus};
     ///
     /// let bus = EventBus::new()
     ///     .with_agent_id("agent-1")

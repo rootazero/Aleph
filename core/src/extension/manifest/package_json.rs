@@ -54,7 +54,7 @@ struct PackageJson {
     keywords: Option<Vec<String>>,
 
     /// Aleph plugin configuration
-    #[serde(default, alias = "aether")]
+    #[serde(default)]
     aleph: Option<AlephConfig>,
 }
 
@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_package_json_with_aether_config() {
+    fn test_parse_package_json_with_aleph_config() {
         let content = r#"{
             "name": "@org/my-plugin",
             "version": "2.0.0",
@@ -381,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_package_json_missing_aether() {
+    fn test_parse_package_json_missing_aleph() {
         let content = r#"{
             "name": "regular-package",
             "version": "1.0.0"

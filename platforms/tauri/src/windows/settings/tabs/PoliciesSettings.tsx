@@ -113,7 +113,7 @@ export function PoliciesSettings() {
       <SettingsSection header={t('settings.policies.analyticsSection', 'Analytics')}>
         <SettingsCard
           title={t('settings.policies.allowAnalytics', 'Allow Analytics')}
-          description={t('settings.policies.allowAnalyticsDescription', 'Send anonymous usage data to improve Aether')}
+          description={t('settings.policies.allowAnalyticsDescription', 'Send anonymous usage data to improve Aleph')}
           icon={BarChart3}
         >
           <Switch

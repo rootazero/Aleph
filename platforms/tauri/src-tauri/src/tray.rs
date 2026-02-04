@@ -64,7 +64,7 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>> {
     let menu = Menu::with_items(
         app,
         &[
-            &MenuItem::with_id(app, "about", "About Aether", true, None::<&str>)?,
+            &MenuItem::with_id(app, "about", "About Aleph", true, None::<&str>)?,
             &MenuItem::with_id(app, "version", format!("Version {}", env!("CARGO_PKG_VERSION")).as_str(), false, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "show_halo", "Show Halo", true, Some("Ctrl+Alt+/"))?,
@@ -74,7 +74,7 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>> {
             &MenuItem::with_id(app, "settings", "Settings...", true, Some("CmdOrCtrl+,"))?,
             &MenuItem::with_id(app, "check_updates", "Check for Updates...", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "quit", "Quit Aether", true, Some("CmdOrCtrl+Q"))?,
+            &MenuItem::with_id(app, "quit", "Quit Aleph", true, Some("CmdOrCtrl+Q"))?,
         ],
     )?;
 
@@ -82,7 +82,7 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>> {
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .tooltip("Aether - AI Assistant")
+        .tooltip("Aleph - AI Assistant")
         .on_menu_event(move |app, event| {
             tracing::debug!("Tray menu event: {:?}", event.id);
 

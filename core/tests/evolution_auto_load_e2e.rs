@@ -7,10 +7,10 @@
 //! 4. Auto-loads skill into ToolServer
 //! 5. Skill is immediately available for use
 
-use aethecore::skill_evolution::types::{ExecutionStatus, SkillExecution, SolidificationConfig};
-use aethecore::skill_evolution::{EvolutionTracker, SolidificationPipeline};
-use aethecore::tools::markdown_skill::{EvolutionAutoLoader, MarkdownSkillGeneratorConfig};
-use aethecore::tools::AetherToolServer;
+use alephcore::skill_evolution::types::{ExecutionStatus, SkillExecution, SolidificationConfig};
+use alephcore::skill_evolution::{EvolutionTracker, SolidificationPipeline};
+use alephcore::tools::markdown_skill::{EvolutionAutoLoader, MarkdownSkillGeneratorConfig};
+use alephcore::tools::AlephToolServer;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -19,7 +19,7 @@ async fn test_e2e_pattern_detection_to_auto_load() {
     // Setup
     let temp_dir = TempDir::new().unwrap();
     let tracker = Arc::new(EvolutionTracker::in_memory().unwrap());
-    let tool_server = Arc::new(AetherToolServer::new());
+    let tool_server = Arc::new(AlephToolServer::new());
 
     // Configure auto-loader with temp output directory
     let config = MarkdownSkillGeneratorConfig {
@@ -129,7 +129,7 @@ async fn test_e2e_pattern_detection_to_auto_load() {
 async fn test_batch_auto_load() {
     let temp_dir = TempDir::new().unwrap();
     let tracker = Arc::new(EvolutionTracker::in_memory().unwrap());
-    let tool_server = Arc::new(AetherToolServer::new());
+    let tool_server = Arc::new(AlephToolServer::new());
 
     let config = MarkdownSkillGeneratorConfig {
         output_dir: temp_dir.path().to_path_buf(),
@@ -207,7 +207,7 @@ async fn test_batch_auto_load() {
 async fn test_auto_load_with_existing_tool() {
     let temp_dir = TempDir::new().unwrap();
     let tracker = Arc::new(EvolutionTracker::in_memory().unwrap());
-    let tool_server = Arc::new(AetherToolServer::new());
+    let tool_server = Arc::new(AlephToolServer::new());
 
     let config = MarkdownSkillGeneratorConfig {
         output_dir: temp_dir.path().to_path_buf(),

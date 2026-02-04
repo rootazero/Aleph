@@ -5,20 +5,20 @@ echo "=== Aleph Accessibility 权限检查 ==="
 echo ""
 
 # Find the running Aleph application path
-AETHER_PATH=$(ps aux | grep -i "Aleph.app/Contents/MacOS/Aleph" | grep -v grep | awk '{for(i=11;i<=NF;i++) printf "%s ", $i; print ""}' | sed 's/[[:space:]]*$//' | head -1)
+ALEPH_PATH=$(ps aux | grep -i "Aleph.app/Contents/MacOS/Aleph" | grep -v grep | awk '{for(i=11;i<=NF;i++) printf "%s ", $i; print ""}' | sed 's/[[:space:]]*$//' | head -1)
 
-if [ -z "$AETHER_PATH" ]; then
+if [ -z "$ALEPH_PATH" ]; then
     echo "❌ Aleph 未运行"
     echo "   请从 Xcode 启动 Aleph 后再运行此脚本"
     exit 1
 fi
 
 echo "✅ 找到 Aleph 进程"
-echo "   路径: $AETHER_PATH"
+echo "   路径: $ALEPH_PATH"
 echo ""
 
 # Extract application bundle path
-APP_PATH=$(echo "$AETHER_PATH" | sed 's/\/Contents\/MacOS\/Aleph.*/\.app/')
+APP_PATH=$(echo "$ALEPH_PATH" | sed 's/\/Contents\/MacOS\/Aleph.*/\.app/')
 
 echo "📦 应用包路径:"
 echo "   $APP_PATH"

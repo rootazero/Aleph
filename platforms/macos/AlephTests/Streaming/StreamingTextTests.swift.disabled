@@ -1,12 +1,12 @@
 //
 //  StreamingTextTests.swift
-//  AetherTests
+//  AlephTests
 //
 //  Unit tests for streaming text functionality
 //
 
 import XCTest
-@testable import Aether
+@testable import Aleph
 
 final class StreamingTextTests: XCTestCase {
     // MARK: - StreamingTextView Tests

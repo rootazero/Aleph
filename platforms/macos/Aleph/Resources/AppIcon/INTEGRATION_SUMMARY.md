@@ -89,7 +89,7 @@ Aleph/
 │       └── Contents.json
 │
 └── Scripts/
-    ├── extract_aether_logo.py       # SVG 提取脚本
+    ├── extract_aleph_logo.py       # SVG 提取脚本
     ├── generate_app_icon.sh         # PNG 生成脚本
     └── setup_app_icons.py           # Assets 配置脚本
 ```
@@ -155,7 +155,7 @@ Image("AppLogo")
 
 ```bash
 # 1. 提取 SVG
-python Scripts/extract_aether_logo.py
+python Scripts/extract_aleph_logo.py
 
 # 2. 生成 PNG 和 .icns
 bash Scripts/generate_app_icon.sh
@@ -194,7 +194,7 @@ xcodebuild -project Aleph.xcodeproj -scheme Aleph build
 
 - `Aleph/Resources/AppIcon/README.md` - 图标集成详细指南
 - `Aleph/Resources/AppIcon/IconUsageExamples.swift` - SwiftUI 代码示例
-- `Scripts/extract_aether_logo.py` - SVG 提取脚本源码
+- `Scripts/extract_aleph_logo.py` - SVG 提取脚本源码
 - `Scripts/generate_app_icon.sh` - PNG 生成脚本源码
 
 ---

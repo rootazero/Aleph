@@ -10,16 +10,16 @@ use tauri_plugin_autostart::MacosLauncher;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub fn run() {
-    // Initialize logging (use try_init to avoid panic if already initialized by aethecore)
+    // Initialize logging (use try_init to avoid panic if already initialized by alephcore)
     let _ = tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "aether_tauri=debug,tauri=info,aethecore=info".into()),
+                .unwrap_or_else(|_| "aleph_tauri=debug,tauri=info,alephcore=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .try_init();
 
-    tracing::info!("Starting Aether Tauri application");
+    tracing::info!("Starting Aleph Tauri application");
 
     tauri::Builder::default()
         // Plugins
@@ -44,15 +44,15 @@ pub fn run() {
                 tracing::error!("Failed to register shortcuts: {:?}", e);
             }
 
-            // Initialize Aether core
-            match core::init_aether_core(app.handle()) {
-                Ok(aether_core) => {
+            // Initialize Aleph core
+            match core::init_aleph_core(app.handle()) {
+                Ok(aleph_core) => {
                     let state = app.state::<core::CoreState>();
-                    state.initialize(aether_core);
-                    tracing::info!("Aether core initialized successfully");
+                    state.initialize(aleph_core);
+                    tracing::info!("Aleph core initialized successfully");
                 }
                 Err(e) => {
-                    tracing::error!("Failed to initialize Aether core: {:?}", e);
+                    tracing::error!("Failed to initialize Aleph core: {:?}", e);
                     // Continue without core - some features will be unavailable
                 }
             }
@@ -97,7 +97,7 @@ pub fn run() {
             commands::send_notification,
             commands::get_autostart_enabled,
             commands::set_autostart_enabled,
-            commands::get_aether_paths,
+            commands::get_aleph_paths,
             // AI processing commands
             core::process_input,
             core::cancel_processing,

@@ -9,12 +9,12 @@
 //! - Provider factory integration (create_provider)
 //! - Protocol methods work (build_request, parse_response)
 
-use aethecore::ProviderConfig;
-use aethecore::providers::adapter::{ProtocolAdapter, RequestPayload};
-use aethecore::providers::protocols::{
+use alephcore::ProviderConfig;
+use alephcore::providers::adapter::{ProtocolAdapter, RequestPayload};
+use alephcore::providers::protocols::{
     ConfigurableProtocol, ProtocolDefinition, ProtocolRegistry,
 };
-use aethecore::providers::create_provider;
+use alephcore::providers::create_provider;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -152,7 +152,7 @@ custom:
 
 #[tokio::test]
 async fn test_protocol_hot_reload_simulation() {
-    use aethecore::providers::protocols::ProtocolLoader;
+    use alephcore::providers::protocols::ProtocolLoader;
 
     init_registry();
 
@@ -300,7 +300,7 @@ base_url: https://api.proto3.com
 
 #[tokio::test]
 async fn test_protocol_load_from_directory() {
-    use aethecore::providers::protocols::ProtocolLoader;
+    use alephcore::providers::protocols::ProtocolLoader;
 
     init_registry();
 

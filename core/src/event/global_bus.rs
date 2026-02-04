@@ -8,9 +8,9 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aether_core::event::global_bus::GlobalBus;
-//! use aether_core::event::filter::EventFilter;
-//! use aether_core::event::EventType;
+//! use alephcore::event::global_bus::GlobalBus;
+//! use alephcore::event::filter::EventFilter;
+//! use alephcore::event::EventType;
 //!
 //! // Access the global singleton
 //! let bus = GlobalBus::global();

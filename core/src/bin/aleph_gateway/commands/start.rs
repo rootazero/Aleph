@@ -195,7 +195,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Err(e) => {
             eprintln!("Warning: Failed to initialize session manager: {}. Using temp storage.", e);
             // Create fallback with temporary path
-            let temp_path = std::env::temp_dir().join("aether_sessions.db");
+            let temp_path = std::env::temp_dir().join("aleph_sessions.db");
             match SessionManager::new(SessionManagerConfig {
                 db_path: temp_path,
                 ..Default::default()
@@ -458,7 +458,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Initialize authentication context
     let device_store_path = dirs::home_dir()
         .map(|h| h.join(".aleph/devices.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aether_devices.db"));
+        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_devices.db"));
 
     // Ensure parent directory exists
     if let Some(parent) = device_store_path.parent() {
@@ -476,7 +476,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Initialize security store for tokens
     let security_store_path = device_store_path.parent()
         .map(|p| p.join("security.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aether_security.db"));
+        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_security.db"));
     let security_store = Arc::new(
         alephcore::gateway::security::SecurityStore::open(&security_store_path)
             .unwrap_or_else(|e| {
@@ -555,7 +555,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Initialize PairingStore for InboundMessageRouter
     let pairing_store_path = dirs::home_dir()
         .map(|h| h.join(".aleph/pairing.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aether_pairing.db"));
+        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_pairing.db"));
 
     // Ensure parent directory exists
     if let Some(parent) = pairing_store_path.parent() {

@@ -2,7 +2,7 @@
 /**
  * Generate Tauri app icons from SVG source.
  *
- * This script converts the Aether SVG icon to all required formats for Tauri:
+ * This script converts the Aleph SVG icon to all required formats for Tauri:
  * - 32x32.png
  * - 128x128.png
  * - 128x128@2x.png (256x256)
@@ -28,13 +28,13 @@ const PROJECT_ROOT = path.resolve(TAURI_ROOT, "../..");
 // Paths
 const MACOS_RESOURCES = path.join(
   PROJECT_ROOT,
-  "platforms/macos/Aether/Resources"
+  "platforms/macos/Aleph/Resources"
 );
 const TAURI_ICONS = path.join(TAURI_ROOT, "src-tauri/icons");
 const TAURI_ASSETS = path.join(TAURI_ROOT, "src/assets");
 
 // Source files
-const SVG_SOURCE = path.join(MACOS_RESOURCES, "AppIcon/AetherAppIcon.svg");
+const SVG_SOURCE = path.join(MACOS_RESOURCES, "AppIcon/AlephAppIcon.svg");
 const ICNS_SOURCE = path.join(MACOS_RESOURCES, "AppIcon/AppIcon.icns");
 const PROVIDER_ICONS_DIR = path.join(MACOS_RESOURCES, "ProviderIcons");
 

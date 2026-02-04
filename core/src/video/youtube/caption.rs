@@ -27,7 +27,7 @@ pub async fn fetch_caption_via_ytdlp(video_id: &str, preferred_lang: &str) -> Re
     // Get yt-dlp path (auto-installs if not present)
     let ytdlp = get_ytdlp_path().await?;
     let temp_dir = std::env::temp_dir();
-    let output_template = temp_dir.join(format!("aether_sub_{}", video_id));
+    let output_template = temp_dir.join(format!("aleph_sub_{}", video_id));
     let url = format!("https://www.youtube.com/watch?v={}", video_id);
 
     debug!(video_id = %video_id, lang = %preferred_lang, "Fetching caption via yt-dlp");
@@ -54,7 +54,7 @@ pub async fn fetch_caption_via_ytdlp(video_id: &str, preferred_lang: &str) -> Re
             "vtt",
             "--skip-download", // Don't download video
             "-o",
-            output_template.to_str().unwrap_or("/tmp/aether_sub"),
+            output_template.to_str().unwrap_or("/tmp/aleph_sub"),
             &url,
         ])
         .output()
@@ -77,25 +77,25 @@ pub async fn fetch_caption_via_ytdlp(video_id: &str, preferred_lang: &str) -> Re
 
     // Add preferred language and its variants
     if preferred_lang == "zh" {
-        candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh.vtt", video_id)));
-        candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-Hans.vtt", video_id)));
-        candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-Hant.vtt", video_id)));
-        candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-CN.vtt", video_id)));
-        candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-TW.vtt", video_id)));
+        candidate_paths.push(temp_dir.join(format!("aleph_sub_{}.zh.vtt", video_id)));
+        candidate_paths.push(temp_dir.join(format!("aleph_sub_{}.zh-Hans.vtt", video_id)));
+        candidate_paths.push(temp_dir.join(format!("aleph_sub_{}.zh-Hant.vtt", video_id)));
+        candidate_paths.push(temp_dir.join(format!("aleph_sub_{}.zh-CN.vtt", video_id)));
+        candidate_paths.push(temp_dir.join(format!("aleph_sub_{}.zh-TW.vtt", video_id)));
     } else {
         candidate_paths
-            .push(temp_dir.join(format!("aether_sub_{}.{}.vtt", video_id, preferred_lang)));
+            .push(temp_dir.join(format!("aleph_sub_{}.{}.vtt", video_id, preferred_lang)));
     }
 
     // Add English as fallback
     if preferred_lang != "en" {
-        candidate_paths.push(temp_dir.join(format!("aether_sub_{}.en.vtt", video_id)));
+        candidate_paths.push(temp_dir.join(format!("aleph_sub_{}.en.vtt", video_id)));
     }
 
     // Find the first existing subtitle file from candidates
     let subtitle_path = candidate_paths.iter().find(|p| p.exists()).cloned().or_else(|| {
         // Try to find any .vtt file that matches as last resort
-        let pattern = format!("aether_sub_{}.", video_id);
+        let pattern = format!("aleph_sub_{}.", video_id);
         if let Ok(entries) = fs::read_dir(&temp_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();

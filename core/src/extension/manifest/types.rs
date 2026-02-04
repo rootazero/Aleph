@@ -1,7 +1,7 @@
 //! Unified plugin manifest types
 //!
 //! This module defines the unified `PluginManifest` type that can be parsed
-//! from either `package.json` (Node.js plugins) or `aether.plugin.json` (WASM plugins).
+//! from either `package.json` (Node.js plugins) or `aleph.plugin.json` (WASM plugins).
 
 use crate::extension::types::PluginKind;
 use serde::{Deserialize, Serialize};
@@ -165,7 +165,7 @@ impl From<&str> for AuthorInfo {
 /// Unified plugin manifest
 ///
 /// This struct represents the parsed and normalized manifest data
-/// from either `package.json` or `aether.plugin.json`.
+/// from either `package.json` or `aleph.plugin.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     /// Unique plugin identifier (lowercase, alphanumeric with hyphens)
@@ -229,7 +229,7 @@ pub struct PluginManifest {
     pub extensions: Vec<String>,
 
     // ═══════════════════════════════════════════
-    // V2 Extension fields (from aether_plugin.toml)
+    // V2 Extension fields (from aleph_plugin.toml)
     // ═══════════════════════════════════════════
 
     /// V2: Static tool declarations from TOML

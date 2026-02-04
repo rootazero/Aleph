@@ -40,7 +40,7 @@ pub struct MarkdownSkillInfo {
 impl From<&MarkdownCliTool> for MarkdownSkillInfo {
     fn from(tool: &MarkdownCliTool) -> Self {
         let sandbox_mode = match tool.spec.metadata.aleph.as_ref() {
-            Some(aether) => match &aether.security.sandbox {
+            Some(aleph_meta) => match &aleph_meta.security.sandbox {
                 crate::tools::markdown_skill::SandboxMode::Host => "host".to_string(),
                 crate::tools::markdown_skill::SandboxMode::Docker => "docker".to_string(),
                 crate::tools::markdown_skill::SandboxMode::VirtualFs => "virtualfs".to_string(),

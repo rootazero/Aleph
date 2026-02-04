@@ -3,13 +3,13 @@
 //! Tests the RiskEvaluator, TaskContext, and DagScheduler
 //! working together for multi-step task execution.
 
-use aethecore::dispatcher::{
+use alephcore::dispatcher::{
     DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpExecutionCallback,
     RiskEvaluator, RiskLevel, TaskContext, TaskOutput, UserDecision,
 };
-use aethecore::dispatcher::agent_types::{AiTask, CodeExec, Language, Task, TaskGraph, TaskType};
-use aethecore::dispatcher::scheduler::DagScheduler;
-use aethecore::Result;
+use alephcore::dispatcher::agent_types::{AiTask, CodeExec, Language, Task, TaskGraph, TaskType};
+use alephcore::dispatcher::scheduler::DagScheduler;
+use alephcore::Result;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -34,7 +34,7 @@ impl MockTaskExecutor {
 }
 
 #[async_trait]
-impl aethecore::dispatcher::scheduler::GraphTaskExecutor for MockTaskExecutor {
+impl alephcore::dispatcher::scheduler::GraphTaskExecutor for MockTaskExecutor {
     async fn execute(
         &self,
         task: &Task,

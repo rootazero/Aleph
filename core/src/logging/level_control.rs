@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Once;
 use tracing::Level;
 
-/// Log level enumeration (matches aether.udl)
+/// Log level enumeration (matches aleph.udl)
 ///
-/// Note: This type is defined in aether.udl for UniFFI code generation.
+/// Note: This type is defined in aleph.udl for UniFFI code generation.
 /// The Rust definition must match the UDL enum exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]

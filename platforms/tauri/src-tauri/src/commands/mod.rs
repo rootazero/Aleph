@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-use crate::error::{AetherError, Result};
-use crate::settings::{self, AetherPaths, Settings, WindowPosition};
+use crate::error::{AlephError, Result};
+use crate::settings::{self, AlephPaths, Settings, WindowPosition};
 
 /// Application version information
 #[derive(Debug, serde::Serialize)]
@@ -36,7 +36,7 @@ pub fn get_cursor_position() -> Result<Position> {
 
         let mut point = POINT::default();
         unsafe {
-            GetCursorPos(&mut point).map_err(|e| AetherError::Unknown(e.to_string()))?;
+            GetCursorPos(&mut point).map_err(|e| AlephError::Unknown(e.to_string()))?;
         }
         Ok(Position {
             x: point.x,
@@ -71,7 +71,7 @@ pub async fn show_halo_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
         // Get window size
         let window_size = window
             .outer_size()
-            .map_err(|e| AetherError::Window(e.to_string()))?;
+            .map_err(|e| AlephError::Window(e.to_string()))?;
 
         // Calculate fixed position: center horizontally, 30% from bottom
         let (final_x, final_y) = calculate_fixed_position(
@@ -85,15 +85,15 @@ pub async fn show_halo_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
                 x: final_x,
                 y: final_y,
             }))
-            .map_err(|e| AetherError::Window(e.to_string()))?;
+            .map_err(|e| AlephError::Window(e.to_string()))?;
 
         window
             .show()
-            .map_err(|e| AetherError::Window(e.to_string()))?;
+            .map_err(|e| AlephError::Window(e.to_string()))?;
 
         window
             .emit("halo:activate", ())
-            .map_err(|e: tauri::Error| AetherError::Window(e.to_string()))?;
+            .map_err(|e: tauri::Error| AlephError::Window(e.to_string()))?;
 
         tracing::debug!("Halo window shown at ({}, {})", final_x, final_y);
     }
@@ -140,7 +140,7 @@ pub async fn hide_halo_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     if let Some(window) = app.get_webview_window("halo") {
         window
             .hide()
-            .map_err(|e| AetherError::Window(e.to_string()))?;
+            .map_err(|e| AlephError::Window(e.to_string()))?;
         tracing::debug!("Halo window hidden");
     }
 
@@ -167,10 +167,10 @@ pub async fn open_settings_window<R: Runtime>(app: AppHandle<R>) -> Result<()> {
 
         window
             .show()
-            .map_err(|e| AetherError::Window(e.to_string()))?;
+            .map_err(|e| AlephError::Window(e.to_string()))?;
         window
             .set_focus()
-            .map_err(|e| AetherError::Window(e.to_string()))?;
+            .map_err(|e| AlephError::Window(e.to_string()))?;
         tracing::debug!("Settings window opened");
     }
 
@@ -212,10 +212,10 @@ pub async fn save_window_position<R: Runtime>(
     if let Some(window) = app.get_webview_window(&window_name) {
         let position = window
             .outer_position()
-            .map_err(|e| AetherError::Window(e.to_string()))?;
+            .map_err(|e| AlephError::Window(e.to_string()))?;
         let size = window
             .outer_size()
-            .map_err(|e| AetherError::Window(e.to_string()))?;
+            .map_err(|e| AlephError::Window(e.to_string()))?;
 
         let mut state = settings::load_window_state().unwrap_or_default();
 
@@ -265,7 +265,7 @@ pub async fn send_notification<R: Runtime>(
         .title(&title)
         .body(&body)
         .show()
-        .map_err(|e| AetherError::Unknown(e.to_string()))?;
+        .map_err(|e| AlephError::Unknown(e.to_string()))?;
 
     Ok(())
 }
@@ -278,7 +278,7 @@ pub async fn get_autostart_enabled<R: Runtime>(app: AppHandle<R>) -> Result<bool
     let manager = app.autolaunch();
     manager
         .is_enabled()
-        .map_err(|e| AetherError::Config(e.to_string()))
+        .map_err(|e| AlephError::Config(e.to_string()))
 }
 
 /// Set autostart status
@@ -291,20 +291,20 @@ pub async fn set_autostart_enabled<R: Runtime>(app: AppHandle<R>, enabled: bool)
     if enabled {
         manager
             .enable()
-            .map_err(|e| AetherError::Config(e.to_string()))?;
+            .map_err(|e| AlephError::Config(e.to_string()))?;
         tracing::info!("Autostart enabled");
     } else {
         manager
             .disable()
-            .map_err(|e| AetherError::Config(e.to_string()))?;
+            .map_err(|e| AlephError::Config(e.to_string()))?;
         tracing::info!("Autostart disabled");
     }
 
     Ok(())
 }
 
-/// Get all Aether paths (~/.config/aether/*)
+/// Get all Aleph paths (~/.config/aleph/*)
 #[tauri::command]
-pub async fn get_aether_paths() -> Result<AetherPaths> {
-    settings::get_aether_paths()
+pub async fn get_aleph_paths() -> Result<AlephPaths> {
+    settings::get_aleph_paths()
 }

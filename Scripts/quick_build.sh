@@ -30,7 +30,7 @@ fi
 echo ""
 echo "🔗 Step 2/5: Generating UniFFI Swift bindings..."
 /Users/zouguojun/.cargo/bin/cargo run --bin uniffi-bindgen -- \
-    generate --library target/release/libaethecore.dylib \
+    generate --library target/release/libalephcore.dylib \
     --language swift \
     --out-dir ../Sources/Generated/
 if [ $? -eq 0 ]; then
@@ -45,10 +45,10 @@ cd "$PROJECT_ROOT"
 echo ""
 echo "📋 Step 3/5: Copying dylib to Frameworks..."
 mkdir -p Aleph/Frameworks
-cp Aleph/core/target/release/libaethecore.dylib Aleph/Frameworks/
+cp Aleph/core/target/release/libalephcore.dylib Aleph/Frameworks/
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓${NC} dylib copied to Frameworks"
-    ls -lh Aleph/Frameworks/libaethecore.dylib
+    ls -lh Aleph/Frameworks/libalephcore.dylib
 else
     echo -e "${RED}✗${NC} Failed to copy dylib"
     exit 1

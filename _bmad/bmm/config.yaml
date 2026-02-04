@@ -3,7 +3,7 @@
 # Version: 6.0.0-Beta.2
 # Date: 2026-01-27T07:24:10.529Z
 
-project_name: Aether
+project_name: Aleph
 user_skill_level: intermediate
 planning_artifacts: "{project-root}/_bmad-output/planning-artifacts"
 implementation_artifacts: "{project-root}/_bmad-output/implementation-artifacts"

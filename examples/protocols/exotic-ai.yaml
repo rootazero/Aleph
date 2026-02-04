@@ -31,7 +31,7 @@ custom:
     # models: "/v2/models"  # Not yet implemented
 
   # Request structure mapping
-  # This defines how to transform Aether's standard request format
+  # This defines how to transform Aleph's standard request format
   # into the provider's custom format
   request_template:
     # Model identifier
@@ -162,7 +162,7 @@ custom:
 #   claude-3-opus: exotic-ai-ultra-v3
 
 # # Rate limiting hints (optional)
-# # Helps Aether implement smart retry logic
+# # Helps Aleph implement smart retry logic
 # rate_limits:
 #   requests_per_minute: 60
 #   tokens_per_minute: 100000
@@ -178,7 +178,7 @@ custom:
 #   retry_on_status: [429, 500, 502, 503, 504]
 
 # Usage:
-# 1. Copy this file to ~/.aether/protocols/exotic-ai.yaml
+# 1. Copy this file to ~/.aleph/protocols/exotic-ai.yaml
 # 2. In your provider config (config.toml), reference it:
 #    [[providers]]
 #    name = "exotic"
@@ -186,4 +186,4 @@ custom:
 #    api_key = "your-api-key"
 #    model = "exotic-ai-premium-v2"
 # 3. Or use it with CLI:
-#    aether chat --provider exotic --model exotic-ai-premium-v2
+#    aleph chat --provider exotic --model exotic-ai-premium-v2

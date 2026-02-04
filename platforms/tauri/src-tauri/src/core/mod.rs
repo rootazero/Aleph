@@ -1,7 +1,7 @@
-//! Tauri-aethecore bridge module
+//! Tauri-alephcore bridge module
 //!
-//! This module provides the bridge between Tauri frontend and aethecore Rust core.
-//! It implements the AetherEventHandler trait to forward callbacks to the Tauri frontend
+//! This module provides the bridge between Tauri frontend and alephcore Rust core.
+//! It implements the AlephEventHandler trait to forward callbacks to the Tauri frontend
 //! via window.emit() events.
 
 mod event_handler;
@@ -14,30 +14,30 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
 use tracing::info;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::settings;
 
-/// Initialize the Aether core
+/// Initialize the Aleph core
 ///
-/// Creates an AetherCore instance with TauriEventHandler for event forwarding.
+/// Creates an AlephCore instance with TauriEventHandler for event forwarding.
 /// This should be called once during app startup.
-pub fn init_aether_core<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<aethecore::AetherCore>> {
+pub fn init_aleph_core<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<alephcore::AlephCore>> {
     // Get config path
     let config_path = settings::get_config_dir()?
         .join("config.toml")
         .to_string_lossy()
         .to_string();
 
-    info!(config_path = %config_path, "Initializing Aether core");
+    info!(config_path = %config_path, "Initializing Aleph core");
 
     // Create event handler that forwards to Tauri
     let handler = TauriEventHandler::new(app.clone());
 
     // Initialize core
-    let core = aethecore::init_core(config_path, Box::new(handler))
-        .map_err(|e| AetherError::Core(e.to_string()))?;
+    let core = alephcore::init_core(config_path, Box::new(handler))
+        .map_err(|e| AlephError::Core(e.to_string()))?;
 
-    info!("Aether core initialized successfully");
+    info!("Aleph core initialized successfully");
     Ok(core)
 }
 
@@ -56,8 +56,8 @@ pub async fn process_input<R: Runtime>(
     let state = app.state::<CoreState>();
     let core = state.get_core()?;
 
-    let options = aethecore::ProcessOptions {
-        app_context: Some("com.aether.tauri".to_string()),
+    let options = alephcore::ProcessOptions {
+        app_context: Some("com.aleph.tauri".to_string()),
         window_title: None,
         topic_id,
         stream: stream.unwrap_or(true),
@@ -65,7 +65,7 @@ pub async fn process_input<R: Runtime>(
     };
 
     core.process(input, Some(options))
-        .map_err(|e| AetherError::Core(e.to_string()))?;
+        .map_err(|e| AlephError::Core(e.to_string()))?;
 
     Ok(())
 }
@@ -101,7 +101,7 @@ pub async fn generate_topic_title<R: Runtime>(
     let core = state.get_core()?;
 
     core.generate_topic_title(user_input, ai_response)
-        .map_err(|e| AetherError::Core(e.to_string()))
+        .map_err(|e| AlephError::Core(e.to_string()))
 }
 
 /// Extract text from an image using OCR
@@ -114,7 +114,7 @@ pub async fn extract_text_from_image<R: Runtime>(
     let core = state.get_core()?;
 
     core.extract_text(image_data)
-        .map_err(|e| AetherError::Core(e.to_string()))
+        .map_err(|e| AlephError::Core(e.to_string()))
 }
 
 // ============================================================================
@@ -152,7 +152,7 @@ pub async fn set_default_provider<R: Runtime>(
     let core = state.get_core()?;
 
     core.set_default_provider(provider_name)
-        .map_err(|e| AetherError::Core(e.to_string()))?;
+        .map_err(|e| AlephError::Core(e.to_string()))?;
 
     Ok(())
 }
@@ -164,7 +164,7 @@ pub async fn reload_config<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     let core = state.get_core()?;
 
     core.reload_config()
-        .map_err(|e| AetherError::Core(e.to_string()))?;
+        .map_err(|e| AlephError::Core(e.to_string()))?;
 
     info!("Configuration reloaded");
     Ok(())
@@ -186,7 +186,7 @@ pub async fn search_memory<R: Runtime>(
 
     let items = core
         .search_memory(query, limit.unwrap_or(10))
-        .map_err(|e| AetherError::Core(e.to_string()))?;
+        .map_err(|e| AlephError::Core(e.to_string()))?;
 
     Ok(items
         .into_iter()
@@ -208,7 +208,7 @@ pub fn get_memory_stats<R: Runtime>(app: AppHandle<R>) -> Result<MemoryStatsFFI>
 
     let stats = core
         .get_memory_stats()
-        .map_err(|e| AetherError::Core(e.to_string()))?;
+        .map_err(|e| AlephError::Core(e.to_string()))?;
 
     Ok(MemoryStatsFFI {
         total_memories: stats.total_memories,
@@ -226,7 +226,7 @@ pub async fn clear_memory<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     let core = state.get_core()?;
 
     core.clear_memory()
-        .map_err(|e| AetherError::Core(e.to_string()))?;
+        .map_err(|e| AlephError::Core(e.to_string()))?;
 
     info!("Memory cleared");
     Ok(())
@@ -317,7 +317,7 @@ pub fn list_skills<R: Runtime>(app: AppHandle<R>) -> Result<Vec<SkillInfoFFI>> {
 
     let skills = core
         .list_skills()
-        .map_err(|e| AetherError::Core(e.to_string()))?;
+        .map_err(|e| AlephError::Core(e.to_string()))?;
 
     Ok(skills
         .into_iter()

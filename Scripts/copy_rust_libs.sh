@@ -17,9 +17,9 @@ ARCH=$(uname -m)
 echo "📦 Architecture: $ARCH"
 
 # Source and destination paths
-RUST_LIB_PATH="${SRCROOT}/Aleph/core/target/release/libaethecore.dylib"
+RUST_LIB_PATH="${SRCROOT}/Aleph/core/target/release/libalephcore.dylib"
 FRAMEWORKS_PATH="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}"
-DEST_LIB_PATH="${FRAMEWORKS_PATH}/libaethecore.dylib"
+DEST_LIB_PATH="${FRAMEWORKS_PATH}/libalephcore.dylib"
 
 # Check if Rust library exists
 if [ ! -f "$RUST_LIB_PATH" ]; then
@@ -39,14 +39,14 @@ echo "📋 Copying library to: $DEST_LIB_PATH"
 cp "$RUST_LIB_PATH" "$DEST_LIB_PATH"
 
 # Fix install name for runtime loading
-echo "🔧 Setting install name to @rpath/libaethecore.dylib"
-install_name_tool -id "@rpath/libaethecore.dylib" "$DEST_LIB_PATH"
+echo "🔧 Setting install name to @rpath/libalephcore.dylib"
+install_name_tool -id "@rpath/libalephcore.dylib" "$DEST_LIB_PATH"
 
 # Verify the library was copied and fixed
 if [ -f "$DEST_LIB_PATH" ]; then
     echo -e "${GREEN}✅ Library copied and configured successfully!${NC}"
     echo "🔍 Install name verification:"
-    otool -L "$DEST_LIB_PATH" | grep -A 1 "libaethecore.dylib" || true
+    otool -L "$DEST_LIB_PATH" | grep -A 1 "libalephcore.dylib" || true
 else
     echo -e "${RED}❌ Error: Failed to copy library${NC}"
     exit 1

@@ -23,7 +23,7 @@ echo ""
 
 # 3. Check Rust core library
 echo "3. 检查 Rust core 库..."
-DYLIB_PATH="Aleph/Frameworks/libaethecore.dylib"
+DYLIB_PATH="Aleph/Frameworks/libalephcore.dylib"
 if [ -f "$DYLIB_PATH" ]; then
     echo "   ✅ 找到 Rust core 库: $DYLIB_PATH"
     echo "   文件大小: $(ls -lh "$DYLIB_PATH" | awk '{print $5}')"

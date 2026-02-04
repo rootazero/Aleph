@@ -436,7 +436,7 @@ impl ExtensionManager {
 
     /// Convert V2 TOML hook declarations to HookConfig
     ///
-    /// This method transforms hook definitions from `aether.plugin.toml` manifests
+    /// This method transforms hook definitions from `aleph.plugin.toml` manifests
     /// into `HookConfig` objects that can be executed by the hook system.
     ///
     /// # Event Mapping

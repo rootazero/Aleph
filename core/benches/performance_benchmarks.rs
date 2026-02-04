@@ -6,7 +6,7 @@
 /// - Memory retrieval: <100ms
 /// - AI processing: <500ms (for mock provider)
 /// - Total pipeline: <800ms
-use aethecore::metrics::StageTimer;
+use alephcore::metrics::StageTimer;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::thread;
 use std::time::Duration;

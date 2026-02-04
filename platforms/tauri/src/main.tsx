@@ -8,9 +8,9 @@ function App() {
   return (
     <div className="flex h-screen items-center justify-center bg-background text-foreground">
       <div className="text-center">
-        <h1 className="text-title mb-4">Aether</h1>
+        <h1 className="text-title mb-4">Aleph</h1>
         <p className="text-muted-foreground">
-          This is the main entry point. In production, use the system tray to access Aether.
+          This is the main entry point. In production, use the system tray to access Aleph.
         </p>
       </div>
     </div>

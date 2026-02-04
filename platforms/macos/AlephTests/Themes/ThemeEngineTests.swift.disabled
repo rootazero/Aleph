@@ -1,12 +1,12 @@
 //
 //  ThemeEngineTests.swift
-//  AetherTests
+//  AlephTests
 //
 //  Unit tests for ThemeEngine functionality
 //
 
 import XCTest
-@testable import Aether
+@testable import Aleph
 
 final class ThemeEngineTests: XCTestCase {
     var themeEngine: ThemeEngine!

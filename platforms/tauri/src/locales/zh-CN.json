@@ -40,7 +40,7 @@
       "sound": "声音效果",
       "soundDescription": "为操作播放声音效果",
       "launchAtLogin": "登录时启动",
-      "launchAtLoginDescription": "登录时自动启动 Aether",
+      "launchAtLoginDescription": "登录时自动启动 Aleph",
       "language": "语言",
       "languageDescription": "选择您的首选语言",
       "version": "版本",
@@ -311,9 +311,9 @@
     "processing": "处理中..."
   },
   "tray": {
-    "about": "关于 Aether",
+    "about": "关于 Aleph",
     "settings": "设置...",
-    "quit": "退出 Aether",
+    "quit": "退出 Aleph",
     "defaultProvider": "默认提供商",
     "showHalo": "显示 Halo",
     "openConversation": "打开对话"

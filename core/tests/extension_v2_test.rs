@@ -1,6 +1,6 @@
 //! Integration tests for Extension SDK V2
 //!
-//! These tests verify the V2 manifest format (aether.plugin.toml) and all its features:
+//! These tests verify the V2 manifest format (aleph.plugin.toml) and all its features:
 //! - TOML priority over JSON
 //! - [[tools]] section parsing
 //! - [[hooks]] section with kind and priority
@@ -13,11 +13,11 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-use aethecore::extension::manifest::{
-    parse_aether_plugin_toml_content, parse_manifest_from_dir_sync,
+use alephcore::extension::manifest::{
+    parse_aleph_plugin_toml_content, parse_manifest_from_dir_sync,
     FilesystemPermission,
 };
-use aethecore::extension::{PluginKind, PluginPermission};
+use alephcore::extension::{PluginKind, PluginPermission};
 
 // =============================================================================
 // Test 1: TOML Priority over JSON
@@ -29,7 +29,7 @@ fn test_v2_manifest_priority_over_json() {
 
     // Write both TOML and JSON manifests
     fs::write(
-        dir.path().join("aether.plugin.toml"),
+        dir.path().join("aleph.plugin.toml"),
         r#"
 [plugin]
 id = "toml-plugin"
@@ -40,7 +40,7 @@ version = "2.0.0"
     .unwrap();
 
     fs::write(
-        dir.path().join("aether.plugin.json"),
+        dir.path().join("aleph.plugin.json"),
         r#"{"id": "json-plugin", "name": "JSON Plugin", "version": "1.0.0"}"#,
     )
     .unwrap();
@@ -58,7 +58,7 @@ fn test_v2_manifest_priority_over_all_formats() {
 
     // Write all manifest formats
     fs::write(
-        dir.path().join("aether.plugin.toml"),
+        dir.path().join("aleph.plugin.toml"),
         r#"
 [plugin]
 id = "toml-version"
@@ -67,7 +67,7 @@ id = "toml-version"
     .unwrap();
 
     fs::write(
-        dir.path().join("aether.plugin.json"),
+        dir.path().join("aleph.plugin.json"),
         r#"{"id": "json-version"}"#,
     )
     .unwrap();
@@ -76,7 +76,7 @@ id = "toml-version"
         dir.path().join("package.json"),
         r#"{
             "name": "npm-version",
-            "aether": {"id": "npm-version"}
+            "aleph": {"id": "npm-version"}
         }"#,
     )
     .unwrap();
@@ -117,7 +117,7 @@ description = "Performs calculations"
 handler = "handle_calculate"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     assert_eq!(manifest.id, "tools-test");
 
@@ -170,7 +170,7 @@ type = "boolean"
 description = "Whether to use formal greeting"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let tools = manifest.tools_v2.expect("tools_v2 should be Some");
     assert_eq!(tools.len(), 1);
@@ -208,7 +208,7 @@ event = "SessionStart"
 handler = "on_session_start"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let hooks = manifest.hooks_v2.expect("hooks_v2 should be Some");
     assert_eq!(hooks.len(), 3);
@@ -248,7 +248,7 @@ event = "PostToolUse"
 kind = "interceptor"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let hooks = manifest.hooks_v2.expect("hooks_v2 should be Some");
     assert_eq!(hooks[0].kind, "observer");
@@ -274,7 +274,7 @@ event = "Event3"
 priority = "high"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let hooks = manifest.hooks_v2.expect("hooks_v2 should be Some");
     assert_eq!(hooks[0].priority, "low");
@@ -297,7 +297,7 @@ file = "SYSTEM.md"
 scope = "system"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let prompt = manifest.prompt_v2.expect("prompt_v2 should be Some");
     assert_eq!(prompt.file, "SYSTEM.md");
@@ -315,7 +315,7 @@ file = "prompts/user-context.md"
 scope = "user"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let prompt = manifest.prompt_v2.expect("prompt_v2 should be Some");
     assert_eq!(prompt.file, "prompts/user-context.md");
@@ -332,7 +332,7 @@ id = "prompt-default-test"
 file = "PROMPT.md"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let prompt = manifest.prompt_v2.expect("prompt_v2 should be Some");
     assert_eq!(prompt.file, "PROMPT.md");
@@ -356,7 +356,7 @@ env = true
 shell = true
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     // Check that permissions are converted correctly
     assert!(manifest.permissions.contains(&PluginPermission::Network));
@@ -377,7 +377,7 @@ id = "fs-read-test"
 [permissions]
 filesystem = "read"
 "#;
-    let manifest = parse_aether_plugin_toml_content(content_read, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content_read, std::path::Path::new("/test")).unwrap();
     assert!(manifest.permissions.contains(&PluginPermission::FilesystemRead));
     assert!(!manifest.permissions.contains(&PluginPermission::FilesystemWrite));
     assert!(!manifest.permissions.contains(&PluginPermission::Filesystem));
@@ -390,7 +390,7 @@ id = "fs-write-test"
 [permissions]
 filesystem = "write"
 "#;
-    let manifest = parse_aether_plugin_toml_content(content_write, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content_write, std::path::Path::new("/test")).unwrap();
     assert!(manifest.permissions.contains(&PluginPermission::FilesystemWrite));
     assert!(!manifest.permissions.contains(&PluginPermission::FilesystemRead));
 
@@ -402,7 +402,7 @@ id = "fs-full-test"
 [permissions]
 filesystem = "full"
 "#;
-    let manifest = parse_aether_plugin_toml_content(content_full, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content_full, std::path::Path::new("/test")).unwrap();
     assert!(manifest.permissions.contains(&PluginPermission::Filesystem));
 
     // Test boolean true
@@ -413,7 +413,7 @@ id = "fs-bool-test"
 [permissions]
 filesystem = true
 "#;
-    let manifest = parse_aether_plugin_toml_content(content_bool, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content_bool, std::path::Path::new("/test")).unwrap();
     assert!(manifest.permissions.contains(&PluginPermission::Filesystem));
 }
 
@@ -424,7 +424,7 @@ fn test_v2_permissions_empty() {
 id = "no-permissions-test"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
     assert!(manifest.permissions.is_empty());
 }
 
@@ -461,7 +461,7 @@ dynamic_tools = true
 dynamic_hooks = true
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let caps = manifest.capabilities_v2.expect("capabilities_v2 should be Some");
     assert!(caps.dynamic_tools);
@@ -475,7 +475,7 @@ fn test_v2_capabilities_defaults() {
 id = "capabilities-default-test"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let caps = manifest.capabilities_v2.expect("capabilities_v2 should be Some");
     assert!(!caps.dynamic_tools); // default false
@@ -492,7 +492,7 @@ id = "capabilities-partial-test"
 dynamic_tools = true
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let caps = manifest.capabilities_v2.expect("capabilities_v2 should be Some");
     assert!(caps.dynamic_tools);
@@ -521,7 +521,7 @@ description = "Watches for file changes"
 start_handler = "start_watcher"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let services = manifest.services_v2.expect("services_v2 should be Some");
     assert_eq!(services.len(), 2);
@@ -563,7 +563,7 @@ description = "Shows help"
 handler = "handle_help"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     let commands = manifest.commands_v2.expect("commands_v2 should be Some");
     assert_eq!(commands.len(), 2);
@@ -642,7 +642,7 @@ dynamic_tools = true
 dynamic_hooks = false
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     // Plugin section
     assert_eq!(manifest.id, "complete-v2-plugin");
@@ -711,7 +711,7 @@ fn test_v2_plugin_kind_defaults() {
 [plugin]
 id = "minimal"
 "#;
-    let manifest = parse_aether_plugin_toml_content(content_minimal, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content_minimal, std::path::Path::new("/test")).unwrap();
     assert_eq!(manifest.kind, PluginKind::Wasm);
     assert_eq!(manifest.entry, PathBuf::from("plugin.wasm"));
 
@@ -721,7 +721,7 @@ id = "minimal"
 id = "nodejs-plugin"
 kind = "nodejs"
 "#;
-    let manifest = parse_aether_plugin_toml_content(content_nodejs, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content_nodejs, std::path::Path::new("/test")).unwrap();
     assert_eq!(manifest.kind, PluginKind::NodeJs);
     assert_eq!(manifest.entry, PathBuf::from("index.js"));
 
@@ -731,7 +731,7 @@ kind = "nodejs"
 id = "static-plugin"
 kind = "static"
 "#;
-    let manifest = parse_aether_plugin_toml_content(content_static, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content_static, std::path::Path::new("/test")).unwrap();
     assert_eq!(manifest.kind, PluginKind::Static);
     assert_eq!(manifest.entry, PathBuf::from("."));
 }
@@ -747,7 +747,7 @@ fn test_v2_missing_plugin_id() {
 name = "No ID Plugin"
 "#;
 
-    let result = parse_aether_plugin_toml_content(content, std::path::Path::new("/test"));
+    let result = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test"));
     assert!(result.is_err());
 }
 
@@ -759,7 +759,7 @@ id = ""
 name = "Empty ID Plugin"
 "#;
 
-    let result = parse_aether_plugin_toml_content(content, std::path::Path::new("/test"));
+    let result = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test"));
     assert!(result.is_err());
 }
 
@@ -770,7 +770,7 @@ fn test_v2_invalid_toml_syntax() {
 id = "broken"
 "#;
 
-    let result = parse_aether_plugin_toml_content(content, std::path::Path::new("/test"));
+    let result = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test"));
     assert!(result.is_err());
 }
 
@@ -782,7 +782,7 @@ id = "Invalid ID With Spaces"
 "#;
 
     // ID should be sanitized
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
     assert_eq!(manifest.id, "invalid-id-with-spaces");
 }
 
@@ -797,7 +797,7 @@ fn test_v2_no_tools() {
 id = "no-tools"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
     assert!(manifest.tools_v2.is_none());
 }
 
@@ -808,7 +808,7 @@ fn test_v2_no_hooks() {
 id = "no-hooks"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
     assert!(manifest.hooks_v2.is_none());
 }
 
@@ -819,7 +819,7 @@ fn test_v2_no_services() {
 id = "no-services"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
     assert!(manifest.services_v2.is_none());
 }
 
@@ -830,7 +830,7 @@ fn test_v2_no_commands() {
 id = "no-commands"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
     assert!(manifest.commands_v2.is_none());
 }
 
@@ -841,7 +841,7 @@ fn test_v2_no_prompt() {
 id = "no-prompt"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
     assert!(manifest.prompt_v2.is_none());
 }
 
@@ -870,7 +870,7 @@ label = "Telegram"
 handler = "handleTelegramChannel"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let channels = manifest.channels_v2.expect("channels_v2 should be Some");
     assert_eq!(channels.len(), 2);
@@ -895,7 +895,7 @@ fn test_v2_channels_empty() {
 id = "no-channels"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
     assert!(manifest.channels_v2.is_none());
 }
 
@@ -926,7 +926,7 @@ models = ["llama-7b", "llama-13b"]
 handler = "handleLocalChat"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let providers = manifest.providers_v2.expect("providers_v2 should be Some");
     assert_eq!(providers.len(), 2);
@@ -953,7 +953,7 @@ fn test_v2_providers_empty() {
 id = "no-providers"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
     assert!(manifest.providers_v2.is_none());
 }
 
@@ -969,7 +969,7 @@ name = "Empty Models Provider"
 handler = "handleChat"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let providers = manifest.providers_v2.expect("providers_v2 should be Some");
     assert_eq!(providers[0].models.len(), 0);
@@ -1002,7 +1002,7 @@ methods = ["GET"]
 handler = "handleHealth"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let routes = manifest.http_routes_v2.expect("http_routes_v2 should be Some");
     assert_eq!(routes.len(), 3);
@@ -1030,7 +1030,7 @@ fn test_v2_http_routes_empty() {
 id = "no-http-routes"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
     assert!(manifest.http_routes_v2.is_none());
 }
 
@@ -1045,7 +1045,7 @@ path = "/api/test"
 handler = "handleTest"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let routes = manifest.http_routes_v2.expect("http_routes_v2 should be Some");
     assert_eq!(routes[0].methods.len(), 0);
@@ -1057,7 +1057,7 @@ handler = "handleTest"
 
 #[test]
 fn test_http_path_matching() {
-    use aethecore::extension::match_path;
+    use alephcore::extension::match_path;
 
     // Exact match
     let params = match_path("/api/users", "/api/users");
@@ -1090,7 +1090,7 @@ fn test_http_path_matching() {
 
 #[test]
 fn test_http_path_matching_edge_cases() {
-    use aethecore::extension::match_path;
+    use alephcore::extension::match_path;
 
     // Root path
     let params = match_path("/", "/");
@@ -1178,7 +1178,7 @@ handler = "handleWebhook"
 dynamic_tools = true
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     // Verify plugin basics
     assert_eq!(manifest.id, "full-p2-plugin");
@@ -1233,7 +1233,7 @@ start_handler = "startSync"
 stop_handler = "stopSync"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let services = manifest.services_v2.unwrap();
     assert_eq!(services.len(), 2);
@@ -1250,7 +1250,7 @@ stop_handler = "stopSync"
 
 #[test]
 fn test_service_state_serialization() {
-    use aethecore::extension::ServiceState;
+    use alephcore::extension::ServiceState;
 
     // Test serialization
     let running = ServiceState::Running;
@@ -1282,7 +1282,7 @@ fn test_service_state_serialization() {
 
 #[test]
 fn test_service_info_serialization() {
-    use aethecore::extension::{ServiceInfo, ServiceState};
+    use alephcore::extension::{ServiceInfo, ServiceState};
 
     let info = ServiceInfo {
         id: "svc-test-123".to_string(),
@@ -1308,7 +1308,7 @@ fn test_service_info_serialization() {
 
 #[test]
 fn test_service_result_serialization() {
-    use aethecore::extension::ServiceResult;
+    use alephcore::extension::ServiceResult;
 
     let ok_result = ServiceResult::ok();
     assert!(ok_result.success);
@@ -1338,7 +1338,7 @@ fn test_v2_parse_from_directory() {
     let dir = TempDir::new().unwrap();
 
     fs::write(
-        dir.path().join("aether.plugin.toml"),
+        dir.path().join("aleph.plugin.toml"),
         r#"
 [plugin]
 id = "dir-plugin"
@@ -1392,7 +1392,7 @@ description = "Clear screen"
 handler = "handleClear"
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, &PathBuf::from("/tmp")).unwrap();
 
     let commands = manifest.commands_v2.unwrap();
     assert_eq!(commands.len(), 2);
@@ -1404,7 +1404,7 @@ handler = "handleClear"
 
 #[test]
 fn test_direct_command_result() {
-    use aethecore::extension::DirectCommandResult;
+    use alephcore::extension::DirectCommandResult;
 
     let success = DirectCommandResult::success("Done!");
     assert!(success.success);
@@ -1453,7 +1453,7 @@ help = "Request timeout in seconds"
 advanced = true
 "#;
 
-    let manifest = parse_aether_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
+    let manifest = parse_aleph_plugin_toml_content(content, std::path::Path::new("/test")).unwrap();
 
     assert!(manifest.config_schema.is_some());
     assert!(manifest.has_config());

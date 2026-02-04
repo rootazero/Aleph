@@ -34,18 +34,18 @@ jobs:
 
       - name: Copy Library
         run: |
-          cp core/target/release/libaethecore.dylib \
-            platforms/macos/Aether/Frameworks/
-          install_name_tool -id "@rpath/libaethecore.dylib" \
-            platforms/macos/Aether/Frameworks/libaethecore.dylib
+          cp core/target/release/libalephcore.dylib \
+            platforms/macos/Aleph/Frameworks/
+          install_name_tool -id "@rpath/libalephcore.dylib" \
+            platforms/macos/Aleph/Frameworks/libalephcore.dylib
 
       - name: Generate UniFFI Bindings
         run: |
           cd core
           cargo run --bin uniffi-bindgen generate \
-            --library target/release/libaethecore.dylib \
+            --library target/release/libalephcore.dylib \
             --language swift \
-            --out-dir ../platforms/macos/Aether/Sources/Generated/
+            --out-dir ../platforms/macos/Aleph/Sources/Generated/
 
       - name: Generate Xcode Project
         working-directory: platforms/macos
@@ -54,13 +54,13 @@ jobs:
       - name: Build App
         working-directory: platforms/macos
         run: |
-          xcodebuild -project Aether.xcodeproj \
-            -scheme Aether \
+          xcodebuild -project Aleph.xcodeproj \
+            -scheme Aleph \
             -configuration Release \
             -destination 'platform=macOS' \
             build
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Aether-macOS
-          path: platforms/macos/build/Release/Aether.app
+          name: Aleph-macOS
+          path: platforms/macos/build/Release/Aleph.app

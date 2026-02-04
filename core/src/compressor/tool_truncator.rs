@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aether_core::compressor::ToolTruncator;
+//! use alephcore::compressor::ToolTruncator;
 //!
 //! let truncator = ToolTruncator::new(2000);
 //!
