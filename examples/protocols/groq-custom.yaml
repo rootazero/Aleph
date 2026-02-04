@@ -1,0 +1,48 @@
+# Example: Minimal Configuration Mode
+# Extends OpenAI protocol with custom authentication
+#
+# This example shows how to create a provider preset that extends
+# an existing protocol (OpenAI) with minimal customization.
+#
+# Use this when:
+# - The provider's API is mostly OpenAI-compatible
+# - You only need to change a few fields (auth, base_url, defaults)
+# - You want to maintain compatibility with future OpenAI protocol updates
+
+name: groq-custom
+extends: openai
+base_url: https://api.groq.com/openai/v1
+
+differences:
+  # Custom authentication header
+  # Groq uses "X-API-Key" instead of "Authorization"
+  auth:
+    header: X-API-Key
+    prefix: ""  # No "Bearer " prefix
+
+  # Field customization
+  # Override default parameter values and ranges
+  request_fields:
+    temperature:
+      default: 0.7
+      range: [0.0, 2.0]
+
+    max_tokens:
+      default: 4096
+      range: [1, 32768]
+
+    top_p:
+      default: 1.0
+      range: [0.0, 1.0]
+
+  # Model name mapping (if Groq uses different model identifiers)
+  model_aliases:
+    llama-3-70b: llama3-70b-8192
+    mixtral-8x7b: mixtral-8x7b-32768
+
+# Usage:
+# 1. Copy this file to ~/.aether/protocols/groq-custom.yaml
+# 2. In your provider config, reference it:
+#    protocol: groq-custom
+# 3. Or use it with --protocol flag:
+#    aether chat --protocol groq-custom --model llama-3-70b
