@@ -14,12 +14,12 @@ This document outlines performance testing procedures to ensure the Modernized S
 ### Software Requirements
 - Xcode 15.0+ with Instruments
 - macOS 13, 14, or 15
-- Aether built in Release configuration
+- Aleph built in Release configuration
 
 ### Pre-Test Setup
 1. Build in Release mode:
    ```bash
-   xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build
+   xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Release build
    ```
 2. Close all other applications
 3. Disable Spotlight indexing temporarily (for consistent results)
@@ -39,7 +39,7 @@ Identify CPU-intensive operations and ensure no single function blocks the UI th
    open -a Instruments
    ```
 2. **Select Template**: Time Profiler
-3. **Choose Target**: Aether.app (Release build)
+3. **Choose Target**: Aleph.app (Release build)
 4. **Configure**:
    - Recording mode: Immediate
    - Sample rate: 1ms (high resolution)
@@ -214,7 +214,7 @@ Verify UI remains responsive with 50+ providers.
    ```bash
    cat > test_providers.sh << 'EOF'
    #!/bin/bash
-   CONFIG=~/.aether/config.toml
+   CONFIG=~/.aleph/config.toml
 
    # Backup existing
    cp $CONFIG ${CONFIG}.backup
@@ -243,7 +243,7 @@ Verify UI remains responsive with 50+ providers.
 ### Test Procedure
 
 #### Scroll Performance
-1. [ ] Open Aether Settings
+1. [ ] Open Aleph Settings
 2. [ ] Navigate to Providers tab
 3. [ ] Verify 50+ provider cards visible in list
 4. [ ] Scroll to bottom (smooth scroll, not jump)
@@ -271,7 +271,7 @@ Verify UI remains responsive with 50+ providers.
 
 #### Memory Usage
 1. [ ] Open Activity Monitor
-2. [ ] Find Aether process
+2. [ ] Find Aleph process
 3. [ ] Record memory usage:
    - With 50 providers: _______ MB
 4. [ ] **Target**: < 200MB total

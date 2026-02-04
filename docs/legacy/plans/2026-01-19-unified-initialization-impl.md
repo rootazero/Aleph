@@ -519,7 +519,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 use super::download::{download_file, set_executable};
 use super::manager::{RuntimeManager, UpdateInfo};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::path::PathBuf;
 use std::process::Command;
 use tracing::{debug, info};
@@ -590,7 +590,7 @@ impl RuntimeManager for FfmpegRuntime {
 
         let install_dir = self.install_dir();
         fs::create_dir_all(&install_dir).map_err(|e| {
-            AetherError::runtime("ffmpeg", format!("Failed to create directory: {}", e))
+            AlephError::runtime("ffmpeg", format!("Failed to create directory: {}", e))
         })?;
 
         // Download zip file
@@ -599,28 +599,28 @@ impl RuntimeManager for FfmpegRuntime {
 
         // Extract ffmpeg binary from zip
         let file = fs::File::open(&zip_path).map_err(|e| {
-            AetherError::runtime("ffmpeg", format!("Failed to open zip: {}", e))
+            AlephError::runtime("ffmpeg", format!("Failed to open zip: {}", e))
         })?;
 
         let mut archive = ZipArchive::new(file).map_err(|e| {
-            AetherError::runtime("ffmpeg", format!("Failed to read zip: {}", e))
+            AlephError::runtime("ffmpeg", format!("Failed to read zip: {}", e))
         })?;
 
         // Find and extract ffmpeg binary
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).map_err(|e| {
-                AetherError::runtime("ffmpeg", format!("Failed to read zip entry: {}", e))
+                AlephError::runtime("ffmpeg", format!("Failed to read zip entry: {}", e))
             })?;
 
             let name = entry.name().to_string();
             if name.ends_with("ffmpeg") || name == "ffmpeg" {
                 let mut contents = Vec::new();
                 entry.read_to_end(&mut contents).map_err(|e| {
-                    AetherError::runtime("ffmpeg", format!("Failed to extract: {}", e))
+                    AlephError::runtime("ffmpeg", format!("Failed to extract: {}", e))
                 })?;
 
                 fs::write(self.binary_path(), contents).map_err(|e| {
-                    AetherError::runtime("ffmpeg", format!("Failed to write binary: {}", e))
+                    AlephError::runtime("ffmpeg", format!("Failed to write binary: {}", e))
                 })?;
 
                 break;
@@ -1322,7 +1322,7 @@ private func runInitialization() {
 **Step 4: Verify Swift builds**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodegen generate && xcodebuild -scheme Aether -configuration Debug build
+cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build
 ```
 
 **Step 5: Commit**
@@ -1435,7 +1435,7 @@ Search and replace any remaining `isFreshInstall()` calls with `needsFirstTimeIn
 **Step 4: Verify Swift builds**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodegen generate && xcodebuild -scheme Aether -configuration Debug build
+cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build
 ```
 
 **Step 5: Commit**
@@ -1470,7 +1470,7 @@ cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodegen generate
 **Step 3: Build full app**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build
+cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build
 ```
 
 **Step 4: Test fresh install scenario**

@@ -11,8 +11,8 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::video::{YouTubeExtractor, VideoTranscript};
-//! use aethecore::config::VideoConfig;
+//! use alephcore::video::{YouTubeExtractor, VideoTranscript};
+//! use alephcore::config::VideoConfig;
 //!
 //! let config = VideoConfig::default();
 //! let extractor = YouTubeExtractor::new(config);

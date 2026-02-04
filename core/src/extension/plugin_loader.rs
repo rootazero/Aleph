@@ -15,7 +15,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::extension::{PluginLoader, PluginManifest, PluginRegistry};
+//! use alephcore::extension::{PluginLoader, PluginManifest, PluginRegistry};
 //!
 //! let mut loader = PluginLoader::new();
 //! let mut registry = PluginRegistry::new();

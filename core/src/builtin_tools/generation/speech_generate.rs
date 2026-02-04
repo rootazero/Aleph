@@ -1,7 +1,7 @@
 //! Speech generation tool (Text-to-Speech)
 //!
 //! Generates speech audio from text using configured AI providers.
-//! Implements AetherTool trait for AI agent integration.
+//! Implements AlephTool trait for AI agent integration.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -15,7 +15,7 @@ use crate::generation::{
     GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
 use crate::builtin_tools::error::ToolError;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 /// Arguments for speech generation
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -237,9 +237,9 @@ impl Clone for SpeechGenerateTool {
     }
 }
 
-/// Implementation of AetherTool trait for SpeechGenerateTool
+/// Implementation of AlephTool trait for SpeechGenerateTool
 #[async_trait]
-impl AetherTool for SpeechGenerateTool {
+impl AlephTool for SpeechGenerateTool {
     const NAME: &'static str = "generate_speech";
     const DESCRIPTION: &'static str = "Convert text to speech audio. Use this when you need to generate spoken audio from text content.";
 
@@ -255,7 +255,7 @@ impl AetherTool for SpeechGenerateTool {
 mod tests {
     use super::*;
     use crate::generation::MockGenerationProvider;
-    use crate::tools::AetherTool;
+    use crate::tools::AlephTool;
 
     fn create_test_registry() -> Arc<GenerationProviderRegistry> {
         let mut registry = GenerationProviderRegistry::new();
@@ -389,7 +389,7 @@ mod tests {
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_ok());
 
         let output = result.unwrap();
@@ -413,10 +413,10 @@ mod tests {
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        // Error is now AetherError
+        // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
         assert!(err_msg.contains("not found"), "Error should contain 'not found': {}", err_msg);
@@ -436,10 +436,10 @@ mod tests {
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        // Error is now AetherError
+        // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
         assert!(err_msg.contains("No speech generation provider"), "Error should contain 'No speech generation provider': {}", err_msg);
@@ -459,10 +459,10 @@ mod tests {
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        // Error is now AetherError
+        // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
         assert!(err_msg.contains("empty"), "Error should contain 'empty': {}", err_msg);
@@ -482,7 +482,7 @@ mod tests {
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_ok());
 
         let output = result.unwrap();
@@ -494,12 +494,12 @@ mod tests {
         let registry = create_test_registry();
         let tool = SpeechGenerateTool::new(registry);
 
-        // Test definition via AetherTool trait
-        let definition = AetherTool::definition(&tool);
+        // Test definition via AlephTool trait
+        let definition = AlephTool::definition(&tool);
         assert_eq!(definition.name, "generate_speech");
         assert!(!definition.description.is_empty());
 
-        // Test call via AetherTool trait
+        // Test call via AlephTool trait
         let args = SpeechGenerateArgs {
             text: "Trait test".to_string(),
             voice: None,
@@ -508,7 +508,7 @@ mod tests {
             provider: Some("mock-tts".to_string()),
         };
 
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_ok());
     }
 

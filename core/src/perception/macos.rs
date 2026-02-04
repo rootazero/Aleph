@@ -17,7 +17,7 @@ use once_cell::sync::Lazy;
 use tracing::warn;
 
 use crate::config::Config;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::vision::{VisionConfig, VisionService};
 
 use super::{
@@ -276,7 +276,7 @@ fn capture_region_image(rect: &Rect, format: ImageFormat) -> Result<Vec<u8>> {
     );
 
     if w <= 0 || h <= 0 {
-        return Err(AetherError::tool("Invalid capture region"));
+        return Err(AlephError::tool("Invalid capture region"));
     }
 
     let tmp = tempfile::Builder::new()
@@ -286,7 +286,7 @@ fn capture_region_image(rect: &Rect, format: ImageFormat) -> Result<Vec<u8>> {
             ImageFormat::Jpeg => ".jpg",
         })
         .tempfile()
-        .map_err(|e| AetherError::tool(format!("Failed to create temp file: {}", e)))?;
+        .map_err(|e| AlephError::tool(format!("Failed to create temp file: {}", e)))?;
 
     let path = tmp.path().to_path_buf();
     let region_arg = format!("{},{},{},{}", x, y, w, h);
@@ -303,14 +303,14 @@ fn capture_region_image(rect: &Rect, format: ImageFormat) -> Result<Vec<u8>> {
         .arg(&region_arg)
         .arg(&path)
         .status()
-        .map_err(|e| AetherError::tool(format!("Failed to run screencapture: {}", e)))?;
+        .map_err(|e| AlephError::tool(format!("Failed to run screencapture: {}", e)))?;
 
     if !status.success() {
-        return Err(AetherError::tool("screencapture failed"));
+        return Err(AlephError::tool("screencapture failed"));
     }
 
     let data = fs::read(&path)
-        .map_err(|e| AetherError::tool(format!("Failed to read snapshot: {}", e)))?;
+        .map_err(|e| AlephError::tool(format!("Failed to read snapshot: {}", e)))?;
 
     Ok(data)
 }
@@ -324,7 +324,7 @@ fn persist_snapshot_image(
 ) -> Result<ImageRef> {
     let base_dir = default_snapshot_dir()?;
     fs::create_dir_all(&base_dir)
-        .map_err(|e| AetherError::tool(format!("Failed to create snapshot dir: {}", e)))?;
+        .map_err(|e| AlephError::tool(format!("Failed to create snapshot dir: {}", e)))?;
 
     let filename = match format {
         ImageFormat::Png => format!("{}.png", snapshot_id),
@@ -333,7 +333,7 @@ fn persist_snapshot_image(
     let path = base_dir.join(filename);
 
     fs::write(&path, data)
-        .map_err(|e| AetherError::tool(format!("Failed to write snapshot image: {}", e)))?;
+        .map_err(|e| AlephError::tool(format!("Failed to write snapshot image: {}", e)))?;
 
     Ok(ImageRef {
         path: path.to_string_lossy().to_string(),
@@ -346,7 +346,7 @@ fn persist_snapshot_image(
 
 fn default_snapshot_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| {
-        AetherError::tool("Failed to resolve home directory for snapshots")
+        AlephError::tool("Failed to resolve home directory for snapshots")
     })?;
     Ok(home.join(".aether").join("snapshots"))
 }

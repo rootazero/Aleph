@@ -9,7 +9,7 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use aethecore::skill_evolution::{ApprovalManager, SolidificationSuggestion};
+//! use alephcore::skill_evolution::{ApprovalManager, SolidificationSuggestion};
 //!
 //! let manager = ApprovalManager::new();
 //!
@@ -31,7 +31,7 @@ use std::sync::{Arc, RwLock};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::types::SolidificationSuggestion;
 
@@ -159,7 +159,7 @@ impl ApprovalManager {
     ///
     /// Returns the request ID for tracking.
     pub fn submit(&self, suggestion: SolidificationSuggestion) -> Result<String> {
-        let mut requests = self.requests.write().map_err(|_| AetherError::Other {
+        let mut requests = self.requests.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire lock".to_string(),
             suggestion: None,
         })?;
@@ -183,7 +183,7 @@ impl ApprovalManager {
                 max = self.config.max_pending_count,
                 "Max pending requests reached"
             );
-            return Err(AetherError::Other {
+            return Err(AlephError::Other {
                 message: format!(
                     "Maximum pending requests ({}) reached. Please approve or reject existing requests.",
                     self.config.max_pending_count
@@ -224,7 +224,7 @@ impl ApprovalManager {
 
     /// List all pending approval requests.
     pub fn list_pending(&self) -> Result<Vec<ApprovalRequest>> {
-        let mut requests = self.requests.write().map_err(|_| AetherError::Other {
+        let mut requests = self.requests.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire lock".to_string(),
             suggestion: None,
         })?;
@@ -260,7 +260,7 @@ impl ApprovalManager {
 
     /// Get a specific request by ID.
     pub fn get(&self, request_id: &str) -> Result<Option<ApprovalRequest>> {
-        let requests = self.requests.read().map_err(|_| AetherError::Other {
+        let requests = self.requests.read().map_err(|_| AlephError::Other {
             message: "Failed to acquire lock".to_string(),
             suggestion: None,
         })?;
@@ -281,18 +281,18 @@ impl ApprovalManager {
         request_id: &str,
         notes: Option<String>,
     ) -> Result<SolidificationSuggestion> {
-        let mut requests = self.requests.write().map_err(|_| AetherError::Other {
+        let mut requests = self.requests.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire lock".to_string(),
             suggestion: None,
         })?;
 
-        let request = requests.get_mut(request_id).ok_or_else(|| AetherError::Other {
+        let request = requests.get_mut(request_id).ok_or_else(|| AlephError::Other {
             message: format!("Request not found: {}", request_id),
             suggestion: None,
         })?;
 
         if !request.is_pending() {
-            return Err(AetherError::Other {
+            return Err(AlephError::Other {
                 message: format!(
                     "Request is not pending (status: {:?})",
                     request.status
@@ -324,18 +324,18 @@ impl ApprovalManager {
 
     /// Reject a pending request with optional reason.
     pub fn reject_with_reason(&self, request_id: &str, reason: Option<String>) -> Result<()> {
-        let mut requests = self.requests.write().map_err(|_| AetherError::Other {
+        let mut requests = self.requests.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire lock".to_string(),
             suggestion: None,
         })?;
 
-        let request = requests.get_mut(request_id).ok_or_else(|| AetherError::Other {
+        let request = requests.get_mut(request_id).ok_or_else(|| AlephError::Other {
             message: format!("Request not found: {}", request_id),
             suggestion: None,
         })?;
 
         if !request.is_pending() {
-            return Err(AetherError::Other {
+            return Err(AlephError::Other {
                 message: format!(
                     "Request is not pending (status: {:?})",
                     request.status
@@ -362,7 +362,7 @@ impl ApprovalManager {
 
     /// Get count of pending requests
     pub fn pending_count(&self) -> Result<usize> {
-        let requests = self.requests.read().map_err(|_| AetherError::Other {
+        let requests = self.requests.read().map_err(|_| AlephError::Other {
             message: "Failed to acquire lock".to_string(),
             suggestion: None,
         })?;
@@ -372,7 +372,7 @@ impl ApprovalManager {
 
     /// Clear all resolved (non-pending) requests to free memory.
     pub fn clear_resolved(&self) -> Result<usize> {
-        let mut requests = self.requests.write().map_err(|_| AetherError::Other {
+        let mut requests = self.requests.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire lock".to_string(),
             suggestion: None,
         })?;
@@ -390,7 +390,7 @@ impl ApprovalManager {
 
     /// Export all requests for persistence.
     pub fn export(&self) -> Result<Vec<ApprovalRequest>> {
-        let requests = self.requests.read().map_err(|_| AetherError::Other {
+        let requests = self.requests.read().map_err(|_| AlephError::Other {
             message: "Failed to acquire lock".to_string(),
             suggestion: None,
         })?;
@@ -400,7 +400,7 @@ impl ApprovalManager {
 
     /// Import requests from persistence.
     pub fn import(&self, requests: Vec<ApprovalRequest>) -> Result<()> {
-        let mut store = self.requests.write().map_err(|_| AetherError::Other {
+        let mut store = self.requests.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire lock".to_string(),
             suggestion: None,
         })?;

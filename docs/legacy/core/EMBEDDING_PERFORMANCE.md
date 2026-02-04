@@ -9,7 +9,7 @@
 
 - **Build Profile**: Release (optimized)
 - **Test Command**: `cargo test --release memory::embedding::tests`
-- **Model Path**: `~/.aether/models/all-MiniLM-L6-v2/`
+- **Model Path**: `~/.aleph/models/all-MiniLM-L6-v2/`
 
 ## Performance Results
 
@@ -119,7 +119,7 @@ To reproduce these results:
 
 ```bash
 # Navigate to core directory
-cd Aether/core/
+cd Aleph/core/
 
 # Run release-mode tests with output
 cargo test --release memory::embedding::tests -- --nocapture

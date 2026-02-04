@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Enhance Aether's message flow system with per-runId sequences, tool formatting, block-level flushing, and message deduplication.
+**Goal:** Enhance Aleph's message flow system with per-runId sequences, tool formatting, block-level flushing, and message deduplication.
 
 **Architecture:** Four new Rust modules (tool_display, stream_buffer, message_dedup, run_context) integrate with existing GatewayEventEmitter. Swift side adds EnhancedRunSummary model and detail popover view.
 
@@ -283,7 +283,7 @@ Expected: All tests pass
 **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add core/src/gateway/tool_display.rs core/src/gateway/mod.rs && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add core/src/gateway/tool_display.rs core/src/gateway/mod.rs && git commit -m "$(cat <<'EOF'
 feat(gateway): add tool display module with emoji and smart formatting
 
 - Add ToolDisplay struct with emoji and label
@@ -507,7 +507,7 @@ pub use stream_buffer::StreamBuffer;
 **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add core/src/gateway/stream_buffer.rs core/src/gateway/mod.rs && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add core/src/gateway/stream_buffer.rs core/src/gateway/mod.rs && git commit -m "$(cat <<'EOF'
 feat(gateway): add stream buffer for block-level text flushing
 
 - StreamBuffer accumulates text with flush tracking
@@ -734,7 +734,7 @@ pub use message_dedup::{normalize_text, is_text_duplicate, SentMessageTracker, S
 **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add core/src/gateway/message_dedup.rs core/src/gateway/mod.rs && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add core/src/gateway/message_dedup.rs core/src/gateway/mod.rs && git commit -m "$(cat <<'EOF'
 feat(gateway): add message deduplication with text normalization
 
 - normalize_text() for consistent comparison
@@ -950,7 +950,7 @@ Expected: All tests pass
 **Step 7: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add core/src/gateway/event_emitter.rs core/Cargo.toml && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add core/src/gateway/event_emitter.rs core/Cargo.toml && git commit -m "$(cat <<'EOF'
 feat(gateway): add EnhancedRunSummary and per-runId sequences
 
 - EnhancedRunSummary with tool_summaries, reasoning, errors
@@ -1120,7 +1120,7 @@ Expected: Syntax valid
 **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add platforms/macos/Aether/Sources/Gateway/ProtocolModels.swift && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Gateway/ProtocolModels.swift && git commit -m "$(cat <<'EOF'
 feat(macos): add EnhancedRunSummary and ToolSummaryItem models
 
 - EnhancedRunSummary with toolSummaries, reasoning, errors
@@ -1145,7 +1145,7 @@ EOF
 ```swift
 //
 //  HaloResultDetailPopover.swift
-//  Aether
+//  Aleph
 //
 //  Detail popover for viewing complete run results with tool summaries.
 //
@@ -1360,7 +1360,7 @@ Expected: Syntax valid
 **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add platforms/macos/Aether/Sources/Components/HaloResultDetailPopover.swift platforms/macos/Aether/Resources/*/Localizable.strings && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Components/HaloResultDetailPopover.swift platforms/macos/Aether/Resources/*/Localizable.strings && git commit -m "$(cat <<'EOF'
 feat(macos): add HaloResultDetailPopover for detailed results
 
 - Shows tool summaries with emoji and duration
@@ -1464,7 +1464,7 @@ Expected: Syntax valid
 **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add platforms/macos/Aether/Sources/Components/HaloResultView.swift && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Components/HaloResultView.swift && git commit -m "$(cat <<'EOF'
 feat(macos): add HaloResultViewV2 with detail popover support
 
 - New HaloResultViewV2 wraps original with popover
@@ -1628,7 +1628,7 @@ Expected: Syntax valid
 **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add platforms/macos/Aether/Sources/Gateway/GatewayStreamAdapter.swift && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Gateway/GatewayStreamAdapter.swift && git commit -m "$(cat <<'EOF'
 feat(macos): update GatewayStreamAdapter with enhanced summary
 
 - Add enhancedRunSummary property
@@ -1703,7 +1703,7 @@ Expected: Syntax valid
 **Step 3: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add platforms/macos/Aether/Sources/Components/HaloStreamingView.swift && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Components/HaloStreamingView.swift && git commit -m "$(cat <<'EOF'
 feat(macos): add tool emoji to HaloStreamingView
 
 - Show emoji prefix for each tool in streaming view
@@ -1741,14 +1741,14 @@ Expected: Project generated
 
 **Step 4: Build macOS app**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build CODE_SIGNING_ALLOWED=NO 2>&1 | tail -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build CODE_SIGNING_ALLOWED=NO 2>&1 | tail -20`
 
 Expected: Build succeeds
 
 **Step 5: Final commit with all integration**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether && git add -A && git status
+cd /Volumes/TBU4/Workspace/Aleph && git add -A && git status
 ```
 
 If there are unstaged changes:

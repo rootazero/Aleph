@@ -12,16 +12,16 @@
 
 **执行命令:**
 ```bash
-cd Aether/core
+cd Aleph/core
 cargo build --release
 cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/
-cp target/release/libaethecore.dylib ../Frameworks/
+cp target/release/libalephcore.dylib ../Frameworks/
 ```
 
 **验证结果:**
 - ✅ 生成的 `aether.swift` 包含新的回调接口
 - ✅ ProcessingState 枚举包含 `retrievingMemory` 和 `processingWithAi` 状态
-- ✅ AetherEventHandler 协议包含 `onAiProcessingStarted` 和 `onAiResponseReceived` 回调
+- ✅ AlephEventHandler 协议包含 `onAiProcessingStarted` 和 `onAiResponseReceived` 回调
 - ✅ 动态库已更新到 Frameworks 目录
 
 ### 2. 更新 Swift EventHandler ✅
@@ -94,7 +94,7 @@ func processingWithAIView(providerColor: Color, providerName: String?) -> AnyVie
 
 ### 生成的文件
 1. `Aether/Sources/Generated/aether.swift` - UniFFI 生成的 Swift 绑定
-2. `Aether/Frameworks/libaethecore.dylib` - 更新的 Rust 核心库
+2. `Aether/Frameworks/libalephcore.dylib` - 更新的 Rust 核心库
 3. `verify_swift_syntax.py` - 语法验证工具
 
 ### 修改的文件
@@ -130,7 +130,7 @@ UniFFI 确保 Rust 和 Swift 之间的类型安全通信：
 **状态:** 待完成（需要完整的 Xcode 和 API keys）
 
 **要求:**
-1. 在真实 macOS 环境中运行 Aether.app
+1. 在真实 macOS 环境中运行 Aleph.app
 2. 配置有效的 API keys（OpenAI、Claude）
 3. 安装 Ollama 本地模型
 4. 测试热键触发、AI 处理、结果粘贴的完整流程
@@ -160,7 +160,7 @@ UniFFI 确保 Rust 和 Swift 之间的类型安全通信：
 ### UniFFI 绑定生成
 ```bash
 # 重新生成绑定（当 aether.udl 修改后）
-cd Aether/core
+cd Aleph/core
 cargo run --bin uniffi-bindgen generate src/aether.udl \
   --language swift \
   --out-dir ../Sources/Generated/
@@ -175,9 +175,9 @@ xcodegen generate
 
 ### 构建 Rust 核心
 ```bash
-cd Aether/core
+cd Aleph/core
 cargo build --release
-cp target/release/libaethecore.dylib ../Frameworks/
+cp target/release/libalephcore.dylib ../Frameworks/
 ```
 
 ## 性能指标

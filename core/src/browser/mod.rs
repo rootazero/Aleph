@@ -15,7 +15,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::browser::{BrowserService, BrowserConfig};
+//! use alephcore::browser::{BrowserService, BrowserConfig};
 //!
 //! let config = BrowserConfig::default();
 //! let mut service = BrowserService::new(config)?;

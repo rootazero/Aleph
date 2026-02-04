@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 将生成供应商集成到 Aether 工具系统，使 AI agent 和用户可以通过工具调用生成媒体
+**Goal:** 将生成供应商集成到 Aleph 工具系统，使 AI agent 和用户可以通过工具调用生成媒体
 
 **Architecture:** 创建 `ImageGenerateTool` 和 `SpeechGenerateTool` 实现 rig 的 `Tool` trait，并在 `ToolRegistry` 中注册为 builtin 工具
 
@@ -868,8 +868,8 @@ Create `src/rig_tools/generation/mod.rs`:
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::GenerationProviderRegistry;
-//! use aethecore::rig_tools::generation::ImageGenerateTool;
+//! use alephcore::generation::GenerationProviderRegistry;
+//! use alephcore::rig_tools::generation::ImageGenerateTool;
 //! use std::sync::Arc;
 //!
 //! let registry = Arc::new(GenerationProviderRegistry::new());

@@ -1,6 +1,6 @@
 # Settings UI User Guide
 
-Welcome to the Aether Settings UI guide! This document will walk you through all the features available in the Settings interface.
+Welcome to the Aleph Settings UI guide! This document will walk you through all the features available in the Settings interface.
 
 ## Table of Contents
 
@@ -17,10 +17,10 @@ Welcome to the Aether Settings UI guide! This document will walk you through all
 
 ## Opening Settings
 
-There are two ways to open Aether Settings:
+There are two ways to open Aleph Settings:
 
-1. **Menu Bar**: Click the Aether icon (✨) in your menu bar → Select "Settings..."
-2. **Keyboard**: Press `Cmd+,` when Aether is active
+1. **Menu Bar**: Click the Aleph icon (✨) in your menu bar → Select "Settings..."
+2. **Keyboard**: Press `Cmd+,` when Aleph is active
 
 The Settings window will appear with multiple tabs at the top.
 
@@ -143,7 +143,7 @@ Create rules to automatically route requests to different AI providers based on 
 ### How Routing Works
 
 1. User selects text and presses hotkey
-2. Aether checks routing rules **in order (top to bottom)**
+2. Aleph checks routing rules **in order (top to bottom)**
 3. First matching rule determines which provider to use
 4. If no rules match, uses `default_provider` from General settings
 
@@ -247,11 +247,11 @@ Displays all rules with:
 
 ## Shortcuts Tab
 
-Customize trigger hotkeys for Aether operations.
+Customize trigger hotkeys for Aleph operations.
 
 ### Trigger Hotkeys (New System)
 
-Aether uses a **double-tap modifier key** system for triggering AI operations:
+Aleph uses a **double-tap modifier key** system for triggering AI operations:
 
 **Replace Trigger**: Double-tap **Left Shift**
 - AI response replaces selected text
@@ -270,12 +270,12 @@ Aether uses a **double-tap modifier key** system for triggering AI operations:
 **How to use:**
 1. Select text in any app
 2. Double-tap the modifier key quickly
-3. Aether processes the text
+3. Aleph processes the text
 4. Result is pasted back
 
 ### Cancel Hotkey
 
-**Purpose**: Stop Aether processing and restore original text
+**Purpose**: Stop Aleph processing and restore original text
 
 **Default**: `Escape`
 
@@ -288,7 +288,7 @@ Aether uses a **double-tap modifier key** system for triggering AI operations:
 
 ## Behavior Tab
 
-Configure how Aether captures input and displays output.
+Configure how Aleph captures input and displays output.
 
 ### Input Mode
 
@@ -296,7 +296,7 @@ Configure how Aether captures input and displays output.
 
 **Options:**
 - **Cut** (Default): Text is removed from source (Cmd+X)
-  - Visual feedback: text "disappears" into Aether
+  - Visual feedback: text "disappears" into Aleph
   - More dramatic, confirms operation started
 - **Copy**: Text remains in source (Cmd+C)
   - Safer option, non-destructive
@@ -358,7 +358,7 @@ Configure how Aether captures input and displays output.
 **Toggle**: Enable/Disable PII scrubbing
 
 **How it works:**
-1. When enabled, Aether scans input text
+1. When enabled, Aleph scans input text
 2. Detects and redacts sensitive information:
    - **Email addresses**: `john@example.com` → `[EMAIL_REDACTED]`
    - **Phone numbers**: `(555) 123-4567` → `[PHONE_REDACTED]`
@@ -384,14 +384,14 @@ Configure how Aether captures input and displays output.
 
 ## Memory Tab
 
-View and manage Aether's long-term memory (context-aware interactions).
+View and manage Aleph's long-term memory (context-aware interactions).
 
 **Note**: Memory module was implemented in Phase 4E. See [Memory Module Guide](./memory-module-guide.md) for detailed documentation.
 
 ### Quick Overview
 
 **What is Memory?**
-- Aether remembers past interactions per-app and per-window
+- Aleph remembers past interactions per-app and per-window
 - Retrieved context is injected into AI prompts automatically
 - All data stored locally (never synced to cloud)
 
@@ -418,8 +418,8 @@ View and manage Aether's long-term memory (context-aware interactions).
 
 **Solutions:**
 1. Check Console.app for errors
-2. Restart Aether: Quit (Cmd+Q) and relaunch
-3. Reset settings: Delete `~/.aether/config.toml` and restart
+2. Restart Aleph: Quit (Cmd+Q) and relaunch
+3. Reset settings: Delete `~/.aleph/config.toml` and restart
 
 ### Changes Not Saving
 
@@ -428,7 +428,7 @@ View and manage Aether's long-term memory (context-aware interactions).
 **Solutions:**
 1. Check file permissions:
    ```bash
-   chmod 644 ~/.aether/config.toml
+   chmod 644 ~/.aleph/config.toml
    ```
 2. Verify config directory exists:
    ```bash
@@ -452,26 +452,26 @@ View and manage Aether's long-term memory (context-aware interactions).
 
 **Solutions:**
 1. Grant Keychain access when prompted
-2. Check Keychain Access app for "Aether:provider-name" entry
+2. Check Keychain Access app for "Aleph:provider-name" entry
 3. Re-enter API key and save again
 4. Ensure no special characters in API key
 
 ### Hotkey Not Working
 
-**Symptom**: Pressing hotkey doesn't trigger Aether
+**Symptom**: Pressing hotkey doesn't trigger Aleph
 
 **Solutions:**
 1. **Check Accessibility Permissions**:
    - System Settings → Privacy & Security → Accessibility
-   - Ensure Aether is checked
-   - If not, click "+" and add Aether
+   - Ensure Aleph is checked
+   - If not, click "+" and add Aleph
 
 2. **Hotkey Conflict**:
    - Try a different hotkey in Settings
    - Use conflict detector (shows warnings)
    - Avoid: Cmd+C, Cmd+V, Cmd+X (system shortcuts)
 
-3. **Restart Aether**: Quit and relaunch
+3. **Restart Aleph**: Quit and relaunch
 
 ### Provider Test Fails
 
@@ -549,7 +549,7 @@ View and manage Aether's long-term memory (context-aware interactions).
 ### 5. Security & Privacy
 - **API keys in Keychain**: Never share config.toml with API keys
 - **Exclude sensitive apps**: Add password managers to memory exclusions
-- **Review memory regularly**: Check what Aether remembers
+- **Review memory regularly**: Check what Aleph remembers
 - **Use PII scrubbing**: When pasting sensitive documents
 
 ### 6. Configuration Management
@@ -591,4 +591,4 @@ Have suggestions for improving the Settings UI?
 3. Describe your use case
 4. Tag with `enhancement` label
 
-We're constantly improving Aether based on user feedback!
+We're constantly improving Aleph based on user feedback!

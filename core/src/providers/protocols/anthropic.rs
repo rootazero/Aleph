@@ -5,7 +5,7 @@
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::anthropic::{
     ContentBlock, ErrorResponse, ImageSource, Message, MessageContent, MessagesRequest,
@@ -226,7 +226,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         let api_key = config
             .api_key
             .as_ref()
-            .ok_or_else(|| AetherError::invalid_config("API key is required"))?;
+            .ok_or_else(|| AlephError::invalid_config("API key is required"))?;
 
         debug!(
             endpoint = %endpoint,
@@ -253,13 +253,13 @@ impl ProtocolAdapter for AnthropicProtocol {
             if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&error_text) {
                 let msg = error_response.error.message;
                 return match status.as_u16() {
-                    401 => Err(AetherError::authentication("Anthropic", &msg)),
-                    429 => Err(AetherError::rate_limit(format!("Anthropic: {}", msg))),
-                    _ => Err(AetherError::provider(format!("Anthropic error: {}", msg))),
+                    401 => Err(AlephError::authentication("Anthropic", &msg)),
+                    429 => Err(AlephError::rate_limit(format!("Anthropic: {}", msg))),
+                    _ => Err(AlephError::provider(format!("Anthropic error: {}", msg))),
                 };
             }
 
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Anthropic error ({}): {}",
                 status, error_text
             )));
@@ -267,7 +267,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         let response_body: MessagesResponse = response.json().await.map_err(|e| {
             error!(error = %e, "Failed to parse Anthropic response");
-            AetherError::provider(format!("Failed to parse response: {}", e))
+            AlephError::provider(format!("Failed to parse response: {}", e))
         })?;
 
         // Extract text from content blocks
@@ -290,7 +290,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Anthropic streaming error ({}): {}",
                 status, error_text
             )));
@@ -299,7 +299,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         let stream = response
             .bytes_stream()
             .map(move |chunk| {
-                let bytes = chunk.map_err(|e| AetherError::network(e.to_string()))?;
+                let bytes = chunk.map_err(|e| AlephError::network(e.to_string()))?;
                 let text = String::from_utf8_lossy(&bytes);
 
                 let mut result = String::new();

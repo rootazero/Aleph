@@ -335,7 +335,7 @@ impl LoopCallback for PoeLoopCallback {
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::poe::AgentLoopWorker;
+/// use alephcore::poe::AgentLoopWorker;
 /// use std::sync::Arc;
 ///
 /// let worker = AgentLoopWorker::new(
@@ -531,7 +531,7 @@ where
     async fn abort(&self) -> Result<()> {
         self.abort_tx
             .send(true)
-            .map_err(|_| crate::error::AetherError::other("Abort channel closed"))?;
+            .map_err(|_| crate::error::AlephError::other("Abort channel closed"))?;
         Ok(())
     }
 
@@ -576,7 +576,7 @@ where
     async fn restore(&self, snapshot: &StateSnapshot) -> Result<()> {
         // Verify workspace matches
         if snapshot.workspace != self.workspace {
-            return Err(crate::error::AetherError::other(format!(
+            return Err(crate::error::AlephError::other(format!(
                 "Snapshot workspace {} does not match worker workspace {}",
                 snapshot.workspace.display(),
                 self.workspace.display()
@@ -720,7 +720,7 @@ fn truncate_instruction(s: &str, max_len: usize) -> String {
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::poe::{GatewayAgentLoopWorker, create_gateway_worker};
+/// use alephcore::poe::{GatewayAgentLoopWorker, create_gateway_worker};
 /// use std::sync::Arc;
 ///
 /// let provider = create_claude_provider_from_env()?;
@@ -748,8 +748,8 @@ pub type GatewayAgentLoopWorker = AgentLoopWorker<
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::poe::create_gateway_worker;
-/// use aethecore::gateway::create_claude_provider_from_env;
+/// use alephcore::poe::create_gateway_worker;
+/// use alephcore::gateway::create_claude_provider_from_env;
 /// use std::sync::Arc;
 /// use std::path::PathBuf;
 ///

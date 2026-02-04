@@ -1,8 +1,8 @@
-# Aether Memory v2 Implementation Plan
+# Aleph Memory v2 Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Upgrade Aether's memory system with signal-based compression, hybrid retrieval, dynamic association clustering, and memory decay.
+**Goal:** Upgrade Aleph's memory system with signal-based compression, hybrid retrieval, dynamic association clustering, and memory decay.
 
 **Architecture:** Five priority phases (P0-P4) with TDD approach. Each phase builds on the previous, with P0 (Signal Detector) and P1 (Hybrid Retrieval) parallelizable.
 
@@ -84,7 +84,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore signal_detector::tests --no-default-features`
+Run: `cargo test -p alephcore signal_detector::tests --no-default-features`
 Expected: FAIL with "cannot find module `signal_detector`"
 
 **Step 3: Write minimal implementation**
@@ -280,7 +280,7 @@ pub use signal_detector::{
 
 **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p aethecore signal_detector::tests --no-default-features`
+Run: `cargo test -p alephcore signal_detector::tests --no-default-features`
 Expected: PASS (4 tests)
 
 **Step 6: Commit**
@@ -335,7 +335,7 @@ async fn test_signal_triggered_compression() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_signal_triggered_compression --no-default-features`
+Run: `cargo test -p alephcore test_signal_triggered_compression --no-default-features`
 Expected: FAIL with "method `check_and_compress_with_signal` not found"
 
 **Step 3: Modify service.rs**
@@ -377,7 +377,7 @@ impl CompressionService {
     pub async fn check_and_compress_with_signal(
         &self,
         user_message: &str,
-    ) -> Result<Option<CompressionResult>, AetherError> {
+    ) -> Result<Option<CompressionResult>, AlephError> {
         // Detect signals in message
         let detection = self.signal_detector.detect(user_message);
 
@@ -415,7 +415,7 @@ impl CompressionService {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_signal_triggered_compression --no-default-features`
+Run: `cargo test -p alephcore test_signal_triggered_compression --no-default-features`
 Expected: PASS
 
 **Step 5: Commit**
@@ -463,7 +463,7 @@ async fn test_context_switch_detection() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_context_switch_detection --no-default-features`
+Run: `cargo test -p alephcore test_context_switch_detection --no-default-features`
 Expected: FAIL with "method `detect_context_switch` not found"
 
 **Step 3: Add context switch detection**
@@ -541,7 +541,7 @@ impl SignalDetector {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_context_switch_detection --no-default-features`
+Run: `cargo test -p alephcore test_context_switch_detection --no-default-features`
 Expected: PASS
 
 **Step 5: Commit**
@@ -622,7 +622,7 @@ fn test_fts5_sync_triggers_exist() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_fts5_tables_created --no-default-features`
+Run: `cargo test -p alephcore test_fts5_tables_created --no-default-features`
 Expected: FAIL with "memories_fts table should exist"
 
 **Step 3: Add FTS5 schema**
@@ -682,7 +682,7 @@ Expected: FAIL with "memories_fts table should exist"
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_fts5_tables_created test_fts5_sync_triggers_exist --no-default-features`
+Run: `cargo test -p alephcore test_fts5_tables_created test_fts5_sync_triggers_exist --no-default-features`
 Expected: PASS (2 tests)
 
 **Step 5: Commit**
@@ -751,7 +751,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore hybrid::tests --no-default-features`
+Run: `cargo test -p alephcore hybrid::tests --no-default-features`
 Expected: FAIL with "cannot find module"
 
 **Step 3: Create the retrieval module structure**
@@ -1004,7 +1004,7 @@ pub use hybrid_retrieval::{HybridRetrieval, HybridSearchConfig, RetrievalStrateg
 
 **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p aethecore hybrid::tests strategy::tests --no-default-features`
+Run: `cargo test -p alephcore hybrid::tests strategy::tests --no-default-features`
 Expected: PASS (6 tests)
 
 **Step 6: Commit**
@@ -1063,7 +1063,7 @@ async fn test_hybrid_search_facts() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_hybrid_search_facts --no-default-features`
+Run: `cargo test -p alephcore test_hybrid_search_facts --no-default-features`
 Expected: FAIL with "method `search_facts` not found"
 
 **Step 3: Implement hybrid search**
@@ -1071,7 +1071,7 @@ Expected: FAIL with "method `search_facts` not found"
 ```rust
 // Modify core/src/memory/hybrid_retrieval/hybrid.rs
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
 use crate::memory::database::VectorDatabase;
 use std::sync::Arc;
@@ -1093,7 +1093,7 @@ impl HybridRetrieval {
         &self,
         query_embedding: &[f32],
         query_text: &str,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         self.database
             .hybrid_search_facts(
                 query_embedding,
@@ -1123,10 +1123,10 @@ impl VectorDatabase {
         min_score: f32,
         candidate_limit: usize,
         result_limit: usize,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         let embedding_bytes = Self::serialize_embedding(query_embedding);
         let conn = self.conn.lock().map_err(|e| {
-            AetherError::config(format!("Failed to lock database: {}", e))
+            AlephError::config(format!("Failed to lock database: {}", e))
         })?;
 
         // Prepare FTS5 query (tokenize and AND together)
@@ -1159,7 +1159,7 @@ impl VectorDatabase {
             ORDER BY combined_score DESC
             LIMIT ?6
             "#,
-        ).map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+        ).map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let facts: Vec<MemoryFact> = stmt
             .query_map(
@@ -1196,7 +1196,7 @@ impl VectorDatabase {
                     })
                 },
             )
-            .map_err(|e| AetherError::config(format!("Failed to execute query: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to execute query: {}", e)))?
             .filter_map(|r| r.ok())
             .filter(|f| f.similarity_score.unwrap_or(0.0) >= min_score)
             .collect();
@@ -1228,7 +1228,7 @@ impl VectorDatabase {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_hybrid_search_facts --no-default-features`
+Run: `cargo test -p alephcore test_hybrid_search_facts --no-default-features`
 Expected: PASS
 
 **Step 5: Commit**
@@ -1277,7 +1277,7 @@ fn test_fact_specificity() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_fact_specificity --no-default-features`
+Run: `cargo test -p alephcore test_fact_specificity --no-default-features`
 Expected: FAIL with "cannot find type `FactSpecificity`"
 
 **Step 3: Add new types to context.rs**
@@ -1323,7 +1323,7 @@ impl FactSpecificity {
 pub enum TemporalScope {
     /// Long-term valid: "User's native language is Chinese"
     Permanent,
-    /// Context-related: "User is working on Aether project"
+    /// Context-related: "User is working on Aleph project"
     #[default]
     Contextual,
     /// Short-term valid: "User wants to focus on docs today"
@@ -1397,7 +1397,7 @@ impl MemoryFact {
 
 **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_fact_specificity --no-default-features`
+Run: `cargo test -p alephcore test_fact_specificity --no-default-features`
 Expected: PASS
 
 **Step 6: Commit**
@@ -1451,7 +1451,7 @@ fn test_reject_strategy() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_merge_strategy --no-default-features`
+Run: `cargo test -p alephcore test_merge_strategy --no-default-features`
 Expected: FAIL with "variant `Merge` not found"
 
 **Step 3: Update conflict.rs**
@@ -1496,7 +1496,7 @@ pub enum MergeStrategy {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_merge_strategy test_reject_strategy --no-default-features`
+Run: `cargo test -p alephcore test_merge_strategy test_reject_strategy --no-default-features`
 Expected: PASS (2 tests)
 
 **Step 5: Commit**
@@ -1566,7 +1566,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore association::tests --no-default-features`
+Run: `cargo test -p alephcore association::tests --no-default-features`
 Expected: FAIL with "cannot find module"
 
 **Step 3: Create association.rs**
@@ -1699,7 +1699,7 @@ pub use strategy::RetrievalStrategy;
 
 **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p aethecore association::tests --no-default-features`
+Run: `cargo test -p alephcore association::tests --no-default-features`
 Expected: PASS (2 tests)
 
 **Step 6: Commit**
@@ -1796,7 +1796,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore decay::tests --no-default-features`
+Run: `cargo test -p alephcore decay::tests --no-default-features`
 Expected: FAIL with "cannot find module"
 
 **Step 3: Create decay.rs**
@@ -1978,7 +1978,7 @@ pub use decay::{DecayConfig, MemoryStrength};
 
 **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p aethecore decay::tests --no-default-features`
+Run: `cargo test -p alephcore decay::tests --no-default-features`
 Expected: PASS (6 tests)
 
 **Step 6: Commit**
@@ -2018,16 +2018,16 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 ```bash
 # Run all memory tests
-cargo test -p aethecore --lib memory:: --no-default-features
+cargo test -p alephcore --lib memory:: --no-default-features
 
 # Run specific phase tests
-cargo test -p aethecore signal_detector --no-default-features     # P0
-cargo test -p aethecore hybrid --no-default-features              # P1
-cargo test -p aethecore association --no-default-features         # P3
-cargo test -p aethecore decay --no-default-features               # P4
+cargo test -p alephcore signal_detector --no-default-features     # P0
+cargo test -p alephcore hybrid --no-default-features              # P1
+cargo test -p alephcore association --no-default-features         # P3
+cargo test -p alephcore decay --no-default-features               # P4
 
 # Run with all features
-cargo test -p aethecore --all-features
+cargo test -p alephcore --all-features
 ```
 
 ---

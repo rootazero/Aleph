@@ -5,7 +5,7 @@
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::gemini::{
     Content, GenerateContentRequest, GenerateContentResponse, GenerationConfig, Part,
@@ -246,7 +246,7 @@ impl ProtocolAdapter for GeminiProtocol {
         let api_key = config
             .api_key
             .as_ref()
-            .ok_or_else(|| AetherError::invalid_config("API key is required"))?;
+            .ok_or_else(|| AlephError::invalid_config("API key is required"))?;
 
         debug!(
             endpoint = %endpoint,
@@ -285,14 +285,14 @@ impl ProtocolAdapter for GeminiProtocol {
                 if let Some(err) = error_response.error {
                     let msg = err.message;
                     return match status.as_u16() {
-                        401 | 403 => Err(AetherError::authentication("Gemini", &msg)),
-                        429 => Err(AetherError::rate_limit(format!("Gemini: {}", msg))),
-                        _ => Err(AetherError::provider(format!("Gemini error: {}", msg))),
+                        401 | 403 => Err(AlephError::authentication("Gemini", &msg)),
+                        429 => Err(AlephError::rate_limit(format!("Gemini: {}", msg))),
+                        _ => Err(AlephError::provider(format!("Gemini error: {}", msg))),
                     };
                 }
             }
 
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Gemini error ({}): {}",
                 status, error_text
             )));
@@ -300,12 +300,12 @@ impl ProtocolAdapter for GeminiProtocol {
 
         let response_body: GenerateContentResponse = response.json().await.map_err(|e| {
             error!(error = %e, "Failed to parse Gemini response");
-            AetherError::provider(format!("Failed to parse response: {}", e))
+            AlephError::provider(format!("Failed to parse response: {}", e))
         })?;
 
         // Check for error in response
         if let Some(err) = response_body.error {
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Gemini error: {}",
                 err.message
             )));
@@ -314,13 +314,13 @@ impl ProtocolAdapter for GeminiProtocol {
         // Extract text from candidates[0].content.parts[0].text
         let text = response_body
             .candidates
-            .ok_or_else(|| AetherError::provider("No candidates in response"))?
+            .ok_or_else(|| AlephError::provider("No candidates in response"))?
             .first()
-            .ok_or_else(|| AetherError::provider("No candidates in response"))?
+            .ok_or_else(|| AlephError::provider("No candidates in response"))?
             .content
             .parts
             .first()
-            .ok_or_else(|| AetherError::provider("No parts in response"))?
+            .ok_or_else(|| AlephError::provider("No parts in response"))?
             .text
             .clone();
 
@@ -335,7 +335,7 @@ impl ProtocolAdapter for GeminiProtocol {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Gemini streaming error ({}): {}",
                 status, error_text
             )));
@@ -344,7 +344,7 @@ impl ProtocolAdapter for GeminiProtocol {
         let stream = response
             .bytes_stream()
             .map(move |chunk| {
-                let bytes = chunk.map_err(|e| AetherError::network(e.to_string()))?;
+                let bytes = chunk.map_err(|e| AlephError::network(e.to_string()))?;
                 let text = String::from_utf8_lossy(&bytes);
 
                 let mut result = String::new();

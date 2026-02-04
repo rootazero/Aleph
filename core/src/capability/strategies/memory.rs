@@ -6,7 +6,7 @@
 
 use crate::capability::strategy::CapabilityStrategy;
 use crate::config::MemoryConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::memory::{ai_retrieval::AiMemoryRetriever, ContextAnchor as MemoryContextAnchor};
 use crate::memory::{MemoryRetrieval, SmartEmbedder, VectorDatabase, DEFAULT_MODEL_TTL_SECS};
 use crate::payload::{AgentPayload, Capability};
@@ -109,7 +109,7 @@ impl CapabilityStrategy for MemoryStrategy {
 
         // If AI retrieval is enabled, verify provider is configured
         if self.use_ai_retrieval && self.ai_provider.is_none() {
-            return Err(AetherError::config(
+            return Err(AlephError::config(
                 "AI retrieval enabled but no AI provider configured",
             ));
         }

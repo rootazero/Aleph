@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 让 Aether 能启动 Claude Code 并读取其输出，为后续的监管者模式打下基础。
+**Goal:** 让 Aleph 能启动 Claude Code 并读取其输出，为后续的监管者模式打下基础。
 
 **Architecture:** 创建独立的 `supervisor` 模块，使用 `portable-pty` 库创建虚拟终端，欺骗 Claude Code 让其以为运行在真实终端中。通过 PTY master 端读写实现 stdin/stdout 双向通信。
 
@@ -144,7 +144,7 @@ pub enum SupervisorError {
 //! PtySupervisor module for controlling external CLI tools.
 //!
 //! This module provides PTY-based process control for tools like Claude Code,
-//! allowing Aether to act as a "supervisor" that can:
+//! allowing Aleph to act as a "supervisor" that can:
 //! - Spawn processes in a pseudo-terminal
 //! - Read and parse their output in real-time
 //! - Inject input (commands, approvals)
@@ -236,7 +236,7 @@ use crate::supervisor::types::{SupervisorConfig, SupervisorError, SupervisorEven
 /// # Example
 ///
 /// ```rust,no_run
-/// use aethecore::supervisor::{ClaudeSupervisor, SupervisorConfig};
+/// use alephcore::supervisor::{ClaudeSupervisor, SupervisorConfig};
 ///
 /// let config = SupervisorConfig::new("/path/to/workspace");
 /// let mut supervisor = ClaudeSupervisor::new(config);
@@ -456,7 +456,7 @@ mod tests {
 //! PtySupervisor module for controlling external CLI tools.
 //!
 //! This module provides PTY-based process control for tools like Claude Code,
-//! allowing Aether to act as a "supervisor" that can:
+//! allowing Aleph to act as a "supervisor" that can:
 //! - Spawn processes in a pseudo-terminal
 //! - Read and parse their output in real-time
 //! - Inject input (commands, approvals)
@@ -781,7 +781,7 @@ Expected: All existing tests still pass
 - [x] ANSI 清洗层 (strip_ansi_escapes)
 - [x] 基础 stdin/stdout 交互测试
 
-**验收**: ✅ Aether 能启动 Claude Code 并读取输出
+**验收**: ✅ Aleph 能启动 Claude Code 并读取输出
 ```
 
 **Step 4: Final Commit**

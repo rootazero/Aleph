@@ -241,7 +241,7 @@ Users needed to:
 - Modify Rust code to add new protocols
 - Recompile entire codebase
 - Wait for compilation (1-2 minutes)
-- Restart Aether service
+- Restart Aleph service
 - No way to test protocols quickly
 
 ### After Phase 4

@@ -1,4 +1,4 @@
-# Aether Project Status - 2025-12-24 (Session 2)
+# Aleph Project Status - 2025-12-24 (Session 2)
 
 ## 🎉 Tasks Completed Today
 
@@ -18,7 +18,7 @@
 #### UniFFI Integration
 - ✅ All methods exposed via UniFFI interface (aether.udl)
 - ✅ Type definitions for MemoryEntry, MemoryStats, MemoryConfig
-- ✅ Error handling with AetherError enum
+- ✅ Error handling with AlephError enum
 - ✅ Swift bindings regenerated successfully
 
 #### Success Metrics
@@ -59,7 +59,7 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
 
 #### Additional Changes
 - ✅ Updated `SettingsView.swift` to add Memory tab
-- ✅ Modified `AppDelegate.swift` to pass AetherCore to settings
+- ✅ Modified `AppDelegate.swift` to pass AlephCore to settings
 - ✅ Created `MemoryEntryCard` component for memory display
 - ✅ Added confirmation dialogs for destructive actions
 - ✅ Implemented error handling with user-friendly alerts
@@ -116,7 +116,7 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Aether Application (Swift)                │
+│                    Aleph Application (Swift)                │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
 │  │  Settings UI │  │  Context     │  │  Halo Overlay    │  │
@@ -127,7 +127,7 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
 │                    UniFFI Bridge Layer                       │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │  AetherCore  │  │  Memory      │  │  Event Handler   │  │
+│  │  AlephCore  │  │  Memory      │  │  Event Handler   │  │
 │  │  (Rust)      │→ │  Management  │→ │  Callbacks       │  │
 │  └──────────────┘  └──────────────┘  └──────────────────┘  │
 │         ↓                  ↓                    ↓            │
@@ -160,11 +160,11 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
 - `Aether/Sources/SettingsView.swift`
   - Added Memory tab to enum
   - Added sidebar navigation item
-  - Added AetherCore parameter
+  - Added AlephCore parameter
   - Wired up MemoryView
 
 - `Aether/Sources/AppDelegate.swift`
-  - Pass AetherCore instance to SettingsView
+  - Pass AlephCore instance to SettingsView
   - Enable memory tab functionality
 
 - `Aether/core/src/core.rs`
@@ -183,7 +183,7 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
 
 ### Build Artifacts
 - `Aether/Sources/Generated/aether.swift` (regenerated)
-- `Aether.xcodeproj/` (regenerated)
+- `Aleph.xcodeproj/` (regenerated)
 
 ## 🎯 Next Steps (Priority Order)
 
@@ -201,7 +201,7 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
    - Integration tests with mock AI
 
 ### Manual Testing (Requires Xcode)
-- [ ] Open Aether.xcodeproj in Xcode
+- [ ] Open Aleph.xcodeproj in Xcode
 - [ ] Build and run application
 - [ ] Test Memory tab in Settings
 - [ ] Verify all CRUD operations
@@ -243,7 +243,7 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
 
 ## 🔒 Privacy & Security Status
 
-- ✅ All data stored locally (`~/.aether/memory.db`)
+- ✅ All data stored locally (`~/.aleph/memory.db`)
 - ✅ PII scrubbing before storage
 - ✅ App exclusion list (password managers)
 - ✅ User-controlled retention policies

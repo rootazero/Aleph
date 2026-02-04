@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::RwLock;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// OAuth tokens received from an authorization server
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,11 +152,11 @@ impl OAuthStorage {
         }
 
         let content = fs::read_to_string(&self.file_path).await.map_err(|e| {
-            AetherError::IoError(format!("Failed to read OAuth storage: {}", e))
+            AlephError::IoError(format!("Failed to read OAuth storage: {}", e))
         })?;
 
         let storage: StorageFile = serde_json::from_str(&content).map_err(|e| {
-            AetherError::IoError(format!("Failed to parse OAuth storage: {}", e))
+            AlephError::IoError(format!("Failed to parse OAuth storage: {}", e))
         })?;
 
         // Update cache
@@ -173,16 +173,16 @@ impl OAuthStorage {
         // Create parent directory if needed
         if let Some(parent) = self.file_path.parent() {
             fs::create_dir_all(parent).await.map_err(|e| {
-                AetherError::IoError(format!("Failed to create OAuth storage dir: {}", e))
+                AlephError::IoError(format!("Failed to create OAuth storage dir: {}", e))
             })?;
         }
 
         let content = serde_json::to_string_pretty(storage).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize OAuth storage: {}", e))
+            AlephError::IoError(format!("Failed to serialize OAuth storage: {}", e))
         })?;
 
         fs::write(&self.file_path, content).await.map_err(|e| {
-            AetherError::IoError(format!("Failed to write OAuth storage: {}", e))
+            AlephError::IoError(format!("Failed to write OAuth storage: {}", e))
         })?;
 
         // Set file permissions to 0600 on Unix (owner read/write only)

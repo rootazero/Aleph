@@ -33,7 +33,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::capability::{CapabilitySystem, MemoryStrategy, SearchStrategy};
+//! use alephcore::capability::{CapabilitySystem, MemoryStrategy, SearchStrategy};
 //!
 //! let system = CapabilitySystem::builder()
 //!     .with_strategy(Arc::new(MemoryStrategy::new(memory_db)))
@@ -501,7 +501,7 @@ impl CapabilitySystemBuilder {
                     .iter()
                     .map(|c| format!("{:?}", c.capability))
                     .collect();
-                return Err(crate::error::AetherError::config(format!(
+                return Err(crate::error::AlephError::config(format!(
                     "Capabilities failed health check: {}",
                     failed.join(", ")
                 )));
@@ -527,7 +527,7 @@ impl Default for CapabilitySystemBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::AetherError;
+    use crate::error::AlephError;
     use crate::payload::{ContextAnchor, ContextFormat, Intent, PayloadBuilder};
     use async_trait::async_trait;
 
@@ -585,7 +585,7 @@ mod tests {
             if self.config_valid {
                 Ok(())
             } else {
-                Err(AetherError::config("Invalid config"))
+                Err(AlephError::config("Invalid config"))
             }
         }
 

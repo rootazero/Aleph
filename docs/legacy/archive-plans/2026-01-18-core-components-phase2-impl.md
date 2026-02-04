@@ -27,7 +27,7 @@
 **Step 1: Create components module directory and mod.rs**
 
 ```rust
-// Aether/core/src/components/mod.rs
+// Aleph/core/src/components/mod.rs
 //! Core event handler components for the agentic loop.
 //!
 //! This module provides the 6 core components:
@@ -58,7 +58,7 @@ pub use types::*;
 **Step 2: Create shared types for components**
 
 ```rust
-// Aether/core/src/components/types.rs
+// Aleph/core/src/components/types.rs
 //! Shared types for component implementations.
 
 use serde::{Deserialize, Serialize};
@@ -272,7 +272,7 @@ Expected: Error about missing files (intent_analyzer.rs, etc.) - this is expecte
 **Step 4: Commit module structure**
 
 ```bash
-git add Aether/core/src/components/
+git add Aleph/core/src/components/
 git commit -m "feat(components): add components module structure and shared types"
 ```
 
@@ -287,7 +287,7 @@ git commit -m "feat(components): add components module structure and shared type
 **Step 1: Write IntentAnalyzer implementation**
 
 ```rust
-// Aether/core/src/components/intent_analyzer.rs
+// Aleph/core/src/components/intent_analyzer.rs
 //! Intent analyzer component - detects intent and complexity for routing.
 //!
 //! Subscribes to: InputReceived
@@ -298,7 +298,7 @@ use serde_json::Value;
 use tracing::{debug, info};
 
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError, InputEvent, PlanRequest,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, InputEvent, PlanRequest,
     PlanStep, StepStatus, TaskPlan, ToolCallRequest,
 };
 use crate::intent::{ExecutionIntent, IntentClassifier};
@@ -482,7 +482,7 @@ impl EventHandler for IntentAnalyzer {
         event: &AetherEvent,
         _ctx: &EventContext,
     ) -> Result<Vec<AetherEvent>, HandlerError> {
-        let AetherEvent::InputReceived(input) = event else {
+        let AlephEvent::InputReceived(input) = event else {
             return Ok(vec![]);
         };
 
@@ -578,7 +578,7 @@ Expected: Tests should compile but may need IntentClassifier adjustments
 **Step 3: Commit IntentAnalyzer**
 
 ```bash
-git add Aether/core/src/components/intent_analyzer.rs
+git add Aleph/core/src/components/intent_analyzer.rs
 git commit -m "feat(components): implement IntentAnalyzer with complexity detection"
 ```
 
@@ -592,7 +592,7 @@ git commit -m "feat(components): implement IntentAnalyzer with complexity detect
 **Step 1: Write TaskPlanner implementation**
 
 ```rust
-// Aether/core/src/components/task_planner.rs
+// Aleph/core/src/components/task_planner.rs
 //! Task planner component - decomposes complex requests into executable steps.
 //!
 //! Subscribes to: PlanRequested
@@ -603,7 +603,7 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError, PlanRequest, PlanStep,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, PlanRequest, PlanStep,
     StepStatus, TaskPlan,
 };
 
@@ -754,7 +754,7 @@ impl EventHandler for TaskPlanner {
         event: &AetherEvent,
         _ctx: &EventContext,
     ) -> Result<Vec<AetherEvent>, HandlerError> {
-        let AetherEvent::PlanRequested(request) = event else {
+        let AlephEvent::PlanRequested(request) = event else {
             return Ok(vec![]);
         };
 
@@ -848,7 +848,7 @@ Expected: All tests pass
 **Step 3: Commit TaskPlanner**
 
 ```bash
-git add Aether/core/src/components/task_planner.rs
+git add Aleph/core/src/components/task_planner.rs
 git commit -m "feat(components): implement TaskPlanner with rule-based step decomposition"
 ```
 
@@ -862,7 +862,7 @@ git commit -m "feat(components): implement TaskPlanner with rule-based step deco
 **Step 1: Write ToolExecutor implementation**
 
 ```rust
-// Aether/core/src/components/tool_executor.rs
+// Aleph/core/src/components/tool_executor.rs
 //! Tool executor component - executes tools with retry logic.
 //!
 //! Subscribes to: ToolCallRequested
@@ -875,7 +875,7 @@ use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use crate::event::{
-    AetherEvent, ErrorKind, EventContext, EventHandler, EventType, HandlerError, TokenUsage,
+    AlephEvent, ErrorKind, EventContext, EventHandler, EventType, HandlerError, TokenUsage,
     ToolCallError, ToolCallRequest, ToolCallResult, ToolCallRetry, ToolCallStarted,
 };
 
@@ -972,7 +972,7 @@ impl ToolExecutor {
                 debug!("Retry attempt {} after {}ms delay", attempts, delay);
 
                 // Publish retry event
-                let retry_event = AetherEvent::ToolCallRetrying(ToolCallRetry {
+                let retry_event = AlephEvent::ToolCallRetrying(ToolCallRetry {
                     call_id: request.call_id.clone(),
                     attempt: attempts,
                     delay_ms: delay,
@@ -1028,7 +1028,7 @@ impl EventHandler for ToolExecutor {
         event: &AetherEvent,
         ctx: &EventContext,
     ) -> Result<Vec<AetherEvent>, HandlerError> {
-        let AetherEvent::ToolCallRequested(request) = event else {
+        let AlephEvent::ToolCallRequested(request) = event else {
             return Ok(vec![]);
         };
 
@@ -1037,7 +1037,7 @@ impl EventHandler for ToolExecutor {
         info!("ToolExecutor executing: {} (call_id: {})", request.tool, request.call_id);
 
         // Publish start event
-        let start_event = AetherEvent::ToolCallStarted(ToolCallStarted {
+        let start_event = AlephEvent::ToolCallStarted(ToolCallStarted {
             call_id: request.call_id.clone(),
             tool: request.tool.clone(),
             input: request.parameters.clone(),
@@ -1127,7 +1127,7 @@ Expected: All tests pass
 **Step 3: Commit ToolExecutor**
 
 ```bash
-git add Aether/core/src/components/tool_executor.rs
+git add Aleph/core/src/components/tool_executor.rs
 git commit -m "feat(components): implement ToolExecutor with exponential backoff retry"
 ```
 
@@ -1141,7 +1141,7 @@ git commit -m "feat(components): implement ToolExecutor with exponential backoff
 **Step 1: Write LoopController implementation**
 
 ```rust
-// Aether/core/src/components/loop_controller.rs
+// Aleph/core/src/components/loop_controller.rs
 //! Loop controller component - manages the agentic loop with protection mechanisms.
 //!
 //! Subscribes to: ToolCallCompleted, ToolCallFailed, PlanCreated
@@ -1152,7 +1152,7 @@ use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
 
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError, LoopState, PlanStep,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, LoopState, PlanStep,
     StepStatus, StopReason, TaskPlan, ToolCallRequest, ToolCallResult,
 };
 
@@ -1315,7 +1315,7 @@ impl EventHandler for LoopController {
         ctx: &EventContext,
     ) -> Result<Vec<AetherEvent>, HandlerError> {
         match event {
-            AetherEvent::PlanCreated(plan) => {
+            AlephEvent::PlanCreated(plan) => {
                 info!("LoopController received plan with {} steps", plan.steps.len());
 
                 // Store the plan
@@ -1328,12 +1328,12 @@ impl EventHandler for LoopController {
                 if let Some(first_step) = self.get_next_step(plan) {
                     debug!("Starting first step: {}", first_step.id);
                     Ok(vec![
-                        AetherEvent::LoopContinue(LoopState {
+                        AlephEvent::LoopContinue(LoopState {
                             iteration: 0,
                             current_step: Some(first_step.id.clone()),
                             pending_steps: plan.steps.len() as u32 - 1,
                         }),
-                        AetherEvent::ToolCallRequested(self.step_to_tool_call(&first_step)),
+                        AlephEvent::ToolCallRequested(self.step_to_tool_call(&first_step)),
                     ])
                 } else {
                     warn!("Plan has no executable steps");
@@ -1341,7 +1341,7 @@ impl EventHandler for LoopController {
                 }
             }
 
-            AetherEvent::ToolCallCompleted(result) => {
+            AlephEvent::ToolCallCompleted(result) => {
                 info!("LoopController: tool {} completed", result.tool);
 
                 // Check guards using a mock session for now
@@ -1368,14 +1368,14 @@ impl EventHandler for LoopController {
                     if let Some(next_step) = self.get_next_step(plan) {
                         debug!("Moving to next step: {}", next_step.id);
                         return Ok(vec![
-                            AetherEvent::LoopContinue(LoopState {
+                            AlephEvent::LoopContinue(LoopState {
                                 iteration: 1, // TODO: Track actual iteration
                                 current_step: Some(next_step.id.clone()),
                                 pending_steps: plan.steps.iter()
                                     .filter(|s| matches!(s.status, StepStatus::Pending))
                                     .count() as u32,
                             }),
-                            AetherEvent::ToolCallRequested(self.step_to_tool_call(&next_step)),
+                            AlephEvent::ToolCallRequested(self.step_to_tool_call(&next_step)),
                         ]);
                     }
                 }
@@ -1384,7 +1384,7 @@ impl EventHandler for LoopController {
                 Ok(vec![AetherEvent::LoopStop(StopReason::Completed)])
             }
 
-            AetherEvent::ToolCallFailed(error) => {
+            AlephEvent::ToolCallFailed(error) => {
                 warn!("LoopController: tool {} failed: {}", error.tool, error.error);
 
                 // Update step status
@@ -1525,7 +1525,7 @@ Expected: All tests pass
 **Step 3: Commit LoopController**
 
 ```bash
-git add Aether/core/src/components/loop_controller.rs
+git add Aleph/core/src/components/loop_controller.rs
 git commit -m "feat(components): implement LoopController with doom loop detection and protection"
 ```
 
@@ -1539,7 +1539,7 @@ git commit -m "feat(components): implement LoopController with doom loop detecti
 **Step 1: Write SessionRecorder implementation**
 
 ```rust
-// Aether/core/src/components/session_recorder.rs
+// Aleph/core/src/components/session_recorder.rs
 //! Session recorder component - persists execution state to SQLite.
 //!
 //! Subscribes to: All events
@@ -1552,7 +1552,7 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
 
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError, SessionDiff, SessionInfo,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, SessionDiff, SessionInfo,
 };
 
 use super::types::{
@@ -1656,13 +1656,13 @@ impl SessionRecorder {
     /// Convert event to session part
     fn event_to_part(&self, event: &AetherEvent) -> Option<SessionPart> {
         match event {
-            AetherEvent::InputReceived(input) => Some(SessionPart::UserInput(UserInputPart {
+            AlephEvent::InputReceived(input) => Some(SessionPart::UserInput(UserInputPart {
                 text: input.text.clone(),
                 context: input.context.clone(),
                 timestamp: input.timestamp,
             })),
 
-            AetherEvent::ToolCallCompleted(result) => Some(SessionPart::ToolCall(ToolCallPart {
+            AlephEvent::ToolCallCompleted(result) => Some(SessionPart::ToolCall(ToolCallPart {
                 id: result.call_id.clone(),
                 tool_name: result.tool.clone(),
                 input: result.input.clone(),
@@ -1673,7 +1673,7 @@ impl SessionRecorder {
                 completed_at: Some(result.completed_at),
             })),
 
-            AetherEvent::ToolCallFailed(error) => Some(SessionPart::ToolCall(ToolCallPart {
+            AlephEvent::ToolCallFailed(error) => Some(SessionPart::ToolCall(ToolCallPart {
                 id: error.call_id.clone(),
                 tool_name: error.tool.clone(),
                 input: serde_json::Value::Null,
@@ -1684,7 +1684,7 @@ impl SessionRecorder {
                 completed_at: Some(chrono::Utc::now().timestamp()),
             })),
 
-            AetherEvent::AiResponseGenerated(response) => {
+            AlephEvent::AiResponseGenerated(response) => {
                 Some(SessionPart::AiResponse(AiResponsePart {
                     content: response.content.clone(),
                     reasoning: response.reasoning.clone(),
@@ -1692,7 +1692,7 @@ impl SessionRecorder {
                 }))
             }
 
-            AetherEvent::PlanCreated(plan) => Some(SessionPart::PlanCreated(PlanPart {
+            AlephEvent::PlanCreated(plan) => Some(SessionPart::PlanCreated(PlanPart {
                 plan_id: plan.id.clone(),
                 steps: plan.steps.iter().map(|s| s.description.clone()).collect(),
                 timestamp: chrono::Utc::now().timestamp(),
@@ -1816,7 +1816,7 @@ mod tests {
     fn test_event_to_part_input() {
         let recorder = SessionRecorder::new_in_memory().unwrap();
 
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "test input".into(),
             topic_id: None,
             context: Some("context".into()),
@@ -1867,7 +1867,7 @@ Expected: All tests pass
 **Step 3: Commit SessionRecorder**
 
 ```bash
-git add Aether/core/src/components/session_recorder.rs
+git add Aleph/core/src/components/session_recorder.rs
 git commit -m "feat(components): implement SessionRecorder with SQLite persistence"
 ```
 
@@ -1881,7 +1881,7 @@ git commit -m "feat(components): implement SessionRecorder with SQLite persisten
 **Step 1: Write SessionCompactor implementation**
 
 ```rust
-// Aether/core/src/components/session_compactor.rs
+// Aleph/core/src/components/session_compactor.rs
 //! Session compactor component - manages token usage and compresses history.
 //!
 //! Subscribes to: LoopContinue, ToolCallCompleted
@@ -1892,7 +1892,7 @@ use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
 use crate::event::{
-    AetherEvent, CompactionInfo, EventContext, EventHandler, EventType, HandlerError,
+    AlephEvent, CompactionInfo, EventContext, EventHandler, EventType, HandlerError,
 };
 
 use super::types::{ExecutionSession, SessionPart, SummaryPart};
@@ -2315,7 +2315,7 @@ Expected: All tests pass
 **Step 3: Commit SessionCompactor**
 
 ```bash
-git add Aether/core/src/components/session_compactor.rs
+git add Aleph/core/src/components/session_compactor.rs
 git commit -m "feat(components): implement SessionCompactor with token tracking and pruning"
 ```
 
@@ -2369,7 +2369,7 @@ Expected: All tests pass
 **Step 6: Commit integration**
 
 ```bash
-git add Aether/core/src/lib.rs Aether/core/src/components/
+git add Aleph/core/src/lib.rs Aleph/core/src/components/
 git commit -m "feat(components): integrate all 6 core components into lib.rs"
 ```
 
@@ -2384,7 +2384,7 @@ git commit -m "feat(components): integrate all 6 core components into lib.rs"
 **Step 1: Create integration test file**
 
 ```rust
-// Aether/core/src/components/integration_test.rs
+// Aleph/core/src/components/integration_test.rs
 //! Integration tests for the components module.
 
 #[cfg(test)]
@@ -2398,7 +2398,7 @@ mod tests {
     };
     use crate::dispatcher::ToolRegistry;
     use crate::event::{
-        AetherEvent, EventBus, EventContext, EventHandler, EventType, InputEvent,
+        AlephEvent, EventBus, EventContext, EventHandler, EventType, InputEvent,
     };
 
     fn create_test_context() -> EventContext {
@@ -2415,7 +2415,7 @@ mod tests {
         let analyzer = IntentAnalyzer::new();
         let ctx = create_test_context();
 
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "search for rust tutorials".into(),
             topic_id: None,
             context: None,
@@ -2429,7 +2429,7 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         // Simple input should produce ToolCallRequested
-        assert!(matches!(events[0], AetherEvent::ToolCallRequested(_)));
+        assert!(matches!(events[0], AlephEvent::ToolCallRequested(_)));
     }
 
     #[tokio::test]
@@ -2437,7 +2437,7 @@ mod tests {
         let analyzer = IntentAnalyzer::new();
         let ctx = create_test_context();
 
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "search for files then delete the old ones".into(),
             topic_id: None,
             context: None,
@@ -2451,7 +2451,7 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         // Complex input should produce PlanRequested
-        assert!(matches!(events[0], AetherEvent::PlanRequested(_)));
+        assert!(matches!(events[0], AlephEvent::PlanRequested(_)));
     }
 
     #[tokio::test]
@@ -2459,7 +2459,7 @@ mod tests {
         let planner = TaskPlanner::new();
         let ctx = create_test_context();
 
-        let event = AetherEvent::PlanRequested(crate::event::PlanRequest {
+        let event = AlephEvent::PlanRequested(crate::event::PlanRequest {
             input: InputEvent {
                 text: "search then delete".into(),
                 topic_id: None,
@@ -2476,7 +2476,7 @@ mod tests {
         let events = result.unwrap();
         assert_eq!(events.len(), 1);
 
-        if let AetherEvent::PlanCreated(plan) = &events[0] {
+        if let AlephEvent::PlanCreated(plan) = &events[0] {
             assert_eq!(plan.steps.len(), 2);
             assert_eq!(plan.steps[0].tool, "search");
             assert_eq!(plan.steps[1].tool, "file_delete");
@@ -2490,7 +2490,7 @@ mod tests {
         let executor = ToolExecutor::new();
         let ctx = create_test_context();
 
-        let event = AetherEvent::ToolCallRequested(crate::event::ToolCallRequest {
+        let event = AlephEvent::ToolCallRequested(crate::event::ToolCallRequest {
             call_id: "test-call-1".into(),
             tool: "search".into(),
             parameters: serde_json::json!({"q": "rust"}),
@@ -2505,7 +2505,7 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         // Should complete successfully (stub implementation)
-        assert!(matches!(events[0], AetherEvent::ToolCallCompleted(_)));
+        assert!(matches!(events[0], AlephEvent::ToolCallCompleted(_)));
     }
 
     #[tokio::test]
@@ -2516,7 +2516,7 @@ mod tests {
         // Set abort signal
         ctx.abort_signal.store(true, Ordering::Relaxed);
 
-        let event = AetherEvent::ToolCallRequested(crate::event::ToolCallRequest {
+        let event = AlephEvent::ToolCallRequested(crate::event::ToolCallRequest {
             call_id: "test-call-1".into(),
             tool: "search".into(),
             parameters: serde_json::json!({"q": "rust"}),
@@ -2531,7 +2531,7 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         // Should fail with abort
-        if let AetherEvent::ToolCallFailed(error) = &events[0] {
+        if let AlephEvent::ToolCallFailed(error) = &events[0] {
             assert_eq!(error.error_kind, crate::event::ErrorKind::Aborted);
         } else {
             panic!("Expected ToolCallFailed event");
@@ -2543,7 +2543,7 @@ mod tests {
         let controller = LoopController::new();
         let ctx = create_test_context();
 
-        let event = AetherEvent::PlanCreated(crate::event::TaskPlan {
+        let event = AlephEvent::PlanCreated(crate::event::TaskPlan {
             id: "plan-1".into(),
             steps: vec![
                 crate::event::PlanStep {
@@ -2565,8 +2565,8 @@ mod tests {
         let events = result.unwrap();
         assert_eq!(events.len(), 2); // LoopContinue + ToolCallRequested
 
-        assert!(matches!(events[0], AetherEvent::LoopContinue(_)));
-        assert!(matches!(events[1], AetherEvent::ToolCallRequested(_)));
+        assert!(matches!(events[0], AlephEvent::LoopContinue(_)));
+        assert!(matches!(events[1], AlephEvent::ToolCallRequested(_)));
     }
 
     #[tokio::test]
@@ -2574,7 +2574,7 @@ mod tests {
         let recorder = SessionRecorder::new_in_memory().unwrap();
         let ctx = create_test_context();
 
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "test input".into(),
             topic_id: None,
             context: None,
@@ -2602,7 +2602,7 @@ mod tests {
 
         // Step 1: IntentAnalyzer processes input
         let analyzer = IntentAnalyzer::new();
-        let input_event = AetherEvent::InputReceived(InputEvent {
+        let input_event = AlephEvent::InputReceived(InputEvent {
             text: "search for files then delete old ones".into(),
             topic_id: None,
             context: None,
@@ -2610,21 +2610,21 @@ mod tests {
         });
 
         let events = analyzer.handle(&input_event, &ctx).await.unwrap();
-        assert!(matches!(events[0], AetherEvent::PlanRequested(_)));
+        assert!(matches!(events[0], AlephEvent::PlanRequested(_)));
 
         // Step 2: TaskPlanner creates plan
         let planner = TaskPlanner::new();
         let events = planner.handle(&events[0], &ctx).await.unwrap();
-        assert!(matches!(events[0], AetherEvent::PlanCreated(_)));
+        assert!(matches!(events[0], AlephEvent::PlanCreated(_)));
 
         // Step 3: LoopController starts execution
         let controller = LoopController::new();
         let events = controller.handle(&events[0], &ctx).await.unwrap();
         assert!(events.len() >= 1);
-        assert!(matches!(events[0], AetherEvent::LoopContinue(_)));
+        assert!(matches!(events[0], AlephEvent::LoopContinue(_)));
 
         // Verify we have a ToolCallRequested
-        let has_tool_request = events.iter().any(|e| matches!(e, AetherEvent::ToolCallRequested(_)));
+        let has_tool_request = events.iter().any(|e| matches!(e, AlephEvent::ToolCallRequested(_)));
         assert!(has_tool_request);
     }
 }
@@ -2647,7 +2647,7 @@ Expected: All tests pass
 **Step 4: Commit integration tests**
 
 ```bash
-git add Aether/core/src/components/
+git add Aleph/core/src/components/
 git commit -m "test(components): add integration tests for event chain"
 ```
 

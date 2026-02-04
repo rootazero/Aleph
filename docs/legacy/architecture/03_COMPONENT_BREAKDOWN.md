@@ -201,7 +201,7 @@ fn test_rule_backward_compat() {
 
 **文件结构**:
 ```
-Aether/core/src/payload/
+Aleph/core/src/payload/
 ├── mod.rs              # AgentPayload, PayloadMeta, PayloadConfig, AgentContext
 ├── intent.rs           # Intent 枚举
 ├── capability.rs       # Capability 枚举
@@ -611,7 +611,7 @@ impl PromptAssembler {
 **重构后的流程**:
 
 ```rust
-impl AetherCore {
+impl AlephCore {
     fn process_with_ai_internal(
         &self,
         input: String,
@@ -627,7 +627,7 @@ impl AetherCore {
         // [3] 🆕 路由决策（扩展版）
         let decision = router
             .route_with_extended_info(&routing_context)
-            .ok_or(AetherError::NoProviderAvailable { ... })?;
+            .ok_or(AlephError::NoProviderAvailable { ... })?;
 
         info!(
             provider = %decision.provider_name,
@@ -862,7 +862,7 @@ struct RoutingRuleEditView: View {
 
 ```rust
 // ✅ 保持不变
-interface AetherCore {
+interface AlephCore {
     string process_input(string user_input, CapturedContext context);
 }
 ```
@@ -928,7 +928,7 @@ let payload = PayloadBuilder::new()
     .build();  // Err("Missing meta")
 
 // 处理：内部 bug，记录日志，返回友好错误
-Err(AetherError::Internal {
+Err(AlephError::Internal {
     message: "Failed to build AgentPayload".into(),
     suggestion: Some("Please report this bug".into()),
 })

@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Enhance Aether MCP implementation to match OpenCode feature parity - HTTP/SSE transports, OAuth authentication, resources, prompts, and notifications.
+**Goal:** Enhance Aleph MCP implementation to match OpenCode feature parity - HTTP/SSE transports, OAuth authentication, resources, prompts, and notifications.
 
 **Architecture:** Extract `McpTransport` trait from existing `StdioTransport`, add HTTP/SSE implementations, build OAuth system with separate callback process, integrate resources/prompts via new managers.
 
@@ -68,7 +68,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp::transport::traits::tests -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::traits::tests -v`
 Expected: FAIL with "module traits not found"
 
 **Step 3: Write minimal implementation**
@@ -188,7 +188,7 @@ pub use traits::{McpTransport, NotificationCallback};
 
 **Step 5: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp::transport -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport -v`
 Expected: PASS
 
 **Step 6: Commit**
@@ -234,7 +234,7 @@ async fn test_stdio_implements_mcp_transport() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp::transport::stdio::tests::test_stdio_implements_mcp_transport -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::stdio::tests::test_stdio_implements_mcp_transport -v`
 Expected: FAIL with "method `server_name` not found"
 
 **Step 3: Implement McpTransport for StdioTransport**
@@ -272,7 +272,7 @@ impl McpTransport for StdioTransport {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp::transport::stdio -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::stdio -v`
 Expected: PASS
 
 **Step 5: Commit**
@@ -322,7 +322,7 @@ async fn test_connection_with_transport_trait() {
 
 **Step 2: Run existing tests first**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp::external::connection -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::external::connection -v`
 Expected: PASS (baseline)
 
 **Step 3: Refactor McpServerConnection**
@@ -423,7 +423,7 @@ pub async fn close(&self) -> Result<()> {
 
 **Step 4: Run tests to verify refactoring works**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp -v`
 Expected: All 55 MCP tests PASS
 
 **Step 5: Commit**
@@ -486,7 +486,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp::transport::http -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::http -v`
 Expected: FAIL with "module http not found"
 
 **Step 3: Write implementation**
@@ -506,7 +506,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use tokio::sync::RwLock;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
 
@@ -580,7 +580,7 @@ impl HttpTransport {
 impl McpTransport for HttpTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let body = serde_json::to_string(request).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize request: {}", e))
+            AlephError::IoError(format!("Failed to serialize request: {}", e))
         })?;
 
         tracing::debug!(
@@ -593,7 +593,7 @@ impl McpTransport for HttpTransport {
             .send()
             .await
             .map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "HTTP request to '{}' failed: {}",
                     self.server_name, e
                 ))
@@ -602,18 +602,18 @@ impl McpTransport for HttpTransport {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "HTTP {} from '{}': {}",
                 status, self.server_name, body
             )));
         }
 
         let text = response.text().await.map_err(|e| {
-            AetherError::IoError(format!("Failed to read response: {}", e))
+            AlephError::IoError(format!("Failed to read response: {}", e))
         })?;
 
         serde_json::from_str(&text).map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Failed to parse response from '{}': {} (body: {})",
                 self.server_name, e, text
             ))
@@ -622,7 +622,7 @@ impl McpTransport for HttpTransport {
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
         let body = serde_json::to_string(notification).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize notification: {}", e))
+            AlephError::IoError(format!("Failed to serialize notification: {}", e))
         })?;
 
         tracing::debug!(
@@ -635,7 +635,7 @@ impl McpTransport for HttpTransport {
             .send()
             .await
             .map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "HTTP notification to '{}' failed: {}",
                     self.server_name, e
                 ))
@@ -754,7 +754,7 @@ pub use traits::{McpTransport, NotificationCallback};
 
 **Step 5: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp::transport -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport -v`
 Expected: All transport tests PASS
 
 **Step 6: Commit**
@@ -803,7 +803,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp::transport::sse -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport::sse -v`
 Expected: FAIL
 
 **Step 3: Write implementation**
@@ -824,7 +824,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use tokio::sync::{mpsc, RwLock};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
 
@@ -946,7 +946,7 @@ impl SseTransport {
 impl McpTransport for SseTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let body = serde_json::to_string(request).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize request: {}", e))
+            AlephError::IoError(format!("Failed to serialize request: {}", e))
         })?;
 
         tracing::debug!(
@@ -959,7 +959,7 @@ impl McpTransport for SseTransport {
             .send()
             .await
             .map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "SSE request to '{}' failed: {}",
                     self.server_name, e
                 ))
@@ -968,18 +968,18 @@ impl McpTransport for SseTransport {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "SSE HTTP {} from '{}': {}",
                 status, self.server_name, body
             )));
         }
 
         let text = response.text().await.map_err(|e| {
-            AetherError::IoError(format!("Failed to read response: {}", e))
+            AlephError::IoError(format!("Failed to read response: {}", e))
         })?;
 
         serde_json::from_str(&text).map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Failed to parse response from '{}': {}",
                 self.server_name, e
             ))
@@ -988,7 +988,7 @@ impl McpTransport for SseTransport {
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
         let body = serde_json::to_string(notification).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize notification: {}", e))
+            AlephError::IoError(format!("Failed to serialize notification: {}", e))
         })?;
 
         let _ = self.build_request(body).send().await;
@@ -1088,7 +1088,7 @@ pub use traits::{McpTransport, NotificationCallback};
 
 **Step 5: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp::transport -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp::transport -v`
 Expected: PASS
 
 **Step 6: Commit**
@@ -1250,7 +1250,7 @@ impl McpClient {
 
 **Step 5: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package aethecore --lib mcp -v`
+Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement && cargo test --package alephcore --lib mcp -v`
 Expected: PASS
 
 **Step 6: Commit**
@@ -1400,7 +1400,7 @@ pub use resources::{McpResourceManager, ResourceContent};
 
 ```bash
 cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
-cargo test --package aethecore --lib mcp::resources -v
+cargo test --package alephcore --lib mcp::resources -v
 git add core/src/mcp/resources.rs core/src/mcp/mod.rs
 git commit -m "feat(mcp): add McpResourceManager for resource handling
 
@@ -1459,7 +1459,7 @@ mod tests {
 // core/src/mcp/notifications.rs
 //! MCP Notification Router
 //!
-//! Routes server-initiated notifications to the Aether event bus.
+//! Routes server-initiated notifications to the Aleph event bus.
 
 use std::sync::Arc;
 
@@ -1548,7 +1548,7 @@ mod tests {
 git add core/src/mcp/notifications.rs core/src/mcp/mod.rs
 git commit -m "feat(mcp): add notification router for server events
 
-Routes MCP server notifications to Aether's EventBus:
+Routes MCP server notifications to Aleph's EventBus:
 - ToolsChanged for dynamic tool updates
 - ResourcesChanged for resource updates
 - PromptsChanged for prompt updates
@@ -1610,7 +1610,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::RwLock;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// OAuth tokens
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1676,11 +1676,11 @@ impl OAuthStorage {
         }
 
         let content = fs::read_to_string(&self.file_path).await.map_err(|e| {
-            AetherError::IoError(format!("Failed to read OAuth storage: {}", e))
+            AlephError::IoError(format!("Failed to read OAuth storage: {}", e))
         })?;
 
         serde_json::from_str(&content).map_err(|e| {
-            AetherError::IoError(format!("Failed to parse OAuth storage: {}", e))
+            AlephError::IoError(format!("Failed to parse OAuth storage: {}", e))
         })
     }
 
@@ -1688,16 +1688,16 @@ impl OAuthStorage {
     async fn save(&self, storage: &StorageFile) -> Result<()> {
         if let Some(parent) = self.file_path.parent() {
             fs::create_dir_all(parent).await.map_err(|e| {
-                AetherError::IoError(format!("Failed to create OAuth storage dir: {}", e))
+                AlephError::IoError(format!("Failed to create OAuth storage dir: {}", e))
             })?;
         }
 
         let content = serde_json::to_string_pretty(storage).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize OAuth storage: {}", e))
+            AlephError::IoError(format!("Failed to serialize OAuth storage: {}", e))
         })?;
 
         fs::write(&self.file_path, content).await.map_err(|e| {
-            AetherError::IoError(format!("Failed to write OAuth storage: {}", e))
+            AlephError::IoError(format!("Failed to write OAuth storage: {}", e))
         })?;
 
         // Set file permissions to 0600 on Unix
@@ -1924,6 +1924,6 @@ After completing all tasks:
 Run final verification:
 ```bash
 cd /Users/zouguojun/Workspace/Aether/.worktrees/mcp-enhancement
-cargo test --package aethecore --lib mcp -v
-cargo clippy --package aethecore -- -D warnings
+cargo test --package alephcore --lib mcp -v
+cargo clippy --package alephcore -- -D warnings
 ```

@@ -4,20 +4,20 @@
 
 **Goal:** Integrate the event-driven agentic loop with the FFI layer and provide callback bridge for Swift UI updates.
 
-**Architecture:** Create a CallbackBridge component that subscribes to UI-relevant events and forwards them to Swift via the existing AetherEventHandler trait. Enhance the FFI layer with new methods for session management.
+**Architecture:** Create a CallbackBridge component that subscribes to UI-relevant events and forwards them to Swift via the existing AlephEventHandler trait. Enhance the FFI layer with new methods for session management.
 
 **Tech Stack:** Rust, UniFFI, async-trait, tokio
 
 ---
 
-## Task 1: Extend AetherEventHandler trait with new callbacks
+## Task 1: Extend AlephEventHandler trait with new callbacks
 
 **Files:**
 - Modify: `Aether/core/src/ffi/mod.rs`
 
-**Step 1: Add new callback methods to AetherEventHandler trait**
+**Step 1: Add new callback methods to AlephEventHandler trait**
 
-Add new methods after the existing callbacks in the `AetherEventHandler` trait:
+Add new methods after the existing callbacks in the `AlephEventHandler` trait:
 
 ```rust
     // ========================================================================
@@ -60,8 +60,8 @@ Expected: Compilation succeeds (trait changes don't break existing code until im
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/ffi/mod.rs
-git commit -m "feat(ffi): extend AetherEventHandler with agentic loop callbacks"
+git add Aleph/core/src/ffi/mod.rs
+git commit -m "feat(ffi): extend AlephEventHandler with agentic loop callbacks"
 ```
 
 ---
@@ -78,27 +78,27 @@ git commit -m "feat(ffi): extend AetherEventHandler with agentic loop callbacks"
 //! CallbackBridge - Forwards internal events to Swift callbacks.
 //!
 //! This component subscribes to UI-relevant events and converts them
-//! to callbacks via the AetherEventHandler trait.
+//! to callbacks via the AlephEventHandler trait.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError,
     LoopState, PlanStep, StopReason, SubAgentRequest, SubAgentResult,
     ToolCallRequest, ToolCallResult, ToolCallError, ToolCallStarted,
 };
-use crate::ffi::AetherEventHandler;
+use crate::ffi::AlephEventHandler;
 
 /// CallbackBridge forwards events to the Swift layer
 pub struct CallbackBridge {
-    handler: Arc<dyn AetherEventHandler>,
+    handler: Arc<dyn AlephEventHandler>,
 }
 
 impl CallbackBridge {
     /// Create a new CallbackBridge
-    pub fn new(handler: Arc<dyn AetherEventHandler>) -> Self {
+    pub fn new(handler: Arc<dyn AlephEventHandler>) -> Self {
         Self { handler }
     }
 }
@@ -126,29 +126,29 @@ impl EventHandler for CallbackBridge {
 
     async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<Vec<AetherEvent>, HandlerError> {
         match event {
-            AetherEvent::SessionCreated(info) => {
+            AlephEvent::SessionCreated(info) => {
                 self.handler.on_session_started(info.session_id.clone());
             }
-            AetherEvent::ToolCallStarted(info) => {
+            AlephEvent::ToolCallStarted(info) => {
                 self.handler.on_tool_call_started(
                     info.call_id.clone(),
                     info.tool.clone(),
                 );
             }
-            AetherEvent::ToolCallCompleted(result) => {
+            AlephEvent::ToolCallCompleted(result) => {
                 self.handler.on_tool_call_completed(
                     result.call_id.clone(),
                     result.output.to_string(),
                 );
             }
-            AetherEvent::ToolCallFailed(error) => {
+            AlephEvent::ToolCallFailed(error) => {
                 self.handler.on_tool_call_failed(
                     error.call_id.clone(),
                     error.error.clone(),
                     error.retryable,
                 );
             }
-            AetherEvent::LoopContinue(state) => {
+            AlephEvent::LoopContinue(state) => {
                 if let Some(session_id) = ctx.get_session_id().await {
                     self.handler.on_loop_progress(
                         session_id,
@@ -157,7 +157,7 @@ impl EventHandler for CallbackBridge {
                     );
                 }
             }
-            AetherEvent::LoopStop(reason) => {
+            AlephEvent::LoopStop(reason) => {
                 if let Some(session_id) = ctx.get_session_id().await {
                     let summary = match reason {
                         StopReason::Completed => "Task completed successfully".to_string(),
@@ -170,7 +170,7 @@ impl EventHandler for CallbackBridge {
                     self.handler.on_session_completed(session_id, summary);
                 }
             }
-            AetherEvent::PlanCreated(plan) => {
+            AlephEvent::PlanCreated(plan) => {
                 if let Some(session_id) = ctx.get_session_id().await {
                     let steps: Vec<String> = plan.steps.iter()
                         .map(|s| s.description.clone())
@@ -178,21 +178,21 @@ impl EventHandler for CallbackBridge {
                     self.handler.on_plan_created(session_id, steps);
                 }
             }
-            AetherEvent::SubAgentStarted(request) => {
+            AlephEvent::SubAgentStarted(request) => {
                 self.handler.on_subagent_started(
                     request.parent_session_id.clone(),
                     request.child_session_id.clone(),
                     request.agent_id.clone(),
                 );
             }
-            AetherEvent::SubAgentCompleted(result) => {
+            AlephEvent::SubAgentCompleted(result) => {
                 self.handler.on_subagent_completed(
                     result.child_session_id.clone(),
                     result.success,
                     result.summary.clone(),
                 );
             }
-            AetherEvent::AiResponseGenerated(response) => {
+            AlephEvent::AiResponseGenerated(response) => {
                 // Forward streaming chunks via on_stream_chunk
                 self.handler.on_stream_chunk(response.content.clone());
                 if response.is_final {
@@ -233,7 +233,7 @@ mod tests {
         }
     }
 
-    impl AetherEventHandler for MockHandler {
+    impl AlephEventHandler for MockHandler {
         fn on_thinking(&self) {}
         fn on_tool_start(&self, _: String) {}
         fn on_tool_result(&self, _: String, _: String) {}
@@ -295,7 +295,7 @@ mod tests {
         let bridge = CallbackBridge::new(Arc::clone(&handler));
         let ctx = create_test_context();
 
-        let event = AetherEvent::SessionCreated(SessionInfo {
+        let event = AlephEvent::SessionCreated(SessionInfo {
             session_id: "test-session".into(),
             agent_id: "main".into(),
             model: "test".into(),
@@ -311,7 +311,7 @@ mod tests {
         let bridge = CallbackBridge::new(Arc::clone(&handler));
         let ctx = create_test_context();
 
-        let event = AetherEvent::ToolCallStarted(ToolCallStarted {
+        let event = AlephEvent::ToolCallStarted(ToolCallStarted {
             call_id: "call-1".into(),
             tool: "web_fetch".into(),
             input: serde_json::json!({}),
@@ -327,7 +327,7 @@ mod tests {
         let bridge = CallbackBridge::new(Arc::clone(&handler));
         let ctx = create_test_context();
 
-        let event = AetherEvent::ToolCallCompleted(ToolCallResult {
+        let event = AlephEvent::ToolCallCompleted(ToolCallResult {
             call_id: "call-1".into(),
             tool: "web_fetch".into(),
             input: serde_json::json!({}),
@@ -348,7 +348,7 @@ mod tests {
         let ctx = create_test_context();
         ctx.set_session_id("test-session".into()).await;
 
-        let event = AetherEvent::LoopStop(StopReason::Completed);
+        let event = AlephEvent::LoopStop(StopReason::Completed);
 
         bridge.handle(&event, &ctx).await.unwrap();
         assert_eq!(handler.session_completed_count.load(Ordering::SeqCst), 1);
@@ -373,7 +373,7 @@ Expected: 6 tests passing
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/components/
+git add Aleph/core/src/components/
 git commit -m "feat(components): add CallbackBridge for Swift event forwarding"
 ```
 
@@ -400,7 +400,7 @@ pub struct SessionInfo {
 
 **Step 2: Add SessionCreated event variant if not exists**
 
-Add to AetherEvent enum if not present:
+Add to AlephEvent enum if not present:
 ```rust
 SessionCreated(SessionInfo),
 ```
@@ -413,7 +413,7 @@ Expected: All tests pass
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/event/types.rs
+git add Aleph/core/src/event/types.rs
 git commit -m "feat(event): add SessionInfo type for session lifecycle events"
 ```
 
@@ -430,14 +430,14 @@ git commit -m "feat(event): add SessionInfo type for session lifecycle events"
 ```rust
 //! Session management FFI methods
 
-use crate::ffi::{AetherCore, AetherFfiError};
+use crate::ffi::{AetherCore, AlephFfiError};
 
-impl AetherCore {
+impl AlephCore {
     /// Resume a previously saved session
     ///
     /// Loads the session from the database and resumes execution
     /// from where it was interrupted.
-    pub fn resume_session(&self, session_id: String) -> Result<(), AetherFfiError> {
+    pub fn resume_session(&self, session_id: String) -> Result<(), AlephFfiError> {
         // This is a placeholder - actual implementation depends on
         // how session persistence is integrated
         tracing::info!(session_id = %session_id, "Resuming session");
@@ -485,7 +485,7 @@ Expected: Compilation succeeds
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/ffi/
+git add Aleph/core/src/ffi/
 git commit -m "feat(ffi): add session management methods"
 ```
 
@@ -521,7 +521,7 @@ Expected: All tests pass
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/lib.rs
+git add Aleph/core/src/lib.rs
 git commit -m "feat(lib): export CallbackBridge and SessionSummary"
 ```
 
@@ -542,11 +542,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::components::CallbackBridge;
 use crate::event::{
-    AetherEvent, EventBus, EventContext, EventHandler,
+    AlephEvent, EventBus, EventContext, EventHandler,
     ToolCallRequest, ToolCallStarted, ToolCallResult,
     LoopState, StopReason, SessionInfo,
 };
-use crate::ffi::AetherEventHandler;
+use crate::ffi::AlephEventHandler;
 
 // ... test implementation similar to Task 2 tests but with full event chains ...
 ```
@@ -559,7 +559,7 @@ Expected: All tests pass
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/components/
+git add Aleph/core/src/components/
 git commit -m "test(components): add CallbackBridge integration tests"
 ```
 
@@ -572,7 +572,7 @@ git commit -m "test(components): add CallbackBridge integration tests"
 
 **Step 1: Add new callback methods to interface**
 
-Find the `callback_interface AetherEventHandler` section and add:
+Find the `callback_interface AlephEventHandler` section and add:
 
 ```udl
     // Agentic loop callbacks (Phase 5)
@@ -595,8 +595,8 @@ Expected: Bindings generated successfully
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/aether.udl
-git add Aether/Sources/Generated/
+git add Aleph/core/src/aether.udl
+git add Aleph/Sources/Generated/
 git commit -m "feat(uniffi): add agentic loop callback methods to UDL"
 ```
 
@@ -633,7 +633,7 @@ Create documentation note for Swift side changes needed:
 
 Phase 5 implements the integration layer with:
 
-1. **Extended AetherEventHandler** - New callbacks for agentic loop events
+1. **Extended AlephEventHandler** - New callbacks for agentic loop events
 2. **CallbackBridge Component** - Forwards events to Swift callbacks
 3. **Session Management FFI** - Methods for session resume/list
 4. **UniFFI Updates** - New callback methods in UDL

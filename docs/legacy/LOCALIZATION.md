@@ -1,10 +1,10 @@
 # Localization Guide
 
-This guide explains how Aether implements internationalization (i18n) and how contributors can add new language translations.
+This guide explains how Aleph implements internationalization (i18n) and how contributors can add new language translations.
 
 ## Overview
 
-Aether uses Apple's native localization infrastructure to support multiple languages:
+Aleph uses Apple's native localization infrastructure to support multiple languages:
 - **Base Language**: English (`en.lproj/`)
 - **Supported Languages**: Simplified Chinese (`zh-Hans.lproj/`)
 
@@ -13,7 +13,7 @@ Aether uses Apple's native localization infrastructure to support multiple langu
 ### Localization Files
 
 ```
-Aether/Resources/
+Aleph/Resources/
 ├── en.lproj/                       # English (base)
 │   ├── Localizable.strings        # UI text
 │   └── InfoPlist.strings          # App metadata & permissions
@@ -72,7 +72,7 @@ String.localizedStringWithFormat(
 ### Step 1: Create Localization Directory
 
 ```bash
-mkdir -p Aether/Resources/<lang-code>.lproj
+mkdir -p Aleph/Resources/<lang-code>.lproj
 ```
 
 **Common Language Codes:**
@@ -90,11 +90,11 @@ mkdir -p Aether/Resources/<lang-code>.lproj
 ### Step 2: Copy Base Strings Files
 
 ```bash
-cp Aether/Resources/en.lproj/Localizable.strings \
-   Aether/Resources/<lang-code>.lproj/Localizable.strings
+cp Aleph/Resources/en.lproj/Localizable.strings \
+   Aleph/Resources/<lang-code>.lproj/Localizable.strings
 
-cp Aether/Resources/en.lproj/InfoPlist.strings \
-   Aether/Resources/<lang-code>.lproj/InfoPlist.strings
+cp Aleph/Resources/en.lproj/InfoPlist.strings \
+   Aleph/Resources/<lang-code>.lproj/InfoPlist.strings
 ```
 
 ### Step 3: Translate Strings
@@ -196,16 +196,16 @@ chmod +x .git/hooks/pre-commit
 1. Open **System Settings** > **General** > **Language & Region**
 2. Add your target language to **Preferred Languages**
 3. Drag it to the top of the list
-4. Restart Aether
+4. Restart Aleph
 
 #### Method 2: Launch with Specific Language (Debug)
 
 ```bash
 # Launch with Simplified Chinese
-open -a Aether --args -AppleLanguages '(zh-Hans)'
+open -a Aleph --args -AppleLanguages '(zh-Hans)'
 
 # Launch with Japanese
-open -a Aether --args -AppleLanguages '(ja)'
+open -a Aleph --args -AppleLanguages '(ja)'
 ```
 
 ### Verify UI Layout
@@ -265,7 +265,7 @@ We welcome community translations! Contributors will be credited in:
 ### Strings Not Updating After Edit
 
 1. Clean Xcode build: `Cmd + Shift + K`
-2. Delete DerivedData: `rm -rf ~/Library/Developer/Xcode/DerivedData/Aether-*`
+2. Delete DerivedData: `rm -rf ~/Library/Developer/Xcode/DerivedData/Aleph-*`
 3. Rebuild project
 
 ### Wrong Language Displayed
@@ -294,10 +294,10 @@ macOS caches `InfoPlist.strings`. To refresh:
 
 ```bash
 # 1. Create directory
-mkdir -p Aether/Resources/ja.lproj
+mkdir -p Aleph/Resources/ja.lproj
 
 # 2. Copy base files
-cp Aether/Resources/en.lproj/*.strings Aether/Resources/ja.lproj/
+cp Aleph/Resources/en.lproj/*.strings Aleph/Resources/ja.lproj/
 
 # 3. Translate (edit ja.lproj/Localizable.strings)
 # "common.save" = "保存";
@@ -314,18 +314,18 @@ xcodegen generate
 ./Scripts/validate_translations.sh
 
 # 7. Test
-open -a Aether --args -AppleLanguages '(ja)'
+open -a Aleph --args -AppleLanguages '(ja)'
 ```
 
 ---
 
 ## Language Selector Feature
 
-Aether now includes a **Language Selector** in General Settings (added in 2026-01-03), with intelligent language detection and fallback logic.
+Aleph now includes a **Language Selector** in General Settings (added in 2026-01-03), with intelligent language detection and fallback logic.
 
 ### Language Selection Logic
 
-Aether uses a three-tier approach to determine the UI language:
+Aleph uses a three-tier approach to determine the UI language:
 
 1. **User Preference** (Highest Priority)
    - If user manually sets language in Settings → Language is saved to config
@@ -351,14 +351,14 @@ Aether uses a three-tier approach to determine the UI language:
    - "简体中文" - Forces Simplified Chinese UI
 
 3. **Behavior**:
-   - Language preference is saved to `~/.aether/config.toml` under `[general]` section
+   - Language preference is saved to `~/.aleph/config.toml` under `[general]` section
    - Format: `language = "en"` or `language = "zh-Hans"`
    - If "System Default" is selected, the language field is omitted from config
    - Language changes require app restart to take effect (macOS localization caching)
 
 4. **User Flow**:
    - Select language from dropdown
-   - Alert appears: "Language will change after restarting Aether. Restart now?"
+   - Alert appears: "Language will change after restarting Aleph. Restart now?"
    - User chooses "Restart Now" (immediate) or "Later" (next launch)
 
 ### First Launch Experience
@@ -382,19 +382,19 @@ On first installation:
 ### Testing Language Changes
 
 1. **Via UI**: Settings → General → Language → Select language → Restart
-2. **Via Config**: Edit `~/.aether/config.toml`:
+2. **Via Config**: Edit `~/.aleph/config.toml`:
    ```toml
    [general]
    language = "zh-Hans"  # or "en"
    ```
 3. **Via Command Line** (deprecated, use UI instead):
    ```bash
-   open -a Aether --args -AppleLanguages '(zh-Hans)'
+   open -a Aleph --args -AppleLanguages '(zh-Hans)'
    ```
 
 ---
 
-**Maintained by**: Aether Development Team
+**Maintained by**: Aleph Development Team
 **Last Updated**: 2026-01-03
 **Status**: ✅ Active (English + Simplified Chinese) + Language Selector
 **Translation Keys**: 256 keys (100% coverage)

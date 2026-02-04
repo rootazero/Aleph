@@ -1,6 +1,6 @@
 # Protocol Adapter 架构设计
 
-> 将 Aether Provider 架构从 "Vendor-Centric" 转变为 "Protocol-Centric"
+> 将 Aleph Provider 架构从 "Vendor-Centric" 转变为 "Protocol-Centric"
 
 **日期**: 2026-02-03
 **状态**: 已批准
@@ -10,7 +10,7 @@
 
 ## 1. 背景
 
-Aether 当前的 Provider 架构采用 "Vendor-First" 模式：每个 AI 厂商对应一个独立的 Rust Struct（DeepSeekProvider, MoonshotProvider 等）。这导致了约 600 行的代码冗余——这些 Provider 本质上都是 OpenAI 协议的换皮。
+Aleph 当前的 Provider 架构采用 "Vendor-First" 模式：每个 AI 厂商对应一个独立的 Rust Struct（DeepSeekProvider, MoonshotProvider 等）。这导致了约 600 行的代码冗余——这些 Provider 本质上都是 OpenAI 协议的换皮。
 
 ### 1.1 问题分析
 
@@ -355,7 +355,7 @@ impl ProtocolAdapter for OpenAiProtocol {
         let body: OpenAiResponse = response.json().await?;
         body.choices.first()
             .map(|c| c.message.content.clone())
-            .ok_or_else(|| AetherError::empty_response())
+            .ok_or_else(|| AlephError::empty_response())
     }
 
     async fn parse_stream(
@@ -363,7 +363,7 @@ impl ProtocolAdapter for OpenAiProtocol {
         response: reqwest::Response,
     ) -> Result<BoxStream<'static, Result<String>>> {
         let stream = response.bytes_stream()
-            .map_err(|e| AetherError::network(e))
+            .map_err(|e| AlephError::network(e))
             .try_filter_map(|chunk| async move {
                 Self::parse_sse_chunk(&chunk)
             });
@@ -555,7 +555,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
             Ok(Arc::new(MockProvider::new(name.to_string())))
         }
 
-        _ => Err(AetherError::unknown_protocol(protocol_name)),
+        _ => Err(AlephError::unknown_protocol(protocol_name)),
     }
 }
 ```

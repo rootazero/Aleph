@@ -1,6 +1,6 @@
 //! YouTube URL parsing and detection utilities
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -39,5 +39,5 @@ pub fn parse_video_id(url: &str) -> Result<String> {
         .captures(url)
         .and_then(|caps| caps.get(1))
         .map(|m| m.as_str().to_string())
-        .ok_or_else(|| AetherError::video(format!("Invalid YouTube URL: {}", url)))
+        .ok_or_else(|| AlephError::video(format!("Invalid YouTube URL: {}", url)))
 }

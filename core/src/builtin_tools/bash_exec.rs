@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::code_exec::{CodeExecArgs, CodeExecTool, Language};
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 /// Arguments for bash execution tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -48,9 +48,9 @@ impl Default for BashExecTool {
     }
 }
 
-/// Implementation of AetherTool trait for BashExecTool
+/// Implementation of AlephTool trait for BashExecTool
 #[async_trait]
-impl AetherTool for BashExecTool {
+impl AlephTool for BashExecTool {
     const NAME: &'static str = "bash";
     const DESCRIPTION: &'static str = r#"Execute bash/shell commands.
 

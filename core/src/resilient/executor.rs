@@ -264,7 +264,7 @@ pub async fn execute_resilient<T: ResilientTask>(task: &T) -> TaskOutcome<T::Out
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::AetherError;
+    use crate::error::AlephError;
     use crate::resilient::ResilienceConfig;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
@@ -289,7 +289,7 @@ mod tests {
             Box::pin(async move {
                 let count = attempts.fetch_add(1, Ordering::SeqCst) + 1;
                 if count < fail_until {
-                    Err(AetherError::NetworkError {
+                    Err(AlephError::NetworkError {
                         message: format!("Attempt {} failed", count),
                         suggestion: None,
                     })

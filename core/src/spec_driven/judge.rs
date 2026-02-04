@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use crate::agents::thinking::ThinkLevel;
 
@@ -194,7 +194,7 @@ Evaluate against the acceptance criteria and test results."#,
 
         let parsed: EvaluationResponse = serde_json::from_str(&json_str).map_err(|e| {
             warn!(error = %e, response = %response, "Failed to parse evaluation");
-            AetherError::Other {
+            AlephError::Other {
                 message: format!("Failed to parse evaluation: {}", e),
                 suggestion: Some("Ensure the LLM returned valid JSON".to_string()),
             }

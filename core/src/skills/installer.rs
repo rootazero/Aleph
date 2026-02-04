@@ -5,7 +5,7 @@
 //! - Third-party skills from any GitHub repository
 //! - Local ZIP file upload
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::skills::types::{PackageManager, SkillRequirements};
 use crate::skills::Skill;
 use std::io::Read;
@@ -58,7 +58,7 @@ impl SkillsInstaller {
         info!(path = %zip_path.display(), "Installing skills from ZIP file");
 
         let file = std::fs::File::open(zip_path).map_err(|e| {
-            AetherError::config(format!(
+            AlephError::config(format!(
                 "Failed to open ZIP file {}: {}",
                 zip_path.display(),
                 e
@@ -75,7 +75,7 @@ impl SkillsInstaller {
         let skill_dir = self.skills_dir.join(id);
 
         if !skill_dir.exists() {
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "Skill '{}' not found",
                 id
             )));
@@ -83,7 +83,7 @@ impl SkillsInstaller {
 
         info!(skill_id = %id, "Deleting skill");
         std::fs::remove_dir_all(&skill_dir)
-            .map_err(|e| AetherError::config(format!("Failed to delete skill '{}': {}", id, e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to delete skill '{}': {}", id, e)))?;
 
         Ok(())
     }
@@ -130,7 +130,7 @@ impl SkillsInstaller {
             return Ok(normalized.to_string());
         }
 
-        Err(AetherError::invalid_config(format!(
+        Err(AlephError::invalid_config(format!(
             "Invalid GitHub URL format: {}. Expected: user/repo, github.com/user/repo, or https://github.com/user/repo",
             url
         )))
@@ -161,10 +161,10 @@ impl SkillsInstaller {
 
         let response = reqwest::get(url)
             .await
-            .map_err(|e| AetherError::network(format!("Failed to download from {}: {}", url, e)))?;
+            .map_err(|e| AlephError::network(format!("Failed to download from {}: {}", url, e)))?;
 
         if !response.status().is_success() {
-            return Err(AetherError::network(format!(
+            return Err(AlephError::network(format!(
                 "Failed to download from {}: HTTP {}",
                 url,
                 response.status()
@@ -174,18 +174,18 @@ impl SkillsInstaller {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| AetherError::network(format!("Failed to read response body: {}", e)))?;
+            .map_err(|e| AlephError::network(format!("Failed to read response body: {}", e)))?;
 
         // Save to temp file
         let temp_dir = std::env::temp_dir();
         let temp_zip = temp_dir.join(format!("aether-skill-{}.zip", uuid::Uuid::new_v4()));
 
         std::fs::write(&temp_zip, &bytes)
-            .map_err(|e| AetherError::config(format!("Failed to write temp ZIP: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to write temp ZIP: {}", e)))?;
 
         // Extract and install
         let file = std::fs::File::open(&temp_zip)
-            .map_err(|e| AetherError::config(format!("Failed to open temp ZIP: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to open temp ZIP: {}", e)))?;
 
         let result = self.extract_and_install_from_zip(file);
 
@@ -201,7 +201,7 @@ impl SkillsInstaller {
         reader: R,
     ) -> Result<Vec<String>> {
         let mut archive = zip::ZipArchive::new(reader)
-            .map_err(|e| AetherError::config(format!("Failed to read ZIP archive: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to read ZIP archive: {}", e)))?;
 
         let mut installed = Vec::new();
 
@@ -211,7 +211,7 @@ impl SkillsInstaller {
         for i in 0..archive.len() {
             let mut file = archive
                 .by_index(i)
-                .map_err(|e| AetherError::config(format!("Failed to read ZIP entry: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to read ZIP entry: {}", e)))?;
 
             let name = file.name().to_string();
 
@@ -219,7 +219,7 @@ impl SkillsInstaller {
             if name.ends_with("SKILL.md") {
                 let mut content = String::new();
                 file.read_to_string(&mut content).map_err(|e| {
-                    AetherError::config(format!("Failed to read SKILL.md content: {}", e))
+                    AlephError::config(format!("Failed to read SKILL.md content: {}", e))
                 })?;
 
                 skill_files.push((name, content));
@@ -258,7 +258,7 @@ impl SkillsInstaller {
                         Err(_) => {
                             // Parent directory might not exist, try create_dir_all
                             std::fs::create_dir_all(&target_dir).map_err(|e| {
-                                AetherError::config(format!(
+                                AlephError::config(format!(
                                     "Failed to create skill directory {}: {}",
                                     target_dir.display(),
                                     e
@@ -270,7 +270,7 @@ impl SkillsInstaller {
                     // Write SKILL.md
                     let skill_md_path = target_dir.join("SKILL.md");
                     std::fs::write(&skill_md_path, &content).map_err(|e| {
-                        AetherError::config(format!("Failed to write SKILL.md: {}", e))
+                        AlephError::config(format!("Failed to write SKILL.md: {}", e))
                     })?;
 
                     info!(
@@ -305,12 +305,12 @@ impl SkillsInstaller {
     /// Returns the first successfully installed skill.
     pub fn install_from_url_sync(&self, url: &str) -> Result<Skill> {
         let runtime = tokio::runtime::Runtime::new()
-            .map_err(|e| AetherError::config(format!("Failed to create async runtime: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to create async runtime: {}", e)))?;
 
         let installed = runtime.block_on(self.install_from_github(url))?;
 
         if installed.is_empty() {
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "No valid skills found at {}",
                 url
             )));
@@ -321,7 +321,7 @@ impl SkillsInstaller {
         let skill_dir = self.skills_dir.join(skill_id);
         let skill_md = skill_dir.join("SKILL.md");
         let content = std::fs::read_to_string(&skill_md)
-            .map_err(|e| AetherError::config(format!("Failed to read installed skill: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to read installed skill: {}", e)))?;
 
         Skill::parse(skill_id, &content)
     }

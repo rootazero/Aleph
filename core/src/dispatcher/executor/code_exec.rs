@@ -19,7 +19,7 @@ use crate::dispatcher::agent_types::{CodeExec, Language, Task, TaskResult, TaskT
 use crate::dispatcher::{
     DEFAULT_ALLOW_NETWORK, DEFAULT_SANDBOX_ENABLED, MAX_STDERR_SIZE, MAX_STDOUT_SIZE,
 };
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// Error types for code execution
 #[derive(Debug, Clone, thiserror::Error)]
@@ -446,7 +446,7 @@ impl CodeExecutor {
 
         // Check for blocked commands
         if let Some(reason) = self.command_checker.is_blocked(&full_command) {
-            return Err(AetherError::other(
+            return Err(AlephError::other(
                 CodeExecError::Blocked { reason }.to_string(),
             ));
         }
@@ -454,7 +454,7 @@ impl CodeExecutor {
         // Check runtime availability (using cache)
         let runtime_info = self.get_runtime_info(cmd).await;
         if !runtime_info.available {
-            return Err(AetherError::other(
+            return Err(AlephError::other(
                 CodeExecError::RuntimeNotFound(cmd.to_string()).to_string(),
             ));
         }
@@ -473,14 +473,14 @@ impl CodeExecutor {
 
         // Check if runtime is allowed
         if !self.is_runtime_allowed(runtime) {
-            return Err(AetherError::other(
+            return Err(AlephError::other(
                 CodeExecError::RuntimeNotAllowed(runtime.to_string()).to_string(),
             ));
         }
 
         // Check for blocked commands in the script
         if let Some(reason) = self.command_checker.is_blocked(code) {
-            return Err(AetherError::other(
+            return Err(AlephError::other(
                 CodeExecError::Blocked { reason }.to_string(),
             ));
         }
@@ -488,7 +488,7 @@ impl CodeExecutor {
         // Check runtime availability (using cache)
         let runtime_info = self.get_runtime_info(runtime).await;
         if !runtime_info.available {
-            return Err(AetherError::other(
+            return Err(AlephError::other(
                 CodeExecError::RuntimeNotFound(runtime.to_string()).to_string(),
             ));
         }
@@ -501,7 +501,7 @@ impl CodeExecutor {
             Language::Ruby => vec!["-e".to_string(), code.to_string()],
             Language::Rust => {
                 // Rust needs compilation, not supported for inline execution
-                return Err(AetherError::other(
+                return Err(AlephError::other(
                     "Inline Rust execution not supported. Use a script file instead.".to_string(),
                 ));
             }
@@ -514,7 +514,7 @@ impl CodeExecutor {
     async fn execute_file(&self, path: &Path, ctx: &ExecutionContext) -> Result<CodeExecResult> {
         // Check file path permission
         let canonical_path = self.permission_checker.check_path(path).map_err(|_e| {
-            AetherError::other(CodeExecError::PathNotAllowed(path.to_path_buf()).to_string())
+            AlephError::other(CodeExecError::PathNotAllowed(path.to_path_buf()).to_string())
         })?;
 
         // Detect language from extension
@@ -535,7 +535,7 @@ impl CodeExecutor {
 
         // Check if runtime is allowed
         if !self.is_runtime_allowed(runtime) {
-            return Err(AetherError::other(
+            return Err(AlephError::other(
                 CodeExecError::RuntimeNotAllowed(runtime.to_string()).to_string(),
             ));
         }
@@ -543,7 +543,7 @@ impl CodeExecutor {
         // Check runtime availability (using cache)
         let runtime_info = self.get_runtime_info(runtime).await;
         if !runtime_info.available {
-            return Err(AetherError::other(
+            return Err(AlephError::other(
                 CodeExecError::RuntimeNotFound(runtime.to_string()).to_string(),
             ));
         }
@@ -599,7 +599,7 @@ impl CodeExecutor {
 
         // Spawn process
         let mut child = cmd.spawn().map_err(|e| {
-            AetherError::other(
+            AlephError::other(
                 CodeExecError::IoError(format!("Failed to spawn process: {}", e)).to_string(),
             )
         })?;
@@ -684,13 +684,13 @@ impl CodeExecutor {
                     runtime: runtime.to_string(),
                 })
             }
-            Ok(Err(e)) => Err(AetherError::other(
+            Ok(Err(e)) => Err(AlephError::other(
                 CodeExecError::IoError(e.to_string()).to_string(),
             )),
             Err(_) => {
                 // Timeout - kill process
                 let _ = child.kill().await;
-                Err(AetherError::other(
+                Err(AlephError::other(
                     CodeExecError::Timeout(self.timeout_seconds).to_string(),
                 ))
             }
@@ -710,13 +710,13 @@ impl TaskExecutor for CodeExecutor {
 
     async fn execute(&self, task: &Task, ctx: &ExecutionContext) -> Result<TaskResult> {
         if !self.enabled {
-            return Err(AetherError::other(CodeExecError::Disabled.to_string()));
+            return Err(AlephError::other(CodeExecError::Disabled.to_string()));
         }
 
         let code_exec = match &task.task_type {
             TaskType::CodeExecution(ce) => ce,
             _ => {
-                return Err(AetherError::other(
+                return Err(AlephError::other(
                     "Task is not a code execution task".to_string(),
                 ))
             }

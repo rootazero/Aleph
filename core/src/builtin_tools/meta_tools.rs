@@ -26,7 +26,7 @@ use tracing::debug;
 use super::error::ToolError;
 use crate::dispatcher::{ToolIndexEntry, ToolRegistry};
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 // ============================================================================
 // ListToolsTool
@@ -131,9 +131,9 @@ impl Clone for ListToolsTool {
     }
 }
 
-/// Implementation of AetherTool trait for ListToolsTool
+/// Implementation of AlephTool trait for ListToolsTool
 #[async_trait]
-impl AetherTool for ListToolsTool {
+impl AlephTool for ListToolsTool {
     const NAME: &'static str = "list_tools";
     const DESCRIPTION: &'static str = "List available tools by category. Use this to discover what tools are available before calling get_tool_schema for specific tools.";
 
@@ -298,9 +298,9 @@ impl Clone for GetToolSchemaTool {
     }
 }
 
-/// Implementation of AetherTool trait for GetToolSchemaTool
+/// Implementation of AlephTool trait for GetToolSchemaTool
 #[async_trait]
-impl AetherTool for GetToolSchemaTool {
+impl AlephTool for GetToolSchemaTool {
     const NAME: &'static str = "get_tool_schema";
     const DESCRIPTION: &'static str = "Get the full JSON Schema definition for a specific tool. Use this before calling a tool that's not in your full-schema set.";
 

@@ -71,7 +71,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/generation/providers/mod.rs Aether/core/src/generation/mod.rs
+git add Aleph/core/src/generation/providers/mod.rs Aleph/core/src/generation/mod.rs
 git commit -m "feat(generation): add providers module structure
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
@@ -110,8 +110,8 @@ Create `Aether/core/src/generation/providers/openai_image.rs`:
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::providers::OpenAiImageProvider;
-//! use aethecore::generation::{GenerationProvider, GenerationRequest};
+//! use alephcore::generation::providers::OpenAiImageProvider;
+//! use alephcore::generation::{GenerationProvider, GenerationRequest};
 //!
 //! let provider = OpenAiImageProvider::new(
 //!     "sk-xxx".to_string(),
@@ -562,7 +562,7 @@ Expected: All tests PASS
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/generation/providers/openai_image.rs
+git add Aleph/core/src/generation/providers/openai_image.rs
 git commit -m "feat(generation): add OpenAI DALL·E 3 image provider
 
 Implements GenerationProvider trait for OpenAI's image generation API.
@@ -976,7 +976,7 @@ Expected: All tests PASS
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/generation/providers/openai_tts.rs
+git add Aleph/core/src/generation/providers/openai_tts.rs
 git commit -m "feat(generation): add OpenAI TTS provider
 
 Implements GenerationProvider trait for OpenAI's text-to-speech API.
@@ -1456,7 +1456,7 @@ Expected: All tests PASS
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/generation/providers/openai_compat.rs
+git add Aleph/core/src/generation/providers/openai_compat.rs
 git commit -m "feat(generation): add OpenAI-compatible provider
 
 Generic provider for any OpenAI-compatible image generation API.
@@ -1495,8 +1495,8 @@ Update `Aether/core/src/generation/providers/mod.rs`:
 //! Use `create_provider` to instantiate providers from configuration:
 //!
 //! ```rust,ignore
-//! use aethecore::generation::providers::create_provider;
-//! use aethecore::config::GenerationProviderConfig;
+//! use alephcore::generation::providers::create_provider;
+//! use alephcore::config::GenerationProviderConfig;
 //!
 //! let config = GenerationProviderConfig { ... };
 //! let provider = create_provider("dalle", &config)?;
@@ -1535,7 +1535,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::generation::providers::create_provider;
+/// use alephcore::generation::providers::create_provider;
 ///
 /// let config = GenerationProviderConfig {
 ///     provider_type: "openai".to_string(),
@@ -1711,7 +1711,7 @@ Expected: All tests PASS
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/generation/providers/mod.rs
+git add Aleph/core/src/generation/providers/mod.rs
 git commit -m "feat(generation): add provider factory function
 
 Add create_provider() to instantiate providers from config.
@@ -1744,7 +1744,7 @@ Expected: All tests PASS
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/lib.rs
+git add Aleph/core/src/lib.rs
 git commit -m "feat(generation): export providers module in public API
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"

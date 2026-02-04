@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { commands } from '@/lib/commands';
 import {
   subscribeToAetherEvents,
-  type AetherEventHandlers,
+  type AlephEventHandlers,
   type StreamChunkPayload,
   type CompletePayload,
   type ErrorPayload,
@@ -115,7 +115,7 @@ export const useHaloStore = create<HaloStore>((set, get) => ({
     const store = get();
     if (store.unsubscribe) return;
 
-    const handlers: AetherEventHandlers = {
+    const handlers: AlephEventHandlers = {
       onThinking: () => get()._onThinking(),
       onStreamChunk: (payload) => get()._onStreamChunk(payload),
       onComplete: (payload) => get()._onComplete(payload),

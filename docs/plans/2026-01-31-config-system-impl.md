@@ -281,7 +281,7 @@ git commit -m "feat(config): add JsonSchema to extension config types"
 **Step 1: Create schema.rs**
 
 ```rust
-//! JSON Schema generation for Aether configuration.
+//! JSON Schema generation for Aleph configuration.
 
 use schemars::{schema::RootSchema, schema_for};
 use crate::config::Config;
@@ -709,12 +709,12 @@ git commit -m "feat(config): add declarative macros for UI hints"
 **Step 1: Create definitions.rs with all hints**
 
 ```rust
-//! Built-in UI hints definitions for Aether configuration.
+//! Built-in UI hints definitions for Aleph configuration.
 
 use super::{ConfigUiHints, FieldHint, GroupMeta};
 use crate::{define_groups, define_hints};
 
-/// Build the complete UI hints for Aether configuration.
+/// Build the complete UI hints for Aleph configuration.
 pub fn build_ui_hints() -> ConfigUiHints {
     ConfigUiHints {
         groups: build_groups(),
@@ -757,7 +757,7 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             help: "Directory for generated files",
             group: "general",
             order: 3,
-            placeholder: "~/.aether/output",
+            placeholder: "~/.aleph/output",
         },
 
         // === Providers (wildcard) ===
@@ -824,7 +824,7 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
         // === Shortcuts ===
         "shortcuts.summon" => {
             label: "Summon Shortcut",
-            help: "Keyboard shortcut to summon Aether",
+            help: "Keyboard shortcut to summon Aleph",
             group: "shortcuts",
             placeholder: "Command+Grave",
         },
@@ -1444,7 +1444,7 @@ git commit -m "feat(config): add reload plan generation module"
 //! Unified config loader supporting TOML and JSONC.
 
 use std::path::{Path, PathBuf};
-use crate::error::AetherError;
+use crate::error::AlephError;
 use super::types::AetherConfig;
 
 /// Config file priority order.
@@ -1462,7 +1462,7 @@ pub fn find_config_file(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Load extension config from a directory.
-pub fn load_extension_config(dir: &Path) -> Result<Option<AetherConfig>, AetherError> {
+pub fn load_extension_config(dir: &Path) -> Result<Option<AetherConfig>, AlephError> {
     let Some(path) = find_config_file(dir) else {
         return Ok(None);
     };
@@ -1471,9 +1471,9 @@ pub fn load_extension_config(dir: &Path) -> Result<Option<AetherConfig>, AetherE
 }
 
 /// Load config from a specific file.
-pub fn load_config_file(path: &Path) -> Result<AetherConfig, AetherError> {
+pub fn load_config_file(path: &Path) -> Result<AetherConfig, AlephError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
-        AetherError::InvalidConfig(format!("Failed to read {}: {}", path.display(), e))
+        AlephError::InvalidConfig(format!("Failed to read {}: {}", path.display(), e))
     })?;
 
     let ext = path
@@ -1484,25 +1484,25 @@ pub fn load_config_file(path: &Path) -> Result<AetherConfig, AetherError> {
     match ext {
         "toml" => parse_toml(&content, path),
         "jsonc" | "json" => parse_jsonc(&content, path),
-        _ => Err(AetherError::InvalidConfig(format!(
+        _ => Err(AlephError::InvalidConfig(format!(
             "Unknown config file extension: {}",
             path.display()
         ))),
     }
 }
 
-fn parse_toml(content: &str, path: &Path) -> Result<AetherConfig, AetherError> {
+fn parse_toml(content: &str, path: &Path) -> Result<AetherConfig, AlephError> {
     toml::from_str(content).map_err(|e| {
-        AetherError::InvalidConfig(format!("Failed to parse {}: {}", path.display(), e))
+        AlephError::InvalidConfig(format!("Failed to parse {}: {}", path.display(), e))
     })
 }
 
-fn parse_jsonc(content: &str, path: &Path) -> Result<AetherConfig, AetherError> {
+fn parse_jsonc(content: &str, path: &Path) -> Result<AetherConfig, AlephError> {
     // Strip comments for JSONC
     let stripped = strip_json_comments(content);
 
     serde_json::from_str(&stripped).map_err(|e| {
-        AetherError::InvalidConfig(format!("Failed to parse {}: {}", path.display(), e))
+        AlephError::InvalidConfig(format!("Failed to parse {}: {}", path.display(), e))
     })
 }
 
@@ -1662,7 +1662,7 @@ git commit -m "feat(extension): add unified config loader with TOML priority"
 //! Migration tool for converting JSONC configs to TOML.
 
 use std::path::{Path, PathBuf};
-use crate::error::AetherError;
+use crate::error::AlephError;
 use super::loader::load_config_file;
 
 /// Migration result.
@@ -1674,10 +1674,10 @@ pub struct MigrationResult {
 }
 
 /// Migrate a JSONC config file to TOML format.
-pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, AetherError> {
+pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, AlephError> {
     // Validate source exists and is JSONC
     if !jsonc_path.exists() {
-        return Err(AetherError::InvalidConfig(format!(
+        return Err(AlephError::InvalidConfig(format!(
             "Source file not found: {}",
             jsonc_path.display()
         )));
@@ -1685,7 +1685,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, AetherError
 
     let ext = jsonc_path.extension().and_then(|e| e.to_str());
     if ext != Some("jsonc") && ext != Some("json") {
-        return Err(AetherError::InvalidConfig(
+        return Err(AlephError::InvalidConfig(
             "Source must be a .jsonc or .json file".to_string(),
         ));
     }
@@ -1695,12 +1695,12 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, AetherError
 
     // Serialize to TOML
     let toml_content = toml::to_string_pretty(&config).map_err(|e| {
-        AetherError::InvalidConfig(format!("Failed to serialize to TOML: {}", e))
+        AlephError::InvalidConfig(format!("Failed to serialize to TOML: {}", e))
     })?;
 
     // Add header comment
     let toml_with_header = format!(
-        "# Aether Extension Configuration\n\
+        "# Aleph Extension Configuration\n\
          # Migrated from {}\n\n{}",
         jsonc_path.file_name().unwrap_or_default().to_string_lossy(),
         toml_content
@@ -1718,7 +1718,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, AetherError
     let backup_path = if target_path.exists() {
         let backup = target_path.with_extension("toml.bak");
         std::fs::rename(&target_path, &backup).map_err(|e| {
-            AetherError::InvalidConfig(format!("Failed to backup existing file: {}", e))
+            AlephError::InvalidConfig(format!("Failed to backup existing file: {}", e))
         })?;
         Some(backup)
     } else {
@@ -1727,7 +1727,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, AetherError
 
     // Write new TOML file
     std::fs::write(&target_path, toml_with_header).map_err(|e| {
-        AetherError::InvalidConfig(format!("Failed to write TOML file: {}", e))
+        AlephError::InvalidConfig(format!("Failed to write TOML file: {}", e))
     })?;
 
     Ok(MigrationResult {

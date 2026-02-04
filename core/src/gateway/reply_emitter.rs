@@ -13,7 +13,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::gateway::{ReplyEmitter, ChannelRegistry, ReplyRoute};
+//! use alephcore::gateway::{ReplyEmitter, ChannelRegistry, ReplyRoute};
 //!
 //! let emitter = ReplyEmitter::new(
 //!     channel_registry.clone(),

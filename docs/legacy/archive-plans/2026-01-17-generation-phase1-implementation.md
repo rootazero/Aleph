@@ -19,9 +19,9 @@
 **Step 1: Create the generation module directory and mod.rs**
 
 ```rust
-// Aether/core/src/generation/mod.rs
+// Aleph/core/src/generation/mod.rs
 
-//! Media Generation Provider abstraction for Aether
+//! Media Generation Provider abstraction for Aleph
 //!
 //! This module defines the `GenerationProvider` trait which provides a unified interface
 //! for different media generation backends (DALL·E, Stability AI, Replicate, etc.).
@@ -36,7 +36,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::{GenerationProvider, GenerationRequest, GenerationType};
+//! use alephcore::generation::{GenerationProvider, GenerationRequest, GenerationType};
 //! use std::sync::Arc;
 //!
 //! async fn example(provider: Arc<dyn GenerationProvider>) {
@@ -90,7 +90,7 @@ pub trait GenerationProvider: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(GenerationOutput)` - The generated media
-    /// * `Err(AetherError)` - Various errors (see GenerationError)
+    /// * `Err(AlephError)` - Various errors (see GenerationError)
     fn generate(
         &self,
         request: GenerationRequest,
@@ -259,13 +259,13 @@ mod tests {
 
 **Step 2: Run the build to verify syntax**
 
-Run: `cd Aether/core && cargo check`
+Run: `cd Aleph/core && cargo check`
 Expected: Compilation errors (types.rs and error.rs don't exist yet)
 
 **Step 3: Commit module structure**
 
 ```bash
-git add Aether/core/src/generation/mod.rs
+git add Aleph/core/src/generation/mod.rs
 git commit -m "feat(generation): add generation module structure with trait definition"
 ```
 
@@ -279,7 +279,7 @@ git commit -m "feat(generation): add generation module structure with trait defi
 **Step 1: Write the types module**
 
 ```rust
-// Aether/core/src/generation/types.rs
+// Aleph/core/src/generation/types.rs
 
 //! Core types for media generation
 //!
@@ -781,13 +781,13 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd Aether/core && cargo test generation::types`
+Run: `cd Aleph/core && cargo test generation::types`
 Expected: All tests pass
 
 **Step 3: Commit types**
 
 ```bash
-git add Aether/core/src/generation/types.rs
+git add Aleph/core/src/generation/types.rs
 git commit -m "feat(generation): add core types (GenerationType, Params, Request, Output)"
 ```
 
@@ -801,7 +801,7 @@ git commit -m "feat(generation): add core types (GenerationType, Params, Request
 **Step 1: Write the error module**
 
 ```rust
-// Aether/core/src/generation/error.rs
+// Aleph/core/src/generation/error.rs
 
 //! Error types for media generation
 //!
@@ -1044,38 +1044,38 @@ impl GenerationError {
     }
 }
 
-// Conversion to AetherError for compatibility
-impl From<GenerationError> for crate::error::AetherError {
+// Conversion to AlephError for compatibility
+impl From<GenerationError> for crate::error::AlephError {
     fn from(err: GenerationError) -> Self {
         match err {
-            GenerationError::RateLimited { .. } => crate::error::AetherError::RateLimitError {
+            GenerationError::RateLimited { .. } => crate::error::AlephError::RateLimitError {
                 message: err.to_string(),
                 suggestion: err.suggestion().map(|s| s.to_string()),
             },
-            GenerationError::NetworkError { message } => crate::error::AetherError::NetworkError {
+            GenerationError::NetworkError { message } => crate::error::AlephError::NetworkError {
                 message,
                 suggestion: Some("Check your internet connection".to_string()),
             },
             GenerationError::InvalidApiKey { provider } => {
-                crate::error::AetherError::AuthenticationError {
+                crate::error::AlephError::AuthenticationError {
                     message: format!("Invalid API key for {}", provider),
                     provider,
                     suggestion: Some("Verify your API key in Settings".to_string()),
                 }
             }
-            GenerationError::Timeout { duration } => crate::error::AetherError::Timeout {
+            GenerationError::Timeout { duration } => crate::error::AlephError::Timeout {
                 suggestion: Some(format!(
                     "Request timed out after {:?}. Try again.",
                     duration
                 )),
             },
             GenerationError::InvalidConfig { message } => {
-                crate::error::AetherError::InvalidConfig {
+                crate::error::AlephError::InvalidConfig {
                     message,
                     suggestion: Some("Check your configuration".to_string()),
                 }
             }
-            _ => crate::error::AetherError::ProviderError {
+            _ => crate::error::AlephError::ProviderError {
                 message: err.to_string(),
                 suggestion: err.suggestion().map(|s| s.to_string()),
             },
@@ -1141,21 +1141,21 @@ mod tests {
     #[test]
     fn test_conversion_to_aether_error() {
         let err = GenerationError::invalid_api_key("openai");
-        let aether_err: crate::error::AetherError = err.into();
-        assert!(matches!(aether_err, crate::error::AetherError::AuthenticationError { .. }));
+        let aether_err: crate::error::AlephError = err.into();
+        assert!(matches!(aether_err, crate::error::AlephError::AuthenticationError { .. }));
     }
 }
 ```
 
 **Step 2: Run tests**
 
-Run: `cd Aether/core && cargo test generation::error`
+Run: `cd Aleph/core && cargo test generation::error`
 Expected: All tests pass
 
 **Step 3: Commit error types**
 
 ```bash
-git add Aether/core/src/generation/error.rs
+git add Aleph/core/src/generation/error.rs
 git commit -m "feat(generation): add GenerationError type with classification helpers"
 ```
 
@@ -1169,14 +1169,14 @@ git commit -m "feat(generation): add GenerationError type with classification he
 **Step 1: Write the registry module**
 
 ```rust
-// Aether/core/src/generation/registry.rs
+// Aleph/core/src/generation/registry.rs
 
 //! Provider Registry for managing generation providers
 //!
 //! This module provides a registry to store and retrieve generation providers by name.
 //! Similar to ProviderRegistry but for GenerationProvider.
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::generation::{GenerationProvider, GenerationType};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1186,7 +1186,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::{GenerationProviderRegistry, MockGenerationProvider};
+/// use alephcore::generation::{GenerationProviderRegistry, MockGenerationProvider};
 /// use std::sync::Arc;
 ///
 /// let mut registry = GenerationProviderRegistry::new();
@@ -1221,14 +1221,14 @@ impl GenerationProviderRegistry {
     /// # Returns
     ///
     /// * `Ok(())` - Provider registered successfully
-    /// * `Err(AetherError::InvalidConfig)` - Provider name already exists
+    /// * `Err(AlephError::InvalidConfig)` - Provider name already exists
     pub fn register(
         &mut self,
         name: String,
         provider: Arc<dyn GenerationProvider>,
     ) -> Result<()> {
         if self.providers.contains_key(&name) {
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "Generation provider '{}' is already registered",
                 name
             )));
@@ -1254,7 +1254,7 @@ impl GenerationProviderRegistry {
     /// Get a provider by name, returning error if not found
     pub fn get_or_err(&self, name: &str) -> Result<Arc<dyn GenerationProvider>> {
         self.get(name).ok_or_else(|| {
-            AetherError::invalid_config(format!("Generation provider '{}' not found", name))
+            AlephError::invalid_config(format!("Generation provider '{}' not found", name))
         })
     }
 
@@ -1348,7 +1348,7 @@ mod tests {
         let result = registry.register("dalle3".to_string(), provider2);
         assert!(result.is_err());
 
-        if let Err(AetherError::InvalidConfig { message, .. }) = result {
+        if let Err(AlephError::InvalidConfig { message, .. }) = result {
             assert!(message.contains("already registered"));
         } else {
             panic!("Expected InvalidConfig error");
@@ -1479,13 +1479,13 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd Aether/core && cargo test generation::registry`
+Run: `cd Aleph/core && cargo test generation::registry`
 Expected: All tests pass
 
 **Step 3: Commit registry**
 
 ```bash
-git add Aether/core/src/generation/registry.rs
+git add Aleph/core/src/generation/registry.rs
 git commit -m "feat(generation): add GenerationProviderRegistry"
 ```
 
@@ -1517,18 +1517,18 @@ pub use crate::generation::{
 
 **Step 2: Run full test suite**
 
-Run: `cd Aether/core && cargo test`
+Run: `cd Aleph/core && cargo test`
 Expected: All tests pass (including new generation tests)
 
 **Step 3: Run clippy**
 
-Run: `cd Aether/core && cargo clippy -- -D warnings`
+Run: `cd Aleph/core && cargo clippy -- -D warnings`
 Expected: No warnings
 
 **Step 4: Commit integration**
 
 ```bash
-git add Aether/core/src/lib.rs
+git add Aleph/core/src/lib.rs
 git commit -m "feat(generation): export generation module from lib.rs"
 ```
 
@@ -1543,7 +1543,7 @@ git commit -m "feat(generation): export generation module from lib.rs"
 **Step 1: Write generation config types**
 
 ```rust
-// Aether/core/src/config/types/generation.rs
+// Aleph/core/src/config/types/generation.rs
 
 //! Generation provider configuration types
 //!
@@ -1929,13 +1929,13 @@ pub use generation::{GenerationConfig, GenerationDefaults, GenerationProviderCon
 
 **Step 3: Run tests**
 
-Run: `cd Aether/core && cargo test config::types::generation`
+Run: `cd Aleph/core && cargo test config::types::generation`
 Expected: All tests pass
 
 **Step 4: Commit config types**
 
 ```bash
-git add Aether/core/src/config/types/generation.rs Aether/core/src/config/types/mod.rs
+git add Aleph/core/src/config/types/generation.rs Aleph/core/src/config/types/mod.rs
 git commit -m "feat(generation): add GenerationConfig and GenerationProviderConfig"
 ```
 
@@ -1957,17 +1957,17 @@ pub use crate::config::{GenerationConfig, GenerationDefaults, GenerationProvider
 
 **Step 2: Run full test suite**
 
-Run: `cd Aether/core && cargo test`
+Run: `cd Aleph/core && cargo test`
 Expected: All tests pass
 
 **Step 3: Run clippy**
 
-Run: `cd Aether/core && cargo clippy -- -D warnings`
+Run: `cd Aleph/core && cargo clippy -- -D warnings`
 Expected: No warnings
 
 **Step 4: Build release**
 
-Run: `cd Aether/core && cargo build --release`
+Run: `cd Aleph/core && cargo build --release`
 Expected: Build succeeds
 
 **Step 5: Final commit**

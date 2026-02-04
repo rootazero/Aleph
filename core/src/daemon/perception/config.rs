@@ -83,7 +83,7 @@ impl Default for PerceptionConfig {
 }
 
 impl PerceptionConfig {
-    /// Load configuration from ~/.aether/perception.toml
+    /// Load configuration from ~/.aleph/perception.toml
     pub fn load() -> Result<Self> {
         let path = dirs::home_dir()
             .ok_or_else(|| DaemonError::Config("HOME environment variable not set".into()))?

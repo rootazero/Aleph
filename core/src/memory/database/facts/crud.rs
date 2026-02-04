@@ -1,13 +1,13 @@
 //! CRUD operations for memory facts
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::database::core::VectorDatabase;
 use rusqlite::params;
 
 impl VectorDatabase {
     /// Get a single fact by ID
-    pub async fn get_fact(&self, fact_id: &str) -> Result<Option<MemoryFact>, AetherError> {
+    pub async fn get_fact(&self, fact_id: &str) -> Result<Option<MemoryFact>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let result = conn.query_row(
@@ -60,12 +60,12 @@ impl VectorDatabase {
         match result {
             Ok(fact) => Ok(Some(fact)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AetherError::config(format!("Failed to get fact: {}", e))),
+            Err(e) => Err(AlephError::config(format!("Failed to get fact: {}", e))),
         }
     }
 
     /// Get all facts, optionally including invalid ones
-    pub async fn get_all_facts(&self, include_invalid: bool) -> Result<Vec<MemoryFact>, AetherError> {
+    pub async fn get_all_facts(&self, include_invalid: bool) -> Result<Vec<MemoryFact>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let query = if include_invalid {
@@ -89,7 +89,7 @@ impl VectorDatabase {
 
         let mut stmt = conn
             .prepare(query)
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let facts = stmt
             .query_map([], |row| {
@@ -128,22 +128,22 @@ impl VectorDatabase {
                     similarity_score: None,
                 })
             })
-            .map_err(|e| AetherError::config(format!("Failed to query facts: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse fact rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse fact rows: {}", e)))?;
 
         Ok(facts)
     }
 
     /// Insert a memory fact into the database
-    pub async fn insert_fact(&self, fact: MemoryFact) -> Result<(), AetherError> {
+    pub async fn insert_fact(&self, fact: MemoryFact) -> Result<(), AlephError> {
         let embedding_bytes = fact
             .embedding
             .as_ref()
             .map(|e| Self::serialize_embedding(e));
 
         let source_ids_json = serde_json::to_string(&fact.source_memory_ids)
-            .map_err(|e| AetherError::config(format!("Failed to serialize source_ids: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to serialize source_ids: {}", e)))?;
 
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
@@ -170,7 +170,7 @@ impl VectorDatabase {
                 fact.decay_invalidated_at,
             ],
         )
-        .map_err(|e| AetherError::config(format!("Failed to insert fact: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert fact: {}", e)))?;
 
         // Sync to facts_vec if embedding exists
         if let Some(ref emb_bytes) = embedding_bytes {
@@ -180,20 +180,20 @@ impl VectorDatabase {
                     params![fact.id],
                     |row| row.get(0),
                 )
-                .map_err(|e| AetherError::config(format!("Failed to get fact rowid: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to get fact rowid: {}", e)))?;
 
             conn.execute(
                 "INSERT INTO facts_vec (rowid, embedding) VALUES (?1, ?2)",
                 params![rowid, emb_bytes],
             )
-            .map_err(|e| AetherError::config(format!("Failed to insert into facts_vec: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to insert into facts_vec: {}", e)))?;
         }
 
         Ok(())
     }
 
     /// Insert multiple facts in a batch
-    pub async fn insert_facts(&self, facts: Vec<MemoryFact>) -> Result<(), AetherError> {
+    pub async fn insert_facts(&self, facts: Vec<MemoryFact>) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         for fact in facts {
@@ -203,7 +203,7 @@ impl VectorDatabase {
                 .map(|e| Self::serialize_embedding(e));
 
             let source_ids_json = serde_json::to_string(&fact.source_memory_ids).map_err(|e| {
-                AetherError::config(format!("Failed to serialize source_ids: {}", e))
+                AlephError::config(format!("Failed to serialize source_ids: {}", e))
             })?;
 
             conn.execute(
@@ -230,7 +230,7 @@ impl VectorDatabase {
                     fact.decay_invalidated_at,
                 ],
             )
-            .map_err(|e| AetherError::config(format!("Failed to insert fact: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to insert fact: {}", e)))?;
 
             // Sync to facts_vec if embedding exists
             if let Some(ref emb_bytes) = embedding_bytes {
@@ -240,14 +240,14 @@ impl VectorDatabase {
                         params![fact.id],
                         |row| row.get(0),
                     )
-                    .map_err(|e| AetherError::config(format!("Failed to get fact rowid: {}", e)))?;
+                    .map_err(|e| AlephError::config(format!("Failed to get fact rowid: {}", e)))?;
 
                 conn.execute(
                     "INSERT INTO facts_vec (rowid, embedding) VALUES (?1, ?2)",
                     params![rowid, emb_bytes],
                 )
                 .map_err(|e| {
-                    AetherError::config(format!("Failed to insert into facts_vec: {}", e))
+                    AlephError::config(format!("Failed to insert into facts_vec: {}", e))
                 })?;
             }
         }
@@ -256,7 +256,7 @@ impl VectorDatabase {
     }
 
     /// Invalidate a fact (soft delete)
-    pub async fn invalidate_fact(&self, fact_id: &str, reason: &str) -> Result<(), AetherError> {
+    pub async fn invalidate_fact(&self, fact_id: &str, reason: &str) -> Result<(), AlephError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -272,10 +272,10 @@ impl VectorDatabase {
                 "#,
                 params![reason, now, fact_id],
             )
-            .map_err(|e| AetherError::config(format!("Failed to invalidate fact: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to invalidate fact: {}", e)))?;
 
         if rows_affected == 0 {
-            return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
+            return Err(AlephError::config(format!("Fact not found: {}", fact_id)));
         }
 
         Ok(())
@@ -290,7 +290,7 @@ impl VectorDatabase {
         fact_id: &str,
         reason: &str,
         decay_timestamp: Option<i64>,
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -308,7 +308,7 @@ impl VectorDatabase {
             "#,
             params![fact_id, reason, now, decay_timestamp],
         )
-        .map_err(|e| AetherError::config(format!("Failed to soft delete fact: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to soft delete fact: {}", e)))?;
 
         Ok(())
     }
@@ -316,14 +316,14 @@ impl VectorDatabase {
     /// Update fact access timestamp
     ///
     /// Used by the lazy decay engine to record when a fact was last accessed.
-    pub async fn update_fact_access(&self, fact_id: &str, timestamp: i64) -> Result<(), AetherError> {
+    pub async fn update_fact_access(&self, fact_id: &str, timestamp: i64) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         conn.execute(
             "UPDATE memory_facts SET updated_at = ?2 WHERE id = ?1",
             params![fact_id, timestamp],
         )
-        .map_err(|e| AetherError::config(format!("Failed to update fact access: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to update fact access: {}", e)))?;
 
         Ok(())
     }
@@ -331,7 +331,7 @@ impl VectorDatabase {
     /// Restore a fact from recycle bin (un-invalidate)
     ///
     /// Clears invalidation status and decay timestamp.
-    pub async fn restore_fact(&self, fact_id: &str) -> Result<(), AetherError> {
+    pub async fn restore_fact(&self, fact_id: &str) -> Result<(), AlephError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -350,10 +350,10 @@ impl VectorDatabase {
                 "#,
                 params![fact_id, now],
             )
-            .map_err(|e| AetherError::config(format!("Failed to restore fact: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to restore fact: {}", e)))?;
 
         if rows_affected == 0 {
-            return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
+            return Err(AlephError::config(format!("Fact not found: {}", fact_id)));
         }
 
         Ok(())
@@ -367,7 +367,7 @@ impl VectorDatabase {
         fact_id: &str,
         new_content: &str,
         new_embedding: Option<&[f32]>,
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -391,10 +391,10 @@ impl VectorDatabase {
                     "#,
                     params![fact_id, new_content, embedding_bytes, now],
                 )
-                .map_err(|e| AetherError::config(format!("Failed to update fact: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to update fact: {}", e)))?;
 
             if rows_affected == 0 {
-                return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
+                return Err(AlephError::config(format!("Fact not found: {}", fact_id)));
             }
 
             // Also update vec table
@@ -404,7 +404,7 @@ impl VectorDatabase {
                 "#,
                 params![fact_id, embedding_bytes],
             )
-            .map_err(|e| AetherError::config(format!("Failed to update fact vector: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to update fact vector: {}", e)))?;
         } else {
             // Update content only
             let rows_affected = conn
@@ -416,10 +416,10 @@ impl VectorDatabase {
                     "#,
                     params![fact_id, new_content, now],
                 )
-                .map_err(|e| AetherError::config(format!("Failed to update fact: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to update fact: {}", e)))?;
 
             if rows_affected == 0 {
-                return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
+                return Err(AlephError::config(format!("Fact not found: {}", fact_id)));
             }
         }
 
@@ -429,7 +429,7 @@ impl VectorDatabase {
     /// Permanently delete invalidated facts older than retention period
     ///
     /// Returns the number of facts deleted.
-    pub async fn purge_old_invalidated_facts(&self, retention_days: u32) -> Result<usize, AetherError> {
+    pub async fn purge_old_invalidated_facts(&self, retention_days: u32) -> Result<usize, AlephError> {
         let cutoff = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -446,11 +446,11 @@ impl VectorDatabase {
                 WHERE is_valid = 0 AND decay_invalidated_at IS NOT NULL AND decay_invalidated_at < ?1
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?
             .query_map(params![cutoff], |row| row.get(0))
-            .map_err(|e| AetherError::config(format!("Failed to query: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to collect: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to collect: {}", e)))?;
 
         if ids_to_delete.is_empty() {
             return Ok(0);
@@ -470,13 +470,13 @@ impl VectorDatabase {
                 "#,
                 params![cutoff],
             )
-            .map_err(|e| AetherError::config(format!("Failed to delete facts: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to delete facts: {}", e)))?;
 
         Ok(deleted)
     }
 
     /// Get count of facts by validity status
-    pub async fn count_facts(&self, include_invalid: bool) -> Result<(usize, usize), AetherError> {
+    pub async fn count_facts(&self, include_invalid: bool) -> Result<(usize, usize), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let valid_count: i64 = conn
@@ -485,7 +485,7 @@ impl VectorDatabase {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| AetherError::config(format!("Failed to count valid facts: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to count valid facts: {}", e)))?;
 
         let invalid_count: i64 = if include_invalid {
             conn.query_row(
@@ -493,7 +493,7 @@ impl VectorDatabase {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| AetherError::config(format!("Failed to count invalid facts: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to count invalid facts: {}", e)))?
         } else {
             0
         };
@@ -502,7 +502,7 @@ impl VectorDatabase {
     }
 
     /// Permanently delete a specific fact by ID
-    pub async fn delete_fact_permanent(&self, fact_id: &str) -> Result<(), AetherError> {
+    pub async fn delete_fact_permanent(&self, fact_id: &str) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Delete from vec table first
@@ -511,10 +511,10 @@ impl VectorDatabase {
         // Delete from main table
         let rows_affected = conn
             .execute("DELETE FROM memory_facts WHERE id = ?1", params![fact_id])
-            .map_err(|e| AetherError::config(format!("Failed to delete fact: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to delete fact: {}", e)))?;
 
         if rows_affected == 0 {
-            return Err(AetherError::config(format!("Fact not found: {}", fact_id)));
+            return Err(AlephError::config(format!("Fact not found: {}", fact_id)));
         }
 
         Ok(())

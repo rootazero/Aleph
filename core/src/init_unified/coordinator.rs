@@ -277,7 +277,7 @@ impl InitializationCoordinator {
         }
 
         // Get our custom cache directory (same as EmbeddingModel uses at runtime)
-        // This ensures consistency: ~/.aether/models/fastembed/
+        // This ensures consistency: ~/.aleph/models/fastembed/
         let cache_dir = AetherEmbeddingModel::get_default_model_path().map_err(|e| {
             InitError::new(
                 "embedding_model",
@@ -385,7 +385,7 @@ impl InitializationCoordinator {
                     // 5 minute timeout for each runtime installation
                     match tokio::time::timeout(Duration::from_secs(300), runtime.install()).await {
                         Ok(install_result) => install_result,
-                        Err(_) => Err(crate::error::AetherError::runtime(
+                        Err(_) => Err(crate::error::AlephError::runtime(
                             &runtime_id,
                             "Installation timed out after 5 minutes",
                         )),

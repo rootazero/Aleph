@@ -110,7 +110,7 @@ pub enum ToolSource {
     },
 
     /// Claude Agent Skill
-    /// Instruction-injection skills from ~/.aether/skills/
+    /// Instruction-injection skills from ~/.aleph/skills/
     Skill {
         /// Skill directory ID (e.g., "refine-text")
         id: String,

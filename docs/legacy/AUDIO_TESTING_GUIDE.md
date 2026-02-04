@@ -10,7 +10,7 @@ This guide covers testing for the audio feedback system (Section 4: halo-audio-f
 ### 1. Verify Audio Assets
 Check that all sound files are present:
 ```bash
-ls -lh Aether/Resources/Sounds/
+ls -lh Aleph/Resources/Sounds/
 # Expected output:
 # listening.aiff
 # processing.aiff
@@ -28,7 +28,7 @@ ls -lh Aether/Resources/Sounds/
 ```bash
 cd /Users/zouguojun/Workspace/Aether
 xcodegen generate
-open Aether.xcodeproj
+open Aleph.xcodeproj
 # Click Run (Cmd+R) in Xcode
 ```
 
@@ -40,7 +40,7 @@ open Aether.xcodeproj
 **Objective**: Verify AudioManager loads all sounds on app launch
 
 **Steps**:
-1. Launch Aether app
+1. Launch Aleph app
 2. Check console logs for sound loading messages
 
 **Expected Results**:
@@ -183,10 +183,10 @@ open Aether.xcodeproj
 5. Repeat at system volume 10%
 
 **Expected Results**:
-- Aether sounds are always proportional to system volume
-- At 100% system: Aether plays at 30% (comfortable)
-- At 50% system: Aether plays at 15% (subtle)
-- At 10% system: Aether plays at 3% (barely audible)
+- Aleph sounds are always proportional to system volume
+- At 100% system: Aleph plays at 30% (comfortable)
+- At 50% system: Aleph plays at 15% (subtle)
+- At 10% system: Aleph plays at 3% (barely audible)
 
 **Pass Criteria**: Volume is never jarring or too loud
 
@@ -219,8 +219,8 @@ open Aether.xcodeproj
 
 **Steps**:
 1. Mute sounds via menu bar
-2. Quit Aether (Cmd+Q)
-3. Relaunch Aether
+2. Quit Aleph (Cmd+Q)
+3. Relaunch Aleph
 4. Check menu bar: should show "Unmute Sounds"
 5. Trigger state change: should be silent
 6. Unmute and quit
@@ -313,7 +313,7 @@ open Aether.xcodeproj
 Create `AudioManagerTests.swift`:
 ```swift
 import XCTest
-@testable import Aether
+@testable import Aleph
 
 class AudioManagerTests: XCTestCase {
     func testSingletonInstance() {

@@ -3,7 +3,7 @@
 //! Detects conflicting facts using vector similarity and resolves them
 //! using three strategies: Override, Reject, or Merge.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
 use crate::memory::database::VectorDatabase;
 use serde::{Deserialize, Serialize};
@@ -100,9 +100,9 @@ impl ConflictDetector {
     pub async fn resolve_conflicts(
         &self,
         new_fact: &MemoryFact,
-    ) -> Result<Vec<ConflictResolution>, AetherError> {
+    ) -> Result<Vec<ConflictResolution>, AlephError> {
         let embedding = new_fact.embedding.as_ref().ok_or_else(|| {
-            AetherError::config("Cannot detect conflicts for fact without embedding")
+            AlephError::config("Cannot detect conflicts for fact without embedding")
         })?;
 
         // Find similar existing facts
@@ -152,7 +152,7 @@ impl ConflictDetector {
     pub async fn apply_resolutions(
         &self,
         resolutions: &[ConflictResolution],
-    ) -> Result<u32, AetherError> {
+    ) -> Result<u32, AlephError> {
         let mut invalidated_count = 0;
 
         for resolution in resolutions {

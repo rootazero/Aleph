@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Structured Context Protocol is Aether's evolution from "string concatenation" to "structured context" for AI prompt assembly. This architectural upgrade provides:
+The Structured Context Protocol is Aleph's evolution from "string concatenation" to "structured context" for AI prompt assembly. This architectural upgrade provides:
 
 - **Type Safety**: Structured data types instead of string manipulation
 - **Extensibility**: Clean interfaces for adding memory, search, MCP, and other context sources
@@ -86,7 +86,7 @@ pub struct AgentPayload {
 ### Basic Usage (Rust)
 
 ```rust
-use aethecore::prompt::{PromptAssembler, AgentIntent, AppContext};
+use alephcore::prompt::{PromptAssembler, AgentIntent, AppContext};
 
 // Create assembler
 let assembler = PromptAssembler::new();
@@ -119,7 +119,7 @@ let messages = payload.build_messages();
 Users can define shortcuts that map to specific prompts:
 
 ```rust
-use aethecore::config::RoutingRuleConfig;
+use alephcore::config::RoutingRuleConfig;
 
 let rule = RoutingRuleConfig {
     regex: "^/polite".to_string(),

@@ -61,7 +61,7 @@ pub async fn store_memory(
     context: ContextAnchor,
     user_input: &str,
     ai_output: &str,
-) -> Result<String, AetherError> {
+) -> Result<String, AlephError> {
     // ... checks ...
 
     // 3. Scrub PII from input and output
@@ -356,7 +356,7 @@ Task 18 (PII Scrubbing) is **fully implemented and tested** as part of the memor
 ---
 
 **Completion Date**: 2025-12-24
-**Implemented By**: Aether Development Team
+**Implemented By**: Aleph Development Team
 **Test Coverage**: 100% (7/7 tests passing)
 **Performance**: < 3ms overhead
 **Privacy**: Strong (irreversible PII removal)

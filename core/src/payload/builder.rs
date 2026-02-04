@@ -13,8 +13,8 @@ use crate::search::SearchResult;
 /// # Example
 ///
 /// ```rust,no_run
-/// use aethecore::payload::*;
-/// use aethecore::memory::MemoryEntry;
+/// use alephcore::payload::*;
+/// use alephcore::memory::MemoryEntry;
 ///
 /// let payload = PayloadBuilder::new()
 ///     .meta(

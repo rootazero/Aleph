@@ -1,6 +1,6 @@
 /// Config file watcher for hot-reload support
 ///
-/// This module watches the config file (~/.aether/config.toml) for external changes
+/// This module watches the config file (~/.aleph/config.toml) for external changes
 /// and triggers a callback when modifications are detected. Uses macOS FSEvents for efficient
 /// file system monitoring with debouncing to avoid duplicate events.
 ///
@@ -13,7 +13,7 @@
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::config::watcher::ConfigWatcher;
+/// use alephcore::config::watcher::ConfigWatcher;
 /// use std::sync::Arc;
 ///
 /// let watcher = ConfigWatcher::new(|config| {
@@ -25,7 +25,7 @@
 /// watcher.stop()?;
 /// ```
 use crate::config::Config;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::path::PathBuf;
@@ -114,7 +114,7 @@ impl ConfigWatcher {
     ///
     /// # Errors
     ///
-    /// * `AetherError::ConfigError` - Failed to start file watcher
+    /// * `AlephError::ConfigError` - Failed to start file watcher
     ///
     /// # Example
     ///
@@ -128,7 +128,7 @@ impl ConfigWatcher {
 
         // Check if already started
         if debouncer_lock.is_some() {
-            return Err(AetherError::config("Watcher already started"));
+            return Err(AlephError::config("Watcher already started"));
         }
 
         // Clone callback for move into closure
@@ -155,14 +155,14 @@ impl ConfigWatcher {
                     for error in &errors {
                         log::error!("File watcher error: {:?}", error);
                     }
-                    callback(Err(AetherError::config(format!(
+                    callback(Err(AlephError::config(format!(
                         "File watcher error: {:?}",
                         errors
                     ))));
                 }
             },
         )
-        .map_err(|e| AetherError::config(format!("Failed to create file watcher: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create file watcher: {}", e)))?;
 
         // Watch the config file (or its parent directory if file doesn't exist)
         let watch_path = if self.config_path.exists() {
@@ -170,13 +170,13 @@ impl ConfigWatcher {
         } else if let Some(parent) = self.config_path.parent() {
             parent.to_path_buf()
         } else {
-            return Err(AetherError::config("Invalid config path"));
+            return Err(AlephError::config("Invalid config path"));
         };
 
         debouncer
             .watcher()
             .watch(&watch_path, RecursiveMode::NonRecursive)
-            .map_err(|e| AetherError::config(format!("Failed to watch config file: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to watch config file: {}", e)))?;
 
         log::info!(
             "Started watching config file: {}",
@@ -205,7 +205,7 @@ impl ConfigWatcher {
         let mut debouncer_lock = self.debouncer.lock().unwrap_or_else(|e| e.into_inner());
 
         if debouncer_lock.is_none() {
-            return Err(AetherError::config("Watcher not started"));
+            return Err(AlephError::config("Watcher not started"));
         }
 
         // Drop the debouncer to stop watching

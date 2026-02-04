@@ -28,7 +28,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::model_router::{ModelMatcher, ModelProfile, Capability};
+//! use alephcore::dispatcher::model_router::{ModelMatcher, ModelProfile, Capability};
 //!
 //! // Create matcher with profiles
 //! let matcher = ModelMatcher::new(profiles, rules);

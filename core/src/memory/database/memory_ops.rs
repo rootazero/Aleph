@@ -1,7 +1,7 @@
 /// Memory CRUD operations
 ///
 /// Insert, search, delete, and clear memories.
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use rusqlite::params;
 use rusqlite::OptionalExtension;
@@ -242,10 +242,10 @@ impl VectorDatabase {
     ///
     /// Inserts into both the main `memories` table and the `memories_vec`
     /// virtual table for KNN search via sqlite-vec.
-    pub async fn insert_memory(&self, memory: MemoryEntry) -> Result<(), AetherError> {
+    pub async fn insert_memory(&self, memory: MemoryEntry) -> Result<(), AlephError> {
         let embedding = memory
             .embedding
-            .ok_or_else(|| AetherError::config("Cannot insert memory without embedding"))?;
+            .ok_or_else(|| AlephError::config("Cannot insert memory without embedding"))?;
 
         // Serialize embedding to bytes for main table
         let embedding_bytes = Self::serialize_embedding(&embedding);
@@ -269,7 +269,7 @@ impl VectorDatabase {
                 memory.context.topic_id,
             ],
         )
-        .map_err(|e| AetherError::config(format!("Failed to insert memory: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert memory: {}", e)))?;
 
         // Get the rowid of the inserted memory for vec0 table
         let rowid: i64 = conn
@@ -278,7 +278,7 @@ impl VectorDatabase {
                 params![memory.id],
                 |row| row.get(0),
             )
-            .map_err(|e| AetherError::config(format!("Failed to get memory rowid: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to get memory rowid: {}", e)))?;
 
         // Insert into vec0 table with matching rowid
         // sqlite-vec expects the embedding as a blob
@@ -286,7 +286,7 @@ impl VectorDatabase {
             "INSERT INTO memories_vec (rowid, embedding) VALUES (?1, ?2)",
             params![rowid, embedding_bytes],
         )
-        .map_err(|e| AetherError::config(format!("Failed to insert into memories_vec: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert into memories_vec: {}", e)))?;
 
         Ok(())
     }
@@ -302,7 +302,7 @@ impl VectorDatabase {
         window_title: &str,
         query_embedding: &[f32],
         limit: u32,
-    ) -> Result<Vec<MemoryEntry>, AetherError> {
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Serialize query embedding for sqlite-vec
@@ -332,7 +332,7 @@ impl VectorDatabase {
                 LIMIT ?5
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         // Fetch more candidates to account for context filtering
         let fetch_limit = limit * 3;
@@ -368,9 +368,9 @@ impl VectorDatabase {
                     })
                 },
             )
-            .map_err(|e| AetherError::config(format!("Failed to query memories: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query memories: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse memory rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse memory rows: {}", e)))?;
 
         Ok(memories)
     }
@@ -383,7 +383,7 @@ impl VectorDatabase {
         query_embedding: &[f32],
         limit: u32,
         node_id: &str,
-    ) -> Result<Vec<MemoryEntry>, AetherError> {
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let query_bytes = Self::serialize_embedding(query_embedding);
 
@@ -411,7 +411,7 @@ impl VectorDatabase {
                 LIMIT ?6
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare entity query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare entity query: {}", e)))?;
 
         let fetch_limit = limit * 3;
         let memories = stmt
@@ -452,9 +452,9 @@ impl VectorDatabase {
                     })
                 },
             )
-            .map_err(|e| AetherError::config(format!("Failed to query entity memories: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query entity memories: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse entity memories: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse entity memories: {}", e)))?;
 
         Ok(memories)
     }
@@ -470,7 +470,7 @@ impl VectorDatabase {
         window_title: &str,
         limit: u32,
         exclude_user_inputs: &[String],
-    ) -> Result<Vec<MemoryEntry>, AetherError> {
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Query recent memories matching context
@@ -485,7 +485,7 @@ impl VectorDatabase {
             LIMIT ?3
             "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let memories = stmt
             .query_map(params![app_bundle_id, window_title, limit * 2], |row| {
@@ -515,9 +515,9 @@ impl VectorDatabase {
                     similarity_score: None,
                 })
             })
-            .map_err(|e| AetherError::config(format!("Failed to query memories: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query memories: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse memory rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse memory rows: {}", e)))?;
 
         // Filter out excluded user inputs (deduplication)
         let filtered: Vec<MemoryEntry> = if exclude_user_inputs.is_empty() {
@@ -538,7 +538,7 @@ impl VectorDatabase {
     }
 
     /// Delete memory by ID
-    pub async fn delete_memory(&self, id: &str) -> Result<(), AetherError> {
+    pub async fn delete_memory(&self, id: &str) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Get rowid before deleting from main table
@@ -549,21 +549,21 @@ impl VectorDatabase {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| AetherError::config(format!("Failed to get memory rowid: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to get memory rowid: {}", e)))?;
 
         let rows_affected = conn
             .execute("DELETE FROM memories WHERE id = ?1", params![id])
-            .map_err(|e| AetherError::config(format!("Failed to delete memory: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to delete memory: {}", e)))?;
 
         if rows_affected == 0 {
-            return Err(AetherError::config(format!("Memory not found: {}", id)));
+            return Err(AlephError::config(format!("Memory not found: {}", id)));
         }
 
         // Delete from vec0 table using rowid
         if let Some(rid) = rowid {
             conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rid])
                 .map_err(|e| {
-                    AetherError::config(format!("Failed to delete from memories_vec: {}", e))
+                    AlephError::config(format!("Failed to delete from memories_vec: {}", e))
                 })?;
         }
 
@@ -575,14 +575,14 @@ impl VectorDatabase {
         &self,
         app_bundle_id: Option<&str>,
         window_title: Option<&str>,
-    ) -> Result<u64, AetherError> {
+    ) -> Result<u64, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // If clearing all, also clear vec table
         if app_bundle_id.is_none() && window_title.is_none() {
             conn.execute("DELETE FROM memories_vec", [])
                 .map_err(|e| {
-                    AetherError::config(format!("Failed to clear memories_vec: {}", e))
+                    AlephError::config(format!("Failed to clear memories_vec: {}", e))
                 })?;
         } else {
             // Get rowids to delete from vec table first
@@ -609,11 +609,11 @@ impl VectorDatabase {
                     .map(|s| s as &dyn rusqlite::ToSql)
                     .collect();
                 let mut stmt = conn.prepare(&query).map_err(|e| {
-                    AetherError::config(format!("Failed to prepare query: {}", e))
+                    AlephError::config(format!("Failed to prepare query: {}", e))
                 })?;
                 let rows = stmt
                     .query_map(params_refs.as_slice(), |row| row.get::<_, i64>(0))
-                    .map_err(|e| AetherError::config(format!("Failed to query rowids: {}", e)))?;
+                    .map_err(|e| AlephError::config(format!("Failed to query rowids: {}", e)))?;
                 let collected: Vec<i64> = rows.filter_map(|r| r.ok()).collect();
                 collected
             };
@@ -648,7 +648,7 @@ impl VectorDatabase {
 
         let rows_affected = conn
             .execute(&query, params_refs.as_slice())
-            .map_err(|e| AetherError::config(format!("Failed to clear memories: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to clear memories: {}", e)))?;
 
         Ok(rows_affected as u64)
     }
@@ -657,17 +657,17 @@ impl VectorDatabase {
     ///
     /// Used when deleting a multi-turn conversation topic to ensure
     /// all related memories are also removed from the database.
-    pub async fn delete_by_topic_id(&self, topic_id: &str) -> Result<u64, AetherError> {
+    pub async fn delete_by_topic_id(&self, topic_id: &str) -> Result<u64, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Get rowids before deleting
         let rowids: Vec<i64> = {
             let mut stmt = conn
                 .prepare("SELECT rowid FROM memories WHERE topic_id = ?1")
-                .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
             let rows = stmt
                 .query_map(params![topic_id], |row| row.get::<_, i64>(0))
-                .map_err(|e| AetherError::config(format!("Failed to query rowids: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to query rowids: {}", e)))?;
             let collected: Vec<i64> = rows.filter_map(|r| r.ok()).collect();
             collected
         };
@@ -684,7 +684,7 @@ impl VectorDatabase {
                 params![topic_id],
             )
             .map_err(|e| {
-                AetherError::config(format!("Failed to delete memories by topic_id: {}", e))
+                AlephError::config(format!("Failed to delete memories by topic_id: {}", e))
             })?;
 
         tracing::info!(
@@ -697,7 +697,7 @@ impl VectorDatabase {
     }
 
     /// Get database statistics
-    pub async fn get_stats(&self) -> Result<MemoryStats, AetherError> {
+    pub async fn get_stats(&self) -> Result<MemoryStats, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Count total memories
@@ -740,7 +740,7 @@ impl VectorDatabase {
     }
 
     /// Get list of unique app bundle IDs with memory counts
-    pub async fn get_app_list(&self) -> Result<Vec<(String, u64)>, AetherError> {
+    pub async fn get_app_list(&self) -> Result<Vec<(String, u64)>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut stmt = conn
@@ -752,7 +752,7 @@ impl VectorDatabase {
                 ORDER BY count DESC, app_bundle_id ASC
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let apps = stmt
             .query_map([], |row| {
@@ -760,9 +760,9 @@ impl VectorDatabase {
                 let count: u64 = row.get(1)?;
                 Ok((app_bundle_id, count))
             })
-            .map_err(|e| AetherError::config(format!("Failed to query app list: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query app list: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse app rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse app rows: {}", e)))?;
 
         Ok(apps)
     }

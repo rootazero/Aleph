@@ -388,7 +388,7 @@ use std::sync::{Arc, RwLock};
 use rusqlite::{params, Connection, OptionalExtension};
 use tracing::{debug, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::types::{ExecutionStatus, SkillExecution, SkillMetrics};
 
@@ -433,12 +433,12 @@ pub struct EvolutionTracker {
 impl EvolutionTracker {
     /// Create a new tracker with database at the given path
     pub fn new(db_path: impl AsRef<Path>) -> Result<Self> {
-        let conn = Connection::open(db_path.as_ref()).map_err(|e| AetherError::ConfigError {
+        let conn = Connection::open(db_path.as_ref()).map_err(|e| AlephError::ConfigError {
             message: format!("Failed to open evolution database: {}", e),
             suggestion: Some("Check database path permissions".to_string()),
         })?;
 
-        conn.execute_batch(SCHEMA).map_err(|e| AetherError::ConfigError {
+        conn.execute_batch(SCHEMA).map_err(|e| AlephError::ConfigError {
             message: format!("Failed to create schema: {}", e),
             suggestion: None,
         })?;
@@ -453,12 +453,12 @@ impl EvolutionTracker {
 
     /// Create an in-memory tracker (for testing)
     pub fn in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory().map_err(|e| AetherError::ConfigError {
+        let conn = Connection::open_in_memory().map_err(|e| AlephError::ConfigError {
             message: format!("Failed to create in-memory database: {}", e),
             suggestion: None,
         })?;
 
-        conn.execute_batch(SCHEMA).map_err(|e| AetherError::ConfigError {
+        conn.execute_batch(SCHEMA).map_err(|e| AlephError::ConfigError {
             message: format!("Failed to create schema: {}", e),
             suggestion: None,
         })?;
@@ -471,7 +471,7 @@ impl EvolutionTracker {
 
     /// Log a skill execution
     pub fn log_execution(&self, execution: &SkillExecution) -> Result<()> {
-        let conn = self.conn.write().map_err(|_| AetherError::Other {
+        let conn = self.conn.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -498,7 +498,7 @@ impl EvolutionTracker {
                 execution.input_summary,
                 execution.output_length,
             ],
-        ).map_err(|e| AetherError::ConfigError {
+        ).map_err(|e| AlephError::ConfigError {
             message: format!("Failed to insert execution: {}", e),
             suggestion: None,
         })?;
@@ -516,7 +516,7 @@ impl EvolutionTracker {
     pub fn get_metrics(&self, skill_id: &str) -> Result<Option<SkillMetrics>> {
         // Check cache first
         {
-            let cache = self.metrics_cache.read().map_err(|_| AetherError::Other {
+            let cache = self.metrics_cache.read().map_err(|_| AlephError::Other {
                 message: "Failed to acquire cache lock".to_string(),
                 suggestion: None,
             })?;
@@ -526,7 +526,7 @@ impl EvolutionTracker {
         }
 
         // Load from database
-        let conn = self.conn.read().map_err(|_| AetherError::Other {
+        let conn = self.conn.read().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -548,7 +548,7 @@ impl EvolutionTracker {
                 )),
             )
             .optional()
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to query metrics: {}", e),
                 suggestion: None,
             })?;
@@ -577,7 +577,7 @@ impl EvolutionTracker {
         &self,
         config: &super::SolidificationConfig,
     ) -> Result<Vec<SkillMetrics>> {
-        let conn = self.conn.read().map_err(|_| AetherError::Other {
+        let conn = self.conn.read().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -599,7 +599,7 @@ impl EvolutionTracker {
                    AND (?3 - first_used) >= ?4
                    AND (?3 - last_used) <= ?5",
             )
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to prepare query: {}", e),
                 suggestion: None,
             })?;
@@ -630,7 +630,7 @@ impl EvolutionTracker {
                     })
                 },
             )
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to query candidates: {}", e),
                 suggestion: None,
             })?;
@@ -642,7 +642,7 @@ impl EvolutionTracker {
 
     /// Update metrics for a skill based on all executions
     fn update_metrics(&self, skill_id: &str) -> Result<()> {
-        let conn = self.conn.write().map_err(|_| AetherError::Other {
+        let conn = self.conn.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -661,7 +661,7 @@ impl EvolutionTracker {
                 params![skill_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to aggregate stats: {}", e),
                 suggestion: None,
             })?;
@@ -678,13 +678,13 @@ impl EvolutionTracker {
         {
             let mut stmt = conn
                 .prepare("SELECT context FROM skill_executions WHERE skill_id = ?1")
-                .map_err(|e| AetherError::ConfigError {
+                .map_err(|e| AlephError::ConfigError {
                     message: format!("Failed to prepare context query: {}", e),
                     suggestion: None,
                 })?;
             let contexts = stmt
                 .query_map(params![skill_id], |row| row.get::<_, String>(0))
-                .map_err(|e| AetherError::ConfigError {
+                .map_err(|e| AlephError::ConfigError {
                     message: format!("Failed to query contexts: {}", e),
                     suggestion: None,
                 })?;
@@ -718,7 +718,7 @@ impl EvolutionTracker {
                 first_used,
                 context_json,
             ],
-        ).map_err(|e| AetherError::ConfigError {
+        ).map_err(|e| AlephError::ConfigError {
             message: format!("Failed to upsert metrics: {}", e),
             suggestion: None,
         })?;
@@ -737,7 +737,7 @@ impl EvolutionTracker {
             context_frequency: context_freq,
         };
 
-        let mut cache = self.metrics_cache.write().map_err(|_| AetherError::Other {
+        let mut cache = self.metrics_cache.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire cache lock".to_string(),
             suggestion: None,
         })?;
@@ -963,7 +963,7 @@ fn parse_suggestion_response(
     metrics: &SkillMetrics,
     sample_contexts: &[String],
 ) -> Result<SolidificationSuggestion> {
-    use crate::error::AetherError;
+    use crate::error::AlephError;
     use crate::spec_driven::spec_writer::extract_json;
 
     let json_str = extract_json(response);
@@ -976,7 +976,7 @@ fn parse_suggestion_response(
     }
 
     let parsed: SuggestionResponse = serde_json::from_str(&json_str).map_err(|e| {
-        AetherError::Other {
+        AlephError::Other {
             message: format!("Failed to parse suggestion: {}", e),
             suggestion: None,
         }
@@ -1057,7 +1057,7 @@ use std::path::{Path, PathBuf};
 
 use tracing::{debug, info};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::types::{GenerationResult, SolidificationSuggestion};
 
@@ -1074,7 +1074,7 @@ triggers:
 
 ---
 
-*Auto-generated by Aether Skill Evolution System*
+*Auto-generated by Aleph Skill Evolution System*
 *Pattern ID: {pattern_id}*
 *Confidence: {confidence:.0}%*
 "#;
@@ -1093,9 +1093,9 @@ impl SkillGenerator {
         }
     }
 
-    /// Create with default skills directory (~/.aether/skills)
+    /// Create with default skills directory (~/.aleph/skills)
     pub fn with_default_dir() -> Result<Self> {
-        let home = dirs::home_dir().ok_or_else(|| AetherError::Other {
+        let home = dirs::home_dir().ok_or_else(|| AlephError::Other {
             message: "Could not determine home directory".to_string(),
             suggestion: None,
         })?;
@@ -1138,14 +1138,14 @@ impl SkillGenerator {
             .replace("{confidence}", &format!("{}", suggestion.confidence * 100.0));
 
         // Create directory
-        fs::create_dir_all(&skill_dir).map_err(|e| AetherError::Other {
+        fs::create_dir_all(&skill_dir).map_err(|e| AlephError::Other {
             message: format!("Failed to create skill directory: {}", e),
             suggestion: None,
         })?;
 
         // Write SKILL.md
         let file_path = skill_dir.join("SKILL.md");
-        fs::write(&file_path, &content).map_err(|e| AetherError::Other {
+        fs::write(&file_path, &content).map_err(|e| AlephError::Other {
             message: format!("Failed to write SKILL.md: {}", e),
             suggestion: None,
         })?;
@@ -1300,7 +1300,7 @@ use std::process::Command;
 
 use tracing::{debug, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::types::CommitResult;
 
@@ -1387,7 +1387,7 @@ impl GitCommitter {
 
         // Commit
         let message = format!(
-            "feat(skills): auto-generate {} skill\n\nGenerated by Aether Skill Evolution System",
+            "feat(skills): auto-generate {} skill\n\nGenerated by Aleph Skill Evolution System",
             skill_name
         );
         let commit_result = self.run_git(&["commit", "-m", &message]);
@@ -1444,7 +1444,7 @@ impl GitCommitter {
             .args(args)
             .current_dir(&self.repo_root)
             .output()
-            .map_err(|e| AetherError::Other {
+            .map_err(|e| AlephError::Other {
                 message: format!("Failed to run git: {}", e),
                 suggestion: Some("Ensure git is installed".to_string()),
             })?;
@@ -1452,7 +1452,7 @@ impl GitCommitter {
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
-            Err(AetherError::Other {
+            Err(AlephError::Other {
                 message: format!(
                     "Git command failed: {}",
                     String::from_utf8_lossy(&output.stderr)

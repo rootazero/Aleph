@@ -237,7 +237,7 @@ fn extract_json(response: &str) -> Result<String> {
         }
     }
 
-    Err(crate::error::AetherError::parse("Could not extract JSON from response"))
+    Err(crate::error::AlephError::parse("Could not extract JSON from response"))
 }
 
 #[cfg(test)]
@@ -1420,7 +1420,7 @@ fn run_dag_execution(
     requires_confirmation: bool,
     provider: Arc<dyn AiProvider>,
     op_token: &CancellationToken,
-    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
+    handler: &Arc<dyn crate::ffi::AlephEventHandler>,
     user_input: &str,
 ) {
     let handler = handler.clone();
@@ -1466,15 +1466,15 @@ fn run_dag_execution(
 Add adapter class:
 
 ```rust
-/// Adapter to convert ExecutionCallback to AetherEventHandler
+/// Adapter to convert ExecutionCallback to AlephEventHandler
 struct FfiExecutionCallback {
-    handler: Arc<dyn crate::ffi::AetherEventHandler>,
+    handler: Arc<dyn crate::ffi::AlephEventHandler>,
     confirmation_tx: tokio::sync::mpsc::Sender<UserDecision>,
     confirmation_rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<UserDecision>>,
 }
 
 impl FfiExecutionCallback {
-    fn new(handler: Arc<dyn crate::ffi::AetherEventHandler>) -> Self {
+    fn new(handler: Arc<dyn crate::ffi::AlephEventHandler>) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         Self {
             handler,
@@ -1782,11 +1782,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 //! Integration test for DAG scheduler with Agent Loop
 
 use std::sync::Arc;
-use aethecore::dispatcher::{
+use alephcore::dispatcher::{
     AnalysisResult, DagScheduler, TaskAnalyzer, TaskContext,
     ExecutionCallback, NoOpCallback, TaskPlan, UserDecision,
 };
-use aethecore::providers::MockProvider;
+use alephcore::providers::MockProvider;
 
 #[tokio::test]
 async fn test_multi_step_task_flow() {

@@ -4,7 +4,7 @@
 
 ## Overview
 
-为 Aether 实现完整的 Thinking Levels 系统，支持 6 级思考深度控制、多 Provider 适配、以及智能 Fallback 机制。
+为 Aleph 实现完整的 Thinking Levels 系统，支持 6 级思考深度控制、多 Provider 适配、以及智能 Fallback 机制。
 
 ## Phase A: ThinkLevel 核心类型
 

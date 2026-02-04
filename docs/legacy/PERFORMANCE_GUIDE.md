@@ -186,7 +186,7 @@ OptimizedRotatingView(duration: 3.0) {
 
 1. **Open Xcode Project**:
    ```bash
-   open Aether.xcodeproj
+   open Aleph.xcodeproj
    ```
 
 2. **Select Profiling Template**:

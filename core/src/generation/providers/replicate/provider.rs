@@ -31,8 +31,8 @@ use tracing::{debug, info, warn};
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::providers::ReplicateProvider;
-/// use aethecore::generation::{GenerationProvider, GenerationType};
+/// use alephcore::generation::providers::ReplicateProvider;
+/// use alephcore::generation::{GenerationProvider, GenerationType};
 ///
 /// let provider = ReplicateProvider::builder("r8_your_api_token")
 ///     .add_model("flux", "black-forest-labs/flux-schnell")
@@ -66,7 +66,7 @@ impl ReplicateProvider {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::providers::ReplicateProvider;
+    /// use alephcore::generation::providers::ReplicateProvider;
     ///
     /// let provider = ReplicateProvider::builder("r8_xxx")
     ///     .add_model("flux", "black-forest-labs/flux-schnell")

@@ -7,7 +7,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::extension::SyncExtensionManager;
+//! use alephcore::extension::SyncExtensionManager;
 //!
 //! let manager = SyncExtensionManager::new()?;
 //! let summary = manager.load_all()?;

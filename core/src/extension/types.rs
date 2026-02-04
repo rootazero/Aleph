@@ -393,7 +393,7 @@ pub enum PluginOrigin {
     Config,
     /// From workspace .aether/ directory
     Workspace,
-    /// From global ~/.aether/ directory
+    /// From global ~/.aleph/ directory
     Global,
     /// Bundled with core (lowest priority)
     Bundled,

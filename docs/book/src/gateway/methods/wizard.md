@@ -39,7 +39,7 @@ Start a new wizard session.
       "id": "step-1",
       "type": "note",
       "title": "Welcome",
-      "message": "Welcome to Aether setup!"
+      "message": "Welcome to Aleph setup!"
     },
     "status": "running"
   }

@@ -6,7 +6,7 @@
 
 ## Overview
 
-Aether's security system provides:
+Aleph's security system provides:
 - **Exec Approval**: Human-in-the-loop for shell commands
 - **Command Analysis**: Static analysis of command risk
 - **Allowlist/Blocklist**: Fine-grained command control
@@ -366,7 +366,7 @@ pub struct Condition {
 ### Resource Patterns
 
 ```
-file://~/.aether/*          # Aether config files
+file://~/.aleph/*          # Aleph config files
 file:///etc/*               # System files
 exec://git/*                # Git commands
 exec://npm/*                # NPM commands
@@ -501,7 +501,7 @@ impl ApprovalBridge {
       "defaultEffect": "deny",
       "rules": [
         {
-          "resource": "file://~/.aether/*",
+          "resource": "file://~/.aleph/*",
           "action": "read",
           "effect": "allow"
         }

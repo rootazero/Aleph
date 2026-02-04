@@ -8,12 +8,12 @@
 
 ## Executive Summary
 
-Implement a **Markdown Tool Adapter** to enable Aether to dynamically load CLI tools defined in Markdown files (SKILL.md format), compatible with OpenClaw ecosystem while maintaining Aether's type safety and security model.
+Implement a **Markdown Tool Adapter** to enable Aleph to dynamically load CLI tools defined in Markdown files (SKILL.md format), compatible with OpenClaw ecosystem while maintaining Aleph's type safety and security model.
 
 ### Strategic Context
 
-This is not just ecosystem compatibility—it's the **missing link** for Aether's Evolution Loop:
-- **Problem**: Aether's current tools are Rust code (compiled, static)
+This is not just ecosystem compatibility—it's the **missing link** for Aleph's Evolution Loop:
+- **Problem**: Aleph's current tools are Rust code (compiled, static)
 - **Vision**: Evolution system should generate executable skills at runtime
 - **Solution**: Markdown format provides a "hot-pluggable, text-defined, runtime-loadable" skill format
 
@@ -24,8 +24,8 @@ Without this adapter, the Evolution Loop would need to generate Rust code and re
 ## Design Goals
 
 1. **OpenClaw Compatibility**: Zero-modification loading of existing OpenClaw skills
-2. **Aether Enhancement**: Extend format with type hints and security controls
-3. **Safety First**: Maintain Aether's security model (sandbox, confirmation, network isolation)
+2. **Aleph Enhancement**: Extend format with type hints and security controls
+3. **Safety First**: Maintain Aleph's security model (sandbox, confirmation, network isolation)
 4. **Evolution Ready**: Enable future auto-generation of skills from usage patterns
 
 ---
@@ -34,7 +34,7 @@ Without this adapter, the Evolution Loop would need to generate Rust code and re
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Aether Tool System                        │
+│                    Aleph Tool System                        │
 │  ┌──────────────────┐        ┌──────────────────────┐       │
 │  │  Builtin Tools   │        │  Markdown Skills     │       │
 │  │  (Rust Native)   │        │  (Runtime Loaded)    │       │
@@ -43,13 +43,13 @@ Without this adapter, the Evolution Loop would need to generate Rust code and re
 │           └─────────────┬───────────────┘                    │
 │                         ▼                                    │
 │              ┌────────────────────┐                          │
-│              │  AetherToolDyn     │                          │
+│              │  AlephToolDyn     │                          │
 │              │  (Unified Interface)│                         │
 │              └─────────┬──────────┘                          │
 └────────────────────────┼─────────────────────────────────────┘
                          ▼
               ┌────────────────────┐
-              │  AetherToolServer  │
+              │  AlephToolServer  │
               │  (Registry + Call)  │
               └────────────────────┘
 ```
@@ -59,7 +59,7 @@ Without this adapter, the Evolution Loop would need to generate Rust code and re
 ```
 core/src/tools/markdown_skill/
 ├── mod.rs               # Module entry point
-├── spec.rs              # AetherSkillSpec data structures
+├── spec.rs              # AlephSkillSpec data structures
 ├── parser.rs            # Frontmatter + Markdown parsing
 ├── tool_adapter.rs      # MarkdownCliTool implementation
 ├── executor.rs          # CLI execution (host/docker)
@@ -68,7 +68,7 @@ core/src/tools/markdown_skill/
 
 ---
 
-## Specification: Aether SKILL.md Format
+## Specification: Aleph SKILL.md Format
 
 ### Base Format (OpenClaw Compatible)
 
@@ -93,7 +93,7 @@ gh pr view 123
 \`\`\`
 ```
 
-### Aether Extensions (Optional)
+### Aleph Extensions (Optional)
 
 ```markdown
 ---
@@ -103,7 +103,7 @@ metadata:
   requires:
     bins: ["gh"]
 
-  # Aether-specific extensions
+  # Aleph-specific extensions
   aether:
     # Security controls
     security:
@@ -150,7 +150,7 @@ metadata:
 ### Core Spec (spec.rs)
 
 ```rust
-pub struct AetherSkillSpec {
+pub struct AlephSkillSpec {
     pub name: String,
     pub description: String,
     pub metadata: SkillMetadata,
@@ -162,7 +162,7 @@ pub struct SkillMetadata {
     pub aether: Option<AetherExtensions>,
 }
 
-pub struct AetherExtensions {
+pub struct AlephExtensions {
     pub security: SecuritySpec,
     pub input_hints: HashMap<String, InputHint>,
     pub evolution: Option<EvolutionMeta>,
@@ -290,7 +290,7 @@ pub async fn load_all(&self) -> (Vec<MarkdownCliTool>, Vec<(PathBuf, Error)>)
 1. **spec.rs**: Define all data structures
 2. **parser.rs**: Implement frontmatter parsing with `serde_yaml`
 3. **tool_adapter.rs**:
-   - Implement `AetherTool` trait
+   - Implement `AlephTool` trait
    - Dynamic schema generation
    - Args-to-CLI conversion
 4. **executor.rs**: Host and Docker execution backends
@@ -298,7 +298,7 @@ pub async fn load_all(&self) -> (Vec<MarkdownCliTool>, Vec<(PathBuf, Error)>)
 6. **Integration**:
    - Extend `ToolDefinition` with `llm_context`
    - Update `PromptBuilder` to inject context
-   - Initialize in `AetherToolServer::new_with_skills()`
+   - Initialize in `AlephToolServer::new_with_skills()`
 
 ---
 
@@ -331,7 +331,7 @@ async-walkdir = "2.0"  # If preferring async
 - Test partial failure scenarios
 
 ### Manual Testing
-- Clone OpenClaw repo, point Aether at `openclaw/skills/`
+- Clone OpenClaw repo, point Aleph at `openclaw/skills/`
 - Verify skills load and execute correctly
 - Test Docker mode with `gh` CLI tool
 
@@ -362,7 +362,7 @@ async-walkdir = "2.0"  # If preferring async
 ## Future Enhancements
 
 ### Phase 2: Context Enhancement
-- Add `examples()` method to `AetherTool` trait
+- Add `examples()` method to `AlephTool` trait
 - Allow builtin tools to provide Few-shot examples
 - Unify example injection across all tools
 
@@ -422,7 +422,7 @@ gh pr list --repo owner/name
 
 **Result**: Loads successfully, generates `args: array<string>` schema, executes on host.
 
-### Example 2: Aether-Enhanced Docker Skill
+### Example 2: Aleph-Enhanced Docker Skill
 
 ```markdown
 ---
@@ -463,7 +463,7 @@ kubectl get pods -n kube-system
 
 This Markdown Tool Adapter design provides:
 - ✅ Immediate OpenClaw ecosystem access
-- ✅ Aether's security and type safety preservation
+- ✅ Aleph's security and type safety preservation
 - ✅ Foundation for Evolution Loop auto-generation
 - ✅ Production-ready error handling and isolation
 

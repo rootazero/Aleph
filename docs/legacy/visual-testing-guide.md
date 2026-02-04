@@ -13,9 +13,9 @@ This document provides detailed instructions for manual visual testing of the Mo
 - Color contrast analyzer (optional but recommended)
 
 ### Pre-Test Configuration
-1. Build Aether application: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether build`
-2. Reset config to defaults: `rm ~/.aether/config.toml`
-3. Launch Aether application
+1. Build Aleph application: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph build`
+2. Reset config to defaults: `rm ~/.aleph/config.toml`
+3. Launch Aleph application
 4. Open Settings window (Cmd+,)
 
 ## Test Procedures
@@ -199,12 +199,12 @@ Save to `docs/screenshots/dark-mode/`:
 **System Light to Dark Transition**
 1. [ ] Open System Preferences > General > Appearance
 2. [ ] Select "Light" in Appearance dropdown
-3. [ ] Switch back to Aether
-4. [ ] Verify Aether is in Light mode (check background colors)
+3. [ ] Switch back to Aleph
+4. [ ] Verify Aleph is in Light mode (check background colors)
 5. [ ] Switch to System Preferences
 6. [ ] Select "Dark" in Appearance dropdown
-7. [ ] Switch back to Aether within 1 second
-8. [ ] Verify Aether switches to Dark mode:
+7. [ ] Switch back to Aleph within 1 second
+8. [ ] Verify Aleph switches to Dark mode:
    - [ ] Transition is immediate (< 0.5s)
    - [ ] No white flash during transition
    - [ ] No black flash during transition
@@ -214,10 +214,10 @@ Save to `docs/screenshots/dark-mode/`:
 
 **System Dark to Light Transition**
 1. [ ] Ensure system is in Dark mode
-2. [ ] Verify Aether is in Dark mode
+2. [ ] Verify Aleph is in Dark mode
 3. [ ] Switch to System Preferences
 4. [ ] Select "Light" in Appearance dropdown
-5. [ ] Switch back to Aether
+5. [ ] Switch back to Aleph
 6. [ ] Verify smooth transition to Light mode:
    - [ ] Transition smooth
    - [ ] No flicker
@@ -225,12 +225,12 @@ Save to `docs/screenshots/dark-mode/`:
 
 **Auto Mode Persistence**
 1. [ ] Verify Auto mode selected in ThemeSwitcher
-2. [ ] Quit Aether (Cmd+Q)
-3. [ ] Relaunch Aether
+2. [ ] Quit Aleph (Cmd+Q)
+3. [ ] Relaunch Aleph
 4. [ ] Verify Auto mode still selected
 5. [ ] Verify theme matches system appearance
 6. [ ] Change system appearance
-7. [ ] Verify Aether follows
+7. [ ] Verify Aleph follows
 
 #### Screenshot Checklist
 Save to `docs/screenshots/auto-mode/`:
@@ -317,7 +317,7 @@ Save to `docs/screenshots/auto-mode/`:
 
 #### Compare to uisample.png
 1. [ ] Open `docs/uisample.png` in Preview
-2. [ ] Open Aether Settings Providers tab
+2. [ ] Open Aleph Settings Providers tab
 3. [ ] Position windows side-by-side
 4. [ ] Compare visually:
 
@@ -355,7 +355,7 @@ Save to `docs/screenshots/auto-mode/`:
    ```
    Date: 2025-12-26
    macOS Version: 15.2
-   Aether Version: 1.0.0
+   Aleph Version: 1.0.0
    Theme Modes: Light, Dark, Auto
    Window Size: 1200x800
    ```
@@ -370,7 +370,7 @@ Save to `docs/screenshots/auto-mode/`:
 **Tester**: [Your Name]
 **Date**: [YYYY-MM-DD]
 **macOS Version**: [13.x / 14.x / 15.x]
-**Aether Version**: [x.x.x]
+**Aleph Version**: [x.x.x]
 **Device**: [MacBook Pro 16" 2023 / etc.]
 
 ## 6.2.1 Light Mode

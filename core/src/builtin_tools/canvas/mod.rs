@@ -55,7 +55,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::builtin_tools::canvas::{CanvasTool, CanvasController, CanvasToolArgs};
+//! use alephcore::builtin_tools::canvas::{CanvasTool, CanvasController, CanvasToolArgs};
 //! use std::sync::Arc;
 //!
 //! // Create tool with no-op backend (for testing)

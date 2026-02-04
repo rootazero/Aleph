@@ -1,4 +1,4 @@
-# Aether Rust 层代码清理规划
+# Aleph Rust 层代码清理规划
 
 > 日期：2026-01-31
 > 状态：待执行
@@ -6,7 +6,7 @@
 
 ## 背景
 
-Aether 正在从 Library 模式（UniFFI）向 Service/Daemon 模式（Gateway WebSocket）转型。虽然 UniFFI 依赖和宏已被移除，但代码库中仍存在大量为 FFI 边界设计的类型和逻辑。
+Aleph 正在从 Library 模式（UniFFI）向 Service/Daemon 模式（Gateway WebSocket）转型。虽然 UniFFI 依赖和宏已被移除，但代码库中仍存在大量为 FFI 边界设计的类型和逻辑。
 
 ### 当前状态
 
@@ -231,7 +231,7 @@ suggestion/, clarification/, checkpoint/, ...
 │     pub → pub(crate) → pub(super) → private                │
 │                                                             │
 │  ⑤ VERIFY  运行测试确保无破坏                               │
-│     cargo test -p aethecore -- <module>::                   │
+│     cargo test -p alephcore -- <module>::                   │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -290,10 +290,10 @@ cargo +nightly udeps --all-targets
 cargo check 2>&1 | grep -E "(error|warning)" && echo "FAIL" || echo "PASS"
 
 # 2. 所有测试通过
-cargo test -p aethecore
+cargo test -p alephcore
 
 # 3. Gateway 功能正常
-cargo run --features gateway --bin aether-gateway -- --port 18789 &
+cargo run --features gateway --bin aleph-gateway -- --port 18789 &
 # 测试 WebSocket 连接...
 
 # 4. 无 FFI 残留类型

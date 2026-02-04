@@ -33,7 +33,7 @@
 //! The module now supports synchronous wait for sub-agent results:
 //!
 //! ```rust,ignore
-//! use aethecore::agents::sub_agents::{
+//! use alephcore::agents::sub_agents::{
 //!     SubAgentDispatcher, SubAgentRequest, ExecutionCoordinator, CoordinatorConfig
 //! };
 //!
@@ -52,7 +52,7 @@
 //! Tool calls and artifacts are automatically collected during execution:
 //!
 //! ```rust,ignore
-//! use aethecore::agents::sub_agents::ResultCollector;
+//! use alephcore::agents::sub_agents::ResultCollector;
 //!
 //! let collector = ResultCollector::new();
 //! collector.init_request("req-1").await;
@@ -65,7 +65,7 @@
 //! # Legacy Usage
 //!
 //! ```rust,ignore
-//! use aethecore::agents::sub_agents::{SubAgent, McpSubAgent, SubAgentRequest};
+//! use alephcore::agents::sub_agents::{SubAgent, McpSubAgent, SubAgentRequest};
 //!
 //! // Create an MCP sub-agent
 //! let mcp_agent = McpSubAgent::new(mcp_registry);

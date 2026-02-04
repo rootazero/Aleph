@@ -11,7 +11,7 @@ use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent, 
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::loader::SkillLoader;
 use super::tool_adapter::MarkdownCliTool;
@@ -93,7 +93,7 @@ impl SkillWatcher {
                 }
             },
         )
-        .map_err(|e| AetherError::Other {
+        .map_err(|e| AlephError::Other {
             message: format!("Failed to create file watcher: {}", e),
             suggestion: Some("Check file system permissions".to_string()),
         })?;
@@ -102,7 +102,7 @@ impl SkillWatcher {
         debouncer
             .watcher()
             .watch(&skills_dir, RecursiveMode::Recursive)
-            .map_err(|e| AetherError::Other {
+            .map_err(|e| AlephError::Other {
                 message: format!("Failed to watch directory: {}", e),
                 suggestion: Some("Ensure the directory exists and is readable".to_string()),
             })?;

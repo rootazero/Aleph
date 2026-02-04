@@ -118,7 +118,7 @@ let response = try core.processInput(userInput: userInput, context: capturedCont
 00:06  用户选中这个问题
 00:06  用户按热键`
 
-Aether处理:
+Aleph处理:
 1. 💾 保存原剪切板（用于恢复）
 2. 📋 Cmd+C复制选中文本 → "如何在appear时加载数据？"
 3. 🔍 检查剪切板监控器:
@@ -147,7 +147,7 @@ Aether处理:
 00:15  用户在编辑器输入: "解释Python装饰器"
 00:15  用户按热键`
 
-Aether处理:
+Aleph处理:
 1. 💾 保存原剪切板
 2. 📋 Cmd+C复制失败 → Cmd+A全选 → Cmd+C
 3. 🔍 检查剪切板监控器:
@@ -170,7 +170,7 @@ Aether处理:
 00:01  用户选中并Cmd+C复制（剪切板：hello world）
 00:02  用户按热键`
 
-Aether处理:
+Aleph处理:
 1. 💾 保存原剪切板: "hello world"
 2. 📋 Cmd+C复制选中文本: "hello world"
 3. 🔍 检查剪切板监控器:

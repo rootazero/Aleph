@@ -3,7 +3,7 @@
 //! Calculates memory strength at read-time and asynchronously
 //! invalidates decayed facts without blocking retrieval.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
 use crate::memory::database::VectorDatabase;
 use crate::memory::decay::{DecayConfig, MemoryStrength};
@@ -121,7 +121,7 @@ impl LazyDecayEngine {
     pub async fn apply_access_updates(
         &self,
         updates: Vec<(String, i64)>,
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         for (fact_id, timestamp) in updates {
             self.db.update_fact_access(&fact_id, timestamp).await?;
         }

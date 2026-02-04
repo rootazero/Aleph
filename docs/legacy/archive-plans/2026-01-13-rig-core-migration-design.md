@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document describes the architectural changes to replace Aether's current 3-layer routing system with the `rig-core` library, leveraging its built-in Memory, Vector Store, and Tool Calling capabilities.
+This document describes the architectural changes to replace Aleph's current 3-layer routing system with the `rig-core` library, leveraging its built-in Memory, Vector Store, and Tool Calling capabilities.
 
 ## Decision Summary
 
@@ -29,7 +29,7 @@ This document describes the architectural changes to replace Aether's current 3-
 User Input
     ↓
 ┌─────────────────────────────────────────┐
-│           AetherCore (UniFFI)           │
+│           AlephCore (UniFFI)           │
 │  ┌───────────────────────────────────┐  │
 │  │         RigAgentManager           │  │
 │  │  ┌─────────────────────────────┐  │  │
@@ -67,7 +67,7 @@ Swift UI (via simplified UniFFI interface)
 ### New `src/` Directory Structure
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── lib.rs                 # UniFFI export entry
 ├── aether.udl             # UniFFI interface (simplified)
 ├── error.rs               # Error types (keep)
@@ -121,7 +121,7 @@ Delete: memory/       (~3,000 lines) → replaced by store/
 ### New `config.toml` Structure
 
 ```toml
-# ~/.aether/config.toml
+# ~/.aleph/config.toml
 
 [agent]
 provider = "openai"              # openai | anthropic | ollama | groq
@@ -129,7 +129,7 @@ model = "gpt-4o"
 temperature = 0.7
 max_tokens = 4096
 system_prompt = """
-You are Aether, an intelligent assistant. You can use various tools to help users.
+You are Aleph, an intelligent assistant. You can use various tools to help users.
 """
 
 [providers.openai]
@@ -145,7 +145,7 @@ model = "llama3"
 
 [memory]
 enabled = true
-db_path = "~/.aether/memory.db"
+db_path = "~/.aleph/memory.db"
 embedding_model = "fastembed"
 top_k = 5
 similarity_threshold = 0.7
@@ -331,12 +331,12 @@ impl RigAgentManager {
 
 ```webidl
 namespace aether {
-    [Throws=AetherError]
-    AetherCore init(string config_path, AetherEventHandler handler);
+    [Throws=AlephError]
+    AlephCore init(string config_path, AlephEventHandler handler);
 };
 
 [Error]
-enum AetherError {
+enum AlephError {
     "Config",
     "Provider",
     "Tool",
@@ -344,7 +344,7 @@ enum AetherError {
     "Cancelled",
 };
 
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
     void on_thinking();
     void on_tool_start(string tool_name);
     void on_tool_result(string tool_name, string result);
@@ -354,21 +354,21 @@ callback interface AetherEventHandler {
     void on_memory_stored();
 };
 
-interface AetherCore {
-    [Throws=AetherError]
+interface AlephCore {
+    [Throws=AlephError]
     void process(string input, ProcessOptions? options);
 
     void cancel();
 
     sequence<ToolInfo> list_tools();
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     sequence<MemoryItem> search_memory(string query, u32 limit);
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     void clear_memory();
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     void reload_config();
 };
 
@@ -429,7 +429,7 @@ Phase 3: Tool Migration
 
 Phase 4: UniFFI Integration
     ├── Update aether.udl
-    ├── Implement new AetherCore
+    ├── Implement new AlephCore
     └── Generate Swift bindings
 
 Phase 5: Cleanup

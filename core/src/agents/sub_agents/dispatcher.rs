@@ -16,7 +16,7 @@ use super::result_collector::ResultCollector;
 use super::traits::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult, ToolCallRecord};
 use super::{McpSubAgent, SkillSubAgent};
 use crate::dispatcher::ToolRegistry;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// Convert ToolCallSummary to ToolCallRecord
 fn summary_to_record(summary: &ToolCallSummary) -> ToolCallRecord {
@@ -51,14 +51,14 @@ impl std::fmt::Display for SubAgentType {
 }
 
 impl std::str::FromStr for SubAgentType {
-    type Err = AetherError;
+    type Err = AlephError;
 
     fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "mcp" | "mcp_agent" => Ok(Self::Mcp),
             "skill" | "skill_agent" => Ok(Self::Skill),
             "custom" => Ok(Self::Custom),
-            _ => Err(AetherError::Other {
+            _ => Err(AlephError::Other {
                 message: format!("Unknown sub-agent type: {}", s),
                 suggestion: None,
             }),
@@ -238,7 +238,7 @@ impl SubAgentDispatcher {
         }
 
         // No suitable agent found
-        Err(AetherError::NotFound(format!(
+        Err(AlephError::NotFound(format!(
             "No sub-agent found to handle request: {}",
             request.prompt.chars().take(50).collect::<String>()
         )))
@@ -258,7 +258,7 @@ impl SubAgentDispatcher {
 
         self.agents
             .get(agent_id)
-            .ok_or_else(|| AetherError::NotFound(format!("Sub-agent not found: {}", agent_id)))?
+            .ok_or_else(|| AlephError::NotFound(format!("Sub-agent not found: {}", agent_id)))?
             .execute(request)
             .await
     }
@@ -509,7 +509,7 @@ impl SubAgentDispatcher {
         }
 
         // No suitable agent found
-        Err(AetherError::NotFound(format!(
+        Err(AlephError::NotFound(format!(
             "No sub-agent found to handle request: {}",
             request.prompt.chars().take(50).collect::<String>()
         )))

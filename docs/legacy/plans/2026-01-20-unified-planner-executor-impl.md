@@ -1441,7 +1441,7 @@ use crate::cowork::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
 use crate::cowork::executor::ExecutorRegistry;
 use crate::cowork::types::{TaskGraph, TaskResult, TaskStatus};
 use crate::planner::{ExecutionPlan, PlannedTask};
-use crate::uniffi_core::AetherEventHandler;
+use crate::uniffi_core::AlephEventHandler;
 
 /// Configuration for the unified executor
 #[derive(Debug, Clone)]
@@ -1470,7 +1470,7 @@ pub struct UnifiedExecutor {
     /// Executor registry for task execution
     executor_registry: Arc<ExecutorRegistry>,
     /// Event handler for callbacks
-    event_handler: Arc<dyn AetherEventHandler>,
+    event_handler: Arc<dyn AlephEventHandler>,
     /// Configuration
     config: ExecutorConfig,
 }
@@ -1480,7 +1480,7 @@ impl UnifiedExecutor {
     pub fn new(
         agent_manager: Arc<RigAgentManager>,
         executor_registry: Arc<ExecutorRegistry>,
-        event_handler: Arc<dyn AetherEventHandler>,
+        event_handler: Arc<dyn AlephEventHandler>,
     ) -> Self {
         let config = ExecutorConfig::default();
         let scheduler_config = SchedulerConfig {
@@ -1500,7 +1500,7 @@ impl UnifiedExecutor {
     pub fn with_config(
         agent_manager: Arc<RigAgentManager>,
         executor_registry: Arc<ExecutorRegistry>,
-        event_handler: Arc<dyn AetherEventHandler>,
+        event_handler: Arc<dyn AlephEventHandler>,
         config: ExecutorConfig,
     ) -> Self {
         let scheduler_config = SchedulerConfig {
@@ -1740,7 +1740,7 @@ mod tests {
     use crate::cowork::types::{AiTask, TaskType};
 
     // Note: Full tests require mock implementations of RigAgentManager,
-    // ExecutorRegistry, and AetherEventHandler. These would be added
+    // ExecutorRegistry, and AlephEventHandler. These would be added
     // in the integration testing phase.
 
     #[test]
@@ -2036,7 +2036,7 @@ git commit -m "refactor: remove NL command detection from command module
 
 ## Phase 5: UI Adaptation
 
-### Task 5.1: Update AetherEventHandler Callbacks
+### Task 5.1: Update AlephEventHandler Callbacks
 
 **Files:**
 - Modify: `core/src/uniffi_core.rs` or equivalent callback definition file
@@ -2045,7 +2045,7 @@ git commit -m "refactor: remove NL command detection from command module
 **Step 1: Add new callbacks**
 
 ```rust
-pub trait AetherEventHandler {
+pub trait AlephEventHandler {
     // Existing callbacks...
 
     // NEW: Plan created notification
@@ -2074,7 +2074,7 @@ Regenerate bindings after UDL changes.
 
 ```bash
 git add -A
-git commit -m "refactor(ffi): update AetherEventHandler callbacks
+git commit -m "refactor(ffi): update AlephEventHandler callbacks
 
 - Add on_plan_created, on_task_started, on_task_completed
 - Remove on_agent_mode_detected
@@ -2091,7 +2091,7 @@ git commit -m "refactor(ffi): update AetherEventHandler callbacks
 **Step 1: Implement new callbacks**
 
 ```swift
-extension AetherBridge: AetherEventHandler {
+extension AlephBridge: AlephEventHandler {
     func onPlanCreated(sessionId: String, steps: [String]) {
         DispatchQueue.main.async {
             // Update UI to show plan

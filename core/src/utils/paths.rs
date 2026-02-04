@@ -4,16 +4,16 @@
 //! Aether configuration and data directories.
 //!
 //! Cross-platform support:
-//! - All platforms: Uses ~/.aether/ (unified path)
+//! - All platforms: Uses ~/.aleph/ (unified path)
 //!
-//! Note: This was changed from ~/.config/aether/ to ~/.aether/ for better
+//! Note: This was changed from ~/.config/aleph/ to ~/.aleph/ for better
 //! Windows compatibility (avoids nested .config directory).
 //!
 //! Fallback for home directory:
 //! - Unix: Uses $HOME environment variable
 //! - Windows: Uses $USERPROFILE or $HOMEDRIVE+$HOMEPATH
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::path::PathBuf;
 
 /// Get the user's home directory in a cross-platform way
@@ -44,7 +44,7 @@ pub fn get_home_dir() -> Result<PathBuf> {
         return Ok(PathBuf::from(format!("{}{}", drive, path)));
     }
 
-    Err(AetherError::config(
+    Err(AlephError::config(
         "Failed to determine home directory. Set HOME or USERPROFILE environment variable.",
     ))
 }
@@ -52,18 +52,18 @@ pub fn get_home_dir() -> Result<PathBuf> {
 /// Get the Aether configuration directory in a cross-platform way
 ///
 /// Uses a unified path across all platforms for consistency:
-/// - All platforms: ~/.aether/
+/// - All platforms: ~/.aleph/
 ///
 /// This ensures that configuration, memory database, skills, and other
 /// data are stored in a consistent location regardless of the operating system.
 ///
 /// # Returns
-/// * `Result<PathBuf>` - Path to config directory (~/.aether/)
+/// * `Result<PathBuf>` - Path to config directory (~/.aleph/)
 ///
 /// # Errors
 /// Returns error if home directory cannot be determined
 pub fn get_config_dir() -> Result<PathBuf> {
-    // Use unified path ~/.aether/ across all platforms
+    // Use unified path ~/.aleph/ across all platforms
     let home_dir = get_home_dir()?;
     Ok(home_dir.join(".aether"))
 }
@@ -78,11 +78,11 @@ pub fn get_config_file_path() -> Result<PathBuf> {
 /// Get the cache directory in a cross-platform way
 ///
 /// Uses a unified path across all platforms for consistency:
-/// - All platforms: ~/.aether/cache/
+/// - All platforms: ~/.aleph/cache/
 ///
 /// This keeps all Aether data under the same root directory.
 pub fn get_cache_dir() -> Result<PathBuf> {
-    // Use unified path ~/.aether/cache/ across all platforms
+    // Use unified path ~/.aleph/cache/ across all platforms
     Ok(get_config_dir()?.join("cache"))
 }
 
@@ -103,7 +103,7 @@ pub fn get_embedding_model_dir() -> Result<PathBuf> {
 
     // Create directory if it doesn't exist
     std::fs::create_dir_all(&model_dir)
-        .map_err(|e| AetherError::config(format!("Failed to create model directory: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create model directory: {}", e)))?;
 
     Ok(model_dir)
 }
@@ -150,7 +150,7 @@ pub fn get_output_dir() -> Result<PathBuf> {
     // Create directory if it doesn't exist
     if !output_dir.exists() {
         std::fs::create_dir_all(&output_dir)
-            .map_err(|e| AetherError::config(format!("Failed to create output directory: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to create output directory: {}", e)))?;
     }
 
     Ok(output_dir)
@@ -213,7 +213,7 @@ pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
 ///    - `.claude/skills/` - Claude Code compatibility
 ///
 /// 2. **User level** (global):
-///    - `~/.aether/skills` - Aether native
+///    - `~/.aleph/skills` - Aether native
 ///    - `~/.claude/skills` - Claude Code compatibility
 ///
 /// # Arguments
@@ -285,10 +285,10 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     if let Ok(home) = get_home_dir() {
         info!(home = %home.display(), "Checking global directories");
 
-        // ~/.aether/skills
+        // ~/.aleph/skills
         let global_aether = home.join(".aether").join("skills");
         if global_aether.is_dir() && !dirs.contains(&global_aether) {
-            info!(path = %global_aether.display(), "Found global ~/.aether/skills");
+            info!(path = %global_aether.display(), "Found global ~/.aleph/skills");
             dirs.push(global_aether);
         }
 
@@ -327,7 +327,7 @@ pub fn get_tool_output_dir() -> Result<PathBuf> {
     // Create directory if it doesn't exist
     if !output_dir.exists() {
         std::fs::create_dir_all(&output_dir)
-            .map_err(|e| AetherError::config(format!("Failed to create tool output directory: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to create tool output directory: {}", e)))?;
     }
 
     Ok(output_dir)

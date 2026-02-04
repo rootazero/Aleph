@@ -2,7 +2,7 @@
 
 ## 概述
 
-Aether已从Legacy Callback架构迁移到Part-driven UI架构（Phases 1-5实施完成）。
+Aleph已从Legacy Callback架构迁移到Part-driven UI架构（Phases 1-5实施完成）。
 
 ## 架构对比
 

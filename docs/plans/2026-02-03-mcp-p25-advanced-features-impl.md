@@ -339,7 +339,7 @@ Update `handle_request` to inject context:
         requesting_server: &str,
     ) -> Result<SamplingResponse> {
         let mut request: SamplingRequest = serde_json::from_value(params).map_err(|e| {
-            AetherError::IoError(format!("Failed to parse sampling request: {}", e))
+            AlephError::IoError(format!("Failed to parse sampling request: {}", e))
         })?;
 
         // Inject context if requested
@@ -413,11 +413,11 @@ Add after the `finish_authorization` method:
             .form(&params)
             .send()
             .await
-            .map_err(|e| AetherError::IoError(format!("Token refresh failed: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Token refresh failed: {}", e)))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Token refresh failed: {}",
                 body
             )));
@@ -936,7 +936,7 @@ use std::time::Duration;
 use tokio::sync::{oneshot, RwLock};
 use tokio::time::timeout;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::mcp::{ApprovalDecision, ApprovalRequest, ApprovalResponse};
 
 /// Callback for presenting approval requests to the user
@@ -1053,7 +1053,7 @@ impl ApprovalHandler {
             let _ = approval.respond_to.send(response);
             Ok(())
         } else {
-            Err(AetherError::NotFound(format!(
+            Err(AlephError::NotFound(format!(
                 "No pending approval with ID: {}",
                 request_id
             )))

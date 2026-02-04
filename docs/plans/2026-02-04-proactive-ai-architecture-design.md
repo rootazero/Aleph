@@ -1,4 +1,4 @@
-# Proactive AI Architecture Design for Aether
+# Proactive AI Architecture Design for Aleph
 
 **Date:** 2026-02-04
 **Status:** Approved
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-This document presents the detailed design for evolving Aether from a reactive CLI tool into a proactive, autonomous AI assistant — a "JARVIS-like" system that runs in the background, perceives the user's environment, maintains context continuity, and autonomously initiates helpful actions without explicit commands.
+This document presents the detailed design for evolving Aleph from a reactive CLI tool into a proactive, autonomous AI assistant — a "JARVIS-like" system that runs in the background, perceives the user's environment, maintains context continuity, and autonomously initiates helpful actions without explicit commands.
 
 **Core Philosophy:** Transform AI from a "tool" into a "colleague" — one that not only responds to instructions but also senses, understands, and proactively serves.
 
@@ -62,7 +62,7 @@ This document presents the detailed design for evolving Aether from a reactive C
 
 ### 2.1 Objective
 
-Ensure Aether runs continuously as a system service and survives reboots.
+Ensure Aleph runs continuously as a system service and survives reboots.
 
 ### 2.2 Core Components
 
@@ -85,7 +85,7 @@ pub struct WindowsService;  // Windows (future)
 ### 2.3 macOS Implementation (LaunchdService)
 
 - **Plist Location:** `~/Library/LaunchAgents/com.aether.daemon.plist`
-- **Binary Path:** `~/.aether/bin/aether-daemon`
+- **Binary Path:** `~/.aleph/bin/aether-daemon`
 - **Launch Trigger:** User login (`RunAtLoad: true`)
 - **Crash Recovery:** `KeepAlive: true` ensures auto-restart
 - **Resource Limits:**
@@ -94,7 +94,7 @@ pub struct WindowsService;  // Windows (future)
 
 ### 2.4 IPC Channel
 
-Daemon listens on Unix Domain Socket: `~/.aether/daemon.sock`
+Daemon listens on Unix Domain Socket: `~/.aleph/daemon.sock`
 
 ```rust
 // JSON-RPC 2.0 Protocol
@@ -386,13 +386,13 @@ impl WorldModel {
     async fn persist(&self) -> Result<()> {
         let memory = self.memory.read().await;
         let json = serde_json::to_string_pretty(&*memory)?;
-        tokio::fs::write("~/.aether/world_state.json", json).await?;
+        tokio::fs::write("~/.aleph/world_state.json", json).await?;
         Ok(())
     }
 
     // Load on startup
     async fn restore() -> Result<CognitiveState> {
-        let json = tokio::fs::read_to_string("~/.aether/world_state.json").await?;
+        let json = tokio::fs::read_to_string("~/.aleph/world_state.json").await?;
         Ok(serde_json::from_str(&json)?)
     }
 }
@@ -506,7 +506,7 @@ impl Dispatcher {
                 let result = self.execute(action.clone()).await;
 
                 self.notification_service.send(Notification {
-                    title: "Aether completed a task",
+                    title: "Aleph completed a task",
                     body: action.description,
                     actions: vec![
                         NotificationAction::Undo(action.id),
@@ -517,7 +517,7 @@ impl Dispatcher {
 
             ExecutionStrategy::AskBefore => {
                 self.notification_service.send_interactive(Notification {
-                    title: "Aether needs your confirmation",
+                    title: "Aleph needs your confirmation",
                     body: format!("{}?", action.description),
                     actions: vec![
                         NotificationAction::Approve(action.id),
@@ -551,9 +551,9 @@ Implement "restart with memory" — not only restore state but also leverage sta
 
 ```rust
 // core/src/daemon/startup.rs
-impl AetherDaemon {
+impl AlephDaemon {
     pub async fn start() -> Result<Self> {
-        info!("🚀 Aether Daemon starting...");
+        info!("🚀 Aleph Daemon starting...");
 
         // Phase 1: Load Cognitive State
         let cognitive_state = match WorldModel::restore().await {
@@ -602,7 +602,7 @@ impl AetherDaemon {
         let reconciler = Reconciler::new(world_model.clone());
         reconciler.reconcile().await?;
 
-        info!("✨ Aether is now active");
+        info!("✨ Aleph is now active");
 
         Ok(Self { world_model, dispatcher, watchers, event_bus })
     }
@@ -657,7 +657,7 @@ impl Reconciler {
         };
 
         NotificationService::send_interactive(Notification {
-            title: "Aether - 准备好继续工作了吗？",
+            title: "Aleph - 准备好继续工作了吗？",
             body: message,
             actions: vec![
                 NotificationAction::Custom {
@@ -722,7 +722,7 @@ Phase 5: JARVIS Mode (整合)        [1-2 weeks]
 [ ] Test: Install and restart macOS, verify auto-start
 
 // Milestone 1.2: IPC Channel
-[ ] Create ~/.aether/daemon.sock
+[ ] Create ~/.aleph/daemon.sock
 [ ] Implement JSON-RPC 2.0 protocol
 [ ] CLI-Daemon communication test
 [ ] Error handling (friendly message when daemon not running)
@@ -738,7 +738,7 @@ Phase 5: JARVIS Mode (整合)        [1-2 weeks]
 
 ```yaml
 Functional Acceptance:
-  - [ ] Aether auto-starts on macOS login
+  - [ ] Aleph auto-starts on macOS login
   - [ ] Detects "Coding" activity within 30s of opening VS Code
   - [ ] Restores last UserContext after restart
   - [ ] Reconciliation sends "Ready to continue?" notification
@@ -809,7 +809,7 @@ plist = "1"                # Generate launchd plist
 
 ### 8.3 Qualitative Goals
 
-- User perception: "Aether knows what I'm doing"
+- User perception: "Aleph knows what I'm doing"
 - User behavior: Starts relying on proactive suggestions
 - User feedback: "It feels like having an assistant"
 
@@ -839,7 +839,7 @@ plist = "1"                # Generate launchd plist
 
 ## 10. Conclusion
 
-This design transforms Aether from a reactive tool into a proactive companion by:
+This design transforms Aleph from a reactive tool into a proactive companion by:
 
 1. **Layered Architecture** — Clear separation between sensing, understanding, and acting
 2. **Smart Tiering** — "Predict, not nag" through risk-based execution strategies

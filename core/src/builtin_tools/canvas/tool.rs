@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 use super::controller::{CanvasBackend, CanvasController};
 use super::types::{CanvasToolArgs, CanvasToolOutput};
@@ -58,7 +58,7 @@ impl CanvasTool {
 }
 
 #[async_trait]
-impl AetherTool for CanvasTool {
+impl AlephTool for CanvasTool {
     const NAME: &'static str = "canvas";
     const DESCRIPTION: &'static str = "Control a visual canvas for rendering content. \
         Actions: present (show canvas), hide, navigate (load URL), eval (run JavaScript), \

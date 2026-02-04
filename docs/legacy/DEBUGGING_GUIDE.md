@@ -1,6 +1,6 @@
 # Debugging Guide
 
-This guide covers debugging techniques for Aether across Rust core and Swift UI layers.
+This guide covers debugging techniques for Aleph across Rust core and Swift UI layers.
 
 ## Rust Core Debugging
 
@@ -29,7 +29,7 @@ RUST_LOG=trace cargo run
 Verify UniFFI bindings are generated correctly:
 
 ```bash
-cd Aether/core/
+cd Aleph/core/
 
 # Generate Swift bindings manually
 cargo run --bin uniffi-bindgen generate src/aether.udl --language swift
@@ -50,7 +50,7 @@ cargo run --bin uniffi-bindgen generate src/aether.udl --language swift 2>&1 | g
 ### Debugging Rust Tests
 
 ```bash
-cd Aether/core/
+cd Aleph/core/
 
 # Run tests with output
 cargo test -- --nocapture
@@ -136,7 +136,7 @@ func onStateChanged(state: ProcessingState) {
 
 **Breakpoint Debugging:**
 
-1. Open Xcode: `open Aether.xcodeproj`
+1. Open Xcode: `open Aleph.xcodeproj`
 2. Navigate to `EventHandler.swift` or target file
 3. Click line number to set breakpoint
 4. Run app with Cmd+R
@@ -203,20 +203,20 @@ Add `#Preview` macros to SwiftUI views for live preview:
 
 ```bash
 # Verify library is in Frameworks directory
-ls -lh Aether/Frameworks/libaethecore.dylib
+ls -lh Aleph/Frameworks/libalephcore.dylib
 
 # Check library dependencies
-otool -L Aether/Frameworks/libaethecore.dylib
+otool -L Aleph/Frameworks/libalephcore.dylib
 
 # Expected output should include:
-# @rpath/libaethecore.dylib
+# @rpath/libalephcore.dylib
 # /usr/lib/libSystem.B.dylib
 ```
 
 **Verify Xcode Build Settings:**
 
 1. Open Xcode project
-2. Select Aether target → Build Settings
+2. Select Aleph target → Build Settings
 3. Search for "Runpath Search Paths"
 4. Ensure `@executable_path/../Frameworks` is present
 
@@ -231,7 +231,7 @@ dyld: Symbol not found: _aether_core_new
 ```
 
 **Solution:**
-- Rebuild Rust library: `cd Aether/core && cargo build`
+- Rebuild Rust library: `cd Aleph/core && cargo build`
 - Regenerate UniFFI bindings: `cargo run --bin uniffi-bindgen generate src/aether.udl --language swift`
 - Clean Xcode build: Cmd+Shift+K, then rebuild
 
@@ -240,12 +240,12 @@ dyld: Symbol not found: _aether_core_new
 **Error: "Library not loaded"**
 
 ```
-dyld: Library not loaded: @rpath/libaethecore.dylib
+dyld: Library not loaded: @rpath/libalephcore.dylib
 Reason: image not found
 ```
 
 **Solution:**
-- Copy library to Frameworks: `cp Aether/core/target/debug/libaethecore.dylib Aether/Frameworks/`
+- Copy library to Frameworks: `cp Aleph/core/target/debug/libalephcore.dylib Aleph/Frameworks/`
 - Verify Runpath Search Paths in Xcode Build Settings
 - Regenerate Xcode project: `xcodegen generate`
 
@@ -300,10 +300,10 @@ print("Operation took: \(duration)s")
 
 ### Profiling with Instruments
 
-1. Build release binary: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build`
+1. Build release binary: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Release build`
 2. Open Instruments: `open /Applications/Xcode.app/Contents/Applications/Instruments.app`
 3. Select "Time Profiler" template
-4. Choose Aether.app as target
+4. Choose Aleph.app as target
 5. Record and trigger hotkey to capture profile
 
 **Look for:**
@@ -327,7 +327,7 @@ print("Operation took: \(duration)s")
 **Command Line:**
 
 ```bash
-# View Aether logs in real-time
+# View Aleph logs in real-time
 log stream --predicate 'process == "Aether"' --level debug
 
 # View crash logs
@@ -418,12 +418,12 @@ logger.error("Failed to initialize Rust core: \(error)")
 
 1. Check config file path:
    ```bash
-   cat ~/.aether/config.toml
+   cat ~/.aleph/config.toml
    ```
 
 2. Verify write permissions:
    ```bash
-   ls -l ~/.aether/
+   ls -l ~/.aleph/
    ```
 
 3. Add debug logging in config module:

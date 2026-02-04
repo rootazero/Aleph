@@ -19,7 +19,7 @@ Refactor the initialization module to consolidate all first-launch tasks into a 
 ## Directory Structure
 
 ```
-~/.aether/
+~/.aleph/
 ├── config.toml           # Main configuration
 ├── memory.db             # SQLite vector database
 ├── logs/                 # Log files
@@ -247,7 +247,7 @@ async fn rollback(&self, completed_steps: &[String]) -> Result<(), InitError> {
 ┌─────────────────────────────────────────┐
 │              [App Icon]                 │
 │                                         │
-│         正在初始化 Aether               │
+│         正在初始化 Aleph               │
 │                                         │
 │           安装运行时环境                │
 │         正在安装: FFmpeg                │

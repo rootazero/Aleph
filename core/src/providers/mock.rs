@@ -2,7 +2,7 @@
 ///
 /// This module provides a mock implementation of `AiProvider` for testing
 /// without requiring actual API calls or network connectivity.
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use std::future::Future;
 use std::pin::Pin;
@@ -20,20 +20,20 @@ pub enum MockError {
     InvalidConfig(String),
 }
 
-impl From<MockError> for AetherError {
+impl From<MockError> for AlephError {
     fn from(err: MockError) -> Self {
         match err {
-            MockError::Network(msg) => AetherError::network(msg),
-            MockError::Authentication(msg) => AetherError::authentication("Mock".to_string(), msg),
-            MockError::RateLimit(msg) => AetherError::rate_limit(msg),
-            MockError::Provider(msg) => AetherError::provider(msg),
-            MockError::Timeout => AetherError::Timeout {
+            MockError::Network(msg) => AlephError::network(msg),
+            MockError::Authentication(msg) => AlephError::authentication("Mock".to_string(), msg),
+            MockError::RateLimit(msg) => AlephError::rate_limit(msg),
+            MockError::Provider(msg) => AlephError::provider(msg),
+            MockError::Timeout => AlephError::Timeout {
                 suggestion: Some("Try again in a few moments".to_string()),
             },
-            MockError::NoProviderAvailable => AetherError::NoProviderAvailable {
+            MockError::NoProviderAvailable => AlephError::NoProviderAvailable {
                 suggestion: Some("Configure a provider".to_string()),
             },
-            MockError::InvalidConfig(msg) => AetherError::invalid_config(msg),
+            MockError::InvalidConfig(msg) => AlephError::invalid_config(msg),
         }
     }
 }
@@ -50,7 +50,7 @@ impl From<MockError> for AetherError {
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::providers::{MockProvider, MockError};
+/// use alephcore::providers::{MockProvider, MockError};
 /// use std::time::Duration;
 ///
 /// # tokio_test::block_on(async {
@@ -206,7 +206,7 @@ mod tests {
         let result = provider.process("input", None).await;
         assert!(result.is_err());
 
-        if let Err(AetherError::AuthenticationError { message, .. }) = result {
+        if let Err(AlephError::AuthenticationError { message, .. }) = result {
             assert_eq!(message, "invalid key");
         } else {
             panic!("Expected AuthenticationError");
@@ -218,7 +218,7 @@ mod tests {
         let provider = MockProvider::new("ignored").with_error(MockError::Timeout);
 
         let result = provider.process("input", None).await;
-        assert!(matches!(result, Err(AetherError::Timeout { .. })));
+        assert!(matches!(result, Err(AlephError::Timeout { .. })));
     }
 
     #[tokio::test]

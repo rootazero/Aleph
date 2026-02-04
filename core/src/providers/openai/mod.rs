@@ -18,11 +18,11 @@
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::config::ProviderConfig;
-/// use aethecore::providers::openai::OpenAiProvider;
-/// use aethecore::providers::AiProvider;
+/// use alephcore::config::ProviderConfig;
+/// use alephcore::providers::openai::OpenAiProvider;
+/// use alephcore::providers::AiProvider;
 ///
-/// # async fn example() -> aethecore::error::Result<()> {
+/// # async fn example() -> alephcore::error::Result<()> {
 /// let config = ProviderConfig {
 ///     api_key: Some("sk-...".to_string()),
 ///     model: "gpt-4o".to_string(),

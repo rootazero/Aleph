@@ -4,7 +4,7 @@ Date: 2026-01-20
 
 ## Overview
 
-This document outlines fixes for four issues identified in the Aether AI agent:
+This document outlines fixes for four issues identified in the Aleph AI agent:
 
 1. CPU 100% with slow output (Typewriter O(n²) problem)
 2. nanobanana drawing model not recognized

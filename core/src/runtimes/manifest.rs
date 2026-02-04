@@ -1,9 +1,9 @@
 //! Manifest for runtime metadata persistence
 //!
 //! Stores installation timestamps, versions, and update check times
-//! in `~/.aether/runtimes/manifest.json`.
+//! in `~/.aleph/runtimes/manifest.json`.
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -73,12 +73,12 @@ impl Manifest {
 
         if path.exists() {
             let content = std::fs::read_to_string(&path).map_err(|e| {
-                AetherError::runtime("manifest", format!("Failed to read manifest: {}", e))
+                AlephError::runtime("manifest", format!("Failed to read manifest: {}", e))
             })?;
 
             let mut manifest: Manifest = serde_json::from_str(&content).map_err(|e| {
                 warn!("Failed to parse manifest, creating new one: {}", e);
-                AetherError::runtime("manifest", format!("Failed to parse manifest: {}", e))
+                AlephError::runtime("manifest", format!("Failed to parse manifest: {}", e))
             })?;
 
             manifest.path = path;
@@ -110,7 +110,7 @@ impl Manifest {
         // Ensure parent directory exists
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                AetherError::runtime(
+                AlephError::runtime(
                     "manifest",
                     format!("Failed to create manifest directory: {}", e),
                 )
@@ -118,11 +118,11 @@ impl Manifest {
         }
 
         let content = serde_json::to_string_pretty(self).map_err(|e| {
-            AetherError::runtime("manifest", format!("Failed to serialize manifest: {}", e))
+            AlephError::runtime("manifest", format!("Failed to serialize manifest: {}", e))
         })?;
 
         std::fs::write(&self.path, content).map_err(|e| {
-            AetherError::runtime("manifest", format!("Failed to write manifest: {}", e))
+            AlephError::runtime("manifest", format!("Failed to write manifest: {}", e))
         })?;
 
         debug!("Saved manifest to {:?}", self.path);

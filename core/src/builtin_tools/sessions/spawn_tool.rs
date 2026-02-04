@@ -37,7 +37,7 @@ use tracing::{debug, info, warn};
 
 use crate::error::Result;
 use crate::gateway::context::GatewayContext;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 use super::super::notify_tool_start;
 
@@ -445,9 +445,9 @@ impl Default for SessionsSpawnTool {
     }
 }
 
-/// Implementation of AetherTool trait for SessionsSpawnTool
+/// Implementation of AlephTool trait for SessionsSpawnTool
 #[async_trait]
-impl AetherTool for SessionsSpawnTool {
+impl AlephTool for SessionsSpawnTool {
     const NAME: &'static str = "sessions_spawn";
     const DESCRIPTION: &'static str =
         "Spawn a sub-agent session to handle a delegated task asynchronously. \
@@ -730,7 +730,7 @@ mod tests {
             cleanup: CleanupPolicy::Ephemeral,
         };
 
-        let output = AetherTool::call(&tool, args).await.unwrap();
+        let output = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(output.status, SpawnStatus::Error);
         assert!(output.error.is_some());
         assert!(output

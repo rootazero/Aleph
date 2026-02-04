@@ -1,8 +1,8 @@
-# Aether Extension SDK V2 - P0.5 to P2 Implementation Plan
+# Aleph Extension SDK V2 - P0.5 to P2 Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement P0.5 (Direct Commands), P1 (Background Services), and P2 (Channels/Providers/HTTP Routes) for the Aether Extension SDK V2.
+**Goal:** Implement P0.5 (Direct Commands), P1 (Background Services), and P2 (Channels/Providers/HTTP Routes) for the Aleph Extension SDK V2.
 
 **Architecture:** Build on existing PluginRegistry and PluginLoader infrastructure. Direct commands integrate with CommandRegistry. Services add lifecycle management to PluginLoader. Channels/Providers/HTTP use trait adapters to bridge plugins to core systems.
 
@@ -292,7 +292,7 @@ handler = "handleClear"
 
 #[test]
 fn test_direct_command_result() {
-    use aethecore::extension::types::DirectCommandResult;
+    use alephcore::extension::types::DirectCommandResult;
 
     let success = DirectCommandResult::success("Done!");
     assert!(success.success);
@@ -840,7 +840,7 @@ stop_handler = "stopSync"
 
 #[test]
 fn test_service_state_serialization() {
-    use aethecore::extension::types::ServiceState;
+    use alephcore::extension::types::ServiceState;
 
     let running = ServiceState::Running;
     let json = serde_json::to_string(&running).unwrap();
@@ -1588,7 +1588,7 @@ handler = "handleItem"
 
 #[test]
 fn test_http_path_matching() {
-    use aethecore::extension::http_handler::match_path;
+    use alephcore::extension::http_handler::match_path;
 
     // Exact match
     assert!(match_path("/api/users", "/api/users").is_some());

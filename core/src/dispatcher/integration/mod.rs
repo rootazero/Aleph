@@ -22,7 +22,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::{DispatcherIntegration, DispatcherConfig};
+//! use alephcore::dispatcher::{DispatcherIntegration, DispatcherConfig};
 //!
 //! let dispatcher = DispatcherIntegration::new(config);
 //!

@@ -1,4 +1,4 @@
-# Aether Plugin System 2.0 Design
+# Aleph Plugin System 2.0 Design
 
 > Date: 2026-01-24
 > Status: Draft
@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document describes a complete rewrite of Aether's plugin system, inspired by OpenCode's implementation while maintaining Claude Code compatibility and leveraging Aether's unique architecture.
+This document describes a complete rewrite of Aleph's plugin system, inspired by OpenCode's implementation while maintaining Claude Code compatibility and leveraging Aleph's unique architecture.
 
 ## Goals
 
@@ -21,7 +21,7 @@ This document describes a complete rewrite of Aether's plugin system, inspired b
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Aether Plugin System 2.0                          │
+│                           Aleph Plugin System 2.0                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -70,9 +70,9 @@ This document describes a complete rewrite of Aether's plugin system, inspired b
 ```
 ~/.claude/skills/          ← Claude Code compatible (read-only)
 ~/.claude/commands/        ← Claude Code compatible (read-only)
-~/.aether/skills/          ← Aether native
-~/.aether/commands/        ← Aether native
-~/.aether/plugins/         ← Aether native
+~/.aleph/skills/          ← Aleph native
+~/.aleph/commands/        ← Aleph native
+~/.aleph/plugins/         ← Aleph native
 ```
 
 **Project-level (find_up to git root):**
@@ -81,10 +81,10 @@ This document describes a complete rewrite of Aether's plugin system, inspired b
 ./.claude/commands/        ← Claude Code compatible (read-only)
 ```
 
-### Write Paths (always use Aether native directory)
+### Write Paths (always use Aleph native directory)
 
 ```
-~/.aether/
+~/.aleph/
 ├── aether.jsonc         # Global configuration
 ├── plugins/             # Installed plugins
 ├── skills/              # User skills
@@ -96,7 +96,7 @@ This document describes a complete rewrite of Aether's plugin system, inspired b
 
 ### Configuration File Priority
 
-1. `~/.aether/aether.jsonc` (global)
+1. `~/.aleph/aether.jsonc` (global)
 2. `./aether.jsonc` (project-level, find_up)
 3. `AETHER_CONFIG_CONTENT` (environment variable, highest priority)
 
@@ -336,7 +336,7 @@ core/src/
 │   ├── mod.rs            # ConfigManager entry
 │   ├── loader.rs         # aether.jsonc parsing
 │   ├── merger.rs         # Multi-level config merging
-│   ├── types.rs          # AetherConfig, AgentConfig, etc
+│   ├── types.rs          # AlephConfig, AgentConfig, etc
 │   └── env.rs            # Environment variable handling
 │
 ├── discovery/            ← NEW: Component discovery system
@@ -378,7 +378,7 @@ core/src/
 ### Phase 1: Infrastructure (config/ + discovery/)
 
 **1.1 Create config/ module**
-- AetherConfig type definitions
+- AlephConfig type definitions
 - aether.jsonc parser
 - Multi-level config merging logic
 
@@ -443,19 +443,19 @@ core/src/
 
 ## Key Design Decisions
 
-1. **Read .claude/, Write ~/.aether/** - Respect Claude Code's directory while maintaining Aether's identity
+1. **Read .claude/, Write ~/.aleph/** - Respect Claude Code's directory while maintaining Aleph's identity
 
-2. **Node.js Runtime via fnm** - Leverage existing Aether infrastructure for JS plugin support
+2. **Node.js Runtime via fnm** - Leverage existing Aleph infrastructure for JS plugin support
 
 3. **JSON-RPC Bridge** - Standard protocol for Rust ↔ Node.js communication, similar to MCP
 
 4. **Backward Compatibility** - Existing plugins continue to work during migration
 
-5. **No Project-level Write** - All writes go to `~/.aether/` for simplicity
+5. **No Project-level Write** - All writes go to `~/.aleph/` for simplicity
 
 ## References
 
 - OpenCode Plugin Implementation: `/Users/zouguojun/Workspace/opencode`
 - OpenCode Plugin SDK: `@opencode-ai/plugin`
 - Claude Code Plugin Format: `.claude-plugin/plugin.json`
-- Aether Current Implementation: `core/src/plugins/`
+- Aleph Current Implementation: `core/src/plugins/`

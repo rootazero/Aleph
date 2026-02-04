@@ -1,10 +1,10 @@
 # Development Setup
 
-This document covers environment setup for Aether development.
+This document covers environment setup for Aleph development.
 
 ## Python Environment
 
-Aether uses `uv` for Python package management.
+Aleph uses `uv` for Python package management.
 
 ### macOS
 
@@ -39,7 +39,7 @@ cd C:\Users\zou\.uv\python3 && uv pip install <package>
 cd platforms/macos && xcodegen generate
 
 # Open project
-open Aether.xcodeproj
+open Aleph.xcodeproj
 ```
 
 ## Swift Syntax Validation
@@ -51,11 +51,11 @@ open Aether.xcodeproj
 
 ## Node.js Environment
 
-Aether uses `fnm` (Fast Node Manager) for Node.js version management.
+Aleph uses `fnm` (Fast Node Manager) for Node.js version management.
 
 ```bash
-# fnm is auto-installed by Aether's runtime manager
-# Node.js binaries are stored in ~/.aether/runtimes/fnm/
+# fnm is auto-installed by Aleph's runtime manager
+# Node.js binaries are stored in ~/.aleph/runtimes/fnm/
 ```
 
 ## Rust Toolchain
@@ -98,11 +98,11 @@ cd core && cargo build && cargo test
 
 ```bash
 # Ensure library is built first
-cargo build --release --features uniffi -p aethecore
+cargo build --release --features uniffi -p alephcore
 
 # Generate bindings
 cd core && cargo run --bin uniffi-bindgen generate \
-    --library ../target/release/libaethecore.dylib \
+    --library ../target/release/libalephcore.dylib \
     --language swift \
     --out-dir ../platforms/macos/Aether/Sources/Generated/
 ```

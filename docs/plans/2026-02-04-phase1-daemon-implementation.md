@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement the foundational infrastructure for Aether's proactive AI system: Daemon Manager, IPC Channel, and Resource Governor.
+**Goal:** Implement the foundational infrastructure for Aleph's proactive AI system: Daemon Manager, IPC Channel, and Resource Governor.
 
-**Architecture:** This phase creates the backbone that allows Aether to run as a persistent system service. The Daemon Manager provides cross-platform service management (starting with macOS launchd), the IPC Channel enables CLI-daemon communication via Unix Domain Socket with JSON-RPC 2.0 protocol, and the Resource Governor ensures frugal resource usage.
+**Architecture:** This phase creates the backbone that allows Aleph to run as a persistent system service. The Daemon Manager provides cross-platform service management (starting with macOS launchd), the IPC Channel enables CLI-daemon communication via Unix Domain Socket with JSON-RPC 2.0 protocol, and the Resource Governor ensures frugal resource usage.
 
 **Tech Stack:**
 - Rust + Tokio for async daemon
@@ -41,7 +41,7 @@ mod tests {
     fn test_daemon_module_exists() {
         // This test ensures the daemon module is properly declared
         let config = DaemonConfig::default();
-        assert_eq!(config.socket_path, "~/.aether/daemon.sock");
+        assert_eq!(config.socket_path, "~/.aleph/daemon.sock");
     }
 }
 ```
@@ -57,7 +57,7 @@ Expected: FAIL with "unresolved import" or "cannot find type `DaemonConfig`"
 // core/src/daemon/mod.rs
 //! Daemon Manager
 //!
-//! Manages Aether as a persistent system service across platforms.
+//! Manages Aleph as a persistent system service across platforms.
 
 pub mod error;
 pub mod types;
@@ -104,9 +104,9 @@ pub struct DaemonConfig {
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
-            socket_path: "~/.aether/daemon.sock".to_string(),
-            binary_path: PathBuf::from("~/.aether/bin/aether-daemon"),
-            log_dir: PathBuf::from("~/.aether/logs"),
+            socket_path: "~/.aleph/daemon.sock".to_string(),
+            binary_path: PathBuf::from("~/.aleph/bin/aether-daemon"),
+            log_dir: PathBuf::from("~/.aleph/logs"),
             nice_value: 10,
             soft_mem_limit: 512 * 1024 * 1024,  // 512MB
             hard_mem_limit: 1024 * 1024 * 1024, // 1GB
@@ -1222,7 +1222,7 @@ use tracing::{error, info};
 
 #[derive(Debug, Parser)]
 #[command(name = "daemon")]
-#[command(about = "Manage Aether daemon service")]
+#[command(about = "Manage Aleph daemon service")]
 pub struct DaemonCli {
     #[command(subcommand)]
     pub command: DaemonCommand,
@@ -1262,7 +1262,7 @@ impl DaemonCli {
     }
 
     async fn install(&self) -> Result<()> {
-        info!("Installing Aether daemon service...");
+        info!("Installing Aleph daemon service...");
 
         let service = create_service_manager()?;
         let config = DaemonConfig::default();
@@ -1276,7 +1276,7 @@ impl DaemonCli {
     }
 
     async fn uninstall(&self) -> Result<()> {
-        info!("Uninstalling Aether daemon service...");
+        info!("Uninstalling Aleph daemon service...");
 
         let service = create_service_manager()?;
         service.uninstall().await?;
@@ -1287,7 +1287,7 @@ impl DaemonCli {
     }
 
     async fn start(&self) -> Result<()> {
-        info!("Starting Aether daemon service...");
+        info!("Starting Aleph daemon service...");
 
         let service = create_service_manager()?;
         service.start().await?;
@@ -1298,7 +1298,7 @@ impl DaemonCli {
     }
 
     async fn stop(&self) -> Result<()> {
-        info!("Stopping Aether daemon service...");
+        info!("Stopping Aleph daemon service...");
 
         let service = create_service_manager()?;
         service.stop().await?;
@@ -1314,7 +1314,7 @@ impl DaemonCli {
         let service_status = service.service_status().await?;
         let daemon_status = service.status().await?;
 
-        info!("Aether Daemon Status:");
+        info!("Aleph Daemon Status:");
         info!("  Service: {:?}", service_status);
         info!("  Daemon:  {:?}", daemon_status);
 
@@ -1324,7 +1324,7 @@ impl DaemonCli {
     async fn run(&self) -> Result<()> {
         use crate::daemon::ipc::IpcServer;
 
-        info!("Starting Aether daemon in foreground mode...");
+        info!("Starting Aleph daemon in foreground mode...");
         info!("Press Ctrl+C to stop");
 
         let config = DaemonConfig::default();
@@ -1462,7 +1462,7 @@ git commit -m "daemon: add full lifecycle integration test"
 ```markdown
 # Daemon Module
 
-The Daemon module provides system service management for Aether, enabling it to run persistently in the background.
+The Daemon module provides system service management for Aleph, enabling it to run persistently in the background.
 
 ## Architecture
 
@@ -1507,7 +1507,7 @@ Monitors system resources and throttles operations:
 
 JSON-RPC 2.0 server over Unix Domain Socket:
 
-- Socket path: `~/.aether/daemon.sock`
+- Socket path: `~/.aleph/daemon.sock`
 - Methods:
   - `daemon.status` - Get daemon status
   - `daemon.ping` - Health check
@@ -1540,7 +1540,7 @@ aether daemon run
 ### Programmatic Usage
 
 ```rust
-use aethecore::daemon::*;
+use alephcore::daemon::*;
 
 // Create service manager
 let service = create_service_manager()?;
@@ -1563,9 +1563,9 @@ Default configuration:
 
 ```rust
 DaemonConfig {
-    socket_path: "~/.aether/daemon.sock",
-    binary_path: "~/.aether/bin/aether-daemon",
-    log_dir: "~/.aether/logs",
+    socket_path: "~/.aleph/daemon.sock",
+    binary_path: "~/.aleph/bin/aether-daemon",
+    log_dir: "~/.aleph/logs",
     nice_value: 10,
     soft_mem_limit: 512 * 1024 * 1024,  // 512MB
     hard_mem_limit: 1024 * 1024 * 1024, // 1GB

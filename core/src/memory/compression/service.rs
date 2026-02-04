@@ -10,7 +10,7 @@ use super::conflict::{ConflictConfig, ConflictDetector};
 use super::extractor::FactExtractor;
 use super::scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
 use super::signal_detector::{CompressionPriority, SignalDetector};
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{CompressionResult, CompressionSession};
 use crate::memory::database::VectorDatabase;
 use crate::memory::graph::GraphStore;
@@ -91,7 +91,7 @@ impl CompressionService {
     }
 
     /// Execute a compression operation
-    pub async fn compress(&self) -> Result<CompressionResult, AetherError> {
+    pub async fn compress(&self) -> Result<CompressionResult, AlephError> {
         let start = Instant::now();
 
         // 1. Get last compression timestamp
@@ -219,7 +219,7 @@ impl CompressionService {
     }
 
     /// Check if compression should be triggered and execute if needed
-    pub async fn check_and_compress(&self) -> Result<Option<CompressionResult>, AetherError> {
+    pub async fn check_and_compress(&self) -> Result<Option<CompressionResult>, AlephError> {
         let trigger = self.scheduler.should_trigger_compression();
 
         match trigger {
@@ -245,7 +245,7 @@ impl CompressionService {
     pub async fn check_and_compress_with_signal(
         &self,
         user_message: &str,
-    ) -> Result<Option<CompressionResult>, AetherError> {
+    ) -> Result<Option<CompressionResult>, AlephError> {
         // Detect signals in message
         let detection = self.signal_detector.detect(user_message);
 

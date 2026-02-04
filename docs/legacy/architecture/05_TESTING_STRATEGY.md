@@ -586,7 +586,7 @@ mod tests {
 **文件**: `Aether/core/tests/integration_simple.rs`
 
 ```rust
-use aethecore::*;
+use alephcore::*;
 
 #[tokio::test]
 async fn test_simple_translation_no_capabilities() {
@@ -596,7 +596,7 @@ async fn test_simple_translation_no_capabilities() {
     config.save_to_file(temp_dir.join("config.toml")).unwrap();
 
     let handler = create_mock_handler();
-    let core = AetherCore::new(handler).unwrap();
+    let core = AlephCore::new(handler).unwrap();
 
     // 2. 执行请求
     let context = CapturedContext {
@@ -643,7 +643,7 @@ async fn test_backward_compatibility_old_config() {
     std::fs::write(temp_dir.join("config.toml"), old_config).unwrap();
 
     let handler = create_mock_handler();
-    let core = AetherCore::new(handler).unwrap();
+    let core = AlephCore::new(handler).unwrap();
 
     // 应该能正常工作
     let context = CapturedContext {
@@ -669,7 +669,7 @@ async fn test_research_with_memory_context() {
     config.save_to_file(temp_dir.join("config.toml")).unwrap();
 
     let handler = create_mock_handler();
-    let core = AetherCore::new(handler).unwrap();
+    let core = AlephCore::new(handler).unwrap();
 
     // 2. 预先插入一些记忆
     let context = CapturedContext {
@@ -715,7 +715,7 @@ async fn test_memory_capability_empty_results() {
     config.save_to_file(temp_dir.join("config.toml")).unwrap();
 
     let handler = create_mock_handler();
-    let core = AetherCore::new(handler).unwrap();
+    let core = AlephCore::new(handler).unwrap();
 
     // 不插入任何记忆
 
@@ -782,7 +782,7 @@ async fn test_memory_capability_empty_results() {
 
 ## 六、Mock 和测试工具
 
-### 6.1 Mock AetherEventHandler
+### 6.1 Mock AlephEventHandler
 
 ```rust
 #[cfg(test)]
@@ -808,7 +808,7 @@ impl MockEventHandler {
     }
 }
 
-impl AetherEventHandler for MockEventHandler {
+impl AlephEventHandler for MockEventHandler {
     fn on_state_changed(&self, state: ProcessingState) {
         self.states.lock().unwrap().push(state);
     }
@@ -919,7 +919,7 @@ pub mod test_helpers {
 cargo install cargo-tarpaulin
 
 # 生成覆盖率报告
-cargo tarpaulin --package aethecore --out Html --output-dir coverage
+cargo tarpaulin --package alephcore --out Html --output-dir coverage
 ```
 
 **目标**:
@@ -951,26 +951,26 @@ cargo test capability::
 cargo test assembler::
 
 # 3. 所有测试
-cargo test --package aethecore
+cargo test --package alephcore
 ```
 
 ### 8.2 提交前测试
 
 ```bash
 # 1. 完整测试套件
-cargo test --package aethecore --all-features
+cargo test --package alephcore --all-features
 
 # 2. Clippy 检查
-cargo clippy --package aethecore -- -D warnings
+cargo clippy --package alephcore -- -D warnings
 
 # 3. 格式检查
 cargo fmt --check
 
 # 4. 文档测试
-cargo test --doc --package aethecore
+cargo test --doc --package alephcore
 
 # 5. 覆盖率检查
-cargo tarpaulin --package aethecore
+cargo tarpaulin --package alephcore
 ```
 
 ### 8.3 CI/CD 测试
@@ -989,9 +989,9 @@ jobs:
         with:
           toolchain: stable
       - name: Run tests
-        run: cargo test --package aethecore --all-features
+        run: cargo test --package alephcore --all-features
       - name: Run clippy
-        run: cargo clippy --package aethecore -- -D warnings
+        run: cargo clippy --package alephcore -- -D warnings
       - name: Check formatting
         run: cargo fmt --check
 ```

@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Extend Aether Skills system with dependency declarations, health checking, and CLI Wrapper execution.
+**Goal:** Extend Aleph Skills system with dependency declarations, health checking, and CLI Wrapper execution.
 
 **Architecture:** Add new types to skills module (types.rs, health.rs, cli_wrapper.rs), extend SkillFrontmatter with optional fields, integrate health checking into registry, and create CLI Wrapper executor that leverages existing exec security system.
 

@@ -1,4 +1,4 @@
-# Aether 架构重构设计方案
+# Aleph 架构重构设计方案
 
 > **日期**: 2026-01-16
 > **状态**: 待审批
@@ -9,7 +9,7 @@
 
 ## 概述
 
-本文档基于对 Aether 项目的系统性架构审查，提出了 6 项改进方案。项目经过多次迭代、功能添加和代码重组后，存在以下核心问题：
+本文档基于对 Aleph 项目的系统性架构审查，提出了 6 项改进方案。项目经过多次迭代、功能添加和代码重组后，存在以下核心问题：
 
 - **uniffi_core.rs** 成为"上帝模块"（1000+ 行，8 种职责）
 - **工具系统**分散在 3 个模块，扩展困难
@@ -332,7 +332,7 @@ src/
 ### 目标结构
 
 ```
-Aether/Sources/
+Aleph/Sources/
 ├── AppDelegate.swift        (~200 行, 仅生命周期)
 ├── AppServices/
 │   ├── MenuBarService.swift
@@ -441,8 +441,8 @@ L3: 全局默认 Provider
 
 **验证**:
 ```bash
-cd Aether/core && cargo build
-xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether build
+cd Aleph/core && cargo build
+xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph build
 ```
 
 ### Phase 2: 工具系统统一 (P2)
@@ -483,7 +483,7 @@ cargo test memory
 
 **验证**:
 ```bash
-xcodebuild -project Aether.xcodeproj -scheme Aether build
+xcodebuild -project Aleph.xcodeproj -scheme Aleph build
 # 手动测试应用启动和热键功能
 ```
 
@@ -572,7 +572,7 @@ dispatcher         ●●      ●●        -         -         -       ●● 
 | AI Provider | providers/ | 实现 AiProvider trait | 简单 |
 | 搜索引擎 | search/providers/ | 实现 SearchProvider | 简单 |
 | MCP Server | config.toml | 配置 [mcp.servers.x] | 简单 |
-| Skills | ~/.aether/skills | 创建 SKILL.md | 简单 |
+| Skills | ~/.aleph/skills | 创建 SKILL.md | 简单 |
 | Cowork Executor | cowork/executor/ | 实现 TaskExecutor | 中等 |
 | Capability | capability/strategies/ | 实现 CapabilityStrategy | 中等 |
 | 新工具类型 | tools/ + dispatcher/ | 修改多处 | 困难 |

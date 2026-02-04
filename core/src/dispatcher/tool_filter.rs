@@ -22,8 +22,8 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::{ToolFilter, ToolFilterConfig};
-//! use aethecore::intent::types::TaskCategory;
+//! use alephcore::dispatcher::{ToolFilter, ToolFilterConfig};
+//! use alephcore::intent::types::TaskCategory;
 //!
 //! let filter = ToolFilter::new(ToolFilterConfig::default());
 //! let relevant_tools = filter.filter_by_category(&all_tools, TaskCategory::WebSearch);

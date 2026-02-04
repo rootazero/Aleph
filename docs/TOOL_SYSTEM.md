@@ -1,12 +1,12 @@
 # Tool System
 
-> AetherTool trait, built-in tools, and tool development guide
+> AlephTool trait, built-in tools, and tool development guide
 
 ---
 
 ## Overview
 
-Aether's tool system provides:
+Aleph's tool system provides:
 - Type-safe tool definitions with automatic schema generation
 - Built-in tools for common operations
 - MCP (Model Context Protocol) integration
@@ -16,12 +16,12 @@ Aether's tool system provides:
 
 ---
 
-## AetherTool Trait
+## AlephTool Trait
 
 ### Static Dispatch (Compile-time)
 
 ```rust
-pub trait AetherTool: Clone + Send + Sync + 'static {
+pub trait AlephTool: Clone + Send + Sync + 'static {
     /// Tool name (used in LLM tool_use)
     const NAME: &'static str;
 
@@ -58,14 +58,14 @@ pub trait AetherTool: Clone + Send + Sync + 'static {
 ### Dynamic Dispatch (Runtime)
 
 ```rust
-pub trait AetherToolDyn: Send + Sync {
+pub trait AlephToolDyn: Send + Sync {
     fn name(&self) -> &str;
     fn definition(&self) -> ToolDefinition;
     fn call(&self, args: Value) -> BoxFuture<'_, Result<Value>>;
 }
 
-// Blanket impl: Any AetherTool is also AetherToolDyn
-impl<T: AetherTool> AetherToolDyn for T { ... }
+// Blanket impl: Any AlephTool is also AlephToolDyn
+impl<T: AlephTool> AlephToolDyn for T { ... }
 ```
 
 ---
@@ -178,7 +178,7 @@ The Tool Server manages tool execution:
 
 ```rust
 pub struct ToolServer {
-    builtin_tools: HashMap<String, Arc<dyn AetherToolDyn>>,
+    builtin_tools: HashMap<String, Arc<dyn AlephToolDyn>>,
     mcp_clients: HashMap<String, McpClient>,
     extension_tools: HashMap<String, ExtensionTool>,
 }
@@ -270,14 +270,14 @@ pub struct MyToolArgs {
 ### Step 2: Implement Tool
 
 ```rust
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 #[derive(Clone)]
 pub struct MyTool {
     // Any shared state
 }
 
-impl AetherTool for MyTool {
+impl AlephTool for MyTool {
     const NAME: &'static str = "my_tool";
     const DESCRIPTION: &'static str = "Does something useful";
 

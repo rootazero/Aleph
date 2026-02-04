@@ -6,7 +6,7 @@
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::generation::{
+/// use alephcore::generation::{
 ///     GenerationProviderRegistry, GenerationType, MockGenerationProvider,
 /// };
 /// use std::sync::Arc;
@@ -50,7 +50,7 @@ impl GenerationProviderRegistry {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::GenerationProviderRegistry;
+    /// use alephcore::generation::GenerationProviderRegistry;
     ///
     /// let registry = GenerationProviderRegistry::new();
     /// assert!(registry.is_empty());
@@ -76,7 +76,7 @@ impl GenerationProviderRegistry {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{GenerationProviderRegistry, MockGenerationProvider};
+    /// use alephcore::generation::{GenerationProviderRegistry, MockGenerationProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = GenerationProviderRegistry::new();
@@ -118,7 +118,7 @@ impl GenerationProviderRegistry {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{GenerationProviderRegistry, MockGenerationProvider};
+    /// use alephcore::generation::{GenerationProviderRegistry, MockGenerationProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = GenerationProviderRegistry::new();
@@ -153,7 +153,7 @@ impl GenerationProviderRegistry {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{GenerationProviderRegistry, MockGenerationProvider};
+    /// use alephcore::generation::{GenerationProviderRegistry, MockGenerationProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = GenerationProviderRegistry::new();
@@ -182,7 +182,7 @@ impl GenerationProviderRegistry {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{GenerationProviderRegistry, MockGenerationProvider};
+    /// use alephcore::generation::{GenerationProviderRegistry, MockGenerationProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = GenerationProviderRegistry::new();
@@ -234,7 +234,7 @@ impl GenerationProviderRegistry {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{
+    /// use alephcore::generation::{
     ///     GenerationProviderRegistry, GenerationType, MockGenerationProvider,
     /// };
     /// use std::sync::Arc;
@@ -266,7 +266,7 @@ impl GenerationProviderRegistry {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{
+    /// use alephcore::generation::{
     ///     GenerationProviderRegistry, GenerationType, MockGenerationProvider,
     /// };
     /// use std::sync::Arc;
@@ -302,7 +302,7 @@ impl GenerationProviderRegistry {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{GenerationProviderRegistry, MockGenerationProvider};
+    /// use alephcore::generation::{GenerationProviderRegistry, MockGenerationProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = GenerationProviderRegistry::new();
@@ -324,7 +324,7 @@ impl GenerationProviderRegistry {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{GenerationProviderRegistry, MockGenerationProvider};
+    /// use alephcore::generation::{GenerationProviderRegistry, MockGenerationProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = GenerationProviderRegistry::new();

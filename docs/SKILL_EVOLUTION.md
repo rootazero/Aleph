@@ -25,7 +25,7 @@ The Skill Evolution System (also known as the Skill Compiler) automatically dete
 Logs skill executions and maintains metrics in SQLite:
 
 ```rust
-let tracker = EvolutionTracker::new("~/.aether/evolution.db")?;
+let tracker = EvolutionTracker::new("~/.aleph/evolution.db")?;
 
 // Log an execution
 let exec = SkillExecution::success(
@@ -151,7 +151,7 @@ if report.passed {
 
 Generated tool package:
 ```
-~/.aether/tools/compiled/<tool-name>/
+~/.aleph/tools/compiled/<tool-name>/
 ├── tool_definition.json    # Tool metadata and schema
 ├── entrypoint.py           # Main execution script
 ├── requirements.txt        # Python dependencies

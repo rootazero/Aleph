@@ -1,4 +1,4 @@
-# Moltbot-Inspired Architecture Redesign for Aether
+# Moltbot-Inspired Architecture Redesign for Aleph
 
 **Date:** 2026-01-28
 **Status:** Design Phase
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-This document outlines a comprehensive architectural redesign of Aether, inspired by [moltbot](https://github.com/moltbot/moltbot)'s proven design patterns. The redesign addresses four critical pain points:
+This document outlines a comprehensive architectural redesign of Aleph, inspired by [moltbot](https://github.com/moltbot/moltbot)'s proven design patterns. The redesign addresses four critical pain points:
 
 1. **Single Agent Bottleneck** - No multi-agent parallelization or specialization
 2. **Dispatcher Complexity** - 16 tightly-coupled sub-modules difficult to maintain
@@ -89,10 +89,10 @@ This document outlines a comprehensive architectural redesign of Aether, inspire
 
 Moltbot addresses these exact challenges through:
 
-| Challenge | Moltbot Solution | Aether Adoption |
+| Challenge | Moltbot Solution | Aleph Adoption |
 |-----------|------------------|-----------------|
 | Communication | WebSocket Gateway control plane | ✅ Direct port |
-| Multi-Agent | Workspace isolation + routing bindings | ✅ Adapt to Aether's needs |
+| Multi-Agent | Workspace isolation + routing bindings | ✅ Adapt to Aleph's needs |
 | Session Management | Hierarchical SessionKey (Main/PerPeer/Task) | ✅ Extend current model |
 | Streaming | Block streaming + tool streaming | ✅ Essential for UX |
 | Architecture | Flat (Gateway → Agent → Tools) | ✅ Simplify Dispatcher |
@@ -158,7 +158,7 @@ Moltbot addresses these exact challenges through:
   "id": "uuid-123",
   "method": "agent.run",
   "params": {
-    "input": "Hello, Aether",
+    "input": "Hello, Aleph",
     "session_key": "agent:main:main"
   }
 }
@@ -200,7 +200,7 @@ Moltbot addresses these exact challenges through:
 
 **Agent Instance Isolation:**
 ```
-~/.aether/
+~/.aleph/
 ├── agents/
 │   ├── main/
 │   │   ├── workspace/          # Independent working directory
@@ -217,7 +217,7 @@ Moltbot addresses these exact challenges through:
 
 **Configuration Example:**
 ```toml
-# ~/.aether/config.toml
+# ~/.aleph/config.toml
 
 [agents.main]
 workspace = "~/aether-main"
@@ -504,7 +504,7 @@ if buffer_size > max_buffer {
 ```bash
 $ aether doctor
 
-🔍 Aether Diagnostics
+🔍 Aleph Diagnostics
 
 ✓ Gateway process: Running
 ✓ WebSocket connection: OK
@@ -631,7 +631,7 @@ core/src/dispatcher/       // REMOVE or deprecate
 // - SessionManager (session resolution)
 // - ExecutionEngine (execution orchestration)
 
-~/.aether/config.toml      // Multi-agent configuration support
+~/.aleph/config.toml      // Multi-agent configuration support
 ```
 
 **Configuration Example:**
@@ -832,7 +832,7 @@ impl AgentInstance {
 
 ### Key Learnings from Moltbot
 
-| Aspect | Moltbot Approach | Aether Adaptation |
+| Aspect | Moltbot Approach | Aleph Adaptation |
 |--------|------------------|-------------------|
 | **Control Plane** | Single Gateway WebSocket | Direct port |
 | **Local-First** | 127.0.0.1 bind, optional Tailscale | Same |

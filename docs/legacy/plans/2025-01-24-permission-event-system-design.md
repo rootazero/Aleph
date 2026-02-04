@@ -8,7 +8,7 @@
 
 ## Overview
 
-This document describes the design for a unified permission system and event bus architecture for Aether, inspired by OpenCode's implementation but adapted to Aether's Rust + Swift architecture.
+This document describes the design for a unified permission system and event bus architecture for Aleph, inspired by OpenCode's implementation but adapted to Aleph's Rust + Swift architecture.
 
 ## Goals
 
@@ -437,7 +437,7 @@ AgentLoop
 
 ## Appendix: OpenCode Alignment
 
-| OpenCode Feature | Aether Implementation |
+| OpenCode Feature | Aleph Implementation |
 |------------------|----------------------|
 | `PermissionNext.ask()` | `PermissionManager::ask()` |
 | `PermissionNext.reply()` | `PermissionManager::reply()` |

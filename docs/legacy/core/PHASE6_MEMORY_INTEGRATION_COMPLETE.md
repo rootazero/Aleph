@@ -270,7 +270,7 @@ let response = core.process_with_ai(
 
 ## 后续阶段
 
-### Phase 7: AetherCore Integration (下一步)
+### Phase 7: AlephCore Integration (下一步)
 
 - 扩展 UniFFI 接口暴露 AI 功能
 - 添加 AI 处理状态回调

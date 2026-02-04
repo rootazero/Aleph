@@ -108,7 +108,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            workspace: "~/.aether/agents/main/workspace".to_string(),
+            workspace: "~/.aleph/agents/main/workspace".to_string(),
             model: "claude-sonnet-4-5".to_string(),
             fallback_models: vec![],
             max_loops: 20,
@@ -333,7 +333,7 @@ impl GatewayConfig {
         Ok(config)
     }
 
-    /// Load from default location (~/.aether/config.toml)
+    /// Load from default location (~/.aleph/config.toml)
     pub fn load_default() -> Result<Self, ConfigError> {
         let config_path = dirs::home_dir()
             .ok_or_else(|| ConfigError::LoadFailed("No home directory".to_string()))?

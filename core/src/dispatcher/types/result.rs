@@ -76,8 +76,8 @@ impl ToolResult {
     }
 }
 
-impl From<crate::error::AetherError> for ToolResult {
-    fn from(err: crate::error::AetherError) -> Self {
+impl From<crate::error::AlephError> for ToolResult {
+    fn from(err: crate::error::AlephError) -> Self {
         ToolResult::error(err.to_string())
     }
 }

@@ -1,6 +1,6 @@
 //! Caption fetching logic including yt-dlp fallback
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::runtimes::RuntimeRegistry;
 use std::path::PathBuf;
 use tracing::debug;
@@ -58,14 +58,14 @@ pub async fn fetch_caption_via_ytdlp(video_id: &str, preferred_lang: &str) -> Re
             &url,
         ])
         .output()
-        .map_err(|e| AetherError::video(format!("Failed to run yt-dlp: {}", e)))?;
+        .map_err(|e| AlephError::video(format!("Failed to run yt-dlp: {}", e)))?;
 
     // Note: yt-dlp may exit successfully even if no subtitles found (just logs a warning)
     // So we need to check for actual subtitle files instead of just exit status
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         debug!(stderr = %stderr, "yt-dlp failed");
-        return Err(AetherError::video_with_suggestion(
+        return Err(AlephError::video_with_suggestion(
             "yt-dlp failed to download subtitles",
             "The video may not have captions available, or there may be network issues.",
         ));
@@ -111,7 +111,7 @@ pub async fn fetch_caption_via_ytdlp(video_id: &str, preferred_lang: &str) -> Re
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         debug!(stdout = %stdout, stderr = %stderr, "No subtitle files found after yt-dlp");
-        AetherError::video_with_suggestion(
+        AlephError::video_with_suggestion(
             "No subtitles available for this video",
             "The video may not have captions (auto-generated or manual) in any supported language.",
         )
@@ -121,7 +121,7 @@ pub async fn fetch_caption_via_ytdlp(video_id: &str, preferred_lang: &str) -> Re
 
     // Read and convert VTT to our format
     let vtt_content = fs::read_to_string(&subtitle_path)
-        .map_err(|e| AetherError::video(format!("Failed to read subtitle file: {}", e)))?;
+        .map_err(|e| AlephError::video(format!("Failed to read subtitle file: {}", e)))?;
 
     // Clean up temp file
     let _ = fs::remove_file(&subtitle_path);

@@ -31,8 +31,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
-//! use aethecore::generation::providers::ElevenLabsProvider;
+//! use alephcore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
+//! use alephcore::generation::providers::ElevenLabsProvider;
 //!
 //! let provider = ElevenLabsProvider::new("xi-...", None, None, None)?;
 //!
@@ -115,8 +115,8 @@ pub const OUTPUT_FORMATS: &[&str] = &[
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::providers::ElevenLabsProvider;
-/// use aethecore::generation::GenerationProvider;
+/// use alephcore::generation::providers::ElevenLabsProvider;
+/// use alephcore::generation::GenerationProvider;
 ///
 /// let provider = ElevenLabsProvider::new(
 ///     "xi-your-api-key",
@@ -159,7 +159,7 @@ impl ElevenLabsProvider {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::providers::ElevenLabsProvider;
+    /// use alephcore::generation::providers::ElevenLabsProvider;
     ///
     /// // Default configuration
     /// let provider = ElevenLabsProvider::new("xi-xxx", None, None, None).unwrap();

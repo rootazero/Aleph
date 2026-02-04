@@ -53,7 +53,7 @@ Core Initialized: true
 **Fix**: Added early return checks for `isPermissionGateActive` and `core != nil` with single `NSSound.beep()`
 
 ### 3. Rust Core Rebuild ✅
-**Issue**: Old `libaethecore.dylib` had compilation errors with test code
+**Issue**: Old `libalephcore.dylib` had compilation errors with test code
 **Action**:
 - `cargo clean` to remove stale artifacts
 - `cargo build --release` to rebuild fresh library
@@ -96,7 +96,7 @@ The debug alert runs on `DispatchQueue.main.async`, while the checks run synchro
 5. Set breakpoint at line 623: `KeyboardSimulator.shared.simulateCopy()`
 
 ### Step 2: Run and Test
-1. Run Aether via Xcode (Cmd+R)
+1. Run Aleph via Xcode (Cmd+R)
 2. Wait for app to launch
 3. Open Notes.app and enter text
 4. Press `` ` `` key
@@ -115,7 +115,7 @@ Check Xcode console for print statements:
 ## Expected Console Log (If Working)
 
 ```
-[GlobalHotkeyMonitor] Detected ` key press - triggering Aether
+[GlobalHotkeyMonitor] Detected ` key press - triggering Aleph
 [AppDelegate] Hotkey pressed - handling in Swift layer
 [AppDelegate] 💾 Saved original clipboard state (changeCount: XX)
 [AppDelegate] Simulating Cmd+C to copy selected text...
@@ -138,7 +138,7 @@ Check Xcode console for print statements:
    - Rebuilt from clean state
    - No code changes, just fresh build
 
-3. **`Aether/Frameworks/libaethecore.dylib`**:
+3. **`Aether/Frameworks/libalephcore.dylib`**:
    - Updated to freshly built version (9.5MB)
 
 ## Build Cache Status
@@ -156,7 +156,7 @@ The codebase is now clean and ready for Xcode debugging:
 4. Ready for breakpoint debugging
 
 **User should**:
-1. Open `Aether.xcodeproj` in Xcode
+1. Open `Aleph.xcodeproj` in Xcode
 2. Set breakpoints as described above
 3. Run with Cmd+R
 4. Test hotkey and observe behavior

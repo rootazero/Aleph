@@ -2,7 +2,7 @@
 //!
 //! Wraps external MCP server tools for dynamic registration.
 //!
-//! This allows MCP tools to be added to the AetherToolServerHandle at runtime (hot-reload).
+//! This allows MCP tools to be added to the AlephToolServerHandle at runtime (hot-reload).
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use futures::Future;
 use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
 use crate::mcp::{McpClient, McpTool};
-use crate::tools::AetherToolDyn;
+use crate::tools::AlephToolDyn;
 
 /// Wrapper for MCP tools that implements rig's ToolDyn trait
 ///
@@ -71,8 +71,8 @@ impl McpToolWrapper {
     }
 }
 
-// Implement AetherToolDyn trait for dynamic dispatch
-impl AetherToolDyn for McpToolWrapper {
+// Implement AlephToolDyn trait for dynamic dispatch
+impl AlephToolDyn for McpToolWrapper {
     fn name(&self) -> &str {
         &self.tool_def.name
     }
@@ -98,7 +98,7 @@ impl AetherToolDyn for McpToolWrapper {
             if mcp_result.success {
                 Ok(mcp_result.content)
             } else {
-                Err(crate::error::AetherError::tool(
+                Err(crate::error::AlephError::tool(
                     mcp_result
                         .error
                         .unwrap_or_else(|| "Unknown MCP tool error".to_string()),
@@ -113,7 +113,7 @@ impl AetherToolDyn for McpToolWrapper {
 // - client (Arc<McpClient>) is Send + Sync (Arc<T> is Send + Sync when T: Send + Sync,
 //   and McpClient uses RwLock for interior mutability which is Send + Sync)
 // - server_name (String) is Send + Sync
-// This is required by AetherToolDyn trait which has Send + Sync bounds.
+// This is required by AlephToolDyn trait which has Send + Sync bounds.
 unsafe impl Send for McpToolWrapper {}
 unsafe impl Sync for McpToolWrapper {}
 

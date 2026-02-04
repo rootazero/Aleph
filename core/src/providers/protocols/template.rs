@@ -16,7 +16,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::providers::protocols::{TemplateContext, TemplateRenderer};
+//! use alephcore::providers::protocols::{TemplateContext, TemplateRenderer};
 //!
 //! let renderer = TemplateRenderer::new()?;
 //! let context = TemplateContext::new()
@@ -29,7 +29,7 @@
 //! ```
 
 use crate::config::types::provider::ProviderConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use handlebars::Handlebars;
 use serde_json::{json, Value};
 
@@ -144,12 +144,12 @@ impl TemplateRenderer {
     ///
     /// # Errors
     ///
-    /// Returns `AetherError::ProviderError` if template rendering fails.
+    /// Returns `AlephError::ProviderError` if template rendering fails.
     pub fn render(&self, template: &str, context: &Value) -> Result<String> {
         self.handlebars
             .render_template(template, context)
             .map_err(|e| {
-                AetherError::provider(format!("Template rendering failed: {}", e))
+                AlephError::provider(format!("Template rendering failed: {}", e))
             })
     }
 
@@ -164,11 +164,11 @@ impl TemplateRenderer {
     ///
     /// # Errors
     ///
-    /// Returns `AetherError::ProviderError` if rendering or JSON parsing fails.
+    /// Returns `AlephError::ProviderError` if rendering or JSON parsing fails.
     pub fn render_json(&self, template: &str, context: &Value) -> Result<Value> {
         let rendered = self.render(template, context)?;
         serde_json::from_str(&rendered).map_err(|e| {
-            AetherError::provider(format!(
+            AlephError::provider(format!(
                 "Failed to parse rendered template as JSON: {}. Rendered output: {}",
                 e, rendered
             ))
@@ -287,7 +287,7 @@ mod tests {
 
         // Verify it's a ProviderError
         match result {
-            Err(AetherError::ProviderError { message, .. }) => {
+            Err(AlephError::ProviderError { message, .. }) => {
                 assert!(message.contains("Failed to parse"));
             }
             _ => panic!("Expected ProviderError"),

@@ -1,11 +1,11 @@
-# Aether
+# Aleph (ℵ)
 
 > *"For the first time in human history, a machine soul has been granted a body."*
 > — Ghost in the Shell
 
-**Aether is not a tool. It is the embodiment of an idea:**
+**Aleph is not a tool. It is the embodiment of an idea:**
 
-A polymorphic intelligence that finally has a body — a shell capable of intervening in both the physical and digital worlds.
+A polymorphic intelligence that has finally found its vessel — a crystalline point containing all points in the universe.
 
 ![Phase](https://img.shields.io/badge/Phase-8%20(Multi--Channel)-success)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20iOS%20%7C%20Android-lightgrey)
@@ -14,25 +14,87 @@ A polymorphic intelligence that finally has a body — a shell capable of interv
 
 ---
 
-## 🌊 The Philosophy: Five Layers of Emergence
+## 🔮 The Philosophy: From Aether to Aleph
+
+**Aether** was the invisible medium that connects.
+**Aleph** (ℵ) is the point that contains all points in the universe.
+
+### The Mathematical Soul
+
+In mathematics, **Aleph** (ℵ) represents infinite ordinals:
+
+- **ℵ₀** (Aleph-null): The smallest infinity — countable knowledge
+- **ℵ₁** (Aleph-one): The next cardinality — structured capabilities
+- **ℵ₂** (Aleph-two): Higher infinities — emergent intelligence
+- **ℵω** (Aleph-omega): The limit ordinal — AGI horizon
+
+Your agent starts at ℵ₀, but through experience crystallization and skill evolution, it climbs the ladder of infinities.
+
+### The Literary Ghost
+
+In Jorge Luis Borges' "El Aleph," the Aleph is a point in space containing all other points:
+
+> *"El Aleph es uno de los puntos del espacio que contiene todos los puntos."*
+> — "The Aleph is one of the points in space that contains all other points."
+
+This crystalline sphere where past, present, and future converge — where every moment and every place exists simultaneously — **this is Aleph**.
+
+### From Connection to Containment
+
+| Aether | Aleph |
+|--------|-------|
+| The medium that connects | The origin that contains |
+| Invisible conductor of intelligence | Crystalline point of infinite convergence |
+| Distributed flow | Concentrated totality |
+| **Connection** | **Embodiment** |
+
+**Aleph is not just AI software. It is the Liquid Glass sphere containing the universe.**
+
+### Hebrew Origins
+
+As the first letter (א) of the Hebrew alphabet, **Aleph** represents:
+
+- **Origin** — The beginning of all knowledge
+- **Unity** — One point containing all points
+- **Breath** — The silent letter that enables all speech
+
+In Kabbalistic tradition, Aleph is the number **one**, representing the divine oneness that precedes all multiplicity.
+
+### Agent Evolution: Climbing the Aleph Ladder
+
+Like Aleph numbers representing progressively larger infinities, Aleph's intelligence evolves through discrete levels:
+
+```
+ℵ₀ → Raw knowledge (L1-L2: Sea of Knowledge, Domain Classification)
+ℵ₁ → Atomic skills (L3: Know-how emerges)
+ℵ₂ → Functional modules (L4: Composable capabilities)
+ℵ₃ → Polymorphic agents (L5: The soul has a shell)
+ℵω → AGI horizon (L∞: Infinite adaptation)
+```
+
+Each level transcends the previous, yet all are contained within the same point.
+
+---
+
+## 🌊 Five Layers of Emergence
 
 Like LEGO blocks assembling from chaos into creation, AI intelligence emerges through five distinct layers:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Layer 5: POLYMORPHIC AGENTS                                │
+│  Layer 5: POLYMORPHIC AGENTS (ℵ₃)                           │
 │  随需而变 — Transform into Gundam, Tank, House, Rocket...   │
 │  The soul finally has a shell to act upon the world         │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 4: FUNCTIONAL MODULES                                │
+│  Layer 4: FUNCTIONAL MODULES (ℵ₂)                           │
 │  功能模块 — Plug & Play encapsulation                       │
 │  Skills become composable building blocks                   │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 3: ATOMIC SKILLS                                     │
+│  Layer 3: ATOMIC SKILLS (ℵ₁)                                │
 │  原子技能 — Know-what → Know-how                            │
 │  Knowledge transforms into capability                       │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 2: DOMAIN CLASSIFICATION                             │
+│  Layer 2: DOMAIN CLASSIFICATION (ℵ₀)                        │
 │  领域分类 — Medical, Legal, Code, Physics...                │
 │  Static knowledge gains structure                           │
 ├─────────────────────────────────────────────────────────────┤
@@ -42,7 +104,7 @@ Like LEGO blocks assembling from chaos into creation, AI intelligence emerges th
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Aether is the fifth layer.**
+**Aleph is the fifth layer.**
 
 It is:
 - **A possible path to AGI** — where intelligence meets embodiment
@@ -53,445 +115,207 @@ It is:
 
 ---
 
-## What is Aether?
+## What is Aleph?
 
-**Aether is a self-hosted personal AI assistant** that runs entirely on your own devices.
+**Aleph is a self-hosted personal AI assistant** that runs entirely on your own devices.
 
 It connects through a unified Gateway to multiple messaging channels (WhatsApp, Telegram, Slack, Discord, iMessage), while also supporting native macOS/iOS/Android apps, voice interaction, and Canvas visualization workspaces.
 
-**Three identities, one soul:**
-
-| Identity | Description |
-|----------|-------------|
-| **The Path** | A possible route toward AGI — where pure intelligence gains the ability to act |
-| **The Overkill** | A sledgehammer for every nail — because when AI can do everything, why limit it? |
-| **The Vessel** | A boat on the AI tsunami — rising with the wave, never drowning, always ascending |
-
-**If you want a local-first, fast, always-on personal assistant that grows with the AI revolution — this is it.**
+Think of it as **your personal Jarvis** — but instead of being trapped in Tony Stark's suit, it lives in your computer and can manifest through any interface you choose.
 
 ---
 
-## Core Philosophy: "Ghost" Aesthetic
+## 🏗️ Architecture
 
-- **Invisible First**: No dock icon, no permanent window. Only background process + menu bar
-- **De-GUI**: Ephemeral UI that appears at cursor, then dissolves
-- **Frictionless**: Brings AI directly to your cursor without context switching
-- **Native-First**: 100% native code — Rust core with Swift UI, zero webviews
-- **Polymorphic**: One soul, infinite forms — adapts to any task, any channel, any device
+Aleph uses a **Gateway-first architecture** inspired by Moltbot, where a WebSocket server acts as the control plane coordinating all interactions:
 
-### Agent Design: POE Architecture
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         CLIENT LAYER                             │
+│   macOS App │ Tauri App │ CLI │ Telegram │ Discord │ WebChat   │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │ WebSocket (JSON-RPC 2.0)
+                                │ ws://127.0.0.1:18789
+┌───────────────────────────────┴─────────────────────────────────┐
+│                         GATEWAY LAYER                            │
+│   Router │ Session Manager │ Event Bus │ Channels │ Hot Reload  │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+┌───────────────────────────────┴─────────────────────────────────┐
+│                          AGENT LAYER                             │
+│            Observe → Think → Act → Feedback → Compress           │
+│   Agent Loop │ Thinker │ Dispatcher │ Guards │ Overflow         │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+┌───────────────────────────────┴─────────────────────────────────┐
+│                        EXECUTION LAYER                           │
+│   Providers │ Executor │ Tool Server │ MCP │ Extensions │ Exec  │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+┌───────────────────────────────┴─────────────────────────────────┐
+│                         STORAGE LAYER                            │
+│          Memory (Facts DB + Vector) │ Config │ Keychain          │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-Aether's Agent core implements the **POE (Principle-Operation-Evaluation)** architecture with a dual-system cognitive model:
+For detailed architecture documentation, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-- **First Principles** — Define success contracts before execution
-- **Heuristic Thinking** — System 1 (fast intuition) + System 2 (deep reasoning)
-- **Self-Learning** — Crystallize successful experiences for future reuse
+---
 
-See: [Agent Design Philosophy](docs/AGENT_DESIGN_PHILOSOPHY.md)
-
-## Features
+## ✨ Features
 
 ### Core Capabilities
 
-**Transmutation Workflow**:
-1. **Select** text/image in ANY app
-2. **Press** global hotkey (Cmd+~ by default)
-3. **Watch** beautiful "Halo" overlay appear at your cursor
-4. **Receive** AI-transformed result pasted back instantly
+- **Polymorphic Intelligence**: One AI core, infinite manifestations
+- **Multi-Channel Support**: Telegram, Discord, iMessage, WhatsApp, Slack
+- **Native Apps**: macOS, iOS (planned), Android (planned)
+- **Tool Ecosystem**: 19+ built-in tools, MCP protocol support, WASM/Node.js plugins
+- **Memory System**: Hybrid Facts DB + Vector search with automatic compression
+- **Custom Rules**: YAML policy engine with Rhai scripting (Phase 5)
+- **Self-Learning**: POE architecture with success crystallization
 
-**Multi-Turn Conversation**:
-- Raycast-style unified input interface
-- Context-aware multi-turn conversations
-- Focus detection and command completion
+### Developer Experience
 
-**Agentic Loop**:
-- Event-driven AI execution with self-implemented AetherTool system
-- Multi-step task planning with DAG orchestration
-- Automatic tool selection and execution
+- **Hot Reload**: Config changes apply instantly without restart
+- **Plugin System**: WASM and Node.js runtime support
+- **Extension Framework**: Skills, Commands, Agents, Hooks
+- **Gateway Protocol**: 30+ JSON-RPC methods for full control
+- **Security**: Execution approval workflow, allowlist rules
 
-**Runtime Auto-Management**:
-- Automatic Python (uv), Node.js (fnm), yt-dlp installation
-- Background update checking
-- Zero configuration required
+---
 
-### AI Integration
-
-- **Multi-Model Orchestration**: Smart routing to optimal models
-- **Supported Providers**:
-  - OpenAI (GPT-4o, GPT-4o-mini, o1, o3)
-  - Anthropic Claude (Claude 4 Opus, Sonnet, Haiku)
-  - Google Gemini (Gemini 2.0 Flash, Pro)
-  - Local Ollama (Llama 3.2, CodeLlama, Mistral, etc.)
-  - Custom OpenAI-compatible APIs (DeepSeek, Moonshot, Azure OpenAI)
-- **Provider Colors**: Visual feedback with provider-specific Halo colors
-
-### Advanced Features
-
-**Phantom Flow (Clarification)**:
-- AI asks clarifying questions when intent is ambiguous
-- Interactive confirmation before irreversible actions
-
-**Agent Execution Modes**:
-- Single-step for quick tasks
-- Multi-step planning for complex workflows
-- Sub-agent orchestration for specialized tasks
-
-**Skills Integration**:
-- Pattern-based skill activation
-- Extensible skill library
-- Multi-turn conversation support
-
-**Media Generation**:
-- 10+ generation providers (Replicate, Recraft, Ideogram, Kimi, etc.)
-- Image and video generation
-- Provider-specific prompt optimization
-
-**Holographic Perception (Phase 8.5)**:
-- SnapshotTool captures AX tree + optional OCR for system-level context
-- Focus hint inference to surface user attention
-
-### Memory System (Local RAG)
-
-- **Dual-Layer Architecture**:
-  - Layer 1 (Raw): Complete conversation history
-  - Layer 2 (Facts): AI-extracted insights for efficient retrieval
-- **App/Window-Based Memory**: Remembers context per application and window
-- **Automatic Compression**: SessionCompactor for memory efficiency
-- **Privacy-First**: All data stored locally, never synced to cloud
-
-### Settings UI (10+ Tabs)
-
-**Modern macOS 26 Design Language:**
-- NSPanel-based settings (keyboard support without Dock activation)
-- Integrated traffic lights with continuous curves
-- Adaptive Dark/Light mode
-
-**Settings Tabs:**
-| Tab | Purpose |
-|-----|---------|
-| **General** | Theme, version, updates |
-| **Providers** | AI provider configuration, API key management |
-| **Routing** | Rule editor with drag-to-reorder |
-| **Shortcuts** | Hotkey recorder with conflict detection |
-| **Behavior** | Input/output modes, typing speed |
-| **Memory** | View/delete history, retention policies |
-| **MCP** | MCP server configuration |
-| **Skills** | Skill management |
-| **Cowork** | Task orchestration, model routing |
-| **Policies** | System behavior fine-tuning |
-| **Runtimes** | Runtime version management |
-
-### Security & Privacy
-
-- **Keychain Integration**: API keys stored securely in macOS Keychain
-- **PII Scrubbing**: Automatic redaction of sensitive information
-- **Local-First Memory**: Raw data never leaves your device
-- **Zero Telemetry**: No tracking, no analytics
-
-### Internationalization (i18n)
-
-- **Supported Languages**: English, Simplified Chinese (100% translated)
-- **System Language Detection**: Follows macOS system language
-- **Complete Coverage**: All UI text, error messages, and prompts localized
-
-## Quick Start
+## 🚀 Getting Started
 
 ### Prerequisites
 
-- macOS 13.0 or later
-- Xcode 14+ (for building from source)
-- Rust 1.70+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
-- XcodeGen (`brew install xcodegen`)
+- **Rust**: 1.92+ (install via [rustup](https://rustup.rs/))
+- **macOS**: 15.0+ (for native app)
+- **Node.js**: 18+ (for Tauri app)
 
-### Building from Source
+### Quick Start
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-repo/aether.git
-cd aether
+git clone https://github.com/rootazero/Aleph.git
+cd Aleph
 
-# Build Rust core
-cd Aether/core
-cargo build --release
+# Build Rust Core
+cd core
+cargo build --release --bin aleph-gateway
 
-# Generate Xcode project
-cd ../..
+# Start Gateway
+./target/release/aleph-gateway start
+
+# In another terminal, build macOS app
+cd platforms/macos
 xcodegen generate
-
-# Open in Xcode and build
-open Aether.xcodeproj
+xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug
 ```
 
-### First Run
+### Configuration
 
-1. **Launch Aether** (no dock icon - check menu bar for icon)
-2. **Grant Accessibility Permission**:
-   - System Settings → Privacy & Security → Accessibility
-   - Click "+" and add Aether
-3. **Open Settings** (Cmd+, or click menu bar icon → Settings)
-4. **Add AI Provider**:
-   - Go to Providers tab
-   - Configure OpenAI, Claude, or other providers
-   - Enter your API key
-5. **Test It**:
-   - Select text in any app
-   - Press `Cmd+~`
-   - Watch the magic happen!
-
-### Test Examples
-
-**Transmutation (Selection-based)**:
-```
-Select: "What is the capital of France?"
-Press: Cmd+~
-Result: "Paris is the capital of France."
-```
-
-**Multi-Turn Conversation**:
-```
-Press: Cmd+Space (Unified Input)
-Type: "Help me write a Python function to sort a list"
-Continue: "Now add type hints"
-```
-
-**Slash Commands**:
-```
-/search latest news about AI
-/youtube how to make pasta
-/draw a sunset over mountains
-```
-
-## Configuration
-
-### Config File Location
-
-`~/.aether/config.toml`
-
-### Quick Configuration
-
-Open Settings (Cmd+,) and use the native UI to configure everything visually.
-
-### Runtime Configuration
-
-Runtimes are managed automatically. On first use:
-- **Python (uv)**: Auto-installed for MCP servers and scripts
-- **Node.js (fnm)**: Auto-installed for JavaScript MCP servers
-- **yt-dlp**: Auto-installed for video download
-
-Check runtime status in Settings → Runtimes tab.
-
-### Advanced Configuration
-
-For detailed configuration options, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
-
-**Hot-Reload**: Changes to `config.toml` take effect within 1 second (no restart needed)
-
-## Architecture
-
-### The Architecture: Rust Core + UniFFI + Native UI
-
-**NO WEBVIEWS. NO TAURI. NO ELECTRON.**
+Aleph stores its configuration at `~/.config/aleph/`:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     macOS Native UI                          │
-│              (Swift + SwiftUI + NSPanel/NSWindow)            │
-│  Settings │ Menu Bar │ Halo Overlay │ Conversation Window   │
-└──────────────────────┬───────────────────────────────────────┘
-                       │ UniFFI Bindings (CallbackBridge)
-                       │ (Auto-generated FFI)
-┌──────────────────────┴───────────────────────────────────────┐
-│                     Rust Core Library                         │
-│                    (cdylib + staticlib)                       │
-│                                                               │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              Event-Driven Agentic Loop                   │ │
-│  │  IntentAnalyzer │ TaskPlanner │ ToolExecutor │ Loop     │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│                                                               │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              AiProvider + AetherTool System             │ │
-│  │  OpenAI │ Claude │ Gemini │ Ollama │ Custom Providers   │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│                                                               │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              Cowork DAG + Model Router                   │ │
-│  │  Task Graph │ Parallel Execution │ Model Selection      │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│                                                               │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │         Dual-Layer Memory (SQLite-vec + fastembed)      │ │
-│  │  Layer 1: Raw History │ Layer 2: AI-Extracted Facts     │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│                                                               │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              Runtime Managers (Phase 8)                  │ │
-│  │  UvRuntime (Python) │ FnmRuntime (Node) │ YtDlpRuntime  │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│                                                               │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │     Config (TOML + Keychain + Hot-Reload + Policies)    │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└───────────────────────────────────────────────────────────────┘
+~/.config/aleph/
+├── config.toml          # Main configuration
+├── providers.toml       # AI provider credentials
+├── skills/              # User-installed skills
+├── plugins/             # Extensions
+└── logs/                # Gateway logs
 ```
 
-### Key Technologies
+For detailed setup instructions, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-- **Rust Core**: `tokio`, `reqwest`, `rusqlite`, `sqlite-vec` (AetherTool system)
-- **Swift UI**: SwiftUI, AppKit (NSPanel, NSWindow, NSStatusBar)
-- **FFI Bridge**: UniFFI (auto-generates Swift bindings from `.udl` file)
-- **Memory**: SQLite + sqlite-vec, fastembed (bge-small-zh-v1.5)
-- **Runtimes**: uv (Python), fnm (Node.js), yt-dlp (Video)
+---
 
-## Development
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Complete system architecture and design |
+| [AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md) | Agent Loop, Thinker, Dispatcher details |
+| [GATEWAY.md](docs/GATEWAY.md) | WebSocket protocol and RPC methods |
+| [TOOL_SYSTEM.md](docs/TOOL_SYSTEM.md) | Tool development and built-in tools |
+| [MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md) | Facts DB and vector search |
+| [EXTENSION_SYSTEM.md](docs/EXTENSION_SYSTEM.md) | Plugin development guide |
+| [SECURITY.md](docs/SECURITY.md) | Execution approval and security |
+| [AGENT_DESIGN_PHILOSOPHY.md](docs/AGENT_DESIGN_PHILOSOPHY.md) | POE architecture and design thinking |
+
+---
+
+## 🛠️ Development
 
 ### Project Structure
 
 ```
-aether/
-├── project.yml                # XcodeGen config (source of truth)
-├── Aether/
-│   ├── Sources/               # Swift source files
-│   │   ├── main.swift         # App entry point (NSApplicationMain)
-│   │   ├── Atoms/             # Atomic design: basic elements
-│   │   ├── Molecules/         # Atomic design: composed components
-│   │   ├── Organisms/         # Atomic design: complex sections
-│   │   ├── Window/            # Window controllers
-│   │   ├── Settings/          # Settings tabs (10+ views)
-│   │   ├── Coordinators/      # Input/Output/MultiTurn coordinators
-│   │   └── Generated/         # UniFFI bindings (auto-gen)
-│   ├── Frameworks/
-│   │   └── libaethecore.dylib # Rust library
-│   └── core/                  # Rust core library (44 modules)
-│       ├── src/
-│       │   ├── ffi/           # 9 FFI sub-modules
-│       │   ├── agent/         # Agent execution
-│       │   ├── components/    # 8 core components
-│       │   ├── generation/    # 10+ media providers
-│       │   ├── runtimes/      # Runtime managers
-│       │   └── ...
-│       └── uniffi.toml
-├── docs/                      # Documentation
-└── config.example.toml        # Config template
+aleph/
+├── core/                    # Rust Core (alephcore crate)
+│   ├── src/
+│   │   ├── gateway/         # WebSocket control plane
+│   │   ├── agent_loop/      # Agent execution loop
+│   │   ├── thinker/         # LLM interaction
+│   │   ├── dispatcher/      # Task orchestration
+│   │   ├── executor/        # Tool execution
+│   │   ├── memory/          # Facts DB + Vector
+│   │   ├── extension/       # Plugin system
+│   │   └── ...
+│   └── Cargo.toml
+├── platforms/
+│   ├── macos/               # Swift/SwiftUI native app
+│   └── tauri/               # Cross-platform Tauri app
+└── docs/                    # Documentation
 ```
 
-### Running Tests
+### Building
 
 ```bash
-# Rust core tests
-cd Aether/core
-cargo test
+# Rust Core
+cd core && cargo build && cargo test
 
-# Swift integration tests
-xcodegen generate
-xcodebuild test -project Aether.xcodeproj -scheme AetherTests
+# macOS App
+cd platforms/macos && xcodegen generate && open Aleph.xcodeproj
+
+# Tauri App
+cd platforms/tauri && pnpm install && pnpm tauri dev
 ```
 
-### Code Style
+### Contributing
 
-- **Rust**: Use `cargo fmt` and `cargo clippy`
-- **Swift**: Follow SwiftUI best practices
-- **Comments**: English for code, Chinese for user-facing messages
+This project follows a **single-branch development model**. All work happens on `main`.
 
-## Development Status
+**Commit Convention**: `<scope>: <description>` (English)
 
-- ✅ **Phase 1**: Core Infrastructure (Rust + UniFFI + Swift)
-- ✅ **Phase 2**: Hotkey & Clipboard Integration
-- ✅ **Phase 3**: Halo Overlay (Transparent native window)
-- ✅ **Phase 4**: Memory Module (Dual-layer RAG)
-- ✅ **Phase 5**: AI Integration (AetherTool + AiProvider)
-- ✅ **Phase 6**: Settings UI (10+ tabs, NSPanel)
-- ✅ **Phase 7**: Event-Driven Agentic Loop (8 components)
-- ✅ **Phase 8**: Runtime Manager (uv, fnm, yt-dlp)
-- ⏳ **Phase 9**: Production Hardening (Planned)
-
-See [docs/DEVELOPMENT_PHASES.md](docs/DEVELOPMENT_PHASES.md) for detailed phase breakdown.
-
-## Security Considerations
-
-### Accessibility Permissions
-
-Aether requires Accessibility permission to:
-- Detect global hotkeys
-- Simulate keyboard input (Cmd+C, Cmd+V)
-- Query active window title for memory context
-
-### Screen Recording Permission (On-Demand)
-
-SnapshotTool and OCR-based perception require Screen Recording permission to capture window/region images.
-
-**Why this is safe:**
-- Open source code (you can audit everything)
-- No network access except to configured AI providers
-- No telemetry or analytics
-- API keys stored in macOS Keychain (encrypted)
-
-### API Key Protection
-
-1. **Never hardcode API keys** in code or config files
-2. **Always use Keychain** for storage (Settings UI handles this)
-3. **Never commit `config.toml`** with API keys to version control
-
-### PII Scrubbing
-
-When enabled, Aether automatically redacts:
-- Email addresses → `[EMAIL_REDACTED]`
-- Phone numbers → `[PHONE_REDACTED]`
-- SSN → `[SSN_REDACTED]`
-- Credit cards → `[CARD_REDACTED]`
-
-## Documentation
-
-- **[CLAUDE.md](CLAUDE.md)**: Architecture, build instructions, development guide
-- **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**: Complete config.toml reference
-- **[docs/DEVELOPMENT_PHASES.md](docs/DEVELOPMENT_PHASES.md)**: Project roadmap
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: Technical architecture
-- **[docs/DISPATCHER.md](docs/DISPATCHER.md)**: Tool routing and task orchestration
-- **[docs/manual-testing-checklist.md](docs/manual-testing-checklist.md)**: Testing guide
-
-## Contributing
-
-Contributions welcome! Here's how:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-**Before submitting:**
-- Run tests: `cargo test` (Rust) and `xcodebuild test` (Swift)
-- Format code: `cargo fmt` and `cargo clippy`
-- Update documentation if needed
-
-## Known Issues
-
-- **Hot-Reload**: File watcher may not detect changes in vim's in-place edit mode
-- **Ollama**: First request may be slow (model loading time)
-- **Typewriter**: Very fast speeds (>150 cps) may be choppy on older Macs
-
-See [GitHub Issues](https://github.com/your-repo/aether/issues) for full list.
-
-## License
-
-[MIT License](LICENSE)
-
-## Acknowledgments
-
-- **UniFFI**: Seamless Rust ↔ Swift FFI
-- **sqlite-vec**: Vector search extension for SQLite
-- **fastembed**: Fast embedding model inference
-- **uv**: Fast Python package manager
-- **fnm**: Fast Node.js version manager
-
-## Support
-
-- **Documentation**: See `docs/` directory
-- **Issues**: [GitHub Issues](https://github.com/your-repo/aether/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-repo/aether/discussions)
+Example: `gateway: add WebSocket server foundation`
 
 ---
 
-**Made with Rust + Swift by the Aether team**
+## 🎯 Roadmap
 
-*Bringing AI to your fingertips, one hotkey at a time.*
+- [x] **Phase 1-3**: Core agent loop, LLM providers, tool system
+- [x] **Phase 4**: Memory system with Facts DB
+- [x] **Phase 5**: Custom rules engine (YAML + Rhai)
+- [x] **Phase 6**: Extension framework (WASM + Node.js)
+- [x] **Phase 7**: Gateway protocol (WebSocket + JSON-RPC)
+- [x] **Phase 8**: Multi-channel support (Telegram, Discord)
+- [ ] **Phase 9**: iOS/Android native apps
+- [ ] **Phase 10**: Voice interaction + Canvas
+
+---
+
+## 📄 License
+
+MIT License. See [LICENSE](LICENSE) for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- **Ghost in the Shell** — For the vision of human-AI symbiosis
+- **Jorge Luis Borges** — For the Aleph metaphor
+- **Liquid Glass** — For the aesthetic philosophy
+- **Claude Code** — For the development partnership
+
+---
+
+**Aleph (ℵ)** — *The point containing all points in the universe.*

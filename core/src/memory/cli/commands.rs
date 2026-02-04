@@ -2,7 +2,7 @@
 //!
 //! Provides command implementations for listing, showing, adding, editing, and managing facts.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryFact, FactSpecificity, TemporalScope};
 use crate::memory::database::VectorDatabase;
 use crate::memory::smart_embedder::SmartEmbedder;
@@ -159,7 +159,7 @@ impl MemoryCommands {
     }
 
     /// List facts with optional filtering
-    pub async fn list(&self, filter: ListFilter) -> Result<Vec<FactSummary>, AetherError> {
+    pub async fn list(&self, filter: ListFilter) -> Result<Vec<FactSummary>, AlephError> {
         // Get facts from database
         let facts = self.db.get_all_facts(filter.include_decayed).await?;
 
@@ -221,7 +221,7 @@ impl MemoryCommands {
     }
 
     /// Get a single fact by ID (supports partial ID match)
-    pub async fn show(&self, id: &str) -> Result<Option<FactSummary>, AetherError> {
+    pub async fn show(&self, id: &str) -> Result<Option<FactSummary>, AlephError> {
         // Try exact match first
         if let Some(fact) = self.db.get_fact(id).await? {
             let now = std::time::SystemTime::now()
@@ -257,7 +257,7 @@ impl MemoryCommands {
                 };
                 Ok(Some(FactSummary::from_fact(fact, strength)))
             }
-            _ => Err(AetherError::other(format!(
+            _ => Err(AlephError::other(format!(
                 "Ambiguous ID '{}' matches {} facts. Use more characters.",
                 id,
                 matches.len()
@@ -326,7 +326,7 @@ impl MemoryCommands {
         content: &str,
         fact_type: FactType,
         embedder: Option<&SmartEmbedder>,
-    ) -> Result<String, AetherError> {
+    ) -> Result<String, AlephError> {
         // Generate embedding if embedder is available
         let embedding = if let Some(emb) = embedder {
             Some(emb.embed(content).await?)
@@ -356,7 +356,7 @@ impl MemoryCommands {
         id: &str,
         new_content: &str,
         embedder: Option<&SmartEmbedder>,
-    ) -> Result<String, AetherError> {
+    ) -> Result<String, AlephError> {
         // Resolve ID (support prefix match)
         let full_id = self.resolve_fact_id(id).await?;
 
@@ -376,7 +376,7 @@ impl MemoryCommands {
     }
 
     /// Soft-delete (forget) a fact
-    pub async fn forget(&self, id: &str, reason: Option<&str>) -> Result<String, AetherError> {
+    pub async fn forget(&self, id: &str, reason: Option<&str>) -> Result<String, AlephError> {
         // Resolve ID (support prefix match)
         let full_id = self.resolve_fact_id(id).await?;
 
@@ -387,7 +387,7 @@ impl MemoryCommands {
     }
 
     /// Restore a fact from recycle bin
-    pub async fn restore(&self, id: &str) -> Result<String, AetherError> {
+    pub async fn restore(&self, id: &str) -> Result<String, AlephError> {
         // Resolve ID (support prefix match)
         let full_id = self.resolve_fact_id(id).await?;
 
@@ -397,7 +397,7 @@ impl MemoryCommands {
     }
 
     /// Resolve a fact ID (supports prefix matching)
-    async fn resolve_fact_id(&self, id: &str) -> Result<String, AetherError> {
+    async fn resolve_fact_id(&self, id: &str) -> Result<String, AlephError> {
         // Try exact match first
         if let Some(fact) = self.db.get_fact(id).await? {
             return Ok(fact.id);
@@ -408,9 +408,9 @@ impl MemoryCommands {
         let matches: Vec<_> = facts.iter().filter(|f| f.id.starts_with(id)).collect();
 
         match matches.len() {
-            0 => Err(AetherError::other(format!("Fact not found: {}", id))),
+            0 => Err(AlephError::other(format!("Fact not found: {}", id))),
             1 => Ok(matches[0].id.clone()),
-            _ => Err(AetherError::other(format!(
+            _ => Err(AlephError::other(format!(
                 "Ambiguous ID '{}' matches {} facts. Use more characters.",
                 id,
                 matches.len()
@@ -421,7 +421,7 @@ impl MemoryCommands {
     /// Run garbage collection to permanently delete old invalidated facts
     ///
     /// Returns GC statistics
-    pub async fn gc(&self, retention_days: u32) -> Result<GcResult, AetherError> {
+    pub async fn gc(&self, retention_days: u32) -> Result<GcResult, AlephError> {
         let deleted = self.db.purge_old_invalidated_facts(retention_days).await?;
         let (valid_facts, remaining_invalid) = self.db.count_facts(true).await?;
 
@@ -434,7 +434,7 @@ impl MemoryCommands {
     }
 
     /// Export all facts to JSON format
-    pub async fn dump(&self, include_invalid: bool) -> Result<String, AetherError> {
+    pub async fn dump(&self, include_invalid: bool) -> Result<String, AlephError> {
         let facts = self.db.get_all_facts(include_invalid).await?;
 
         let export = FactExport {
@@ -447,7 +447,7 @@ impl MemoryCommands {
         };
 
         serde_json::to_string_pretty(&export)
-            .map_err(|e| AetherError::other(format!("Failed to serialize: {}", e)))
+            .map_err(|e| AlephError::other(format!("Failed to serialize: {}", e)))
     }
 
     /// Import facts from JSON format
@@ -457,9 +457,9 @@ impl MemoryCommands {
         &self,
         json: &str,
         embedder: Option<&SmartEmbedder>,
-    ) -> Result<ImportResult, AetherError> {
+    ) -> Result<ImportResult, AlephError> {
         let export: FactExport = serde_json::from_str(json)
-            .map_err(|e| AetherError::other(format!("Failed to parse JSON: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to parse JSON: {}", e)))?;
 
         let mut imported = 0;
         let mut skipped = 0;
@@ -513,7 +513,7 @@ impl MemoryCommands {
     }
 
     /// Get statistics about the memory database
-    pub async fn stats(&self) -> Result<MemoryStats, AetherError> {
+    pub async fn stats(&self) -> Result<MemoryStats, AlephError> {
         let (valid, invalid) = self.db.count_facts(true).await?;
 
         Ok(MemoryStats {

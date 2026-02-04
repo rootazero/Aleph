@@ -39,7 +39,7 @@ Before:                              After:
 
 ```swift
 struct XxxSettingsView: View {
-    let core: AetherCore?
+    let core: AlephCore?
 
     // Local state (no saveBarState parameter)
     @State private var hasUnsavedChanges: Bool = false

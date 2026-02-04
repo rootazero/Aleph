@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document describes the design for Aether's Plugin & Extension system, enabling both WASM native plugins and Node.js/npm ecosystem compatibility (Moltbot-style).
+This document describes the design for Aleph's Plugin & Extension system, enabling both WASM native plugins and Node.js/npm ecosystem compatibility (Moltbot-style).
 
 ## Design Decisions
 
@@ -68,7 +68,7 @@ Priority 2: Workspace local
   ./.claude/extensions/     (Claude Code compatibility)
 
 Priority 3: Global user-level
-  ~/.aether/extensions/
+  ~/.aleph/extensions/
   ~/.claude/extensions/     (compatibility)
 
 Priority 4 (lowest): Bundled

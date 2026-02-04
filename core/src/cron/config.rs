@@ -37,7 +37,7 @@ fn default_true() -> bool {
 }
 
 fn default_db_path() -> String {
-    "~/.aether/cron.db".to_string()
+    "~/.aleph/cron.db".to_string()
 }
 
 fn default_check_interval() -> u64 {

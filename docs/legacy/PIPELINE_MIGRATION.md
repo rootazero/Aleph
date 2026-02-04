@@ -1,6 +1,6 @@
 # Intent Routing Pipeline Migration Guide
 
-This guide covers enabling and configuring the Intent Routing Pipeline, which enhances Aether's routing with caching, confidence calibration, and intelligent layer execution.
+This guide covers enabling and configuring the Intent Routing Pipeline, which enhances Aleph's routing with caching, confidence calibration, and intelligent layer execution.
 
 ## Overview
 
@@ -16,7 +16,7 @@ The Intent Routing Pipeline is an optional enhancement to the existing Dispatche
 
 ### Quick Start
 
-Add to your `~/.aether/config.toml`:
+Add to your `~/.aleph/config.toml`:
 
 ```toml
 [routing.pipeline]

@@ -30,7 +30,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::{ToolConfirmation, ConfirmationConfig};
+//! use alephcore::dispatcher::{ToolConfirmation, ConfirmationConfig};
 //!
 //! let config = ConfirmationConfig::default();
 //! let confirmation = ToolConfirmation::new(config);

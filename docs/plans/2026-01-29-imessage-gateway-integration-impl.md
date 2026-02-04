@@ -211,7 +211,7 @@ pub use inbound_context::{InboundContext, ReplyRoute};
 **Step 3: Run tests to verify**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether && cargo test -p aethecore --features gateway inbound_context -- --nocapture
+cd /Users/zouguojun/Workspace/Aleph && cargo test -p alephcore --features gateway inbound_context -- --nocapture
 ```
 
 Expected: All tests pass
@@ -706,7 +706,7 @@ pub use pairing_store::{PairingStore, PairingRequest, PairingError, SqlitePairin
 **Step 3: Run tests**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether && cargo test -p aethecore --features gateway pairing_store -- --nocapture
+cd /Users/zouguojun/Workspace/Aleph && cargo test -p alephcore --features gateway pairing_store -- --nocapture
 ```
 
 Expected: All tests pass
@@ -981,7 +981,7 @@ pub use reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
 **Step 3: Run tests**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether && cargo test -p aethecore --features gateway reply_emitter -- --nocapture
+cd /Users/zouguojun/Workspace/Aleph && cargo test -p alephcore --features gateway reply_emitter -- --nocapture
 ```
 
 Expected: All tests pass
@@ -1135,7 +1135,7 @@ pub use routing_config::{RoutingConfig, DmScope};
 **Step 3: Run tests**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether && cargo test -p aethecore --features gateway routing_config -- --nocapture
+cd /Users/zouguojun/Workspace/Aleph && cargo test -p alephcore --features gateway routing_config -- --nocapture
 ```
 
 **Step 4: Commit**
@@ -1530,7 +1530,7 @@ impl InboundMessageRouter {
         if created {
             // Send pairing message
             let message = format!(
-                "Hi! I'm Aether, a personal AI assistant.\n\n\
+                "Hi! I'm Aleph, a personal AI assistant.\n\n\
                 To chat with me, please have my owner approve your access.\n\n\
                 Your ID: {}\n\
                 Pairing code: {}\n\n\
@@ -1691,7 +1691,7 @@ pub use inbound_router::{InboundMessageRouter, RoutingError, ChannelConfig, DmPo
 **Step 3: Run tests**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether && cargo test -p aethecore --features gateway inbound_router -- --nocapture
+cd /Users/zouguojun/Workspace/Aleph && cargo test -p alephcore --features gateway inbound_router -- --nocapture
 ```
 
 **Step 4: Commit**
@@ -2053,7 +2053,7 @@ pub mod pairing;
 **Step 3: Run tests**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether && cargo test -p aethecore --features gateway handlers::pairing -- --nocapture
+cd /Users/zouguojun/Workspace/Aleph && cargo test -p alephcore --features gateway handlers::pairing -- --nocapture
 ```
 
 **Step 4: Commit**
@@ -2087,7 +2087,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use aethecore::gateway::{
+use alephcore::gateway::{
     ChannelId, ChannelRegistry, ConversationId, InboundMessage, MessageId, UserId,
     InboundMessageRouter, RoutingConfig, DmScope,
     SqlitePairingStore, PairingStore,
@@ -2351,7 +2351,7 @@ async fn test_session_key_main_scope() {
 **Step 2: Run integration tests**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether && cargo test -p aethecore --features gateway integration_imessage_routing -- --nocapture
+cd /Users/zouguojun/Workspace/Aleph && cargo test -p alephcore --features gateway integration_imessage_routing -- --nocapture
 ```
 
 **Step 3: Commit**

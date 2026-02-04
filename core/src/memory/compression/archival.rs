@@ -2,7 +2,7 @@
 //!
 //! Handles scratchpad archiving during compression based on trigger reason.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::compression::trigger::{CompressionAggressiveness, TriggerReason};
 use crate::memory::scratchpad::{ScratchpadManager, SessionHistory};
 
@@ -76,7 +76,7 @@ impl ArchivalService {
         &self,
         manager: &ScratchpadManager,
         session_id: &str,
-    ) -> Result<ArchivalResult, AetherError> {
+    ) -> Result<ArchivalResult, AlephError> {
         // Check if scratchpad has meaningful content
         if !manager.exists() || !manager.has_content().await? {
             return Ok(ArchivalResult {
@@ -113,7 +113,7 @@ impl ArchivalService {
         reason: &TriggerReason,
         manager: &ScratchpadManager,
         session_id: &str,
-    ) -> Result<ArchivalResult, AetherError> {
+    ) -> Result<ArchivalResult, AlephError> {
         if !self.should_archive(reason) {
             return Ok(ArchivalResult {
                 archived: false,

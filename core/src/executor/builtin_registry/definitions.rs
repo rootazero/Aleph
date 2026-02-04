@@ -6,13 +6,13 @@
 //! # Architecture
 //!
 //! This is the authoritative source for builtin tool definitions.
-//! Both BuiltinToolRegistry (Agent Loop execution) and AetherToolServer (tool management)
+//! Both BuiltinToolRegistry (Agent Loop execution) and AlephToolServer (tool management)
 //! source their tool definitions from this module.
 //!
 //! # Usage
 //!
 //! - `BUILTIN_TOOL_DEFINITIONS` - List of all tool definitions
-//! - `create_tool_boxed()` - Create boxed tool instance for AetherToolServer
+//! - `create_tool_boxed()` - Create boxed tool instance for AlephToolServer
 //! - `get_builtin_tool_names()` - Get list of all tool names
 //! - `is_builtin_tool()` - Check if a name is a builtin tool
 
@@ -23,7 +23,7 @@ use crate::builtin_tools::{
     ReadSkillTool, SearchTool, SnapshotCaptureTool, WebFetchTool, YouTubeTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
-use crate::tools::AetherToolDyn;
+use crate::tools::AlephToolDyn;
 
 use super::BuiltinToolConfig;
 
@@ -43,7 +43,7 @@ pub struct BuiltinToolDefinition {
 /// All builtin tools in the system - Single Source of Truth
 ///
 /// This is the authoritative list of all builtin tools.
-/// Both BuiltinToolRegistry and AetherToolServer use this list.
+/// Both BuiltinToolRegistry and AlephToolServer use this list.
 pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "search",
@@ -116,7 +116,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
 
 /// Create a boxed tool instance by name
 ///
-/// This function is used by AetherToolServer to create tool instances
+/// This function is used by AlephToolServer to create tool instances
 /// for tool management and hot-reload capabilities.
 ///
 /// # Arguments
@@ -129,7 +129,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
 pub fn create_tool_boxed(
     name: &str,
     config: Option<&BuiltinToolConfig>,
-) -> Option<Box<dyn AetherToolDyn>> {
+) -> Option<Box<dyn AlephToolDyn>> {
     match name {
         "search" => {
             let tool = if let Some(cfg) = config {

@@ -13,7 +13,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use aethecore::mcp::manager::McpPersistentConfig;
+//! use alephcore::mcp::manager::McpPersistentConfig;
 //! use std::path::Path;
 //!
 //! // Load configuration
@@ -36,7 +36,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use super::types::McpManagerConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// Persistent configuration for MCP Manager
 ///
@@ -69,7 +69,7 @@ impl Default for McpPersistentConfig {
 impl McpPersistentConfig {
     /// Get the default configuration file path
     ///
-    /// Returns `~/.aether/mcp_config.json`
+    /// Returns `~/.aleph/mcp_config.json`
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -85,7 +85,7 @@ impl McpPersistentConfig {
         match tokio::fs::read_to_string(path).await {
             Ok(contents) => {
                 serde_json::from_str(&contents).map_err(|e| {
-                    AetherError::ConfigError {
+                    AlephError::ConfigError {
                         message: format!("Failed to parse MCP config at {}: {}", path.display(), e),
                         suggestion: Some(
                             "Check the JSON syntax in your MCP configuration file".to_string(),
@@ -97,7 +97,7 @@ impl McpPersistentConfig {
                 tracing::debug!("MCP config not found at {}, using default", path.display());
                 Ok(Self::default())
             }
-            Err(e) => Err(AetherError::IoError(format!(
+            Err(e) => Err(AlephError::IoError(format!(
                 "Failed to read MCP config at {}: {}",
                 path.display(),
                 e
@@ -113,7 +113,7 @@ impl McpPersistentConfig {
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to create config directory {}: {}",
                     parent.display(),
                     e
@@ -123,13 +123,13 @@ impl McpPersistentConfig {
 
         // Serialize to pretty JSON
         let json = serde_json::to_string_pretty(self).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize MCP config: {}", e))
+            AlephError::IoError(format!("Failed to serialize MCP config: {}", e))
         })?;
 
         // Write atomically by writing to temp file and renaming
         let temp_path = path.with_extension("json.tmp");
         tokio::fs::write(&temp_path, &json).await.map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Failed to write MCP config to {}: {}",
                 temp_path.display(),
                 e
@@ -137,7 +137,7 @@ impl McpPersistentConfig {
         })?;
 
         tokio::fs::rename(&temp_path, path).await.map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Failed to rename temp config to {}: {}",
                 path.display(),
                 e
@@ -461,7 +461,7 @@ mod tests {
 
         let result = McpPersistentConfig::load(&config_path).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AetherError::ConfigError { .. }));
+        assert!(matches!(result.unwrap_err(), AlephError::ConfigError { .. }));
     }
 
     #[test]

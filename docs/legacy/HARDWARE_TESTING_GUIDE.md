@@ -1,7 +1,7 @@
 # Hardware Performance Testing Guide
 
 ## Overview
-This guide provides test procedures for validating Aether performance across different Mac hardware configurations.
+This guide provides test procedures for validating Aleph performance across different Mac hardware configurations.
 
 ---
 
@@ -25,7 +25,7 @@ This guide provides test procedures for validating Aether performance across dif
 ```bash
 cd /Users/zouguojun/Workspace/Aether
 xcodegen generate
-open Aether.xcodeproj
+open Aleph.xcodeproj
 
 # In Xcode:
 # - Set scheme to "Release" (for accurate performance)
@@ -67,7 +67,7 @@ ZStack {
 **Objective**: Verify correct GPU detection and quality assignment
 
 **Steps**:
-1. Launch Aether
+1. Launch Aleph
 2. Check console logs for GPU info:
    ```
    [PerformanceManager] Detected GPU: [GPU Name]
@@ -94,10 +94,10 @@ ZStack {
 **Objective**: Verify minimal CPU/GPU usage when Halo is hidden
 
 **Steps**:
-1. Launch Aether (Halo hidden)
+1. Launch Aleph (Halo hidden)
 2. Wait 30 seconds
 3. Open Activity Monitor
-4. Check Aether CPU/GPU usage
+4. Check Aleph CPU/GPU usage
 
 **Expected Results**:
 - CPU: < 1% (idle)
@@ -105,7 +105,7 @@ ZStack {
 - Memory: < 50 MB
 - No thermal impact
 
-**Pass Criteria**: Aether idle footprint negligible
+**Pass Criteria**: Aleph idle footprint negligible
 
 ---
 
@@ -218,7 +218,7 @@ ZStack {
 **Objective**: Verify no thermal throttling or memory leaks
 
 **Steps**:
-1. Launch Aether
+1. Launch Aleph
 2. Script to trigger state changes every 10 seconds
 3. Run for 30 minutes
 4. Monitor:

@@ -199,8 +199,8 @@ Expected: 6 tests passing
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/agents/
-git add Aether/core/src/lib.rs
+git add Aleph/core/src/agents/
+git add Aleph/core/src/lib.rs
 git commit -m "feat(agents): add agent types module with AgentDef and AgentMode"
 ```
 
@@ -546,7 +546,7 @@ Expected: 11 tests passing
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/agents/
+git add Aleph/core/src/agents/
 git commit -m "feat(agents): add AgentRegistry with built-in agent definitions"
 ```
 
@@ -866,7 +866,7 @@ mod tests {
         // Check that event was published
         let event = subscriber.recv().await.unwrap();
         match event.event {
-            AetherEvent::SubAgentStarted(req) => {
+            AlephEvent::SubAgentStarted(req) => {
                 assert_eq!(req.agent_id, "coder");
                 assert_eq!(req.prompt, "Write a test file");
                 assert_eq!(req.parent_session_id, "parent-session");
@@ -908,7 +908,7 @@ Expected: 10 tests passing
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/agents/
+git add Aleph/core/src/agents/
 git commit -m "feat(agents): add TaskTool for calling sub-agents"
 ```
 
@@ -936,7 +936,7 @@ use tokio::sync::RwLock;
 use crate::agents::{AgentDef, AgentRegistry};
 use crate::components::types::{ExecutionSession, SessionStatus, SubAgentPart};
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError, SubAgentRequest,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, SubAgentRequest,
     SubAgentResult,
 };
 
@@ -1086,10 +1086,10 @@ impl EventHandler for SubAgentHandler {
 
     async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<(), HandlerError> {
         match event {
-            AetherEvent::SubAgentStarted(request) => {
+            AlephEvent::SubAgentStarted(request) => {
                 self.handle_started(request, ctx).await
             }
-            AetherEvent::SubAgentCompleted(result) => {
+            AlephEvent::SubAgentCompleted(result) => {
                 self.handle_completed(result, ctx).await
             }
             _ => Ok(()),
@@ -1153,7 +1153,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
 
-        let event = AetherEvent::SubAgentStarted(request);
+        let event = AlephEvent::SubAgentStarted(request);
         handler.handle(&event, &ctx).await.unwrap();
 
         assert!(handler.is_session_active("child-1").await);
@@ -1176,7 +1176,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
 
-        let event = AetherEvent::SubAgentStarted(request);
+        let event = AlephEvent::SubAgentStarted(request);
         let result = handler.handle(&event, &ctx).await;
 
         assert!(result.is_err());
@@ -1299,7 +1299,7 @@ Expected: 11 tests passing
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/components/
+git add Aleph/core/src/components/
 git commit -m "feat(components): add SubAgentHandler for sub-agent lifecycle management"
 ```
 
@@ -1342,7 +1342,7 @@ Expected: All tests passing
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/lib.rs
+git add Aleph/core/src/lib.rs
 git commit -m "feat(lib): add agents module exports"
 ```
 
@@ -1399,7 +1399,7 @@ async fn test_full_subagent_lifecycle() {
     // 2. Receive the SubAgentStarted event
     let event = subscriber.recv().await.unwrap();
     let request = match &event.event {
-        AetherEvent::SubAgentStarted(req) => req.clone(),
+        AlephEvent::SubAgentStarted(req) => req.clone(),
         _ => panic!("Expected SubAgentStarted"),
     };
 
@@ -1627,7 +1627,7 @@ Expected: 7 tests passing
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/agents/
+git add Aleph/core/src/agents/
 git commit -m "test(agents): add integration tests for sub-agent system"
 ```
 

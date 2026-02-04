@@ -5,7 +5,7 @@
 
 ## Background
 
-Based on comparative analysis with OpenCode (Claude Code open-source implementation), Aether's Skill system has several gaps:
+Based on comparative analysis with OpenCode (Claude Code open-source implementation), Aleph's Skill system has several gaps:
 
 1. **Missing Skill Tool** - Skills are statically injected into prompts; LLM cannot dynamically invoke them
 2. **No Instance Caching** - File system scanned on every access
@@ -22,7 +22,7 @@ Based on comparative analysis with OpenCode (Claude Code open-source implementat
 ## Non-Goals
 
 - Shell command execution in templates (`!`command``) - security risk
-- Full OpenCode parity - maintain Aether's architectural identity
+- Full OpenCode parity - maintain Aleph's architectural identity
 - Breaking changes to existing APIs
 
 ## Design

@@ -6,7 +6,7 @@
 
 ## Overview
 
-Successfully completed Task 13 (Prompt Augmentation) and Task 14 (AI Pipeline Integration) for the add-contextual-memory-rag change. This completes the core memory-augmented AI flow, enabling Aether to provide context-aware responses by injecting relevant past interactions into LLM prompts.
+Successfully completed Task 13 (Prompt Augmentation) and Task 14 (AI Pipeline Integration) for the add-contextual-memory-rag change. This completes the core memory-augmented AI flow, enabling Aleph to provide context-aware responses by injecting relevant past interactions into LLM prompts.
 
 ## Task 13: Prompt Augmentation Module
 
@@ -231,7 +231,7 @@ let db = match self.memory_db.as_ref() {
 let model_dir = Self::get_embedding_model_dir()?;
 let embedding_model = Arc::new(
     EmbeddingModel::new(model_dir)
-        .map_err(|e| AetherError::config(format!("Failed to initialize embedding model: {}", e)))?
+        .map_err(|e| AlephError::config(format!("Failed to initialize embedding model: {}", e)))?
 );
 
 let init_time = start_time.elapsed();
@@ -310,8 +310,8 @@ The method logs detailed timing information at each step:
 
 **Exposed in aether.udl:110**:
 ```idl
-interface AetherCore {
-  [Throws=AetherError]
+interface AlephCore {
+  [Throws=AlephError]
   string retrieve_and_augment_prompt(string base_prompt, string user_input);
 }
 ```
@@ -337,7 +337,7 @@ The method is **ready for immediate integration** with AI providers:
 ```rust
 // Before AI provider call
 let augmented_prompt = core.retrieve_and_augment_prompt(
-    "You are Aether AI",
+    "You are Aleph AI",
     &user_input
 )?;
 
@@ -517,7 +517,7 @@ let context = CapturedContext {
 core.setCurrentContext(context);
 
 // 3. Prepare base prompt
-let base_prompt = "You are Aether AI, a helpful assistant.";
+let base_prompt = "You are Aleph AI, a helpful assistant.";
 let user_input = "What were the key milestones we discussed?";
 
 // 4. Retrieve and augment prompt with memories
@@ -539,14 +539,14 @@ let memory_id = core.storeInteractionMemory(user_input, &ai_response)?;
 
 **Without Memory**:
 ```
-You are Aether AI, a helpful assistant.
+You are Aleph AI, a helpful assistant.
 
 User: What were the key milestones we discussed?
 ```
 
 **With Memory** (same context):
 ```
-You are Aether AI, a helpful assistant.
+You are Aleph AI, a helpful assistant.
 
 ## Context History
 The following are relevant past interactions in this context:
@@ -633,13 +633,13 @@ User: What were the key milestones we discussed?
 
 #### Basic Flow
 - [ ] Enable memory in settings
-- [ ] Use Aether in Notes.app
+- [ ] Use Aleph in Notes.app
 - [ ] Ask a question, get response
 - [ ] Ask follow-up question
 - [ ] Verify AI mentions previous interaction
 
 #### Context Isolation
-- [ ] Use Aether in Notes.app "Doc1.txt"
+- [ ] Use Aleph in Notes.app "Doc1.txt"
 - [ ] Ask question, get response
 - [ ] Switch to "Doc2.txt"
 - [ ] Ask similar question

@@ -32,11 +32,11 @@
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::config::ProviderConfig;
-/// use aethecore::providers::ollama::OllamaProvider;
-/// use aethecore::providers::AiProvider;
+/// use alephcore::config::ProviderConfig;
+/// use alephcore::providers::ollama::OllamaProvider;
+/// use alephcore::providers::AiProvider;
 ///
-/// # async fn example() -> aethecore::error::Result<()> {
+/// # async fn example() -> alephcore::error::Result<()> {
 /// let config = ProviderConfig {
 ///     api_key: None, // Not needed for Ollama
 ///     model: "llama3.2".to_string(),
@@ -54,7 +54,7 @@
 /// # }
 /// ```
 use crate::config::ProviderConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -132,7 +132,7 @@ impl OllamaProvider {
     /// # Returns
     ///
     /// * `Ok(OllamaProvider)` - Successfully initialized provider
-    /// * `Err(AetherError)` - Configuration validation failed
+    /// * `Err(AlephError)` - Configuration validation failed
     ///
     /// # Errors
     ///
@@ -141,11 +141,11 @@ impl OllamaProvider {
     /// - Timeout is zero
     pub fn new(name: String, config: ProviderConfig) -> Result<Self> {
         if config.model.is_empty() {
-            return Err(AetherError::invalid_config("Model name cannot be empty"));
+            return Err(AlephError::invalid_config("Model name cannot be empty"));
         }
 
         if config.timeout_seconds == 0 {
-            return Err(AetherError::invalid_config(
+            return Err(AlephError::invalid_config(
                 "Timeout must be greater than zero",
             ));
         }
@@ -155,7 +155,7 @@ impl OllamaProvider {
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
             .map_err(|e| {
-                AetherError::invalid_config(format!("Failed to build HTTP client: {}", e))
+                AlephError::invalid_config(format!("Failed to build HTTP client: {}", e))
             })?;
 
         // Build API endpoint
@@ -281,7 +281,7 @@ impl OllamaProvider {
     }
 
     /// Handle error response from Ollama
-    async fn handle_error(&self, response: reqwest::Response) -> AetherError {
+    async fn handle_error(&self, response: reqwest::Response) -> AlephError {
         let status = response.status();
 
         // Try to parse error response
@@ -291,19 +291,19 @@ impl OllamaProvider {
             // Check for specific error patterns
             if error_msg.contains("model") && error_msg.contains("not found") {
                 error!(model = %self.model, "Ollama model not found");
-                return AetherError::provider(format!(
+                return AlephError::provider(format!(
                     "Ollama model '{}' not found. Run: ollama pull {}",
                     self.model, self.model
                 ));
             }
 
             error!(status = %status, error = %error_msg, "Ollama API error");
-            return AetherError::provider(format!("Ollama error: {}", error_msg));
+            return AlephError::provider(format!("Ollama error: {}", error_msg));
         }
 
         // Fallback error
         error!(status = %status, "Ollama request failed");
-        AetherError::provider(format!("Ollama request failed: {}", status))
+        AlephError::provider(format!("Ollama request failed: {}", status))
     }
 }
 
@@ -338,20 +338,20 @@ impl AiProvider for OllamaProvider {
                 .map_err(|e| {
                     if e.is_timeout() {
                         error!("Ollama request timed out");
-                        AetherError::Timeout {
+                        AlephError::Timeout {
                             suggestion: Some(
                                 "The Ollama model is taking too long. Try a smaller model or increase the timeout.".to_string(),
                             ),
                         }
                     } else if e.is_connect() {
                         error!(error = %e, "Failed to connect to Ollama");
-                        AetherError::network(format!(
+                        AlephError::network(format!(
                             "Failed to connect to Ollama at {}. Is Ollama running?",
                             self.endpoint
                         ))
                     } else {
                         error!(error = %e, "Ollama network error");
-                        AetherError::network(format!("Network error: {}", e))
+                        AlephError::network(format!("Network error: {}", e))
                     }
                 })?;
 
@@ -363,14 +363,14 @@ impl AiProvider for OllamaProvider {
             // Parse response
             let generate_response: GenerateResponse = response.json().await.map_err(|e| {
                 error!(error = %e, "Failed to parse Ollama response");
-                AetherError::provider(format!("Failed to parse Ollama response: {}", e))
+                AlephError::provider(format!("Failed to parse Ollama response: {}", e))
             })?;
 
             let text = generate_response.response.trim().to_string();
 
             if text.is_empty() {
                 warn!(model = %self.model, "Ollama returned empty response");
-                return Err(AetherError::provider("Ollama returned empty response"));
+                return Err(AlephError::provider("Ollama returned empty response"));
             }
 
             info!(
@@ -474,7 +474,7 @@ impl AiProvider for OllamaProvider {
                 .map_err(|e| {
                     if e.is_timeout() {
                         error!("Ollama multimodal request timed out");
-                        AetherError::Timeout {
+                        AlephError::Timeout {
                             suggestion: Some(
                                 "Vision processing is slow. Try increasing the timeout."
                                     .to_string(),
@@ -482,13 +482,13 @@ impl AiProvider for OllamaProvider {
                         }
                     } else if e.is_connect() {
                         error!(error = %e, "Failed to connect to Ollama");
-                        AetherError::network(format!(
+                        AlephError::network(format!(
                             "Failed to connect to Ollama at {}. Is Ollama running?",
                             self.endpoint
                         ))
                     } else {
                         error!(error = %e, "Ollama network error");
-                        AetherError::network(format!("Network error: {}", e))
+                        AlephError::network(format!("Network error: {}", e))
                     }
                 })?;
 
@@ -500,14 +500,14 @@ impl AiProvider for OllamaProvider {
             // Parse response
             let generate_response: GenerateResponse = response.json().await.map_err(|e| {
                 error!(error = %e, "Failed to parse Ollama multimodal response");
-                AetherError::provider(format!("Failed to parse Ollama response: {}", e))
+                AlephError::provider(format!("Failed to parse Ollama response: {}", e))
             })?;
 
             let text = generate_response.response.trim().to_string();
 
             if text.is_empty() {
                 warn!(model = %self.model, "Ollama returned empty response");
-                return Err(AetherError::provider("Ollama returned empty response"));
+                return Err(AlephError::provider("Ollama returned empty response"));
             }
 
             info!(
@@ -557,7 +557,7 @@ mod tests {
         let mut config = create_test_config();
         config.model = "".to_string();
         let result = OllamaProvider::new("ollama".to_string(), config);
-        assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
+        assert!(matches!(result, Err(AlephError::InvalidConfig { .. })));
     }
 
     #[test]
@@ -565,7 +565,7 @@ mod tests {
         let mut config = create_test_config();
         config.timeout_seconds = 0;
         let result = OllamaProvider::new("ollama".to_string(), config);
-        assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
+        assert!(matches!(result, Err(AlephError::InvalidConfig { .. })));
     }
 
     #[test]

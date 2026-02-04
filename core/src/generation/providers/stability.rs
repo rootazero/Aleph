@@ -13,8 +13,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::{GenerationProvider, GenerationRequest};
-//! use aethecore::generation::providers::StabilityImageProvider;
+//! use alephcore::generation::{GenerationProvider, GenerationRequest};
+//! use alephcore::generation::providers::StabilityImageProvider;
 //!
 //! let provider = StabilityImageProvider::new("sk-...", None, None);
 //!
@@ -99,8 +99,8 @@ pub const STYLE_PRESETS: &[&str] = &[
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::providers::StabilityImageProvider;
-/// use aethecore::generation::GenerationProvider;
+/// use alephcore::generation::providers::StabilityImageProvider;
+/// use alephcore::generation::GenerationProvider;
 ///
 /// let provider = StabilityImageProvider::new(
 ///     "sk-your-api-key",
@@ -134,7 +134,7 @@ impl StabilityImageProvider {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::providers::StabilityImageProvider;
+    /// use alephcore::generation::providers::StabilityImageProvider;
     ///
     /// // Default configuration
     /// let provider = StabilityImageProvider::new("sk-xxx", None, None);

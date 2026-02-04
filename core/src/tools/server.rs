@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::traits::AetherToolDyn;
+use super::traits::AlephToolDyn;
 use crate::dispatcher::ToolDefinition;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 // =============================================================================
 // Tool Repair Types
@@ -103,7 +103,7 @@ fn to_snake_case(s: &str) -> String {
 }
 
 // =============================================================================
-// AetherToolServer
+// AlephToolServer
 // =============================================================================
 
 /// Thread-safe tool server with hot-reload support.
@@ -123,9 +123,9 @@ fn to_snake_case(s: &str) -> String {
 /// # Example
 ///
 /// ```rust,ignore
-/// use crate::tools::{AetherToolServer, AetherTool};
+/// use crate::tools::{AlephToolServer, AlephTool};
 ///
-/// let server = AetherToolServer::new();
+/// let server = AlephToolServer::new();
 ///
 /// // Add a tool
 /// server.add_tool(SearchTool::new()).await;
@@ -142,11 +142,11 @@ fn to_snake_case(s: &str) -> String {
 ///     handle.call("search", args).await
 /// });
 /// ```
-pub struct AetherToolServer {
-    tools: Arc<RwLock<HashMap<String, Arc<dyn AetherToolDyn>>>>,
+pub struct AlephToolServer {
+    tools: Arc<RwLock<HashMap<String, Arc<dyn AlephToolDyn>>>>,
 }
 
-impl AetherToolServer {
+impl AlephToolServer {
     /// Create a new empty tool server.
     pub fn new() -> Self {
         Self {
@@ -158,11 +158,11 @@ impl AetherToolServer {
     ///
     /// This method is useful for chaining during server construction:
     /// ```rust,ignore
-    /// let server = AetherToolServer::new()
+    /// let server = AlephToolServer::new()
     ///     .tool(SearchTool::new())
     ///     .tool(WebFetchTool::new());
     /// ```
-    pub fn tool(self, tool: impl AetherToolDyn + 'static) -> Self {
+    pub fn tool(self, tool: impl AlephToolDyn + 'static) -> Self {
         // Get mutable access synchronously during construction
         // Safe because we own the server and no other references exist
         if let Ok(mut tools) = self.tools.try_write() {
@@ -177,9 +177,9 @@ impl AetherToolServer {
     /// This method is useful when tools are created dynamically and already boxed.
     /// ```rust,ignore
     /// let tool = create_tool_boxed("search", &config);
-    /// let server = AetherToolServer::new().tool_boxed(tool);
+    /// let server = AlephToolServer::new().tool_boxed(tool);
     /// ```
-    pub fn tool_boxed(self, tool: Box<dyn AetherToolDyn>) -> Self {
+    pub fn tool_boxed(self, tool: Box<dyn AlephToolDyn>) -> Self {
         // Get mutable access synchronously during construction
         // Safe because we own the server and no other references exist
         if let Ok(mut tools) = self.tools.try_write() {
@@ -192,7 +192,7 @@ impl AetherToolServer {
     /// Add a tool to the server.
     ///
     /// If a tool with the same name already exists, it will be replaced.
-    pub async fn add_tool(&self, tool: impl AetherToolDyn + 'static) {
+    pub async fn add_tool(&self, tool: impl AlephToolDyn + 'static) {
         let name = tool.name().to_string();
         self.tools.write().await.insert(name, Arc::new(tool));
     }
@@ -200,7 +200,7 @@ impl AetherToolServer {
     /// Add a pre-boxed dynamic tool.
     ///
     /// Useful when the tool is already wrapped in Arc.
-    pub async fn add_tool_arc(&self, tool: Arc<dyn AetherToolDyn>) {
+    pub async fn add_tool_arc(&self, tool: Arc<dyn AlephToolDyn>) {
         let name = tool.name().to_string();
         self.tools.write().await.insert(name, tool);
     }
@@ -220,7 +220,7 @@ impl AetherToolServer {
     ///     println!("Added new tool: {}", update_info.tool_name);
     /// }
     /// ```
-    pub async fn replace_tool(&self, tool: impl AetherToolDyn + 'static) -> ToolUpdateInfo {
+    pub async fn replace_tool(&self, tool: impl AlephToolDyn + 'static) -> ToolUpdateInfo {
         let name = tool.name().to_string();
         let new_description = tool.definition().description;
 
@@ -238,7 +238,7 @@ impl AetherToolServer {
     /// Replace or add a pre-boxed dynamic tool.
     ///
     /// Arc version of `replace_tool()`.
-    pub async fn replace_tool_arc(&self, tool: Arc<dyn AetherToolDyn>) -> ToolUpdateInfo {
+    pub async fn replace_tool_arc(&self, tool: Arc<dyn AlephToolDyn>) -> ToolUpdateInfo {
         let name = tool.name().to_string();
         let new_description = tool.definition().description;
 
@@ -299,12 +299,12 @@ impl AetherToolServer {
     ///
     /// # Errors
     ///
-    /// Returns `AetherError::ToolNotFound` if the tool doesn't exist.
+    /// Returns `AlephError::ToolNotFound` if the tool doesn't exist.
     pub async fn call(&self, name: &str, args: Value) -> Result<Value> {
         let tools = self.tools.read().await;
         let tool = tools
             .get(name)
-            .ok_or_else(|| AetherError::tool_not_found(name))?;
+            .ok_or_else(|| AlephError::tool_not_found(name))?;
 
         // Clone the Arc to release the read lock before calling
         let tool = Arc::clone(tool);
@@ -411,7 +411,7 @@ impl AetherToolServer {
         // 5. No repair possible
         drop(tools);
         (
-            Err(AetherError::tool_not_found_with_suggestion(
+            Err(AlephError::tool_not_found_with_suggestion(
                 name,
                 "Use list_tools to see available tools",
             )),
@@ -449,8 +449,8 @@ impl AetherToolServer {
     ///
     /// The handle shares the same underlying tool registry and can be
     /// cloned cheaply for use in multiple async tasks.
-    pub fn handle(&self) -> AetherToolServerHandle {
-        AetherToolServerHandle {
+    pub fn handle(&self) -> AlephToolServerHandle {
+        AlephToolServerHandle {
             tools: Arc::clone(&self.tools),
         }
     }
@@ -472,9 +472,9 @@ impl AetherToolServer {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let server = AetherToolServer::new_with_skills(vec![
+    /// let server = AlephToolServer::new_with_skills(vec![
     ///     PathBuf::from("skills"),
-    ///     PathBuf::from("~/.aether/skills"),
+    ///     PathBuf::from("~/.aleph/skills"),
     /// ]).await;
     /// ```
     pub async fn new_with_skills(skill_dirs: Vec<std::path::PathBuf>) -> Self {
@@ -501,24 +501,24 @@ impl AetherToolServer {
     }
 
     /// Add a pre-boxed dynamic tool (internal helper).
-    async fn add_tool_dyn(&self, tool: Box<dyn AetherToolDyn>) -> Result<()> {
+    async fn add_tool_dyn(&self, tool: Box<dyn AlephToolDyn>) -> Result<()> {
         let name = tool.name().to_string();
         self.tools.write().await.insert(name, Arc::from(tool));
         Ok(())
     }
 }
 
-impl Default for AetherToolServer {
+impl Default for AlephToolServer {
     fn default() -> Self {
         Self::new()
     }
 }
 
 // =============================================================================
-// AetherToolServerHandle
+// AlephToolServerHandle
 // =============================================================================
 
-/// Lightweight handle to an `AetherToolServer`.
+/// Lightweight handle to an `AlephToolServer`.
 ///
 /// This handle can be cloned cheaply and shared across async tasks.
 /// It provides the same functionality as the server itself.
@@ -526,7 +526,7 @@ impl Default for AetherToolServer {
 /// # Example
 ///
 /// ```rust,ignore
-/// let server = AetherToolServer::new();
+/// let server = AlephToolServer::new();
 /// let handle = server.handle();
 ///
 /// // Clone for multiple tasks
@@ -536,25 +536,25 @@ impl Default for AetherToolServer {
 /// });
 /// ```
 #[derive(Clone)]
-pub struct AetherToolServerHandle {
-    tools: Arc<RwLock<HashMap<String, Arc<dyn AetherToolDyn>>>>,
+pub struct AlephToolServerHandle {
+    tools: Arc<RwLock<HashMap<String, Arc<dyn AlephToolDyn>>>>,
 }
 
-impl AetherToolServerHandle {
+impl AlephToolServerHandle {
     /// Add a tool to the server.
-    pub async fn add_tool(&self, tool: impl AetherToolDyn + 'static) {
+    pub async fn add_tool(&self, tool: impl AlephToolDyn + 'static) {
         let name = tool.name().to_string();
         self.tools.write().await.insert(name, Arc::new(tool));
     }
 
     /// Add a pre-boxed dynamic tool.
-    pub async fn add_tool_arc(&self, tool: Arc<dyn AetherToolDyn>) {
+    pub async fn add_tool_arc(&self, tool: Arc<dyn AlephToolDyn>) {
         let name = tool.name().to_string();
         self.tools.write().await.insert(name, tool);
     }
 
     /// Replace or add a tool with explicit update semantics.
-    pub async fn replace_tool(&self, tool: impl AetherToolDyn + 'static) -> ToolUpdateInfo {
+    pub async fn replace_tool(&self, tool: impl AlephToolDyn + 'static) -> ToolUpdateInfo {
         let name = tool.name().to_string();
         let new_description = tool.definition().description;
 
@@ -570,7 +570,7 @@ impl AetherToolServerHandle {
     }
 
     /// Replace or add a pre-boxed dynamic tool.
-    pub async fn replace_tool_arc(&self, tool: Arc<dyn AetherToolDyn>) -> ToolUpdateInfo {
+    pub async fn replace_tool_arc(&self, tool: Arc<dyn AlephToolDyn>) -> ToolUpdateInfo {
         let name = tool.name().to_string();
         let new_description = tool.definition().description;
 
@@ -630,7 +630,7 @@ impl AetherToolServerHandle {
         let tools = self.tools.read().await;
         let tool = tools
             .get(name)
-            .ok_or_else(|| AetherError::tool_not_found(name))?;
+            .ok_or_else(|| AlephError::tool_not_found(name))?;
 
         // Clone the Arc to release the read lock before calling
         let tool = Arc::clone(tool);
@@ -641,7 +641,7 @@ impl AetherToolServerHandle {
 
     /// Call a tool with automatic repair for common errors.
     ///
-    /// See `AetherToolServer::call_with_repair` for details.
+    /// See `AlephToolServer::call_with_repair` for details.
     pub async fn call_with_repair(
         &self,
         name: &str,
@@ -723,7 +723,7 @@ impl AetherToolServerHandle {
         // 5. No repair possible
         drop(tools);
         (
-            Err(AetherError::tool_not_found_with_suggestion(
+            Err(AlephError::tool_not_found_with_suggestion(
                 name,
                 "Use list_tools to see available tools",
             )),
@@ -766,13 +766,13 @@ impl AetherToolServerHandle {
 mod tests {
     use super::*;
 
-    /// A pure dynamic tool for testing (only implements AetherToolDyn, not AetherTool)
+    /// A pure dynamic tool for testing (only implements AlephToolDyn, not AlephTool)
     /// This allows dynamic name configuration needed for server tests.
     struct DynamicMockTool {
         name: String,
     }
 
-    impl AetherToolDyn for DynamicMockTool {
+    impl AlephToolDyn for DynamicMockTool {
         fn name(&self) -> &str {
             &self.name
         }
@@ -810,7 +810,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_add_and_call() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
 
         server
             .add_tool(DynamicMockTool {
@@ -831,7 +831,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_remove_tool() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
 
         server
             .add_tool(DynamicMockTool {
@@ -847,7 +847,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_list_tools() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
 
         server
             .add_tool(DynamicMockTool {
@@ -871,7 +871,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_tool_not_found() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
 
         let result = server
             .call("nonexistent", serde_json::json!({}))
@@ -880,13 +880,13 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            AetherError::ToolNotFound { .. }
+            AlephError::ToolNotFound { .. }
         ));
     }
 
     #[tokio::test]
     async fn test_server_handle() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
         let handle = server.handle();
 
         // Add via server
@@ -909,7 +909,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_clone() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
         server
             .add_tool(DynamicMockTool {
                 name: "cloned".to_string(),
@@ -930,7 +930,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_clear() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
 
         server
             .add_tool(DynamicMockTool {
@@ -962,7 +962,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_with_repair_exact_match() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
         server
             .add_tool(DynamicMockTool {
                 name: "search".to_string(),
@@ -979,7 +979,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_with_repair_case_insensitive() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
         server
             .add_tool(DynamicMockTool {
                 name: "search".to_string(),
@@ -1001,7 +1001,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_with_repair_snake_case() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
         server
             .add_tool(DynamicMockTool {
                 name: "web_search".to_string(),
@@ -1023,7 +1023,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_with_repair_invalid_fallback() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
 
         // Add an "invalid" tool for fallback
         server
@@ -1047,7 +1047,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_with_repair_no_fallback() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
 
         // No "invalid" tool, so should return error
         let (result, repair_info) = server
@@ -1060,7 +1060,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_repair_tool_name() {
-        let server = AetherToolServer::new();
+        let server = AlephToolServer::new();
         server
             .add_tool(DynamicMockTool {
                 name: "web_search".to_string(),

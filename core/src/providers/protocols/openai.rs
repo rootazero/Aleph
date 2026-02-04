@@ -4,7 +4,7 @@
 //! Used by: OpenAI, DeepSeek, Moonshot, Doubao, vLLM, etc.
 
 use crate::config::ProviderConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::openai::{
     ChatCompletionResponse, ContentBlock, ImageUrl, Message, MessageContent,
@@ -292,7 +292,7 @@ impl ProtocolAdapter for OpenAiProtocol {
         let api_key = config
             .api_key
             .as_ref()
-            .ok_or_else(|| AetherError::invalid_config("API key is required"))?;
+            .ok_or_else(|| AlephError::invalid_config("API key is required"))?;
 
         debug!(
             endpoint = %endpoint,
@@ -315,7 +315,7 @@ impl ProtocolAdapter for OpenAiProtocol {
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
             error!(status = %status, error = %error_text, "OpenAI API error");
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "API error ({}): {}",
                 status, error_text
             )));
@@ -323,14 +323,14 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
             error!(error = %e, "Failed to parse OpenAI response");
-            AetherError::provider(format!("Failed to parse response: {}", e))
+            AlephError::provider(format!("Failed to parse response: {}", e))
         })?;
 
         completion
             .choices
             .first()
             .map(|c| c.message.content.clone())
-            .ok_or_else(|| AetherError::provider("No response choices"))
+            .ok_or_else(|| AlephError::provider("No response choices"))
     }
 
     async fn parse_stream(
@@ -341,7 +341,7 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "API error ({}): {}",
                 status, error_text
             )));
@@ -349,10 +349,10 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         let stream = response
             .bytes_stream()
-            .map_err(|e| AetherError::network(format!("Stream error: {}", e)))
+            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
             .try_filter_map(|chunk| async move {
                 let text = std::str::from_utf8(&chunk)
-                    .map_err(|e| AetherError::provider(format!("UTF-8 error: {}", e)))?;
+                    .map_err(|e| AlephError::provider(format!("UTF-8 error: {}", e)))?;
 
                 let mut result = String::new();
                 for line in text.lines() {

@@ -1,8 +1,8 @@
-# Aether UnifiedSaveBar Test Report
+# Aleph UnifiedSaveBar Test Report
 
 ## Test Execution Summary
 **Date**: 2025-12-31 00:56
-**Application**: Aether Debug Build
+**Application**: Aleph Debug Build
 **Test Target**: BehaviorSettingsView with UnifiedSaveBar
 
 ## ✅ Application Status
@@ -10,7 +10,7 @@
 ### Process Information
 - **Status**: Running
 - **PID**: 78454
-- **Location**: `/Users/zouguojun/Library/Developer/Xcode/DerivedData/Aether-etjxjwefzynbztajfjnzbmaenbyi/Build/Products/Debug/Aether.app`
+- **Location**: `/Users/zouguojun/Library/Developer/Xcode/DerivedData/Aleph-etjxjwefzynbztajfjnzbmaenbyi/Build/Products/Debug/Aleph.app`
 - **Memory Usage**: ~170 MB
 - **CPU Time**: 0:05.72
 
@@ -24,7 +24,7 @@
 ### Compilation Tests
 - ✅ **Build Status**: SUCCESS
 - ✅ **Swift Compilation**: All files compiled without errors
-- ✅ **Rust Core**: Built successfully (target/debug/libaethecore.dylib)
+- ✅ **Rust Core**: Built successfully (target/debug/libalephcore.dylib)
 - ✅ **UniFFI Bindings**: Generated successfully
 
 ### Code Integration Tests
@@ -38,7 +38,7 @@
 Due to sandboxing limitations, the following tests require manual verification:
 
 ### 1. Visual Verification
-**Action**: Open Aether Settings → Navigate to Behavior tab
+**Action**: Open Aleph Settings → Navigate to Behavior tab
 
 **Check**:
 - [ ] UnifiedSaveBar visible at bottom of view

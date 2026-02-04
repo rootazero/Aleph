@@ -1,6 +1,6 @@
 # Development Phases
 
-This document outlines the development phases for Aether, tracking progress and defining success criteria for each phase.
+This document outlines the development phases for Aleph, tracking progress and defining success criteria for each phase.
 
 ---
 
@@ -14,7 +14,7 @@ This document outlines the development phases for Aether, tracking progress and 
 - [x] Initialize Cargo workspace with `crate-type = ["cdylib", "staticlib"]`
 - [x] Create `aether.udl` interface definition
 - [x] Implement `AetherCore` struct with basic lifecycle
-- [x] Implement `AetherEventHandler` trait for callbacks
+- [x] Implement `AlephEventHandler` trait for callbacks
 - [x] Set up UniFFI bindings generation
 - [x] Create macOS Xcode project
 - [x] Generate Swift bindings and integrate into Xcode
@@ -97,7 +97,7 @@ This document outlines the development phases for Aether, tracking progress and 
 - [x] Add memory management UI in Settings (view/delete history)
 - [x] Implement SessionCompactor for memory compression
 
-**Success Criteria**: ✅ Aether remembers past interactions per-app/per-window and augments prompts with relevant context
+**Success Criteria**: ✅ Aleph remembers past interactions per-app/per-window and augments prompts with relevant context
 
 ---
 
@@ -105,10 +105,10 @@ This document outlines the development phases for Aether, tracking progress and 
 
 **Status**: ✅ COMPLETED
 
-**Goal**: Connect to real AI providers with self-implemented AetherTool system
+**Goal**: Connect to real AI providers with self-implemented AlephTool system
 
 **Tasks:**
-- [x] Implement AetherTool trait for unified tool system
+- [x] Implement AlephTool trait for unified tool system
 - [x] Implement OpenAI API client (self-implemented AiProvider)
 - [x] Implement Anthropic Claude API client
 - [x] Implement Google Gemini API client
@@ -125,12 +125,12 @@ This document outlines the development phases for Aether, tracking progress and 
 ### Key Files
 
 - `core/src/providers/` - AI provider implementations
-- `core/src/tools/` - AetherTool trait and server
+- `core/src/tools/` - AlephTool trait and server
 - `core/src/dispatcher/` - Smart routing system
 - `core/src/config/` - Configuration management (10 type modules)
 - `platforms/macos/Aether/config.example.toml` - Comprehensive configuration example
 
-**Success Criteria**: ✅ All providers implemented with AetherTool system, router correctly routes requests based on rules
+**Success Criteria**: ✅ All providers implemented with AlephTool system, router correctly routes requests based on rules
 
 ---
 
@@ -172,7 +172,7 @@ This document outlines the development phases for Aether, tracking progress and 
 
 **Status**: ✅ COMPLETED
 
-**Goal**: Production-ready AI agent execution with AetherTool integration
+**Goal**: Production-ready AI agent execution with AlephTool integration
 
 ### Core Components (8 Modules)
 
@@ -324,9 +324,9 @@ This document outlines the development phases for Aether, tracking progress and 
 | enigo (input sim) | Swift layer |
 | SwiftUI App lifecycle | main.swift + NSApplicationMain() |
 | NSWindow for Settings | NSPanel |
-| Manual AI providers | Self-implemented AetherTool + AiProvider |
+| Manual AI providers | Self-implemented AlephTool + AiProvider |
 | Single-layer memory | Dual-layer (Raw + Facts) |
-| rig-core 0.28 | Removed (migrated to AetherTool system) |
+| rig-core 0.28 | Removed (migrated to AlephTool system) |
 
 ---
 

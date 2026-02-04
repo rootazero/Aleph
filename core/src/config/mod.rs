@@ -9,7 +9,7 @@
 //! Phase 4: Added memory configuration support.
 //! Phase 5: Added AI provider configuration support.
 //! Phase 6: Added Keychain integration and file watching support.
-//! Phase 8: Added config file loading from ~/.aether/config.toml
+//! Phase 8: Added config file loading from ~/.aleph/config.toml
 
 // Submodules
 mod structs;

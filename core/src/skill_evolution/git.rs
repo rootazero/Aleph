@@ -7,7 +7,7 @@ use std::process::Command;
 
 use tracing::{debug, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::types::CommitResult;
 
@@ -153,7 +153,7 @@ impl GitCommitter {
             .args(args)
             .current_dir(&self.repo_root)
             .output()
-            .map_err(|e| AetherError::Other {
+            .map_err(|e| AlephError::Other {
                 message: format!("Failed to run git: {}", e),
                 suggestion: Some("Ensure git is installed".to_string()),
             })?;
@@ -161,7 +161,7 @@ impl GitCommitter {
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
-            Err(AetherError::Other {
+            Err(AlephError::Other {
                 message: format!(
                     "Git command failed: {}",
                     String::from_utf8_lossy(&output.stderr)

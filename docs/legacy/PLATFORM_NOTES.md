@@ -1,12 +1,12 @@
 # Platform-Specific Notes
 
-This document contains platform-specific configuration, permissions, and setup instructions for Aether.
+This document contains platform-specific configuration, permissions, and setup instructions for Aleph.
 
 ## macOS (Primary Target)
 
 ### Required Entitlements
 
-Configure in `Aether.entitlements`:
+Configure in `Aleph.entitlements`:
 
 ```xml
 <key>com.apple.security.automation.apple-events</key>
@@ -28,7 +28,7 @@ Configure in `Aether/Info.plist`:
 
 <!-- Accessibility permission description -->
 <key>NSAppleEventsUsageDescription</key>
-<string>Aether needs to simulate keyboard input to paste AI responses.</string>
+<string>Aleph needs to simulate keyboard input to paste AI responses.</string>
 ```
 
 **Key Behaviors:**
@@ -39,13 +39,13 @@ Configure in `Aether/Info.plist`:
 
 ### Accessibility Permissions
 
-Aether requires macOS Accessibility permission to:
+Aleph requires macOS Accessibility permission to:
 - Detect global hotkeys (via `rdev`)
 - Simulate keyboard input (via `enigo`)
 - Query active window title for memory context
 
 **Permission Request Flow:**
-1. User launches Aether for the first time
+1. User launches Aleph for the first time
 2. App detects missing Accessibility permission
 3. Shows `PermissionGateView` with instructions
 4. User manually grants permission in System Settings > Privacy & Security > Accessibility
@@ -76,7 +76,7 @@ statusItem.menu = createMenu()
 **Menu Structure:**
 - Settings...
 - ---
-- Quit Aether
+- Quit Aleph
 
 **Icon:**
 - System symbol: `sparkles`
@@ -86,7 +86,7 @@ statusItem.menu = createMenu()
 
 ### Sandbox Considerations
 
-Aether currently runs **without App Sandbox** to support:
+Aleph currently runs **without App Sandbox** to support:
 - Global hotkey detection
 - Clipboard access across all apps
 - Keyboard simulation
@@ -103,7 +103,7 @@ Aether currently runs **without App Sandbox** to support:
 Build universal binary for distribution:
 
 ```bash
-cd Aether/core/
+cd Aleph/core/
 
 # Build for Intel
 cargo build --release --target x86_64-apple-darwin
@@ -113,19 +113,19 @@ cargo build --release --target aarch64-apple-darwin
 
 # Combine into universal binary
 lipo -create \
-  target/x86_64-apple-darwin/release/libaethecore.dylib \
-  target/aarch64-apple-darwin/release/libaethecore.dylib \
-  -output libaethecore.universal.dylib
+  target/x86_64-apple-darwin/release/libalephcore.dylib \
+  target/aarch64-apple-darwin/release/libalephcore.dylib \
+  -output libalephcore.universal.dylib
 
 # Copy to Frameworks directory
-cp libaethecore.universal.dylib ../Frameworks/libaethecore.dylib
+cp libalephcore.universal.dylib ../Frameworks/libalephcore.dylib
 ```
 
 ---
 
 ## Tauri Cross-Platform (Windows & Linux)
 
-Aether uses Tauri 2.0 for cross-platform support on Windows and Linux.
+Aleph uses Tauri 2.0 for cross-platform support on Windows and Linux.
 
 ### Architecture
 

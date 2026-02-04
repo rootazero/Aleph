@@ -12,8 +12,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::{GenerationProvider, GenerationRequest};
-//! use aethecore::generation::providers::OpenAiImageProvider;
+//! use alephcore::generation::{GenerationProvider, GenerationRequest};
+//! use alephcore::generation::providers::OpenAiImageProvider;
 //!
 //! let provider = OpenAiImageProvider::new("sk-...", None, None);
 //!
@@ -64,7 +64,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 120;
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::generation::providers::OpenAiImageProvider;
+/// use alephcore::generation::providers::OpenAiImageProvider;
 ///
 /// let provider = OpenAiImageProvider::new(
 ///     "sk-your-api-key",
@@ -98,7 +98,7 @@ impl OpenAiImageProvider {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::providers::OpenAiImageProvider;
+    /// use alephcore::generation::providers::OpenAiImageProvider;
     ///
     /// // Default configuration
     /// let provider = OpenAiImageProvider::new("sk-xxx", None, None);

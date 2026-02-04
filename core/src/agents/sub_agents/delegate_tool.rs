@@ -15,7 +15,7 @@ use tracing::info;
 use super::dispatcher::SubAgentDispatcher;
 use super::traits::{ExecutionContextInfo, SubAgentRequest};
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 /// Arguments for the delegate tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -201,9 +201,9 @@ impl DelegateTool {
     }
 }
 
-/// Implementation of AetherTool trait for DelegateTool
+/// Implementation of AlephTool trait for DelegateTool
 #[async_trait]
-impl AetherTool for DelegateTool {
+impl AlephTool for DelegateTool {
     const NAME: &'static str = "delegate";
     const DESCRIPTION: &'static str = "Delegate a task to a specialized sub-agent. Use this when:\n\
         - You need to discover MCP tools from external servers (agent: \"mcp\")\n\
@@ -223,7 +223,7 @@ impl AetherTool for DelegateTool {
 mod tests {
     use super::*;
     use crate::dispatcher::ToolRegistry;
-    use crate::tools::AetherTool;
+    use crate::tools::AlephTool;
 
     #[tokio::test]
     async fn test_delegate_tool_creation() {
@@ -241,7 +241,7 @@ mod tests {
         let dispatcher = Arc::new(RwLock::new(SubAgentDispatcher::with_defaults(registry)));
         let tool = DelegateTool::new(dispatcher);
 
-        let definition = AetherTool::definition(&tool);
+        let definition = AlephTool::definition(&tool);
         assert_eq!(definition.name, "delegate");
         assert!(definition.description.contains("sub-agent"));
     }

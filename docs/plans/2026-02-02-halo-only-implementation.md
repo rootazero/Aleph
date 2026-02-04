@@ -22,7 +22,7 @@
 ```swift
 //
 //  HaloStreamingTypes.swift
-//  Aether
+//  Aleph
 //
 //  New streaming types for simplified Halo state model.
 //
@@ -323,7 +323,7 @@ struct HistoryTopic: Equatable, Identifiable {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds or only unrelated warnings
 
@@ -570,7 +570,7 @@ extension ErrorType {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
@@ -605,7 +605,7 @@ EOF
 ```swift
 //
 //  HaloStreamingView.swift
-//  Aether
+//  Aleph
 //
 //  Unified streaming view for all processing states.
 //
@@ -761,7 +761,7 @@ struct HaloStreamingView_Previews: PreviewProvider {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
@@ -794,7 +794,7 @@ EOF
 ```swift
 //
 //  HaloResultView.swift
-//  Aether
+//  Aleph
 //
 //  Result display view (replaces success state).
 //
@@ -955,7 +955,7 @@ struct HaloResultView_Previews: PreviewProvider {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
@@ -989,7 +989,7 @@ EOF
 ```swift
 //
 //  HaloHistoryListView.swift
-//  Aether
+//  Aleph
 //
 //  History list view triggered by // command.
 //
@@ -1174,7 +1174,7 @@ struct HaloHistoryListView_Previews: PreviewProvider {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
@@ -1210,7 +1210,7 @@ EOF
 ```swift
 //
 //  HaloViewV2.swift
-//  Aether
+//  Aleph
 //
 //  Simplified HaloView with 6 core states.
 //
@@ -1484,7 +1484,7 @@ struct HaloViewV2_Previews: PreviewProvider {
 
 **Step 2: Verify the file compiles**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 Expected: Build succeeds
 
@@ -1528,7 +1528,7 @@ Search for and remove any references to MultiTurn files in `platforms/macos/proj
 
 **Step 3: Verify build still works**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodegen generate && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -30`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -30`
 
 Expected: Build may fail due to missing references - this is expected, we'll fix in next task
 
@@ -1570,7 +1570,7 @@ Key changes:
 
 **Step 2: Verify build**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 **Step 3: Commit**
 
@@ -1604,7 +1604,7 @@ Replace:
 
 **Step 2: Verify build**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 **Step 3: Commit**
 
@@ -1643,7 +1643,7 @@ Search and replace `HaloStateV2` → `HaloState` across the codebase
 
 **Step 3: Verify build**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aether -configuration Debug build -quiet 2>&1 | head -20`
+Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build -quiet 2>&1 | head -20`
 
 **Step 4: Commit**
 

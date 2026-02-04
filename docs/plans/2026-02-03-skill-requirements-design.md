@@ -6,7 +6,7 @@
 
 ## 概述
 
-本设计为 Aether Skills 系统引入三项增强能力：
+本设计为 Aleph Skills 系统引入三项增强能力：
 
 1. **元数据扩展** — 依赖声明、安装指令、UI 元数据
 2. **健康检查机制** — Pre-flight Check，主动安装工作流
@@ -21,7 +21,7 @@
 
 ### 参考对比
 
-| 特性 | Aether (现有) | OpenClaw | Aether (本设计) |
+| 特性 | Aleph (现有) | OpenClaw | Aleph (本设计) |
 |------|--------------|----------|----------------|
 | 依赖声明 | ❌ | ✅ bins | ✅ requirements.binaries |
 | 安装指令 | ❌ | ✅ install | ✅ requirements.install |
@@ -536,7 +536,7 @@ impl SecurityPolicy {
 ### 用户配置
 
 ```yaml
-# ~/.aether/config.yaml
+# ~/.aleph/config.yaml
 
 exec:
   # Skill allowlist - 这些 Skill 的 CLI 命令自动批准

@@ -28,7 +28,7 @@
 ```
 Rust Core (已有)          C ABI 导出 (新增)           C# 端 (新增)
 ─────────────────────────────────────────────────────────────────
-init_unified/             ffi_cabi.rs                 AetherCore.cs
+init_unified/             ffi_cabi.rs                 AlephCore.cs
 ├─ coordinator.rs    →    aether_needs_init()    →    NeedsFirstTimeInit()
 ├─ phases (6个)      →    aether_run_init()      →    RunFirstTimeInit()
 └─ progress handler  →    callback functions     →    IInitProgressHandler
@@ -110,16 +110,16 @@ pub type InitErrorCallback = extern "C" fn(
 #### NativeMethods.g.cs（csbindgen 自动生成）
 
 ```csharp
-[DllImport("aethecore", CallingConvention = CallingConvention.Cdecl)]
+[DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
 public static extern int aether_needs_first_time_init();
 
-[DllImport("aethecore", CallingConvention = CallingConvention.Cdecl)]
+[DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
 public static extern int aether_check_embedding_model_exists();
 
-[DllImport("aethecore", CallingConvention = CallingConvention.Cdecl)]
+[DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
 public static extern int aether_run_first_time_init();
 
-[DllImport("aethecore", CallingConvention = CallingConvention.Cdecl)]
+[DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
 public static extern unsafe int aether_register_init_callbacks(
     delegate* unmanaged[Cdecl]<byte*, uint, uint, void> onPhaseStarted,
     delegate* unmanaged[Cdecl]<byte*, double, byte*, void> onPhaseProgress,
@@ -128,11 +128,11 @@ public static extern unsafe int aether_register_init_callbacks(
     delegate* unmanaged[Cdecl]<byte*, byte*, int, void> onError
 );
 
-[DllImport("aethecore", CallingConvention = CallingConvention.Cdecl)]
+[DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
 public static extern void aether_clear_init_callbacks();
 ```
 
-#### AetherCore.cs 新增
+#### AlephCore.cs 新增
 
 ```csharp
 /// <summary>
@@ -147,7 +147,7 @@ public interface IInitProgressHandler
     void OnError(string phase, string message, bool isRetryable);
 }
 
-// AetherCore 类新增方法
+// AlephCore 类新增方法
 public bool NeedsFirstTimeInit()
 {
     return NativeMethods.aether_needs_first_time_init() == 1;
@@ -170,8 +170,8 @@ public void RunFirstTimeInit(IInitProgressHandler handler)
 
 ```xml
 <ContentDialog
-    x:Class="Aether.Windows.InitializationDialog"
-    Title="初始化 Aether"
+    x:Class="Aleph.Windows.InitializationDialog"
+    Title="初始化 Aleph"
     CloseButtonText=""
     IsPrimaryButtonEnabled="False"
     IsSecondaryButtonEnabled="False">
@@ -236,7 +236,7 @@ OnLaunched()
     │   └─ else → ContinueStartup()
     │
     └─ ContinueStartup()              // 后续初始化
-        ├─ AetherCore.Initialize()    // 仅加载已存在的配置
+        ├─ AlephCore.Initialize()    // 仅加载已存在的配置
         ├─ HotkeyService
         ├─ TrayIconService
         ├─ AutoUpdateService
@@ -297,7 +297,7 @@ public bool Initialize()
 ## 目录结构（初始化完成后）
 
 ```
-~/.aether/                    # Windows: %USERPROFILE%\.config\aether
+~/.aleph/                    # Windows: %USERPROFILE%\.config\aether
 ├── config.toml                      # 配置文件
 ├── memory.db                        # 向量数据库
 ├── logs/                            # 日志目录

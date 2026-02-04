@@ -35,7 +35,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::extension::{ServiceManager, PluginLoader, ServiceRegistration};
+//! use alephcore::extension::{ServiceManager, PluginLoader, ServiceRegistration};
 //!
 //! let mut manager = ServiceManager::new();
 //! let mut loader = PluginLoader::new();

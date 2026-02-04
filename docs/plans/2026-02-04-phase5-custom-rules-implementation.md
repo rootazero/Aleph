@@ -83,7 +83,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --lib scripting::engine --no-fail-fast`
+Run: `cargo test -p alephcore --lib scripting::engine --no-fail-fast`
 Expected: FAIL with "could not compile" (rhai not in dependencies)
 
 **Step 3: Add Rhai dependency**
@@ -154,7 +154,7 @@ pub mod scripting;
 
 **Step 6: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --lib scripting::engine`
+Run: `cargo test -p alephcore --lib scripting::engine`
 Expected: All 3 tests PASS
 
 **Step 7: Commit**
@@ -314,7 +314,7 @@ metadata:
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --lib yaml_policy::schema --no-fail-fast`
+Run: `cargo test -p alephcore --lib yaml_policy::schema --no-fail-fast`
 Expected: FAIL with "serde_yaml not found"
 
 **Step 3: Add serde_yaml dependency**
@@ -348,7 +348,7 @@ pub mod yaml_policy;
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --lib yaml_policy::schema`
+Run: `cargo test -p alephcore --lib yaml_policy::schema`
 Expected: 3 tests PASS
 
 **Step 6: Commit**
@@ -447,7 +447,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --lib scripting::helpers`
+Run: `cargo test -p alephcore --lib scripting::helpers`
 Expected: FAIL with "not implemented"
 
 **Step 3: Implement duration parsing**
@@ -508,7 +508,7 @@ pub use helpers::{parse_duration, register_duration_helpers};
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --lib scripting::helpers`
+Run: `cargo test -p alephcore --lib scripting::helpers`
 Expected: 6 tests PASS
 
 **Step 6: Commit**
@@ -667,7 +667,7 @@ pub use event_collection::EventCollection;
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --lib scripting::api`
+Run: `cargo test -p alephcore --lib scripting::api`
 Expected: FAIL (module not found)
 
 **Step 3: Update scripting module exports**
@@ -686,7 +686,7 @@ pub use api::{HistoryApi, EventCollection};
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --lib scripting::api`
+Run: `cargo test -p alephcore --lib scripting::api`
 Expected: 3 tests PASS (basic stubs)
 
 **Step 5: Commit**
@@ -882,7 +882,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --lib scripting::api::event`
+Run: `cargo test -p alephcore --lib scripting::api::event`
 Expected: FAIL (module not found)
 
 **Step 3: Implement EventApi and update exports**
@@ -963,7 +963,7 @@ impl EventCollection {
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --lib scripting::api`
+Run: `cargo test -p alephcore --lib scripting::api`
 Expected: 5 tests PASS
 
 **Step 6: Commit**
@@ -1051,7 +1051,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --lib scripting::api::history`
+Run: `cargo test -p alephcore --lib scripting::api::history`
 Expected: FAIL (count is 0, should be > 0)
 
 **Step 3: Add query_derived_events to WorldModel**
@@ -1147,7 +1147,7 @@ impl HistoryApi {
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --lib scripting::api::history`
+Run: `cargo test -p alephcore --lib scripting::api::history`
 Expected: 2 tests PASS
 
 **Step 6: Commit**
@@ -1319,7 +1319,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --lib scripting::api::baseline`
+Run: `cargo test -p alephcore --lib scripting::api::baseline`
 Expected: FAIL (DerivedEvent import error)
 
 **Step 3: Fix imports and update exports**
@@ -1382,7 +1382,7 @@ mod tests {
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --lib scripting::api`
+Run: `cargo test -p alephcore --lib scripting::api`
 Expected: 8 tests PASS (including new baseline tests)
 
 **Step 6: Commit**
@@ -1624,7 +1624,7 @@ risk: low
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --lib yaml_policy::yaml_policy`
+Run: `cargo test -p alephcore --lib yaml_policy::yaml_policy`
 Expected: FAIL (module not found or compilation errors)
 
 **Step 3: Update yaml_policy module exports**
@@ -1641,7 +1641,7 @@ pub use yaml_policy::YamlPolicy;
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --lib yaml_policy::yaml_policy`
+Run: `cargo test -p alephcore --lib yaml_policy::yaml_policy`
 Expected: 2 tests PASS
 
 **Step 5: Commit**
@@ -1779,7 +1779,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --lib yaml_policy::loader --no-fail-fast`
+Run: `cargo test -p alephcore --lib yaml_policy::loader --no-fail-fast`
 Expected: FAIL (tempfile dependency missing)
 
 **Step 3: Add tempfile dev-dependency**
@@ -1883,7 +1883,7 @@ mod tests {
 
 **Step 6: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --lib dispatcher::policy`
+Run: `cargo test -p alephcore --lib dispatcher::policy`
 Expected: All tests PASS (including new test_policy_engine_with_yaml)
 
 **Step 7: Commit**
@@ -1918,7 +1918,7 @@ Tests: 4 passing (success, missing file, invalid YAML, integration)"
 Create `examples/policies.yaml`:
 
 ```yaml
-# Example Custom Policies for Aether
+# Example Custom Policies for Aleph
 
 # ============================================================
 # Simple Rules - 80% Scenarios
@@ -1997,11 +1997,11 @@ Create `core/tests/e2e_yaml_policies.rs`:
 ```rust
 //! End-to-End Test for YAML Policies
 
-use aethecore::daemon::event_bus::DaemonEventBus;
-use aethecore::daemon::worldmodel::{WorldModel, WorldModelConfig};
-use aethecore::daemon::dispatcher::policy::PolicyEngine;
-use aethecore::daemon::events::{DaemonEvent, DerivedEvent};
-use aethecore::daemon::worldmodel::state::{ActivityType, EnhancedContext};
+use alephcore::daemon::event_bus::DaemonEventBus;
+use alephcore::daemon::worldmodel::{WorldModel, WorldModelConfig};
+use alephcore::daemon::dispatcher::policy::PolicyEngine;
+use alephcore::daemon::events::{DaemonEvent, DerivedEvent};
+use alephcore::daemon::worldmodel::state::{ActivityType, EnhancedContext};
 use std::sync::Arc;
 use chrono::Utc;
 
@@ -2041,7 +2041,7 @@ async fn test_yaml_policies_load_and_evaluate() {
 
     // Check that one action is MuteSystemAudio
     assert!(actions.iter().any(|a| {
-        matches!(a.action_type, aethecore::daemon::dispatcher::policy::ActionType::MuteSystemAudio)
+        matches!(a.action_type, alephcore::daemon::dispatcher::policy::ActionType::MuteSystemAudio)
     }));
 }
 
@@ -2073,14 +2073,14 @@ async fn test_yaml_policies_disabled_rule_not_triggered() {
     // "Refactoring Mode Detection" is disabled
     // Should not trigger EnableDoNotDisturb
     assert!(!actions.iter().any(|a| {
-        matches!(a.action_type, aethecore::daemon::dispatcher::policy::ActionType::EnableDoNotDisturb)
+        matches!(a.action_type, alephcore::daemon::dispatcher::policy::ActionType::EnableDoNotDisturb)
     }));
 }
 ```
 
 **Step 3: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --test e2e_yaml_policies --no-fail-fast`
+Run: `cargo test -p alephcore --test e2e_yaml_policies --no-fail-fast`
 Expected: FAIL (file not found or evaluation issues)
 
 **Step 4: Fix any issues and verify structure**
@@ -2090,7 +2090,7 @@ Expected: File exists
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p aethecore --test e2e_yaml_policies`
+Run: `cargo test -p alephcore --test e2e_yaml_policies`
 Expected: 2 tests PASS
 
 **Step 6: Commit**

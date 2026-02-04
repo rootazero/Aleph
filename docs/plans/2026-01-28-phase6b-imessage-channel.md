@@ -13,7 +13,7 @@ Moltbot 使用 **外部 CLI (`imsg`)** + **JSON-RPC over stdio** 模式：
 - 通过 `imsg rpc` 子进程通信
 - 支持远程 SSH 部署
 
-### Aether 实现策略
+### Aleph 实现策略
 
 我们采用 **Rust 原生实现**：
 
@@ -233,7 +233,7 @@ core/src/gateway/channels/
 ## Configuration
 
 ```toml
-# ~/.aether/gateway.toml
+# ~/.aleph/gateway.toml
 [channels.imessage]
 enabled = true
 db_path = "~/Library/Messages/chat.db"
@@ -259,10 +259,10 @@ allow_from = ["+15551234567"]   # allowlist entries
 ### Manual Testing
 ```bash
 # Start gateway with iMessage channel
-cargo run --features gateway --bin aether-gateway
+cargo run --features gateway --bin aleph-gateway
 
 # Send test message via Gateway
-echo '{"jsonrpc":"2.0","method":"channel.send","params":{"channel":"imessage","to":"+15551234567","text":"Hello from Aether!"},"id":1}' | websocat ws://127.0.0.1:18789
+echo '{"jsonrpc":"2.0","method":"channel.send","params":{"channel":"imessage","to":"+15551234567","text":"Hello from Aleph!"},"id":1}' | websocat ws://127.0.0.1:18789
 ```
 
 ---

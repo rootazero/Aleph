@@ -14,7 +14,7 @@ use crate::{define_groups, define_hints};
 /// # Example
 ///
 /// ```ignore
-/// use aethecore::config::ui_hints::build_ui_hints;
+/// use alephcore::config::ui_hints::build_ui_hints;
 ///
 /// let hints = build_ui_hints();
 ///
@@ -70,7 +70,7 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             help: "Directory for generated files",
             group: "general",
             order: 3,
-            placeholder: "~/.aether/output",
+            placeholder: "~/.aleph/output",
         },
 
         // === Providers (wildcard) ===

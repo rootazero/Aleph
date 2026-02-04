@@ -51,7 +51,7 @@ impl MigrationResult {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use aethecore::extension::config::migrate::migrate_to_toml;
+/// use alephcore::extension::config::migrate::migrate_to_toml;
 ///
 /// let result = migrate_to_toml(Path::new("/path/to/aether.jsonc"))?;
 /// println!("Migrated {} -> {}", result.source.display(), result.target.display());

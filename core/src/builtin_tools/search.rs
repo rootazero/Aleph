@@ -1,6 +1,6 @@
 //! Web search tool with Tavily API integration
 //!
-//! Implements AetherTool trait for AI agent integration.
+//! Implements AlephTool trait for AI agent integration.
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use super::error::ToolError;
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 /// Arguments for search tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -193,11 +193,11 @@ impl Clone for SearchTool {
     }
 }
 
-/// Implementation of AetherTool trait for SearchTool
+/// Implementation of AlephTool trait for SearchTool
 ///
 /// This allows SearchTool to be used with Aether's unified tool system.
 #[async_trait]
-impl AetherTool for SearchTool {
+impl AlephTool for SearchTool {
     const NAME: &'static str = "search";
     const DESCRIPTION: &'static str =
         "Search the internet for current information. Use for questions requiring up-to-date data.";
@@ -214,7 +214,7 @@ impl AetherTool for SearchTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Delegate to the internal implementation, converting ToolError to AetherError
+        // Delegate to the internal implementation, converting ToolError to AlephError
         self.call_impl(args).await.map_err(Into::into)
     }
 }
@@ -261,10 +261,10 @@ mod tests {
         };
 
         // Use fully qualified syntax to avoid ambiguity with blanket impl
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        // Error is now AetherError (converted from ToolError)
+        // Error is now AlephError (converted from ToolError)
         let err = result.unwrap_err();
         let err_msg = err.to_string();
         assert!(

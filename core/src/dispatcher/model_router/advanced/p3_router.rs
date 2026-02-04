@@ -39,7 +39,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::model_router::{P3IntelligentRouter, P3RouterConfig};
+//! use alephcore::dispatcher::model_router::{P3IntelligentRouter, P3RouterConfig};
 //!
 //! let router = P3IntelligentRouter::new(config)?;
 //!

@@ -1,6 +1,6 @@
 # Session Compaction
 
-This document describes Aether's session compaction system, which manages token usage while preserving conversation context.
+This document describes Aleph's session compaction system, which manages token usage while preserving conversation context.
 
 ## Overview
 
@@ -332,7 +332,7 @@ SessionCompactor::check_and_compact()
     │
     ├─ Compaction performed
     │
-    └─ Publish AetherEvent::SessionCompacted(CompactionInfo)
+    └─ Publish AlephEvent::SessionCompacted(CompactionInfo)
            │
            ▼
     CallbackBridge handles event
@@ -363,7 +363,7 @@ impl EventHandler for SessionCompactor {
         _ctx: &EventContext,
     ) -> Result<Vec<AetherEvent>, HandlerError> {
         match event {
-            AetherEvent::LoopContinue(loop_state) => {
+            AlephEvent::LoopContinue(loop_state) => {
                 // Check if we need compaction based on token count
                 let limit = self.token_tracker.get_model_limit(&loop_state.model);
                 if loop_state.total_tokens >= limit.compaction_threshold() {
@@ -371,7 +371,7 @@ impl EventHandler for SessionCompactor {
                 }
                 Ok(vec![])
             }
-            AetherEvent::ToolCallCompleted(_) => {
+            AlephEvent::ToolCallCompleted(_) => {
                 // Trigger pruning check after tool completion
                 Ok(vec![])
             }

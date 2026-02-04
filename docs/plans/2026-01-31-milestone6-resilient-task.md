@@ -398,7 +398,7 @@ mod tests {
 //! ## Example
 //!
 //! ```rust,ignore
-//! use aethecore::resilient::{ResilientTask, ResilienceConfig, TaskOutcome};
+//! use alephcore::resilient::{ResilientTask, ResilienceConfig, TaskOutcome};
 //!
 //! struct PodcastTask { /* ... */ }
 //!
@@ -494,7 +494,7 @@ pub trait ResilientTask: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Self::Output>> + Send + 'a>> {
         let _ = ctx;
         Box::pin(async {
-            Err(crate::error::AetherError::Other {
+            Err(crate::error::AlephError::Other {
                 message: "No fallback available".to_string(),
                 suggestion: None,
             })
@@ -519,7 +519,7 @@ pub trait ResilientTask: Send + Sync {
     /// Check if a specific error should be retried.
     ///
     /// Override to customize retry behavior.
-    fn should_retry(&self, error: &crate::error::AetherError, attempt: u32) -> bool {
+    fn should_retry(&self, error: &crate::error::AlephError, attempt: u32) -> bool {
         let config = self.config();
         if attempt >= config.max_attempts {
             return false;
@@ -527,9 +527,9 @@ pub trait ResilientTask: Send + Sync {
 
         // Check error type
         match error {
-            crate::error::AetherError::NetworkError { .. } => true,
-            crate::error::AetherError::RateLimitError { .. } => true,
-            crate::error::AetherError::ProviderError { .. } => true,
+            crate::error::AlephError::NetworkError { .. } => true,
+            crate::error::AlephError::RateLimitError { .. } => true,
+            crate::error::AlephError::ProviderError { .. } => true,
             _ => false,
         }
     }
@@ -639,7 +639,7 @@ where
             fb(ctx)
         } else {
             Box::pin(async {
-                Err(crate::error::AetherError::Other {
+                Err(crate::error::AlephError::Other {
                     message: "No fallback available".to_string(),
                     suggestion: None,
                 })
@@ -679,7 +679,7 @@ mod tests {
             let should_fail = self.should_fail;
             Box::pin(async move {
                 if should_fail {
-                    Err(crate::error::AetherError::Other {
+                    Err(crate::error::AlephError::Other {
                         message: "Test failure".to_string(),
                         suggestion: None,
                     })
@@ -773,7 +773,7 @@ use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::task::ResilientTask;
 use super::types::{
@@ -1054,7 +1054,7 @@ mod tests {
             Box::pin(async move {
                 let count = attempts.fetch_add(1, Ordering::SeqCst) + 1;
                 if count < fail_until {
-                    Err(AetherError::NetworkError {
+                    Err(AlephError::NetworkError {
                         message: format!("Attempt {} failed", count),
                         suggestion: None,
                     })
@@ -1283,7 +1283,7 @@ impl ResilientTask for PodcastTask {
             // For demonstration, simulate occasional failure
             #[cfg(test)]
             {
-                return Err(crate::error::AetherError::NetworkError {
+                return Err(crate::error::AlephError::NetworkError {
                     message: "TTS service unavailable".to_string(),
                     suggestion: None,
                 });

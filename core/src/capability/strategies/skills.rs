@@ -52,7 +52,7 @@ impl CapabilityStrategy for SkillsStrategy {
         if let Some(registry) = &self.skills_registry {
             let dir = registry.skills_dir();
             if !dir.exists() {
-                return Err(crate::error::AetherError::config(format!(
+                return Err(crate::error::AlephError::config(format!(
                     "Skills directory does not exist: {}",
                     dir.display()
                 )));

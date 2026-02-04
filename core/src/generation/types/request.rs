@@ -5,7 +5,7 @@
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::{GenerationRequest, GenerationType, GenerationParams};
+/// use alephcore::generation::{GenerationRequest, GenerationType, GenerationParams};
 ///
 /// let request = GenerationRequest::new(
 ///     GenerationType::Image,
@@ -43,7 +43,7 @@ impl GenerationRequest {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::{GenerationRequest, GenerationType};
+    /// use alephcore::generation::{GenerationRequest, GenerationType};
     ///
     /// let request = GenerationRequest::new(
     ///     GenerationType::Image,

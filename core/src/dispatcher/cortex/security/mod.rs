@@ -20,7 +20,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::cortex::security::{
+//! use alephcore::dispatcher::cortex::security::{
 //!     SecurityPipeline, SecurityConfig, SanitizeContext,
 //! };
 //!

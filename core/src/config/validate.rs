@@ -3,7 +3,7 @@
 //! This module handles validation of configuration values.
 
 use crate::config::Config;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use chrono::NaiveTime;
 use tracing::{debug, error, info, warn};
 
@@ -44,7 +44,7 @@ impl Config {
         if let Some(ref default_provider) = self.general.default_provider {
             if !self.providers.contains_key(default_provider) {
                 error!(default_provider = %default_provider, "Default provider not found");
-                return Err(AetherError::invalid_config(format!(
+                return Err(AlephError::invalid_config(format!(
                     "Default provider '{}' not found in providers",
                     default_provider
                 )));
@@ -61,7 +61,7 @@ impl Config {
                 && provider.api_key.is_none()
             {
                 error!(provider = %name, protocol = %protocol, "Provider missing API key");
-                return Err(AetherError::invalid_config(format!(
+                return Err(AlephError::invalid_config(format!(
                     "Provider '{}' requires an API key",
                     name
                 )));
@@ -70,7 +70,7 @@ impl Config {
             // Validate timeout
             if provider.timeout_seconds == 0 {
                 error!(provider = %name, "Provider timeout is zero");
-                return Err(AetherError::invalid_config(format!(
+                return Err(AlephError::invalid_config(format!(
                     "Provider '{}' timeout must be greater than 0",
                     name
                 )));
@@ -88,7 +88,7 @@ impl Config {
 
                 if !(min..=max).contains(&temp) {
                     error!(provider = %name, temperature = temp, "Invalid temperature for {}", provider_name);
-                    return Err(AetherError::invalid_config(format!(
+                    return Err(AlephError::invalid_config(format!(
                         "Provider '{}' ({}) temperature must be between {} and {}, got {}",
                         name, provider_name, min, max, temp
                     )));
@@ -99,7 +99,7 @@ impl Config {
             if let Some(max_tokens) = provider.max_tokens {
                 if max_tokens == 0 {
                     error!(provider = %name, max_tokens = max_tokens, "Invalid max_tokens");
-                    return Err(AetherError::invalid_config(format!(
+                    return Err(AlephError::invalid_config(format!(
                         "Provider '{}' max_tokens must be greater than 0, got {}",
                         name, max_tokens
                     )));
@@ -110,7 +110,7 @@ impl Config {
             if let Some(top_p) = provider.top_p {
                 if !(0.0..=1.0).contains(&top_p) {
                     error!(provider = %name, top_p = top_p, "Invalid top_p");
-                    return Err(AetherError::invalid_config(format!(
+                    return Err(AlephError::invalid_config(format!(
                         "Provider '{}' top_p must be between 0.0 and 1.0, got {}",
                         name, top_p
                     )));
@@ -121,7 +121,7 @@ impl Config {
             if let Some(top_k) = provider.top_k {
                 if top_k == 0 {
                     error!(provider = %name, top_k = top_k, "Invalid top_k");
-                    return Err(AetherError::invalid_config(format!(
+                    return Err(AlephError::invalid_config(format!(
                         "Provider '{}' top_k must be greater than 0, got {}",
                         name, top_k
                     )));
@@ -133,7 +133,7 @@ impl Config {
                 if let Some(freq_pen) = provider.frequency_penalty {
                     if !(-2.0..=2.0).contains(&freq_pen) {
                         error!(provider = %name, frequency_penalty = freq_pen, "Invalid frequency_penalty");
-                        return Err(AetherError::invalid_config(format!(
+                        return Err(AlephError::invalid_config(format!(
                             "Provider '{}' frequency_penalty must be between -2.0 and 2.0, got {}",
                             name, freq_pen
                         )));
@@ -143,7 +143,7 @@ impl Config {
                 if let Some(pres_pen) = provider.presence_penalty {
                     if !(-2.0..=2.0).contains(&pres_pen) {
                         error!(provider = %name, presence_penalty = pres_pen, "Invalid presence_penalty");
-                        return Err(AetherError::invalid_config(format!(
+                        return Err(AlephError::invalid_config(format!(
                             "Provider '{}' presence_penalty must be between -2.0 and 2.0, got {}",
                             name, pres_pen
                         )));
@@ -156,7 +156,7 @@ impl Config {
                 if let Some(ref thinking_level) = provider.thinking_level {
                     if thinking_level != "LOW" && thinking_level != "HIGH" {
                         error!(provider = %name, thinking_level = %thinking_level, "Invalid thinking_level");
-                        return Err(AetherError::invalid_config(format!(
+                        return Err(AlephError::invalid_config(format!(
                             "Provider '{}' thinking_level must be 'LOW' or 'HIGH', got '{}'",
                             name, thinking_level
                         )));
@@ -166,7 +166,7 @@ impl Config {
                 if let Some(ref media_res) = provider.media_resolution {
                     if media_res != "LOW" && media_res != "MEDIUM" && media_res != "HIGH" {
                         error!(provider = %name, media_resolution = %media_res, "Invalid media_resolution");
-                        return Err(AetherError::invalid_config(format!(
+                        return Err(AlephError::invalid_config(format!(
                             "Provider '{}' media_resolution must be 'LOW', 'MEDIUM', or 'HIGH', got '{}'",
                             name, media_res
                         )));
@@ -179,7 +179,7 @@ impl Config {
                 if let Some(repeat_pen) = provider.repeat_penalty {
                     if repeat_pen < 0.0 {
                         error!(provider = %name, repeat_penalty = repeat_pen, "Invalid repeat_penalty");
-                        return Err(AetherError::invalid_config(format!(
+                        return Err(AlephError::invalid_config(format!(
                             "Provider '{}' repeat_penalty must be >= 0.0, got {}",
                             name, repeat_pen
                         )));
@@ -209,7 +209,7 @@ impl Config {
                                 provider = %provider,
                                 "Command rule references unknown provider"
                             );
-                            return Err(AetherError::invalid_config(format!(
+                            return Err(AlephError::invalid_config(format!(
                                 "Command rule #{} references unknown provider '{}'",
                                 idx + 1,
                                 provider
@@ -222,7 +222,7 @@ impl Config {
                             regex = %rule.regex,
                             "Command rule missing provider"
                         );
-                        return Err(AetherError::invalid_config(format!(
+                        return Err(AlephError::invalid_config(format!(
                             "Command rule #{} (regex: '{}') requires a provider",
                             idx + 1,
                             rule.regex
@@ -256,7 +256,7 @@ impl Config {
                     error = %e,
                     "Invalid regex pattern"
                 );
-                return Err(AetherError::invalid_config(format!(
+                return Err(AlephError::invalid_config(format!(
                     "Rule #{} has invalid regex '{}': {}",
                     idx + 1,
                     rule.regex,
@@ -268,7 +268,7 @@ impl Config {
         // Validate memory config
         if self.memory.max_context_items == 0 {
             error!("Memory max_context_items is zero");
-            return Err(AetherError::invalid_config(
+            return Err(AlephError::invalid_config(
                 "memory.max_context_items must be greater than 0",
             ));
         }
@@ -278,7 +278,7 @@ impl Config {
                 threshold = self.memory.similarity_threshold,
                 "Invalid similarity threshold"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "memory.similarity_threshold must be between 0.0 and 1.0, got {}",
                 self.memory.similarity_threshold
             )));
@@ -287,14 +287,14 @@ impl Config {
         if self.memory.dreaming.enabled {
             if self.memory.dreaming.idle_threshold_seconds == 0 {
                 error!("Dreaming idle_threshold_seconds is zero");
-                return Err(AetherError::invalid_config(
+                return Err(AlephError::invalid_config(
                     "memory.dreaming.idle_threshold_seconds must be greater than 0",
                 ));
             }
 
             if self.memory.dreaming.max_duration_seconds == 0 {
                 error!("Dreaming max_duration_seconds is zero");
-                return Err(AetherError::invalid_config(
+                return Err(AlephError::invalid_config(
                     "memory.dreaming.max_duration_seconds must be greater than 0",
                 ));
             }
@@ -309,7 +309,7 @@ impl Config {
                     window_start = %self.memory.dreaming.window_start_local,
                     "Invalid dreaming window_start_local"
                 );
-                return Err(AetherError::invalid_config(format!(
+                return Err(AlephError::invalid_config(format!(
                     "memory.dreaming.window_start_local must be HH:MM, got {}",
                     self.memory.dreaming.window_start_local
                 )));
@@ -322,7 +322,7 @@ impl Config {
                     window_end = %self.memory.dreaming.window_end_local,
                     "Invalid dreaming window_end_local"
                 );
-                return Err(AetherError::invalid_config(format!(
+                return Err(AlephError::invalid_config(format!(
                     "memory.dreaming.window_end_local must be HH:MM, got {}",
                     self.memory.dreaming.window_end_local
                 )));
@@ -334,7 +334,7 @@ impl Config {
                 value = self.memory.graph_decay.node_decay_per_day,
                 "Invalid graph node_decay_per_day"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "memory.graph_decay.node_decay_per_day must be between 0.0 and 1.0, got {}",
                 self.memory.graph_decay.node_decay_per_day
             )));
@@ -345,7 +345,7 @@ impl Config {
                 value = self.memory.graph_decay.edge_decay_per_day,
                 "Invalid graph edge_decay_per_day"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "memory.graph_decay.edge_decay_per_day must be between 0.0 and 1.0, got {}",
                 self.memory.graph_decay.edge_decay_per_day
             )));
@@ -356,7 +356,7 @@ impl Config {
                 value = self.memory.graph_decay.min_score,
                 "Invalid graph min_score"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "memory.graph_decay.min_score must be between 0.0 and 1.0, got {}",
                 self.memory.graph_decay.min_score
             )));
@@ -367,7 +367,7 @@ impl Config {
                 value = self.memory.memory_decay.half_life_days,
                 "Invalid memory decay half_life_days"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "memory.memory_decay.half_life_days must be greater than 0, got {}",
                 self.memory.memory_decay.half_life_days
             )));
@@ -378,7 +378,7 @@ impl Config {
                 value = self.memory.memory_decay.access_boost,
                 "Invalid memory decay access_boost"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "memory.memory_decay.access_boost must be >= 0, got {}",
                 self.memory.memory_decay.access_boost
             )));
@@ -389,7 +389,7 @@ impl Config {
                 value = self.memory.memory_decay.min_strength,
                 "Invalid memory decay min_strength"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "memory.memory_decay.min_strength must be between 0.0 and 1.0, got {}",
                 self.memory.memory_decay.min_strength
             )));
@@ -443,7 +443,7 @@ impl Config {
                         default_provider = %search_config.default_provider,
                         "Search default provider not found in backends"
                     );
-                    return Err(AetherError::invalid_config(format!(
+                    return Err(AlephError::invalid_config(format!(
                         "Search default provider '{}' not found in backends",
                         search_config.default_provider
                     )));
@@ -457,7 +457,7 @@ impl Config {
                                 fallback_provider = %provider_name,
                                 "Search fallback provider not found in backends"
                             );
-                            return Err(AetherError::invalid_config(format!(
+                            return Err(AlephError::invalid_config(format!(
                                 "Search fallback provider '{}' not found in backends",
                                 provider_name
                             )));
@@ -468,7 +468,7 @@ impl Config {
                 // Validate max_results is reasonable
                 if search_config.max_results == 0 {
                     error!("Search max_results cannot be 0");
-                    return Err(AetherError::invalid_config(
+                    return Err(AlephError::invalid_config(
                         "Search max_results must be greater than 0".to_string(),
                     ));
                 }
@@ -483,7 +483,7 @@ impl Config {
                 // Validate timeout is reasonable
                 if search_config.timeout_seconds == 0 {
                     error!("Search timeout cannot be 0");
-                    return Err(AetherError::invalid_config(
+                    return Err(AlephError::invalid_config(
                         "Search timeout_seconds must be greater than 0".to_string(),
                     ));
                 }
@@ -496,7 +496,7 @@ impl Config {
                         "tavily" => {
                             if backend_config.api_key.is_none() {
                                 error!(backend = %backend_name, "Tavily backend requires API key");
-                                return Err(AetherError::invalid_config(format!(
+                                return Err(AlephError::invalid_config(format!(
                                     "Search backend '{}' (Tavily) requires an API key",
                                     backend_name
                                 )));
@@ -505,7 +505,7 @@ impl Config {
                         "brave" => {
                             if backend_config.api_key.is_none() {
                                 error!(backend = %backend_name, "Brave backend requires API key");
-                                return Err(AetherError::invalid_config(format!(
+                                return Err(AlephError::invalid_config(format!(
                                     "Search backend '{}' (Brave) requires an API key",
                                     backend_name
                                 )));
@@ -514,14 +514,14 @@ impl Config {
                         "google" => {
                             if backend_config.api_key.is_none() {
                                 error!(backend = %backend_name, "Google backend requires API key");
-                                return Err(AetherError::invalid_config(format!(
+                                return Err(AlephError::invalid_config(format!(
                                     "Search backend '{}' (Google) requires an API key",
                                     backend_name
                                 )));
                             }
                             if backend_config.engine_id.is_none() {
                                 error!(backend = %backend_name, "Google backend requires engine_id");
-                                return Err(AetherError::invalid_config(format!(
+                                return Err(AlephError::invalid_config(format!(
                                     "Search backend '{}' (Google) requires an engine_id",
                                     backend_name
                                 )));
@@ -530,7 +530,7 @@ impl Config {
                         "bing" => {
                             if backend_config.api_key.is_none() {
                                 error!(backend = %backend_name, "Bing backend requires API key");
-                                return Err(AetherError::invalid_config(format!(
+                                return Err(AlephError::invalid_config(format!(
                                     "Search backend '{}' (Bing) requires an API key",
                                     backend_name
                                 )));
@@ -539,7 +539,7 @@ impl Config {
                         "exa" => {
                             if backend_config.api_key.is_none() {
                                 error!(backend = %backend_name, "Exa backend requires API key");
-                                return Err(AetherError::invalid_config(format!(
+                                return Err(AlephError::invalid_config(format!(
                                     "Search backend '{}' (Exa) requires an API key",
                                     backend_name
                                 )));
@@ -548,7 +548,7 @@ impl Config {
                         "searxng" => {
                             if backend_config.base_url.is_none() {
                                 error!(backend = %backend_name, "SearXNG backend requires base_url");
-                                return Err(AetherError::invalid_config(format!(
+                                return Err(AlephError::invalid_config(format!(
                                     "Search backend '{}' (SearXNG) requires a base_url",
                                     backend_name
                                 )));
@@ -582,7 +582,7 @@ impl Config {
         // Validate Agent config
         if let Err(e) = self.agent.validate() {
             error!(error = %e, "Agent config validation failed");
-            return Err(AetherError::invalid_config(e));
+            return Err(AlephError::invalid_config(e));
         }
 
         // Validate planner_provider exists if specified
@@ -592,7 +592,7 @@ impl Config {
                     provider = %provider_name,
                     "Agent planner_provider not found in providers"
                 );
-                return Err(AetherError::invalid_config(format!(
+                return Err(AlephError::invalid_config(format!(
                     "Agent planner_provider '{}' not found in providers",
                     provider_name
                 )));

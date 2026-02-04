@@ -7,8 +7,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::agent_loop::overflow::{OverflowDetector, OverflowConfig};
-//! use aethecore::components::ExecutionSession;
+//! use alephcore::agent_loop::overflow::{OverflowDetector, OverflowConfig};
+//! use alephcore::components::ExecutionSession;
 //!
 //! let detector = OverflowDetector::new(OverflowConfig::default());
 //! let session = ExecutionSession::new().with_model("gpt-4o");

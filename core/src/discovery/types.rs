@@ -6,7 +6,7 @@ use std::path::PathBuf;
 /// Source of a discovered component
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DiscoverySource {
-    /// Aether native global (~/.aether/)
+    /// Aether native global (~/.aleph/)
     AetherGlobal,
     /// Claude Code global (~/.claude/)
     ClaudeGlobal,

@@ -178,7 +178,7 @@ similarity_threshold = 0.7         # 已更新为 0.7（从 0.3）
 ### 运行完整流程测试
 
 ```bash
-cd Aether/core/
+cd Aleph/core/
 cargo test test_full_pipeline_store_retrieve_augment -- --nocapture
 ```
 
@@ -226,7 +226,7 @@ User: Show me an example of error handling
 
 ## 下一步
 
-记忆模块已完全实现，可以集成到主 AetherCore 工作流程中：
+记忆模块已完全实现，可以集成到主 AlephCore 工作流程中：
 
 1. **集成到 core.rs**
    - 在 `AetherCore::process_clipboard()` 中调用检索
@@ -251,5 +251,5 @@ User: Show me an example of error handling
 ---
 
 **Task 13 完成时间**: 2025-12-24
-**实现者**: Aether Development Team
+**实现者**: Aleph Development Team
 **状态**: ✅ **COMPLETE**

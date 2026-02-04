@@ -21,7 +21,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::cortex::{CortexError, RecoveryHint, SecuritySeverity};
+//! use alephcore::dispatcher::cortex::{CortexError, RecoveryHint, SecuritySeverity};
 //!
 //! fn handle_error(err: CortexError) {
 //!     match err.recovery_hint() {

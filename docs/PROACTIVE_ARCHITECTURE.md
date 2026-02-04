@@ -1,4 +1,4 @@
-# Proactive AI Architecture Plan for Aether
+# Proactive AI Architecture Plan for Aleph
 
 **Date:** 2026-02-04
 **Status:** Proposed (Refined)
@@ -23,7 +23,7 @@ To evolve `Aether` from a reactive, user-prompted CLI tool into a proactive, aut
 
 ## 3. Gap Analysis & Strategy
 
-| Feature | OpenClaw Approach | Aether (Current) | Aether Strategy (Target) |
+| Feature | OpenClaw Approach | Aleph (Current) | Aleph Strategy (Target) |
 | :--- | :--- | :--- | :--- |
 | **Persistence** | `GatewayService` (Node.js) | CLI (Ephemeral) | **`DaemonManager` (Rust)**: Cross-platform service abstraction. |
 | **Sensation** | Specialized child processes (`gog`) | None | **`PerceptionLayer`**: Native Rust traits for lightweight watchers; Child processes for heavy/risky ones. |
@@ -34,7 +34,7 @@ To evolve `Aether` from a reactive, user-prompted CLI tool into a proactive, aut
 
 ### 4.1. Module 1: Daemon Manager (`core/src/daemon`)
 
-**Purpose:** Ensure Aether runs continuously and survives reboots.
+**Purpose:** Ensure Aleph runs continuously and survives reboots.
 
 **Components:**
 1.  **`ServiceManager` Trait:**
@@ -114,7 +114,7 @@ To evolve `Aether` from a reactive, user-prompted CLI tool into a proactive, aut
 ### Phase 4: Integration (JARVIS Mode)
 1.  Implement "Active" vs "Passive" modes.
 2.  Add User Feedback loop (System Notifications for actions taken).
-3.  **Privacy Control:** A TUI dashboard showing exactly what Aether is watching and doing.
+3.  **Privacy Control:** A TUI dashboard showing exactly what Aleph is watching and doing.
 
 ## 6. Key Principles for "JARVIS" Quality
 

@@ -10,7 +10,7 @@ This document describes the design for integrating iMessage channel with the Gat
 
 ## Problem Statement
 
-Current Aether iMessage implementation has:
+Current Aleph iMessage implementation has:
 - Basic SQLite polling for receiving messages
 - AppleScript-based message sending
 - Target parsing and configuration
@@ -202,7 +202,7 @@ InboundMessage arrives
 
 **Pairing Message Example:**
 ```
-Hi! I'm Aether, a personal AI assistant.
+Hi! I'm Aleph, a personal AI assistant.
 
 To chat with me, please have my owner approve your access.
 

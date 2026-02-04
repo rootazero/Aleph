@@ -1,6 +1,6 @@
-# Aether Core Architecture
+# Aleph Core Architecture
 
-This document describes the internal architecture of Aether's Rust core, particularly the **Structured Context Protocol** for intelligent request routing and context injection.
+This document describes the internal architecture of Aleph's Rust core, particularly the **Structured Context Protocol** for intelligent request routing and context injection.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ This document describes the internal architecture of Aether's Rust core, particu
 
 ## Overview
 
-Aether's core uses a **structured payload-based architecture** that replaces simple string concatenation with a rich, type-safe data flow system. This enables:
+Aleph's core uses a **structured payload-based architecture** that replaces simple string concatenation with a rich, type-safe data flow system. This enables:
 
 - **Intelligent routing** based on user intent and context
 - **Dynamic capability execution** (Memory ✅, Search ✅, MCP tools ✅)
@@ -146,7 +146,7 @@ let response = provider.chat(
 
 ## Conversation Modes
 
-Aether supports two distinct conversation modes with different lifecycle management, state persistence, and execution characteristics.
+Aleph supports two distinct conversation modes with different lifecycle management, state persistence, and execution characteristics.
 
 ### Single-Turn Mode (🔒 FROZEN)
 
@@ -406,7 +406,7 @@ similarity_threshold = 0.7     # Min cosine similarity (0.0-1.0)
 ```
 
 **Privacy**:
-- All data stored locally in `~/.aether/memory.db`
+- All data stored locally in `~/.aleph/memory.db`
 - No raw memory data sent to cloud LLMs
 - Only formatted context snippets injected into prompts
 
@@ -1108,7 +1108,7 @@ pub struct OAuthTokens {
 
 **Implementation Details**:
 - **Claude Code compatible**: Follows Claude Code plugin manifest format (`.claude-plugin/plugin.json`)
-- **Multi-level discovery**: Reads from `~/.claude/`, `~/.aether/`, `.claude/` (current project)
+- **Multi-level discovery**: Reads from `~/.claude/`, `~/.aleph/`, `.claude/` (current project)
 - **Plugin types**: Skills, commands, agents, MCP servers, hooks
 - **Configuration**: `aether.jsonc` with multi-source merging
 - **Async FFI**: Native async/await via UniFFI 0.31+ (Swift, Kotlin, Python)
@@ -1131,7 +1131,7 @@ extension/              # Extension system
 
 ffi/
 ├── async_extension.rs # Async FFI exports (extension_load_all, etc.)
-└── plugins.rs         # Sync FFI exports (legacy AetherCore methods)
+└── plugins.rs         # Sync FFI exports (legacy AlephCore methods)
 ```
 
 **Key Types**:
@@ -1318,7 +1318,7 @@ pub struct PartUpdateData {
 **Location**: `core/src/ffi/mod.rs`
 
 ```rust
-pub trait AetherEventHandler: Send + Sync {
+pub trait AlephEventHandler: Send + Sync {
     // ... existing callbacks ...
 
     /// Part update callback for real-time UI rendering
@@ -1596,7 +1596,7 @@ Events in GlobalBus are wrapped with source context:
 pub struct GlobalEvent {
     pub source_agent_id: String,
     pub source_session_id: String,
-    pub event: AetherEvent,
+    pub event: AlephEvent,
     pub sequence: u64,
     pub timestamp: i64,
 }
@@ -1626,12 +1626,12 @@ For Swift/Kotlin integration (via UniFFI):
 pub async fn global_bus_subscribe(
     filter_json: String,
     callback_id: String,
-) -> Result<String, AetherError>
+) -> Result<String, AlephError>
 
 // FFI-friendly unsubscribe
 pub async fn global_bus_unsubscribe(
     subscription_id: String,
-) -> Result<(), AetherError>
+) -> Result<(), AlephError>
 ```
 
 ---
@@ -1642,7 +1642,7 @@ pub async fn global_bus_unsubscribe(
 
 **Location**: `core/src/permission/`, `core/src/question/`
 
-Aether implements a permission system inspired by OpenCode and Claude Code, providing granular control over tool execution with pattern-based rules.
+Aleph implements a permission system inspired by OpenCode and Claude Code, providing granular control over tool execution with pattern-based rules.
 
 ### Architecture
 
@@ -1740,5 +1740,5 @@ let answers = question_manager.ask(request).await?;
 ---
 
 **Last Updated**: 2026-01-24
-**Implemented In**: Aether v0.1.0
+**Implemented In**: Aleph v0.1.0
 **OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`, `enhance-intent-routing-pipeline`, `smart-tool-discovery`, `event-bus-smart-compaction`

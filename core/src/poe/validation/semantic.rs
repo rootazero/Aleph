@@ -167,14 +167,14 @@ impl SemanticValidator {
     /// Read file content from the given path.
     async fn read_file_content(&self, path: &Path) -> Result<String> {
         if !path.exists() {
-            return Err(crate::error::AetherError::IoError(format!(
+            return Err(crate::error::AlephError::IoError(format!(
                 "File does not exist: {}",
                 path.display()
             )));
         }
 
         tokio::fs::read_to_string(path).await.map_err(|e| {
-            crate::error::AetherError::IoError(format!(
+            crate::error::AlephError::IoError(format!(
                 "Failed to read file {}: {}",
                 path.display(),
                 e
@@ -191,7 +191,7 @@ impl SemanticValidator {
             .stderr(Stdio::piped());
 
         let child = command.spawn().map_err(|e| {
-            crate::error::AetherError::IoError(format!("Failed to spawn command '{}': {}", cmd, e))
+            crate::error::AlephError::IoError(format!("Failed to spawn command '{}': {}", cmd, e))
         })?;
 
         let duration = Duration::from_millis(DEFAULT_COMMAND_TIMEOUT_MS);
@@ -202,11 +202,11 @@ impl SemanticValidator {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 Ok(format!("{}{}", stdout, stderr))
             }
-            Ok(Err(e)) => Err(crate::error::AetherError::IoError(format!(
+            Ok(Err(e)) => Err(crate::error::AlephError::IoError(format!(
                 "Command '{}' failed: {}",
                 cmd, e
             ))),
-            Err(_) => Err(crate::error::AetherError::IoError(format!(
+            Err(_) => Err(crate::error::AlephError::IoError(format!(
                 "Command '{}' timed out after {}ms",
                 cmd, DEFAULT_COMMAND_TIMEOUT_MS
             ))),

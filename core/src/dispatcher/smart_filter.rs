@@ -30,8 +30,8 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::{SmartToolFilter, ToolFilterConfig};
-//! use aethecore::intent::TaskCategory;
+//! use alephcore::dispatcher::{SmartToolFilter, ToolFilterConfig};
+//! use alephcore::intent::TaskCategory;
 //!
 //! let filter = SmartToolFilter::new(ToolFilterConfig::default());
 //! let result = filter.filter(

@@ -19,7 +19,7 @@ use tracing::{debug, info};
 use super::error::ToolError;
 use super::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 // ============================================================================
 // ReadSkillTool - Read skill instructions (Level 2) or resources (Level 3)
@@ -75,7 +75,7 @@ pub struct ReadSkillOutput {
 ///
 /// Supports multi-location discovery:
 /// - Project level: .aether/skills/, .claude/skills/
-/// - Global level: ~/.aether/skills, ~/.claude/skills
+/// - Global level: ~/.aleph/skills, ~/.claude/skills
 pub struct ReadSkillTool {
     /// All skills directories (for multi-location discovery)
     skills_dirs: Vec<PathBuf>,
@@ -99,7 +99,7 @@ Skill instructions are task directives, not suggestions.
 
 Skills are discovered from multiple locations:
 - Project level: .aether/skills/, .claude/skills/ (traverse up to git root)
-- Global level: ~/.aether/skills, ~/.claude/skills
+- Global level: ~/.aleph/skills, ~/.claude/skills
 
 Examples:
 - User asks to "refine this text" → read_skill(skill_id="refine-text")
@@ -134,7 +134,7 @@ You can also read additional resources within a skill by specifying file_name:
         if skills_dirs.is_empty() {
             // Fallback to default directory
             let default_dir = crate::utils::paths::get_skills_dir()
-                .unwrap_or_else(|_| PathBuf::from("~/.aether/skills"));
+                .unwrap_or_else(|_| PathBuf::from("~/.aleph/skills"));
             Self {
                 skills_dirs: vec![default_dir],
                 max_file_size: 5 * 1024 * 1024,
@@ -329,9 +329,9 @@ impl Clone for ReadSkillTool {
     }
 }
 
-/// Implementation of AetherTool trait for ReadSkillTool
+/// Implementation of AlephTool trait for ReadSkillTool
 #[async_trait]
-impl AetherTool for ReadSkillTool {
+impl AlephTool for ReadSkillTool {
     const NAME: &'static str = "read_skill";
     const DESCRIPTION: &'static str = r#"Read the instructions of an installed skill.
 
@@ -408,7 +408,7 @@ pub struct ListSkillsOutput {
 ///
 /// Supports multi-location discovery:
 /// - Project level: .aether/skills/, .claude/skills/
-/// - Global level: ~/.aether/skills, ~/.claude/skills
+/// - Global level: ~/.aleph/skills, ~/.claude/skills
 pub struct ListSkillsTool {
     /// All skills directories (for multi-location discovery)
     skills_dirs: Vec<PathBuf>,
@@ -426,7 +426,7 @@ Each skill has an ID, name, description, and optional trigger keywords.
 
 Skills are discovered from multiple locations:
 - Project level: .aether/skills/, .claude/skills/ (traverse up to git root)
-- Global level: ~/.aether/skills, ~/.claude/skills
+- Global level: ~/.aleph/skills, ~/.claude/skills
 
 After finding a relevant skill, use read_skill(skill_id) to load its full instructions.
 "#;
@@ -451,7 +451,7 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
         if skills_dirs.is_empty() {
             // Fallback to default directory
             let default_dir = crate::utils::paths::get_skills_dir()
-                .unwrap_or_else(|_| PathBuf::from("~/.aether/skills"));
+                .unwrap_or_else(|_| PathBuf::from("~/.aleph/skills"));
             Self {
                 skills_dirs: vec![default_dir],
             }
@@ -630,9 +630,9 @@ impl Clone for ListSkillsTool {
     }
 }
 
-/// Implementation of AetherTool trait for ListSkillsTool
+/// Implementation of AlephTool trait for ListSkillsTool
 #[async_trait]
-impl AetherTool for ListSkillsTool {
+impl AlephTool for ListSkillsTool {
     const NAME: &'static str = "list_skills";
     const DESCRIPTION: &'static str = r#"List all available skills installed on the system.
 
@@ -656,7 +656,7 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::AetherTool;
+    use crate::tools::AlephTool;
     use tempfile::TempDir;
 
     fn create_test_skill(dir: &Path, id: &str, name: &str, description: &str) {
@@ -703,7 +703,7 @@ Follow them carefully.
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.skill_id, "test-skill");
         assert_eq!(result.file_name, "SKILL.md");
@@ -727,7 +727,7 @@ Follow them carefully.
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.file_name, "REFERENCE.md");
         assert!(result.content.contains("Additional reference material"));
@@ -745,7 +745,7 @@ Follow them carefully.
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("not found") || err_msg.contains("NotFound"), "Error should indicate not found: {}", err_msg);
@@ -764,7 +764,7 @@ Follow them carefully.
             file_name: None,
         };
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
 
         // Test file_name path traversal
@@ -772,7 +772,7 @@ Follow them carefully.
             skill_id: "test".to_string(),
             file_name: Some("../../../etc/passwd".to_string()),
         };
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
     }
 
@@ -788,7 +788,7 @@ Follow them carefully.
         let args = ListSkillsArgs { filter: None };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.count, 2);
         assert_eq!(result.skills[0].id, "skill-a");
@@ -809,7 +809,7 @@ Follow them carefully.
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.count, 1);
         assert_eq!(result.skills[0].id, "refine-text");
@@ -831,7 +831,7 @@ Follow them carefully.
         let tool = ListSkillsTool::with_directories(vec![skills_dir1.clone(), skills_dir2.clone()]);
         let args = ListSkillsArgs { filter: None };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.count, 2);
 
@@ -857,7 +857,7 @@ Follow them carefully.
         let tool = ListSkillsTool::with_directories(vec![skills_dir1.clone(), skills_dir2.clone()]);
         let args = ListSkillsArgs { filter: None };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.count, 1);
         assert_eq!(result.skills[0].id, "same-skill");
@@ -883,7 +883,7 @@ Follow them carefully.
             file_name: None,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.skill_id, "unique-skill");
         assert!(result.content.contains("Unique Skill"));

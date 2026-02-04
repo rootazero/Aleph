@@ -254,7 +254,7 @@
 
   pub struct PlanExecutor {
       tool_registry: Arc<ToolRegistry>,
-      event_handler: Arc<dyn AetherEventHandler>,
+      event_handler: Arc<dyn AlephEventHandler>,
       config: ExecutorConfig,
   }
 
@@ -351,7 +351,7 @@
   执行进度 UI 通知
 
   // UniFFI callback 扩展
-  callback interface AetherEventHandler {
+  callback interface AlephEventHandler {
       // ... 现有方法 ...
 
       /// 计划开始执行
@@ -550,7 +550,7 @@
       IrreversibleHighRisk,
   }
 
-  pub trait AetherTool: Send + Sync {
+  pub trait AlephTool: Send + Sync {
       fn name(&self) -> &str;
       fn description(&self) -> &str;
       fn safety_level(&self) -> ToolSafetyLevel;
@@ -559,7 +559,7 @@
 
       /// 回滚操作 (如果支持)
       async fn rollback(&self, execution_id: Uuid) -> Result<()> {
-          Err(AetherError::RollbackNotSupported)
+          Err(AlephError::RollbackNotSupported)
       }
   }
 
@@ -910,7 +910,7 @@
 
       // 检测环: 如果排序后节点数 != 总节点数，存在环
       if sorted.iter().map(|g| g.len()).sum::<usize>() != steps.len() {
-          return Err(AetherError::CyclicDependency);
+          return Err(AlephError::CyclicDependency);
       }
 
       Ok(sorted)

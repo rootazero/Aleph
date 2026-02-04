@@ -1,6 +1,6 @@
 # Configuration
 
-Aether uses a JSON5 configuration file at `~/.aether/config.json`.
+Aleph uses a JSON5 configuration file at `~/.aleph/config.json`.
 
 ## Basic Structure
 
@@ -15,7 +15,7 @@ Aether uses a JSON5 configuration file at `~/.aether/config.json`.
     },
     list: [{
       id: "main",
-      identity: "You are Aether, a helpful personal AI assistant.",
+      identity: "You are Aleph, a helpful personal AI assistant.",
     }],
   },
 
@@ -84,7 +84,7 @@ agents: {
 agents: {
   list: [{
     id: "main",
-    identity: "You are Aether, a personal AI assistant. Be helpful, concise, and accurate.",
+    identity: "You are Aleph, a personal AI assistant. Be helpful, concise, and accurate.",
 
     // Group chat behavior
     groupChat: {

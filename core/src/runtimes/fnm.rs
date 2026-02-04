@@ -8,7 +8,7 @@ use super::download::{
     set_executable,
 };
 use super::manager::{RuntimeManager, UpdateInfo};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::path::PathBuf;
 use std::process::Command;
 use tracing::{debug, info};
@@ -123,7 +123,7 @@ impl FnmRuntime {
     /// Install a global npm package
     pub async fn install_global_package(&self, package: &str) -> Result<()> {
         if !self.is_installed() {
-            return Err(AetherError::runtime("fnm", "fnm/Node.js is not installed"));
+            return Err(AlephError::runtime("fnm", "fnm/Node.js is not installed"));
         }
 
         info!(package = %package, "Installing global npm package");
@@ -132,12 +132,12 @@ impl FnmRuntime {
             .args(["install", "-g", package])
             .output()
             .map_err(|e| {
-                AetherError::runtime("fnm", format!("Failed to install package: {}", e))
+                AlephError::runtime("fnm", format!("Failed to install package: {}", e))
             })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AetherError::runtime(
+            return Err(AlephError::runtime(
                 "fnm",
                 format!("Failed to install {}: {}", package, stderr),
             ));
@@ -156,7 +156,7 @@ impl FnmRuntime {
             "apple-darwin" => "macos",
             "unknown-linux-gnu" => "linux",
             "pc-windows-msvc" => "windows",
-            _ => return Err(AetherError::runtime("fnm", "Unsupported platform")),
+            _ => return Err(AlephError::runtime("fnm", "Unsupported platform")),
         };
 
         Ok(format!(
@@ -177,11 +177,11 @@ impl FnmRuntime {
             .env("FNM_DIR", &fnm_dir)
             .args(["install", DEFAULT_NODE_MAJOR_VERSION])
             .output()
-            .map_err(|e| AetherError::runtime("fnm", format!("Failed to install Node: {}", e)))?;
+            .map_err(|e| AlephError::runtime("fnm", format!("Failed to install Node: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AetherError::runtime(
+            return Err(AlephError::runtime(
                 "fnm",
                 format!("Failed to install Node: {}", stderr),
             ));
@@ -204,7 +204,7 @@ impl FnmRuntime {
         let node_versions_dir = fnm_dir.join("node-versions");
 
         if !node_versions_dir.exists() {
-            return Err(AetherError::runtime(
+            return Err(AlephError::runtime(
                 "fnm",
                 "fnm node-versions directory not found",
             ));
@@ -212,7 +212,7 @@ impl FnmRuntime {
 
         // Find the installed node version
         let entries = std::fs::read_dir(&node_versions_dir).map_err(|e| {
-            AetherError::runtime("fnm", format!("Failed to read node-versions dir: {}", e))
+            AlephError::runtime("fnm", format!("Failed to read node-versions dir: {}", e))
         })?;
 
         for entry in entries.flatten() {
@@ -229,7 +229,7 @@ impl FnmRuntime {
                     // Ensure parent directory exists
                     if let Some(parent) = default_dir.parent() {
                         std::fs::create_dir_all(parent).map_err(|e| {
-                            AetherError::runtime(
+                            AlephError::runtime(
                                 "fnm",
                                 format!("Failed to create versions dir: {}", e),
                             )
@@ -240,7 +240,7 @@ impl FnmRuntime {
                     {
                         std::os::unix::fs::symlink(&installation_dir, &default_dir).map_err(
                             |e| {
-                                AetherError::runtime(
+                                AlephError::runtime(
                                     "fnm",
                                     format!("Failed to create symlink: {}", e),
                                 )
@@ -253,7 +253,7 @@ impl FnmRuntime {
                         // On Windows, create junction or copy
                         std::os::windows::fs::symlink_dir(&installation_dir, &default_dir)
                             .map_err(|e| {
-                                AetherError::runtime(
+                                AlephError::runtime(
                                     "fnm",
                                     format!("Failed to create symlink: {}", e),
                                 )
@@ -266,7 +266,7 @@ impl FnmRuntime {
             }
         }
 
-        Err(AetherError::runtime(
+        Err(AlephError::runtime(
             "fnm",
             "No installed Node version found in node-versions/",
         ))
@@ -302,7 +302,7 @@ impl RuntimeManager for FnmRuntime {
 
         let fnm_dir = self.fnm_dir();
         std::fs::create_dir_all(&fnm_dir).map_err(|e| {
-            AetherError::runtime("fnm", format!("Failed to create fnm directory: {}", e))
+            AlephError::runtime("fnm", format!("Failed to create fnm directory: {}", e))
         })?;
 
         // Download fnm zip

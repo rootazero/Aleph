@@ -9,7 +9,7 @@
 //! ## Tool Package Structure
 //!
 //! ```text
-//! ~/.aether/tools/compiled/<tool-name>/
+//! ~/.aleph/tools/compiled/<tool-name>/
 //! ├── tool_definition.json    # Tool metadata and schema
 //! ├── entrypoint.py           # Main execution script
 //! ├── requirements.txt        # Python dependencies (if any)
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::types::SolidificationSuggestion;
 
@@ -125,14 +125,14 @@ impl ToolGenerator {
 
         // Check if already exists
         if package_dir.exists() {
-            return Err(AetherError::Other {
+            return Err(AlephError::Other {
                 message: format!("Tool '{}' already exists at {}", tool_name, package_dir.display()),
                 suggestion: Some("Delete the existing tool or use a different name".to_string()),
             });
         }
 
         // Create package directory
-        fs::create_dir_all(&package_dir).map_err(|e| AetherError::Other {
+        fs::create_dir_all(&package_dir).map_err(|e| AlephError::Other {
             message: format!("Failed to create tool directory: {}", e),
             suggestion: None,
         })?;
@@ -161,12 +161,12 @@ impl ToolGenerator {
         // Write tool_definition.json
         let definition_path = package_dir.join("tool_definition.json");
         let definition_json = serde_json::to_string_pretty(&definition).map_err(|e| {
-            AetherError::Other {
+            AlephError::Other {
                 message: format!("Failed to serialize definition: {}", e),
                 suggestion: None,
             }
         })?;
-        fs::write(&definition_path, &definition_json).map_err(|e| AetherError::Other {
+        fs::write(&definition_path, &definition_json).map_err(|e| AlephError::Other {
             message: format!("Failed to write definition: {}", e),
             suggestion: None,
         })?;
@@ -179,14 +179,14 @@ impl ToolGenerator {
         };
 
         let entrypoint_path = package_dir.join(&definition.entrypoint);
-        fs::write(&entrypoint_path, &entrypoint_content).map_err(|e| AetherError::Other {
+        fs::write(&entrypoint_path, &entrypoint_content).map_err(|e| AlephError::Other {
             message: format!("Failed to write entrypoint: {}", e),
             suggestion: None,
         })?;
 
         // Generate README
         let readme = generate_readme(suggestion, &definition);
-        fs::write(package_dir.join("README.md"), &readme).map_err(|e| AetherError::Other {
+        fs::write(package_dir.join("README.md"), &readme).map_err(|e| AlephError::Other {
             message: format!("Failed to write README: {}", e),
             suggestion: None,
         })?;
@@ -194,7 +194,7 @@ impl ToolGenerator {
         // Generate requirements.txt for Python
         if self.config.runtime == "python" {
             fs::write(package_dir.join("requirements.txt"), "# Add dependencies here\n")
-                .map_err(|e| AetherError::Other {
+                .map_err(|e| AlephError::Other {
                     message: format!("Failed to write requirements: {}", e),
                     suggestion: None,
                 })?;
@@ -227,18 +227,18 @@ impl ToolGenerator {
         let definition_path = package_dir.join("tool_definition.json");
 
         if !definition_path.exists() {
-            return Err(AetherError::Other {
+            return Err(AlephError::Other {
                 message: format!("Tool '{}' not found", tool_name),
                 suggestion: None,
             });
         }
 
-        let content = fs::read_to_string(&definition_path).map_err(|e| AetherError::Other {
+        let content = fs::read_to_string(&definition_path).map_err(|e| AlephError::Other {
             message: format!("Failed to read definition: {}", e),
             suggestion: None,
         })?;
 
-        serde_json::from_str(&content).map_err(|e| AetherError::Other {
+        serde_json::from_str(&content).map_err(|e| AlephError::Other {
             message: format!("Failed to parse definition: {}", e),
             suggestion: None,
         })
@@ -253,7 +253,7 @@ impl ToolGenerator {
         let mut tools = Vec::new();
 
         for entry in fs::read_dir(&self.config.output_dir)
-            .map_err(|e| AetherError::Other {
+            .map_err(|e| AlephError::Other {
                 message: format!("Failed to read tools directory: {}", e),
                 suggestion: None,
             })?
@@ -281,13 +281,13 @@ impl ToolGenerator {
         let package_dir = self.config.output_dir.join(tool_name);
 
         if !package_dir.exists() {
-            return Err(AetherError::Other {
+            return Err(AlephError::Other {
                 message: format!("Tool '{}' not found", tool_name),
                 suggestion: None,
             });
         }
 
-        fs::remove_dir_all(&package_dir).map_err(|e| AetherError::Other {
+        fs::remove_dir_all(&package_dir).map_err(|e| AlephError::Other {
             message: format!("Failed to delete tool: {}", e),
             suggestion: None,
         })?;
@@ -304,12 +304,12 @@ impl ToolGenerator {
         let mut definition = self.load_definition(tool_name)?;
         definition.self_tested = passed;
 
-        let content = serde_json::to_string_pretty(&definition).map_err(|e| AetherError::Other {
+        let content = serde_json::to_string_pretty(&definition).map_err(|e| AlephError::Other {
             message: format!("Failed to serialize: {}", e),
             suggestion: None,
         })?;
 
-        fs::write(&definition_path, content).map_err(|e| AetherError::Other {
+        fs::write(&definition_path, content).map_err(|e| AlephError::Other {
             message: format!("Failed to write definition: {}", e),
             suggestion: None,
         })?;

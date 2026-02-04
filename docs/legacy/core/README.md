@@ -1,10 +1,10 @@
-# Aether Core
+# Aleph Core
 
-Rust library providing core functionality for the Aether AI middleware system. This is a shared library (cdylib/staticlib) that exposes a clean FFI boundary via Mozilla UniFFI for native client integration.
+Rust library providing core functionality for the Aleph AI middleware system. This is a shared library (cdylib/staticlib) that exposes a clean FFI boundary via Mozilla UniFFI for native client integration.
 
 ## Overview
 
-Aether Core is a headless service library that provides:
+Aleph Core is a headless service library that provides:
 - Global hotkey detection (Cmd+~ on macOS, Ctrl+~ on Windows/Linux)
 - Cross-platform clipboard management (text and images)
 - Event callback system for Rust → Native UI communication
@@ -22,9 +22,9 @@ Aether Core is a headless service library that provides:
                │ UniFFI FFI
                ▼
 ┌─────────────────────────────────────┐
-│       Aether Core (Rust)            │
+│       Aleph Core (Rust)            │
 │  ┌─────────────────────────────┐   │
-│  │     AetherCore              │   │
+│  │     AlephCore              │   │
 │  │  - Orchestrates components  │   │
 │  └──────────┬──────────────────┘   │
 │             │                       │
@@ -64,10 +64,10 @@ cargo fmt --check
 
 After `cargo build --release`, you'll find:
 
-- **macOS**: `target/release/libaethecore.dylib` (shared library)
-- **Windows**: `target/release/aethecore.dll`
-- **Linux**: `target/release/libaethecore.so`
-- **Static library**: `target/release/libaethecore.a` (all platforms)
+- **macOS**: `target/release/libalephcore.dylib` (shared library)
+- **Windows**: `target/release/alephcore.dll`
+- **Linux**: `target/release/libalephcore.so`
+- **Static library**: `target/release/libalephcore.a` (all platforms)
 
 ## Generating Language Bindings
 
@@ -104,11 +104,11 @@ uniffi-bindgen generate src/aether.udl --language csharp --out-dir ../bindings/c
 ## Usage Example (Rust)
 
 ```rust
-use aethecore::{AetherCore, AetherEventHandler, ProcessingState};
+use alephcore::{AetherCore, AlephEventHandler, ProcessingState};
 
 // Implement the callback trait
 struct MyHandler;
-impl AetherEventHandler for MyHandler {
+impl AlephEventHandler for MyHandler {
     fn on_state_changed(&self, state: ProcessingState) {
         println!("State changed: {:?}", state);
     }
@@ -124,7 +124,7 @@ impl AetherEventHandler for MyHandler {
 
 // Create and use the core
 let handler = Box::new(MyHandler);
-let core = AetherCore::new(handler).unwrap();
+let core = AlephCore::new(handler).unwrap();
 
 // Start listening for Cmd+~
 core.start_listening().unwrap();
@@ -141,7 +141,7 @@ core.stop_listening().unwrap();
 import aether
 
 // Implement the callback protocol
-class SwiftEventHandler: AetherEventHandler {
+class SwiftEventHandler: AlephEventHandler {
     func onStateChanged(state: ProcessingState) {
         print("State: \(state)")
     }
@@ -157,7 +157,7 @@ class SwiftEventHandler: AetherEventHandler {
 
 // Create and use
 let handler = SwiftEventHandler()
-let core = try AetherCore(handler: handler)
+let core = try AlephCore(handler: handler)
 
 // Start listening
 try core.startListening()
@@ -215,7 +215,7 @@ core/
 ├── src/
 │   ├── aether.udl           # UniFFI interface definition
 │   ├── lib.rs               # Library entry point
-│   ├── core.rs              # AetherCore orchestrator
+│   ├── core.rs              # AlephCore orchestrator
 │   ├── error.rs             # Error types
 │   ├── event_handler.rs     # Callback trait
 │   ├── clipboard/           # Clipboard management
@@ -259,7 +259,7 @@ This implementation provides:
 
 ## Contributing
 
-This is part of the Aether project. See the main [CLAUDE.md](../CLAUDE.md) for full architecture documentation.
+This is part of the Aleph project. See the main [CLAUDE.md](../CLAUDE.md) for full architecture documentation.
 
 ## License
 

@@ -39,7 +39,7 @@ pub enum JsonFragment {
 /// # Example
 ///
 /// ```
-/// use aethecore::dispatcher::cortex::parser::JsonStreamDetector;
+/// use alephcore::dispatcher::cortex::parser::JsonStreamDetector;
 ///
 /// let mut detector = JsonStreamDetector::new();
 ///

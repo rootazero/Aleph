@@ -1,14 +1,14 @@
 # Message Flow Optimization Design
 
-> 参考 OpenClaw 项目，优化 Aether 的对话消息流和 Agent 结果汇总功能
+> 参考 OpenClaw 项目，优化 Aleph 的对话消息流和 Agent 结果汇总功能
 
 ## 1. 背景与目标
 
 ### 1.1 现状分析
 
-对比 OpenClaw 项目，Aether 在消息流处理方面存在以下差距：
+对比 OpenClaw 项目，Aleph 在消息流处理方面存在以下差距：
 
-| 维度 | OpenClaw | Aether 现状 |
+| 维度 | OpenClaw | Aleph 现状 |
 |------|----------|-------------|
 | 结果汇总 | `buildEmbeddedRunPayloads()` 完整汇总 | `RunSummary` 只有基础字段 |
 | 工具格式化 | emoji + 路径分组 + 参数摘要 | 只显示工具名称 |

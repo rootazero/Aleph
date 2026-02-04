@@ -1,6 +1,6 @@
 //! Search operations for memory facts
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::database::core::VectorDatabase;
 use rusqlite::params;
@@ -12,7 +12,7 @@ impl VectorDatabase {
         query_embedding: &[f32],
         limit: u32,
         include_invalid: bool,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let query_bytes = Self::serialize_embedding(query_embedding);
 
@@ -57,7 +57,7 @@ impl VectorDatabase {
 
         let mut stmt = conn
             .prepare(query)
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let facts = stmt
             .query_map(params![query_bytes, limit], |row| {
@@ -96,9 +96,9 @@ impl VectorDatabase {
                     similarity_score: Some(score as f32),
                 })
             })
-            .map_err(|e| AetherError::config(format!("Failed to query facts: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse fact rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse fact rows: {}", e)))?;
 
         Ok(facts)
     }
@@ -108,7 +108,7 @@ impl VectorDatabase {
         &self,
         fact_type: FactType,
         limit: u32,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut stmt = conn
@@ -123,7 +123,7 @@ impl VectorDatabase {
                 LIMIT ?2
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let facts = stmt
             .query_map(params![fact_type.as_str(), limit], |row| {
@@ -161,9 +161,9 @@ impl VectorDatabase {
                     similarity_score: None,
                 })
             })
-            .map_err(|e| AetherError::config(format!("Failed to query facts: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse fact rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse fact rows: {}", e)))?;
 
         Ok(facts)
     }
@@ -174,7 +174,7 @@ impl VectorDatabase {
         query_embedding: &[f32],
         threshold: f32,
         exclude_id: Option<&str>,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let query_bytes = Self::serialize_embedding(query_embedding);
 
@@ -202,7 +202,7 @@ impl VectorDatabase {
                 ORDER BY vm.distance
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let facts = stmt
             .query_map(params![query_bytes, limit], |row| {
@@ -241,9 +241,9 @@ impl VectorDatabase {
                     similarity_score: Some(score as f32),
                 })
             })
-            .map_err(|e| AetherError::config(format!("Failed to query similar facts: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query similar facts: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse fact rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse fact rows: {}", e)))?;
 
         // Filter by threshold and exclude_id
         let similar_facts: Vec<MemoryFact> = facts

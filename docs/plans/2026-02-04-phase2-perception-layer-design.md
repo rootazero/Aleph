@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-This document presents the detailed design for Phase 2 of Aether's proactive AI system: the Perception Layer. This layer acts as the system's "sensory system," continuously monitoring environment changes and converting them into standardized events for the WorldModel (Phase 3).
+This document presents the detailed design for Phase 2 of Aleph's proactive AI system: the Perception Layer. This layer acts as the system's "sensory system," continuously monitoring environment changes and converting them into standardized events for the WorldModel (Phase 3).
 
 **Core Philosophy:** Build an adaptive, configurable sensing system that operates invisibly while providing rich environmental context.
 
@@ -17,7 +17,7 @@ This document presents the detailed design for Phase 2 of Aether's proactive AI 
 
 ### 1.1 Objective
 
-Act as Aether's "sensory system" - continuously monitoring OS-level events (processes, files, time, system state) and transforming them into structured events for higher-level reasoning.
+Act as Aleph's "sensory system" - continuously monitoring OS-level events (processes, files, time, system state) and transforming them into structured events for higher-level reasoning.
 
 ### 1.2 Design Principles
 
@@ -249,7 +249,7 @@ pub struct SystemWatcherConfig {
 
 ### 3.2 Default Configuration
 
-**File:** `~/.aether/perception.toml`
+**File:** `~/.aleph/perception.toml`
 
 ```toml
 enabled = true
@@ -493,7 +493,7 @@ pub use perception::{
 ```rust
 // core/src/daemon/cli.rs - run() method extension
 async fn run(&self) -> Result<()> {
-    info!("Starting Aether daemon with Perception Layer...");
+    info!("Starting Aleph daemon with Perception Layer...");
 
     // 1. Load configuration
     let config = DaemonConfig::default();
@@ -737,9 +737,9 @@ chrono = { version = "0.4", features = ["serde"] } # Already exists
 
 ## Conclusion
 
-Phase 2 (Perception Layer) transforms Aether from a static daemon into an **adaptive sensing system**. By implementing a configurable, tiered Watcher architecture with an isolated event system, we create the foundation for context-aware proactive AI while maintaining the "Invisible First" principle.
+Phase 2 (Perception Layer) transforms Aleph from a static daemon into an **adaptive sensing system**. By implementing a configurable, tiered Watcher architecture with an isolated event system, we create the foundation for context-aware proactive AI while maintaining the "Invisible First" principle.
 
-The design's key innovation is the **Level 0/1 tiering strategy**, which ensures Aether always maintains a "sensing core" (Level 0) while intelligently throttling resource-intensive operations (Level 1) based on system constraints. This "organic" behavior mimics a living system that adapts its awareness to available energy.
+The design's key innovation is the **Level 0/1 tiering strategy**, which ensures Aleph always maintains a "sensing core" (Level 0) while intelligently throttling resource-intensive operations (Level 1) based on system constraints. This "organic" behavior mimics a living system that adapts its awareness to available energy.
 
 **Design Status:** ✅ Approved for Implementation
 **Next Step:** Create detailed implementation plan using `superpowers:writing-plans`

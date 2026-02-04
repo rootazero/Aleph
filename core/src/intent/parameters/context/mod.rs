@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```rust
-//! use aethecore::intent::parameters::{MatchingContext, ConversationContext, AppContext, TimeContext};
+//! use alephcore::intent::parameters::{MatchingContext, ConversationContext, AppContext, TimeContext};
 //!
 //! let context = MatchingContext::builder()
 //!     .raw_input("What's the weather?")

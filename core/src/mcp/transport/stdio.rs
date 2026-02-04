@@ -12,7 +12,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::McpTransport;
 
@@ -73,7 +73,7 @@ impl StdioTransport {
         }
 
         let child = cmd.spawn().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Failed to spawn MCP server '{}' ({}): {}",
                 name, command_str, e
             ))
@@ -120,7 +120,7 @@ impl StdioTransport {
                 // Put back whatever we took
                 child.stdin = stdin_opt;
                 child.stdout = stdout_opt;
-                return Err(AetherError::IoError(format!(
+                return Err(AlephError::IoError(format!(
                     "MCP server '{}' stdin/stdout not available",
                     self.server_name
                 )));
@@ -134,7 +134,7 @@ impl StdioTransport {
                 // Put handles back
                 child.stdin = Some(stdin);
                 child.stdout = Some(stdout);
-                return Err(AetherError::IoError(format!(
+                return Err(AlephError::IoError(format!(
                     "Failed to serialize request: {}",
                     e
                 )));
@@ -145,7 +145,7 @@ impl StdioTransport {
             // Put handles back before returning error
             child.stdin = Some(stdin);
             child.stdout = Some(stdout);
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Failed to write to MCP server '{}': {}",
                 self.server_name, e
             )));
@@ -155,7 +155,7 @@ impl StdioTransport {
             // Put handles back before returning error
             child.stdin = Some(stdin);
             child.stdout = Some(stdout);
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Failed to flush MCP server '{}' stdin: {}",
                 self.server_name, e
             )));
@@ -174,14 +174,14 @@ impl StdioTransport {
         child.stdout = Some(reader.into_inner());
 
         match read_result {
-            Ok(Ok(0)) => Err(AetherError::IoError(format!(
+            Ok(Ok(0)) => Err(AlephError::IoError(format!(
                 "MCP server '{}' closed connection",
                 self.server_name
             ))),
             Ok(Ok(_)) => {
                 let response: JsonRpcResponse = serde_json::from_str(response_line.trim())
                     .map_err(|e| {
-                        AetherError::IoError(format!(
+                        AlephError::IoError(format!(
                             "Failed to parse response from '{}': {} (raw: {})",
                             self.server_name,
                             e,
@@ -198,7 +198,7 @@ impl StdioTransport {
 
                 Ok(response)
             }
-            Ok(Err(e)) => Err(AetherError::IoError(format!(
+            Ok(Err(e)) => Err(AlephError::IoError(format!(
                 "Failed to read from MCP server '{}': {}",
                 self.server_name, e
             ))),
@@ -209,7 +209,7 @@ impl StdioTransport {
                     timeout_secs = self.timeout.as_secs(),
                     "MCP request timed out"
                 );
-                Err(AetherError::McpTimeout)
+                Err(AlephError::McpTimeout)
             }
         }
     }
@@ -232,7 +232,7 @@ impl StdioTransport {
         let stdin = match child.stdin.take() {
             Some(stdin) => stdin,
             None => {
-                return Err(AetherError::IoError(format!(
+                return Err(AlephError::IoError(format!(
                     "MCP server '{}' stdin not available",
                     self.server_name
                 )));
@@ -244,7 +244,7 @@ impl StdioTransport {
             Ok(json) => json,
             Err(e) => {
                 child.stdin = Some(stdin);
-                return Err(AetherError::IoError(format!(
+                return Err(AlephError::IoError(format!(
                     "Failed to serialize notification: {}",
                     e
                 )));
@@ -254,7 +254,7 @@ impl StdioTransport {
         let mut stdin = stdin;
         if let Err(e) = stdin.write_all(notification_json.as_bytes()).await {
             child.stdin = Some(stdin);
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Failed to write notification to MCP server '{}': {}",
                 self.server_name, e
             )));
@@ -262,7 +262,7 @@ impl StdioTransport {
 
         if let Err(e) = stdin.flush().await {
             child.stdin = Some(stdin);
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Failed to flush MCP server '{}' stdin: {}",
                 self.server_name, e
             )));

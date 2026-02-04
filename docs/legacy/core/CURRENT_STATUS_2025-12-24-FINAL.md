@@ -1,4 +1,4 @@
-# Aether Project Status - 2025-12-24 (Final Session)
+# Aleph Project Status - 2025-12-24 (Final Session)
 
 ## 🎉 Tasks Completed Today
 
@@ -211,7 +211,7 @@ test result: ok. 100 passed; 0 failed; 0 ignored
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Aether Application (Swift)                │
+│                    Aleph Application (Swift)                │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
 │  │  Settings UI │  │  Context     │  │  Halo Overlay    │  │
@@ -226,7 +226,7 @@ test result: ok. 100 passed; 0 failed; 0 ignored
 │  - Memory Management APIs (Task 20)                         │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │            AetherCore (Rust)                         │   │
+│  │            AlephCore (Rust)                         │   │
 │  │  ┌────────────────┐  ┌──────────────────────────┐   │   │
 │  │  │  Retrieval &   │  │  Prompt Augmenter        │   │   │
 │  │  │  Augmentation  │→ │  (Task 13)               │   │   │
@@ -299,7 +299,7 @@ The memory-augmented AI pipeline is **ready for integration** with AI providers:
 pub async fn process_request(&self, user_input: &str) -> Result<String> {
     // 1. Retrieve and augment prompt with memory context
     let augmented_prompt = self.core.retrieve_and_augment_prompt(
-        "You are Aether AI, a helpful assistant.",
+        "You are Aleph AI, a helpful assistant.",
         user_input
     )?;
 
@@ -422,7 +422,7 @@ let response = gemini.generate_content(content).await?;
 ### Phase 4E: Remaining Tasks (Optional)
 
 1. **Task 22: Memory Usage Indicator** (Optional)
-   - Add callback to `AetherEventHandler`
+   - Add callback to `AlephEventHandler`
    - Show subtle indicator in Halo when memory used
    - Display memory count tooltip
 
@@ -458,7 +458,7 @@ let response = gemini.generate_content(content).await?;
 
 #### Memory Features (Requires Xcode)
 - [ ] Enable memory in settings UI
-- [ ] Use Aether in Notes.app
+- [ ] Use Aleph in Notes.app
 - [ ] Ask question, get response
 - [ ] Ask follow-up question
 - [ ] Verify context continuity
@@ -506,7 +506,7 @@ echo "5. Checking for warnings..."
 cargo clippy --all-targets
 
 echo "6. Regenerating UniFFI bindings..."
-cd Aether/core
+cd Aleph/core
 cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/
 
 echo "7. Regenerating Xcode project..."
@@ -519,7 +519,7 @@ echo "✅ All tests passed! Ready for manual testing in Xcode."
 ### Manual Testing Flow
 
 ```
-1. Open Aether.xcodeproj in Xcode
+1. Open Aleph.xcodeproj in Xcode
    ↓
 2. Build and run (⌘R)
    ↓

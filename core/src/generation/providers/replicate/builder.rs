@@ -20,8 +20,8 @@ use super::constants::DEFAULT_TIMEOUT_SECS;
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::providers::ReplicateProvider;
-/// use aethecore::generation::GenerationType;
+/// use alephcore::generation::providers::ReplicateProvider;
+/// use alephcore::generation::GenerationType;
 ///
 /// let provider = ReplicateProvider::builder("r8_xxx")
 ///     .endpoint("https://custom.replicate.com")

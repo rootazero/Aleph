@@ -15,20 +15,20 @@
 
 | 优先级 | 任务 | 预计减少行数 | 复杂度 |
 |-------|------|------------|-------|
-| P0 | `aether_gateway.rs` 拆分 | -2000+ | 高 |
+| P0 | `aleph_gateway.rs` 拆分 | -2000+ | 高 |
 | P1 | 测试文件外提 (5个文件) | -2500+ | 低 |
 | P2 | `facts.rs` 功能拆分 | 重组 | 中 |
 | P3 | `prompt_builder.rs` 去重 | -300 | 低 |
 
 ---
 
-## P0: aether_gateway.rs 拆分
+## P0: aleph_gateway.rs 拆分
 
-**原文件:** `core/src/bin/aether_gateway.rs` (2255 行)
+**原文件:** `core/src/bin/aleph_gateway.rs` (2255 行)
 
 **目标结构:**
 ```
-core/src/bin/aether_gateway/
+core/src/bin/aleph_gateway/
 ├── main.rs          # main() 入口
 ├── cli.rs           # Clap CLI 定义
 ├── commands/

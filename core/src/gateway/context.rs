@@ -19,7 +19,7 @@ use super::session_manager::SessionManager;
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::gateway::{
+/// use alephcore::gateway::{
 ///     GatewayContext, SessionManager, AgentRegistry,
 ///     ExecutionAdapter, AgentToAgentPolicy,
 /// };

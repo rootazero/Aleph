@@ -26,7 +26,7 @@
 //! ```
 
 use crate::config::IntentDetectionPolicy;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -164,7 +164,7 @@ impl AiIntentDetector {
                         "AI intent detection timed out after {}ms",
                         self.timeout.as_millis()
                     );
-                    AetherError::Timeout {
+                    AlephError::Timeout {
                         suggestion: Some(format!(
                             "AI intent detection timed out after {}ms",
                             self.timeout.as_millis()

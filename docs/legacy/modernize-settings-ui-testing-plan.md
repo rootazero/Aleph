@@ -123,10 +123,10 @@ This document outlines the comprehensive testing strategy for the Modernize Sett
 
 - [ ] Modify multiple settings
 - [ ] Close settings window
-- [ ] Quit and restart Aether
+- [ ] Quit and restart Aleph
 - [ ] Reopen settings window
 - [ ] Verify all changes persisted
-- [ ] Check `~/.aether/config.toml` content matches
+- [ ] Check `~/.aleph/config.toml` content matches
 
 ### 6.1.3 Test Import/Export
 
@@ -196,13 +196,13 @@ This document outlines the comprehensive testing strategy for the Modernize Sett
 - [ ] Switch to Auto mode using ThemeSwitcher
 - [ ] Open System Preferences > General > Appearance
 - [ ] Change to Light
-  - [ ] Aether switches to Light immediately
+  - [ ] Aleph switches to Light immediately
   - [ ] No flicker or delay
 - [ ] Change to Dark
-  - [ ] Aether switches to Dark immediately
+  - [ ] Aleph switches to Dark immediately
   - [ ] No flicker or delay
 - [ ] Change back to Auto/System
-  - [ ] Aether follows system
+  - [ ] Aleph follows system
 - [ ] Verify transition smooth
 
 ### 6.2.4 Theme Switcher Interaction
@@ -220,7 +220,7 @@ This document outlines the comprehensive testing strategy for the Modernize Sett
 - [ ] Animation smooth
   - [ ] No jerky transitions
   - [ ] Frame rate appears 60fps
-- [ ] Quit and restart Aether
+- [ ] Quit and restart Aleph
   - [ ] Theme preference restored
   - [ ] Correct icon highlighted
 
@@ -322,7 +322,7 @@ This document outlines the comprehensive testing strategy for the Modernize Sett
       echo "api_key = \"sk-test-$i\""
       echo "model = \"gpt-4\""
       echo ""
-    done >> ~/.aether/config.toml
+    done >> ~/.aleph/config.toml
     ```
 - [ ] Open Providers tab
 - [ ] Measure scroll performance:
@@ -492,7 +492,7 @@ This document outlines the comprehensive testing strategy for the Modernize Sett
 ### Pre-Testing Setup
 - [ ] Clean build directory: `xcodebuild clean`
 - [ ] Regenerate Xcode project: `xcodegen generate`
-- [ ] Build Rust core: `cd Aether/core && cargo build --release`
+- [ ] Build Rust core: `cd Aleph/core && cargo build --release`
 - [ ] Generate UniFFI bindings
 - [ ] Copy dylib to Frameworks
 - [ ] Build Xcode project
@@ -545,4 +545,4 @@ Store in `docs/testing/phase6/`:
 
 **Document Version**: 1.0
 **Last Updated**: 2025-12-26
-**Maintained By**: Aether Development Team
+**Maintained By**: Aleph Development Team

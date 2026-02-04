@@ -1,8 +1,8 @@
-# Aether → Rust Moltbot 全面重构设计
+# Aleph → Rust Moltbot 全面重构设计
 
 **日期**: 2026-01-28
 **状态**: 规划阶段
-**目标**: 将 Aether 全面改造为 Rust 版 Moltbot，采用 Gateway 中心化架构
+**目标**: 将 Aleph 全面改造为 Rust 版 Moltbot，采用 Gateway 中心化架构
 
 ---
 
@@ -19,7 +19,7 @@ Moltbot 的架构设计极其巧妙，核心优势包括：
 5. **事件驱动自动化** - Cron 调度 + Webhook 监听
 6. **Agent 间协作** - 通过 `sessions_list/send` 工具实现多 Agent 协调
 
-**Aether 当前问题**：
+**Aleph 当前问题**：
 - 架构碎片化：UI 层、Rust 核心、Agent Loop 各自独立
 - 缺乏统一控制平面，组件间通信复杂
 - 多平台集成困难（WhatsApp/Telegram 等需要大量定制开发）
@@ -27,7 +27,7 @@ Moltbot 的架构设计极其巧妙，核心优势包括：
 
 ### 1.2 改造目标
 
-**核心目标**：将 Aether 改造为 **Rust 原生的 Moltbot**，保持 Rust 性能优势，采用 Moltbot 的架构模式。
+**核心目标**：将 Aleph 改造为 **Rust 原生的 Moltbot**，保持 Rust 性能优势，采用 Moltbot 的架构模式。
 
 **四大核心能力**（已确认）：
 1. ✅ **Gateway 中心化** - WebSocket 控制平面协调所有组件
@@ -52,7 +52,7 @@ Moltbot 的架构设计极其巧妙，核心优势包括：
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Aether Gateway (Rust)                         │
+│                        Aleph Gateway (Rust)                         │
 │                     WebSocket Server :18789                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
@@ -291,11 +291,11 @@ Channel Connector (send to original channel)
 
 ## 3. 功能对比与实现路径
 
-### 3.1 Moltbot 核心功能 → Aether 实现
+### 3.1 Moltbot 核心功能 → Aleph 实现
 
-| Moltbot 功能 | 对应 Aether 实现 | 优先级 | 技术栈 |
+| Moltbot 功能 | 对应 Aleph 实现 | 优先级 | 技术栈 |
 |--------------|----------------|-------|-------|
-| Gateway (WebSocket) | 全新实现 `aether_gateway` crate | P0 | tokio-tungstenite |
+| Gateway (WebSocket) | 全新实现 `aleph_gateway` crate | P0 | tokio-tungstenite |
 | Pi Agent Runtime | 重写 Agent Loop | P0 | Custom Rust |
 | Channel Connectors | 新增 `channels/` 模块 | P0 | 各平台 SDK/API |
 | Sandbox Docker | 新增 `sandbox/` 模块 | P1 | bollard |
@@ -313,7 +313,7 @@ Channel Connector (send to original channel)
 **目标**: 构建 WebSocket Gateway 和 RPC 框架
 
 **交付物**：
-- [ ] `aether_gateway` crate (WebSocket Server)
+- [ ] `aleph_gateway` crate (WebSocket Server)
 - [ ] JSON-RPC 2.0 协议实现
 - [ ] 客户端连接管理
 - [ ] 基础 RPC 方法（`agent.message.send`, `sessions.list`）
@@ -691,7 +691,7 @@ pub enum SessionMode {
 ```
 
 **持久化**:
-- SQLite 存储（`~/.aether/sessions.db`）
+- SQLite 存储（`~/.aleph/sessions.db`）
 - 自动压缩历史（保留最近 50 条消息）
 - 过期会话清理（7 天未活动）
 
@@ -718,7 +718,7 @@ impl ToolRegistry {
 
 ### 5.3 配置管理
 
-**统一配置文件** (`~/.aether/config.toml`):
+**统一配置文件** (`~/.aleph/config.toml`):
 ```toml
 [gateway]
 host = "127.0.0.1"
@@ -854,7 +854,7 @@ executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 ## 9. 迁移路径
 
-### 9.1 从现有 Aether 迁移
+### 9.1 从现有 Aleph 迁移
 
 **Phase 0: 兼容性保留**
 - 保留现有 macOS App UI
@@ -953,7 +953,7 @@ executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 1. **创建新 Crate 结构**:
    ```bash
-   cargo new aether_gateway --lib
+   cargo new aleph_gateway --lib
    cargo new aether_agent --lib
    cargo new aether_channels --lib
    cargo new aether_sandbox --lib

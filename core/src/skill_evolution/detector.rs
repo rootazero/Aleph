@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 
 use super::tracker::EvolutionTracker;
@@ -153,7 +153,7 @@ fn parse_suggestion_response(
     }
 
     let parsed: SuggestionResponse = serde_json::from_str(&json_str).map_err(|e| {
-        AetherError::Other {
+        AlephError::Other {
             message: format!("Failed to parse suggestion: {}", e),
             suggestion: None,
         }

@@ -34,7 +34,7 @@ struct YourSettingsView: View {
     @State private var isSaving: Bool = false
     @State private var errorMessage: String?
 
-    let core: AetherCore?
+    let core: AlephCore?
 ```
 
 ### 2. Update View Structure

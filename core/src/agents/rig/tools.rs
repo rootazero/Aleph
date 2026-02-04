@@ -7,7 +7,7 @@ use crate::executor::{
     create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig as UnifiedBuiltinToolConfig,
 };
 use crate::generation::GenerationProviderRegistry;
-use crate::tools::{AetherToolServer, AetherToolServerHandle};
+use crate::tools::{AlephToolServer, AlephToolServerHandle};
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
 
@@ -60,8 +60,8 @@ impl std::fmt::Debug for BuiltinToolConfig {
 /// This function uses the unified builtin registry from executor::builtin_registry
 /// to ensure consistency with BuiltinToolRegistry used by Agent Loop.
 ///
-/// Returns an `AetherToolServerHandle` that can be shared across threads.
-pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AetherToolServerHandle {
+/// Returns an `AlephToolServerHandle` that can be shared across threads.
+pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AlephToolServerHandle {
     // Convert to unified config
     let unified_config = config.map(|cfg| {
         #[allow(unused_mut)]
@@ -76,13 +76,13 @@ pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AetherT
         config
     });
 
-    let mut server = AetherToolServer::new();
+    let mut server = AlephToolServer::new();
 
     // Register all builtin tools from unified registry
     for name in get_builtin_tool_names() {
         if let Some(tool) = create_tool_boxed(&name, unified_config.as_ref()) {
             server = server.tool_boxed(tool);
-            info!(tool = name, "Registered builtin tool in AetherToolServer");
+            info!(tool = name, "Registered builtin tool in AlephToolServer");
         } else {
             // Tool requires config that wasn't provided (e.g., generate_image needs registry)
             warn!(

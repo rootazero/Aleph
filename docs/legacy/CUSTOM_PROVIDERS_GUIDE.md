@@ -2,19 +2,19 @@
 
 ## 快速开始
 
-Aether 现在支持多个自定义 OpenAI 兼容的 AI 服务！你可以使用 DeepSeek、Moonshot、Azure OpenAI 等任何兼容 OpenAI API 的服务。
+Aleph 现在支持多个自定义 OpenAI 兼容的 AI 服务！你可以使用 DeepSeek、Moonshot、Azure OpenAI 等任何兼容 OpenAI API 的服务。
 
 ## 配置步骤
 
 ### 1. 复制示例配置
 
 ```bash
-cp Aether/config.example.toml ~/.aether/config.toml
+cp Aleph/config.example.toml ~/.aleph/config.toml
 ```
 
 ### 2. 添加自定义 Provider
 
-在 `~/.aether/config.toml` 中添加：
+在 `~/.aleph/config.toml` 中添加：
 
 ```toml
 [providers.deepseek]
@@ -44,7 +44,7 @@ provider = "openai"     # 使用 OpenAI
 
 - 选中文本：`/deep 解释量子计算`
 - 按 `Cmd+~` (macOS) 或 `Ctrl+~` (Windows)
-- Aether 自动使用 DeepSeek 处理请求
+- Aleph 自动使用 DeepSeek 处理请求
 
 ## 支持的服务
 
@@ -218,7 +218,7 @@ provider = "openai"  # 兜底规则（匹配所有）
 
 如果遇到问题：
 1. 查看 `config.example.toml` 中的详细注释
-2. 检查 Aether 日志输出
+2. 检查 Aleph 日志输出
 3. 在 GitHub 提交 Issue：https://github.com/your-repo/aether/issues
 
 ---

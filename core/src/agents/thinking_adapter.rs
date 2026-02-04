@@ -13,8 +13,8 @@
 //! # Example
 //!
 //! ```rust
-//! use aethecore::agents::thinking::{ThinkLevel, ThinkingConfig};
-//! use aethecore::agents::thinking_adapter::ThinkingAdapter;
+//! use alephcore::agents::thinking::{ThinkLevel, ThinkingConfig};
+//! use alephcore::agents::thinking_adapter::ThinkingAdapter;
 //!
 //! let config = ThinkingConfig::new(ThinkLevel::High, "claude", "claude-3-5-sonnet");
 //! let params = ThinkingAdapter::to_provider_params(&config);

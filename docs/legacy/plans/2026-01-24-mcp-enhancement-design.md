@@ -1,12 +1,12 @@
 # MCP Enhancement Design
 
-> 完整增强 Aether MCP 实现，达到与 OpenCode（Claude Code 开源实现）同等级功能
+> 完整增强 Aleph MCP 实现，达到与 OpenCode（Claude Code 开源实现）同等级功能
 
 ## 背景
 
-对比分析 OpenCode 和 Aether 的 MCP 实现后，发现以下关键差距：
+对比分析 OpenCode 和 Aleph 的 MCP 实现后，发现以下关键差距：
 
-| 功能 | OpenCode | Aether | 重要性 |
+| 功能 | OpenCode | Aleph | 重要性 |
 |------|----------|--------|--------|
 | 远程服务器支持 | StreamableHTTP + SSE | 仅 Stdio | 高 |
 | OAuth 认证 | 完整实现 | 无 | 高 |
@@ -19,7 +19,7 @@
 
 ## 设计决策
 
-- **传输层实现**：自行实现 HTTP/SSE 传输，保持与 Aether 自实现 AetherTool/AiProvider 风格一致
+- **传输层实现**：自行实现 HTTP/SSE 传输，保持与 Aleph 自实现 AlephTool/AiProvider 风格一致
 - **OAuth 回调服务器**：独立轻量级进程，避免主进程复杂化
 
 ---
@@ -90,7 +90,7 @@ pub trait NotificationHandler: Send + Sync {
 | HTTP | POST 请求 | 响应流/轮询 | 远程无状态 |
 | SSE | POST + EventSource | SSE 事件流 | 远程有状态 |
 
-HTTP 和 SSE 使用 `reqwest` 客户端（Aether 已依赖）。
+HTTP 和 SSE 使用 `reqwest` 客户端（Aleph 已依赖）。
 
 ### 2. OAuth 认证系统
 
@@ -125,7 +125,7 @@ impl McpOAuthProvider {
 ```rust
 // auth/storage.rs
 pub struct OAuthStorage {
-    file_path: PathBuf,  // ~/.aether/data/mcp-auth.json
+    file_path: PathBuf,  // ~/.aleph/data/mcp-auth.json
 }
 
 pub struct OAuthEntry {
@@ -255,7 +255,7 @@ impl NotificationHandler for McpNotificationRouter {
 }
 ```
 
-通知事件通过 Aether 的 `EventBus` 广播，UI 层和 Agent Loop 可订阅响应。
+通知事件通过 Aleph 的 `EventBus` 广播，UI 层和 Agent Loop 可订阅响应。
 
 ### 6. 配置增强
 
@@ -345,7 +345,7 @@ pub enum AuthResult {
 为 Swift/Kotlin UI 层暴露：
 
 ```rust
-impl AetherCore {
+impl AlephCore {
     // 现有接口保持不变...
 
     // 新增接口

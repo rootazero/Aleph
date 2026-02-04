@@ -1,7 +1,7 @@
 //! Image generation tool
 //!
 //! Generates images from text prompts using configured AI providers.
-//! Implements AetherTool trait for AI agent integration.
+//! Implements AlephTool trait for AI agent integration.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -15,7 +15,7 @@ use crate::generation::{
     GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
 use crate::builtin_tools::error::ToolError;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 /// Arguments for image generation
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -233,9 +233,9 @@ impl Clone for ImageGenerateTool {
     }
 }
 
-/// Implementation of AetherTool trait for ImageGenerateTool
+/// Implementation of AlephTool trait for ImageGenerateTool
 #[async_trait]
-impl AetherTool for ImageGenerateTool {
+impl AlephTool for ImageGenerateTool {
     const NAME: &'static str = "generate_image";
     const DESCRIPTION: &'static str = r#"Generate images from text prompts using AI image generation providers."#;
 
@@ -251,7 +251,7 @@ impl AetherTool for ImageGenerateTool {
 mod tests {
     use super::*;
     use crate::generation::MockGenerationProvider;
-    use crate::tools::AetherTool;
+    use crate::tools::AlephTool;
 
     fn create_test_registry() -> Arc<RwLock<GenerationProviderRegistry>> {
         let mut registry = GenerationProviderRegistry::new();
@@ -314,7 +314,7 @@ mod tests {
         };
 
         // Use fully qualified syntax to avoid ambiguity
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_ok());
 
         let output = result.unwrap();
@@ -339,10 +339,10 @@ mod tests {
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        // Error is now AetherError
+        // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
         assert!(err_msg.contains("not found"), "Error should contain 'not found': {}", err_msg);
@@ -363,10 +363,10 @@ mod tests {
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
 
-        // Error is now AetherError
+        // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
         assert!(err_msg.contains("No image generation provider"), "Error should contain 'No image generation provider': {}", err_msg);
@@ -387,7 +387,7 @@ mod tests {
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_ok());
 
         let output = result.unwrap();

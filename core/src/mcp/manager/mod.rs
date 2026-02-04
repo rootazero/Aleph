@@ -22,7 +22,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use aethecore::mcp::manager::{McpManagerActor, McpManagerHandle, McpManagerConfig};
+//! use alephcore::mcp::manager::{McpManagerActor, McpManagerHandle, McpManagerConfig};
 //!
 //! // Create the actor (loads config from default path)
 //! let (actor, handle) = McpManagerActor::new(None).await?;

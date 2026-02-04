@@ -53,7 +53,7 @@ Expected: Success, no output
 ```c
 //
 //  ShaderTypes.h
-//  Aether
+//  Aleph
 //
 //  Shared types between Swift and Metal shaders for Liquid Glass rendering.
 //
@@ -143,7 +143,7 @@ git commit -m "feat(liquid-glass): add shader types header for Metal-Swift inter
 ```metal
 //
 //  LiquidGlassShaders.metal
-//  Aether
+//  Aleph
 //
 //  Metal shaders for Liquid Glass effect:
 //  - Aurora background with flowing colors
@@ -454,7 +454,7 @@ git commit -m "feat(liquid-glass): add Metal shaders for aurora, metaball fusion
 ```swift
 //
 //  LiquidGlassRenderer.swift
-//  Aether
+//  Aleph
 //
 //  Metal renderer for Liquid Glass effects.
 //  Manages render pipeline, buffers, and frame updates.
@@ -859,7 +859,7 @@ git commit -m "feat(liquid-glass): add Metal renderer with triple buffering and 
 ```swift
 //
 //  LiquidGlassMetalView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI wrapper for MTKView to render Liquid Glass effects.
 //
@@ -1000,7 +1000,7 @@ git commit -m "feat(liquid-glass): add SwiftUI wrapper for MTKView"
 ```swift
 //
 //  DominantColorExtractor.swift
-//  Aether
+//  Aleph
 //
 //  K-means clustering for extracting dominant colors from images.
 //
@@ -1192,7 +1192,7 @@ struct DominantColorExtractor {
 ```swift
 //
 //  WallpaperColorSampler.swift
-//  Aether
+//  Aleph
 //
 //  Samples colors from the desktop wallpaper and system accent color.
 //  Updates periodically and on system events.
@@ -1424,7 +1424,7 @@ git commit -m "feat(liquid-glass): add wallpaper color sampling with K-means ext
 ```swift
 //
 //  BubbleFusionCalculator.swift
-//  Aether
+//  Aleph
 //
 //  Calculates fusion weights for bubble merging based on distance, time, and interaction.
 //
@@ -1608,7 +1608,7 @@ git commit -m "feat(liquid-glass): add bubble fusion calculator with distance/ti
 ```swift
 //
 //  LiquidGlassConfiguration.swift
-//  Aether
+//  Aleph
 //
 //  Central configuration for Liquid Glass effects.
 //
@@ -1783,7 +1783,7 @@ git commit -m "feat(liquid-glass): add central configuration for all effect para
 ```swift
 //
 //  BubbleGeometryReporter.swift
-//  Aether
+//  Aleph
 //
 //  Reports bubble geometry from SwiftUI to Metal layer.
 //  Uses preference keys to collect frame data.
@@ -2068,7 +2068,7 @@ private var contentWithBackground: some View {
 
 **Step 3: 验证修改**
 
-Run: `cd platforms/macos && xcodebuild -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `cd platforms/macos && xcodebuild -scheme Aleph -configuration Debug build 2>&1 | head -50`
 Expected: Build starts (may have warnings initially)
 
 **Step 4: Commit**
@@ -2214,7 +2214,7 @@ git commit -m "chore: configure Xcode project for Metal shaders"
 
 **Step 1: 构建项目**
 
-Run: `cd platforms/macos && xcodebuild -scheme Aether -configuration Debug build 2>&1 | tail -20`
+Run: `cd platforms/macos && xcodebuild -scheme Aleph -configuration Debug build 2>&1 | tail -20`
 Expected: BUILD SUCCEEDED
 
 **Step 2: 修复编译错误（如果有）**
@@ -2226,7 +2226,7 @@ Expected: BUILD SUCCEEDED
 
 **Step 3: 运行测试**
 
-Run: `cd platforms/macos && xcodebuild -scheme Aether -configuration Debug test 2>&1 | tail -30`
+Run: `cd platforms/macos && xcodebuild -scheme Aleph -configuration Debug test 2>&1 | tail -30`
 
 **Step 4: 最终 Commit**
 

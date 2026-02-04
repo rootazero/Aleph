@@ -9,7 +9,7 @@
 
 ## 📋 Overview
 
-Expand Aether's provider ecosystem by adding presets for popular OpenAI-compatible AI services. These providers all use the OpenAI chat completions API format, requiring only preset configurations (no new protocol adapters).
+Expand Aleph's provider ecosystem by adding presets for popular OpenAI-compatible AI services. These providers all use the OpenAI chat completions API format, requiring only preset configurations (no new protocol adapters).
 
 ---
 

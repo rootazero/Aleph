@@ -11,7 +11,7 @@ use tracing::{debug, trace};
 /// Directory scanner for discovering components across multiple locations
 #[derive(Debug)]
 pub struct DirectoryScanner {
-    /// Aether home directory (~/.aether/)
+    /// Aether home directory (~/.aleph/)
     aether_home: PathBuf,
     /// Claude home directory (~/.claude/)
     claude_home: Option<PathBuf>,
@@ -68,7 +68,7 @@ impl DirectoryScanner {
     ///
     /// Priority order (lowest to highest):
     /// 1. Claude global (~/.claude/) - priority 0
-    /// 2. Aether global (~/.aether/) - priority 10
+    /// 2. Aether global (~/.aleph/) - priority 10
     /// 3. Project-level .claude/ directories - priority 20+
     pub fn get_all_directories(&self) -> DiscoveryResult<Vec<ScanDirectory>> {
         let mut dirs = Vec::new();

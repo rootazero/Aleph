@@ -13,7 +13,7 @@ This document provides comprehensive accessibility testing procedures to ensure 
 - **Screen Recording**: For documenting issues
 
 ### Pre-Test Setup
-1. Build Aether in Release mode
+1. Build Aleph in Release mode
 2. Enable Accessibility features:
    - VoiceOver: Cmd+F5
    - Full Keyboard Access: System Preferences > Keyboard > Shortcuts > "Use keyboard navigation to move focus between controls"
@@ -26,7 +26,7 @@ This document provides comprehensive accessibility testing procedures to ensure 
 ### Setup VoiceOver
 1. Press Cmd+F5 to enable VoiceOver
 2. Open VoiceOver Utility (Cmd+F8) if needed to adjust settings
-3. Launch Aether and open Settings window
+3. Launch Aleph and open Settings window
 
 ### General VoiceOver Navigation
 
@@ -477,7 +477,7 @@ Repeat all above tests in Dark mode:
 
 1. Open Xcode > Open Developer Tool > Accessibility Inspector
 2. Click "Audit" tab
-3. Select Aether.app window
+3. Select Aleph.app window
 4. Click "Run Audit"
 5. Review "Color Contrast" issues
 6. [ ] All issues resolved or documented

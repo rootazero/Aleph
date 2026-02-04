@@ -23,7 +23,7 @@ pub use types::{FileInfo, FileOperation, FileOpsArgs, FileOpsOutput};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::AetherTool;
+    use crate::tools::AlephTool;
     use std::fs;
     use tempfile::tempdir;
 
@@ -45,7 +45,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.items_affected, Some(2));
     }
@@ -66,7 +66,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = AetherTool::call(&tool, write_args).await.unwrap();
+        let result = AlephTool::call(&tool, write_args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.bytes_written, Some(13));
 
@@ -80,7 +80,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = AetherTool::call(&tool, read_args).await.unwrap();
+        let result = AlephTool::call(&tool, read_args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.content, Some("Hello, World!".to_string()));
     }
@@ -100,7 +100,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert!(new_dir.exists());
     }
@@ -124,7 +124,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert!(!from.exists());
         assert!(to.exists());
@@ -149,7 +149,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert!(result.success);
         assert_eq!(result.items_affected, Some(2));
     }
@@ -159,7 +159,7 @@ mod tests {
         // Test that relative paths resolve to the output directory correctly
         let tool = FileOpsTool::new();
 
-        // "test_subdir" should resolve to ~/.aether/output/test_subdir
+        // "test_subdir" should resolve to ~/.aleph/output/test_subdir
         let args = FileOpsArgs {
             operation: FileOperation::Mkdir,
             path: "test_mkdir_relative_subdir".to_string(),
@@ -169,7 +169,7 @@ mod tests {
             create_parents: true,
         };
 
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
 
         // This should succeed - output directory should be writable
         match &result {
@@ -214,7 +214,7 @@ mod tests {
         let tool = FileOpsTool::new();
 
         // Test that output subdirectories are allowed
-        // Relative paths like "chapter-1" should resolve to ~/.aether/output/chapter-1
+        // Relative paths like "chapter-1" should resolve to ~/.aleph/output/chapter-1
         let result = tool.check_path(std::path::Path::new("chapter-1"));
         assert!(
             result.is_ok(),

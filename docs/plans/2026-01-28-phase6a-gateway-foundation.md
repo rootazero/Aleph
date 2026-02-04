@@ -16,7 +16,7 @@
 | PairingManager | `gateway/security/pairing.rs` | Complete - 6-digit code, confirm, cancel |
 | EventBus | `gateway/event_bus.rs` | Basic - broadcast only, no topic filtering |
 | Server | `gateway/server.rs` | Basic - ConnectionState has subscriptions (unused) |
-| CLI | `bin/aether_gateway.rs` | Basic - start/stop/status only |
+| CLI | `bin/aleph_gateway.rs` | Basic - start/stop/status only |
 
 ### Gaps to Address
 
@@ -206,27 +206,27 @@ Add new CLI subcommands for gateway management.
 
 ```bash
 # List pending pairing requests
-aether-gateway pairing list
+aleph-gateway pairing list
 
 # Approve a pairing request
-aether-gateway pairing approve <code>
+aleph-gateway pairing approve <code>
 
 # Reject a pairing request
-aether-gateway pairing reject <code>
+aleph-gateway pairing reject <code>
 
 # List approved devices
-aether-gateway devices list
+aleph-gateway devices list
 
 # Revoke a device
-aether-gateway devices revoke <device_id>
+aleph-gateway devices revoke <device_id>
 
 # Check gateway status (enhanced)
-aether-gateway status --json
+aleph-gateway status --json
 ```
 
 **Implementation:**
 
-Update `bin/aether_gateway.rs` with new subcommands:
+Update `bin/aleph_gateway.rs` with new subcommands:
 
 ```rust
 #[derive(Subcommand, Debug)]
@@ -262,7 +262,7 @@ enum DevicesAction {
 ```
 
 **Files to Modify:**
-- `core/src/bin/aether_gateway.rs` (MODIFY)
+- `core/src/bin/aleph_gateway.rs` (MODIFY)
 
 ---
 
@@ -314,7 +314,7 @@ Support session resumption after disconnection.
 | `core/src/gateway/event_bus.rs` | Add topic-based filtering |
 | `core/src/gateway/server.rs` | Integrate auth, filter events per connection |
 | `core/src/gateway/handlers/mod.rs` | Export new handlers |
-| `core/src/bin/aether_gateway.rs` | Add pairing/devices subcommands |
+| `core/src/bin/aleph_gateway.rs` | Add pairing/devices subcommands |
 
 ---
 
@@ -338,13 +338,13 @@ Support session resumption after disconnection.
 
 ```bash
 # Terminal 1: Start gateway
-cargo run --features gateway --bin aether-gateway
+cargo run --features gateway --bin aleph-gateway
 
 # Terminal 2: Test with websocat
 echo '{"jsonrpc":"2.0","method":"connect","params":{"device_name":"test"},"id":1}' | websocat ws://127.0.0.1:18789
 
 # Terminal 3: Approve pairing
-cargo run --features gateway --bin aether-gateway -- pairing approve 123456
+cargo run --features gateway --bin aleph-gateway -- pairing approve 123456
 ```
 
 ---
@@ -378,8 +378,8 @@ cargo run --features gateway --bin aether-gateway -- pairing approve 123456
 - [x] New device connecting prompts for pairing
 - [x] Approved devices can reconnect with stored token
 - [x] Clients can subscribe to specific event topics
-- [x] `aether-gateway pairing approve <code>` works
-- [x] `aether-gateway devices list` shows approved devices
+- [x] `aleph-gateway pairing approve <code>` works
+- [x] `aleph-gateway devices list` shows approved devices
 - [x] Gateway restart preserves approved devices
 
 ---
@@ -416,7 +416,7 @@ cargo run --features gateway --bin aether-gateway -- pairing approve 123456
 - `core/src/gateway/event_bus.rs` (added TopicEvent, TopicFilter, topic_matches)
 - `core/src/gateway/handlers/mod.rs`
 - `core/src/gateway/mod.rs`
-- `core/src/bin/aether_gateway.rs`
+- `core/src/bin/aleph_gateway.rs`
 
 ### All Tasks Complete!
 

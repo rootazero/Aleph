@@ -21,8 +21,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
-//! use aethecore::generation::providers::OpenAiTtsProvider;
+//! use alephcore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
+//! use alephcore::generation::providers::OpenAiTtsProvider;
 //!
 //! let provider = OpenAiTtsProvider::new("sk-...", None, None, None)?;
 //!
@@ -84,8 +84,8 @@ pub const AVAILABLE_FORMATS: [&str; 4] = ["mp3", "opus", "aac", "flac"];
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::providers::OpenAiTtsProvider;
-/// use aethecore::generation::GenerationProvider;
+/// use alephcore::generation::providers::OpenAiTtsProvider;
+/// use alephcore::generation::GenerationProvider;
 ///
 /// let provider = OpenAiTtsProvider::new(
 ///     "sk-your-api-key",
@@ -128,7 +128,7 @@ impl OpenAiTtsProvider {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::providers::OpenAiTtsProvider;
+    /// use alephcore::generation::providers::OpenAiTtsProvider;
     ///
     /// // Default configuration
     /// let provider = OpenAiTtsProvider::new("sk-xxx", None, None, None).unwrap();

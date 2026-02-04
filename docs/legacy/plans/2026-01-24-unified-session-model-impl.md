@@ -45,7 +45,7 @@ fn test_execution_session_with_request_context() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test test_execution_session_with_request_context -p aethecore --lib`
+Run: `cargo test test_execution_session_with_request_context -p alephcore --lib`
 Expected: FAIL with "no method named `with_original_request`"
 
 **Step 3: Write minimal implementation**
@@ -121,7 +121,7 @@ impl ExecutionSession {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test test_execution_session_with_request_context -p aethecore --lib`
+Run: `cargo test test_execution_session_with_request_context -p alephcore --lib`
 Expected: PASS
 
 **Step 5: Commit**
@@ -166,7 +166,7 @@ fn test_system_reminder_part() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test test_system_reminder_part -p aethecore --lib`
+Run: `cargo test test_system_reminder_part -p alephcore --lib`
 Expected: FAIL with "no variant named `SystemReminder`"
 
 **Step 3: Write minimal implementation**
@@ -230,7 +230,7 @@ impl PartId for SessionPart {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test test_system_reminder_part -p aethecore --lib`
+Run: `cargo test test_system_reminder_part -p alephcore --lib`
 Expected: PASS
 
 **Step 5: Commit**
@@ -293,7 +293,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test test_sync_loop_state_to_session -p aethecore --lib`
+Run: `cargo test test_sync_loop_state_to_session -p alephcore --lib`
 Expected: FAIL with "unresolved import" or "cannot find value `SessionSync`"
 
 **Step 3: Write minimal implementation**
@@ -438,7 +438,7 @@ pub use session_sync::SessionSync;
 
 **Step 5: Run test to verify it passes**
 
-Run: `cargo test session_sync -p aethecore --lib`
+Run: `cargo test session_sync -p alephcore --lib`
 Expected: PASS
 
 **Step 6: Commit**
@@ -481,7 +481,7 @@ fn test_unified_session_feature_flags() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test test_unified_session_feature_flags -p aethecore --lib`
+Run: `cargo test test_unified_session_feature_flags -p alephcore --lib`
 Expected: FAIL
 
 **Step 3: Write minimal implementation**
@@ -516,7 +516,7 @@ impl Default for LoopConfig {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test test_unified_session_feature_flags -p aethecore --lib`
+Run: `cargo test test_unified_session_feature_flags -p alephcore --lib`
 Expected: PASS
 
 **Step 5: Commit**
@@ -580,7 +580,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test test_parts_to_messages_user_input -p aethecore --lib`
+Run: `cargo test test_parts_to_messages_user_input -p alephcore --lib`
 Expected: FAIL
 
 **Step 3: Write minimal implementation**
@@ -875,7 +875,7 @@ pub use message_builder::{MessageBuilder, MessageBuilderConfig, Message};
 
 **Step 5: Run test to verify it passes**
 
-Run: `cargo test message_builder -p aethecore --lib`
+Run: `cargo test message_builder -p alephcore --lib`
 Expected: PASS
 
 **Step 6: Commit**
@@ -949,7 +949,7 @@ fn test_build_messages_with_filter_compacted() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test test_build_messages_with_filter_compacted -p aethecore --lib`
+Run: `cargo test test_build_messages_with_filter_compacted -p alephcore --lib`
 Expected: FAIL
 
 **Step 3: Write minimal implementation**
@@ -989,7 +989,7 @@ impl MessageBuilder {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test test_build_messages_with_filter_compacted -p aethecore --lib`
+Run: `cargo test test_build_messages_with_filter_compacted -p alephcore --lib`
 Expected: PASS
 
 **Step 5: Commit**
@@ -1049,7 +1049,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test overflow -p aethecore --lib`
+Run: `cargo test overflow -p alephcore --lib`
 Expected: FAIL
 
 **Step 3: Write minimal implementation**
@@ -1203,7 +1203,7 @@ pub use overflow::{OverflowDetector, OverflowConfig};
 
 **Step 5: Run test to verify it passes**
 
-Run: `cargo test overflow -p aethecore --lib`
+Run: `cargo test overflow -p alephcore --lib`
 Expected: PASS
 
 **Step 6: Commit**
@@ -1263,7 +1263,7 @@ fn test_inject_token_limit_warning() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test test_inject_token_limit_warning -p aethecore --lib`
+Run: `cargo test test_inject_token_limit_warning -p alephcore --lib`
 Expected: FAIL
 
 **Step 3: Write minimal implementation**
@@ -1322,7 +1322,7 @@ impl MessageBuilder {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test test_inject_token_limit_warning -p aethecore --lib`
+Run: `cargo test test_inject_token_limit_warning -p alephcore --lib`
 Expected: PASS
 
 **Step 5: Commit**
@@ -1378,7 +1378,7 @@ fn test_inject_max_steps_warning() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test test_inject_max_steps_warning -p aethecore --lib`
+Run: `cargo test test_inject_max_steps_warning -p alephcore --lib`
 Expected: FAIL
 
 **Step 3: Write minimal implementation**
@@ -1424,7 +1424,7 @@ impl MessageBuilder {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test test_inject_max_steps_warning -p aethecore --lib`
+Run: `cargo test test_inject_max_steps_warning -p alephcore --lib`
 Expected: PASS
 
 **Step 5: Commit**
@@ -1523,7 +1523,7 @@ fn test_build_system_prompt_cached() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test test_build_system_prompt_cached -p aethecore --lib`
+Run: `cargo test test_build_system_prompt_cached -p alephcore --lib`
 Expected: FAIL
 
 **Step 3: Write minimal implementation**
@@ -1571,7 +1571,7 @@ impl PromptBuilder {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test test_build_system_prompt_cached -p aethecore --lib`
+Run: `cargo test test_build_system_prompt_cached -p alephcore --lib`
 Expected: PASS
 
 **Step 5: Commit**
@@ -1617,7 +1617,7 @@ impl Default for LoopConfig {
 
 **Step 2: Run full test suite**
 
-Run: `cargo test -p aethecore --lib`
+Run: `cargo test -p alephcore --lib`
 Expected: All tests pass
 
 **Step 3: Commit**
@@ -1640,10 +1640,10 @@ EOF
 
 ## Verification Checklist
 
-- [x] All tests pass: `cargo test -p aethecore --lib` (3208 passed, 1 pre-existing failure unrelated to this work)
-- [ ] No new warnings: `cargo clippy -p aethecore`
-- [ ] Format check: `cargo fmt -p aethecore --check`
-- [x] Build succeeds: `cargo build -p aethecore`
+- [x] All tests pass: `cargo test -p alephcore --lib` (3208 passed, 1 pre-existing failure unrelated to this work)
+- [ ] No new warnings: `cargo clippy -p alephcore`
+- [ ] Format check: `cargo fmt -p alephcore --check`
+- [x] Build succeeds: `cargo build -p alephcore`
 - [ ] Integration test: Manual test with real LLM call
 
 ## Implementation Status

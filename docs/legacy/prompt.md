@@ -2,7 +2,7 @@
 不仅仅是一个软件，而是一个幽灵（Ghost）——它平时不可见，当你需要神谕时，它在光标处显形，完成神迹后消散。
 基于你**“后端主导，前端极简，无感替换”**的需求，我为你重新设计了这款软件的最终架构方案。我们暂且代号称之为 "Aether" (以太)——无处不在，无形无相。
 
-项目：Aether - 架构设计蓝图
+项目：Aleph - 架构设计蓝图
 1. 核心设计哲学
 * Invisible First: 运行时没有主窗口，没有Dock栏图标（可配置），仅托盘图标（Tray Icon）用于进入设置。
 * Overlay Feedback: 利用全屏透明穿透层（Click-through Overlay）在光标位置渲染动态UI。
@@ -74,7 +74,7 @@ fn determine_provider(input_text: &str) -> AiProvider {
 }
 C. 输入清理与预处理
 * Prompt 注入: 当用户输入 "请翻译：[图片]" 时，软件需要自动构建 Prompt。
-* System Prompt: 在设置里，你可以给 Aether 注入灵魂。
+* System Prompt: 在设置里，你可以给 Aleph 注入灵魂。
     * System Prompt: "你是一个直接的执行者。不要输出任何'好的'、'当然'等废话。直接输出结果。如果用户要求写代码，只输出代码块。"
 
 5. 执行方案 Roadmap
@@ -106,7 +106,7 @@ C. 输入清理与预处理
     * 对策: 在 Cmd+X 和 Cmd+V 之间增加可配置的微小延迟 (Sleep 50ms)。
 
 
-对于 Aether 这种“无UI”应用来说，设置界面（Preferences Window） 是用户唯一能感知其物理存在的地方，它必须兼具控制台的精密感和未来主义的美学。
+对于 Aleph 这种“无UI”应用来说，设置界面（Preferences Window） 是用户唯一能感知其物理存在的地方，它必须兼具控制台的精密感和未来主义的美学。
 考虑到你的“黑客”审美和对“多AI调动”的极致需求，我将设置界面设计为一个模块化的控制面板。
 设计风格建议：深色模式（Dark Mode），磨砂玻璃背景（Blur Effect），高对比度的强调色（Neon accents），字体推荐使用等宽字体（Monospace，如 JetBrains Mono）来强化工具属性。
 以下是详细的设置项目架构设计：
@@ -124,7 +124,7 @@ C. 输入清理与预处理
         * Temperature: 滑动条（0.0 - 1.0），并在旁边标注“精确 <-> 创意”。
     * 连通性测试 (Ping)：每个Provider旁边都有一个小绿点/红点，点击可测试延迟（Latency: 120ms）。
 2. 路由面板：突触连接 (Synapses / Routing)
-这里是 Aether 最强大的地方，决定了什么任务交给谁。
+这里是 Aleph 最强大的地方，决定了什么任务交给谁。
 * 默认模型 (Default Brain)：
     * 下拉选择一个主力模型（例如 GPT-4o），用于处理未命中的通用请求。
 * 触发规则表 (Trigger Rules Table)
@@ -140,7 +140,7 @@ C. 输入清理与预处理
 * 回退策略 (Fallback)：
     * 开关：当首选API超时或报错时，自动尝试使用默认模型重试。
 3. 交互面板：神念触发 (Manifestation / Shortcuts)
-定义用户如何召唤 Aether。
+定义用户如何召唤 Aleph。
 * 快捷键 (Keybindings)
     * Summon Key (召唤键): 默认为 Cmd + ~。
     * Voice Key (语音键): 默认为 Hold Cmd + Space (长按说话)。
@@ -166,7 +166,7 @@ C. 输入清理与预处理
         * Gemini -> 🔵 蓝色呼吸灯
         * Error -> 🔴 红色闪烁
 5. 人格与系统 (Cortex / System)
-定义 Aether 的灵魂和底层安全。
+定义 Aleph 的灵魂和底层安全。
 * 系统提示词 (Master System Prompt)
     * 一个大的多行文本框。
     * 预设: "你是一个高效的助手，不要解释，直接给出结果..."
@@ -179,7 +179,7 @@ C. 输入清理与预处理
     * 特别项: 针对内网或特定环境的证书忽略选项 (Allow Insecure SSL)。
 
 配置存储方案 (技术实现)
-所有这些设置不建议用复杂的数据库，建议直接映射到一个 TOML 或 JSON 配置文件中，存放在 ~/.aether/config.toml。
+所有这些设置不建议用复杂的数据库，建议直接映射到一个 TOML 或 JSON 配置文件中，存放在 ~/.aleph/config.toml。
 这样你可以随时通过命令行备份你的配置，或者直接用 Vim 编辑配置（符合你的 CLI 习惯），而设置界面只是这个文件的 GUI 编辑器。
 config.toml 结构预览：
 Ini, TOML

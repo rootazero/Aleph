@@ -5,14 +5,14 @@
 //!
 //! # Architecture
 //!
-//! The core library runs as a standalone daemon (`aether-gateway`) that exposes
+//! The core library runs as a standalone daemon (`aleph-gateway`) that exposes
 //! a WebSocket JSON-RPC interface. Native clients (Swift on macOS, React on Web)
 //! communicate with this gateway to access AI processing, tool execution,
 //! and memory management functionality.
 //!
 //! ```text
 //! ┌─────────────────┐      ┌─────────────────┐
-//! │  macOS App      │      │  aether-gateway │
+//! │  macOS App      │      │  aleph-gateway │
 //! │  (Swift)        │─────▶│  (Rust Daemon)  │
 //! │                 │  WS  │  ws://127.0.0.1 │
 //! └─────────────────┘      └─────────────────┘
@@ -112,7 +112,7 @@ mod tests;
 // =============================================================================
 
 // Error types (always needed)
-pub use crate::error::{AetherError, AetherException, Result};
+pub use crate::error::{AlephError, AlephException, Result};
 
 // Configuration (main entry points only)
 pub use crate::config::{Config, FullConfig, ProviderConfig};
@@ -146,7 +146,7 @@ pub use crate::compressor::{ContextCompressor, NoOpCompressor};
 // =============================================================================
 
 // Unified tool traits
-pub use crate::tools::{AetherTool, AetherToolDyn, AetherToolServer, AetherToolServerHandle};
+pub use crate::tools::{AlephTool, AlephToolDyn, AlephToolServer, AlephToolServerHandle};
 
 // Dispatcher (tool registry)
 pub use crate::dispatcher::{

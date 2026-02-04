@@ -1,7 +1,7 @@
 //! Runtime Manager Module
 //!
 //! Unified management of external runtimes (uv, fnm, yt-dlp, etc.) for Aether.
-//! All runtimes are stored under `~/.aether/runtimes/` with lazy installation.
+//! All runtimes are stored under `~/.aleph/runtimes/` with lazy installation.
 //!
 //! # Architecture
 //!
@@ -12,7 +12,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::runtimes::RuntimeRegistry;
+//! use alephcore::runtimes::RuntimeRegistry;
 //!
 //! let registry = RuntimeRegistry::new()?;
 //!
@@ -57,7 +57,7 @@ use std::path::PathBuf;
 /// Get the runtimes directory path
 ///
 /// Returns platform-specific path:
-/// - Unix: `~/.aether/runtimes/`
+/// - Unix: `~/.aleph/runtimes/`
 /// - Windows: `%USERPROFILE%\.aether\runtimes\`
 pub fn get_runtimes_dir() -> Result<PathBuf> {
     crate::utils::paths::get_runtimes_dir()
@@ -75,7 +75,7 @@ pub fn get_runtimes_dir() -> Result<PathBuf> {
 /// # Example
 /// ```ignore
 /// // Result on Unix:
-/// // "~/.aether/runtimes/uv/envs/default/bin:~/.aether/runtimes/fnm/versions/default/bin:/usr/local/bin:/usr/bin"
+/// // "~/.aleph/runtimes/uv/envs/default/bin:~/.aleph/runtimes/fnm/versions/default/bin:/usr/local/bin:/usr/bin"
 /// let path = build_aether_path(&registry);
 /// ```
 pub fn build_aether_path(registry: &RuntimeRegistry) -> String {

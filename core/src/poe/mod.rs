@@ -67,8 +67,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::poe::{PoeManager, PoeConfig, PoeTask, SuccessManifest, ValidationRule};
-//! use aethecore::poe::{AgentLoopWorker, CompositeValidator};
+//! use alephcore::poe::{PoeManager, PoeConfig, PoeTask, SuccessManifest, ValidationRule};
+//! use alephcore::poe::{AgentLoopWorker, CompositeValidator};
 //!
 //! // Create components
 //! let worker = AgentLoopWorker::new("/workspace".into());
@@ -91,13 +91,13 @@
 //! let outcome = manager.execute(task).await?;
 //!
 //! match outcome {
-//!     aethecore::poe::PoeOutcome::Success(verdict) => {
+//!     alephcore::poe::PoeOutcome::Success(verdict) => {
 //!         println!("Task succeeded! Distance: {}", verdict.distance_score);
 //!     }
-//!     aethecore::poe::PoeOutcome::StrategySwitch { reason, suggestion } => {
+//!     alephcore::poe::PoeOutcome::StrategySwitch { reason, suggestion } => {
 //!         println!("Stuck: {}. Try: {}", reason, suggestion);
 //!     }
-//!     aethecore::poe::PoeOutcome::BudgetExhausted { attempts, last_error } => {
+//!     alephcore::poe::PoeOutcome::BudgetExhausted { attempts, last_error } => {
 //!         println!("Failed after {} attempts: {}", attempts, last_error);
 //!     }
 //! }

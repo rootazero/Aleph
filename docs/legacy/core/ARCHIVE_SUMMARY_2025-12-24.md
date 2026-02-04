@@ -188,7 +188,7 @@ Coverage: ~90% of memory module
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Aether Application (Swift)                │
+│                    Aleph Application (Swift)                │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
 │  │  Settings UI │  │  Context     │  │  Halo Overlay    │  │
@@ -204,7 +204,7 @@ Coverage: ~90% of memory module
 │  - Memory Management APIs (get/search/delete/clear)         │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │            AetherCore (Rust)                         │   │
+│  │            AlephCore (Rust)                         │   │
 │  │  ┌────────────────┐  ┌──────────────────────────┐   │   │
 │  │  │  Retrieval &   │  │  Prompt Augmenter        │   │   │
 │  │  │  Augmentation  │→ │  - Format memories       │   │   │
@@ -288,7 +288,7 @@ The memory system is **ready for immediate use** with AI providers:
 pub async fn process_request(&self, user_input: &str) -> Result<String> {
     // 1. Retrieve and augment prompt with memory context
     let augmented_prompt = self.core.retrieve_and_augment_prompt(
-        "You are Aether AI, a helpful assistant.",
+        "You are Aleph AI, a helpful assistant.",
         user_input
     )?;
 
@@ -346,7 +346,7 @@ pub async fn process_request(&self, user_input: &str) -> Result<String> {
 ## Privacy & Security Guarantees
 
 ### Local-First Architecture ✅
-- All memory data stored in `~/.aether/memory.db`
+- All memory data stored in `~/.aleph/memory.db`
 - Vector embeddings computed locally
 - No raw memory data sent to cloud
 

@@ -8,7 +8,7 @@
 
 ### 1.1 现状分析
 
-Aether 的 MCP 实现目前处于"接口定义"阶段：
+Aleph 的 MCP 实现目前处于"接口定义"阶段：
 
 | 组件 | 状态 | 问题 |
 |------|------|------|
@@ -23,7 +23,7 @@ Aether 的 MCP 实现目前处于"接口定义"阶段：
 
 **P0 - 基础设施补全**：
 - 实现 `McpManager` Actor 管理所有 Server 生命周期
-- 配置持久化到 `~/.aether/mcp_config.json`
+- 配置持久化到 `~/.aleph/mcp_config.json`
 - 完善 Gateway handlers，对接 McpManager
 - 健康检查与自动重启
 
@@ -69,7 +69,7 @@ Aether 的 MCP 实现目前处于"接口定义"阶段：
 │                                 ▼                                        │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │ clients: HashMap<String, Arc<McpClient>>                        │    │
-│  │ config: McpPersistentConfig (~/.aether/mcp_config.json)         │    │
+│  │ config: McpPersistentConfig (~/.aleph/mcp_config.json)         │    │
 │  │ health_states: HashMap<String, ServerHealth>                    │    │
 │  │ event_tx: broadcast::Sender<McpEvent>                           │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
@@ -128,7 +128,7 @@ Gateway/AgentLoop                McpManager                McpClient
 ```rust
 // Actor 内部状态
 struct McpManagerActor {
-    config_path: PathBuf,                              // ~/.aether/mcp_config.json
+    config_path: PathBuf,                              // ~/.aleph/mcp_config.json
     clients: HashMap<String, Arc<McpClient>>,          // server_id -> client
     health_states: HashMap<String, ServerHealth>,      // 健康状态
     event_tx: broadcast::Sender<McpEvent>,             // 事件广播
@@ -167,7 +167,7 @@ pub struct McpManagerHandle {
 
 ### 3.2 配置持久化
 
-**位置**：`~/.aether/mcp_config.json`
+**位置**：`~/.aleph/mcp_config.json`
 
 ```json
 {
@@ -198,7 +198,7 @@ pub struct McpManagerHandle {
 ### 3.3 启动流程
 
 ```
-Aether 启动
+Aleph 启动
     │
     ▼
 ┌─────────────────────────────────────┐

@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::{ContentCategory, infer_required_tools};
+//! use alephcore::dispatcher::{ContentCategory, infer_required_tools};
 //!
 //! let categories = infer_required_tools(
 //!     "Download the YouTube video and summarize",

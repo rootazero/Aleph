@@ -58,7 +58,7 @@ Create `core/src/providers/protocols/template.rs`:
 //! Template engine for protocol request/response transformation
 
 use crate::config::ProviderConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use handlebars::Handlebars;
 use serde_json::{json, Value};
 
@@ -119,7 +119,7 @@ impl TemplateRenderer {
     pub fn render(&self, template: &str, context: &Value) -> Result<String> {
         self.registry
             .render_template(template, context)
-            .map_err(|e| AetherError::provider(format!("Template render error: {}", e)))
+            .map_err(|e| AlephError::provider(format!("Template render error: {}", e)))
     }
 
     /// Render a JSON template with context
@@ -127,7 +127,7 @@ impl TemplateRenderer {
         let json_str = serde_json::to_string(template)?;
         let rendered = self.render(&json_str, context)?;
         serde_json::from_str(&rendered)
-            .map_err(|e| AetherError::provider(format!("Invalid JSON after template render: {}", e)))
+            .map_err(|e| AlephError::provider(format!("Invalid JSON after template render: {}", e)))
     }
 }
 
@@ -204,19 +204,19 @@ Create `core/src/providers/protocols/jsonpath.rs`:
 ```rust
 //! JSONPath parser for extracting values from protocol responses
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use jsonpath_rust::JsonPath;
 use serde_json::Value;
 
 /// Extract value from JSON using JSONPath
 pub fn extract_value(json: &Value, path: &str) -> Result<String> {
     let json_path = JsonPath::try_from(path)
-        .map_err(|e| AetherError::provider(format!("Invalid JSONPath '{}': {}", path, e)))?;
+        .map_err(|e| AlephError::provider(format!("Invalid JSONPath '{}': {}", path, e)))?;
 
     let results = json_path.find(json);
 
     if results.is_empty() {
-        return Err(AetherError::provider(format!(
+        return Err(AlephError::provider(format!(
             "JSONPath '{}' matched no values",
             path
         )));
@@ -228,7 +228,7 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
         Value::Number(n) => Ok(n.to_string()),
         Value::Bool(b) => Ok(b.to_string()),
         other => serde_json::to_string(other)
-            .map_err(|e| AetherError::provider(format!("Failed to serialize value: {}", e))),
+            .map_err(|e| AlephError::provider(format!("Failed to serialize value: {}", e))),
     }
 }
 
@@ -397,7 +397,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
             if let Some(ref diff) = self.definition.differences {
                 if let Some(ref auth) = diff.auth {
                     let api_key = config.api_key.as_deref()
-                        .ok_or_else(|| AetherError::invalid_config("API key required"))?;
+                        .ok_or_else(|| AlephError::invalid_config("API key required"))?;
 
                     let value = if let Some(ref prefix) = auth.prefix {
                         format!("{}{}", prefix, api_key)
@@ -414,10 +414,10 @@ impl ProtocolAdapter for ConfigurableProtocol {
 
         // Custom mode: Build from template (Task 5)
         if self.definition.custom.is_some() {
-            return Err(AetherError::provider("Custom protocol mode not yet implemented"));
+            return Err(AlephError::provider("Custom protocol mode not yet implemented"));
         }
 
-        Err(AetherError::provider("Protocol must either extend a base protocol or define custom implementation"))
+        Err(AlephError::provider("Protocol must either extend a base protocol or define custom implementation"))
     }
 
     async fn parse_response(&self, response: reqwest::Response) -> Result<String> {
@@ -427,7 +427,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
         }
 
         // Custom mode (Task 5)
-        Err(AetherError::provider("Custom protocol mode not yet implemented"))
+        Err(AlephError::provider("Custom protocol mode not yet implemented"))
     }
 
     async fn parse_stream(
@@ -440,7 +440,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
         }
 
         // Custom mode (Task 5)
-        Err(AetherError::provider("Custom protocol mode not yet implemented"))
+        Err(AlephError::provider("Custom protocol mode not yet implemented"))
     }
 
     fn name(&self) -> &'static str {
@@ -551,7 +551,7 @@ fn build_request(
         if let Some(ref diff) = self.definition.differences {
             if let Some(ref auth) = diff.auth {
                 let api_key = config.api_key.as_deref()
-                    .ok_or_else(|| AetherError::invalid_config("API key required"))?;
+                    .ok_or_else(|| AlephError::invalid_config("API key required"))?;
 
                 let value = if let Some(ref prefix) = auth.prefix {
                     format!("{}{}", prefix, api_key)
@@ -571,7 +571,7 @@ fn build_request(
         // Build URL
         let base_url = self.definition.base_url.as_ref()
             .or(config.base_url.as_ref())
-            .ok_or_else(|| AetherError::invalid_config("base_url required for custom protocol"))?;
+            .ok_or_else(|| AlephError::invalid_config("base_url required for custom protocol"))?;
 
         let endpoint = if is_streaming {
             custom.endpoints.stream.as_ref().unwrap_or(&custom.endpoints.chat)
@@ -606,7 +606,7 @@ fn build_request(
         return Ok(req);
     }
 
-    Err(AetherError::provider("Protocol must either extend a base protocol or define custom implementation"))
+    Err(AlephError::provider("Protocol must either extend a base protocol or define custom implementation"))
 }
 ```
 
@@ -622,19 +622,19 @@ async fn parse_response(&self, response: reqwest::Response) -> Result<String> {
     // Custom mode: Parse using JSONPath
     if let Some(ref custom) = self.definition.custom {
         let json: serde_json::Value = response.json().await
-            .map_err(|e| AetherError::provider(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to parse JSON response: {}", e)))?;
 
         // Check for error
         if let Some(ref error_path) = custom.response_mapping.error {
             if let Ok(error_msg) = crate::providers::protocols::extract_value(&json, error_path) {
-                return Err(AetherError::provider(error_msg));
+                return Err(AlephError::provider(error_msg));
             }
         }
 
         // Extract content
         crate::providers::protocols::extract_value(&json, &custom.response_mapping.content)
     } else {
-        Err(AetherError::provider("Invalid protocol configuration"))
+        Err(AlephError::provider("Invalid protocol configuration"))
     }
 }
 ```
@@ -730,7 +730,7 @@ Replace loader.rs implementation:
 ```rust
 //! Protocol loader for YAML-based protocols
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, ProtocolRegistry};
 use reqwest::Client;
 use std::path::Path;
@@ -746,10 +746,10 @@ impl ProtocolLoader {
     pub async fn load_from_file(path: &Path) -> Result<()> {
         let content = fs::read_to_string(path)
             .await
-            .map_err(|e| AetherError::provider(format!("Failed to read protocol file {:?}: {}", path, e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to read protocol file {:?}: {}", path, e)))?;
 
         let def: ProtocolDefinition = serde_yaml::from_str(&content)
-            .map_err(|e| AetherError::provider(format!("Failed to parse protocol YAML: {}", e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to parse protocol YAML: {}", e)))?;
 
         let client = Client::new();
         let protocol = ConfigurableProtocol::new(def.clone(), client);
@@ -768,10 +768,10 @@ impl ProtocolLoader {
 
         let mut entries = fs::read_dir(dir)
             .await
-            .map_err(|e| AetherError::provider(format!("Failed to read directory {:?}: {}", dir, e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to read directory {:?}: {}", dir, e)))?;
 
         while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            AetherError::provider(format!("Failed to read directory entry: {}", e))
+            AlephError::provider(format!("Failed to read directory entry: {}", e))
         })? {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
@@ -873,11 +873,11 @@ impl ProtocolLoader {
             tx,
             Config::default().with_poll_interval(std::time::Duration::from_secs(2)),
         )
-        .map_err(|e| AetherError::provider(format!("Failed to create file watcher: {}", e)))?;
+        .map_err(|e| AlephError::provider(format!("Failed to create file watcher: {}", e)))?;
 
         watcher
             .watch(dir, RecursiveMode::NonRecursive)
-            .map_err(|e| AetherError::provider(format!("Failed to watch directory {:?}: {}", dir, e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to watch directory {:?}: {}", dir, e)))?;
 
         info!("Watching protocols directory: {:?}", dir);
 
@@ -925,7 +925,7 @@ impl ProtocolLoader {
     /// Start hot reload for default directory
     pub fn start_watching() -> Result<Option<RecommendedWatcher>> {
         let protocols_dir = dirs::home_dir()
-            .ok_or_else(|| AetherError::provider("Cannot determine home directory"))?
+            .ok_or_else(|| AlephError::provider("Cannot determine home directory"))?
             .join(".aether/protocols");
 
         if !protocols_dir.exists() {
@@ -1030,18 +1030,18 @@ Create `examples/protocols/README.md`:
 ```markdown
 # Example Protocol Configurations
 
-This directory contains example YAML protocol configurations for Aether.
+This directory contains example YAML protocol configurations for Aleph.
 
 ## Usage
 
-Copy example files to `~/.aether/protocols/` to use them:
+Copy example files to `~/.aleph/protocols/` to use them:
 
 ```bash
-mkdir -p ~/.aether/protocols
-cp examples/protocols/groq-custom.yaml ~/.aether/protocols/
+mkdir -p ~/.aleph/protocols
+cp examples/protocols/groq-custom.yaml ~/.aleph/protocols/
 ```
 
-Aether will automatically load protocols from `~/.aether/protocols/` on startup and hot-reload changes.
+Aleph will automatically load protocols from `~/.aleph/protocols/` on startup and hot-reload changes.
 
 ## Examples
 
@@ -1096,13 +1096,13 @@ Create `docs/PROTOCOL_ADAPTER_USER_GUIDE.md`:
 
 ## Overview
 
-Aether's Protocol Adapter system allows you to add support for new AI providers without modifying or recompiling the Rust codebase. Define new protocols using YAML configuration files that are automatically loaded and hot-reloaded.
+Aleph's Protocol Adapter system allows you to add support for new AI providers without modifying or recompiling the Rust codebase. Define new protocols using YAML configuration files that are automatically loaded and hot-reloaded.
 
 ## Quick Start
 
 ### 1. Create Protocol Configuration
 
-Create `~/.aether/protocols/my-provider.yaml`:
+Create `~/.aleph/protocols/my-provider.yaml`:
 
 ```yaml
 name: my-custom-provider
@@ -1112,7 +1112,7 @@ base_url: https://api.myprovider.com/v1
 
 ### 2. Use in Provider Config
 
-Add to your `~/.aether/config.yaml`:
+Add to your `~/.aleph/config.yaml`:
 
 ```yaml
 providers:
@@ -1124,7 +1124,7 @@ providers:
 
 ### 3. Hot Reload
 
-Aether watches `~/.aether/protocols/` and automatically reloads when you edit files. Changes take effect within 2 seconds.
+Aleph watches `~/.aleph/protocols/` and automatically reloads when you edit files. Changes take effect within 2 seconds.
 
 ## Configuration Modes
 
@@ -1215,7 +1215,7 @@ stream_config:
 
 ## Template Syntax
 
-Aether uses Handlebars-style template syntax:
+Aleph uses Handlebars-style template syntax:
 
 ### Variables
 
@@ -1244,9 +1244,9 @@ Use JSONPath to extract values from responses:
 
 ## Hot Reload
 
-Aether automatically watches these locations:
+Aleph automatically watches these locations:
 
-1. **Default directory**: `~/.aether/protocols/`
+1. **Default directory**: `~/.aleph/protocols/`
 2. **Explicit paths** in `config.yaml`:
 
 ```yaml
@@ -1263,7 +1263,7 @@ Changes to protocol files are detected within 2 seconds and applied automaticall
 
 Check logs for errors:
 ```bash
-tail -f ~/.aether/logs/aether.log | grep protocol
+tail -f ~/.aleph/logs/aether.log | grep protocol
 ```
 
 Common issues:
@@ -1277,7 +1277,7 @@ Common issues:
 Use `aether test-protocol` command:
 
 ```bash
-aether test-protocol ~/.aether/protocols/my-provider.yaml
+aether test-protocol ~/.aleph/protocols/my-provider.yaml
 ```
 
 This validates YAML syntax and template rendering.
@@ -1323,9 +1323,9 @@ Create `core/tests/protocol_integration_test.rs`:
 ```rust
 //! Integration tests for configurable protocol system
 
-use aethecore::config::ProviderConfig;
-use aethecore::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, ProtocolLoader, ProtocolRegistry};
-use aethecore::providers::create_provider;
+use alephcore::config::ProviderConfig;
+use alephcore::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, ProtocolLoader, ProtocolRegistry};
+use alephcore::providers::create_provider;
 use std::sync::Once;
 
 static INIT: Once = Once::new();
@@ -1431,7 +1431,7 @@ Add to the Providers section in `docs/ARCHITECTURE.md`:
 ```markdown
 ### Protocol Adapter Architecture
 
-Aether uses a layered protocol adapter system supporting multiple AI provider protocols:
+Aleph uses a layered protocol adapter system supporting multiple AI provider protocols:
 
 **Layer 1: Built-in Protocols** (Compiled Rust)
 - `OpenAiProtocol` - OpenAI-compatible APIs
@@ -1442,7 +1442,7 @@ Aether uses a layered protocol adapter system supporting multiple AI provider pr
 **Layer 2: Configurable Protocols** (YAML-based, hot-reload)
 - Minimal configuration mode - Extend existing protocols with differences
 - Full template mode - Completely custom protocol implementations
-- Loaded from `~/.aether/protocols/` directory
+- Loaded from `~/.aleph/protocols/` directory
 - Changes detected within 2 seconds (file watching)
 
 **Layer 3: Extension Protocols** (Future)
@@ -1465,7 +1465,7 @@ ProtocolRegistry.get(name)
 
 #### Hot Reload Mechanism
 
-1. `notify` crate watches `~/.aether/protocols/`
+1. `notify` crate watches `~/.aleph/protocols/`
 2. File change detected (Create/Modify/Delete)
 3. YAML parsed into `ProtocolDefinition`
 4. `ConfigurableProtocol` created
@@ -1539,17 +1539,17 @@ After implementation, manually verify:
 
 1. **Create test protocol**:
 ```bash
-mkdir -p ~/.aether/protocols
-cat > ~/.aether/protocols/test.yaml << EOF
+mkdir -p ~/.aleph/protocols
+cat > ~/.aleph/protocols/test.yaml << EOF
 name: test-groq
 extends: openai
 base_url: https://api.groq.com/openai/v1
 EOF
 ```
 
-2. **Start Aether gateway**:
+2. **Start Aleph gateway**:
 ```bash
-cargo run -p aethecore --features gateway
+cargo run -p alephcore --features gateway
 ```
 
 3. **Verify protocol loaded**: Check logs for "Loaded protocol 'test-groq'"

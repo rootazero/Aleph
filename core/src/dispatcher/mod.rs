@@ -31,7 +31,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::{
+//! use alephcore::dispatcher::{
 //!     ToolRegistry, UnifiedTool, ToolSource,
 //!     AgentEngine, AgentConfig, ModelRouter
 //! };

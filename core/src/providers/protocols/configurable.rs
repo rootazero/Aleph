@@ -3,7 +3,7 @@
 //! Configurable protocol adapter loaded from YAML
 
 use crate::config::ProviderConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::protocols::{
     extract_value, ProtocolDefinition, ProtocolRegistry, TemplateContext, TemplateRenderer,
@@ -38,7 +38,7 @@ impl ConfigurableProtocol {
             ProtocolRegistry::global()
                 .get(extends)
                 .ok_or_else(|| {
-                    AetherError::provider(format!(
+                    AlephError::provider(format!(
                         "Base protocol '{}' not found in registry",
                         extends
                     ))
@@ -85,7 +85,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
                     let api_key = config
                         .api_key
                         .as_ref()
-                        .ok_or_else(|| AetherError::invalid_config("API key is required"))?;
+                        .ok_or_else(|| AlephError::invalid_config("API key is required"))?;
 
                     // Build auth value: prefix + api_key (or just api_key if no prefix)
                     let auth_value = if let Some(ref prefix) = auth.prefix {
@@ -120,7 +120,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 .definition
                 .base_url
                 .as_deref()
-                .ok_or_else(|| AetherError::invalid_config("base_url is required for custom protocols"))?;
+                .ok_or_else(|| AlephError::invalid_config("base_url is required for custom protocols"))?;
 
             // Determine endpoint
             let endpoint = if is_streaming {
@@ -149,13 +149,13 @@ impl ProtocolAdapter for ConfigurableProtocol {
             let request_body = if custom.request_template.is_string() {
                 // Template is a string, render it
                 let template_str = custom.request_template.as_str().ok_or_else(|| {
-                    AetherError::invalid_config("request_template string conversion failed")
+                    AlephError::invalid_config("request_template string conversion failed")
                 })?;
                 self.renderer.render_json(template_str, &context)?
             } else {
                 // Template is already a JSON object, render it as string first
                 let template_str = serde_json::to_string(&custom.request_template).map_err(|e| {
-                    AetherError::provider(format!("Failed to serialize request_template: {}", e))
+                    AlephError::provider(format!("Failed to serialize request_template: {}", e))
                 })?;
                 self.renderer.render_json(&template_str, &context)?
             };
@@ -172,14 +172,14 @@ impl ProtocolAdapter for ConfigurableProtocol {
             let api_key = config
                 .api_key
                 .as_ref()
-                .ok_or_else(|| AetherError::invalid_config("API key is required"))?;
+                .ok_or_else(|| AlephError::invalid_config("API key is required"))?;
 
             // Parse auth config
             if custom.auth.auth_type == "header" {
                 // Extract header name and prefix from config
                 let header = custom.auth.config.get("header")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| AetherError::invalid_config("auth.config.header is required for header auth"))?;
+                    .ok_or_else(|| AlephError::invalid_config("auth.config.header is required for header auth"))?;
 
                 let prefix = custom.auth.config.get("prefix")
                     .and_then(|v| v.as_str())
@@ -195,7 +195,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
 
                 request = request.header(header, auth_value);
             } else {
-                return Err(AetherError::invalid_config(format!(
+                return Err(AlephError::invalid_config(format!(
                     "Unsupported auth type: {}",
                     custom.auth.auth_type
                 )));
@@ -205,7 +205,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
         }
 
         // No base protocol and no custom config = invalid
-        Err(AetherError::invalid_config(
+        Err(AlephError::invalid_config(
             "Protocol must either extend a base protocol or provide custom configuration",
         ))
     }
@@ -230,11 +230,11 @@ impl ProtocolAdapter for ConfigurableProtocol {
 
             // Read response body as JSON
             let body = response.text().await.map_err(|e| {
-                AetherError::provider(format!("Failed to read response body: {}", e))
+                AlephError::provider(format!("Failed to read response body: {}", e))
             })?;
 
             let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
-                AetherError::provider(format!(
+                AlephError::provider(format!(
                     "Failed to parse response as JSON: {}. Body: {}",
                     e, body
                 ))
@@ -245,7 +245,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 if let Ok(error_msg) = extract_value(&json, error_path) {
                     // If we successfully extracted an error message, return it as an error
                     if !error_msg.is_empty() && error_msg != "null" {
-                        return Err(AetherError::provider(format!(
+                        return Err(AlephError::provider(format!(
                             "Provider returned error: {}",
                             error_msg
                         )));
@@ -264,7 +264,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
 
             Ok(content)
         } else {
-            Err(AetherError::invalid_config(
+            Err(AlephError::invalid_config(
                 "Protocol must either extend a base protocol or provide custom configuration",
             ))
         }
@@ -286,12 +286,12 @@ impl ProtocolAdapter for ConfigurableProtocol {
 
         // Custom mode: streaming not yet implemented (complex feature, defer to later)
         if self.definition.custom.is_some() {
-            return Err(AetherError::provider(
+            return Err(AlephError::provider(
                 "Custom protocol streaming not yet implemented (deferred to future enhancement)",
             ));
         }
 
-        Err(AetherError::invalid_config(
+        Err(AlephError::invalid_config(
             "Protocol must either extend a base protocol or provide custom configuration",
         ))
     }

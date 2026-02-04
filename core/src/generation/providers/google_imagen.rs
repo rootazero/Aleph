@@ -20,8 +20,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::{GenerationProvider, GenerationRequest};
-//! use aethecore::generation::providers::GoogleImagenProvider;
+//! use alephcore::generation::{GenerationProvider, GenerationRequest};
+//! use alephcore::generation::providers::GoogleImagenProvider;
 //!
 //! let provider = GoogleImagenProvider::new("your-api-key", None, None);
 //!
@@ -85,8 +85,8 @@ pub const PERSON_GENERATION_OPTIONS: &[&str] = &["dont_allow", "allow_adult", "a
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::providers::GoogleImagenProvider;
-/// use aethecore::generation::GenerationProvider;
+/// use alephcore::generation::providers::GoogleImagenProvider;
+/// use alephcore::generation::GenerationProvider;
 ///
 /// let provider = GoogleImagenProvider::new(
 ///     "your-api-key",
@@ -120,7 +120,7 @@ impl GoogleImagenProvider {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::providers::GoogleImagenProvider;
+    /// use alephcore::generation::providers::GoogleImagenProvider;
     ///
     /// // Default configuration
     /// let provider = GoogleImagenProvider::new("api-key", None, None);

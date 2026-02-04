@@ -6,7 +6,7 @@
 
 **Architecture:** Replace `MultiTurnInputWindow` + `ConversationDisplayWindow` with a single `UnifiedConversationWindow`. The new window displays conversation history, command lists, and attachment previews above the input area. Window is positioned with input bottom at 70% screen height.
 
-**Tech Stack:** Swift, SwiftUI, AppKit (NSWindow, NSOpenPanel), existing Aether patterns (IMETextField, adaptiveGlass, etc.)
+**Tech Stack:** Swift, SwiftUI, AppKit (NSWindow, NSOpenPanel), existing Aleph patterns (IMETextField, adaptiveGlass, etc.)
 
 ---
 
@@ -22,7 +22,7 @@
 ```swift
 //
 //  PendingAttachment.swift
-//  Aether
+//  Aleph
 //
 //  Data model for pending attachments in multi-turn conversation.
 //
@@ -145,12 +145,12 @@ struct PendingAttachment: Identifiable, Equatable {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/Models/PendingAttachment.swift
+git add Aleph/Sources/MultiTurn/Models/PendingAttachment.swift
 git commit -m "feat(multi-turn): add PendingAttachment model for manual file attachments"
 ```
 
@@ -166,7 +166,7 @@ git commit -m "feat(multi-turn): add PendingAttachment model for manual file att
 ```swift
 //
 //  ContentDisplayState.swift
-//  Aether
+//  Aleph
 //
 //  Display state for unified conversation window content area.
 //
@@ -214,12 +214,12 @@ enum ContentDisplayState: Equatable {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/Models/ContentDisplayState.swift
+git add Aleph/Sources/MultiTurn/Models/ContentDisplayState.swift
 git commit -m "feat(multi-turn): add ContentDisplayState enum for display state machine"
 ```
 
@@ -237,7 +237,7 @@ git commit -m "feat(multi-turn): add ContentDisplayState enum for display state 
 ```swift
 //
 //  UnifiedConversationViewModel.swift
-//  Aether
+//  Aleph
 //
 //  View model for unified conversation window.
 //  Manages display state, messages, attachments, commands, and input.
@@ -327,7 +327,7 @@ final class UnifiedConversationViewModel {
 
     // MARK: - Core Reference
 
-    private var core: AetherCore? {
+    private var core: AlephCore? {
         (NSApplication.shared.delegate as? AppDelegate)?.core
     }
 
@@ -681,12 +681,12 @@ final class UnifiedConversationViewModel {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/UnifiedConversationViewModel.swift
+git add Aleph/Sources/MultiTurn/UnifiedConversationViewModel.swift
 git commit -m "feat(multi-turn): add UnifiedConversationViewModel with attachment support"
 ```
 
@@ -704,7 +704,7 @@ git commit -m "feat(multi-turn): add UnifiedConversationViewModel with attachmen
 ```swift
 //
 //  AttachmentPreviewView.swift
-//  Aether
+//  Aleph
 //
 //  Attachment preview component for unified conversation window.
 //
@@ -804,12 +804,12 @@ struct AttachmentThumbnailView: View {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/Views/AttachmentPreviewView.swift
+git add Aleph/Sources/MultiTurn/Views/AttachmentPreviewView.swift
 git commit -m "feat(multi-turn): add AttachmentPreviewView component"
 ```
 
@@ -825,7 +825,7 @@ git commit -m "feat(multi-turn): add AttachmentPreviewView component"
 ```swift
 //
 //  InputAreaView.swift
-//  Aether
+//  Aleph
 //
 //  Input area component with text field, attachment button, and send button.
 //
@@ -964,12 +964,12 @@ struct AttachmentButton: View {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/Views/InputAreaView.swift
+git add Aleph/Sources/MultiTurn/Views/InputAreaView.swift
 git commit -m "feat(multi-turn): add InputAreaView with attachment button"
 ```
 
@@ -985,7 +985,7 @@ git commit -m "feat(multi-turn): add InputAreaView with attachment button"
 ```swift
 //
 //  ConversationAreaView.swift
-//  Aether
+//  Aleph
 //
 //  Conversation history display area for unified window.
 //
@@ -1141,12 +1141,12 @@ struct ConversationAreaView: View {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/Views/ConversationAreaView.swift
+git add Aleph/Sources/MultiTurn/Views/ConversationAreaView.swift
 git commit -m "feat(multi-turn): add ConversationAreaView component"
 ```
 
@@ -1162,7 +1162,7 @@ git commit -m "feat(multi-turn): add ConversationAreaView component"
 ```swift
 //
 //  CommandListView.swift
-//  Aether
+//  Aleph
 //
 //  Command and topic list components for unified window.
 //
@@ -1255,12 +1255,12 @@ struct TopicListView: View {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/Views/CommandListView.swift
+git add Aleph/Sources/MultiTurn/Views/CommandListView.swift
 git commit -m "feat(multi-turn): add CommandListView and TopicListView components"
 ```
 
@@ -1278,7 +1278,7 @@ git commit -m "feat(multi-turn): add CommandListView and TopicListView component
 ```swift
 //
 //  UnifiedConversationView.swift
-//  Aether
+//  Aleph
 //
 //  Main SwiftUI view for unified conversation window.
 //  Displays conversation/commands/topics above input, with attachment preview.
@@ -1405,12 +1405,12 @@ struct UnifiedConversationView: View {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/UnifiedConversationView.swift
+git add Aleph/Sources/MultiTurn/UnifiedConversationView.swift
 git commit -m "feat(multi-turn): add UnifiedConversationView main view"
 ```
 
@@ -1426,7 +1426,7 @@ git commit -m "feat(multi-turn): add UnifiedConversationView main view"
 ```swift
 //
 //  UnifiedConversationWindow.swift
-//  Aether
+//  Aleph
 //
 //  Unified NSWindow for multi-turn conversation.
 //  Replaces separate input and display windows.
@@ -1655,12 +1655,12 @@ final class UnifiedConversationWindow: NSWindow {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/UnifiedConversationWindow.swift
+git add Aleph/Sources/MultiTurn/UnifiedConversationWindow.swift
 git commit -m "feat(multi-turn): add UnifiedConversationWindow"
 ```
 
@@ -1715,12 +1715,12 @@ private func handleInput(_ text: String, attachments: [PendingAttachment]) {
 
 **Step 2: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | head -50`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | head -50`
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/MultiTurnCoordinator.swift
+git add Aleph/Sources/MultiTurn/MultiTurnCoordinator.swift
 git commit -m "refactor(multi-turn): update coordinator to use UnifiedConversationWindow"
 ```
 
@@ -1761,7 +1761,7 @@ git commit -m "refactor(multi-turn): update coordinator to use UnifiedConversati
 **Step 3: Commit**
 
 ```bash
-git add Aether/Resources/*/Localizable.strings
+git add Aleph/Resources/*/Localizable.strings
 git commit -m "i18n: add localization strings for unified conversation window"
 ```
 
@@ -1783,7 +1783,7 @@ Add `@available(*, deprecated, message: "Use UnifiedConversationWindow instead")
 **Step 2: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/*.swift
+git add Aleph/Sources/MultiTurn/*.swift
 git commit -m "refactor(multi-turn): mark deprecated window files"
 ```
 

@@ -1,6 +1,6 @@
 //! Code execution tool for AI agent integration
 //!
-//! Implements AetherTool trait to provide code/script execution capabilities.
+//! Implements AlephTool trait to provide code/script execution capabilities.
 //! Supports: Python, JavaScript/Node.js, Shell (bash)
 //!
 //! # Safety
@@ -25,7 +25,7 @@ use tracing::{debug, info, warn};
 use super::error::ToolError;
 use crate::dispatcher::{DEFAULT_CODE_EXEC_TIMEOUT, MAX_STDERR_SIZE, MAX_STDOUT_SIZE};
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 /// Supported programming languages
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -400,9 +400,9 @@ impl Default for CodeExecTool {
     }
 }
 
-/// Implementation of AetherTool trait for CodeExecTool
+/// Implementation of AlephTool trait for CodeExecTool
 #[async_trait]
-impl AetherTool for CodeExecTool {
+impl AlephTool for CodeExecTool {
     const NAME: &'static str = "code_exec";
     const DESCRIPTION: &'static str = r#"Execute code in various programming languages. Supported languages:
 - python: Execute Python 3 code

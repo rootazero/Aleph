@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use rusqlite::{params, Connection, OptionalExtension};
 use tracing::{debug, info};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::types::{ExecutionStatus, SkillExecution, SkillMetrics, SolidificationConfig};
 
@@ -77,13 +77,13 @@ pub struct EvolutionTracker {
 impl EvolutionTracker {
     /// Create a new tracker with database at the given path
     pub fn new(db_path: impl AsRef<Path>) -> Result<Self> {
-        let conn = Connection::open(db_path.as_ref()).map_err(|e| AetherError::ConfigError {
+        let conn = Connection::open(db_path.as_ref()).map_err(|e| AlephError::ConfigError {
             message: format!("Failed to open evolution database: {}", e),
             suggestion: Some("Check database path permissions".to_string()),
         })?;
 
         conn.execute_batch(SCHEMA)
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to create schema: {}", e),
                 suggestion: None,
             })?;
@@ -98,13 +98,13 @@ impl EvolutionTracker {
 
     /// Create an in-memory tracker (for testing)
     pub fn in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory().map_err(|e| AetherError::ConfigError {
+        let conn = Connection::open_in_memory().map_err(|e| AlephError::ConfigError {
             message: format!("Failed to create in-memory database: {}", e),
             suggestion: None,
         })?;
 
         conn.execute_batch(SCHEMA)
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to create schema: {}", e),
                 suggestion: None,
             })?;
@@ -117,7 +117,7 @@ impl EvolutionTracker {
 
     /// Log a skill execution
     pub fn log_execution(&self, execution: &SkillExecution) -> Result<()> {
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -144,7 +144,7 @@ impl EvolutionTracker {
                 execution.input_summary,
                 execution.output_length,
             ],
-        ).map_err(|e| AetherError::ConfigError {
+        ).map_err(|e| AlephError::ConfigError {
             message: format!("Failed to insert execution: {}", e),
             suggestion: None,
         })?;
@@ -162,7 +162,7 @@ impl EvolutionTracker {
     pub fn get_metrics(&self, skill_id: &str) -> Result<Option<SkillMetrics>> {
         // Check cache first
         {
-            let cache = self.metrics_cache.read().map_err(|_| AetherError::Other {
+            let cache = self.metrics_cache.read().map_err(|_| AlephError::Other {
                 message: "Failed to acquire cache lock".to_string(),
                 suggestion: None,
             })?;
@@ -172,7 +172,7 @@ impl EvolutionTracker {
         }
 
         // Load from database
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -196,7 +196,7 @@ impl EvolutionTracker {
                 },
             )
             .optional()
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to query metrics: {}", e),
                 suggestion: None,
             })?;
@@ -235,7 +235,7 @@ impl EvolutionTracker {
         &self,
         config: &SolidificationConfig,
     ) -> Result<Vec<SkillMetrics>> {
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -257,7 +257,7 @@ impl EvolutionTracker {
                    AND (?3 - first_used) >= ?4
                    AND (?3 - last_used) <= ?5",
             )
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to prepare query: {}", e),
                 suggestion: None,
             })?;
@@ -288,7 +288,7 @@ impl EvolutionTracker {
                     })
                 },
             )
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to query candidates: {}", e),
                 suggestion: None,
             })?;
@@ -300,7 +300,7 @@ impl EvolutionTracker {
 
     /// Update metrics for a skill based on all executions
     fn update_metrics(&self, skill_id: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -328,7 +328,7 @@ impl EvolutionTracker {
                     ))
                 },
             )
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to aggregate stats: {}", e),
                 suggestion: None,
             })?;
@@ -345,13 +345,13 @@ impl EvolutionTracker {
         {
             let mut stmt = conn
                 .prepare("SELECT context FROM skill_executions WHERE skill_id = ?1")
-                .map_err(|e| AetherError::ConfigError {
+                .map_err(|e| AlephError::ConfigError {
                     message: format!("Failed to prepare context query: {}", e),
                     suggestion: None,
                 })?;
             let contexts = stmt
                 .query_map(params![skill_id], |row| row.get::<_, String>(0))
-                .map_err(|e| AetherError::ConfigError {
+                .map_err(|e| AlephError::ConfigError {
                     message: format!("Failed to query contexts: {}", e),
                     suggestion: None,
                 })?;
@@ -387,7 +387,7 @@ impl EvolutionTracker {
                 context_json,
             ],
         )
-        .map_err(|e| AetherError::ConfigError {
+        .map_err(|e| AlephError::ConfigError {
             message: format!("Failed to upsert metrics: {}", e),
             suggestion: None,
         })?;
@@ -406,7 +406,7 @@ impl EvolutionTracker {
             context_frequency: context_freq,
         };
 
-        let mut cache = self.metrics_cache.write().map_err(|_| AetherError::Other {
+        let mut cache = self.metrics_cache.write().map_err(|_| AlephError::Other {
             message: "Failed to acquire cache lock".to_string(),
             suggestion: None,
         })?;
@@ -421,7 +421,7 @@ impl EvolutionTracker {
 
     /// Save a compiler status value
     pub fn save_status(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -437,7 +437,7 @@ impl EvolutionTracker {
              ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3",
             params![key, value, now],
         )
-        .map_err(|e| AetherError::ConfigError {
+        .map_err(|e| AlephError::ConfigError {
             message: format!("Failed to save status: {}", e),
             suggestion: None,
         })?;
@@ -447,7 +447,7 @@ impl EvolutionTracker {
 
     /// Get a compiler status value
     pub fn get_status(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -459,7 +459,7 @@ impl EvolutionTracker {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to get status: {}", e),
                 suggestion: None,
             })?;
@@ -516,7 +516,7 @@ impl EvolutionTracker {
         suggestion: &super::types::SolidificationSuggestion,
         status: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -545,7 +545,7 @@ impl EvolutionTracker {
                 now,
             ],
         )
-        .map_err(|e| AetherError::ConfigError {
+        .map_err(|e| AlephError::ConfigError {
             message: format!("Failed to save suggestion: {}", e),
             suggestion: None,
         })?;
@@ -555,7 +555,7 @@ impl EvolutionTracker {
 
     /// Update suggestion status
     pub fn update_suggestion_status(&self, id: &str, status: &str, notes: Option<&str>) -> Result<()> {
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -569,7 +569,7 @@ impl EvolutionTracker {
             "UPDATE pending_suggestions SET status = ?2, updated_at = ?3, notes = ?4 WHERE id = ?1",
             params![id, status, now, notes],
         )
-        .map_err(|e| AetherError::ConfigError {
+        .map_err(|e| AlephError::ConfigError {
             message: format!("Failed to update suggestion: {}", e),
             suggestion: None,
         })?;
@@ -579,7 +579,7 @@ impl EvolutionTracker {
 
     /// Get pending suggestions count
     pub fn get_pending_count(&self) -> Result<usize> {
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -590,7 +590,7 @@ impl EvolutionTracker {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to count suggestions: {}", e),
                 suggestion: None,
             })?;
@@ -600,7 +600,7 @@ impl EvolutionTracker {
 
     /// Delete old resolved suggestions (cleanup)
     pub fn cleanup_old_suggestions(&self, max_age_days: u32) -> Result<usize> {
-        let conn = self.conn.lock().map_err(|_| AetherError::Other {
+        let conn = self.conn.lock().map_err(|_| AlephError::Other {
             message: "Failed to acquire database lock".to_string(),
             suggestion: None,
         })?;
@@ -616,7 +616,7 @@ impl EvolutionTracker {
                 "DELETE FROM pending_suggestions WHERE status != 'pending' AND updated_at < ?1",
                 params![cutoff],
             )
-            .map_err(|e| AetherError::ConfigError {
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to cleanup suggestions: {}", e),
                 suggestion: None,
             })?;

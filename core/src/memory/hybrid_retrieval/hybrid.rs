@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
 use crate::memory::database::VectorDatabase;
 
@@ -205,7 +205,7 @@ impl HybridRetrieval {
         &self,
         query_embedding: &[f32],
         query_text: &str,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         self.database
             .hybrid_search_facts(
                 query_embedding,
@@ -227,7 +227,7 @@ impl HybridRetrieval {
         query_embedding: &[f32],
         query_text: &str,
         max_results: usize,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         let candidate_limit = max_results * self.config.candidate_multiplier;
         self.database
             .hybrid_search_facts(

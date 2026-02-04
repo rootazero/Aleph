@@ -17,7 +17,7 @@ use super::spec::{
 /// Configuration for Markdown Skill generation
 #[derive(Debug, Clone)]
 pub struct MarkdownSkillGeneratorConfig {
-    /// Output directory for generated skills (default: ~/.aether/skills/generated)
+    /// Output directory for generated skills (default: ~/.aleph/skills/generated)
     pub output_dir: PathBuf,
 
     /// Default sandbox mode for generated skills

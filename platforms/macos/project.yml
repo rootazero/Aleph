@@ -1,4 +1,4 @@
-name: Aether
+name: Aleph
 
 packages:
   GRDB:
@@ -33,7 +33,7 @@ settings:
     SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
     STRING_CATALOG_GENERATE_SYMBOLS: YES
     # Swift 6 concurrency checking: minimal (for UniFFI compatibility), targeted, complete
-    # Note: Using minimal to avoid errors in UniFFI-generated code (aether.swift)
+    # Note: Using minimal to avoid errors in UniFFI-generated code (aleph.swift)
     # which has global mutable state (vtable, handleMap, initializationResult)
     SWIFT_STRICT_CONCURRENCY: minimal
     # Limit to arm64 only to match Rust library architecture
@@ -47,27 +47,27 @@ settings:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
 
 targets:
-  Aether:
+  Aleph:
     type: application
     platform: macOS
     sources:
-      - path: Aether/Sources
+      - path: Aleph/Sources
         name: Sources
         type: group
-      - path: Aether/Assets.xcassets
+      - path: Aleph/Assets.xcassets
         type: file
-      - path: Aether/Resources
+      - path: Aleph/Resources
         name: Resources
         type: group
         excludes:
           - "AppIcon/**"
           - "skills/**"
-      - path: Aether/Resources/skills
+      - path: Aleph/Resources/skills
         name: skills
         type: folder
         buildPhase: resources
     info:
-      path: Aether/Info.plist
+      path: Aleph/Info.plist
       properties:
         CFBundleDevelopmentRegion: en
         CFBundleExecutable: $(EXECUTABLE_NAME)
@@ -82,45 +82,45 @@ targets:
           - zh-Hans
         LSMinimumSystemVersion: "15.0"
         LSUIElement: true
-        NSAppleEventsUsageDescription: "Aether needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration."
-        NSHumanReadableCopyright: "Copyright © 2025 Aether. All rights reserved."
+        NSAppleEventsUsageDescription: "Aleph needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration."
+        NSHumanReadableCopyright: "Copyright © 2025 Aleph. All rights reserved."
         NSPrincipalClass: NSApplication
     entitlements:
-      path: Aether/Aether.entitlements
+      path: Aleph/Aleph.entitlements
       properties:
         com.apple.security.automation.apple-events: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: Rootazero.Aether
+        PRODUCT_BUNDLE_IDENTIFIER: Rootazero.Aleph
         PRODUCT_NAME: $(TARGET_NAME)
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
-        INFOPLIST_FILE: Aether/Info.plist
+        INFOPLIST_FILE: Aleph/Info.plist
         LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
         OTHER_LDFLAGS:
           - -Xlinker
           - -no_application_extension
         LIBRARY_SEARCH_PATHS:
           - $(inherited)
-          - $(PROJECT_DIR)/Aether/Frameworks
+          - $(PROJECT_DIR)/Aleph/Frameworks
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
-          - $(PROJECT_DIR)/Aether/Frameworks
+          - $(PROJECT_DIR)/Aleph/Frameworks
         HEADER_SEARCH_PATHS:
           - $(inherited)
-          - $(PROJECT_DIR)/Aether/Sources/Generated
-          - $(PROJECT_DIR)/Aether/Sources/LiquidGlass/Metal/Shaders
+          - $(PROJECT_DIR)/Aleph/Sources/Generated
+          - $(PROJECT_DIR)/Aleph/Sources/LiquidGlass/Metal/Shaders
         SWIFT_INCLUDE_PATHS:
           - $(inherited)
-          - $(PROJECT_DIR)/Aether/Sources/Generated
+          - $(PROJECT_DIR)/Aleph/Sources/Generated
         # Enable module import for UniFFI FFI
-        # Import bridging header for UniFFI (provides access to aetherFFI.h)
-        SWIFT_OBJC_BRIDGING_HEADER: $(PROJECT_DIR)/Aether/Sources/AetherBridgingHeader.h
+        # Import bridging header for UniFFI (provides access to alephFFI.h)
+        SWIFT_OBJC_BRIDGING_HEADER: $(PROJECT_DIR)/Aleph/Sources/AlephBridgingHeader.h
         CLANG_ENABLE_MODULES: YES
     dependencies:
-      - framework: Aether/Frameworks/libaethecore.dylib
+      - framework: Aleph/Frameworks/libalephcore.dylib
         embed: true
         link: true
       - package: GRDB
@@ -151,16 +151,16 @@ targets:
               cd "${CORE_DIR}"
               "${CARGO_PATH}" build
               # Copy debug library from workspace target
-              cp "${WORKSPACE_TARGET}/debug/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/"
+              cp "${WORKSPACE_TARGET}/debug/libalephcore.dylib" "${PROJECT_DIR}/Aleph/Frameworks/"
               # Fix install_name to use @rpath for portability across machines
-              install_name_tool -id "@rpath/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/libaethecore.dylib"
+              install_name_tool -id "@rpath/libalephcore.dylib" "${PROJECT_DIR}/Aleph/Frameworks/libalephcore.dylib"
           else
               cd "${CORE_DIR}"
               "${CARGO_PATH}" build --release
               # Copy release library from workspace target
-              cp "${WORKSPACE_TARGET}/release/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/"
+              cp "${WORKSPACE_TARGET}/release/libalephcore.dylib" "${PROJECT_DIR}/Aleph/Frameworks/"
               # Fix install_name to use @rpath for portability across machines
-              install_name_tool -id "@rpath/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/libaethecore.dylib"
+              install_name_tool -id "@rpath/libalephcore.dylib" "${PROJECT_DIR}/Aleph/Frameworks/libalephcore.dylib"
           fi
         basedOnDependencyAnalysis: false
       - name: "Generate UniFFI Bindings"
@@ -174,29 +174,29 @@ targets:
 
           # Determine which library to use based on configuration
           if [ "${CONFIGURATION}" = "Debug" ]; then
-              LIBRARY_PATH="${WORKSPACE_TARGET}/debug/libaethecore.dylib"
+              LIBRARY_PATH="${WORKSPACE_TARGET}/debug/libalephcore.dylib"
           else
-              LIBRARY_PATH="${WORKSPACE_TARGET}/release/libaethecore.dylib"
+              LIBRARY_PATH="${WORKSPACE_TARGET}/release/libalephcore.dylib"
           fi
 
           # Use Cargo to run uniffi-bindgen (more reliable than Python version)
           "${CARGO_PATH}" run --bin uniffi-bindgen -- generate \
             --library "${LIBRARY_PATH}" \
             --language swift \
-            --out-dir "${PROJECT_DIR}/Aether/Sources/Generated/"
+            --out-dir "${PROJECT_DIR}/Aleph/Sources/Generated/"
 
           # Patch generated Swift for Swift 6 concurrency compatibility
           # Add nonisolated(unsafe) to global mutable state variables (idempotent)
-          GENERATED_FILE="${PROJECT_DIR}/Aether/Sources/Generated/aether.swift"
+          GENERATED_FILE="${PROJECT_DIR}/Aleph/Sources/Generated/aleph.swift"
           if [ -f "${GENERATED_FILE}" ]; then
               # Only patch if not already patched (check for marker)
               if ! grep -q "nonisolated(unsafe) static var vtable" "${GENERATED_FILE}"; then
                   sed -i '' 's/    static var vtable/    nonisolated(unsafe) static var vtable/g' "${GENERATED_FILE}"
                   sed -i '' 's/    fileprivate static var handleMap/    nonisolated(unsafe) fileprivate static var handleMap/g' "${GENERATED_FILE}"
                   sed -i '' 's/^private var initializationResult/nonisolated(unsafe) private var initializationResult/g' "${GENERATED_FILE}"
-                  echo "Swift 6 concurrency patches applied to aether.swift"
+                  echo "Swift 6 concurrency patches applied to aleph.swift"
               else
-                  echo "aether.swift already patched, skipping"
+                  echo "aleph.swift already patched, skipping"
               fi
 
               # Remove redundant Sendable conformances to fix Swift 6 warnings
@@ -226,61 +226,61 @@ targets:
                   $block = 0;
                 }
               ' "${GENERATED_FILE}"
-              echo "Redundant Sendable conformances removed from aether.swift"
+              echo "Redundant Sendable conformances removed from aleph.swift"
           fi
 
           echo "UniFFI bindings generated successfully"
         basedOnDependencyAnalysis: false
 
-  AetherTests:
+  AlephTests:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - path: AetherTests
-        name: AetherTests
+      - path: AlephTests
+        name: AlephTests
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: Rootazero.AetherTests
+        PRODUCT_BUNDLE_IDENTIFIER: Rootazero.AlephTests
         PRODUCT_NAME: $(TARGET_NAME)
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES
         BUNDLE_LOADER: $(TEST_HOST)
-        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Aether.app/Contents/MacOS/Aether
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Aleph.app/Contents/MacOS/Aleph
         SWIFT_EMIT_LOC_STRINGS: NO
     dependencies:
-      - target: Aether
+      - target: Aleph
 
-  AetherUITests:
+  AlephUITests:
     type: bundle.ui-testing
     platform: macOS
     sources:
-      - path: AetherUITests
-        name: AetherUITests
+      - path: AlephUITests
+        name: AlephUITests
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: Rootazero.AetherUITests
+        PRODUCT_BUNDLE_IDENTIFIER: Rootazero.AlephUITests
         PRODUCT_NAME: $(TARGET_NAME)
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Aether
         SWIFT_EMIT_LOC_STRINGS: NO
     dependencies:
-      - target: Aether
+      - target: Aleph
 
 schemes:
-  Aether:
+  Aleph:
     build:
       targets:
-        Aether: all
-        AetherTests: [test]
-        AetherUITests: [test]
+        Aleph: all
+        AlephTests: [test]
+        AlephUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - AetherTests
-        - AetherUITests
+        - AlephTests
+        - AlephUITests
     profile:
       config: Release
     analyze:

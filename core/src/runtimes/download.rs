@@ -7,7 +7,7 @@
 //! - Uses Rust native libraries for archive extraction (no external tools)
 //! - Works on macOS, Linux, and Windows
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -23,7 +23,7 @@ pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
     // Ensure parent directory exists
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            AetherError::runtime(
+            AlephError::runtime(
                 "download",
                 format!("Failed to create directory {:?}: {}", parent, e),
             )
@@ -35,16 +35,16 @@ pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
         .user_agent("Aether/1.0")
         .build()
         .map_err(|e| {
-            AetherError::runtime("download", format!("Failed to create HTTP client: {}", e))
+            AlephError::runtime("download", format!("Failed to create HTTP client: {}", e))
         })?;
 
     let response =
         client.get(url).send().await.map_err(|e| {
-            AetherError::runtime("download", format!("Download request failed: {}", e))
+            AlephError::runtime("download", format!("Download request failed: {}", e))
         })?;
 
     if !response.status().is_success() {
-        return Err(AetherError::runtime(
+        return Err(AlephError::runtime(
             "download",
             format!("Download failed with status: {}", response.status()),
         ));
@@ -53,10 +53,10 @@ pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| AetherError::runtime("download", format!("Failed to read response: {}", e)))?;
+        .map_err(|e| AlephError::runtime("download", format!("Failed to read response: {}", e)))?;
 
     std::fs::write(dest, &bytes).map_err(|e| {
-        AetherError::runtime(
+        AlephError::runtime(
             "download",
             format!("Failed to write file {:?}: {}", dest, e),
         )
@@ -79,7 +79,7 @@ pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: us
     info!(archive = ?archive_path, dest = ?dest_dir, "Extracting tar.gz archive");
 
     let file = File::open(archive_path)
-        .map_err(|e| AetherError::runtime("extract", format!("Failed to open archive: {}", e)))?;
+        .map_err(|e| AlephError::runtime("extract", format!("Failed to open archive: {}", e)))?;
 
     let buf_reader = BufReader::new(file);
     let gz_decoder = flate2::read::GzDecoder::new(buf_reader);
@@ -87,18 +87,18 @@ pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: us
 
     // Create destination directory if it doesn't exist
     std::fs::create_dir_all(dest_dir).map_err(|e| {
-        AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+        AlephError::runtime("extract", format!("Failed to create directory: {}", e))
     })?;
 
     // Extract each entry, stripping path components as needed
     for entry in archive.entries().map_err(|e| {
-        AetherError::runtime("extract", format!("Failed to read archive entries: {}", e))
+        AlephError::runtime("extract", format!("Failed to read archive entries: {}", e))
     })? {
         let mut entry = entry
-            .map_err(|e| AetherError::runtime("extract", format!("Failed to read entry: {}", e)))?;
+            .map_err(|e| AlephError::runtime("extract", format!("Failed to read entry: {}", e)))?;
 
         let entry_path = entry.path().map_err(|e| {
-            AetherError::runtime("extract", format!("Failed to get entry path: {}", e))
+            AlephError::runtime("extract", format!("Failed to get entry path: {}", e))
         })?;
 
         // Strip leading components from path
@@ -115,7 +115,7 @@ pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: us
         // Create parent directories
         if let Some(parent) = dest_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                AetherError::runtime("extract", format!("Failed to create parent dir: {}", e))
+                AlephError::runtime("extract", format!("Failed to create parent dir: {}", e))
             })?;
         }
 
@@ -123,11 +123,11 @@ pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: us
         let entry_type = entry.header().entry_type();
         if entry_type.is_dir() {
             std::fs::create_dir_all(&dest_path).map_err(|e| {
-                AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+                AlephError::runtime("extract", format!("Failed to create directory: {}", e))
             })?;
         } else if entry_type.is_file() || entry_type.is_symlink() {
             entry.unpack(&dest_path).map_err(|e| {
-                AetherError::runtime("extract", format!("Failed to extract file: {}", e))
+                AlephError::runtime("extract", format!("Failed to extract file: {}", e))
             })?;
         }
     }
@@ -150,7 +150,7 @@ pub fn extract_tar_xz(archive_path: &Path, dest_dir: &Path, strip_components: us
     info!(archive = ?archive_path, dest = ?dest_dir, "Extracting tar.xz archive");
 
     let file = File::open(archive_path)
-        .map_err(|e| AetherError::runtime("extract", format!("Failed to open archive: {}", e)))?;
+        .map_err(|e| AlephError::runtime("extract", format!("Failed to open archive: {}", e)))?;
 
     let buf_reader = BufReader::new(file);
     let xz_decoder = xz2::read::XzDecoder::new(buf_reader);
@@ -158,18 +158,18 @@ pub fn extract_tar_xz(archive_path: &Path, dest_dir: &Path, strip_components: us
 
     // Create destination directory if it doesn't exist
     std::fs::create_dir_all(dest_dir).map_err(|e| {
-        AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+        AlephError::runtime("extract", format!("Failed to create directory: {}", e))
     })?;
 
     // Extract each entry, stripping path components as needed
     for entry in archive.entries().map_err(|e| {
-        AetherError::runtime("extract", format!("Failed to read archive entries: {}", e))
+        AlephError::runtime("extract", format!("Failed to read archive entries: {}", e))
     })? {
         let mut entry = entry
-            .map_err(|e| AetherError::runtime("extract", format!("Failed to read entry: {}", e)))?;
+            .map_err(|e| AlephError::runtime("extract", format!("Failed to read entry: {}", e)))?;
 
         let entry_path = entry.path().map_err(|e| {
-            AetherError::runtime("extract", format!("Failed to get entry path: {}", e))
+            AlephError::runtime("extract", format!("Failed to get entry path: {}", e))
         })?;
 
         // Strip leading components from path
@@ -186,7 +186,7 @@ pub fn extract_tar_xz(archive_path: &Path, dest_dir: &Path, strip_components: us
         // Create parent directories
         if let Some(parent) = dest_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                AetherError::runtime("extract", format!("Failed to create parent dir: {}", e))
+                AlephError::runtime("extract", format!("Failed to create parent dir: {}", e))
             })?;
         }
 
@@ -194,11 +194,11 @@ pub fn extract_tar_xz(archive_path: &Path, dest_dir: &Path, strip_components: us
         let entry_type = entry.header().entry_type();
         if entry_type.is_dir() {
             std::fs::create_dir_all(&dest_path).map_err(|e| {
-                AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+                AlephError::runtime("extract", format!("Failed to create directory: {}", e))
             })?;
         } else if entry_type.is_file() || entry_type.is_symlink() {
             entry.unpack(&dest_path).map_err(|e| {
-                AetherError::runtime("extract", format!("Failed to extract file: {}", e))
+                AlephError::runtime("extract", format!("Failed to extract file: {}", e))
             })?;
         }
     }
@@ -219,20 +219,20 @@ pub fn extract_zip(archive_path: &Path, dest_dir: &Path) -> Result<()> {
     info!(archive = ?archive_path, dest = ?dest_dir, "Extracting ZIP archive");
 
     let file = File::open(archive_path)
-        .map_err(|e| AetherError::runtime("extract", format!("Failed to open archive: {}", e)))?;
+        .map_err(|e| AlephError::runtime("extract", format!("Failed to open archive: {}", e)))?;
 
     let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-        AetherError::runtime("extract", format!("Failed to read ZIP archive: {}", e))
+        AlephError::runtime("extract", format!("Failed to read ZIP archive: {}", e))
     })?;
 
     // Create destination directory if it doesn't exist
     std::fs::create_dir_all(dest_dir).map_err(|e| {
-        AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+        AlephError::runtime("extract", format!("Failed to create directory: {}", e))
     })?;
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| {
-            AetherError::runtime("extract", format!("Failed to read ZIP entry: {}", e))
+            AlephError::runtime("extract", format!("Failed to read ZIP entry: {}", e))
         })?;
 
         // Get the entry name (handling both forward and back slashes)
@@ -245,23 +245,23 @@ pub fn extract_zip(archive_path: &Path, dest_dir: &Path) -> Result<()> {
 
         if entry.is_dir() {
             std::fs::create_dir_all(&dest_path).map_err(|e| {
-                AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+                AlephError::runtime("extract", format!("Failed to create directory: {}", e))
             })?;
         } else {
             // Create parent directories
             if let Some(parent) = dest_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
-                    AetherError::runtime("extract", format!("Failed to create parent dir: {}", e))
+                    AlephError::runtime("extract", format!("Failed to create parent dir: {}", e))
                 })?;
             }
 
             // Extract file
             let mut outfile = File::create(&dest_path).map_err(|e| {
-                AetherError::runtime("extract", format!("Failed to create file: {}", e))
+                AlephError::runtime("extract", format!("Failed to create file: {}", e))
             })?;
 
             std::io::copy(&mut entry, &mut outfile).map_err(|e| {
-                AetherError::runtime("extract", format!("Failed to write file: {}", e))
+                AlephError::runtime("extract", format!("Failed to write file: {}", e))
             })?;
 
             // Preserve executable permissions on Unix
@@ -286,14 +286,14 @@ pub fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let mut perms = std::fs::metadata(path)
-        .map_err(|e| AetherError::runtime("permissions", format!("Failed to get metadata: {}", e)))?
+        .map_err(|e| AlephError::runtime("permissions", format!("Failed to get metadata: {}", e)))?
         .permissions();
 
     // Add execute permission for owner, group, and others
     perms.set_mode(perms.mode() | 0o111);
 
     std::fs::set_permissions(path, perms).map_err(|e| {
-        AetherError::runtime("permissions", format!("Failed to set permissions: {}", e))
+        AlephError::runtime("permissions", format!("Failed to set permissions: {}", e))
     })?;
 
     debug!(path = ?path, "Set executable permissions");
@@ -367,15 +367,15 @@ pub async fn get_github_latest_version(owner: &str, repo: &str) -> Result<String
     let client = reqwest::Client::builder()
         .user_agent("Aether/1.0")
         .build()
-        .map_err(|e| AetherError::runtime("github", format!("Failed to create client: {}", e)))?;
+        .map_err(|e| AlephError::runtime("github", format!("Failed to create client: {}", e)))?;
 
     let response =
         client.get(&url).send().await.map_err(|e| {
-            AetherError::runtime("github", format!("Failed to fetch release: {}", e))
+            AlephError::runtime("github", format!("Failed to fetch release: {}", e))
         })?;
 
     if !response.status().is_success() {
-        return Err(AetherError::runtime(
+        return Err(AlephError::runtime(
             "github",
             format!("GitHub API returned {}", response.status()),
         ));
@@ -384,12 +384,12 @@ pub async fn get_github_latest_version(owner: &str, repo: &str) -> Result<String
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| AetherError::runtime("github", format!("Failed to parse response: {}", e)))?;
+        .map_err(|e| AlephError::runtime("github", format!("Failed to parse response: {}", e)))?;
 
     json.get("tag_name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| AetherError::runtime("github", "No tag_name in release response"))
+        .ok_or_else(|| AlephError::runtime("github", "No tag_name in release response"))
 }
 
 /// Extract version number from a tag (removes 'v' prefix if present)

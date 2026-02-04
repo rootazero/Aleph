@@ -3,7 +3,7 @@
 //! This module handles migrating configuration from old formats to new formats.
 
 use crate::config::Config;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use tracing::{info, warn};
 
 impl Config {
@@ -60,7 +60,7 @@ impl Config {
     pub(crate) fn migrate_mcp_builtin_in_toml(contents: &str) -> Result<String> {
         // Parse as raw TOML value
         let mut value: toml::Value = toml::from_str(contents).map_err(|e| {
-            AetherError::invalid_config(format!("Failed to parse TOML for migration: {}", e))
+            AlephError::invalid_config(format!("Failed to parse TOML for migration: {}", e))
         })?;
 
         // Check if migration is needed
@@ -100,7 +100,7 @@ impl Config {
 
         // Serialize back to TOML
         toml::to_string_pretty(&value).map_err(|e| {
-            AetherError::invalid_config(format!("Failed to serialize migrated TOML: {}", e))
+            AlephError::invalid_config(format!("Failed to serialize migrated TOML: {}", e))
         })
     }
 }

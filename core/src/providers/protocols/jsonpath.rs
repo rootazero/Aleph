@@ -4,7 +4,7 @@
 //! This module provides JSONPath querying to extract values from arbitrary
 //! JSON responses using expressions like `$.data.choices[0].message.content`.
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use jsonpath_rust::JsonPathQuery;
 use serde_json::Value;
 
@@ -26,7 +26,7 @@ use serde_json::Value;
 ///
 /// # Errors
 ///
-/// Returns `AetherError::ProviderError` if:
+/// Returns `AlephError::ProviderError` if:
 /// - The JSONPath expression is invalid
 /// - The path does not exist in the JSON structure
 /// - No values match the path
@@ -36,7 +36,7 @@ use serde_json::Value;
 ///
 /// ```rust,ignore
 /// use serde_json::json;
-/// use aethecore::providers::protocols::extract_value;
+/// use alephcore::providers::protocols::extract_value;
 ///
 /// let json = json!({
 ///     "data": {
@@ -54,14 +54,14 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
     let results = json
         .clone()
         .path(path)
-        .map_err(|e| AetherError::provider(format!("JSONPath query failed: {}", e)))?;
+        .map_err(|e| AlephError::provider(format!("JSONPath query failed: {}", e)))?;
 
     // The path() method returns a Value which could be an array of matches or a single value
     // For our use case, we want to extract the first match
     let first_match = match &results {
         Value::Array(arr) if !arr.is_empty() => &arr[0],
         Value::Array(_) => {
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "No value found at JSONPath '{}' in response",
                 path
             )));
@@ -82,7 +82,7 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
         // We'll do a simple heuristic: if the path points to a field that
         // doesn't exist in the JSON structure, return an error
         if !path_exists_in_json(json, path) {
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "No value found at JSONPath '{}' in response (path does not exist)",
                 path
             )));
@@ -99,7 +99,7 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
         Value::Object(_) | Value::Array(_) => {
             // Serialize complex types to JSON string
             serde_json::to_string(first_match).map_err(|e| {
-                AetherError::provider(format!("Failed to serialize JSON value: {}", e))
+                AlephError::provider(format!("Failed to serialize JSON value: {}", e))
             })?
         }
     };
@@ -194,7 +194,7 @@ mod tests {
         let result = extract_value(&json, "$.nonexistent.path");
         assert!(result.is_err());
 
-        if let Err(AetherError::ProviderError { message, .. }) = result {
+        if let Err(AlephError::ProviderError { message, .. }) = result {
             assert!(
                 message.contains("No value found at JSONPath")
                     && message.contains("path does not exist")
@@ -248,7 +248,7 @@ mod tests {
         let result = extract_value(&json, "$.data.nonexistent.field");
         assert!(result.is_err());
 
-        if let Err(AetherError::ProviderError { message, .. }) = result {
+        if let Err(AlephError::ProviderError { message, .. }) = result {
             assert!(message.contains("path does not exist"));
         } else {
             panic!("Expected ProviderError for nested nonexistent path");
@@ -289,7 +289,7 @@ mod tests {
         let result = extract_value(&json, "$.[invalid");
         assert!(result.is_err());
 
-        if let Err(AetherError::ProviderError { message, .. }) = result {
+        if let Err(AlephError::ProviderError { message, .. }) = result {
             assert!(
                 message.contains("JSONPath query failed")
                     || message.contains("Invalid JSONPath expression")

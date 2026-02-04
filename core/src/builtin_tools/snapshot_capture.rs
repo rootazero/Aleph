@@ -2,16 +2,16 @@
 
 use async_trait::async_trait;
 use crate::builtin_tools::{notify_tool_result, notify_tool_start};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::perception::{capture_snapshot, PerceptionSnapshot, SnapshotCaptureArgs};
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
-/// SnapshotTool wrapper for AetherTool.
+/// SnapshotTool wrapper for AlephTool.
 #[derive(Clone, Default)]
 pub struct SnapshotCaptureTool;
 
 #[async_trait]
-impl AetherTool for SnapshotCaptureTool {
+impl AlephTool for SnapshotCaptureTool {
     const NAME: &'static str = "snapshot_capture";
     const DESCRIPTION: &'static str =
         "Capture a system snapshot (AX tree + optional vision OCR) with focus hints.";
@@ -44,7 +44,7 @@ impl AetherTool for SnapshotCaptureTool {
             }
             Err(err) => {
                 notify_tool_result(Self::NAME, "snapshot failed", false);
-                Err(AetherError::tool(format!("snapshot_capture failed: {}", err)))
+                Err(AlephError::tool(format!("snapshot_capture failed: {}", err)))
             }
         }
     }

@@ -1,10 +1,10 @@
 # rig-core Era Archives
 
-This directory contains historical design documents from the early days of Aether when it used the `rig-core` framework.
+This directory contains historical design documents from the early days of Aleph when it used the `rig-core` framework.
 
 **Status**: Archived (January 2025)
 
-The project has since migrated to a self-implemented **AetherTool** system that provides:
+The project has since migrated to a self-implemented **AlephTool** system that provides:
 - Better control over tool execution
 - Custom streaming and progress callbacks
 - Simplified dependency management

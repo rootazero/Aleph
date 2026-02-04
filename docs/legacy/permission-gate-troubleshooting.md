@@ -1,10 +1,10 @@
 # Permission Gate Troubleshooting Guide
 
-This document helps diagnose and resolve permission-related issues with Aether's mandatory permission gate.
+This document helps diagnose and resolve permission-related issues with Aleph's mandatory permission gate.
 
 ## Overview
 
-Aether requires two macOS system permissions to function:
+Aleph requires two macOS system permissions to function:
 1. **Accessibility** - For keyboard simulation and window context capture
 2. **Input Monitoring** - For global hotkey detection (⌘~)
 
@@ -28,7 +28,7 @@ The permission gate enforces that BOTH permissions must be granted before the ap
 - Prevents false positives from transient permission checks
 
 **User Action:**
-1. Restart Aether
+1. Restart Aleph
 2. Grant permissions in System Settings
 3. Wait 3-5 seconds for debouncing to confirm stable state
 4. Permission gate should auto-dismiss when both permissions confirmed
@@ -47,13 +47,13 @@ The permission gate enforces that BOTH permissions must be granted before the ap
 
 **Solutions:**
 
-**A. Restart Aether:**
+**A. Restart Aleph:**
 ```bash
-# Kill Aether process
-killall Aether
+# Kill Aleph process
+killall Aleph
 
 # Restart from Xcode or Finder
-open /path/to/Aether.app
+open /path/to/Aleph.app
 ```
 
 **B. Verify Permissions in System Settings:**
@@ -71,7 +71,7 @@ sudo tccutil reset Accessibility com.aether.Aether
 # Reset Input Monitoring permissions database
 sudo tccutil reset ListenEvent com.aether.Aether
 
-# Restart Aether and grant permissions again
+# Restart Aleph and grant permissions again
 ```
 
 ### Issue 3: Permission Gate Window Won't Close
@@ -85,7 +85,7 @@ sudo tccutil reset ListenEvent com.aether.Aether
 
 **1. Check Console Logs:**
 ```bash
-# Tail Aether logs
+# Tail Aleph logs
 log stream --predicate 'process == "Aether"' --level debug
 ```
 
@@ -115,7 +115,7 @@ print(PermissionChecker.hasInputMonitoringPermission())  // Should be true
 **Resolution:**
 If permissions show as granted but gate won't close:
 1. Check for errors in console logs
-2. Force quit and restart Aether
+2. Force quit and restart Aleph
 3. File a bug report with console logs
 
 ### Issue 4: "Unable to obtain task name port right" Error
@@ -132,7 +132,7 @@ If permissions show as granted but gate won't close:
 
 **A. Verify App Signature:**
 ```bash
-codesign -dv --entitlements - /path/to/Aether.app
+codesign -dv --entitlements - /path/to/Aleph.app
 ```
 
 Expected entitlements:
@@ -144,11 +144,11 @@ Expected entitlements:
 **B. Re-sign App (if unsigned):**
 ```bash
 # Sign app with ad-hoc signature
-codesign -s - -f --deep /path/to/Aether.app
+codesign -s - -f --deep /path/to/Aleph.app
 ```
 
 **C. Check Entitlements File:**
-Ensure `Aether/Aether.entitlements` contains:
+Ensure `Aether/Aleph.entitlements` contains:
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -172,8 +172,8 @@ Ensure `Aether/Aether.entitlements` contains:
 1. Open **System Settings**
 2. Go to **Privacy & Security**
 3. Scroll down and click **Accessibility**
-4. Click **+** button and add Aether
-5. Enable the checkbox next to Aether
+4. Click **+** button and add Aleph
+5. Enable the checkbox next to Aleph
 6. Repeat for **Input Monitoring**
 
 **B. Verify Deep Link URLs:**
@@ -213,7 +213,7 @@ Expected output when granting permission:
 
 ```bash
 # Check if permission gate is active
-ps aux | grep Aether
+ps aux | grep Aleph
 # Look for permission gate window process
 ```
 
@@ -222,8 +222,8 @@ ps aux | grep Aether
 If permissions seem stuck, force a re-check:
 
 ```bash
-# Kill Aether
-killall Aether
+# Kill Aleph
+killall Aleph
 
 # Clear macOS TCC cache (requires restart)
 sudo tccutil reset All com.aether.Aether
@@ -236,12 +236,12 @@ sudo reboot
 
 ### Normal Flow:
 
-1. **Launch Aether** → Permission check starts
+1. **Launch Aleph** → Permission check starts
 2. **If missing permissions** → Permission gate window appears
 3. **User clicks "Open System Settings"** → System Settings opens to Accessibility
 4. **User grants Accessibility** → After 3 seconds, auto-progress to Input Monitoring step
 5. **User grants Input Monitoring** → After 3 seconds, permission gate auto-dismisses
-6. **Core initialization** → Aether starts normal operation
+6. **Core initialization** → Aleph starts normal operation
 
 ### Debouncing Timeline:
 
@@ -271,7 +271,7 @@ If issues persist, file a bug report with:
 3. **System Info:**
    ```bash
    sw_vers > system_info.txt
-   codesign -dv /path/to/Aether.app >> system_info.txt 2>&1
+   codesign -dv /path/to/Aleph.app >> system_info.txt 2>&1
    ```
 
 4. **Steps to Reproduce:**

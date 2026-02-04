@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
 use crate::mcp::manager::McpManagerHandle;
-use crate::tools::AetherToolDyn;
+use crate::tools::AlephToolDyn;
 
 /// Arguments for mcp_get_prompt tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -55,7 +55,7 @@ impl McpGetPromptTool {
     }
 }
 
-impl AetherToolDyn for McpGetPromptTool {
+impl AlephToolDyn for McpGetPromptTool {
     fn name(&self) -> &str {
         "mcp_get_prompt"
     }
@@ -86,8 +86,8 @@ impl AetherToolDyn for McpGetPromptTool {
                 .handle
                 .get_client(server_id)
                 .await
-                .map_err(|e| crate::error::AetherError::tool(format!("Failed to get client: {}", e)))?
-                .ok_or_else(|| crate::error::AetherError::NotFound(
+                .map_err(|e| crate::error::AlephError::tool(format!("Failed to get client: {}", e)))?
+                .ok_or_else(|| crate::error::AlephError::NotFound(
                     format!("MCP server not found: {}", server_id)
                 ))?;
 

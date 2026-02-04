@@ -777,7 +777,7 @@ git commit -m "feat(three-layer): add PathSandbox for file system restrictions"
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::three_layer::{Capability, CapabilityGate, PathSandbox};
+//! use alephcore::three_layer::{Capability, CapabilityGate, PathSandbox};
 //!
 //! // Create a gate with specific capabilities
 //! let gate = CapabilityGate::new(vec![

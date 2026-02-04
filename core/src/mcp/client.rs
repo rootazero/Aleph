@@ -11,7 +11,7 @@ use std::time::Duration;
 use futures::future::join_all;
 use tokio::sync::RwLock;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
 use crate::mcp::sampling::SamplingHandler;
 use crate::mcp::transport::{HttpTransport, HttpTransportConfig, McpTransport, SseTransport, SseTransportConfig};
@@ -277,7 +277,7 @@ impl McpClient {
             }
         }
 
-        Err(AetherError::NotFound(format!("Resource not found: {}", uri)))
+        Err(AlephError::NotFound(format!("Resource not found: {}", uri)))
     }
 
     /// Get a prompt by name with optional arguments
@@ -307,7 +307,7 @@ impl McpClient {
             }
         }
 
-        Err(AetherError::NotFound(format!("Prompt not found: {}", name)))
+        Err(AlephError::NotFound(format!("Prompt not found: {}", name)))
     }
 
     /// Get tools as a formatted list for context injection
@@ -352,7 +352,7 @@ impl McpClient {
         }
 
         // Tool not found
-        Err(AetherError::McpToolNotFound(name.to_string()))
+        Err(AlephError::McpToolNotFound(name.to_string()))
     }
 
     /// Get list of registered external server names
@@ -407,7 +407,7 @@ impl McpClient {
     /// # Returns
     ///
     /// * `Ok(())` - If the connection was established successfully
-    /// * `Err(AetherError)` - If connection failed
+    /// * `Err(AlephError)` - If connection failed
     pub async fn start_remote_server(&self, config: McpRemoteServerConfig) -> Result<()> {
         let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(300));
 
@@ -643,7 +643,7 @@ mod tests {
         assert!(result.is_err());
 
         match result.unwrap_err() {
-            AetherError::McpToolNotFound(name) => {
+            AlephError::McpToolNotFound(name) => {
                 assert_eq!(name, "unknown_tool");
             }
             _ => panic!("Expected McpToolNotFound error"),

@@ -5,7 +5,7 @@
 
 ## 概述
 
-本文档描述 Aether 全新的 Agent Loop 架构设计，整合 orchestrator、intent、planner、executor、prompt、dispatcher 六个模块为统一的循环执行架构。
+本文档描述 Aleph 全新的 Agent Loop 架构设计，整合 orchestrator、intent、planner、executor、prompt、dispatcher 六个模块为统一的循环执行架构。
 
 ## 设计决策
 
@@ -563,7 +563,7 @@ pub enum LoopEvent {
 
 ```rust
 #[uniffi::export]
-impl AetherCore {
+impl AlephCore {
     pub async fn process(
         &self,
         input: String,

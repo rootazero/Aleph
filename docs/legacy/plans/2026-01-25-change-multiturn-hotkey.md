@@ -261,7 +261,7 @@ default: keyCode = 44 // Default to /
 
 **Step 2: Build to verify syntax**
 
-Run: `cd platforms/macos && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build`
+Run: `cd platforms/macos && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build`
 Expected: Build succeeds
 
 **Step 3: Commit HotkeyService changes**
@@ -361,7 +361,7 @@ private let defaultCommandCharKey: CommandCharKey = .space
 
 **Step 4: Build and test UI**
 
-Run: `cd platforms/macos && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build`
+Run: `cd platforms/macos && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build`
 Expected: Build succeeds, no compilation errors
 
 **Step 5: Commit UI changes**
@@ -453,7 +453,7 @@ In `platforms/macos/Aether/Resources/zh-Hans.lproj/Localizable.strings`, change 
 
 **Step 3: Rebuild to verify string compilation**
 
-Run: `cd platforms/macos && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build`
+Run: `cd platforms/macos && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build`
 Expected: Build succeeds, strings compiled
 
 **Step 4: Commit localization changes**
@@ -531,20 +531,20 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 1. Create test config with old hotkey:
    ```bash
    mkdir -p ~/.aether
-   cat > ~/.aether/config.toml <<EOF
+   cat > ~/.aleph/config.toml <<EOF
    [shortcuts]
    command_prompt = "Command+Option+/"
    EOF
    ```
-2. Launch Aether
+2. Launch Aleph
 3. Verify: Console logs show "Migrating command_prompt hotkey: Command+Option+/ -> Option+Space"
-4. Verify: `~/.aether/config.toml` now contains `command_prompt = "Option+Space"`
+4. Verify: `~/.aleph/config.toml` now contains `command_prompt = "Option+Space"`
 5. Verify: Settings UI shows "⌥ ⌘ ␣" (Option+Command+Space)
 
 **Step 2: Test new default hotkey works**
 
-1. Delete `~/.aether/config.toml`
-2. Launch Aether
+1. Delete `~/.aleph/config.toml`
+2. Launch Aleph
 3. Open Settings → Shortcuts
 4. Verify: Command Completion shows "⌥ ⌘ ␣" (Option+Command+Space)
 5. Press Option+Space while in any app
@@ -557,15 +557,15 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 3. Verify: Dropdown includes "Esc" option with "⎋" symbol
 4. Select "Esc"
 5. Click Save
-6. Verify: `~/.aether/config.toml` contains `command_prompt = "Option+Command+Esc"`
+6. Verify: `~/.aleph/config.toml` contains `command_prompt = "Option+Command+Esc"`
 7. Press Option+Command+Esc
 8. Verify: Multi-turn window appears
 
 **Step 4: Test preservation of custom hotkeys**
 
-1. Edit `~/.aether/config.toml`
+1. Edit `~/.aleph/config.toml`
 2. Set: `command_prompt = "Control+Shift+/"`
-3. Relaunch Aether
+3. Relaunch Aleph
 4. Verify: NO migration log message (custom hotkey preserved)
 5. Verify: Settings UI shows "⌃ ⇧ /" (Control+Shift+/)
 6. Press Control+Shift+/
@@ -591,7 +591,7 @@ $(date +%Y-%m-%d)
 
 ## Test Environment
 - macOS Version: $(sw_vers -productVersion)
-- Aether Build: $(git rev-parse --short HEAD)
+- Aleph Build: $(git rev-parse --short HEAD)
 
 ## Test Cases
 - [x] Old config (Command+Option+/) auto-migrated to Option+Space

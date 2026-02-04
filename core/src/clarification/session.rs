@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use aethecore::clarification::session::{ClarificationManager, SessionConfig};
+//! use alephcore::clarification::session::{ClarificationManager, SessionConfig};
 //!
 //! # async fn example() {
 //! let config = SessionConfig::default();

@@ -5,13 +5,13 @@
 //!
 //! Watched directories:
 //! - `~/.claude/` (skills/, commands/, agents/, plugins/)
-//! - `~/.aether/` (skills/, commands/, agents/, plugins/)
+//! - `~/.aleph/` (skills/, commands/, agents/, plugins/)
 //! - `.claude/` (project-local)
 //! - `.aether/` (project-local)
 //!
 //! Uses macOS FSEvents for efficient file system monitoring with debouncing.
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::collections::HashSet;
@@ -90,7 +90,7 @@ impl ExtensionWatcher {
     ///
     /// Watches:
     /// - `~/.claude/` (global)
-    /// - `~/.aether/` (global)
+    /// - `~/.aleph/` (global)
     /// - `.claude/` (project-local, if exists)
     /// - `.aether/` (project-local, if exists)
     ///
@@ -156,7 +156,7 @@ impl ExtensionWatcher {
         let mut debouncer_lock = self.debouncer.lock().unwrap_or_else(|e| e.into_inner());
 
         if debouncer_lock.is_some() {
-            return Err(AetherError::config("Extension watcher already started"));
+            return Err(AlephError::config("Extension watcher already started"));
         }
 
         if self.watch_dirs.is_empty() {
@@ -211,7 +211,7 @@ impl ExtensionWatcher {
                 }
             },
         )
-        .map_err(|e| AetherError::config(format!("Failed to create extension watcher: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create extension watcher: {}", e)))?;
 
         // Watch each directory recursively
         for dir in &self.watch_dirs {
@@ -220,7 +220,7 @@ impl ExtensionWatcher {
                     .watcher()
                     .watch(dir, RecursiveMode::Recursive)
                     .map_err(|e| {
-                        AetherError::config(format!(
+                        AlephError::config(format!(
                             "Failed to watch directory {}: {}",
                             dir.display(),
                             e
@@ -241,7 +241,7 @@ impl ExtensionWatcher {
         let mut debouncer_lock = self.debouncer.lock().unwrap_or_else(|e| e.into_inner());
 
         if debouncer_lock.is_none() {
-            return Err(AetherError::config("Extension watcher not started"));
+            return Err(AlephError::config("Extension watcher not started"));
         }
 
         *debouncer_lock = None;
@@ -278,7 +278,7 @@ impl ExtensionWatcher {
                     dir = %dir.display(),
                     "Adding watch directory requires restart"
                 );
-                return Err(AetherError::config(
+                return Err(AlephError::config(
                     "Cannot add directory to running watcher. Please restart the watcher.",
                 ));
             }

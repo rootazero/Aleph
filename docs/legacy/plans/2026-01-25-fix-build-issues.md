@@ -152,7 +152,7 @@ sed -n '920,930p' platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationVi
 **Step 6: 验证 SwiftLint**
 
 ```bash
-cd platforms/macos && swiftlint lint --path Aether/Sources/MultiTurn/
+cd platforms/macos && swiftlint lint --path Aleph/Sources/MultiTurn/
 ```
 
 Expected: 不再有 SwiftLint 警告
@@ -200,7 +200,7 @@ cd core && cargo build
 **Step 5: 验证 Xcode 构建**
 
 ```bash
-cd platforms/macos && xcodebuild -scheme Aether -configuration Debug 2>&1 | grep -c "Redundant conformance"
+cd platforms/macos && xcodebuild -scheme Aleph -configuration Debug 2>&1 | grep -c "Redundant conformance"
 ```
 
 Expected: 0（如果添加了 swiftlint:disable）
@@ -231,7 +231,7 @@ Expected: 0 warnings
 **Step 2: 完整 macOS 构建验证**
 
 ```bash
-cd platforms/macos && xcodebuild clean && xcodebuild -scheme Aether -configuration Debug 2>&1 | tee /tmp/xcode-build.log
+cd platforms/macos && xcodebuild clean && xcodebuild -scheme Aleph -configuration Debug 2>&1 | tee /tmp/xcode-build.log
 grep -c "warning:" /tmp/xcode-build.log | grep -v "Sendable"
 ```
 

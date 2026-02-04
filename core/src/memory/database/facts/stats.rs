@@ -1,12 +1,12 @@
 //! Statistics and utility operations for memory facts
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::FactStats;
 use crate::memory::database::core::VectorDatabase;
 
 impl VectorDatabase {
     /// Get fact statistics
-    pub async fn get_fact_stats(&self) -> Result<FactStats, AetherError> {
+    pub async fn get_fact_stats(&self) -> Result<FactStats, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Total facts
@@ -29,7 +29,7 @@ impl VectorDatabase {
             .prepare(
                 "SELECT fact_type, COUNT(*) FROM memory_facts WHERE is_valid = 1 GROUP BY fact_type",
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let rows = stmt
             .query_map([], |row| {
@@ -37,7 +37,7 @@ impl VectorDatabase {
                 let count: u64 = row.get(1)?;
                 Ok((fact_type, count))
             })
-            .map_err(|e| AetherError::config(format!("Failed to query fact types: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to query fact types: {}", e)))?;
 
         for (fact_type, count) in rows.flatten() {
             facts_by_type.insert(fact_type, count);
@@ -70,11 +70,11 @@ impl VectorDatabase {
     }
 
     /// Clear all facts (for testing or reset)
-    pub async fn clear_facts(&self) -> Result<u64, AetherError> {
+    pub async fn clear_facts(&self) -> Result<u64, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows_affected = conn
             .execute("DELETE FROM memory_facts", [])
-            .map_err(|e| AetherError::config(format!("Failed to clear facts: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to clear facts: {}", e)))?;
 
         Ok(rows_affected as u64)
     }

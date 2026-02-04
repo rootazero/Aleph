@@ -1,4 +1,4 @@
-# Aether 项目会话记忆 - Phase 6 开始
+# Aleph 项目会话记忆 - Phase 6 开始
 
 **生成时间**: 2025-12-24  
 **当前状态**: Phase 5 完成 ✅ → Phase 6 待开始
@@ -8,7 +8,7 @@
 ## 快速恢复上下文
 
 ### 项目简介
-Aether 是一个 macOS/Windows/Linux 的系统级 AI 中间件（Rust Core + Native UI）。用户按 Cmd+~ 选中文本，AI 处理后粘贴回去。
+Aleph 是一个 macOS/Windows/Linux 的系统级 AI 中间件（Rust Core + Native UI）。用户按 Cmd+~ 选中文本，AI 处理后粘贴回去。
 
 ### Phase 5 完成成果 ✅ (2025-12-24)
 
@@ -69,7 +69,7 @@ Aether 是一个 macOS/Windows/Linux 的系统级 AI 中间件（Rust Core + Nat
 - `Aether/core/src/memory/context.rs` - 上下文捕获
 
 **需要修改的文件**:
-- `Aether/core/src/core.rs` - AetherCore 主逻辑
+- `Aether/core/src/core.rs` - AlephCore 主逻辑
 - `Aether/core/src/memory/augmentation.rs` - 提示词增强（可能需要创建）
 
 ### 预期流程
@@ -104,7 +104,7 @@ AI 响应
 ### Rust Core
 ```rust
 // 关键类型
-pub struct AetherCore {
+pub struct AlephCore {
     // 已有字段
     pub memory_store: Option<Arc<MemoryStore>>,
     // 待添加 (Phase 7)
@@ -139,7 +139,7 @@ similarity_threshold = 0.7
 ## 开发命令
 
 ```bash
-cd Aether/core
+cd Aleph/core
 
 # 运行记忆相关测试
 cargo test memory --lib

@@ -37,7 +37,7 @@ pub trait McpTransport: Send + Sync + std::any::Any {
     ///
     /// # Returns
     /// * `Ok(JsonRpcResponse)` - The response from the server
-    /// * `Err(AetherError)` - If sending failed, timeout occurred, or parsing failed
+    /// * `Err(AlephError)` - If sending failed, timeout occurred, or parsing failed
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse>;
 
     /// Send a JSON-RPC notification (no response expected)
@@ -50,7 +50,7 @@ pub trait McpTransport: Send + Sync + std::any::Any {
     ///
     /// # Returns
     /// * `Ok(())` - If the notification was sent successfully
-    /// * `Err(AetherError)` - If sending failed
+    /// * `Err(AlephError)` - If sending failed
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()>;
 
     /// Check if the transport connection is still alive
@@ -72,7 +72,7 @@ pub trait McpTransport: Send + Sync + std::any::Any {
     ///
     /// # Returns
     /// * `Ok(())` - If closed successfully
-    /// * `Err(AetherError)` - If an error occurred during close
+    /// * `Err(AlephError)` - If an error occurred during close
     async fn close(&self) -> Result<()>;
 
     /// Get the server name for this transport
@@ -174,7 +174,7 @@ mod tests {
     impl McpTransport for MockTransport {
         async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
             if self.should_fail.load(Ordering::SeqCst) {
-                return Err(crate::error::AetherError::IoError(
+                return Err(crate::error::AlephError::IoError(
                     "Mock transport failure".to_string(),
                 ));
             }
@@ -197,7 +197,7 @@ mod tests {
 
         async fn send_notification(&self, _notification: &JsonRpcNotification) -> Result<()> {
             if self.should_fail.load(Ordering::SeqCst) {
-                return Err(crate::error::AetherError::IoError(
+                return Err(crate::error::AlephError::IoError(
                     "Mock transport failure".to_string(),
                 ));
             }

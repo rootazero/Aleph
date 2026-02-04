@@ -181,7 +181,7 @@ impl AuditEntry {
     }
 }
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::database::VectorDatabase;
 use std::sync::Arc;
 
@@ -197,7 +197,7 @@ impl AuditLogger {
     }
 
     /// Log an audit event
-    pub async fn log(&self, entry: AuditEntry) -> Result<(), AetherError> {
+    pub async fn log(&self, entry: AuditEntry) -> Result<(), AlephError> {
         self.db.insert_audit_entry(&entry).await
     }
 
@@ -207,7 +207,7 @@ impl AuditLogger {
         fact_id: &str,
         source: &str,
         extraction_context: Option<&str>,
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let entry = AuditEntry::new(
             fact_id.to_string(),
             AuditAction::Created,
@@ -228,7 +228,7 @@ impl AuditLogger {
         query: Option<&str>,
         relevance_score: Option<f32>,
         used_in_response: bool,
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let entry = AuditEntry::new(
             fact_id.to_string(),
             AuditAction::Accessed,
@@ -250,7 +250,7 @@ impl AuditLogger {
         reason: &str,
         actor: AuditActor,
         strength_at_invalidation: Option<f32>,
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let entry = AuditEntry::new(
             fact_id.to_string(),
             AuditAction::Invalidated,
@@ -265,7 +265,7 @@ impl AuditLogger {
     }
 
     /// Log a fact restoration event
-    pub async fn log_restored(&self, fact_id: &str, new_strength: f32) -> Result<(), AetherError> {
+    pub async fn log_restored(&self, fact_id: &str, new_strength: f32) -> Result<(), AlephError> {
         let entry = AuditEntry::new(
             fact_id.to_string(),
             AuditAction::Restored,
@@ -282,7 +282,7 @@ impl AuditLogger {
         fact_id: &str,
         reason: &str,
         days_in_recycle_bin: Option<u32>,
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let entry = AuditEntry::new(
             fact_id.to_string(),
             AuditAction::Deleted,
@@ -297,12 +297,12 @@ impl AuditLogger {
     }
 
     /// Get audit history for a specific fact
-    pub async fn get_fact_history(&self, fact_id: &str) -> Result<Vec<AuditEntry>, AetherError> {
+    pub async fn get_fact_history(&self, fact_id: &str) -> Result<Vec<AuditEntry>, AlephError> {
         self.db.get_audit_entries_for_fact(fact_id).await
     }
 
     /// Get recent audit events
-    pub async fn get_recent_events(&self, limit: usize) -> Result<Vec<AuditEntry>, AetherError> {
+    pub async fn get_recent_events(&self, limit: usize) -> Result<Vec<AuditEntry>, AlephError> {
         self.db.get_recent_audit_entries(limit).await
     }
 
@@ -310,12 +310,12 @@ impl AuditLogger {
     ///
     /// Returns a human-readable explanation of how a fact was created,
     /// accessed, and potentially invalidated.
-    pub async fn explain_fact(&self, fact_id: &str) -> Result<FactExplanation, AetherError> {
+    pub async fn explain_fact(&self, fact_id: &str) -> Result<FactExplanation, AlephError> {
         let history = self.get_fact_history(fact_id).await?;
         let fact = self.db.get_fact(fact_id).await?;
 
         if history.is_empty() && fact.is_none() {
-            return Err(AetherError::other(format!("Fact not found: {}", fact_id)));
+            return Err(AlephError::other(format!("Fact not found: {}", fact_id)));
         }
 
         // Build explanation from history
@@ -429,7 +429,7 @@ impl AuditLogger {
     /// Explain why a fact was forgotten/invalidated
     ///
     /// Returns a focused explanation specifically about invalidation.
-    pub async fn explain_forgetting(&self, fact_id: &str) -> Result<ForgettingExplanation, AetherError> {
+    pub async fn explain_forgetting(&self, fact_id: &str) -> Result<ForgettingExplanation, AlephError> {
         let history = self.get_fact_history(fact_id).await?;
         let fact = self.db.get_fact(fact_id).await?;
 
@@ -462,13 +462,13 @@ impl AuditLogger {
                             f.decay_invalidated_at,
                         )
                     } else {
-                        return Err(AetherError::other(format!(
+                        return Err(AlephError::other(format!(
                             "Fact {} is still valid, not forgotten",
                             fact_id
                         )));
                     }
                 } else {
-                    return Err(AetherError::other(format!("Fact not found: {}", fact_id)));
+                    return Err(AlephError::other(format!("Fact not found: {}", fact_id)));
                 }
             }
         };

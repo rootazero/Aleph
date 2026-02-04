@@ -3,7 +3,7 @@
 //! This module handles loading configuration from TOML files.
 
 use crate::config::Config;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
@@ -12,7 +12,7 @@ impl Config {
     /// Get the default config path using unified directory
     ///
     /// Returns unified path for all platforms:
-    /// - All platforms: ~/.aether/config.toml
+    /// - All platforms: ~/.aleph/config.toml
     pub fn default_path() -> PathBuf {
         crate::utils::paths::get_config_dir()
             .map(|d| d.join("config.toml"))
@@ -26,12 +26,12 @@ impl Config {
     ///
     /// # Returns
     /// * `Ok(Config)` - Successfully loaded config
-    /// * `Err(AetherError::ConfigNotFound)` - File doesn't exist
-    /// * `Err(AetherError::InvalidConfig)` - File exists but parsing failed
+    /// * `Err(AlephError::ConfigNotFound)` - File doesn't exist
+    /// * `Err(AlephError::InvalidConfig)` - File exists but parsing failed
     ///
     /// # Example
     /// ```rust,ignore
-    /// use aethecore::config::Config;
+    /// use alephcore::config::Config;
     ///
     /// let config = Config::load_from_file("config.toml").unwrap();
     /// ```
@@ -43,7 +43,7 @@ impl Config {
         // Check if file exists
         if !path.exists() {
             error!(path = %path.display(), "Config file not found");
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "Config file not found: {}",
                 path.display()
             )));
@@ -52,7 +52,7 @@ impl Config {
         // Read file contents
         let contents = fs::read_to_string(path).map_err(|e| {
             error!(path = %path.display(), error = %e, "Failed to read config file");
-            AetherError::invalid_config(format!(
+            AlephError::invalid_config(format!(
                 "Failed to read config file {}: {}",
                 path.display(),
                 e
@@ -71,7 +71,7 @@ impl Config {
         // Parse TOML
         let mut config: Config = toml::from_str(&contents).map_err(|e| {
             error!(path = %path.display(), error = %e, "Failed to parse config TOML");
-            AetherError::invalid_config(format!(
+            AlephError::invalid_config(format!(
                 "Failed to parse config file {}: {}",
                 path.display(),
                 e
@@ -147,16 +147,16 @@ impl Config {
         Ok(config)
     }
 
-    /// Load configuration from default path (~/.aether/config.toml)
+    /// Load configuration from default path (~/.aleph/config.toml)
     /// Falls back to default config if file doesn't exist
     ///
     /// # Returns
     /// * `Ok(Config)` - Successfully loaded config or default config
-    /// * `Err(AetherError::InvalidConfig)` - File exists but parsing failed
+    /// * `Err(AlephError::InvalidConfig)` - File exists but parsing failed
     ///
     /// # Example
     /// ```rust,ignore
-    /// use aethecore::config::Config;
+    /// use alephcore::config::Config;
     ///
     /// let config = Config::load().unwrap();
     /// ```

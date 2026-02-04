@@ -323,12 +323,12 @@ impl CapabilityExecutor {
 async fn execute_skills_workflow(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
     // 1. 获取 skill_id
     let skill_id = payload.meta.intent.skills_id()
-        .ok_or_else(|| AetherError::InvalidIntent)?;
+        .ok_or_else(|| AlephError::InvalidIntent)?;
 
     // 2. 从 SkillsRegistry 加载 Skill 定义
     let skill = self.skills_registry
         .as_ref()
-        .ok_or_else(|| AetherError::SkillsNotAvailable)?
+        .ok_or_else(|| AlephError::SkillsNotAvailable)?
         .load(skill_id)
         .await?;
 
@@ -342,7 +342,7 @@ async fn execute_skills_workflow(&self, mut payload: AgentPayload) -> Result<Age
                 // 调用 MCP Tool
                 let result = self.mcp_client
                     .as_ref()
-                    .ok_or_else(|| AetherError::McpNotAvailable)?
+                    .ok_or_else(|| AlephError::McpNotAvailable)?
                     .call_tool(&step.tool, &step.params)
                     .await?;
 
@@ -400,7 +400,7 @@ pub struct CapabilityExecutor {
 
 ### 4.1 完整的 Skills 配置
 
-**文件**: `~/.aether/config.toml`
+**文件**: `~/.aleph/config.toml`
 
 ```toml
 # 🔮 Skills 配置示例 1: 构建 macOS 应用
@@ -446,7 +446,7 @@ workflow = '''
 }
 '''
 tools = '["read_files", "write_files", "swift_compile", "xcodebuild_test"]'
-knowledge_base = "~/.aether/skills/build-macos-apps/knowledge"
+knowledge_base = "~/.aleph/skills/build-macos-apps/knowledge"
 
 # 🔮 Skills 配置示例 2: PDF 文档处理
 [[rules]]
@@ -478,7 +478,7 @@ workflow = '''
 }
 '''
 tools = '["pdf_extract_text", "pdf_merge", "pdf_split", "pdf_form_fill", "pdf_write"]'
-knowledge_base = "~/.aether/skills/pdf/knowledge"
+knowledge_base = "~/.aleph/skills/pdf/knowledge"
 ```
 
 ### 4.2 workflow 字段详细说明
@@ -519,7 +519,7 @@ knowledge_base = "~/.aether/skills/pdf/knowledge"
 **文件结构**:
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── skills/                     # 🔮 Skills 模块（方案 C 新建）
 │   ├── mod.rs                  # SkillsRegistry
 │   ├── registry.rs             # Skill 加载和管理
@@ -678,7 +678,7 @@ struct RoutingRuleConfig {
 │  Version:    [1.0.0               ]    │
 │  Workflow:   [编辑工作流...        ] 🔘  │
 │  Tools:      [read_files, ...     ]    │
-│  Knowledge:  [~/.aether/skills/... ]    │
+│  Knowledge:  [~/.aleph/skills/... ]    │
 └─────────────────────────────────────────┘
 ```
 
@@ -707,7 +707,7 @@ fn test_routing_rule_config_skills_fields_serialize() {
         skill_version: Some("1.0.0".into()),
         workflow: Some(r#"{"steps":[]}"#.into()),
         tools: Some(r#"["tool1"]"#.into()),
-        knowledge_base: Some("~/.aether/skills/test".into()),
+        knowledge_base: Some("~/.aleph/skills/test".into()),
         ..Default::default()
     };
 

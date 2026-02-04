@@ -25,8 +25,8 @@ use crate::generation::GenerationResult;
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::generation::providers::OpenAiCompatProvider;
-/// use aethecore::generation::GenerationType;
+/// use alephcore::generation::providers::OpenAiCompatProvider;
+/// use alephcore::generation::GenerationType;
 ///
 /// let provider = OpenAiCompatProvider::builder("custom-provider", "api-key", "https://api.example.com")
 ///     .model("dall-e-3")
@@ -71,7 +71,7 @@ impl OpenAiCompatProvider {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::providers::OpenAiCompatProvider;
+    /// use alephcore::generation::providers::OpenAiCompatProvider;
     ///
     /// let provider = OpenAiCompatProvider::new(
     ///     "my-service",
@@ -107,8 +107,8 @@ impl OpenAiCompatProvider {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::providers::OpenAiCompatProvider;
-    /// use aethecore::generation::GenerationType;
+    /// use alephcore::generation::providers::OpenAiCompatProvider;
+    /// use alephcore::generation::GenerationType;
     ///
     /// let provider = OpenAiCompatProvider::builder("my-proxy", "sk-xxx", "https://api.proxy.com/v1")
     ///     .model("dall-e-3")

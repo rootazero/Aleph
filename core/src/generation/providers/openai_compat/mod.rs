@@ -14,8 +14,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::providers::OpenAiCompatProvider;
-//! use aethecore::generation::GenerationType;
+//! use alephcore::generation::providers::OpenAiCompatProvider;
+//! use alephcore::generation::GenerationType;
 //!
 //! // Using builder pattern
 //! let provider = OpenAiCompatProvider::builder("my-proxy", "sk-xxx", "https://api.proxy.com/v1")

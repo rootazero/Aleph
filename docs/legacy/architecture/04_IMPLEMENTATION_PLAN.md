@@ -29,18 +29,18 @@
 **文件操作**:
 ```bash
 # 创建新模块目录
-mkdir -p Aether/core/src/payload
+mkdir -p Aleph/core/src/payload
 
 # 创建模块文件
-touch Aether/core/src/payload/mod.rs
-touch Aether/core/src/payload/intent.rs
-touch Aether/core/src/payload/capability.rs
-touch Aether/core/src/payload/context_format.rs
-touch Aether/core/src/payload/builder.rs
-touch Aether/core/src/payload/assembler.rs
+touch Aleph/core/src/payload/mod.rs
+touch Aleph/core/src/payload/intent.rs
+touch Aleph/core/src/payload/capability.rs
+touch Aleph/core/src/payload/context_format.rs
+touch Aleph/core/src/payload/builder.rs
+touch Aleph/core/src/payload/assembler.rs
 
 # 注册模块
-# 在 Aether/core/src/lib.rs 添加: pub mod payload;
+# 在 Aleph/core/src/lib.rs 添加: pub mod payload;
 ```
 
 **实现内容**:
@@ -140,7 +140,7 @@ mod tests {
 - ✅ 所有枚举实现 Debug, Clone, PartialEq
 - ✅ 所有 from_str() 方法返回 Result
 - ✅ 所有测试用例通过（`cargo test payload::`）
-- ✅ 无 clippy 警告（`cargo clippy --package aethecore`）
+- ✅ 无 clippy 警告（`cargo clippy --package alephcore`）
 
 **预计耗时**: 30 分钟
 
@@ -233,7 +233,7 @@ mod tests {
 - ✅ 所有结构体实现 Debug, Clone
 - ✅ AgentContext 实现 Default
 - ✅ from_routing_decision() 正确构建 Payload
-- ✅ 编译通过（`cargo build --package aethecore`）
+- ✅ 编译通过（`cargo build --package alephcore`）
 
 **预计耗时**: 45 分钟
 
@@ -839,7 +839,7 @@ fn process_with_ai_internal(
         router_guard
             .as_ref()
             .map(|r| Arc::clone(r))
-            .ok_or(AetherError::NoProviderAvailable {
+            .ok_or(AlephError::NoProviderAvailable {
                 suggestion: Some("Configure at least one AI provider".to_string()),
             })?
     };
@@ -850,7 +850,7 @@ fn process_with_ai_internal(
     // [3] 🆕 路由决策（扩展版）
     let decision = router
         .route_with_extended_info(&routing_context)
-        .ok_or(AetherError::NoProviderAvailable {
+        .ok_or(AlephError::NoProviderAvailable {
             suggestion: Some("No matching routing rule found".to_string()),
         })?;
 
@@ -934,7 +934,7 @@ fn process_with_ai_internal(
 - ✅ AgentPayload 构建和 Capability 执行正确
 - ✅ PromptAssembler 组装正确
 - ✅ 保持原有错误处理和重试逻辑
-- ✅ 编译通过：`cargo build --package aethecore`
+- ✅ 编译通过：`cargo build --package alephcore`
 - ✅ 集成测试通过（如果有）
 
 **预计耗时**: 60 分钟
@@ -1047,7 +1047,7 @@ struct RoutingRuleEditView: View {
 **运行命令**:
 ```bash
 # 运行所有单元测试
-cargo test --package aethecore
+cargo test --package alephcore
 
 # 运行特定模块测试
 cargo test payload::
@@ -1128,10 +1128,10 @@ fn test_backward_compatibility() {
 
 ### 5.1 代码质量
 
-- ✅ **编译通过**: `cargo build --package aethecore` 无错误
-- ✅ **Clippy 检查**: `cargo clippy --package aethecore` 无警告
+- ✅ **编译通过**: `cargo build --package alephcore` 无错误
+- ✅ **Clippy 检查**: `cargo clippy --package alephcore` 无警告
 - ✅ **格式化**: `cargo fmt --check` 符合规范
-- ✅ **测试通过**: `cargo test --package aethecore` 100% 通过
+- ✅ **测试通过**: `cargo test --package alephcore` 100% 通过
 
 ### 5.2 测试覆盖率
 
@@ -1167,9 +1167,9 @@ fn test_backward_compatibility() {
 - [ ] 配置保存后可以重新加载
 
 ### 编译与测试
-- [ ] `cargo build --package aethecore` 成功
-- [ ] `cargo clippy --package aethecore` 无警告
-- [ ] `cargo test --package aethecore` 全部通过
+- [ ] `cargo build --package alephcore` 成功
+- [ ] `cargo clippy --package alephcore` 无警告
+- [ ] `cargo test --package alephcore` 全部通过
 - [ ] Swift 编译成功（`xcodegen generate && xcodebuild build`）
 
 ### 性能验证
@@ -1237,7 +1237,7 @@ mod tests {
 所有以下条件满足即可视为完成：
 
 1. ✅ 所有代码文件按照 Step 1-9 创建并实现
-2. ✅ 所有单元测试通过（`cargo test --package aethecore`）
+2. ✅ 所有单元测试通过（`cargo test --package alephcore`）
 3. ✅ 至少 3 个集成测试场景通过
 4. ✅ Clippy 无警告
 5. ✅ Swift UI 可以配置 Capabilities 并保存

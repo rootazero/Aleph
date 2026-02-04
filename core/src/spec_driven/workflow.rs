@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tracing::{error, info};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use crate::supervisor::{ClaudeSupervisor, SupervisorConfig, SupervisorEvent};
 
@@ -177,13 +177,13 @@ impl SpecDrivenWorkflow {
             .with_args(vec!["--print".into()]);
 
         let mut supervisor = ClaudeSupervisor::new(config);
-        let rx = supervisor.spawn().map_err(|e| AetherError::Other {
+        let rx = supervisor.spawn().map_err(|e| AlephError::Other {
             message: format!("Supervisor spawn failed: {}", e),
             suggestion: Some("Ensure Claude CLI is installed".to_string()),
         })?;
 
         // Send prompt
-        supervisor.writeln(&prompt).map_err(|e| AetherError::Other {
+        supervisor.writeln(&prompt).map_err(|e| AlephError::Other {
             message: format!("Supervisor write failed: {}", e),
             suggestion: None,
         })?;

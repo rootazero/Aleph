@@ -19,7 +19,7 @@ use super::types::{
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::generation::providers::{MidjourneyProviderBuilder, MidjourneyMode};
+/// use alephcore::generation::providers::{MidjourneyProviderBuilder, MidjourneyMode};
 ///
 /// let provider = MidjourneyProviderBuilder::new("your-api-key")
 ///     .mode(MidjourneyMode::Fast)

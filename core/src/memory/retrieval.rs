@@ -3,7 +3,7 @@
 /// This module handles retrieval of semantically similar past interactions
 /// filtered by current context (app + window).
 use crate::config::MemoryConfig;
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::database::VectorDatabase;
 use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
@@ -90,7 +90,7 @@ impl MemoryRetrieval {
         &self,
         context: &ContextAnchor,
         query: &str,
-    ) -> Result<Vec<MemoryEntry>, AetherError> {
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
         record_activity();
         debug!(
             app = %context.app_bundle_id,
@@ -110,7 +110,7 @@ impl MemoryRetrieval {
         debug!("Generating query embedding");
         let query_embedding = self.embedder.embed(query).await.map_err(|e| {
             warn!(error = %e, "Failed to generate query embedding");
-            AetherError::config(format!("Failed to generate query embedding: {}", e))
+            AlephError::config(format!("Failed to generate query embedding: {}", e))
         })?;
 
         debug!(
@@ -200,7 +200,7 @@ impl MemoryRetrieval {
         context: &ContextAnchor,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<MemoryEntry>, AetherError> {
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
         record_activity();
         debug!(
             app = %context.app_bundle_id,
@@ -220,7 +220,7 @@ impl MemoryRetrieval {
         debug!("Generating query embedding");
         let query_embedding = self.embedder.embed(query).await.map_err(|e| {
             warn!(error = %e, "Failed to generate query embedding");
-            AetherError::config(format!("Failed to generate query embedding: {}", e))
+            AlephError::config(format!("Failed to generate query embedding: {}", e))
         })?;
 
         debug!(

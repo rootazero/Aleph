@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 /// # Example
 ///
 /// ```rust
-/// use aethecore::dispatcher::model_router::{TaskIntent, Capability};
+/// use alephcore::dispatcher::model_router::{TaskIntent, Capability};
 ///
 /// let intent = TaskIntent::from_string("code_generation");
 /// assert_eq!(intent.required_capability(), Some(Capability::CodeGeneration));
@@ -223,8 +223,8 @@ impl TaskIntent {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::intent::TaskCategory;
-    /// use aethecore::dispatcher::model_router::TaskIntent;
+    /// use alephcore::intent::TaskCategory;
+    /// use alephcore::dispatcher::model_router::TaskIntent;
     ///
     /// let category = TaskCategory::FileOrganize;
     /// let intent = TaskIntent::from_category(category);

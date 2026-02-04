@@ -9,7 +9,7 @@ classical-poetry等skill通过bash命令或Python脚本创建的文件没有被A
 3. Agent Loop结束时，只返回已追踪的文件列表
 
 ## 解决方案
-在Agent Loop和Skill执行完成后，扫描工作目录（`~/.aether/output/{topic_id}/`），找出所有在session期间新创建的文件，并将它们添加到 `[GENERATED_FILES]` 块中。
+在Agent Loop和Skill执行完成后，扫描工作目录（`~/.aleph/output/{topic_id}/`），找出所有在session期间新创建的文件，并将它们添加到 `[GENERATED_FILES]` 块中。
 
 ## 实现细节
 
@@ -74,7 +74,7 @@ file_count = 4
 
 ### 方法3：检查数据库
 ```sql
-sqlite3 ~/.aether/conversations.db "
+sqlite3 ~/.aleph/conversations.db "
 SELECT content
 FROM messages
 WHERE role='assistant'

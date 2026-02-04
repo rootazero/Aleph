@@ -28,8 +28,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::providers::MidjourneyProvider;
-//! use aethecore::generation::GenerationProvider;
+//! use alephcore::generation::providers::MidjourneyProvider;
+//! use alephcore::generation::GenerationProvider;
 //!
 //! let provider = MidjourneyProvider::builder("your-api-key")
 //!     .mode(MidjourneyMode::Fast)

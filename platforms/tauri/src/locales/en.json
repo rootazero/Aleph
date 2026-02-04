@@ -40,7 +40,7 @@
       "sound": "Sound Effects",
       "soundDescription": "Play sound effects for actions",
       "launchAtLogin": "Launch at Login",
-      "launchAtLoginDescription": "Automatically start Aether when you log in",
+      "launchAtLoginDescription": "Automatically start Aleph when you log in",
       "language": "Language",
       "languageDescription": "Select your preferred language",
       "version": "Version",
@@ -305,8 +305,8 @@
   "conversation": {
     "title": "Conversation",
     "startPrompt": "Start a Conversation",
-    "startDescription": "Type a message below to begin chatting with Aether AI.",
-    "inputPlaceholder": "Ask Aether anything...",
+    "startDescription": "Type a message below to begin chatting with Aleph AI.",
+    "inputPlaceholder": "Ask Aleph anything...",
     "clearMessages": "Clear messages",
     "processing": "Processing..."
   },

@@ -16,7 +16,7 @@ use crate::dispatcher::model_router::{
 };
 use crate::dispatcher::monitor::TaskMonitor;
 use crate::dispatcher::scheduler::TaskScheduler;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 impl AgentEngine {
     // =========================================================================
@@ -90,11 +90,11 @@ impl AgentEngine {
         let matcher = self
             .model_matcher
             .as_ref()
-            .ok_or_else(|| AetherError::config("Model routing is not enabled"))?;
+            .ok_or_else(|| AlephError::config("Model routing is not enabled"))?;
 
         matcher
             .route(task)
-            .map_err(|e| AetherError::config(e.to_string()))
+            .map_err(|e| AlephError::config(e.to_string()))
     }
 
     /// Route by TaskIntent for unified routing integration
@@ -117,7 +117,7 @@ impl AgentEngine {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::dispatcher::model_router::TaskIntent;
+    /// use alephcore::dispatcher::model_router::TaskIntent;
     ///
     /// // Route based on matched routing rule
     /// let rule = config.find_matching_rule(input)?;
@@ -133,11 +133,11 @@ impl AgentEngine {
         let matcher = self
             .model_matcher
             .as_ref()
-            .ok_or_else(|| AetherError::config("Model routing is not enabled"))?;
+            .ok_or_else(|| AlephError::config("Model routing is not enabled"))?;
 
         matcher
             .route_by_intent_with_preference(intent, preferred_model)
-            .ok_or_else(|| AetherError::config("No model available for intent"))
+            .ok_or_else(|| AlephError::config("No model available for intent"))
     }
 
     /// Route from a RoutingRuleConfig
@@ -394,7 +394,7 @@ impl AgentEngine {
                 ai_task.prompt.clone()
             } else {
                 return (
-                    Err(AetherError::config("Task is not an AI inference task")),
+                    Err(AlephError::config("Task is not an AI inference task")),
                     Some(model_id),
                 );
             };

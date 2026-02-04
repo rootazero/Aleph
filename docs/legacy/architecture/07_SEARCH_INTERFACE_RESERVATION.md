@@ -4,7 +4,7 @@
 
 ### 1.1 什么是搜索集成
 
-**搜索集成（Search Integration）** 是为 Aether Agent 提供**实时联网搜索能力**的功能模块，使 AI 能够访问最新的网络信息，突破训练数据的时间限制。
+**搜索集成（Search Integration）** 是为 Aleph Agent 提供**实时联网搜索能力**的功能模块，使 AI 能够访问最新的网络信息，突破训练数据的时间限制。
 
 **核心价值**:
 - ✅ **信息时效性**: 获取最新新闻、实时数据、当前事件
@@ -23,7 +23,7 @@
 
 ### 1.2 搜索后端对比
 
-Aether 设计为**多后端兼容架构**，支持以下搜索引擎：
+Aleph 设计为**多后端兼容架构**，支持以下搜索引擎：
 
 #### 对比表格
 
@@ -448,7 +448,7 @@ impl CapabilityExecutor {
         // 1. 检查 SearchClient 是否可用
         let search_client = self.search_client
             .as_ref()
-            .ok_or_else(|| AetherError::SearchNotAvailable)?;
+            .ok_or_else(|| AlephError::SearchNotAvailable)?;
 
         // 2. 构建搜索选项
         let options = SearchOptions {
@@ -566,13 +566,13 @@ impl SearchClient {
     ) -> Result<Vec<SearchResult>> {
         let provider = self.providers
             .get(provider_name)
-            .ok_or_else(|| AetherError::ProviderNotFound(provider_name.to_string()))?;
+            .ok_or_else(|| AlephError::ProviderNotFound(provider_name.to_string()))?;
 
         // 检查配额
         let quota = provider.get_quota().await?;
         if let Some(remaining) = quota.remaining {
             if remaining == 0 {
-                return Err(AetherError::QuotaExceeded);
+                return Err(AlephError::QuotaExceeded);
             }
         }
 
@@ -735,7 +735,7 @@ struct TavilyResult {
 
 ### 4.1 Google CSE 配置
 
-**文件**: `~/.aether/config.toml`
+**文件**: `~/.aleph/config.toml`
 
 ```toml
 [search]
@@ -863,7 +863,7 @@ search_max_results = 10
 **文件结构**:
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── search/                       # 🔮 搜索模块（阶段 2 新建）
 │   ├── mod.rs                    # 模块导出
 │   ├── provider.rs               # SearchProvider trait
@@ -978,7 +978,7 @@ impl QuotaManager {
     /// 检查是否可以执行搜索
     pub async fn check_quota(&self, provider: &str) -> Result<bool> {
         let limit = self.limits.get(provider)
-            .ok_or_else(|| AetherError::ProviderNotFound(provider.to_string()))?;
+            .ok_or_else(|| AlephError::ProviderNotFound(provider.to_string()))?;
 
         let usage = self.usage.lock().await;
         let stats = usage.get(provider).cloned().unwrap_or_default();

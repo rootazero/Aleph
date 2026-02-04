@@ -30,7 +30,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::cortex::decision::{
+//! use alephcore::dispatcher::cortex::decision::{
 //!     DecisionConfig, SessionOverride, ConfirmationOverride, merge_config
 //! };
 //!

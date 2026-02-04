@@ -17,7 +17,7 @@ use serde_json::Value;
 /// # Example
 ///
 /// ```
-/// use aethecore::dispatcher::cortex::parser::try_repair;
+/// use alephcore::dispatcher::cortex::parser::try_repair;
 ///
 /// let incomplete = r#"{"name": "test""#;
 /// let repaired = try_repair(incomplete);

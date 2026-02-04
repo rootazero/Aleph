@@ -19,7 +19,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::model_router::{SemanticCacheManager, SemanticCacheConfig};
+//! use alephcore::dispatcher::model_router::{SemanticCacheManager, SemanticCacheConfig};
 //!
 //! let config = SemanticCacheConfig::default();
 //! let cache = SemanticCacheManager::new(config)?;

@@ -1,6 +1,6 @@
 # POE Architecture Design
 
-> **Principle-Operation-Evaluation**: 让 Aether 从"碰运气的聊天机器人"进化为"目标导向的专业 Agent"
+> **Principle-Operation-Evaluation**: 让 Aleph 从"碰运气的聊天机器人"进化为"目标导向的专业 Agent"
 
 **Date**: 2026-02-01
 **Status**: Draft

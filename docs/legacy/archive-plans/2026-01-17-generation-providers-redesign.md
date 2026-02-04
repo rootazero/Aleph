@@ -16,7 +16,7 @@
 Modify `update_generation_provider` to sync registry after saving:
 
 ```rust
-pub fn update_generation_provider(&self, name: String, provider: GenerationProviderConfigFFI) -> Result<(), AetherFfiError> {
+pub fn update_generation_provider(&self, name: String, provider: GenerationProviderConfigFFI) -> Result<(), AlephFfiError> {
     let internal_config: GenerationProviderConfig = provider.into();
 
     // 1. Save to config file
@@ -43,7 +43,7 @@ pub fn update_generation_provider(&self, name: String, provider: GenerationProvi
 Modify `delete_generation_provider` to remove from registry:
 
 ```rust
-pub fn delete_generation_provider(&self, name: String) -> Result<(), AetherFfiError> {
+pub fn delete_generation_provider(&self, name: String) -> Result<(), AlephFfiError> {
     // 1. Remove from config
     {
         let mut config = self.lock_config();

@@ -21,12 +21,12 @@ pub trait SearchProvider: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(Vec<SearchResult>)` - List of search results
-    /// * `Err(AetherError)` - Network error, API error, quota exceeded, etc.
+    /// * `Err(AlephError)` - Network error, API error, quota exceeded, etc.
     ///
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use aethecore::search::{SearchProvider, SearchOptions};
+    /// # use alephcore::search::{SearchProvider, SearchOptions};
     /// # async fn example(provider: &dyn SearchProvider) {
     /// let options = SearchOptions::default();
     /// let results = provider.search("Rust async", &options).await.unwrap();

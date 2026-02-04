@@ -10,14 +10,14 @@ This guide helps verify that the critical crash fix (rdev upgrade from 0.5.x to 
 - **Symptom**: Application crashes when typing in other apps' input fields
 - **Error**: `_dispatch_assert_queue_fail` in `TSMGetInputSourceProperty`
 - **Root Cause**: rdev 0.5.x calls macOS input method API on background thread
-- **Impact**: Application terminates with SIGTRAP, making Aether unusable
+- **Impact**: Application terminates with SIGTRAP, making Aleph unusable
 
 ### The Solution
 - **Fix**: Upgraded rdev from 0.5.x to 0.6.0 (git main branch)
 - **Commit**: `f2d764a` - "fix(crash): upgrade rdev to fix macOS main thread assertion crash"
 - **Files Changed**:
   - `Aether/core/Cargo.toml` - Updated rdev dependency
-  - `Aether/Frameworks/libaethecore.dylib` - Rebuilt with new rdev
+  - `Aether/Frameworks/libalephcore.dylib` - Rebuilt with new rdev
 
 ---
 
@@ -32,8 +32,8 @@ This guide helps verify that the critical crash fix (rdev upgrade from 0.5.x to 
 **Goal**: Verify application launches without errors
 
 **Steps**:
-1. Open `Aether.app` from Release build directory
-2. Check menu bar for Aether icon (sparkles ✨)
+1. Open `Aleph.app` from Release build directory
+2. Check menu bar for Aleph icon (sparkles ✨)
 3. Verify no crash on launch
 
 **Expected Result**:
@@ -50,7 +50,7 @@ This guide helps verify that the critical crash fix (rdev upgrade from 0.5.x to 
 1. If permissions not granted, permission gate window should appear
 2. Grant Accessibility permission
 3. Grant Input Monitoring permission
-4. Click "进入 Aether" button to restart
+4. Click "进入 Aleph" button to restart
 
 **Expected Result**:
 - ✅ Permission gate appears if needed
@@ -62,10 +62,10 @@ This guide helps verify that the critical crash fix (rdev upgrade from 0.5.x to 
 ### Test 3: 🔥 CRITICAL - Typing in Other Apps (Crash Test)
 **Goal**: Verify the crash is fixed
 
-**Background**: This is the **primary bug** we fixed. Previously, typing in ANY application (Safari, TextEdit, VSCode, etc.) would cause Aether to crash with `_dispatch_assert_queue_fail`.
+**Background**: This is the **primary bug** we fixed. Previously, typing in ANY application (Safari, TextEdit, VSCode, etc.) would cause Aleph to crash with `_dispatch_assert_queue_fail`.
 
 **Steps**:
-1. Ensure Aether is running (check menu bar icon)
+1. Ensure Aleph is running (check menu bar icon)
 2. Open Safari or any text editor (TextEdit, VSCode, Notes, etc.)
 3. Click into a text input field
 4. **Start typing normally** (type a sentence or paragraph)
@@ -73,14 +73,14 @@ This guide helps verify that the critical crash fix (rdev upgrade from 0.5.x to 
 6. Switch to another app and repeat
 
 **Expected Result**:
-- ✅ **NO CRASH** - Aether remains running
+- ✅ **NO CRASH** - Aleph remains running
 - ✅ Menu bar icon stays visible
 - ✅ You can type freely in any application
 - ✅ No `_dispatch_assert_queue_fail` errors in Console.app
 
 **Failure Signs** (if crash still occurs):
 - ❌ Application disappears from menu bar
-- ❌ macOS shows "Aether quit unexpectedly" dialog
+- ❌ macOS shows "Aleph quit unexpectedly" dialog
 - ❌ Console.app shows `_dispatch_assert_queue_fail` or SIGTRAP
 
 ---
@@ -108,16 +108,16 @@ This guide helps verify that the critical crash fix (rdev upgrade from 0.5.x to 
 **Goal**: Verify long-term stability
 
 **Steps**:
-1. Leave Aether running in the background
+1. Leave Aleph running in the background
 2. Use your Mac normally for 1 hour:
    - Browse the web (Safari, Chrome)
    - Edit code (VSCode, Xcode)
    - Write documents (Pages, TextEdit)
    - Use messaging apps (Slack, WeChat)
-3. Check Aether is still running after 1 hour
+3. Check Aleph is still running after 1 hour
 
 **Expected Result**:
-- ✅ Aether remains running for extended period
+- ✅ Aleph remains running for extended period
 - ✅ No crashes during normal Mac usage
 - ✅ Menu bar icon remains visible
 
@@ -153,8 +153,8 @@ If a crash still occurs, gather diagnostic information:
 # Crash reports are saved to:
 ~/Library/Logs/DiagnosticReports/
 
-# Find latest Aether crash:
-ls -lt ~/Library/Logs/DiagnosticReports/ | grep Aether | head -5
+# Find latest Aleph crash:
+ls -lt ~/Library/Logs/DiagnosticReports/ | grep Aleph | head -5
 ```
 
 ### Provide Crash Report
@@ -169,7 +169,7 @@ If crash occurs, provide:
 
 ✅ **Fix is successful if:**
 1. No crashes occur when typing in other applications
-2. Aether runs stably for extended periods
+2. Aleph runs stably for extended periods
 3. Hotkey functionality works correctly
 4. No `_dispatch_assert_queue_fail` errors in logs
 
@@ -223,7 +223,7 @@ rdev = { git = "https://github.com/Narsil/rdev.git", branch = "main" }
 
 - **Crash Fix Commit**: `f2d764a`
 - **Cargo.toml**: `Aether/core/Cargo.toml`
-- **Library**: `Aether/Frameworks/libaethecore.dylib`
+- **Library**: `Aether/Frameworks/libalephcore.dylib`
 - **Tasks**: `openspec/changes/redesign-permission-authorization/tasks.md`
 
 ---

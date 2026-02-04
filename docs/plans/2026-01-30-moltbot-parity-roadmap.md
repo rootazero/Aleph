@@ -1,6 +1,6 @@
 # Moltbot 功能对齐路线图
 
-> **目标**: 以 Moltbot 为参考，完成 Aether 的核心功能闭环
+> **目标**: 以 Moltbot 为参考，完成 Aleph 的核心功能闭环
 > **优先级**: Gateway 加固 → Agent 增强 → 工具生态
 
 ---
@@ -101,7 +101,7 @@ impl SubscriptionManager {
 
 **实现要点**:
 ```rust
-// core/src/bin/aether_gateway.rs
+// core/src/bin/aleph_gateway.rs
 
 async fn main() -> Result<()> {
     let config = load_config()?;
@@ -414,7 +414,7 @@ pub struct StreamingConfig {
 }
 
 // 配置示例
-// ~/.aether/config.json
+// ~/.aleph/config.json
 {
     "streaming": {
         "chunking": {
@@ -511,7 +511,7 @@ pub enum FailureReason {
 **任务清单**:
 - [ ] 定义数据类型
 - [ ] JSON 序列化/反序列化
-- [ ] 文件存储: `~/.aether/agent:main/auth-profiles.json`
+- [ ] 文件存储: `~/.aleph/agent:main/auth-profiles.json`
 
 #### 2.2.2 Profile 排序算法
 

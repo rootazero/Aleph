@@ -44,7 +44,7 @@ use tracing::{debug, error, info, warn};
 
 use super::super::event_bus::GatewayEventBus;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::poe::{
     // Core types
     CompositeValidator, PoeConfig, PoeManager, PoeOutcome, PoeTask, SuccessManifest,
@@ -896,7 +896,7 @@ impl<W: Worker + 'static> PoeContractService<W> {
     ///
     /// Generates a SuccessManifest using ManifestBuilder and stores it
     /// in the pending contracts store awaiting signature.
-    pub async fn prepare(&self, params: PrepareParams) -> Result<PrepareResult, AetherError> {
+    pub async fn prepare(&self, params: PrepareParams) -> Result<PrepareResult, AlephError> {
         // 1. Build context string for ManifestBuilder
         let context_str = params.context.as_ref().and_then(|ctx| {
             let contract_ctx: ContractContext = ctx.clone().into();
@@ -953,14 +953,14 @@ impl<W: Worker + 'static> PoeContractService<W> {
     /// Sign a pending contract and start execution.
     ///
     /// Optionally applies amendments before execution.
-    pub async fn sign(&self, params: SignRequest) -> Result<SignResult, AetherError> {
+    pub async fn sign(&self, params: SignRequest) -> Result<SignResult, AlephError> {
         // 1. Take contract from store (atomic remove + return)
         let contract = self
             .contract_store
             .take(&params.contract_id)
             .await
             .ok_or_else(|| {
-                AetherError::NotFound(format!(
+                AlephError::NotFound(format!(
                     "Contract {} not found or already signed",
                     params.contract_id
                 ))
@@ -1017,7 +1017,7 @@ impl<W: Worker + 'static> PoeContractService<W> {
             .run_manager
             .start_run(run_params)
             .await
-            .map_err(AetherError::other)?;
+            .map_err(AlephError::other)?;
 
         Ok(SignResult {
             task_id: run_result.task_id,

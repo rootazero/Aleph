@@ -851,7 +851,7 @@ pub enum SpawnStatus {
 Cross-agent communication requires permission control:
 
 ```toml
-# ~/.aether/config.toml
+# ~/.aleph/config.toml
 
 [tools.agent_to_agent]
 # Enable cross-agent communication
@@ -1321,7 +1321,7 @@ pub struct ExecApprovalsFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SocketConfig {
-    pub path: Option<String>,   // ~/.aether/exec-approvals.sock
+    pub path: Option<String>,   // ~/.aleph/exec-approvals.sock
     pub token: Option<String>,  // Random auth token
 }
 
@@ -1578,7 +1578,7 @@ fn is_safe_bin_usage(executable: &str, argv: &[String], safe_bins: &[String]) ->
 
 UI communicates with Core via Unix Domain Socket for approvals:
 
-**Socket path**: `~/.aether/exec-approvals.sock`
+**Socket path**: `~/.aleph/exec-approvals.sock`
 
 ```rust
 // core/src/exec/socket.rs
@@ -1627,7 +1627,7 @@ pub struct ApprovalSocketServer {
 impl ApprovalSocketServer {
     pub async fn start(config: &SocketConfig) -> Result<Self> {
         let path = expand_home(&config.path.clone()
-            .unwrap_or_else(|| "~/.aether/exec-approvals.sock".into()));
+            .unwrap_or_else(|| "~/.aleph/exec-approvals.sock".into()));
 
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path)?;

@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use tokio::sync::RwLock;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
 
@@ -123,7 +123,7 @@ impl HttpTransport {
 impl McpTransport for HttpTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let body = serde_json::to_string(request).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize request: {}", e))
+            AlephError::IoError(format!("Failed to serialize request: {}", e))
         })?;
 
         tracing::debug!(
@@ -133,7 +133,7 @@ impl McpTransport for HttpTransport {
         );
 
         let response = self.build_request(body).send().await.map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "HTTP request to '{}' failed: {}",
                 self.server_name, e
             ))
@@ -142,18 +142,18 @@ impl McpTransport for HttpTransport {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "HTTP {} from '{}': {}",
                 status, self.server_name, body
             )));
         }
 
         let text = response.text().await.map_err(|e| {
-            AetherError::IoError(format!("Failed to read response: {}", e))
+            AlephError::IoError(format!("Failed to read response: {}", e))
         })?;
 
         serde_json::from_str(&text).map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Failed to parse response from '{}': {} (body: {})",
                 self.server_name, e, text
             ))
@@ -162,7 +162,7 @@ impl McpTransport for HttpTransport {
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
         let body = serde_json::to_string(notification).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize notification: {}", e))
+            AlephError::IoError(format!("Failed to serialize notification: {}", e))
         })?;
 
         tracing::debug!(
@@ -172,7 +172,7 @@ impl McpTransport for HttpTransport {
         );
 
         let response = self.build_request(body).send().await.map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "HTTP notification to '{}' failed: {}",
                 self.server_name, e
             ))

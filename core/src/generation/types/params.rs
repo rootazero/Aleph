@@ -6,7 +6,7 @@
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::GenerationParams;
+/// use alephcore::generation::GenerationParams;
 ///
 /// let params = GenerationParams::builder()
 ///     .width(1024)
@@ -87,7 +87,7 @@ impl GenerationParams {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::GenerationParams;
+    /// use alephcore::generation::GenerationParams;
     ///
     /// let params = GenerationParams::builder()
     ///     .width(512)
@@ -105,7 +105,7 @@ impl GenerationParams {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::GenerationParams;
+    /// use alephcore::generation::GenerationParams;
     ///
     /// let mut base = GenerationParams::builder()
     ///     .width(512)
@@ -192,7 +192,7 @@ impl GenerationParams {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::GenerationParams;
+    /// use alephcore::generation::GenerationParams;
     ///
     /// let base = GenerationParams::builder().width(512).build();
     /// let other = GenerationParams::builder().height(512).build();

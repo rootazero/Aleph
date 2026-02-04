@@ -68,7 +68,7 @@ pub struct FenceSplit {
 /// # Example
 ///
 /// ```
-/// use aethecore::markdown::fences::parse_fence_spans;
+/// use alephcore::markdown::fences::parse_fence_spans;
 ///
 /// let text = "Hello\n```rust\nfn main() {}\n```\nWorld";
 /// let spans = parse_fence_spans(text);

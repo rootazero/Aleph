@@ -75,7 +75,7 @@ dictionary RoutingRuleConfig {
     string? tools;
 
     /// Skills 知识库路径或 URL
-    /// 示例: "~/.aether/skills/build-macos-apps/knowledge"
+    /// 示例: "~/.aleph/skills/build-macos-apps/knowledge"
     string? knowledge_base;
 }
 ```
@@ -205,7 +205,7 @@ skill_id = "build-macos-apps"
 skill_version = "1.0.0"
 workflow = '{"steps": [{"type": "analyze", "prompt": "分析需求"}, {"type": "tool_call", "tool": "read_files", "params": {"pattern": "**/*.swift"}}, {"type": "generate", "prompt": "生成代码"}, {"type": "tool_call", "tool": "swift_compile"}]}'
 tools = '["read_files", "write_files", "swift_compile", "xcodebuild_test"]'
-knowledge_base = "~/.aether/skills/build-macos-apps/knowledge"
+knowledge_base = "~/.aleph/skills/build-macos-apps/knowledge"
 ```
 
 ---
@@ -1074,7 +1074,7 @@ impl AgentPayload {
 ## 八、模块组织结构
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── payload/                    # 🆕 Payload 模块
 │   ├── mod.rs                  # AgentPayload, PayloadMeta, PayloadConfig
 │   ├── intent.rs               # Intent 枚举

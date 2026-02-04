@@ -20,8 +20,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::{GenerationProvider, GenerationRequest};
-//! use aethecore::generation::providers::GoogleVeoProvider;
+//! use alephcore::generation::{GenerationProvider, GenerationRequest};
+//! use alephcore::generation::providers::GoogleVeoProvider;
 //!
 //! let provider = GoogleVeoProvider::new("your-api-key", None, None);
 //!

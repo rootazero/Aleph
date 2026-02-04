@@ -1,4 +1,4 @@
-# Aether 功能测试清单
+# Aleph 功能测试清单
 
 ## 编译状态
 
@@ -145,7 +145,7 @@
 
 **检查配置文件**:
 ```bash
-cat ~/.aether/config.toml
+cat ~/.aleph/config.toml
 ```
 - [ ] **验证**: config.toml 文件包含正确的配置
 - [ ] **验证**: API keys 不在配置文件中（存储在 Keychain）
@@ -164,7 +164,7 @@ cat ~/.aether/config.toml
 #### 3.1 内存泄漏检测
 
 - [ ] 打开 Activity Monitor
-- [ ] 监控 Aether 内存使用
+- [ ] 监控 Aleph 内存使用
 - [ ] 执行以下操作 10 次：
   - 打开设置窗口
   - 添加并删除 provider
@@ -174,7 +174,7 @@ cat ~/.aether/config.toml
 #### 3.2 配置热重载
 
 - [ ] 在设置界面中修改配置
-- [ ] 在文本编辑器中直接编辑 `~/.aether/config.toml`
+- [ ] 在文本编辑器中直接编辑 `~/.aleph/config.toml`
 - [ ] **验证**: 应用在 1 秒内检测到变更并重新加载
 
 #### 3.3 错误处理
@@ -233,5 +233,5 @@ cat ~/.aether/config.toml
 ## 注意事项
 
 1. **Accessibility 权限**: 应用需要 Accessibility 权限才能使用快捷键功能
-2. **首次启动**: 会自动创建 `~/.aether/` 目录和默认配置
+2. **首次启动**: 会自动创建 `~/.aleph/` 目录和默认配置
 3. **日志查看**: 使用 `Console.app` 查看应用日志（搜索 "Aether"）

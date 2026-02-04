@@ -135,7 +135,7 @@ export interface ClarificationPayload {
 // ============================================================================
 
 /** Event listener callback types */
-export interface AetherEventHandlers {
+export interface AlephEventHandlers {
   onThinking?: () => void;
   onStreamChunk?: (payload: StreamChunkPayload) => void;
   onComplete?: (payload: CompletePayload) => void;
@@ -166,7 +166,7 @@ export interface AetherEventHandlers {
  * Returns an unlisten function to clean up all listeners
  */
 export async function subscribeToAetherEvents(
-  handlers: AetherEventHandlers
+  handlers: AlephEventHandlers
 ): Promise<UnlistenFn> {
   const unlisteners: UnlistenFn[] = [];
 

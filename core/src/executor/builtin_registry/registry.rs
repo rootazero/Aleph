@@ -9,7 +9,7 @@ use tracing::{debug, error, info};
 
 use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::generation::GenerationProviderRegistry;
 use crate::builtin_tools::{BashExecTool, CanvasTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, SnapshotCaptureTool, WebFetchTool, YouTubeTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
@@ -20,7 +20,7 @@ use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::gateway::context::GatewayContext;
 // TODO: Capability system will be reimplemented following OpenClaw's sandbox/tool-policy pattern
 // See: /Volumes/TBU4/Workspace/openclaw/src/agents/sandbox/
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 use tokio::sync::RwLock;
 
 use super::{BuiltinToolConfig, ToolRegistry};
@@ -402,10 +402,10 @@ impl ToolRegistry for BuiltinToolRegistry {
             return Box::pin(async move { Err(e) });
         }
 
-        // Use AetherTool::call_json directly for migrated tools
+        // Use AlephTool::call_json directly for migrated tools
         // This simplifies the code by avoiding intermediate execute_* methods
         match tool_name {
-            // Core tools - use call_json directly via AetherTool trait
+            // Core tools - use call_json directly via AlephTool trait
             "search" => Box::pin(async move { self.search_tool.call_json(arguments).await }),
             "web_fetch" => Box::pin(async move { self.web_fetch_tool.call_json(arguments).await }),
             "youtube" => Box::pin(async move { self.youtube_tool.call_json(arguments).await }),
@@ -417,10 +417,10 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Canvas tool for visual rendering
             "canvas" => Box::pin(async move { self.canvas_tool.call_json(arguments).await }),
 
-            // Generation tools - image uses AetherTool, video/audio use legacy execute_* methods
+            // Generation tools - image uses AlephTool, video/audio use legacy execute_* methods
             "generate_image" => Box::pin(async move {
                 let tool = self.image_generate_tool.as_ref().ok_or_else(|| {
-                    AetherError::tool("Image generation not available: no generation registry configured")
+                    AlephError::tool("Image generation not available: no generation registry configured")
                 })?;
                 tool.call_json(arguments).await
             }),
@@ -430,20 +430,20 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Meta tools for smart tool discovery - use call_json
             "list_tools" => Box::pin(async move {
                 let registry = self.dispatcher_registry.as_ref().ok_or_else(|| {
-                    AetherError::tool("list_tools not available: no dispatcher registry configured")
+                    AlephError::tool("list_tools not available: no dispatcher registry configured")
                 })?;
                 let tool = ListToolsTool::new(Arc::clone(registry));
                 tool.call_json(arguments).await
             }),
             "get_tool_schema" => Box::pin(async move {
                 let registry = self.dispatcher_registry.as_ref().ok_or_else(|| {
-                    AetherError::tool("get_tool_schema not available: no dispatcher registry configured")
+                    AlephError::tool("get_tool_schema not available: no dispatcher registry configured")
                 })?;
                 let tool = GetToolSchemaTool::new(Arc::clone(registry));
                 tool.call_json(arguments).await
             }),
 
-            // Delegate tool for sub-agent delegation (uses AetherTool)
+            // Delegate tool for sub-agent delegation (uses AlephTool)
             "delegate" => Box::pin(async move { self.execute_delegate(arguments).await }),
 
             // Skill reading tools - use call_json
@@ -455,7 +455,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             #[cfg(feature = "gateway")]
             "sessions_list" => Box::pin(async move {
                 let context = self.gateway_context.as_ref().ok_or_else(|| {
-                    AetherError::tool("sessions_list not available: no gateway context configured")
+                    AlephError::tool("sessions_list not available: no gateway context configured")
                 })?;
                 // Use "main" as default caller_agent_id; in practice, this would come from
                 // the agent executing the tool via higher-level context
@@ -465,7 +465,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             #[cfg(feature = "gateway")]
             "sessions_send" => Box::pin(async move {
                 let context = self.gateway_context.as_ref().ok_or_else(|| {
-                    AetherError::tool("sessions_send not available: no gateway context configured")
+                    AlephError::tool("sessions_send not available: no gateway context configured")
                 })?;
                 // Note: GatewayContext doesn't implement Clone, so we dereference and clone
                 // the inner context for SessionsSendTool which expects GatewayContext by value
@@ -477,7 +477,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let tool = tool_name.to_string();
                 error!(tool = %tool, "Unknown tool requested");
                 Box::pin(async move {
-                    Err(AetherError::tool(format!("Unknown tool: {}", tool)))
+                    Err(AlephError::tool(format!("Unknown tool: {}", tool)))
                 })
             }
         }
