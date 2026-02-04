@@ -3,6 +3,7 @@
 use crate::daemon::worldmodel::WorldModel;
 use crate::daemon::dispatcher::scripting::helpers::parse_duration;
 use super::event_collection::EventCollection;
+use super::baseline::BaselineApi;
 use std::sync::Arc;
 use chrono::Utc;
 
@@ -54,6 +55,11 @@ impl HistoryApi {
             log::error!("Failed to query history events");
             EventCollection::empty()
         })
+    }
+
+    /// Get baseline calculator for a metric
+    pub fn baseline(&self, metric: &str) -> BaselineApi {
+        BaselineApi::new(metric.to_string(), self.worldmodel.clone())
     }
 }
 
@@ -107,5 +113,18 @@ mod tests {
         // Query very small window - should be empty
         let events = api.last_async("1s").await;
         assert_eq!(events.count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_history_api_baseline() {
+        let event_bus = Arc::new(DaemonEventBus::new(100));
+        let config = WorldModelConfig::default();
+        let worldmodel = Arc::new(WorldModel::new(config, event_bus).await.unwrap());
+
+        let api = HistoryApi::new(worldmodel);
+        let baseline = api.baseline("file_changes");
+
+        // Should return 0.0 for no data
+        assert_eq!(baseline.avg(), 0.0);
     }
 }
