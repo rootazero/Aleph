@@ -3,6 +3,7 @@ mod service_manager_tests;
 mod launchd_tests;
 mod resource_governor_tests;
 mod ipc_tests;
+mod cli_tests;
 
 #[cfg(test)]
 mod tests {
