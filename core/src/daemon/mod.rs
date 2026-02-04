@@ -11,6 +11,7 @@ pub mod perception;
 pub mod resource_governor;
 pub mod service_manager;
 pub mod types;
+pub mod worldmodel;
 
 #[cfg(target_os = "macos")]
 pub mod platforms;
@@ -30,6 +31,10 @@ pub use perception::{PerceptionConfig, WatcherRegistry};
 pub use resource_governor::{GovernorDecision, ResourceGovernor, ResourceLimits};
 pub use service_manager::{ServiceManager, create_service_manager};
 pub use types::{DaemonConfig, DaemonStatus, ServiceStatus};
+pub use worldmodel::{
+    ActionType, ActivityType, CoreState, EnhancedContext, InferenceCache, PendingAction,
+    RiskLevel, WorldModelConfig,
+};
 
 /// Initialize daemon subsystem
 pub fn init() -> Result<()> {
