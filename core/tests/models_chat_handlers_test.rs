@@ -13,10 +13,10 @@
 
 #![cfg(feature = "gateway")]
 
-use aethecore::gateway::handlers::chat::{ClearParams, HistoryParams, SendParams};
-use aethecore::gateway::handlers::models;
-use aethecore::gateway::protocol::JsonRpcRequest;
-use aethecore::{Config, ProviderConfig};
+use alephcore::gateway::handlers::chat::{ClearParams, HistoryParams, SendParams};
+use alephcore::gateway::handlers::models;
+use alephcore::gateway::protocol::JsonRpcRequest;
+use alephcore::{Config, ProviderConfig};
 use serde_json::json;
 use std::sync::Arc;
 

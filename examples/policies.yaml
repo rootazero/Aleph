@@ -1,4 +1,4 @@
-# Example Custom Policies for Aether
+# Example Custom Policies for Aleph
 
 # ============================================================
 # Simple Rules - 80% Scenarios
@@ -15,7 +15,7 @@
   risk: low
   metadata:
     tags: ["battery", "alert"]
-    author: "aether-mvp"
+    author: "aleph-mvp"
 
 - name: "Meeting Auto-Mute"
   enabled: true
@@ -51,7 +51,7 @@
   risk: low
   metadata:
     tags: ["health", "productivity"]
-    author: "aether-community"
+    author: "aleph-community"
 
 - name: "Refactoring Mode Detection (Disabled for MVP)"
   enabled: false

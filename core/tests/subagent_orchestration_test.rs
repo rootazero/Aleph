@@ -8,12 +8,12 @@
 use std::time::Duration;
 use tempfile::TempDir;
 
-use aethecore::gateway::run_event_bus::{
+use alephcore::gateway::run_event_bus::{
     wait_for_run_end, ActiveRunHandle, RunEndResult, RunEvent, RunStatus,
 };
-use aethecore::gateway::router::SessionKey;
-use aethecore::providers::auth_profiles::AuthProfileFailureReason;
-use aethecore::providers::profile_manager::AuthProfileManager;
+use alephcore::gateway::router::SessionKey;
+use alephcore::providers::auth_profiles::AuthProfileFailureReason;
+use alephcore::providers::profile_manager::AuthProfileManager;
 
 // ============================================================================
 // RunEventBus Tests
@@ -380,10 +380,10 @@ fn test_profile_manager_no_profiles_error() {
 
 #[cfg(feature = "gateway")]
 mod gateway_tests {
-    use aethecore::builtin_tools::sessions::{
+    use alephcore::builtin_tools::sessions::{
         CleanupPolicy, SessionsSpawnArgs, SessionsSpawnTool, SpawnStatus,
     };
-    use aethecore::tools::AetherTool;
+    use alephcore::tools::AlephTool;
 
     #[test]
     fn test_spawn_tool_session_key_format() {
@@ -433,7 +433,7 @@ mod gateway_tests {
             cleanup: CleanupPolicy::Ephemeral,
         };
 
-        let output = AetherTool::call(&tool, args).await.unwrap();
+        let output = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(output.status, SpawnStatus::Error);
         assert!(output.error.is_some());
         assert!(output

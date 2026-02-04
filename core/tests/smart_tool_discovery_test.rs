@@ -13,13 +13,13 @@ use std::time::Instant;
 use serde_json::json;
 use tokio::sync::RwLock;
 
-use aethecore::dispatcher::{
+use alephcore::dispatcher::{
     ToolIndex, ToolIndexCategory, ToolIndexEntry, ToolRegistry, ToolSource, UnifiedTool,
 };
-use aethecore::builtin_tools::meta_tools::{
+use alephcore::builtin_tools::meta_tools::{
     GetToolSchemaArgs, GetToolSchemaTool, ListToolsArgs, ListToolsTool,
 };
-use aethecore::tools::AetherTool;
+use alephcore::tools::AlephTool;
 
 /// Helper to register a tool in the registry (via Arc<RwLock<>>)
 async fn register_tool(registry: &Arc<RwLock<ToolRegistry>>, tool: UnifiedTool) {
@@ -882,7 +882,7 @@ async fn test_end_to_end_with_many_tools() {
 
 #[tokio::test]
 async fn test_sub_agent_delegate_result_parsing() {
-    use aethecore::agents::sub_agents::ResultMerger;
+    use alephcore::agents::sub_agents::ResultMerger;
 
     let json = json!({
         "success": true,
@@ -912,7 +912,7 @@ async fn test_sub_agent_delegate_result_parsing() {
 
 #[tokio::test]
 async fn test_sub_agent_result_merging() {
-    use aethecore::agents::sub_agents::{ArtifactInfo, DelegateResult, ResultMerger, ToolCallInfo};
+    use alephcore::agents::sub_agents::{ArtifactInfo, DelegateResult, ResultMerger, ToolCallInfo};
 
     let delegate_result = DelegateResult {
         success: true,
@@ -948,7 +948,7 @@ async fn test_sub_agent_result_merging() {
 
 #[tokio::test]
 async fn test_sub_agent_context_passing() {
-    use aethecore::agents::sub_agents::{ExecutionContextInfo, SubAgentRequest};
+    use alephcore::agents::sub_agents::{ExecutionContextInfo, SubAgentRequest};
 
     let context = ExecutionContextInfo::new()
         .with_working_directory("/Users/test/project")

@@ -41,8 +41,8 @@ impl MarkdownCliTool {
             .stdin(Stdio::null());
 
         // Apply network restrictions if specified
-        if let Some(aether) = &self.spec.metadata.aleph {
-            if matches!(aether.security.network, NetworkMode::None) {
+        if let Some(aleph_meta) = &self.spec.metadata.aleph {
+            if matches!(aleph_meta.security.network, NetworkMode::None) {
                 // Platform-specific network isolation
                 #[cfg(target_os = "linux")]
                 {
@@ -97,8 +97,8 @@ impl MarkdownCliTool {
         ];
 
         // Pass environment variables
-        if let Some(aether) = &self.spec.metadata.aleph {
-            if let Some(docker_cfg) = &aether.docker {
+        if let Some(aleph_meta) = &self.spec.metadata.aleph {
+            if let Some(docker_cfg) = &aleph_meta.docker {
                 for env_var in &docker_cfg.env_vars {
                     if let Ok(value) = std::env::var(env_var) {
                         docker_args.push("-e".to_string());
@@ -168,8 +168,8 @@ impl MarkdownCliTool {
     /// Get Docker image (STRICT: must be configured or known)
     fn get_docker_image(&self) -> Result<String> {
         // Priority 1: Explicit configuration
-        if let Some(aether) = &self.spec.metadata.aleph {
-            if let Some(docker_cfg) = &aether.docker {
+        if let Some(aleph_meta) = &self.spec.metadata.aleph {
+            if let Some(docker_cfg) = &aleph_meta.docker {
                 return Ok(docker_cfg.image.clone());
             }
         }
@@ -214,8 +214,8 @@ impl MarkdownCliTool {
     }
 
     fn get_docker_network_mode(&self) -> String {
-        if let Some(aether) = &self.spec.metadata.aleph {
-            match aether.security.network {
+        if let Some(aleph_meta) = &self.spec.metadata.aleph {
+            match aleph_meta.security.network {
                 NetworkMode::None => "none".to_string(),
                 NetworkMode::Local => "bridge".to_string(),
                 NetworkMode::Internet => "bridge".to_string(),
@@ -268,8 +268,8 @@ impl MarkdownCliTool {
         sandbox.apply_env(&mut cmd);
 
         // Apply network restrictions if specified
-        if let Some(aether) = &self.spec.metadata.aleph {
-            if matches!(aether.security.network, NetworkMode::None) {
+        if let Some(aleph_meta) = &self.spec.metadata.aleph {
+            if matches!(aleph_meta.security.network, NetworkMode::None) {
                 #[cfg(target_os = "linux")]
                 {
                     cmd.env("NO_PROXY", "*");
@@ -332,7 +332,7 @@ impl VirtualFsSandbox {
     fn new(tool_name: &str) -> Result<Self> {
         // Create root sandbox directory with unique name
         let root_dir = std::env::temp_dir().join(format!(
-            "aether-virtualfs-{}-{}",
+            "aleph-virtualfs-{}-{}",
             tool_name,
             uuid::Uuid::new_v4()
         ));

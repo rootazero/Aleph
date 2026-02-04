@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Aether App Icon</title>
+  <title>Aleph App Icon</title>
 
   <!-- Background with gradient -->
   <rect width="1024" height="1024" rx="226.5" fill="url(#bgGradient)"/>

@@ -1,16 +1,16 @@
-//! CoreState - manages the AetherCore instance lifecycle
+//! CoreState - manages the AlephCore instance lifecycle
 //!
-//! This module provides thread-safe access to the AetherCore instance
+//! This module provides thread-safe access to the AlephCore instance
 //! for use across multiple Tauri commands.
 
 use std::sync::{Arc, RwLock};
 use tracing::warn;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
-/// Thread-safe state wrapper for AetherCore
+/// Thread-safe state wrapper for AlephCore
 pub struct CoreState {
-    core: RwLock<Option<Arc<aethecore::AetherCore>>>,
+    core: RwLock<Option<Arc<alephcore::AlephCore>>>,
 }
 
 impl CoreState {
@@ -21,8 +21,8 @@ impl CoreState {
         }
     }
 
-    /// Initialize the core with an AetherCore instance
-    pub fn initialize(&self, core: Arc<aethecore::AetherCore>) {
+    /// Initialize the core with an AlephCore instance
+    pub fn initialize(&self, core: Arc<alephcore::AlephCore>) {
         let mut guard = self.core.write().unwrap_or_else(|e| {
             warn!("CoreState write lock poisoned, recovering");
             e.into_inner()
@@ -31,7 +31,7 @@ impl CoreState {
     }
 
     /// Get a reference to the core, or error if not initialized
-    pub fn get_core(&self) -> Result<Arc<aethecore::AetherCore>> {
+    pub fn get_core(&self) -> Result<Arc<alephcore::AlephCore>> {
         let guard = self.core.read().unwrap_or_else(|e| {
             warn!("CoreState read lock poisoned, recovering");
             e.into_inner()
@@ -39,7 +39,7 @@ impl CoreState {
 
         guard
             .clone()
-            .ok_or_else(|| AetherError::Core("Aether core not initialized".to_string()))
+            .ok_or_else(|| AlephError::Core("Aleph core not initialized".to_string()))
     }
 
     /// Check if the core is initialized

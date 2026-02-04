@@ -62,7 +62,7 @@ pub fn cleanup_old_logs(
         // Skip non-log files (only process .log* files)
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        if !file_name.starts_with("aether") || !file_name.contains(".log") {
+        if !file_name.starts_with("aleph") || !file_name.contains(".log") {
             continue;
         }
 
@@ -135,9 +135,9 @@ mod tests {
         let log_dir = temp_dir.path();
 
         // Create test log files
-        create_test_log_file(log_dir, "aether.log.2025-01-01", 10).unwrap();
-        create_test_log_file(log_dir, "aether.log.2025-01-10", 5).unwrap();
-        create_test_log_file(log_dir, "aether.log.2025-01-20", 1).unwrap();
+        create_test_log_file(log_dir, "aleph.log.2025-01-01", 10).unwrap();
+        create_test_log_file(log_dir, "aleph.log.2025-01-10", 5).unwrap();
+        create_test_log_file(log_dir, "aleph.log.2025-01-20", 1).unwrap();
 
         // Clean up logs older than 7 days
         let deleted = cleanup_old_logs(log_dir, 7).unwrap();
@@ -151,9 +151,9 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
 
-        assert!(remaining.contains(&"aether.log.2025-01-10".to_string()));
-        assert!(remaining.contains(&"aether.log.2025-01-20".to_string()));
-        assert!(!remaining.contains(&"aether.log.2025-01-01".to_string()));
+        assert!(remaining.contains(&"aleph.log.2025-01-10".to_string()));
+        assert!(remaining.contains(&"aleph.log.2025-01-20".to_string()));
+        assert!(!remaining.contains(&"aleph.log.2025-01-01".to_string()));
     }
 
     #[test]
@@ -162,14 +162,14 @@ mod tests {
         let log_dir = temp_dir.path();
 
         // Create log files and non-log files
-        create_test_log_file(log_dir, "aether.log.2025-01-01", 10).unwrap();
+        create_test_log_file(log_dir, "aleph.log.2025-01-01", 10).unwrap();
         create_test_log_file(log_dir, "other.txt", 10).unwrap();
         create_test_log_file(log_dir, "README.md", 10).unwrap();
 
         // Clean up logs older than 7 days
         let deleted = cleanup_old_logs(log_dir, 7).unwrap();
 
-        // Should only delete the aether.log file
+        // Should only delete the aleph.log file
         assert_eq!(deleted, 1);
 
         // Verify non-log files still exist
@@ -201,7 +201,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let log_dir = temp_dir.path();
 
-        create_test_log_file(log_dir, "aether.log.2025-01-01", 40).unwrap();
+        create_test_log_file(log_dir, "aleph.log.2025-01-01", 40).unwrap();
 
         // Test with invalid retention days (should clamp to 1-30)
         let deleted = cleanup_old_logs(log_dir, 0).unwrap(); // Clamps to 1
@@ -214,8 +214,8 @@ mod tests {
         let log_dir = temp_dir.path();
 
         // Create logs all within retention period
-        create_test_log_file(log_dir, "aether.log.2025-01-10", 1).unwrap();
-        create_test_log_file(log_dir, "aether.log.2025-01-11", 2).unwrap();
+        create_test_log_file(log_dir, "aleph.log.2025-01-10", 1).unwrap();
+        create_test_log_file(log_dir, "aleph.log.2025-01-11", 2).unwrap();
 
         // Clean up logs older than 7 days
         let deleted = cleanup_old_logs(log_dir, 7).unwrap();

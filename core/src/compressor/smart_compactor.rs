@@ -8,7 +8,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aether_core::compressor::{SmartCompactor, SmartCompactionStrategy};
+//! use alephcore::compressor::{SmartCompactor, SmartCompactionStrategy};
 //!
 //! // Create with default settings
 //! let compactor = SmartCompactor::new();

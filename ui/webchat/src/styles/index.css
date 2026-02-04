@@ -64,7 +64,7 @@
 }
 
 .prose a {
-  @apply text-aether-600 dark:text-aether-400 hover:underline;
+  @apply text-aleph-600 dark:text-aleph-400 hover:underline;
 }
 
 .prose strong {

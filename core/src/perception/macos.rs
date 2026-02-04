@@ -280,7 +280,7 @@ fn capture_region_image(rect: &Rect, format: ImageFormat) -> Result<Vec<u8>> {
     }
 
     let tmp = tempfile::Builder::new()
-        .prefix("aether_snapshot_")
+        .prefix("aleph_snapshot_")
         .suffix(match format {
             ImageFormat::Png => ".png",
             ImageFormat::Jpeg => ".jpg",

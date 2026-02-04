@@ -1,5 +1,5 @@
 #!/bin/bash
-# Aether Tauri Local CI Script
+# Aleph Tauri Local CI Script
 # Simulates the CI pipeline locally for testing
 # Usage: ./scripts/ci-local.sh
 

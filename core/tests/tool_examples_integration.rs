@@ -1,8 +1,8 @@
 //! Integration tests for tool examples() method
 
-use aethecore::builtin_tools::bash_exec::BashExecTool;
-use aethecore::builtin_tools::search::SearchTool;
-use aethecore::tools::AetherTool;
+use alephcore::builtin_tools::bash_exec::BashExecTool;
+use alephcore::builtin_tools::search::SearchTool;
+use alephcore::tools::AlephTool;
 
 #[test]
 fn test_bash_tool_has_examples() {

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// Complete settings structure matching frontend types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,13 +441,13 @@ impl Default for PoliciesSettings {
 }
 
 // ============================================================================
-// Unified Aether Directory Structure
-// All platforms use ~/.config/aether for consistency with macOS Swift version
+// Unified Aleph Directory Structure
+// All platforms use ~/.config/aleph for consistency with macOS Swift version
 // ============================================================================
 
-/// Aether directory structure under ~/.config/aether
+/// Aleph directory structure under ~/.config/aleph
 ///
-/// ~/.config/aether/
+/// ~/.config/aleph/
 /// ├── config/              # Configuration files
 /// │   ├── settings.json    # Main settings
 /// │   └── window-state.json
@@ -463,80 +463,80 @@ impl Default for PoliciesSettings {
 /// ├── cache/               # Temporary cache
 /// └── logs/                # Application logs
 
-/// Get the base Aether directory (~/.config/aether)
-pub fn get_aether_base_dir() -> Result<PathBuf> {
+/// Get the base Aleph directory (~/.config/aleph)
+pub fn get_aleph_base_dir() -> Result<PathBuf> {
     let home = dirs::home_dir()
-        .ok_or_else(|| AetherError::Config("Cannot find home directory".to_string()))?;
+        .ok_or_else(|| AlephError::Config("Cannot find home directory".to_string()))?;
 
-    let aether_dir = home.join(".config").join("aether");
+    let aleph_dir = home.join(".config").join("aleph");
 
-    if !aether_dir.exists() {
-        fs::create_dir_all(&aether_dir)
-            .map_err(|e| AetherError::Config(format!("Cannot create aether directory: {}", e)))?;
+    if !aleph_dir.exists() {
+        fs::create_dir_all(&aleph_dir)
+            .map_err(|e| AlephError::Config(format!("Cannot create aleph directory: {}", e)))?;
     }
 
-    Ok(aether_dir)
+    Ok(aleph_dir)
 }
 
-/// Get a subdirectory under the Aether base directory
-pub fn get_aether_subdir(subdir: &str) -> Result<PathBuf> {
-    let base = get_aether_base_dir()?;
+/// Get a subdirectory under the Aleph base directory
+pub fn get_aleph_subdir(subdir: &str) -> Result<PathBuf> {
+    let base = get_aleph_base_dir()?;
     let path = base.join(subdir);
 
     if !path.exists() {
         fs::create_dir_all(&path)
-            .map_err(|e| AetherError::Config(format!("Cannot create directory {}: {}", subdir, e)))?;
+            .map_err(|e| AlephError::Config(format!("Cannot create directory {}: {}", subdir, e)))?;
     }
 
     Ok(path)
 }
 
-/// Get the config directory (~/.config/aether/config)
+/// Get the config directory (~/.config/aleph/config)
 pub fn get_config_dir() -> Result<PathBuf> {
-    get_aether_subdir("config")
+    get_aleph_subdir("config")
 }
 
-/// Get the data directory (~/.config/aether/data)
+/// Get the data directory (~/.config/aleph/data)
 pub fn get_data_dir() -> Result<PathBuf> {
-    get_aether_subdir("data")
+    get_aleph_subdir("data")
 }
 
-/// Get the memory directory (~/.config/aether/data/memory)
+/// Get the memory directory (~/.config/aleph/data/memory)
 pub fn get_memory_dir() -> Result<PathBuf> {
-    get_aether_subdir("data/memory")
+    get_aleph_subdir("data/memory")
 }
 
-/// Get the attachments directory (~/.config/aether/attachments)
+/// Get the attachments directory (~/.config/aleph/attachments)
 pub fn get_attachments_dir() -> Result<PathBuf> {
-    get_aether_subdir("attachments")
+    get_aleph_subdir("attachments")
 }
 
-/// Get the skills directory (~/.config/aether/skills)
+/// Get the skills directory (~/.config/aleph/skills)
 pub fn get_skills_dir() -> Result<PathBuf> {
-    get_aether_subdir("skills")
+    get_aleph_subdir("skills")
 }
 
-/// Get the MCP directory (~/.config/aether/mcp)
+/// Get the MCP directory (~/.config/aleph/mcp)
 pub fn get_mcp_dir() -> Result<PathBuf> {
-    get_aether_subdir("mcp")
+    get_aleph_subdir("mcp")
 }
 
-/// Get the plugins directory (~/.config/aether/plugins)
+/// Get the plugins directory (~/.config/aleph/plugins)
 pub fn get_plugins_dir() -> Result<PathBuf> {
-    get_aether_subdir("plugins")
+    get_aleph_subdir("plugins")
 }
 
-/// Get the cache directory (~/.config/aether/cache)
+/// Get the cache directory (~/.config/aleph/cache)
 pub fn get_cache_dir() -> Result<PathBuf> {
-    get_aether_subdir("cache")
+    get_aleph_subdir("cache")
 }
 
-/// Get the logs directory (~/.config/aether/logs)
+/// Get the logs directory (~/.config/aleph/logs)
 pub fn get_logs_dir() -> Result<PathBuf> {
-    get_aether_subdir("logs")
+    get_aleph_subdir("logs")
 }
 
-/// Get the settings file path (~/.config/aether/config/settings.json)
+/// Get the settings file path (~/.config/aleph/config/settings.json)
 pub fn get_settings_path() -> Result<PathBuf> {
     let config_dir = get_config_dir()?;
     Ok(config_dir.join("settings.json"))
@@ -552,7 +552,7 @@ pub fn load_settings() -> Result<Settings> {
     }
 
     let contents = fs::read_to_string(&path)
-        .map_err(|e| AetherError::Config(format!("Cannot read settings file: {}", e)))?;
+        .map_err(|e| AlephError::Config(format!("Cannot read settings file: {}", e)))?;
 
     // First try to parse as-is (new format)
     if let Ok(settings) = serde_json::from_str::<Settings>(&contents) {
@@ -563,7 +563,7 @@ pub fn load_settings() -> Result<Settings> {
     // Try to parse with migration from old format
     tracing::info!("Attempting to migrate old settings format");
     let mut json_value: serde_json::Value = serde_json::from_str(&contents)
-        .map_err(|e| AetherError::Config(format!("Cannot parse settings file: {}", e)))?;
+        .map_err(|e| AlephError::Config(format!("Cannot parse settings file: {}", e)))?;
 
     // Migrate agent settings if in old format
     if let Some(agent) = json_value.get_mut("agent") {
@@ -572,14 +572,14 @@ pub fn load_settings() -> Result<Settings> {
             if agent_obj.contains_key("file_operations") || agent_obj.contains_key("code_execution") {
                 let migrated = migrate_agent_settings(agent_obj);
                 *agent = serde_json::to_value(migrated)
-                    .map_err(|e| AetherError::Config(format!("Migration error: {}", e)))?;
+                    .map_err(|e| AlephError::Config(format!("Migration error: {}", e)))?;
                 tracing::info!("Agent settings migrated to new format");
             }
         }
     }
 
     let settings: Settings = serde_json::from_value(json_value)
-        .map_err(|e| AetherError::Config(format!("Cannot parse migrated settings: {}", e)))?;
+        .map_err(|e| AlephError::Config(format!("Cannot parse migrated settings: {}", e)))?;
 
     // Save migrated settings
     if let Err(e) = save_settings(&settings) {
@@ -651,10 +651,10 @@ pub fn save_settings(settings: &Settings) -> Result<()> {
     let path = get_settings_path()?;
 
     let contents = serde_json::to_string_pretty(settings)
-        .map_err(|e| AetherError::Config(format!("Cannot serialize settings: {}", e)))?;
+        .map_err(|e| AlephError::Config(format!("Cannot serialize settings: {}", e)))?;
 
     fs::write(&path, contents)
-        .map_err(|e| AetherError::Config(format!("Cannot write settings file: {}", e)))?;
+        .map_err(|e| AlephError::Config(format!("Cannot write settings file: {}", e)))?;
 
     tracing::info!("Settings saved to {:?}", path);
     Ok(())
@@ -674,7 +674,7 @@ pub struct WindowPosition {
     pub height: u32,
 }
 
-/// Get window state file path (~/.config/aether/config/window-state.json)
+/// Get window state file path (~/.config/aleph/config/window-state.json)
 pub fn get_window_state_path() -> Result<PathBuf> {
     let config_dir = get_config_dir()?;
     Ok(config_dir.join("window-state.json"))
@@ -689,10 +689,10 @@ pub fn load_window_state() -> Result<WindowState> {
     }
 
     let contents = fs::read_to_string(&path)
-        .map_err(|e| AetherError::Config(format!("Cannot read window state: {}", e)))?;
+        .map_err(|e| AlephError::Config(format!("Cannot read window state: {}", e)))?;
 
     let state: WindowState = serde_json::from_str(&contents)
-        .map_err(|e| AetherError::Config(format!("Cannot parse window state: {}", e)))?;
+        .map_err(|e| AlephError::Config(format!("Cannot parse window state: {}", e)))?;
 
     Ok(state)
 }
@@ -702,10 +702,10 @@ pub fn save_window_state(state: &WindowState) -> Result<()> {
     let path = get_window_state_path()?;
 
     let contents = serde_json::to_string_pretty(state)
-        .map_err(|e| AetherError::Config(format!("Cannot serialize window state: {}", e)))?;
+        .map_err(|e| AlephError::Config(format!("Cannot serialize window state: {}", e)))?;
 
     fs::write(&path, contents)
-        .map_err(|e| AetherError::Config(format!("Cannot write window state: {}", e)))?;
+        .map_err(|e| AlephError::Config(format!("Cannot write window state: {}", e)))?;
 
     Ok(())
 }
@@ -714,9 +714,9 @@ pub fn save_window_state(state: &WindowState) -> Result<()> {
 // Path Constants for Frontend
 // ============================================================================
 
-/// Get all Aether paths for frontend use
+/// Get all Aleph paths for frontend use
 #[derive(Debug, Clone, Serialize)]
-pub struct AetherPaths {
+pub struct AlephPaths {
     pub base: PathBuf,
     pub config: PathBuf,
     pub data: PathBuf,
@@ -729,10 +729,10 @@ pub struct AetherPaths {
     pub logs: PathBuf,
 }
 
-/// Get all Aether paths
-pub fn get_aether_paths() -> Result<AetherPaths> {
-    Ok(AetherPaths {
-        base: get_aether_base_dir()?,
+/// Get all Aleph paths
+pub fn get_aleph_paths() -> Result<AlephPaths> {
+    Ok(AlephPaths {
+        base: get_aleph_base_dir()?,
         config: get_config_dir()?,
         data: get_data_dir()?,
         memory: get_memory_dir()?,

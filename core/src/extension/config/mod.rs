@@ -1,7 +1,7 @@
 //! Extension configuration system
 //!
 //! Handles aleph.jsonc configuration with multi-level merging.
-//! Now also supports aether.toml as the preferred format.
+//! Now also supports aleph.toml as the preferred format.
 
 mod types;
 pub mod loader;
@@ -73,13 +73,13 @@ impl ConfigManager {
         }
 
         // Check for inline config from environment
-        if let Ok(content) = std::env::var("AETHER_CONFIG_CONTENT") {
+        if let Ok(content) = std::env::var("ALEPH_CONFIG_CONTENT") {
             match self.merge_json_str(&content) {
                 Ok(()) => {
-                    info!("Loaded inline config from AETHER_CONFIG_CONTENT");
+                    info!("Loaded inline config from ALEPH_CONFIG_CONTENT");
                 }
                 Err(e) => {
-                    warn!("Failed to parse AETHER_CONFIG_CONTENT: {}", e);
+                    warn!("Failed to parse ALEPH_CONFIG_CONTENT: {}", e);
                 }
             }
         }

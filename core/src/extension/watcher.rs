@@ -106,26 +106,26 @@ impl ExtensionWatcher {
         // Global directories
         if let Some(home) = dirs::home_dir() {
             let claude_global = home.join(".claude");
-            let aether_global = home.join(".aleph");
+            let aleph_global = home.join(".aleph");
 
             if claude_global.exists() {
                 watch_dirs.push(claude_global);
             }
-            if aether_global.exists() {
-                watch_dirs.push(aether_global);
+            if aleph_global.exists() {
+                watch_dirs.push(aleph_global);
             }
         }
 
         // Project-local directories
         if let Some(root) = project_root {
             let claude_local = root.join(".claude");
-            let aether_local = root.join(".aleph");
+            let aleph_local = root.join(".aleph");
 
             if claude_local.exists() {
                 watch_dirs.push(claude_local);
             }
-            if aether_local.exists() {
-                watch_dirs.push(aether_local);
+            if aleph_local.exists() {
+                watch_dirs.push(aleph_local);
             }
         }
 

@@ -560,7 +560,7 @@ impl InboundMessageRouter {
         }
 
         // Check common patterns
-        let patterns = ["@aether", "@bot", "aether"];
+        let patterns = ["@aleph", "@bot", "aleph"];
         patterns.iter().any(|p| text_lower.contains(p))
     }
 

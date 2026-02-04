@@ -435,7 +435,7 @@ impl PluginKind {
         match (filename, ext) {
             (_, Some("wasm")) => Some(PluginKind::Wasm),
             ("package.json", _) => Some(PluginKind::NodeJs),
-            ("aether.plugin.json", _) => Some(PluginKind::Wasm),
+            ("aleph.plugin.json", _) => Some(PluginKind::Wasm),
             ("SKILL.md" | "COMMAND.md" | "AGENT.md", _) => Some(PluginKind::Static),
             (_, Some("md")) => Some(PluginKind::Static),
             _ => None,
@@ -1253,7 +1253,7 @@ mod tests {
 
         // Wasm plugin manifest
         assert_eq!(
-            PluginKind::detect_from_path(Path::new("aether.plugin.json")),
+            PluginKind::detect_from_path(Path::new("aleph.plugin.json")),
             Some(PluginKind::Wasm)
         );
 

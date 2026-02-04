@@ -273,10 +273,10 @@ mod tests {
         std::fs::create_dir(root.join(".git")).unwrap();
 
         // Create Aleph-like structure
-        let aether = root.join(".aleph");
-        std::fs::create_dir_all(aether.join("skills/my-skill")).unwrap();
-        std::fs::create_dir_all(aether.join("commands/my-cmd")).unwrap();
-        std::fs::create_dir_all(aether.join("plugins")).unwrap();
+        let aleph_dir = root.join(".aleph");
+        std::fs::create_dir_all(aleph_dir.join("skills/my-skill")).unwrap();
+        std::fs::create_dir_all(aleph_dir.join("commands/my-cmd")).unwrap();
+        std::fs::create_dir_all(aleph_dir.join("plugins")).unwrap();
 
         // Create project-level .claude
         std::fs::create_dir_all(root.join("project/.claude/skills/project-skill")).unwrap();
@@ -296,7 +296,7 @@ mod tests {
             max_upward_depth: 10,
         };
 
-        // Override aether home for testing
+        // Override aleph home for testing
         let scanner = DirectoryScanner {
             aleph_home: root.join(".aleph"),
             claude_home: None,

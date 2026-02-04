@@ -36,9 +36,9 @@ jobs:
 
       - name: Copy DLL
         run: |
-          New-Item -ItemType Directory -Path platforms/windows/Aether/libs -Force
-          Copy-Item core/target/release/aethecore.dll `
-            -Destination platforms/windows/Aether/libs/
+          New-Item -ItemType Directory -Path platforms/windows/Aleph/libs -Force
+          Copy-Item core/target/release/alephcore.dll `
+            -Destination platforms/windows/Aleph/libs/
 
       - name: Build .NET App
         working-directory: platforms/windows
@@ -46,5 +46,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Aether-Windows
-          path: platforms/windows/Aether/bin/Release/
+          name: Aleph-Windows
+          path: platforms/windows/Aleph/bin/Release/

@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_aether_tool_trait() {
+    async fn test_aleph_tool_trait() {
         let registry = create_test_registry();
         let tool = SpeechGenerateTool::new(registry);
 

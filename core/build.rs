@@ -1,4 +1,4 @@
-// Build script for Aether Core
+// Build script for Aleph Core
 //
 // FFI removed - using Gateway WebSocket architecture exclusively
 

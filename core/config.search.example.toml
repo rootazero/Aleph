@@ -1,5 +1,5 @@
-# Example Aether Configuration with Search Capability
-# Copy this file to ~/.config/aether/config.toml and customize
+# Example Aleph Configuration with Search Capability
+# Copy this file to ~/.config/aleph/config.toml and customize
 
 default_hotkey = "Grave"  # Backtick key
 

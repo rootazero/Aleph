@@ -21,14 +21,14 @@ Push-Location $CoreDir
 try {
     if ($Config -eq "Debug") {
         cargo build --features cabi
-        $LibPath = "target/debug/aethecore.dll"
+        $LibPath = "target/debug/alephcore.dll"
     } else {
         cargo build --release --features cabi
-        $LibPath = "target/release/aethecore.dll"
+        $LibPath = "target/release/alephcore.dll"
     }
 
     # Copy DLL
-    $DestDir = Join-Path $WindowsDir "Aether/libs"
+    $DestDir = Join-Path $WindowsDir "Aleph/libs"
     if (-not (Test-Path $DestDir)) {
         New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
     }

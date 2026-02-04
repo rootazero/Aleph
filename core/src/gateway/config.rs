@@ -224,7 +224,7 @@ impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            docker_image: "aether-sandbox:latest".to_string(),
+            docker_image: "aleph-sandbox:latest".to_string(),
             memory_limit_mb: 512,
             cpu_quota_percent: 50,
             network_mode: NetworkMode::Restricted,
@@ -482,12 +482,12 @@ port = 18789
 max_connections = 200
 
 [agents.main]
-workspace = "~/aether-main"
+workspace = "~/aleph-main"
 model = "claude-sonnet-4-5"
 max_loops = 30
 
 [agents.work]
-workspace = "~/aether-work"
+workspace = "~/aleph-work"
 model = "claude-opus-4-5"
 
 [bindings]
@@ -500,7 +500,7 @@ token = "${TELEGRAM_BOT_TOKEN}"
 
 [sandbox]
 enabled = true
-docker_image = "aether-sandbox:latest"
+docker_image = "aleph-sandbox:latest"
 memory_limit_mb = 1024
 
 [tools.chrome]

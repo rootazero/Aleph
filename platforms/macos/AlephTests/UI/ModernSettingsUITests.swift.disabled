@@ -1,5 +1,5 @@
 import XCTest
-@testable import Aether
+@testable import Aleph
 
 /// Comprehensive functional tests for Modernize Settings UI (Phase 6.1)
 /// Tests all settings tabs and configuration persistence
@@ -280,17 +280,17 @@ final class ModernSettingsUITests: XCTestCase {
     func testConfigFilePath() throws {
         // Test config file path construction
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        let configDir = homeDir.appendingPathComponent(".aether")
+        let configDir = homeDir.appendingPathComponent(".aleph")
         let configFile = configDir.appendingPathComponent("config.toml")
 
-        XCTAssertTrue(configFile.path.contains(".aether/config.toml"))
+        XCTAssertTrue(configFile.path.contains(".aleph/config.toml"))
     }
 
     func testConfigFileCreation() throws {
         // Test config directory creation
         let fileManager = FileManager.default
         let homeDir = fileManager.homeDirectoryForCurrentUser
-        let configDir = homeDir.appendingPathComponent(".aether")
+        let configDir = homeDir.appendingPathComponent(".aleph")
 
         // This would normally create the directory if it doesn't exist
         var isDirectory: ObjCBool = false

@@ -1,6 +1,6 @@
 //! Integration test for Rhai sandboxed engine
 
-use aethecore::daemon::dispatcher::scripting::create_sandboxed_engine;
+use alephcore::daemon::dispatcher::scripting::create_sandboxed_engine;
 
 #[test]
 fn test_sandboxed_engine_rejects_dangerous_operations() {

@@ -2,7 +2,7 @@
 //!
 //! Tests logging behavior, PII scrubbing, retention policies, and log level control.
 
-use aethecore::logging::{
+use alephcore::logging::{
     file_appender::get_log_directory,
     level_control::{get_log_level, set_log_level, LogLevel},
     pii_filter::PiiScrubbingLayer,
@@ -112,24 +112,24 @@ fn test_retention_policy_deletes_old_logs() {
     let log_dir = temp_dir.path().to_path_buf();
 
     // Create old log files (older than retention period)
-    create_test_log_file(&log_dir, "aether-2024-01-01.log", 100); // 100 days old
-    create_test_log_file(&log_dir, "aether-2024-02-01.log", 50); // 50 days old
+    create_test_log_file(&log_dir, "aleph-2024-01-01.log", 100); // 100 days old
+    create_test_log_file(&log_dir, "aleph-2024-02-01.log", 50); // 50 days old
 
     // Create recent log files (within retention period)
-    create_test_log_file(&log_dir, "aether-2024-12-20.log", 5); // 5 days old
-    create_test_log_file(&log_dir, "aether-2024-12-24.log", 1); // 1 day old
+    create_test_log_file(&log_dir, "aleph-2024-12-20.log", 5); // 5 days old
+    create_test_log_file(&log_dir, "aleph-2024-12-24.log", 1); // 1 day old
 
     // Run cleanup with 30-day retention
     let retention_days = 30;
     cleanup_old_logs(&log_dir, retention_days).expect("Cleanup failed");
 
     // Verify old files are deleted
-    assert!(!log_dir.join("aether-2024-01-01.log").exists());
-    assert!(!log_dir.join("aether-2024-02-01.log").exists());
+    assert!(!log_dir.join("aleph-2024-01-01.log").exists());
+    assert!(!log_dir.join("aleph-2024-02-01.log").exists());
 
     // Verify recent files are kept
-    assert!(log_dir.join("aether-2024-12-20.log").exists());
-    assert!(log_dir.join("aether-2024-12-24.log").exists());
+    assert!(log_dir.join("aleph-2024-12-20.log").exists());
+    assert!(log_dir.join("aleph-2024-12-24.log").exists());
 }
 
 #[test]
@@ -138,9 +138,9 @@ fn test_retention_policy_keeps_all_with_zero_days() {
     let log_dir = temp_dir.path().to_path_buf();
 
     // Create log files of various ages
-    create_test_log_file(&log_dir, "aether-2024-12-24.log", 1); // 1 day old (within 30 days)
-    create_test_log_file(&log_dir, "aether-2024-12-20.log", 5); // 5 days old (within 30 days)
-    create_test_log_file(&log_dir, "aether-2024-11-01.log", 55); // 55 days old (outside 30 days)
+    create_test_log_file(&log_dir, "aleph-2024-12-24.log", 1); // 1 day old (within 30 days)
+    create_test_log_file(&log_dir, "aleph-2024-12-20.log", 5); // 5 days old (within 30 days)
+    create_test_log_file(&log_dir, "aleph-2024-11-01.log", 55); // 55 days old (outside 30 days)
 
     // Run cleanup with 0-day retention (clamped to 1 day minimum)
     // Note: cleanup_old_logs clamps retention_days to range [1, 30]
@@ -150,7 +150,7 @@ fn test_retention_policy_keeps_all_with_zero_days() {
     // Since 0 is clamped to 1, only files older than 1 day will be deleted
     // The 1-day old file should be kept (on the boundary)
     // Files older than 1 day will be deleted
-    assert!(!log_dir.join("aether-2024-11-01.log").exists()); // Deleted (55 days old)
+    assert!(!log_dir.join("aleph-2024-11-01.log").exists()); // Deleted (55 days old)
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn test_retention_policy_skips_non_log_files() {
     let log_dir = temp_dir.path().to_path_buf();
 
     // Create old log file
-    create_test_log_file(&log_dir, "aether-2024-01-01.log", 100);
+    create_test_log_file(&log_dir, "aleph-2024-01-01.log", 100);
 
     // Create old non-log file
     let readme = log_dir.join("README.txt");
@@ -174,7 +174,7 @@ fn test_retention_policy_skips_non_log_files() {
     cleanup_old_logs(&log_dir, retention_days).expect("Cleanup failed");
 
     // Verify log file is deleted
-    assert!(!log_dir.join("aether-2024-01-01.log").exists());
+    assert!(!log_dir.join("aleph-2024-01-01.log").exists());
 
     // Verify non-log file is kept
     assert!(readme.exists());
@@ -218,7 +218,7 @@ fn test_get_log_directory_returns_valid_path() {
 
     // Verify path contains expected components
     // Note: On macOS, config_dir might be different (e.g., ~/Library/Application Support)
-    assert!(log_dir_str.contains("aether"));
+    assert!(log_dir_str.contains("aleph"));
     assert!(log_dir_str.contains("logs"));
 
     // Verify path is absolute

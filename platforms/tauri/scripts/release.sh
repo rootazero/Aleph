@@ -1,5 +1,5 @@
 #!/bin/bash
-# Aether Tauri Release Script
+# Aleph Tauri Release Script
 # Creates a new release by updating version and creating a git tag
 # Usage: ./scripts/release.sh <version>
 # Example: ./scripts/release.sh 0.2.0
@@ -79,7 +79,7 @@ rm -f src-tauri/Cargo.toml.bak
 # Update Cargo.lock
 log_info "Updating Cargo.lock..."
 cd src-tauri
-cargo update -p aether-tauri
+cargo update -p aleph-tauri
 cd "$PROJECT_DIR"
 
 # Run CI checks

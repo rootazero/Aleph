@@ -6,8 +6,8 @@
 //! - File write isolation
 //! - Security: dangerous env vars removed
 
-use aethecore::tools::markdown_skill::{load_skills_from_dir, SandboxMode};
-use aethecore::tools::AetherToolServer;
+use alephcore::tools::markdown_skill::{load_skills_from_dir, SandboxMode};
+use alephcore::tools::AlephToolServer;
 use serde_json::json;
 use std::fs;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ description: Test skill for VirtualFs sandbox
 metadata:
   requires:
     bins: ["{cli_command}"]
-  aether:
+  aleph:
     security:
       sandbox: virtualfs
       confirmation: never
@@ -59,7 +59,7 @@ async fn test_virtualfs_basic_execution() {
 
     // Verify sandbox mode
     assert!(matches!(
-        tool.spec.metadata.aether.as_ref().unwrap().security.sandbox,
+        tool.spec.metadata.aleph.as_ref().unwrap().security.sandbox,
         SandboxMode::VirtualFs
     ));
 
@@ -96,7 +96,7 @@ description: Test file writing in VirtualFs
 metadata:
   requires:
     bins: ["sh"]
-  aether:
+  aleph:
     security:
       sandbox: virtualfs
       confirmation: never
@@ -155,7 +155,7 @@ description: Test environment variables in VirtualFs
 metadata:
   requires:
     bins: ["sh"]
-  aether:
+  aleph:
     security:
       sandbox: virtualfs
       confirmation: never
@@ -210,7 +210,7 @@ description: Test tmp directory in VirtualFs
 metadata:
   requires:
     bins: ["sh"]
-  aether:
+  aleph:
     security:
       sandbox: virtualfs
       confirmation: never
@@ -290,7 +290,7 @@ async fn test_virtualfs_in_tool_server() {
     let skill_dir = create_virtualfs_skill(&temp_dir, "server-test", "echo");
 
     // Load skill into ToolServer
-    let tool_server = Arc::new(AetherToolServer::new());
+    let tool_server = Arc::new(AlephToolServer::new());
     let tools = load_skills_from_dir(&skill_dir).await;
 
     for tool in tools {
@@ -327,7 +327,7 @@ description: Test error handling in VirtualFs
 metadata:
   requires:
     bins: ["nonexistent-command-12345"]
-  aether:
+  aleph:
     security:
       sandbox: virtualfs
       confirmation: never
@@ -360,7 +360,7 @@ fn count_virtualfs_sandboxes(temp_dir: &std::path::Path) -> usize {
                 .filter(|e| {
                     e.file_name()
                         .to_string_lossy()
-                        .starts_with("aether-virtualfs-")
+                        .starts_with("aleph-virtualfs-")
                 })
                 .count()
         })

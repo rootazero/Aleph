@@ -15,12 +15,12 @@ generate_macos() {
     cd "$ROOT_DIR"
 
     # Ensure library is built
-    cargo build --release --features uniffi -p aethecore
+    cargo build --release --features uniffi -p alephcore
 
     # Generate Swift bindings
     cd "$CORE_DIR"
     cargo run --bin uniffi-bindgen generate \
-        --library ../target/release/libaethecore.dylib \
+        --library ../target/release/libalephcore.dylib \
         --language swift \
         --out-dir "$ROOT_DIR/platforms/macos/Aleph/Sources/Generated/"
 

@@ -15,7 +15,7 @@ use crate::dispatcher::risk::{RiskEvaluator, RiskLevel};
 
 /// Task status for UI display
 ///
-/// Note: UniFFI export is done via UDL (aether.udl), not proc-macros,
+/// Note: UniFFI export is done via UDL (aleph.udl), not proc-macros,
 /// to avoid conflicts with UDL-defined callback parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DagTaskDisplayStatus {
@@ -49,7 +49,7 @@ impl std::fmt::Display for DagTaskDisplayStatus {
 
 /// Task information for UI display
 ///
-/// Note: UniFFI export is done via UDL (aether.udl), not proc-macros.
+/// Note: UniFFI export is done via UDL (aleph.udl), not proc-macros.
 #[derive(Debug, Clone)]
 pub struct DagTaskInfo {
     /// Unique task identifier
@@ -95,7 +95,7 @@ impl DagTaskInfo {
 
 /// Execution plan for UI display
 ///
-/// Note: UniFFI export is done via UDL (aether.udl), not proc-macros.
+/// Note: UniFFI export is done via UDL (aleph.udl), not proc-macros.
 #[derive(Debug, Clone)]
 pub struct DagTaskPlan {
     /// Unique plan identifier

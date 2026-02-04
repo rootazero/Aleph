@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { commands } from '@/lib/commands';
 import {
-  subscribeToAetherEvents,
+  subscribeToAlephEvents,
   type AlephEventHandlers,
   type StreamChunkPayload,
   type CompletePayload,
@@ -124,7 +124,7 @@ export const useHaloStore = create<HaloStore>((set, get) => ({
       onPlanConfirmationRequired: (payload) => get()._onPlanConfirmation(payload),
     };
 
-    const unsubscribe = await subscribeToAetherEvents(handlers);
+    const unsubscribe = await subscribeToAlephEvents(handlers);
     set({ unsubscribe });
     console.log('[HaloStore] Event listeners initialized');
   },

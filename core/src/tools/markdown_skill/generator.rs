@@ -207,27 +207,27 @@ impl MarkdownSkillGenerator {
         }
 
         // Aleph extensions
-        if let Some(aether) = &spec.metadata.aleph {
-            result.push_str("  aether:\n");
+        if let Some(aleph_meta) = &spec.metadata.aleph {
+            result.push_str("  aleph:\n");
 
             // Security
             result.push_str("    security:\n");
             result.push_str(&format!("      sandbox: {}\n",
-                match aether.security.sandbox {
+                match aleph_meta.security.sandbox {
                     SandboxMode::Host => "host",
                     SandboxMode::Docker => "docker",
                     SandboxMode::VirtualFs => "virtualfs",
                 }
             ));
             result.push_str(&format!("      confirmation: {}\n",
-                match aether.security.confirmation {
+                match aleph_meta.security.confirmation {
                     ConfirmationMode::Always => "always",
                     ConfirmationMode::Write => "write",
                     ConfirmationMode::Never => "never",
                 }
             ));
             result.push_str(&format!("      network: {}\n",
-                match aether.security.network {
+                match aleph_meta.security.network {
                     NetworkMode::Internet => "internet",
                     NetworkMode::Local => "local",
                     NetworkMode::None => "none",
@@ -235,9 +235,9 @@ impl MarkdownSkillGenerator {
             ));
 
             // Input hints
-            if !aether.input_hints.is_empty() {
+            if !aleph_meta.input_hints.is_empty() {
                 result.push_str("    input_hints:\n");
-                for (key, hint) in &aether.input_hints {
+                for (key, hint) in &aleph_meta.input_hints {
                     result.push_str(&format!("      {}:\n", key));
                     if let Some(hint_type) = &hint.hint_type {
                         result.push_str(&format!("        type: {}\n", hint_type));
@@ -252,7 +252,7 @@ impl MarkdownSkillGenerator {
             }
 
             // Evolution metadata
-            if let Some(evolution) = &aether.evolution {
+            if let Some(evolution) = &aleph_meta.evolution {
                 result.push_str("    evolution:\n");
                 result.push_str(&format!("      source: \"{}\"\n", evolution.source));
                 result.push_str(&format!("      confidence_score: {}\n", evolution.confidence_score));

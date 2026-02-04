@@ -368,7 +368,7 @@ mod tests {
         use std::fs;
 
         let temp_dir = std::env::temp_dir().join(format!(
-            "aether_test_perms_{}",
+            "aleph_test_perms_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

@@ -18,7 +18,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aether_core::compressor::TurnProtector;
+//! use alephcore::compressor::TurnProtector;
 //!
 //! let protector = TurnProtector::new(2); // Protect last 2 turns
 //!

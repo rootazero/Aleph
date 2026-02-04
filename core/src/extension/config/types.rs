@@ -237,9 +237,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_aether_config_deserialize() {
+    fn test_aleph_config_deserialize() {
         let json = r#"{
-            "$schema": "https://aether.ai/config.json",
+            "$schema": "https://aleph.ai/config.json",
             "model": "anthropic/claude-4",
             "plugin": ["@my/plugin"],
             "agent": {

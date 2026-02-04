@@ -4,8 +4,8 @@
 /// PII scrubbing and daily log rotation.
 ///
 /// Run with: cargo run --example file_logging_demo
-use aethecore::init_logging;
-use aethecore::logging::get_log_directory;
+use alephcore::init_logging;
+use alephcore::logging::get_log_directory;
 use tracing::{debug, error, info, warn};
 
 fn main() {
@@ -74,5 +74,5 @@ fn main() {
     println!("  1. All messages from this demo");
     println!("  2. Timestamps for each message");
     println!("  3. PII automatically replaced with placeholders");
-    println!("  4. Daily rotation (files named aether-YYYY-MM-DD.log)");
+    println!("  4. Daily rotation (files named aleph-YYYY-MM-DD.log)");
 }

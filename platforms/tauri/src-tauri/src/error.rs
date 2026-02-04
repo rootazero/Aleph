@@ -2,7 +2,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Debug, Error, Serialize)]
-pub enum AetherError {
+pub enum AlephError {
     #[error("Network error: {0}")]
     Network(String),
 
@@ -40,29 +40,29 @@ pub enum AetherError {
     Unknown(String),
 }
 
-impl From<std::io::Error> for AetherError {
+impl From<std::io::Error> for AlephError {
     fn from(e: std::io::Error) -> Self {
-        AetherError::Io(e.to_string())
+        AlephError::Io(e.to_string())
     }
 }
 
-impl From<serde_json::Error> for AetherError {
+impl From<serde_json::Error> for AlephError {
     fn from(e: serde_json::Error) -> Self {
-        AetherError::Serialization(e.to_string())
+        AlephError::Serialization(e.to_string())
     }
 }
 
-impl From<tauri::Error> for AetherError {
+impl From<tauri::Error> for AlephError {
     fn from(e: tauri::Error) -> Self {
-        AetherError::Window(e.to_string())
+        AlephError::Window(e.to_string())
     }
 }
 
 // Convert to String for Tauri command returns
-impl From<AetherError> for String {
-    fn from(e: AetherError) -> Self {
+impl From<AlephError> for String {
+    fn from(e: AlephError) -> Self {
         serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())
     }
 }
 
-pub type Result<T> = std::result::Result<T, AetherError>;
+pub type Result<T> = std::result::Result<T, AlephError>;

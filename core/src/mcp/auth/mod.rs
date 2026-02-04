@@ -11,7 +11,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use aether_core::mcp::auth::{OAuthStorage, OAuthTokens, OAuthProvider};
+//! use alephcore::mcp::auth::{OAuthStorage, OAuthTokens, OAuthProvider};
 //!
 //! // Create storage
 //! let storage = Arc::new(OAuthStorage::new(OAuthStorage::default_path()));

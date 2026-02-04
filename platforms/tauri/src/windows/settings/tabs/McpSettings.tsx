@@ -560,7 +560,7 @@ export function McpSettings() {
             <Server className="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p>{t('settings.mcp.noServers', 'No MCP servers configured')}</p>
             <p className="text-caption mt-1">
-              {t('settings.mcp.noServersHint', "Add a server to extend Aether's capabilities")}
+              {t('settings.mcp.noServersHint', "Add a server to extend Aleph's capabilities")}
             </p>
           </div>
         ) : (
@@ -603,7 +603,7 @@ export function McpSettings() {
         <div className="flex items-start gap-sm">
           <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <span>
-            {t('settings.mcp.hint', 'MCP servers extend Aether with additional tools and capabilities. Visit the Model Context Protocol documentation to learn more.')}
+            {t('settings.mcp.hint', 'MCP servers extend Aleph with additional tools and capabilities. Visit the Model Context Protocol documentation to learn more.')}
           </span>
         </div>
       </InfoBox>

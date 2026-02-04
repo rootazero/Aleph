@@ -27,7 +27,7 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             socket_path: "~/.aleph/daemon.sock".to_string(),
-            binary_path: PathBuf::from("~/.aleph/bin/aether-daemon"),
+            binary_path: PathBuf::from("~/.aleph/bin/aleph-daemon"),
             log_dir: PathBuf::from("~/.aleph/logs"),
             nice_value: 10,
             soft_mem_limit: 512 * 1024 * 1024,  // 512MB

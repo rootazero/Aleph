@@ -22,7 +22,7 @@ echo ""
 
 # 2. Check Accessibility permission
 echo "2. 检查 Accessibility 权限..."
-AETHER_PATH="/Users/zouguojun/Library/Developer/Xcode/DerivedData/Aleph-etjxjwefzynbztajfjnzbmaenbyi/Build/Products/Debug/Aleph.app"
+ALEPH_PATH="/Users/zouguojun/Library/Developer/Xcode/DerivedData/Aleph-etjxjwefzynbztajfjnzbmaenbyi/Build/Products/Debug/Aleph.app"
 
 # Query TCC database using SQLite
 TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"

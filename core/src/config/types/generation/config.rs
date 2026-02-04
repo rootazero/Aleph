@@ -24,7 +24,7 @@ use super::provider::GenerationProviderConfig;
 /// [generation]
 /// default_image_provider = "dalle"
 /// default_speech_provider = "elevenlabs"
-/// output_dir = "~/Downloads/aether-gen"
+/// output_dir = "~/Downloads/aleph-gen"
 /// auto_paste_threshold_mb = 5
 /// background_task_threshold_seconds = 30
 /// smart_routing_enabled = true
@@ -81,7 +81,7 @@ pub struct GenerationConfig {
 fn default_output_dir() -> PathBuf {
     dirs::download_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Downloads"))
-        .join("aether-gen")
+        .join("aleph-gen")
 }
 
 fn default_auto_paste_threshold_mb() -> u32 {

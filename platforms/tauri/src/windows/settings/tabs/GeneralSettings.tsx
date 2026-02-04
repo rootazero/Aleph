@@ -86,7 +86,7 @@ export function GeneralSettings() {
     setCheckingUpdates(true);
     try {
       // Open GitHub releases page in browser
-      window.open('https://github.com/AetherHQ/aether/releases', '_blank');
+      window.open('https://github.com/rootazero/Aleph/releases', '_blank');
     } finally {
       setCheckingUpdates(false);
     }

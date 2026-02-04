@@ -1,7 +1,7 @@
 //! Integration tests for Markdown Skill System
 
-use aethecore::tools::markdown_skill::{load_skills_from_dir, SkillLoader};
-use aethecore::tools::AetherToolServer;
+use alephcore::tools::markdown_skill::{load_skills_from_dir, SkillLoader};
+use alephcore::tools::AlephToolServer;
 use std::path::PathBuf;
 
 #[tokio::test]
@@ -19,7 +19,7 @@ async fn test_load_openclaw_compatible_skill() {
 }
 
 #[tokio::test]
-async fn test_load_aether_enhanced_skill() {
+async fn test_load_aleph_enhanced_skill() {
     let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/markdown_skills/gh-pr-docker");
 
@@ -29,21 +29,21 @@ async fn test_load_aether_enhanced_skill() {
     let tool = &tools[0];
     assert_eq!(tool.spec.name, "gh-pr-docker");
 
-    // Check Aether extensions
-    let aether = tool.spec.metadata.aether.as_ref().unwrap();
+    // Check Aleph extensions
+    let aleph_meta = tool.spec.metadata.aleph.as_ref().unwrap();
     assert!(matches!(
-        aether.security.sandbox,
-        aethecore::tools::markdown_skill::SandboxMode::Docker
+        aleph_meta.security.sandbox,
+        alephcore::tools::markdown_skill::SandboxMode::Docker
     ));
 
     // Check Docker config
-    let docker = aether.docker.as_ref().unwrap();
+    let docker = aleph_meta.docker.as_ref().unwrap();
     assert_eq!(docker.image, "ghcr.io/cli/cli:latest");
     assert!(docker.env_vars.contains(&"GITHUB_TOKEN".to_string()));
 
     // Check input hints
-    assert!(aether.input_hints.contains_key("action"));
-    assert!(aether.input_hints.contains_key("repo"));
+    assert!(aleph_meta.input_hints.contains_key("action"));
+    assert!(aleph_meta.input_hints.contains_key("repo"));
 }
 
 #[tokio::test]
@@ -85,7 +85,7 @@ async fn test_tool_server_integration() {
     let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/markdown_skills/echo-basic");
 
-    let server = AetherToolServer::new_with_skills(vec![fixtures_dir]).await;
+    let server = AlephToolServer::new_with_skills(vec![fixtures_dir]).await;
 
     // Debug: list all tools
     let names = server.list_names().await;

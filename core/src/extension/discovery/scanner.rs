@@ -162,7 +162,7 @@ mod tests {
         let plugin_dir = dir.path().join("my-plugin");
         fs::create_dir(&plugin_dir).unwrap();
         fs::write(
-            plugin_dir.join("aether.plugin.json"),
+            plugin_dir.join("aleph.plugin.json"),
             r#"{
             "id": "my-plugin",
             "name": "My Plugin",

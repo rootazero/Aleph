@@ -108,7 +108,7 @@ pub fn is_static_file_request(uri: &Uri) -> bool {
     let is_static_path = path.starts_with("/assets/")
         || path.starts_with("/static/")
         || path == "/favicon.ico"
-        || path == "/aether.svg"
+        || path == "/aleph.svg"
         || path == "/";
 
     has_extension || is_static_path

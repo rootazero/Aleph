@@ -48,7 +48,7 @@ export function ChatInput({ onSend, disabled = false, placeholder = 'Type a mess
           className="w-full resize-none rounded-xl border border-gray-300 dark:border-gray-600
                      bg-gray-50 dark:bg-gray-900 px-4 py-3 pr-12
                      text-gray-900 dark:text-white placeholder-gray-500
-                     focus:outline-none focus:ring-2 focus:ring-aether-500 focus:border-transparent
+                     focus:outline-none focus:ring-2 focus:ring-aleph-500 focus:border-transparent
                      disabled:opacity-50 disabled:cursor-not-allowed
                      transition-colors"
         />
@@ -57,7 +57,7 @@ export function ChatInput({ onSend, disabled = false, placeholder = 'Type a mess
         type="submit"
         disabled={disabled || !input.trim()}
         className="flex items-center justify-center w-12 h-12 rounded-xl
-                   bg-aether-600 hover:bg-aether-700 disabled:bg-gray-300 dark:disabled:bg-gray-600
+                   bg-aleph-600 hover:bg-aleph-700 disabled:bg-gray-300 dark:disabled:bg-gray-600
                    text-white disabled:text-gray-500
                    transition-colors disabled:cursor-not-allowed"
         aria-label="Send message"

@@ -552,7 +552,7 @@
 "permission.gate.status_granted" = "已授权 ✓";
 "permission.gate.status_waiting" = "等待授权...";
 "permission.gate.button.continue" = "继续";
-"permission.gate.button.enter_aether" = "进入 Aleph";
+"permission.gate.button.enter_aleph" = "进入 Aleph";
 
 // MARK: - Error Messages
 "error.provider.invalid_api_key" = "无效的 API 密钥。请检查您的凭据。";
@@ -563,7 +563,7 @@
 "error.permission.input_monitoring_denied" = "输入监控权限被拒绝。";
 "error.general.unknown" = "发生未知错误。";
 "error.title" = "错误";
-"error.aether" = "Aleph 错误";
+"error.aleph" = "Aleph 错误";
 "error.no_clipboard_text" = "剪贴板中没有文本";
 "error.no_clipboard_text.suggestion" = "请先选择要处理的文本";
 "error.no_text_in_window" = "当前窗口没有文本内容";

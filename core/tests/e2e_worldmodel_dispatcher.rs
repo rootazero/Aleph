@@ -3,7 +3,7 @@
 //! Basic smoke test to verify that WorldModel and Dispatcher can start
 //! and process events without crashing.
 
-use aethecore::{
+use alephcore::{
     DaemonEventBus, ProactiveDispatcher as Dispatcher, ProactiveDispatcherConfig as DispatcherConfig,
     WorldModel, WorldModelConfig,
     DaemonEvent, RawEvent, ProcessEventType, ActivityType,
@@ -118,7 +118,7 @@ async fn test_worldmodel_dispatcher_integration() {
 /// Test: Dispatcher mode transitions
 #[tokio::test]
 async fn test_dispatcher_mode() {
-    use aethecore::daemon::DispatcherMode;
+    use alephcore::daemon::DispatcherMode;
 
     let event_bus = Arc::new(DaemonEventBus::new(100));
     let worldmodel = create_test_worldmodel(event_bus.clone()).await;
@@ -152,8 +152,8 @@ async fn test_dispatcher_mode() {
 /// Test: WorldModel persistence across restarts
 #[tokio::test]
 async fn test_worldmodel_persistence() {
-    use aethecore::daemon::worldmodel::PendingAction;
-    use aethecore::daemon::{ActionType, RiskLevel};
+    use alephcore::daemon::worldmodel::PendingAction;
+    use alephcore::daemon::{ActionType, RiskLevel};
 
     let dir = tempdir().unwrap();
     let state_path = dir.path().join("worldmodel_state.json");

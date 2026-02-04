@@ -178,7 +178,7 @@ impl SkillsInstaller {
 
         // Save to temp file
         let temp_dir = std::env::temp_dir();
-        let temp_zip = temp_dir.join(format!("aether-skill-{}.zip", uuid::Uuid::new_v4()));
+        let temp_zip = temp_dir.join(format!("aleph-skill-{}.zip", uuid::Uuid::new_v4()));
 
         std::fs::write(&temp_zip, &bytes)
             .map_err(|e| AlephError::config(format!("Failed to write temp ZIP: {}", e)))?;

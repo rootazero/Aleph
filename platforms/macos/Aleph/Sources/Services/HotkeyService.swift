@@ -98,7 +98,7 @@ final class HotkeyService {
             _ = hotkeyHandler(event)
         }
 
-        // Local monitor - when AETHER is active
+        // Local monitor - when ALEPH is active
         conversationLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if hotkeyHandler(event) {
                 return nil // Consume event

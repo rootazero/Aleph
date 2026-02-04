@@ -209,14 +209,14 @@ metadata:
     }
 
     #[test]
-    fn test_parse_aether_extensions() {
+    fn test_parse_aleph_extensions() {
         let yaml = r#"
 name: gh-pr
 description: GitHub PR operations
 metadata:
   requires:
     bins: ["gh"]
-  aether:
+  aleph:
     security:
       sandbox: docker
       confirmation: always
@@ -232,19 +232,19 @@ metadata:
 "#;
 
         let spec: AlephSkillSpec = serde_yaml::from_str(yaml).unwrap();
-        let aether = spec.metadata.aleph.unwrap();
+        let aleph_meta = spec.metadata.aleph.unwrap();
 
-        assert!(matches!(aether.security.sandbox, SandboxMode::Docker));
+        assert!(matches!(aleph_meta.security.sandbox, SandboxMode::Docker));
         assert!(matches!(
-            aether.security.confirmation,
+            aleph_meta.security.confirmation,
             ConfirmationMode::Always
         ));
 
-        let docker = aether.docker.unwrap();
+        let docker = aleph_meta.docker.unwrap();
         assert_eq!(docker.image, "ghcr.io/cli/cli:latest");
         assert_eq!(docker.env_vars, vec!["GITHUB_TOKEN"]);
 
-        let hint = aether.input_hints.get("repo").unwrap();
+        let hint = aleph_meta.input_hints.get("repo").unwrap();
         assert_eq!(hint.hint_type.as_ref().unwrap(), "string");
         assert_eq!(hint.pattern.as_ref().unwrap(), "^[^/]+/[^/]+$");
         assert!(!hint.optional);

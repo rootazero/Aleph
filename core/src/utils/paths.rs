@@ -256,10 +256,10 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     let mut current = start_dir.clone();
     loop {
         // Check .aleph/skills/
-        let aether_skills = current.join(".aleph").join("skills");
-        if aether_skills.is_dir() && !dirs.contains(&aether_skills) {
-            info!(path = %aether_skills.display(), "Found project-level .aleph/skills");
-            dirs.push(aether_skills);
+        let aleph_skills = current.join(".aleph").join("skills");
+        if aleph_skills.is_dir() && !dirs.contains(&aleph_skills) {
+            info!(path = %aleph_skills.display(), "Found project-level .aleph/skills");
+            dirs.push(aleph_skills);
         }
 
         // Check .claude/skills/ (Claude Code compatibility)
@@ -286,10 +286,10 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
         info!(home = %home.display(), "Checking global directories");
 
         // ~/.aleph/skills
-        let global_aether = home.join(".aleph").join("skills");
-        if global_aether.is_dir() && !dirs.contains(&global_aether) {
-            info!(path = %global_aether.display(), "Found global ~/.aleph/skills");
-            dirs.push(global_aether);
+        let global_aleph = home.join(".aleph").join("skills");
+        if global_aleph.is_dir() && !dirs.contains(&global_aleph) {
+            info!(path = %global_aleph.display(), "Found global ~/.aleph/skills");
+            dirs.push(global_aleph);
         }
 
         // ~/.claude/skills (Claude Code compatibility)
@@ -373,8 +373,8 @@ mod tests {
         std::fs::create_dir(project.join(".git")).unwrap();
 
         // Create project-level skills
-        let aether_skills = project.join(".aleph").join("skills");
-        std::fs::create_dir_all(&aether_skills).unwrap();
+        let aleph_skills = project.join(".aleph").join("skills");
+        std::fs::create_dir_all(&aleph_skills).unwrap();
 
         let claude_skills = project.join(".claude").join("skills");
         std::fs::create_dir_all(&claude_skills).unwrap();
@@ -383,13 +383,13 @@ mod tests {
         let dirs = get_all_skills_dirs(Some(&project)).unwrap();
 
         // Should find both project-level directories
-        assert!(dirs.iter().any(|d| d == &aether_skills));
+        assert!(dirs.iter().any(|d| d == &aleph_skills));
         assert!(dirs.iter().any(|d| d == &claude_skills));
 
         // .aleph should come before .claude (priority order)
-        let aether_idx = dirs.iter().position(|d| d == &aether_skills);
+        let aleph_idx = dirs.iter().position(|d| d == &aleph_skills);
         let claude_idx = dirs.iter().position(|d| d == &claude_skills);
-        assert!(aether_idx < claude_idx);
+        assert!(aleph_idx < claude_idx);
     }
 
     #[test]
@@ -403,13 +403,13 @@ mod tests {
         std::fs::create_dir(project.join(".git")).unwrap();
 
         // Create skills dir at project root
-        let aether_skills = project.join(".aleph").join("skills");
-        std::fs::create_dir_all(&aether_skills).unwrap();
+        let aleph_skills = project.join(".aleph").join("skills");
+        std::fs::create_dir_all(&aleph_skills).unwrap();
 
         // Search from subdirectory
         let dirs = get_all_skills_dirs(Some(&subdir)).unwrap();
 
         // Should find the skills dir at project root
-        assert!(dirs.iter().any(|d| d == &aether_skills));
+        assert!(dirs.iter().any(|d| d == &aleph_skills));
     }
 }

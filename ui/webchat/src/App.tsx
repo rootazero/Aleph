@@ -115,13 +115,13 @@ function App() {
         <div className="flex-1 overflow-y-auto p-4">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center px-4">
-              <div className="w-16 h-16 rounded-2xl bg-aether-100 dark:bg-aether-900/30 flex items-center justify-center mb-4">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-aether-600 dark:text-aether-400">
+              <div className="w-16 h-16 rounded-2xl bg-aleph-100 dark:bg-aleph-900/30 flex items-center justify-center mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-aleph-600 dark:text-aleph-400">
                   <path fillRule="evenodd" d="M9 4.5a.75.75 0 01.721.544l.813 2.846a3.75 3.75 0 002.576 2.576l2.846.813a.75.75 0 010 1.442l-2.846.813a3.75 3.75 0 00-2.576 2.576l-.813 2.846a.75.75 0 01-1.442 0l-.813-2.846a3.75 3.75 0 00-2.576-2.576l-2.846-.813a.75.75 0 010-1.442l2.846-.813A3.75 3.75 0 007.466 7.89l.813-2.846A.75.75 0 019 4.5z" clipRule="evenodd" />
                 </svg>
               </div>
               <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-                Welcome to Aether
+                Welcome to Aleph
               </h3>
               <p className="text-gray-500 dark:text-gray-400 max-w-md">
                 Start a conversation with your AI assistant. Ask questions, get help with tasks, or just chat.
@@ -141,7 +141,7 @@ function App() {
                     <span className="typing-dot w-2 h-2 bg-current rounded-full" />
                     <span className="typing-dot w-2 h-2 bg-current rounded-full" />
                   </div>
-                  <span className="text-sm">Aether is thinking...</span>
+                  <span className="text-sm">Aleph is thinking...</span>
                 </div>
               )}
 

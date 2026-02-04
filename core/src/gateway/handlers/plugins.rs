@@ -247,7 +247,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
 
     // Extract and install
     let plugins_dir = crate::extension::default_plugins_dir();
-    let temp_path = std::env::temp_dir().join(format!("aether-plugin-{}.zip", uuid::Uuid::new_v4()));
+    let temp_path = std::env::temp_dir().join(format!("aleph-plugin-{}.zip", uuid::Uuid::new_v4()));
 
     // Write temp file
     if let Err(e) = std::fs::write(&temp_path, &zip_data) {
@@ -437,7 +437,7 @@ pub struct CallToolParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadPluginParams {
-    /// Path to the plugin directory (containing aether.plugin.json or package.json with aether field)
+    /// Path to the plugin directory (containing aleph.plugin.json or package.json with aleph field)
     pub path: String,
 }
 
@@ -625,7 +625,7 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
 /// Load a runtime plugin from a path
 ///
 /// This handler loads a plugin from a directory containing a valid manifest
-/// (`aether.plugin.json` or `package.json` with aether field). The plugin
+/// (`aleph.plugin.json` or `package.json` with aleph field). The plugin
 /// is loaded into the appropriate runtime (Node.js or WASM) based on its kind.
 ///
 /// # Params

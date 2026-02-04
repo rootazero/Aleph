@@ -29,8 +29,8 @@ impl MigrationResult {
 /// Migrate a JSONC config file to TOML format.
 ///
 /// This function reads a JSONC or JSON config file, parses it, and writes
-/// the equivalent TOML configuration. If an `aether.toml` file already exists,
-/// it will be backed up to `aether.toml.bak`.
+/// the equivalent TOML configuration. If an `aleph.toml` file already exists,
+/// it will be backed up to `aleph.toml.bak`.
 ///
 /// # Arguments
 ///
@@ -96,7 +96,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
     let target_path = jsonc_path
         .parent()
         .unwrap_or(Path::new("."))
-        .join("aether.toml");
+        .join("aleph.toml");
 
     // Backup existing TOML file if it exists
     let backup_path = if target_path.exists() {
@@ -124,7 +124,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
 /// Check if a directory needs migration.
 ///
 /// A directory needs migration if it contains `aleph.jsonc` or `aleph.json`
-/// but no `aether.toml`.
+/// but no `aleph.toml`.
 ///
 /// # Arguments
 ///
@@ -134,7 +134,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
 ///
 /// `true` if the directory has JSONC config but no TOML config.
 pub fn needs_migration(dir: &Path) -> bool {
-    let toml_exists = dir.join("aether.toml").exists();
+    let toml_exists = dir.join("aleph.toml").exists();
     let jsonc_exists = dir.join("aleph.jsonc").exists() || dir.join("aleph.json").exists();
     !toml_exists && jsonc_exists
 }
@@ -197,7 +197,7 @@ pub fn migrate_directory(
         if dry_run {
             results.push(MigrationResult {
                 source: source.clone(),
-                target: root.join("aether.toml"),
+                target: root.join("aleph.toml"),
                 backup: None,
             });
         } else {
@@ -244,7 +244,7 @@ mod tests {
     fn test_needs_migration_has_both() {
         let temp_dir = tempfile::tempdir().unwrap();
         let jsonc_path = temp_dir.path().join("aleph.jsonc");
-        let toml_path = temp_dir.path().join("aether.toml");
+        let toml_path = temp_dir.path().join("aleph.toml");
         std::fs::write(&jsonc_path, r#"{"model": "test"}"#).unwrap();
         std::fs::write(&toml_path, r#"model = "test""#).unwrap();
         assert!(!needs_migration(temp_dir.path()));
@@ -277,7 +277,7 @@ mod tests {
     fn test_migrate_to_toml_with_backup() {
         let temp_dir = tempfile::tempdir().unwrap();
         let jsonc_path = temp_dir.path().join("aleph.jsonc");
-        let toml_path = temp_dir.path().join("aether.toml");
+        let toml_path = temp_dir.path().join("aleph.toml");
 
         std::fs::write(&jsonc_path, r#"{"model": "new"}"#).unwrap();
         std::fs::write(&toml_path, r#"model = "old""#).unwrap();
@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(get_migration_source(temp_dir.path()), Some(jsonc_path.clone()));
 
         // Has toml too (no migration needed)
-        let toml_path = temp_dir.path().join("aether.toml");
+        let toml_path = temp_dir.path().join("aleph.toml");
         std::fs::write(&toml_path, "").unwrap();
         assert!(get_migration_source(temp_dir.path()).is_none());
     }
@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(results.len(), 2);
 
         // Verify no files were actually created
-        assert!(!temp_dir.path().join("aether.toml").exists());
-        assert!(!sub_dir.join("aether.toml").exists());
+        assert!(!temp_dir.path().join("aleph.toml").exists());
+        assert!(!sub_dir.join("aleph.toml").exists());
     }
 }

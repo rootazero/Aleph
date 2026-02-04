@@ -10,9 +10,9 @@ echo ""
 sleep 5
 
 echo "🔍 正在检查 Aleph 进程..."
-AETHER_PID=$(pgrep -x "Aleph" | head -1)
+ALEPH_PID=$(pgrep -x "Aleph" | head -1)
 
-if [ -z "$AETHER_PID" ]; then
+if [ -z "$ALEPH_PID" ]; then
     echo "❌ 未找到 Aleph 进程"
     echo ""
     echo "可能的原因："
@@ -22,12 +22,12 @@ if [ -z "$AETHER_PID" ]; then
     exit 1
 fi
 
-echo "✅ 找到 Aleph 进程 (PID: $AETHER_PID)"
+echo "✅ 找到 Aleph 进程 (PID: $ALEPH_PID)"
 echo ""
 
 # Get full path
-AETHER_PATH=$(ps -p $AETHER_PID -o command= | awk '{print $1}')
-APP_PATH=$(dirname $(dirname "$AETHER_PATH"))
+ALEPH_PATH=$(ps -p $ALEPH_PID -o command= | awk '{print $1}')
+APP_PATH=$(dirname $(dirname "$ALEPH_PATH"))
 
 echo "📦 应用路径: $APP_PATH"
 echo ""

@@ -145,7 +145,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
     };
 
     // Write to temp file
-    let temp_path = std::env::temp_dir().join(format!("aether-skill-{}.zip", uuid::Uuid::new_v4()));
+    let temp_path = std::env::temp_dir().join(format!("aleph-skill-{}.zip", uuid::Uuid::new_v4()));
 
     if let Err(e) = std::fs::write(&temp_path, &zip_data) {
         return JsonRpcResponse::error(

@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use aethecore::gateway::{
+use alephcore::gateway::{
     ChannelId, ChannelRegistry, ConversationId, InboundMessage, MessageId, UserId,
     InboundMessageRouter, RoutingConfig, DmScope,
     SqlitePairingStore, PairingStore,
@@ -189,7 +189,7 @@ async fn test_group_with_mention_required_no_mention() {
         RouterChannelConfig {
             group_policy: GroupPolicy::Open,
             require_mention: true,
-            bot_name: Some("Aether".to_string()),
+            bot_name: Some("Aleph".to_string()),
             ..Default::default()
         },
     );
@@ -213,13 +213,13 @@ async fn test_group_with_mention_required_with_mention() {
         RouterChannelConfig {
             group_policy: GroupPolicy::Open,
             require_mention: true,
-            bot_name: Some("Aether".to_string()),
+            bot_name: Some("Aleph".to_string()),
             ..Default::default()
         },
     );
 
     // With mention - should pass
-    let msg = make_group_message("chat_id:42", "+15551234567", "Hey @aether, help me!");
+    let msg = make_group_message("chat_id:42", "+15551234567", "Hey @aleph, help me!");
     let result = router.handle_message(msg).await;
     assert!(result.is_ok());
 }
@@ -240,7 +240,7 @@ async fn test_group_disabled() {
         },
     );
 
-    let msg = make_group_message("chat_id:42", "+15551234567", "@aether help!");
+    let msg = make_group_message("chat_id:42", "+15551234567", "@aleph help!");
     let result = router.handle_message(msg).await;
 
     // Should be filtered (group disabled)

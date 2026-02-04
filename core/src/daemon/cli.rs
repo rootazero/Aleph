@@ -57,7 +57,7 @@ impl DaemonCli {
         service.install(&config).await?;
 
         info!("✓ Daemon service installed successfully");
-        info!("  Run 'aether daemon start' to start the service");
+        info!("  Run 'aleph daemon start' to start the service");
 
         Ok(())
     }

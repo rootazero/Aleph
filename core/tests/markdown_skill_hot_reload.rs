@@ -1,6 +1,6 @@
 //! Integration tests for Markdown Skill hot reload
 
-use aethecore::tools::markdown_skill::{
+use alephcore::tools::markdown_skill::{
     SkillWatcher, SkillWatcherConfig, ReloadCallback, MarkdownCliTool,
 };
 use std::sync::{Arc, Mutex};

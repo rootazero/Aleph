@@ -35,7 +35,7 @@ The Perception Layer continuously monitors OS-level events and publishes them to
 **Quick Start:**
 ```bash
 # Run daemon with perception layer
-cargo run -p aethecore -- daemon run
+cargo run -p alephcore -- daemon run
 
 # Check configuration
 cat ~/.aleph/perception.toml
@@ -97,7 +97,7 @@ aleph daemon run
 ### Programmatic Usage
 
 ```rust
-use aethecore::daemon::*;
+use alephcore::daemon::*;
 
 // Create service manager
 let service = create_service_manager()?;

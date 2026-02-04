@@ -848,54 +848,54 @@ mod tests {
     // === Conversion tests ===
 
     #[test]
-    fn test_from_generation_error_to_aether_error() {
+    fn test_from_generation_error_to_aleph_error() {
         let gen_err = GenerationError::authentication("Invalid key", "openai");
-        let aether_err: AlephError = gen_err.into();
+        let aleph_err: AlephError = gen_err.into();
 
         assert!(matches!(
-            aether_err,
+            aleph_err,
             AlephError::AuthenticationError { .. }
         ));
     }
 
     #[test]
-    fn test_from_rate_limit_to_aether_error() {
+    fn test_from_rate_limit_to_aleph_error() {
         let gen_err = GenerationError::rate_limit("Too many requests", None);
-        let aether_err: AlephError = gen_err.into();
+        let aleph_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AlephError::RateLimitError { .. }));
+        assert!(matches!(aleph_err, AlephError::RateLimitError { .. }));
     }
 
     #[test]
-    fn test_from_timeout_to_aether_error() {
+    fn test_from_timeout_to_aleph_error() {
         let gen_err = GenerationError::timeout(Duration::from_secs(30));
-        let aether_err: AlephError = gen_err.into();
+        let aleph_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AlephError::Timeout { .. }));
+        assert!(matches!(aleph_err, AlephError::Timeout { .. }));
     }
 
     #[test]
-    fn test_from_network_to_aether_error() {
+    fn test_from_network_to_aleph_error() {
         let gen_err = GenerationError::network("Connection failed");
-        let aether_err: AlephError = gen_err.into();
+        let aleph_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AlephError::NetworkError { .. }));
+        assert!(matches!(aleph_err, AlephError::NetworkError { .. }));
     }
 
     #[test]
-    fn test_from_cancelled_to_aether_error() {
+    fn test_from_cancelled_to_aleph_error() {
         let gen_err = GenerationError::cancelled();
-        let aether_err: AlephError = gen_err.into();
+        let aleph_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AlephError::Cancelled));
+        assert!(matches!(aleph_err, AlephError::Cancelled));
     }
 
     #[test]
-    fn test_from_provider_error_to_aether_error() {
+    fn test_from_provider_error_to_aleph_error() {
         let gen_err = GenerationError::provider("Server error", Some(500), "openai");
-        let aether_err: AlephError = gen_err.into();
+        let aleph_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AlephError::ProviderError { .. }));
+        assert!(matches!(aleph_err, AlephError::ProviderError { .. }));
     }
 
     #[test]

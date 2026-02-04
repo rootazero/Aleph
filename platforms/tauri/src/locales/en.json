@@ -311,9 +311,9 @@
     "processing": "Processing..."
   },
   "tray": {
-    "about": "About Aether",
+    "about": "About Aleph",
     "settings": "Settings...",
-    "quit": "Quit Aether",
+    "quit": "Quit Aleph",
     "defaultProvider": "Default Provider",
     "showHalo": "Show Halo",
     "openConversation": "Open Conversation"

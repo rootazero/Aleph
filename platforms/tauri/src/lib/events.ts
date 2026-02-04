@@ -162,35 +162,35 @@ export interface AlephEventHandlers {
 }
 
 /**
- * Subscribe to all Aether events
+ * Subscribe to all Aleph events
  * Returns an unlisten function to clean up all listeners
  */
-export async function subscribeToAetherEvents(
+export async function subscribeToAlephEvents(
   handlers: AlephEventHandlers
 ): Promise<UnlistenFn> {
   const unlisteners: UnlistenFn[] = [];
 
   // Core processing events
   if (handlers.onThinking) {
-    unlisteners.push(await listen('aether:thinking', handlers.onThinking));
+    unlisteners.push(await listen('aleph:thinking', handlers.onThinking));
   }
   if (handlers.onStreamChunk) {
     unlisteners.push(
-      await listen('aether:stream-chunk', (event) =>
+      await listen('aleph:stream-chunk', (event) =>
         handlers.onStreamChunk!(event.payload as StreamChunkPayload)
       )
     );
   }
   if (handlers.onComplete) {
     unlisteners.push(
-      await listen('aether:complete', (event) =>
+      await listen('aleph:complete', (event) =>
         handlers.onComplete!(event.payload as CompletePayload)
       )
     );
   }
   if (handlers.onError) {
     unlisteners.push(
-      await listen('aether:error', (event) =>
+      await listen('aleph:error', (event) =>
         handlers.onError!(event.payload as ErrorPayload)
       )
     );
@@ -199,14 +199,14 @@ export async function subscribeToAetherEvents(
   // Tool events
   if (handlers.onToolStart) {
     unlisteners.push(
-      await listen('aether:tool-start', (event) =>
+      await listen('aleph:tool-start', (event) =>
         handlers.onToolStart!(event.payload as ToolStartPayload)
       )
     );
   }
   if (handlers.onToolResult) {
     unlisteners.push(
-      await listen('aether:tool-result', (event) =>
+      await listen('aleph:tool-result', (event) =>
         handlers.onToolResult!(event.payload as ToolResultPayload)
       )
     );
@@ -214,13 +214,13 @@ export async function subscribeToAetherEvents(
 
   // Memory events
   if (handlers.onMemoryStored) {
-    unlisteners.push(await listen('aether:memory-stored', handlers.onMemoryStored));
+    unlisteners.push(await listen('aleph:memory-stored', handlers.onMemoryStored));
   }
 
   // Agent mode events
   if (handlers.onAgentModeDetected) {
     unlisteners.push(
-      await listen('aether:agent-mode-detected', (event) =>
+      await listen('aleph:agent-mode-detected', (event) =>
         handlers.onAgentModeDetected!(event.payload as AgentModePayload)
       )
     );
@@ -229,21 +229,21 @@ export async function subscribeToAetherEvents(
   // Hot-reload events
   if (handlers.onToolsChanged) {
     unlisteners.push(
-      await listen('aether:tools-changed', (event) =>
+      await listen('aleph:tools-changed', (event) =>
         handlers.onToolsChanged!(event.payload as ToolsChangedPayload)
       )
     );
   }
   if (handlers.onMcpStartupComplete) {
     unlisteners.push(
-      await listen('aether:mcp-startup-complete', (event) =>
+      await listen('aleph:mcp-startup-complete', (event) =>
         handlers.onMcpStartupComplete!(event.payload as McpStartupPayload)
       )
     );
   }
   if (handlers.onRuntimeUpdates) {
     unlisteners.push(
-      await listen('aether:runtime-updates', (event) =>
+      await listen('aleph:runtime-updates', (event) =>
         handlers.onRuntimeUpdates!(event.payload as RuntimeUpdatesPayload)
       )
     );
@@ -252,49 +252,49 @@ export async function subscribeToAetherEvents(
   // Session events
   if (handlers.onSessionStarted) {
     unlisteners.push(
-      await listen('aether:session-started', (event) =>
+      await listen('aleph:session-started', (event) =>
         handlers.onSessionStarted!(event.payload as SessionPayload)
       )
     );
   }
   if (handlers.onToolCallStarted) {
     unlisteners.push(
-      await listen('aether:tool-call-started', (event) =>
+      await listen('aleph:tool-call-started', (event) =>
         handlers.onToolCallStarted!(event.payload as ToolCallStartPayload)
       )
     );
   }
   if (handlers.onToolCallCompleted) {
     unlisteners.push(
-      await listen('aether:tool-call-completed', (event) =>
+      await listen('aleph:tool-call-completed', (event) =>
         handlers.onToolCallCompleted!(event.payload as ToolCallCompletePayload)
       )
     );
   }
   if (handlers.onToolCallFailed) {
     unlisteners.push(
-      await listen('aether:tool-call-failed', (event) =>
+      await listen('aleph:tool-call-failed', (event) =>
         handlers.onToolCallFailed!(event.payload as ToolCallFailedPayload)
       )
     );
   }
   if (handlers.onLoopProgress) {
     unlisteners.push(
-      await listen('aether:loop-progress', (event) =>
+      await listen('aleph:loop-progress', (event) =>
         handlers.onLoopProgress!(event.payload as LoopProgressPayload)
       )
     );
   }
   if (handlers.onPlanCreated) {
     unlisteners.push(
-      await listen('aether:plan-created', (event) =>
+      await listen('aleph:plan-created', (event) =>
         handlers.onPlanCreated!(event.payload as PlanCreatedPayload)
       )
     );
   }
   if (handlers.onSessionCompleted) {
     unlisteners.push(
-      await listen('aether:session-completed', (event) =>
+      await listen('aleph:session-completed', (event) =>
         handlers.onSessionCompleted!(event.payload as SessionCompletedPayload)
       )
     );
@@ -303,14 +303,14 @@ export async function subscribeToAetherEvents(
   // Sub-agent events
   if (handlers.onSubagentStarted) {
     unlisteners.push(
-      await listen('aether:subagent-started', (event) =>
+      await listen('aleph:subagent-started', (event) =>
         handlers.onSubagentStarted!(event.payload as SubagentStartedPayload)
       )
     );
   }
   if (handlers.onSubagentCompleted) {
     unlisteners.push(
-      await listen('aether:subagent-completed', (event) =>
+      await listen('aleph:subagent-completed', (event) =>
         handlers.onSubagentCompleted!(event.payload as SubagentCompletedPayload)
       )
     );
@@ -319,7 +319,7 @@ export async function subscribeToAetherEvents(
   // Plan confirmation events
   if (handlers.onPlanConfirmationRequired) {
     unlisteners.push(
-      await listen('aether:plan-confirmation-required', (event) =>
+      await listen('aleph:plan-confirmation-required', (event) =>
         handlers.onPlanConfirmationRequired!(event.payload as PlanConfirmationPayload)
       )
     );
@@ -328,7 +328,7 @@ export async function subscribeToAetherEvents(
   // Tool confirmation events
   if (handlers.onToolConfirmationRequired) {
     unlisteners.push(
-      await listen('aether:tool-confirmation-required', (event) =>
+      await listen('aleph:tool-confirmation-required', (event) =>
         handlers.onToolConfirmationRequired!(event.payload as ToolConfirmationPayload)
       )
     );
@@ -337,7 +337,7 @@ export async function subscribeToAetherEvents(
   // Clarification events
   if (handlers.onClarificationRequired) {
     unlisteners.push(
-      await listen('aether:clarification-required', (event) =>
+      await listen('aleph:clarification-required', (event) =>
         handlers.onClarificationRequired!(event.payload as ClarificationPayload)
       )
     );

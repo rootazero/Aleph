@@ -76,9 +76,9 @@ pub fn get_runtimes_dir() -> Result<PathBuf> {
 /// ```ignore
 /// // Result on Unix:
 /// // "~/.aleph/runtimes/uv/envs/default/bin:~/.aleph/runtimes/fnm/versions/default/bin:/usr/local/bin:/usr/bin"
-/// let path = build_aether_path(&registry);
+/// let path = build_aleph_path(&registry);
 /// ```
-pub fn build_aether_path(registry: &RuntimeRegistry) -> String {
+pub fn build_aleph_path(registry: &RuntimeRegistry) -> String {
     let mut paths: Vec<PathBuf> = Vec::new();
 
     // Add Aleph runtime bin directories (installed runtimes only)

@@ -375,7 +375,7 @@ export function PluginsSettings() {
         <div>
           <h1 className="text-title mb-1">{t('settings.plugins.title', 'Plugins')}</h1>
           <p className="text-caption text-muted-foreground">
-            {t('settings.plugins.description', 'Extend Aether with third-party plugins')}
+            {t('settings.plugins.description', 'Extend Aleph with third-party plugins')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -424,7 +424,7 @@ export function PluginsSettings() {
             <Plug className="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p>{t('settings.plugins.noPlugins', 'No plugins installed')}</p>
             <p className="text-caption mt-1">
-              {t('settings.plugins.noPluginsHint', "Install plugins to extend Aether's functionality")}
+              {t('settings.plugins.noPluginsHint', "Install plugins to extend Aleph's functionality")}
             </p>
           </div>
         ) : (
@@ -447,7 +447,7 @@ export function PluginsSettings() {
         <div className="flex items-start gap-sm">
           <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <span>
-            {t('settings.plugins.hint', 'Plugins can add new tools, integrations, and capabilities to Aether. Install plugins from Git repositories, ZIP archives, or local folders.')}
+            {t('settings.plugins.hint', 'Plugins can add new tools, integrations, and capabilities to Aleph. Install plugins from Git repositories, ZIP archives, or local folders.')}
           </span>
         </div>
       </InfoBox>

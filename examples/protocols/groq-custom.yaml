@@ -44,8 +44,8 @@ differences:
   #   mixtral-8x7b: mixtral-8x7b-32768
 
 # Usage:
-# 1. Copy this file to ~/.aether/protocols/groq-custom.yaml
+# 1. Copy this file to ~/.aleph/protocols/groq-custom.yaml
 # 2. In your provider config, reference it:
 #    protocol: groq-custom
 # 3. Or use it with --protocol flag:
-#    aether chat --protocol groq-custom --model llama-3-70b
+#    aleph chat --protocol groq-custom --model llama-3-70b

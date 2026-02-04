@@ -28,7 +28,7 @@
 //! let installer = NpmInstaller::new(registry);
 //!
 //! // Install an npm package
-//! installer.install("@anthropic/aether-plugin@1.0.0").await?;
+//! installer.install("@anthropic/aleph-plugin@1.0.0").await?;
 //!
 //! // Run a JS plugin
 //! let runtime = PluginRuntime::new(&registry)?;
@@ -148,7 +148,7 @@ impl NpmInstaller {
         // Create package.json if it doesn't exist
         let package_json = self.install_dir.join("package.json");
         if !package_json.exists() {
-            let content = r#"{"name": "aether-plugins", "version": "1.0.0", "private": true}"#;
+            let content = r#"{"name": "aleph-plugins", "version": "1.0.0", "private": true}"#;
             std::fs::write(&package_json, content).map_err(|e| {
                 ExtensionError::Runtime(format!("Failed to create package.json: {}", e))
             })?;

@@ -1,6 +1,6 @@
-# Aether Tauri Build Scripts
+# Aleph Tauri Build Scripts
 
-This directory contains scripts for building and releasing the Tauri cross-platform version of Aether.
+This directory contains scripts for building and releasing the Tauri cross-platform version of Aleph.
 
 ## Scripts
 

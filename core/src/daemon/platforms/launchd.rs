@@ -158,7 +158,7 @@ impl ServiceManager for LaunchdService {
     async fn start(&self) -> Result<()> {
         if !self.plist_path.exists() {
             return Err(DaemonError::ServiceError(
-                "Service not installed. Run 'aether daemon install' first.".to_string(),
+                "Service not installed. Run 'aleph daemon install' first.".to_string(),
             ));
         }
 

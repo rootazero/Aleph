@@ -1,7 +1,7 @@
 //! Integration tests for ToolServer replace API
 
-use aethecore::tools::{AetherTool, AetherToolServer};
-use aethecore::Result;
+use alephcore::tools::{AlephTool, AlephToolServer};
+use alephcore::Result;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ struct TestOutput {
 }
 
 #[async_trait]
-impl AetherTool for TestToolV1 {
+impl AlephTool for TestToolV1 {
     const NAME: &'static str = "test_tool";
     const DESCRIPTION: &'static str = "Test tool version 1";
 
@@ -40,7 +40,7 @@ impl AetherTool for TestToolV1 {
 struct TestToolV2;
 
 #[async_trait]
-impl AetherTool for TestToolV2 {
+impl AlephTool for TestToolV2 {
     const NAME: &'static str = "test_tool";
     const DESCRIPTION: &'static str = "Test tool version 2 (updated)";
 
@@ -56,7 +56,7 @@ impl AetherTool for TestToolV2 {
 
 #[tokio::test]
 async fn test_replace_tool_new_addition() {
-    let server = AetherToolServer::new();
+    let server = AlephToolServer::new();
 
     // Add a new tool
     let update_info = server.replace_tool(TestToolV1).await;
@@ -73,7 +73,7 @@ async fn test_replace_tool_new_addition() {
 
 #[tokio::test]
 async fn test_replace_tool_update_existing() {
-    let server = AetherToolServer::new();
+    let server = AlephToolServer::new();
 
     // Add v1
     server.add_tool(TestToolV1).await;
@@ -97,7 +97,7 @@ async fn test_replace_tool_update_existing() {
 
 #[tokio::test]
 async fn test_replace_tool_execution_updated() {
-    let server = AetherToolServer::new();
+    let server = AlephToolServer::new();
 
     // Add v1
     server.add_tool(TestToolV1).await;
@@ -122,7 +122,7 @@ async fn test_replace_tool_execution_updated() {
 
 #[tokio::test]
 async fn test_replace_tool_handle() {
-    let server = AetherToolServer::new();
+    let server = AlephToolServer::new();
     let handle = server.handle();
 
     // Add v1 via handle
@@ -140,7 +140,7 @@ async fn test_replace_tool_handle() {
 
 #[tokio::test]
 async fn test_multiple_replacements() {
-    let server = AetherToolServer::new();
+    let server = AlephToolServer::new();
 
     // First addition
     let info1 = server.replace_tool(TestToolV1).await;

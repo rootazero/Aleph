@@ -17,18 +17,18 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use async_trait::async_trait;
 use tempfile::tempdir;
 
-use aethecore::builtin_tools::sessions::{
+use alephcore::builtin_tools::sessions::{
     SessionsListArgs, SessionsListTool, SessionsSendArgs, SessionsSendStatus, SessionsSendTool,
 };
-use aethecore::gateway::a2a_policy::AgentToAgentPolicy;
-use aethecore::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
-use aethecore::gateway::context::GatewayContext;
-use aethecore::gateway::event_emitter::EventEmitter;
-use aethecore::gateway::execution_adapter::ExecutionAdapter;
-use aethecore::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};
-use aethecore::gateway::router::SessionKey;
-use aethecore::gateway::session_manager::{SessionManager, SessionManagerConfig};
-use aethecore::tools::AetherTool;
+use alephcore::gateway::a2a_policy::AgentToAgentPolicy;
+use alephcore::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+use alephcore::gateway::context::GatewayContext;
+use alephcore::gateway::event_emitter::EventEmitter;
+use alephcore::gateway::execution_adapter::ExecutionAdapter;
+use alephcore::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};
+use alephcore::gateway::router::SessionKey;
+use alephcore::gateway::session_manager::{SessionManager, SessionManagerConfig};
+use alephcore::tools::AlephTool;
 
 // ============================================================================
 // Test Infrastructure
@@ -184,7 +184,7 @@ async fn test_list_sessions_empty() {
         message_limit: None,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 0);
     assert!(result.sessions.is_empty());
 }
@@ -213,7 +213,7 @@ async fn test_list_sessions_with_multiple_types() {
         message_limit: None,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 3);
 }
 
@@ -249,7 +249,7 @@ async fn test_list_sessions_filter_by_kind_task() {
         message_limit: None,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 2);
     for session in &result.sessions {
         assert_eq!(session.kind, "task");
@@ -284,7 +284,7 @@ async fn test_list_sessions_filter_by_multiple_kinds() {
         message_limit: None,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 2);
 
     let kinds: Vec<&str> = result.sessions.iter().map(|s| s.kind.as_str()).collect();
@@ -313,7 +313,7 @@ async fn test_list_sessions_with_limit() {
         message_limit: None,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 5);
 }
 
@@ -349,7 +349,7 @@ async fn test_list_sessions_with_messages() {
         message_limit: Some(5),
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 1);
 
     let session = &result.sessions[0];
@@ -391,7 +391,7 @@ async fn test_list_with_permissive_policy() {
         message_limit: None,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 3);
 }
 
@@ -426,7 +426,7 @@ async fn test_list_with_restrictive_policy() {
         message_limit: None,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 1);
     assert!(result.sessions[0].key.contains("main"));
 }
@@ -461,7 +461,7 @@ async fn test_list_with_prefix_pattern_policy() {
         message_limit: None,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 2);
 
     for session in &result.sessions {
@@ -495,7 +495,7 @@ async fn test_list_with_disabled_policy() {
         message_limit: None,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.count, 1);
     assert!(result.sessions[0].key.contains("agent:main:"));
 }
@@ -514,7 +514,7 @@ async fn test_send_without_context_returns_error() {
         timeout_seconds: 0,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.status, SessionsSendStatus::Error);
     assert!(result
         .error
@@ -536,7 +536,7 @@ async fn test_send_invalid_session_key_returns_error() {
         timeout_seconds: 0,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.status, SessionsSendStatus::Error);
     assert!(result.error.as_ref().unwrap().contains("Invalid session key"));
 }
@@ -559,7 +559,7 @@ async fn test_send_a2a_policy_denial() {
         timeout_seconds: 30,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.status, SessionsSendStatus::Forbidden);
     assert!(result.error.as_ref().unwrap().contains("A2A policy denies"));
 }
@@ -582,7 +582,7 @@ async fn test_send_fire_and_forget() {
         timeout_seconds: 0, // Fire-and-forget
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.status, SessionsSendStatus::Accepted);
     assert!(result.session_key.is_some());
     assert!(result.reply.is_none()); // No reply in fire-and-forget mode
@@ -608,7 +608,7 @@ async fn test_send_agent_not_found() {
         timeout_seconds: 30,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.status, SessionsSendStatus::Error);
     assert!(result
         .error
@@ -635,7 +635,7 @@ async fn test_send_wait_mode_execution_failure() {
         timeout_seconds: 5, // Wait mode
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.status, SessionsSendStatus::Error);
     assert!(result.error.as_ref().unwrap().contains("Execution failed"));
 }
@@ -658,7 +658,7 @@ async fn test_send_default_to_main_session() {
         timeout_seconds: 0,
     };
 
-    let result = AetherTool::call(&tool, args).await.unwrap();
+    let result = AlephTool::call(&tool, args).await.unwrap();
     assert_eq!(result.status, SessionsSendStatus::Accepted);
 }
 
@@ -698,7 +698,7 @@ async fn test_list_then_send_workflow() {
         message_limit: None,
     };
 
-    let list_result = AetherTool::call(&list_tool, list_args).await.unwrap();
+    let list_result = AlephTool::call(&list_tool, list_args).await.unwrap();
     assert!(list_result.count >= 2);
 
     // Find the translator session
@@ -716,7 +716,7 @@ async fn test_list_then_send_workflow() {
         timeout_seconds: 0, // Fire-and-forget
     };
 
-    let send_result = AetherTool::call(&send_tool, send_args).await.unwrap();
+    let send_result = AlephTool::call(&send_tool, send_args).await.unwrap();
     assert_eq!(send_result.status, SessionsSendStatus::Accepted);
 
     // Give background task time to complete
@@ -758,7 +758,7 @@ async fn test_policy_consistency_across_tools() {
         message_limit: None,
     };
 
-    let list_result = AetherTool::call(&list_tool, list_args).await.unwrap();
+    let list_result = AlephTool::call(&list_tool, list_args).await.unwrap();
     assert_eq!(list_result.count, 1);
     assert!(list_result.sessions[0].key.contains("work-agent"));
 
@@ -770,7 +770,7 @@ async fn test_policy_consistency_across_tools() {
         timeout_seconds: 0,
     };
 
-    let send_result = AetherTool::call(&send_tool, send_args).await.unwrap();
+    let send_result = AlephTool::call(&send_tool, send_args).await.unwrap();
     assert_eq!(send_result.status, SessionsSendStatus::Accepted);
 
     // Send to personal-agent: should be forbidden
@@ -780,7 +780,7 @@ async fn test_policy_consistency_across_tools() {
         timeout_seconds: 0,
     };
 
-    let send_result_personal = AetherTool::call(&send_tool, send_args_personal).await.unwrap();
+    let send_result_personal = AlephTool::call(&send_tool, send_args_personal).await.unwrap();
     assert_eq!(send_result_personal.status, SessionsSendStatus::Forbidden);
 }
 
@@ -811,7 +811,7 @@ async fn test_same_agent_always_allowed() {
         message_limit: None,
     };
 
-    let list_result = AetherTool::call(&list_tool, list_args).await.unwrap();
+    let list_result = AlephTool::call(&list_tool, list_args).await.unwrap();
     assert_eq!(list_result.count, 1);
 
     // Send: main agent should be able to send to itself
@@ -822,6 +822,6 @@ async fn test_same_agent_always_allowed() {
         timeout_seconds: 0,
     };
 
-    let send_result = AetherTool::call(&send_tool, send_args).await.unwrap();
+    let send_result = AlephTool::call(&send_tool, send_args).await.unwrap();
     assert_eq!(send_result.status, SessionsSendStatus::Accepted);
 }

@@ -126,13 +126,13 @@ impl OAuthStorage {
     /// Get the default storage location
     ///
     /// Uses the system data directory:
-    /// - macOS: ~/Library/Application Support/aether/mcp-auth.json
-    /// - Linux: ~/.local/share/aether/mcp-auth.json
-    /// - Windows: %APPDATA%\aether\mcp-auth.json
+    /// - macOS: ~/Library/Application Support/aleph/mcp-auth.json
+    /// - Linux: ~/.local/share/aleph/mcp-auth.json
+    /// - Windows: %APPDATA%\aleph\mcp-auth.json
     pub fn default_path() -> PathBuf {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("aether")
+            .join("aleph")
             .join("mcp-auth.json")
     }
 
