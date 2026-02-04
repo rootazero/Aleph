@@ -110,8 +110,10 @@ impl DaemonCli {
 
     async fn run(&self) -> Result<()> {
         use crate::daemon::ipc::IpcServer;
+        use crate::daemon::dispatcher::{Dispatcher, DispatcherConfig};
+        use crate::daemon::worldmodel::{WorldModel, WorldModelConfig};
 
-        info!("Starting Aether daemon with Perception Layer...");
+        info!("Starting Aether daemon with Perception Layer, WorldModel, and Dispatcher...");
 
         // 1. Load configurations
         let config = DaemonConfig::default();
@@ -121,7 +123,7 @@ impl DaemonCli {
         // 2. Create EventBus
         let event_bus = Arc::new(DaemonEventBus::new(1000));
 
-        // 3. Create and register Watchers
+        // 3. Create and register Watchers (Perception Layer)
         let mut registry = WatcherRegistry::new();
 
         if perception_config.enabled {
@@ -158,7 +160,33 @@ impl DaemonCli {
             info!("Perception layer disabled in configuration");
         }
 
-        // 5. Start IPC Server
+        // 5. Create and start WorldModel (Phase 3)
+        info!("Initializing WorldModel...");
+        let worldmodel_config = WorldModelConfig::default();
+        let worldmodel = Arc::new(WorldModel::new(worldmodel_config, event_bus.clone()).await?);
+
+        let worldmodel_clone = worldmodel.clone();
+        let worldmodel_handle = tokio::spawn(async move {
+            if let Err(e) = worldmodel_clone.run().await {
+                error!("WorldModel error: {}", e);
+            }
+        });
+        info!("WorldModel started");
+
+        // 6. Create and start Dispatcher (Phase 4)
+        info!("Initializing Dispatcher...");
+        let dispatcher_config = DispatcherConfig::default();
+        let dispatcher = Dispatcher::new(dispatcher_config, worldmodel.clone(), event_bus.clone());
+
+        let dispatcher_clone = dispatcher.clone();
+        let dispatcher_handle = tokio::spawn(async move {
+            if let Err(e) = dispatcher_clone.run().await {
+                error!("Dispatcher error: {}", e);
+            }
+        });
+        info!("Dispatcher started");
+
+        // 7. Start IPC Server
         let server = IpcServer::new(config.socket_path.clone());
         let server_handle = tokio::spawn(async move {
             if let Err(e) = server.start().await {
@@ -166,12 +194,14 @@ impl DaemonCli {
             }
         });
 
-        // 6. Wait for Ctrl+C
+        // 8. Wait for Ctrl+C
         tokio::signal::ctrl_c().await?;
 
-        // 7. Graceful shutdown
+        // 9. Graceful shutdown
         info!("Shutting down daemon...");
         registry.shutdown_all().await?;
+        worldmodel_handle.abort();
+        dispatcher_handle.abort();
         server_handle.abort();
         info!("Daemon stopped");
 
