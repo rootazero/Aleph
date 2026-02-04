@@ -131,7 +131,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
             config.base_url = Some(preset.base_url.to_string());
         }
         // Set protocol if not provided
-        if config.protocol.is_none() && config.provider_type.is_none() {
+        if config.protocol.is_none() {
             config.protocol = Some(preset.protocol.to_string());
         }
         // Set color if default
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn test_create_claude_provider() {
         let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
-        config.provider_type = Some("claude".to_string());
+        config.protocol = Some("anthropic".to_string());
 
         let provider = create_provider("claude", config);
         assert!(provider.is_ok());
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn test_create_gemini_provider() {
         let mut config = ProviderConfig::test_config("gemini-1.5-flash");
-        config.provider_type = Some("gemini".to_string());
+        config.protocol = Some("gemini".to_string());
 
         let provider = create_provider("gemini", config);
         assert!(provider.is_ok());
@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn test_create_ollama_provider() {
         let mut config = ProviderConfig::test_config("llama3.2");
-        config.provider_type = Some("ollama".to_string());
+        config.protocol = Some("ollama".to_string());
         config.api_key = None;
         config.timeout_seconds = 60;
 
@@ -548,7 +548,7 @@ mod tests {
     fn test_create_custom_openai_compatible_provider() {
         // DeepSeek as example
         let mut config = ProviderConfig::test_config("deepseek-chat");
-        config.provider_type = Some("openai".to_string());
+        config.protocol = Some("openai".to_string());
         config.base_url = Some("https://api.deepseek.com".to_string());
 
         let provider = create_provider("deepseek", config);
@@ -557,46 +557,12 @@ mod tests {
         assert_eq!(provider.unwrap().name(), "deepseek");
     }
 
-    #[test]
-    fn test_infer_provider_type_explicit() {
-        let mut config = ProviderConfig::test_config("gpt-4o");
-        config.provider_type = Some("claude".to_string());
-
-        // Explicit provider_type should take precedence
-        assert_eq!(config.infer_provider_type("openai"), "claude");
-    }
+    // Tests for provider_type inference removed - this functionality moved to protocol registry
 
     #[test]
-    fn test_infer_provider_type_from_name() {
+    fn test_create_unknown_protocol() {
         let mut config = ProviderConfig::test_config("model");
-        config.provider_type = None;
-
-        // Infer from name
-        assert_eq!(config.infer_provider_type("openai"), "openai");
-        assert_eq!(config.infer_provider_type("claude"), "claude");
-        assert_eq!(config.infer_provider_type("gemini"), "gemini");
-        assert_eq!(config.infer_provider_type("google"), "gemini");
-        assert_eq!(config.infer_provider_type("ollama"), "ollama");
-        assert_eq!(config.infer_provider_type("deepseek"), "openai");
-        assert_eq!(config.infer_provider_type("moonshot"), "openai");
-    }
-
-    #[test]
-    fn test_infer_provider_type_case_insensitive() {
-        let mut config = ProviderConfig::test_config("model");
-        config.provider_type = None;
-        config.api_key = None;
-
-        // Case insensitive inference
-        assert_eq!(config.infer_provider_type("CLAUDE"), "claude");
-        assert_eq!(config.infer_provider_type("Claude"), "claude");
-        assert_eq!(config.infer_provider_type("OLLAMA"), "ollama");
-    }
-
-    #[test]
-    fn test_create_unknown_provider_type() {
-        let mut config = ProviderConfig::test_config("model");
-        config.provider_type = Some("unknown".to_string());
+        config.protocol = Some("unknown".to_string());
 
         let result = create_provider("test", config);
         assert!(result.is_err());
@@ -607,11 +573,11 @@ mod tests {
     fn test_multiple_custom_providers() {
         // Simulate configuring multiple custom providers
         let mut deepseek_config = ProviderConfig::test_config("deepseek-chat");
-        deepseek_config.provider_type = Some("openai".to_string());
+        deepseek_config.protocol = Some("openai".to_string());
         deepseek_config.base_url = Some("https://api.deepseek.com".to_string());
 
         let mut moonshot_config = ProviderConfig::test_config("moonshot-v1-8k");
-        moonshot_config.provider_type = Some("openai".to_string());
+        moonshot_config.protocol = Some("openai".to_string());
         moonshot_config.base_url = Some("https://api.moonshot.cn/v1".to_string());
         moonshot_config.max_tokens = Some(8192);
 

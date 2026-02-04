@@ -159,7 +159,7 @@ fn test_config_ollama_no_api_key() {
     // Ollama provider doesn't need API key
     let mut provider = ProviderConfig::test_config("llama3.2");
     provider.api_key = None; // Ollama doesn't need API key
-    provider.provider_type = Some("ollama".to_string());
+    provider.protocol = Some("ollama".to_string());
     config.providers.insert("ollama".to_string(), provider);
 
     // Should pass validation (no API key needed for Ollama)
@@ -224,24 +224,4 @@ fn test_regex_validation_invalid_patterns() {
     }
 }
 
-#[test]
-fn test_provider_type_inference() {
-    let mut provider = ProviderConfig::test_config("test-model");
-    provider.provider_type = None; // Test inference
-
-    // Test inference from provider name
-    assert_eq!(provider.infer_provider_type("openai"), "openai");
-    assert_eq!(provider.infer_provider_type("claude"), "claude");
-    assert_eq!(provider.infer_provider_type("ollama"), "ollama");
-    assert_eq!(provider.infer_provider_type("deepseek"), "openai"); // OpenAI-compatible
-    assert_eq!(provider.infer_provider_type("custom"), "openai"); // Default
-}
-
-#[test]
-fn test_provider_type_explicit_override() {
-    let mut provider = ProviderConfig::test_config("test-model");
-    provider.provider_type = Some("custom".to_string());
-
-    // Explicit type should override inference
-    assert_eq!(provider.infer_provider_type("openai"), "custom");
-}
+// Tests for provider_type inference removed - this functionality moved to protocol registry
