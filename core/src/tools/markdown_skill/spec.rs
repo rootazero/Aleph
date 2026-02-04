@@ -24,7 +24,7 @@ pub struct AetherSkillSpec {
 }
 
 /// Skill metadata (OpenClaw compatible + Aether extensions)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillMetadata {
     /// OpenClaw compatibility: required binaries
     #[serde(default)]
