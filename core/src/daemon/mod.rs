@@ -24,8 +24,8 @@ pub use cli::{DaemonCli, DaemonCommand};
 pub use error::{DaemonError, Result};
 pub use event_bus::DaemonEventBus;
 pub use dispatcher::{
-    ActionType, DispatcherConfig, DispatcherMode, NotificationPriority, Policy, PolicyEngine,
-    ProposedAction, RiskLevel,
+    ActionExecutor, ActionType, Dispatcher, DispatcherConfig, DispatcherMode, NotificationPriority,
+    Policy, PolicyEngine, ProposedAction, RiskLevel,
 };
 pub use events::{
     DaemonEvent, DerivedEvent, FsEventType, PressureLevel, PressureType, ProcessEventType,
