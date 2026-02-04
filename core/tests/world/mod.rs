@@ -2,6 +2,15 @@
 
 use cucumber::World;
 use tempfile::TempDir;
+use rhai::{Engine, AST};
+
+/// Scripting engine test context
+#[derive(Debug, Default)]
+pub struct ScriptingContext {
+    pub engine: Option<Engine>,
+    pub compile_result: Option<Result<AST, String>>,
+    pub eval_result: Option<Result<i64, String>>,
+}
 
 /// Main World struct for all BDD tests
 /// Each module context is lazily initialized via Option<T>
@@ -15,7 +24,6 @@ pub struct AlephWorld {
     /// Last error message captured
     pub last_error: Option<String>,
 
-    // ═══ Module Contexts (added as batches are implemented) ═══
-    // pub config: Option<ConfigContext>,
-    // pub scripting: Option<ScriptingContext>,
+    // ═══ Module Contexts ═══
+    pub scripting: Option<ScriptingContext>,
 }
