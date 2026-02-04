@@ -8,8 +8,8 @@
 *.a
 
 # Platform libraries (built from Rust, not committed)
-platforms/macos/Aether/Frameworks/*.dylib
-platforms/windows/Aether/libs/*.dll
+platforms/macos/Aleph/Frameworks/*.dylib
+platforms/windows/Aleph/libs/*.dll
 
 # Cargo files
 Cargo.lock
@@ -30,8 +30,8 @@ Cargo.lock
 *.db-shm
 *.db-wal
 **/test_*.db
-**/.aether/memory*.db
-**/.aether/memory*.lance
+**/.aleph/memory*.db
+**/.aleph/memory*.lance
 
 # Swift Package Manager / xcodebuild
 platforms/macos/.build/
@@ -90,7 +90,7 @@ icons/
 !platforms/tauri/src-tauri/icons/
 agentstructure/
 .worktrees/
-Aether.dmg
+Aleph.dmg
 
 # Git worktrees
 .worktrees/
