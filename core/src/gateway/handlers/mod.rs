@@ -15,6 +15,7 @@
 //! | plugins | Plugin lifecycle |
 //! | services | Background service lifecycle |
 //! | skills | Skills management |
+//! | markdown_skills | Markdown skill runtime management |
 //! | mcp | MCP integration |
 //! | providers | AI provider management |
 //! | profiles | Auth profile management |
@@ -54,6 +55,7 @@ pub mod memory;
 pub mod plugins;
 pub mod services;
 pub mod skills;
+pub mod markdown_skills;
 pub mod mcp;
 pub mod providers;
 pub mod profiles;
@@ -252,6 +254,12 @@ impl HandlerRegistry {
         registry.register("mcp.list_pending_approvals", mcp::handle_list_pending_approvals);
         registry.register("mcp.respond_approval", mcp::handle_respond_approval);
         registry.register("mcp.cancel_approval", mcp::handle_cancel_approval);
+
+        // Markdown Skills handlers
+        registry.register("markdown_skills.load", markdown_skills::handle_load);
+        registry.register("markdown_skills.reload", markdown_skills::handle_reload);
+        registry.register("markdown_skills.list", markdown_skills::handle_list);
+        registry.register("markdown_skills.unload", markdown_skills::handle_unload);
 
         registry
     }
@@ -469,5 +477,14 @@ mod tests {
         assert!(registry.has_method("mcp.list_pending_approvals"));
         assert!(registry.has_method("mcp.respond_approval"));
         assert!(registry.has_method("mcp.cancel_approval"));
+    }
+
+    #[test]
+    fn test_markdown_skills_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("markdown_skills.load"));
+        assert!(registry.has_method("markdown_skills.reload"));
+        assert!(registry.has_method("markdown_skills.list"));
+        assert!(registry.has_method("markdown_skills.unload"));
     }
 }
