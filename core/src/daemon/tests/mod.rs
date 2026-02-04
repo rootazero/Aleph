@@ -1,3 +1,5 @@
+mod service_manager_tests;
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
