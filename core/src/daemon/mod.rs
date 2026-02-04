@@ -3,6 +3,7 @@
 //! Manages Aether as a persistent system service across platforms.
 
 pub mod error;
+pub mod ipc;
 pub mod resource_governor;
 pub mod service_manager;
 pub mod types;
@@ -14,6 +15,7 @@ pub mod platforms;
 mod tests;
 
 pub use error::{DaemonError, Result};
+pub use ipc::{IpcServer, JsonRpcRequest, JsonRpcResponse};
 pub use resource_governor::{GovernorDecision, ResourceGovernor, ResourceLimits};
 pub use service_manager::{ServiceManager, create_service_manager};
 pub use types::{DaemonConfig, DaemonStatus, ServiceStatus};
