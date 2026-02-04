@@ -45,7 +45,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<Config>) -> JsonRp
             name: name.clone(),
             enabled: cfg.enabled,
             model: cfg.model.clone(),
-            provider_type: cfg.provider_type.as_ref().map(|t| format!("{:?}", t)),
+            provider_type: Some(cfg.protocol()),
             is_default: default_provider.as_ref() == Some(name),
         })
         .collect();
@@ -92,7 +92,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpc
                 name: params.name.clone(),
                 enabled: cfg.enabled,
                 model: cfg.model.clone(),
-                provider_type: cfg.provider_type.as_ref().map(|t| format!("{:?}", t)),
+                provider_type: Some(cfg.protocol()),
                 is_default: default_provider.as_ref() == Some(&params.name),
             };
             JsonRpcResponse::success(request.id, json!({ "provider": info }))

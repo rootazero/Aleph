@@ -89,7 +89,7 @@ pub fn infer_capabilities(provider_type: &str, model: &str) -> Vec<String> {
                 capabilities.push("thinking".to_string());
             }
         }
-        "claude" => {
+        "anthropic" => {
             // Claude 3+ models have vision
             if model_lower.contains("claude-3") {
                 capabilities.push("vision".to_string());
@@ -214,13 +214,13 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<Config>) -> JsonRp
             true
         })
         .map(|(name, cfg)| {
-            let provider_type = cfg.infer_provider_type(name);
-            let capabilities = infer_capabilities(&provider_type, &cfg.model);
+            let protocol = cfg.protocol();
+            let capabilities = infer_capabilities(&protocol, &cfg.model);
 
             ModelInfo {
                 id: cfg.model.clone(),
                 provider: name.clone(),
-                provider_type,
+                provider_type: protocol,
                 enabled: cfg.enabled,
                 is_default: default_provider.as_ref() == Some(name),
                 capabilities,
@@ -276,13 +276,13 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpc
     match config.providers.get(&params.provider) {
         Some(cfg) => {
             let default_provider = config.general.default_provider.clone();
-            let provider_type = cfg.infer_provider_type(&params.provider);
-            let capabilities = infer_capabilities(&provider_type, &cfg.model);
+            let protocol = cfg.protocol();
+            let capabilities = infer_capabilities(&protocol, &cfg.model);
 
             let info = ModelInfo {
                 id: cfg.model.clone(),
                 provider: params.provider.clone(),
-                provider_type,
+                provider_type: protocol,
                 enabled: cfg.enabled,
                 is_default: default_provider.as_ref() == Some(&params.provider),
                 capabilities,
@@ -335,8 +335,8 @@ pub async fn handle_capabilities(request: JsonRpcRequest, config: Arc<Config>) -
 
     match config.providers.get(&params.provider) {
         Some(cfg) => {
-            let provider_type = cfg.infer_provider_type(&params.provider);
-            let capabilities = infer_capabilities(&provider_type, &cfg.model);
+            let protocol = cfg.protocol();
+            let capabilities = infer_capabilities(&protocol, &cfg.model);
 
             JsonRpcResponse::success(request.id, json!({ "capabilities": capabilities }))
         }
@@ -451,14 +451,14 @@ mod tests {
     #[test]
     fn test_infer_capabilities_claude() {
         // Claude 3.5 Sonnet has chat, vision, tools, thinking
-        let caps = infer_capabilities("claude", "claude-3-5-sonnet-20241022");
+        let caps = infer_capabilities("anthropic", "claude-3-5-sonnet-20241022");
         assert!(caps.contains(&"chat".to_string()));
         assert!(caps.contains(&"vision".to_string()));
         assert!(caps.contains(&"tools".to_string()));
         assert!(caps.contains(&"thinking".to_string()));
 
         // Claude 3 Opus has thinking and vision
-        let caps = infer_capabilities("claude", "claude-3-opus");
+        let caps = infer_capabilities("anthropic", "claude-3-opus");
         assert!(caps.contains(&"thinking".to_string()));
         assert!(caps.contains(&"vision".to_string()));
     }

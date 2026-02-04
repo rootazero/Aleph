@@ -4,7 +4,11 @@
 ///
 /// # Architecture
 ///
-/// Providers are organized by **protocol** (not vendor):
+/// Providers are organized by **protocol** (not vendor), using a registry-based system:
+///
+/// - **ProtocolRegistry**: Central registry for all protocol adapters
+///   - Built-in protocols: OpenAI, Anthropic, Gemini
+///   - Dynamic protocols: Loaded from YAML configurations at runtime
 ///
 /// - **OpenAI Protocol**: Handled by `HttpProvider` + `OpenAiProtocol` adapter
 ///   - Supports: OpenAI, DeepSeek, Moonshot, Doubao, T8Star, and any OpenAI-compatible API
@@ -25,7 +29,7 @@
 ///
 /// To add a new provider that uses an existing protocol:
 /// 1. Add a preset to `presets.rs` with base_url, protocol, and color
-/// 2. That's it! The factory will automatically route to `HttpProvider`
+/// 2. That's it! The factory will automatically route to `HttpProvider` via the registry
 ///
 /// # Example
 ///
@@ -122,6 +126,13 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 /// - `"gemini"` - Google Gemini API (native)
 /// - `"ollama"` - Local Ollama models (native)
 pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn AiProvider>> {
+    // Initialize protocol registry if not already done
+    use crate::providers::protocols::ProtocolRegistry;
+    let registry = ProtocolRegistry::global();
+    if registry.list_protocols().is_empty() {
+        registry.register_builtin();
+    }
+
     let name_lower = name.to_lowercase();
 
     // 1. Apply preset configuration if available
@@ -131,7 +142,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
             config.base_url = Some(preset.base_url.to_string());
         }
         // Set protocol if not provided
-        if config.protocol.is_none() && config.provider_type.is_none() {
+        if config.protocol.is_none() {
             config.protocol = Some(preset.protocol.to_string());
         }
         // Set color if default
@@ -140,65 +151,33 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
         }
     }
 
-    // 2. Determine protocol
-    let protocol = config.protocol();
+    // 2. Determine protocol name
+    let protocol_name = config.protocol();
 
-    // 3. Route based on protocol
-    match protocol.as_str() {
-        "openai" => {
-            // Use new HttpProvider + OpenAiProtocol
-            use std::time::Duration;
-
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(config.timeout_seconds))
-                .build()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
-
-            let adapter = Arc::new(protocols::OpenAiProtocol::new(client));
-            let provider = HttpProvider::new(name.to_string(), config, adapter)?;
-            Ok(Arc::new(provider))
-        }
-
-        "claude" | "anthropic" => {
-            // Use HttpProvider + AnthropicProtocol
-            use std::time::Duration;
-
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(config.timeout_seconds))
-                .build()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
-
-            let adapter = Arc::new(protocols::AnthropicProtocol::new(client));
-            let provider = HttpProvider::new(name.to_string(), config, adapter)?;
-            Ok(Arc::new(provider))
-        }
-        "gemini" => {
-            // Use HttpProvider + GeminiProtocol
-            use std::time::Duration;
-
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(config.timeout_seconds))
-                .build()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
-
-            let adapter = Arc::new(protocols::GeminiProtocol::new(client));
-            let provider = HttpProvider::new(name.to_string(), config, adapter)?;
-            Ok(Arc::new(provider))
-        }
-        "ollama" => {
-            let provider = OllamaProvider::new(name.to_string(), config)?;
-            Ok(Arc::new(provider))
-        }
-        "mock" => {
-            let provider = MockProvider::new("Mock response".to_string());
-            Ok(Arc::new(provider))
-        }
-
-        unknown => Err(AetherError::invalid_config(format!(
-            "Unknown protocol: '{}'. Supported: openai, claude, anthropic, gemini, ollama, mock.",
-            unknown
-        ))),
+    // 3. Special case: Ollama still uses native implementation
+    if protocol_name == "ollama" {
+        return Ok(Arc::new(OllamaProvider::new(name.to_string(), config)?));
     }
+
+    // Special case: Mock provider for testing
+    if protocol_name == "mock" {
+        return Ok(Arc::new(MockProvider::new("Mock response".to_string())));
+    }
+
+    // 4. Get protocol adapter from registry
+    let adapter = registry
+        .get(&protocol_name)
+        .ok_or_else(|| {
+            AetherError::invalid_config(format!(
+                "Unknown protocol: '{}'. Available: {:?}",
+                protocol_name,
+                registry.list_protocols()
+            ))
+        })?;
+
+    // 5. Use HttpProvider with dynamic protocol
+    let provider = HttpProvider::new(name.to_string(), config, adapter)?;
+    Ok(Arc::new(provider))
 }
 
 /// Unified interface for AI providers
@@ -515,7 +494,7 @@ mod tests {
     #[test]
     fn test_create_claude_provider() {
         let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
-        config.provider_type = Some("claude".to_string());
+        config.protocol = Some("anthropic".to_string());
 
         let provider = create_provider("claude", config);
         assert!(provider.is_ok());
@@ -525,7 +504,7 @@ mod tests {
     #[test]
     fn test_create_gemini_provider() {
         let mut config = ProviderConfig::test_config("gemini-1.5-flash");
-        config.provider_type = Some("gemini".to_string());
+        config.protocol = Some("gemini".to_string());
 
         let provider = create_provider("gemini", config);
         assert!(provider.is_ok());
@@ -535,7 +514,7 @@ mod tests {
     #[test]
     fn test_create_ollama_provider() {
         let mut config = ProviderConfig::test_config("llama3.2");
-        config.provider_type = Some("ollama".to_string());
+        config.protocol = Some("ollama".to_string());
         config.api_key = None;
         config.timeout_seconds = 60;
 
@@ -548,7 +527,7 @@ mod tests {
     fn test_create_custom_openai_compatible_provider() {
         // DeepSeek as example
         let mut config = ProviderConfig::test_config("deepseek-chat");
-        config.provider_type = Some("openai".to_string());
+        config.protocol = Some("openai".to_string());
         config.base_url = Some("https://api.deepseek.com".to_string());
 
         let provider = create_provider("deepseek", config);
@@ -557,46 +536,12 @@ mod tests {
         assert_eq!(provider.unwrap().name(), "deepseek");
     }
 
-    #[test]
-    fn test_infer_provider_type_explicit() {
-        let mut config = ProviderConfig::test_config("gpt-4o");
-        config.provider_type = Some("claude".to_string());
-
-        // Explicit provider_type should take precedence
-        assert_eq!(config.infer_provider_type("openai"), "claude");
-    }
+    // Tests for provider_type inference removed - this functionality moved to protocol registry
 
     #[test]
-    fn test_infer_provider_type_from_name() {
+    fn test_create_unknown_protocol() {
         let mut config = ProviderConfig::test_config("model");
-        config.provider_type = None;
-
-        // Infer from name
-        assert_eq!(config.infer_provider_type("openai"), "openai");
-        assert_eq!(config.infer_provider_type("claude"), "claude");
-        assert_eq!(config.infer_provider_type("gemini"), "gemini");
-        assert_eq!(config.infer_provider_type("google"), "gemini");
-        assert_eq!(config.infer_provider_type("ollama"), "ollama");
-        assert_eq!(config.infer_provider_type("deepseek"), "openai");
-        assert_eq!(config.infer_provider_type("moonshot"), "openai");
-    }
-
-    #[test]
-    fn test_infer_provider_type_case_insensitive() {
-        let mut config = ProviderConfig::test_config("model");
-        config.provider_type = None;
-        config.api_key = None;
-
-        // Case insensitive inference
-        assert_eq!(config.infer_provider_type("CLAUDE"), "claude");
-        assert_eq!(config.infer_provider_type("Claude"), "claude");
-        assert_eq!(config.infer_provider_type("OLLAMA"), "ollama");
-    }
-
-    #[test]
-    fn test_create_unknown_provider_type() {
-        let mut config = ProviderConfig::test_config("model");
-        config.provider_type = Some("unknown".to_string());
+        config.protocol = Some("unknown".to_string());
 
         let result = create_provider("test", config);
         assert!(result.is_err());
@@ -607,11 +552,11 @@ mod tests {
     fn test_multiple_custom_providers() {
         // Simulate configuring multiple custom providers
         let mut deepseek_config = ProviderConfig::test_config("deepseek-chat");
-        deepseek_config.provider_type = Some("openai".to_string());
+        deepseek_config.protocol = Some("openai".to_string());
         deepseek_config.base_url = Some("https://api.deepseek.com".to_string());
 
         let mut moonshot_config = ProviderConfig::test_config("moonshot-v1-8k");
-        moonshot_config.provider_type = Some("openai".to_string());
+        moonshot_config.protocol = Some("openai".to_string());
         moonshot_config.base_url = Some("https://api.moonshot.cn/v1".to_string());
         moonshot_config.max_tokens = Some(8192);
 

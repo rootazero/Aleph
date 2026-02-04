@@ -54,13 +54,13 @@ impl Config {
 
         // Validate provider configurations
         for (name, provider) in &self.providers {
-            let provider_type = provider.infer_provider_type(name);
+            let protocol = provider.protocol();
 
             // Check API key for cloud providers (not required for Ollama)
-            if (provider_type == "openai" || provider_type == "claude" || provider_type == "gemini")
+            if (protocol == "openai" || protocol == "anthropic" || protocol == "gemini")
                 && provider.api_key.is_none()
             {
-                error!(provider = %name, provider_type = %provider_type, "Provider missing API key");
+                error!(provider = %name, protocol = %protocol, "Provider missing API key");
                 return Err(AetherError::invalid_config(format!(
                     "Provider '{}' requires an API key",
                     name
@@ -78,8 +78,8 @@ impl Config {
 
             // Validate temperature if specified (provider-specific ranges)
             if let Some(temp) = provider.temperature {
-                let (min, max, provider_name): (f32, f32, &str) = match provider_type.as_str() {
-                    "claude" => (0.0, 1.0, "Claude"),
+                let (min, max, provider_name): (f32, f32, &str) = match protocol.as_str() {
+                    "anthropic" => (0.0, 1.0, "Claude"),
                     "openai" => (0.0, 2.0, "OpenAI"),
                     "gemini" => (0.0, 2.0, "Gemini"),
                     "ollama" => (0.0, f32::MAX, "Ollama"),
@@ -129,7 +129,7 @@ impl Config {
             }
 
             // Validate OpenAI-specific parameters
-            if provider_type == "openai" {
+            if protocol == "openai" {
                 if let Some(freq_pen) = provider.frequency_penalty {
                     if !(-2.0..=2.0).contains(&freq_pen) {
                         error!(provider = %name, frequency_penalty = freq_pen, "Invalid frequency_penalty");
@@ -152,7 +152,7 @@ impl Config {
             }
 
             // Validate Gemini-specific parameters
-            if provider_type == "gemini" {
+            if protocol == "gemini" {
                 if let Some(ref thinking_level) = provider.thinking_level {
                     if thinking_level != "LOW" && thinking_level != "HIGH" {
                         error!(provider = %name, thinking_level = %thinking_level, "Invalid thinking_level");
@@ -175,7 +175,7 @@ impl Config {
             }
 
             // Validate Ollama-specific parameters
-            if provider_type == "ollama" {
+            if protocol == "ollama" {
                 if let Some(repeat_pen) = provider.repeat_penalty {
                     if repeat_pen < 0.0 {
                         error!(provider = %name, repeat_penalty = repeat_pen, "Invalid repeat_penalty");
@@ -189,7 +189,7 @@ impl Config {
 
             debug!(
                 provider = %name,
-                provider_type = %provider_type,
+                protocol = %protocol,
                 timeout_seconds = provider.timeout_seconds,
                 "Provider validated"
             );

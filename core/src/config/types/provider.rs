@@ -39,12 +39,8 @@ pub struct TestConnectionResult {
 /// AI Provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderConfig {
-    /// Provider type: "openai", "claude", "gemini", "ollama", or custom name
-    /// If not specified, inferred from provider name in config
-    #[serde(default)]
-    pub provider_type: Option<String>,
     /// Protocol to use: "openai", "anthropic", "gemini", "ollama"
-    /// If not specified, inferred from provider_type or provider name
+    /// If not specified, defaults to "openai"
     #[serde(default)]
     pub protocol: Option<String>,
     /// API key for cloud providers (required for OpenAI, Claude, Gemini)
@@ -127,52 +123,13 @@ pub fn default_provider_enabled() -> bool {
 }
 
 impl ProviderConfig {
-    /// Infer provider type from config
-    ///
-    /// If `provider_type` is explicitly set, use it.
-    /// Otherwise, infer from provider name:
-    /// - "openai" -> "openai"
-    /// - "claude" -> "claude"
-    /// - "gemini" -> "gemini"
-    /// - "ollama" -> "ollama"
-    /// - anything with base_url -> "openai" (OpenAI-compatible)
-    /// - default -> "openai"
-    pub fn infer_provider_type(&self, provider_name: &str) -> String {
-        if let Some(ref provider_type) = self.provider_type {
-            return provider_type.clone();
-        }
-
-        // Infer from provider name
-        let name_lower = provider_name.to_lowercase();
-        if name_lower.contains("claude") {
-            "claude".to_string()
-        } else if name_lower.contains("gemini") || name_lower.contains("google") {
-            "gemini".to_string()
-        } else if name_lower.contains("ollama") {
-            "ollama".to_string()
-        } else {
-            // Default to OpenAI-compatible (covers OpenAI, DeepSeek, Moonshot, etc.)
-            "openai".to_string()
-        }
-    }
-
     /// Get the effective protocol name
     ///
-    /// Priority: protocol > provider_type > default "openai"
+    /// Priority: protocol field > default "openai"
     pub fn protocol(&self) -> String {
-        if let Some(ref p) = self.protocol {
-            return p.clone();
-        }
-
-        if let Some(ref t) = self.provider_type {
-            let t_lower = t.to_lowercase();
-            return match t_lower.as_str() {
-                "claude" => "anthropic".to_string(),
-                _ => t_lower,
-            };
-        }
-
-        "openai".to_string()
+        self.protocol
+            .clone()
+            .unwrap_or_else(|| "openai".to_string())
     }
 
     /// Create a minimal test configuration with only required fields
@@ -181,7 +138,6 @@ impl ProviderConfig {
     /// All optional advanced parameters (like frequency_penalty, media_resolution, etc.) are set to None.
     pub fn test_config(model: impl Into<String>) -> Self {
         Self {
-            provider_type: None,
             protocol: None,
             api_key: Some("test-key".to_string()),
             model: model.into(),
@@ -222,18 +178,52 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_from_provider_type() {
-        let mut config = ProviderConfig::test_config("model");
-        config.provider_type = Some("claude".to_string());
+    fn test_protocol_without_provider_type() {
+        let config = ProviderConfig {
+            protocol: Some("anthropic".to_string()),
+            model: "claude-3-5-sonnet".to_string(),
+            api_key: None,
+            base_url: None,
+            color: default_provider_color(),
+            timeout_seconds: default_timeout_seconds(),
+            enabled: default_provider_enabled(),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: None,
+            thinking_level: None,
+            media_resolution: None,
+            repeat_penalty: None,
+            system_prompt_mode: None,
+        };
         assert_eq!(config.protocol(), "anthropic");
     }
 
     #[test]
-    fn test_protocol_precedence() {
-        let mut config = ProviderConfig::test_config("model");
-        config.protocol = Some("gemini".to_string());
-        config.provider_type = Some("openai".to_string());
-        // protocol takes precedence
-        assert_eq!(config.protocol(), "gemini");
+    fn test_protocol_defaults_to_openai() {
+        let config = ProviderConfig {
+            protocol: None,
+            model: "gpt-4".to_string(),
+            api_key: None,
+            base_url: None,
+            color: default_provider_color(),
+            timeout_seconds: default_timeout_seconds(),
+            enabled: default_provider_enabled(),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: None,
+            thinking_level: None,
+            media_resolution: None,
+            repeat_penalty: None,
+            system_prompt_mode: None,
+        };
+        assert_eq!(config.protocol(), "openai");
     }
 }
