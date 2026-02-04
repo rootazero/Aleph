@@ -503,8 +503,10 @@ where
         );
 
         // Build request context with workspace
-        let mut context = RequestContext::default();
-        context.working_directory = Some(self.workspace.to_string_lossy().to_string());
+        let context = RequestContext {
+            working_directory: Some(self.workspace.to_string_lossy().to_string()),
+            ..Default::default()
+        };
 
         // Execute via AgentLoop
         let result = agent_loop

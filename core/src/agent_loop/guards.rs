@@ -448,6 +448,7 @@ impl LoopGuard {
     /// If the agent is making the same type of action repeatedly BUT:
     /// - Some succeed and some fail (debugging/iterating)
     /// - At least one succeeds (making progress)
+    ///
     /// Then it's NOT stuck, it's making progress through iteration.
     ///
     /// Only triggers if:

@@ -186,11 +186,7 @@ impl GeminiProtocol {
         }
 
         // Extract JSON data (handle both "data: " prefix and plain JSON)
-        let json_str = if line.starts_with("data: ") {
-            &line[6..]
-        } else {
-            line
-        };
+        let json_str = line.strip_prefix("data: ").unwrap_or(line);
 
         // Skip [DONE] marker
         if json_str == "[DONE]" {

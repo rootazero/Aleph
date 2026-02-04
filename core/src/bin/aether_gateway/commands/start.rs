@@ -527,8 +527,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     #[cfg(target_os = "macos")]
     {
         // Create iMessage config with enabled = true
-        let mut imessage_config = IMessageConfig::default();
-        imessage_config.enabled = true;
+        let imessage_config = IMessageConfig {
+            enabled: true,
+            ..Default::default()
+        };
 
         let imessage_channel = IMessageChannel::new(imessage_config);
         let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
