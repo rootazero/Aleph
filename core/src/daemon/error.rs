@@ -21,4 +21,7 @@ pub enum DaemonError {
 
     #[error("Event bus error: {0}")]
     EventBus(String),
+
+    #[error("WorldModel error: {0}")]
+    WorldModel(#[from] anyhow::Error),
 }
