@@ -195,6 +195,7 @@ required-features = ["gateway"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+cucumber = { version = "0.21", features = ["macros"] }
 tempfile = "3.8"
 filetime = "0.2"
 serial_test = "3.0"
@@ -205,4 +206,8 @@ core-foundation = "0.9"
 
 [[bench]]
 name = "memory_benchmarks_simple"
+harness = false
+
+[[test]]
+name = "cucumber"
 harness = false

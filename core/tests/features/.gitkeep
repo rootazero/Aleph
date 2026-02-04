@@ -1,0 +1,4 @@
+# BDD Feature files directory
+# Feature files will be organized by module:
+# - config/     - Configuration system features
+# - scripting/  - Scripting engine features
