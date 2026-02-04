@@ -4,11 +4,13 @@
 //! Compatible with OpenClaw ecosystem while adding Aether-specific extensions.
 
 mod executor;
+mod generator;
 mod loader;
 mod parser;
 mod spec;
 mod tool_adapter;
 
+pub use generator::{MarkdownSkillGenerator, MarkdownSkillGeneratorConfig};
 pub use loader::{load_skills_from_dir, SkillLoader};
 pub use spec::{
     AetherExtensions, AetherSkillSpec, ConfirmationMode, DockerConfig, EvolutionMeta, InputHint,
