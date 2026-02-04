@@ -233,6 +233,33 @@ pub use crate::resilient::{
 };
 
 // =============================================================================
+// Daemon Subsystem Exports (Phase 3+4: Proactive AI)
+// =============================================================================
+
+pub use crate::daemon::{
+    DaemonCli, DaemonCommand, DaemonConfig, DaemonEventBus, DaemonStatus, PerceptionConfig,
+    WatcherRegistry,
+};
+
+// WorldModel (Phase 3)
+pub use crate::daemon::worldmodel::{
+    ActivityType, CoreState, EnhancedContext, WorldModel, WorldModelConfig,
+};
+
+// Dispatcher (Phase 4) - Note: Using ProactiveDispatcher* to avoid conflict with tool system
+pub use crate::daemon::dispatcher::{
+    ActionExecutor, ActionType, Dispatcher as ProactiveDispatcher,
+    DispatcherConfig as ProactiveDispatcherConfig, DispatcherMode,
+    NotificationPriority, Policy, PolicyEngine, ProposedAction, RiskLevel,
+};
+
+// Events
+pub use crate::daemon::events::{
+    DaemonEvent, DerivedEvent, FsEventType, PressureLevel, PressureType, ProcessEventType,
+    RawEvent, SystemEvent, SystemStateType, TimeTrigger,
+};
+
+// =============================================================================
 // Memory & Search Exports
 // =============================================================================
 
