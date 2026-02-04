@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::{oneshot, RwLock};
 use tokio::time::timeout;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::mcp::{ApprovalDecision, ApprovalRequest, ApprovalResponse};
 
 /// Callback for presenting approval requests to the user
@@ -147,7 +147,7 @@ impl ApprovalHandler {
             let _ = approval.respond_to.send(response);
             Ok(())
         } else {
-            Err(AetherError::NotFound(format!(
+            Err(AlephError::NotFound(format!(
                 "No pending approval with ID: {}",
                 request_id
             )))

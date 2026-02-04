@@ -31,7 +31,7 @@ use tracing::debug;
 /// # Examples
 ///
 /// ```
-/// use aethecore::utils::json_extract::extract_json_robust;
+/// use alephcore::utils::json_extract::extract_json_robust;
 ///
 /// // Pure JSON
 /// let result = extract_json_robust(r#"{"tool": "search"}"#);

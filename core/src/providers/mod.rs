@@ -34,8 +34,8 @@
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::providers::{create_provider, AiProvider};
-/// use aethecore::config::ProviderConfig;
+/// use alephcore::providers::{create_provider, AiProvider};
+/// use alephcore::config::ProviderConfig;
 ///
 /// // Create via preset (base_url auto-configured)
 /// let config = ProviderConfig::test_config("deepseek-chat");
@@ -97,7 +97,7 @@ pub use protocols::OpenAiProtocol;
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
-use crate::error::AetherError;
+use crate::error::AlephError;
 use std::sync::Arc;
 
 /// Create a mock provider for testing
@@ -168,7 +168,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
     let adapter = registry
         .get(&protocol_name)
         .ok_or_else(|| {
-            AetherError::invalid_config(format!(
+            AlephError::invalid_config(format!(
                 "Unknown protocol: '{}'. Available: {:?}",
                 protocol_name,
                 registry.list_protocols()
@@ -205,7 +205,7 @@ pub trait AiProvider: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(String)` - The AI-generated response text
-    /// * `Err(AetherError)` - Various errors:
+    /// * `Err(AlephError)` - Various errors:
     ///   - `NetworkError`: Network connectivity issues
     ///   - `AuthenticationError`: Invalid API key
     ///   - `RateLimitError`: Too many requests
@@ -215,7 +215,7 @@ pub trait AiProvider: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// # use aethecore::providers::AiProvider;
+    /// # use alephcore::providers::AiProvider;
     /// # async fn example(provider: &dyn AiProvider) {
     /// let response = provider.process(
     ///     "Translate to French: Hello",
@@ -240,7 +240,7 @@ pub trait AiProvider: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(String)` - The AI-generated response text
-    /// * `Err(AetherError)` - Various errors (same as `process()`)
+    /// * `Err(AlephError)` - Various errors (same as `process()`)
     ///
     /// # Default Implementation
     ///
@@ -276,7 +276,7 @@ pub trait AiProvider: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(String)` - The AI-generated response text
-    /// * `Err(AetherError)` - Various errors (same as `process()`)
+    /// * `Err(AlephError)` - Various errors (same as `process()`)
     ///
     /// # Default Implementation
     ///
@@ -321,7 +321,7 @@ pub trait AiProvider: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// # use aethecore::providers::AiProvider;
+    /// # use alephcore::providers::AiProvider;
     /// # fn example(provider: &dyn AiProvider) {
     /// assert_eq!(provider.name(), "openai");
     /// # }
@@ -337,7 +337,7 @@ pub trait AiProvider: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// # use aethecore::providers::AiProvider;
+    /// # use alephcore::providers::AiProvider;
     /// # fn example(provider: &dyn AiProvider) {
     /// let color = provider.color();
     /// assert!(color.starts_with('#'));
@@ -545,7 +545,7 @@ mod tests {
 
         let result = create_provider("test", config);
         assert!(result.is_err());
-        assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
+        assert!(matches!(result, Err(AlephError::InvalidConfig { .. })));
     }
 
     #[test]

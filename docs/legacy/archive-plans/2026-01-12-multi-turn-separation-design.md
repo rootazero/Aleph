@@ -4,7 +4,7 @@ Date: 2026-01-12
 
 ## Overview
 
-Completely separate single-turn and multi-turn conversation modes in Aether, making multi-turn mode an independent conversation experience without relying on cursor focus detection.
+Completely separate single-turn and multi-turn conversation modes in Aleph, making multi-turn mode an independent conversation experience without relying on cursor focus detection.
 
 ## Design Goals
 
@@ -58,7 +58,7 @@ MultiTurnCoordinator
     ├── owns → MultiTurnInputWindow
     ├── owns → ConversationDisplayWindow
     ├── uses → ConversationStore (persistence)
-    └── calls → AetherCore (Rust)
+    └── calls → AlephCore (Rust)
 ```
 
 ## Data Model
@@ -109,7 +109,7 @@ struct Message: Identifiable {
 }
 ```
 
-**Storage Location**: `~/.aether/conversations.db`
+**Storage Location**: `~/.aleph/conversations.db`
 
 ## Interaction Flow
 
@@ -127,7 +127,7 @@ MultiTurnCoordinator.handleHotkey()
 User types text, presses Enter
     ↓
 ┌─ Save user message to SQLite
-├─ Call AetherCore.processInput()
+├─ Call AlephCore.processInput()
 ├─ ConversationDisplayWindow shows user message + loading
     ↓
 AI response returns

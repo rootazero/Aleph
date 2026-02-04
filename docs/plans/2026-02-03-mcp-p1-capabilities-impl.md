@@ -302,7 +302,7 @@ Add after `refresh_tools()`:
         let response = self.transport.send_request(&request).await?;
 
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "MCP server '{}' resources/list failed: {}",
                 self.name, e
             ))
@@ -310,7 +310,7 @@ Add after `refresh_tools()`:
 
         let resources_result: mcp_types::ResourcesListResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse resources list from '{}': {}",
                     self.name, e
                 ))
@@ -354,7 +354,7 @@ Add after `refresh_tools()`:
         let response = self.transport.send_request(&request).await?;
 
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "MCP server '{}' prompts/list failed: {}",
                 self.name, e
             ))
@@ -362,7 +362,7 @@ Add after `refresh_tools()`:
 
         let prompts_result: mcp_types::PromptsListResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse prompts list from '{}': {}",
                     self.name, e
                 ))
@@ -436,7 +436,7 @@ Add after getter methods:
             self.id_gen.next(),
             "resources/read",
             serde_json::to_value(&params).map_err(|e| {
-                AetherError::IoError(format!("Failed to serialize resource read params: {}", e))
+                AlephError::IoError(format!("Failed to serialize resource read params: {}", e))
             })?,
         );
 
@@ -448,7 +448,7 @@ Add after getter methods:
 
         let response = self.transport.send_request(&request).await?;
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Resource read '{}' on '{}' failed: {}",
                 resource_uri, self.name, e
             ))
@@ -456,7 +456,7 @@ Add after getter methods:
 
         let read_result: mcp_types::ResourceReadResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse resource read result from '{}': {}",
                     self.name, e
                 ))
@@ -474,7 +474,7 @@ Add after getter methods:
                     let data = base64::engine::general_purpose::STANDARD
                         .decode(&blob)
                         .map_err(|e| {
-                            AetherError::IoError(format!("Failed to decode blob: {}", e))
+                            AlephError::IoError(format!("Failed to decode blob: {}", e))
                         })?;
                     Ok(crate::mcp::resources::ResourceContent::Binary {
                         data,
@@ -513,7 +513,7 @@ Add after `read_resource`:
             self.id_gen.next(),
             "prompts/get",
             serde_json::to_value(&params).map_err(|e| {
-                AetherError::IoError(format!("Failed to serialize prompt get params: {}", e))
+                AlephError::IoError(format!("Failed to serialize prompt get params: {}", e))
             })?,
         );
 
@@ -525,7 +525,7 @@ Add after `read_resource`:
 
         let response = self.transport.send_request(&request).await?;
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Prompt get '{}' on '{}' failed: {}",
                 prompt_name, self.name, e
             ))
@@ -533,7 +533,7 @@ Add after `read_resource`:
 
         let get_result: mcp_types::PromptGetResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse prompt get result from '{}': {}",
                     self.name, e
                 ))
@@ -680,7 +680,7 @@ Add after `list_prompts`:
             }
         }
 
-        Err(AetherError::NotFound(format!("Resource not found: {}", uri)))
+        Err(AlephError::NotFound(format!("Resource not found: {}", uri)))
     }
 
     /// Get a prompt by name with optional arguments
@@ -710,7 +710,7 @@ Add after `list_prompts`:
             }
         }
 
-        Err(AetherError::NotFound(format!("Prompt not found: {}", name)))
+        Err(AlephError::NotFound(format!("Prompt not found: {}", name)))
     }
 ```
 
@@ -833,7 +833,7 @@ use serde_json::json;
 use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
 use crate::mcp::manager::McpManagerHandle;
-use crate::tools::AetherToolDyn;
+use crate::tools::AlephToolDyn;
 
 /// Arguments for mcp_read_resource tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -865,7 +865,7 @@ impl McpReadResourceTool {
     }
 }
 
-impl AetherToolDyn for McpReadResourceTool {
+impl AlephToolDyn for McpReadResourceTool {
     fn name(&self) -> &str {
         "mcp_read_resource"
     }
@@ -894,7 +894,7 @@ impl AetherToolDyn for McpReadResourceTool {
                 .handle
                 .get_client(server_id)
                 .await?
-                .ok_or_else(|| crate::error::AetherError::NotFound(
+                .ok_or_else(|| crate::error::AlephError::NotFound(
                     format!("MCP server not found: {}", server_id)
                 ))?;
 
@@ -1007,7 +1007,7 @@ use serde_json::{json, Value};
 use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
 use crate::mcp::manager::McpManagerHandle;
-use crate::tools::AetherToolDyn;
+use crate::tools::AlephToolDyn;
 
 /// Arguments for mcp_get_prompt tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1049,7 +1049,7 @@ impl McpGetPromptTool {
     }
 }
 
-impl AetherToolDyn for McpGetPromptTool {
+impl AlephToolDyn for McpGetPromptTool {
     fn name(&self) -> &str {
         "mcp_get_prompt"
     }
@@ -1078,7 +1078,7 @@ impl AetherToolDyn for McpGetPromptTool {
                 .handle
                 .get_client(server_id)
                 .await?
-                .ok_or_else(|| crate::error::AetherError::NotFound(
+                .ok_or_else(|| crate::error::AlephError::NotFound(
                     format!("MCP server not found: {}", server_id)
                 ))?;
 

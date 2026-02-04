@@ -7,7 +7,7 @@
 //!
 //! Skills are discovered from multiple locations in priority order:
 //! 1. Project level: `.aether/skills/`, `.claude/skills/` (traverse up to git root)
-//! 2. User level: `~/.aether/skills`, `~/.claude/skills`
+//! 2. User level: `~/.aleph/skills`, `~/.claude/skills`
 //!
 //! ## Progressive Disclosure
 //!
@@ -16,7 +16,7 @@
 //! - **Level 2 (Instructions)**: Full SKILL.md content - loaded via read_skill tool
 //! - **Level 3 (Resources)**: Additional files - loaded on-demand via file_name parameter
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::skills::health::HealthChecker;
 use crate::skills::types::SkillHealth;
 use crate::skills::Skill;
@@ -59,7 +59,7 @@ pub struct SkillMetadata {
 pub enum SkillSource {
     /// Project-level skill (.aether/skills or .claude/skills)
     Project,
-    /// Global user-level skill (~/.aether/skills or ~/.claude/skills)
+    /// Global user-level skill (~/.aleph/skills or ~/.claude/skills)
     Global,
 }
 
@@ -112,7 +112,7 @@ impl SkillsRegistry {
     ///
     /// Automatically discovers skills from:
     /// - Project level: .aether/skills/, .claude/skills/
-    /// - Global level: ~/.aether/skills, ~/.claude/skills
+    /// - Global level: ~/.aleph/skills, ~/.claude/skills
     ///
     /// # Arguments
     ///
@@ -122,7 +122,7 @@ impl SkillsRegistry {
 
         // Use first directory as primary (for backwards compatibility)
         let skills_dir = skills_dirs.first().cloned().unwrap_or_else(|| {
-            crate::utils::paths::get_skills_dir().unwrap_or_else(|_| PathBuf::from("~/.aether/skills"))
+            crate::utils::paths::get_skills_dir().unwrap_or_else(|_| PathBuf::from("~/.aleph/skills"))
         });
 
         Ok(Self {
@@ -165,12 +165,12 @@ impl SkillsRegistry {
         let mut skills = self
             .skills
             .write()
-            .map_err(|_| AetherError::config("Failed to acquire write lock on skills registry"))?;
+            .map_err(|_| AlephError::config("Failed to acquire write lock on skills registry"))?;
 
         let mut metadata = self
             .metadata
             .write()
-            .map_err(|_| AetherError::config("Failed to acquire write lock on skills metadata"))?;
+            .map_err(|_| AlephError::config("Failed to acquire write lock on skills metadata"))?;
 
         skills.clear();
         metadata.clear();
@@ -283,7 +283,7 @@ impl SkillsRegistry {
     /// Load a single skill from its SKILL.md file
     fn load_skill(&self, skill_id: &str, path: &PathBuf) -> Result<Skill> {
         let content = std::fs::read_to_string(path).map_err(|e| {
-            AetherError::config(format!(
+            AlephError::config(format!(
                 "Failed to read SKILL.md at {}: {}",
                 path.display(),
                 e
@@ -359,32 +359,32 @@ impl SkillsRegistry {
     /// The file content if found
     pub fn get_skill_content(&self, id: &str, file_name: Option<&str>) -> Result<String> {
         let metadata = self.metadata.read()
-            .map_err(|_| AetherError::config("Failed to acquire read lock on skills metadata"))?;
+            .map_err(|_| AlephError::config("Failed to acquire read lock on skills metadata"))?;
 
         let meta = metadata.get(id)
-            .ok_or_else(|| AetherError::config(format!("Skill '{}' not found", id)))?;
+            .ok_or_else(|| AlephError::config(format!("Skill '{}' not found", id)))?;
 
         let file = file_name.unwrap_or("SKILL.md");
         let file_path = meta.location.join(file);
 
         if !file_path.exists() {
-            return Err(AetherError::config(format!(
+            return Err(AlephError::config(format!(
                 "File '{}' not found in skill '{}'",
                 file, id
             )));
         }
 
         std::fs::read_to_string(&file_path)
-            .map_err(|e| AetherError::config(format!("Failed to read skill file: {}", e)))
+            .map_err(|e| AlephError::config(format!("Failed to read skill file: {}", e)))
     }
 
     /// List files available in a skill directory
     pub fn list_skill_files(&self, id: &str) -> Result<Vec<String>> {
         let metadata = self.metadata.read()
-            .map_err(|_| AetherError::config("Failed to acquire read lock on skills metadata"))?;
+            .map_err(|_| AlephError::config("Failed to acquire read lock on skills metadata"))?;
 
         let meta = metadata.get(id)
-            .ok_or_else(|| AetherError::config(format!("Skill '{}' not found", id)))?;
+            .ok_or_else(|| AlephError::config(format!("Skill '{}' not found", id)))?;
 
         let mut files = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&meta.location) {

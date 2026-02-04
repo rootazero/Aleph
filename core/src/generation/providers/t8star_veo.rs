@@ -32,8 +32,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::providers::T8StarVeoProvider;
-//! use aethecore::generation::{GenerationProvider, GenerationRequest};
+//! use alephcore::generation::providers::T8StarVeoProvider;
+//! use alephcore::generation::{GenerationProvider, GenerationRequest};
 //!
 //! let provider = T8StarVeoProvider::builder("api-key", "https://ai.t8star.cn")
 //!     .model("veo3.1-fast")
@@ -112,7 +112,7 @@ impl T8StarVeoProvider {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::providers::T8StarVeoProvider;
+    /// use alephcore::generation::providers::T8StarVeoProvider;
     ///
     /// let provider = T8StarVeoProvider::builder("sk-xxx", "https://ai.t8star.cn")
     ///     .model("veo3.1-fast")

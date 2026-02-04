@@ -30,7 +30,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::builtin_tools::message::{MessageTool, MessageToolArgs, MessageAction};
+//! use alephcore::builtin_tools::message::{MessageTool, MessageToolArgs, MessageAction};
 //!
 //! let tool = MessageTool::new(registry);
 //! let args = MessageToolArgs {

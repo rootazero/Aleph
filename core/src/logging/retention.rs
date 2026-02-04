@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime};
 ///
 /// ```rust,no_run
 /// use std::path::Path;
-/// use aethecore::logging::retention::cleanup_old_logs;
+/// use alephcore::logging::retention::cleanup_old_logs;
 ///
 /// let log_dir = Path::new("/Users/user/.aether/logs");
 /// let deleted = cleanup_old_logs(log_dir, 7).unwrap();

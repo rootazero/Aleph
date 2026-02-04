@@ -10,7 +10,7 @@
 /// # Example
 ///
 /// ```ignore
-/// use aethecore::define_groups;
+/// use alephcore::define_groups;
 ///
 /// let groups = define_groups! {
 ///     "general" => { label: "General", order: 10, icon: "gear" },
@@ -59,7 +59,7 @@ macro_rules! define_groups {
 /// # Example
 ///
 /// ```ignore
-/// use aethecore::define_hints;
+/// use alephcore::define_hints;
 ///
 /// let hints = define_hints! {
 ///     "general.language" => {

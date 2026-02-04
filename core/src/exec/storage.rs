@@ -39,7 +39,7 @@ pub struct ExecApprovalsStorage {
 }
 
 impl ExecApprovalsStorage {
-    /// Create storage with default path (~/.aether/exec-approvals.json)
+    /// Create storage with default path (~/.aleph/exec-approvals.json)
     pub fn new() -> Self {
         Self::with_path(Self::default_path())
     }

@@ -14,7 +14,7 @@ use crate::supervisor::types::{SupervisorConfig, SupervisorError, SupervisorEven
 /// # Example
 ///
 /// ```rust,no_run
-/// use aethecore::supervisor::{ClaudeSupervisor, SupervisorConfig};
+/// use alephcore::supervisor::{ClaudeSupervisor, SupervisorConfig};
 ///
 /// let config = SupervisorConfig::new("/path/to/workspace");
 /// let mut supervisor = ClaudeSupervisor::new(config);

@@ -26,8 +26,8 @@ mod registry;
 /// # Example
 ///
 /// ```rust,no_run
-/// use aethecore::search::{SearchProvider, SearchOptions};
-/// use aethecore::search::providers::TavilyProvider;
+/// use alephcore::search::{SearchProvider, SearchOptions};
+/// use alephcore::search::providers::TavilyProvider;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {

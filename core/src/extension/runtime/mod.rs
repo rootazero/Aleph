@@ -21,8 +21,8 @@
 //! ## Node.js Runtime
 //!
 //! ```rust,ignore
-//! use aethecore::extension::runtime::{NpmInstaller, PluginRuntime};
-//! use aethecore::runtimes::RuntimeRegistry;
+//! use alephcore::extension::runtime::{NpmInstaller, PluginRuntime};
+//! use alephcore::runtimes::RuntimeRegistry;
 //!
 //! let registry = RuntimeRegistry::new(runtimes_dir)?;
 //! let installer = NpmInstaller::new(registry);
@@ -38,7 +38,7 @@
 //! ## Node.js Runtime (Synchronous)
 //!
 //! ```rust,ignore
-//! use aethecore::extension::runtime::{NodeJsRuntime, JsonRpcRequest, JsonRpcResponse};
+//! use alephcore::extension::runtime::{NodeJsRuntime, JsonRpcRequest, JsonRpcResponse};
 //!
 //! let mut runtime = NodeJsRuntime::new("/usr/bin/node", "/path/to/host.js");
 //! let registrations = runtime.load_plugin(&manifest)?;
@@ -48,7 +48,7 @@
 //! ## WASM Runtime
 //!
 //! ```rust,ignore
-//! use aethecore::extension::runtime::{WasmRuntime, WasmToolInput};
+//! use alephcore::extension::runtime::{WasmRuntime, WasmToolInput};
 //!
 //! let mut runtime = WasmRuntime::new();
 //! runtime.load_plugin(&manifest)?;
@@ -91,7 +91,7 @@ const IPC_TIMEOUT_SECS: u64 = 300;
 pub struct NpmInstaller {
     /// fnm runtime
     fnm: FnmRuntime,
-    /// Installation directory (e.g., ~/.aether/plugins/node_modules/)
+    /// Installation directory (e.g., ~/.aleph/plugins/node_modules/)
     install_dir: PathBuf,
 }
 

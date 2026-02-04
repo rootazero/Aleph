@@ -50,7 +50,7 @@ pub fn home_dir() -> DiscoveryResult<PathBuf> {
     dirs::home_dir().ok_or(DiscoveryError::HomeDirNotFound)
 }
 
-/// Get the Aether home directory (~/.aether/)
+/// Get the Aether home directory (~/.aleph/)
 pub fn aether_home_dir() -> DiscoveryResult<PathBuf> {
     Ok(home_dir()?.join(AETHER_HOME_DIR))
 }
@@ -60,32 +60,32 @@ pub fn claude_home_dir() -> DiscoveryResult<PathBuf> {
     Ok(home_dir()?.join(CLAUDE_HOME_DIR))
 }
 
-/// Get the Aether skills directory (~/.aether/skills/)
+/// Get the Aether skills directory (~/.aleph/skills/)
 pub fn aether_skills_dir() -> DiscoveryResult<PathBuf> {
     Ok(aether_home_dir()?.join(SKILLS_DIR))
 }
 
-/// Get the Aether commands directory (~/.aether/commands/)
+/// Get the Aether commands directory (~/.aleph/commands/)
 pub fn aether_commands_dir() -> DiscoveryResult<PathBuf> {
     Ok(aether_home_dir()?.join(COMMANDS_DIR))
 }
 
-/// Get the Aether agents directory (~/.aether/agents/)
+/// Get the Aether agents directory (~/.aleph/agents/)
 pub fn aether_agents_dir() -> DiscoveryResult<PathBuf> {
     Ok(aether_home_dir()?.join(AGENTS_DIR))
 }
 
-/// Get the Aether plugins directory (~/.aether/plugins/)
+/// Get the Aether plugins directory (~/.aleph/plugins/)
 pub fn aether_plugins_dir() -> DiscoveryResult<PathBuf> {
     Ok(aether_home_dir()?.join(PLUGINS_DIR))
 }
 
-/// Get the global config file path (~/.aether/aether.jsonc)
+/// Get the global config file path (~/.aleph/aether.jsonc)
 pub fn global_config_path() -> DiscoveryResult<PathBuf> {
     Ok(aether_home_dir()?.join(AETHER_CONFIG_FILE))
 }
 
-/// Get the plugin state file path (~/.aether/plugins.json)
+/// Get the plugin state file path (~/.aleph/plugins.json)
 pub fn plugin_state_path() -> DiscoveryResult<PathBuf> {
     Ok(aether_home_dir()?.join(PLUGIN_STATE_FILE))
 }

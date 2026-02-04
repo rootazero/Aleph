@@ -1,4 +1,4 @@
-# Aether Windows Version Design
+# Aleph Windows Version Design
 
 > Created: 2026-01-19
 > Status: Approved
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-This document outlines the design for Aether's Windows version, targeting **feature parity** with the macOS version. The implementation uses **C# + WinUI 3** for the UI layer, with **csbindgen** for Rust FFI integration.
+This document outlines the design for Aleph's Windows version, targeting **feature parity** with the macOS version. The implementation uses **C# + WinUI 3** for the UI layer, with **csbindgen** for Rust FFI integration.
 
 ## Key Decisions
 
@@ -36,14 +36,14 @@ This document outlines the design for Aether's Windows version, targeting **feat
 │  └──────────────────────────┬────────────────────────────────┘  │
 │                             │ P/Invoke                           │
 │  ┌──────────────────────────┴────────────────────────────────┐  │
-│  │              AetherCore.cs (csbindgen generated)           │  │
+│  │              AlephCore.cs (csbindgen generated)           │  │
 │  │  ├─ NativeMethods.g.cs (auto-generated P/Invoke)          │  │
 │  │  └─ CallbackBridge.cs (callback adapter)                  │  │
 │  └──────────────────────────┬────────────────────────────────┘  │
 └─────────────────────────────┼────────────────────────────────────┘
                               │ C ABI
 ┌─────────────────────────────┴────────────────────────────────────┐
-│                    Rust Core (aethecore.dll)                     │
+│                    Rust Core (alephcore.dll)                     │
 │  ├─ ffi_cabi.rs (Windows C ABI exports)                         │
 │  ├─ Business logic (router, AI calls, Memory, MCP...)           │
 │  └─ Platform adaptation (system info, file permissions)         │
@@ -60,9 +60,9 @@ This document outlines the design for Aether's Windows version, targeting **feat
 
 ```
 platforms/windows/
-├── Aether.sln                          # Visual Studio solution
-├── Aether/
-│   ├── Aether.csproj                   # .NET 8 + WinUI 3 project
+├── Aleph.sln                          # Visual Studio solution
+├── Aleph/
+│   ├── Aleph.csproj                   # .NET 8 + WinUI 3 project
 │   ├── app.manifest                    # Windows manifest (DPI, permissions)
 │   │
 │   ├── App.xaml                        # Application entry
@@ -93,7 +93,7 @@ platforms/windows/
 │   │
 │   ├── Interop/                        # Rust FFI
 │   │   ├── NativeMethods.g.cs          # csbindgen auto-generated
-│   │   ├── AetherCore.cs               # High-level wrapper
+│   │   ├── AlephCore.cs               # High-level wrapper
 │   │   └─ CallbackBridge.cs            # Callback adapter
 │   │
 │   ├── Models/                         # Data models
@@ -102,8 +102,8 @@ platforms/windows/
 │       ├── Strings/                    # Localization
 │       └── Styles/                     # XAML styles
 │
-└── Aether.Tests/                       # Unit test project
-    └── Aether.Tests.csproj
+└── Aleph.Tests/                       # Unit test project
+    └── Aleph.Tests.csproj
 ```
 
 ### macOS Mapping
@@ -123,7 +123,7 @@ platforms/windows/
 │                        C# UI Layer                               │
 │                                                                  │
 │  ┌─────────────┐    ┌──────────────┐    ┌─────────────────────┐ │
-│  │ HaloWindow  │───▶│ AetherCore   │───▶│ DispatcherQueue     │ │
+│  │ HaloWindow  │───▶│ AlephCore   │───▶│ DispatcherQueue     │ │
 │  │             │    │ .Process()   │    │ (UI thread dispatch) │ │
 │  └─────────────┘    └──────┬───────┘    └──────────┬──────────┘ │
 │                            │                        │            │
@@ -152,7 +152,7 @@ platforms/windows/
 // Interop/CallbackBridge.cs
 public static class CallbackBridge
 {
-    private static AetherCore? _instance;
+    private static AlephCore? _instance;
 
     // Must keep delegate reference to prevent GC collection
     private static readonly StreamCallback _onStream = OnStreamChunk;
@@ -390,7 +390,7 @@ windows = { version = "0.58", features = [
 
 ```
 platforms/windows/
-├── Aether.POC.sln
+├── Aleph.POC.sln
 ├── POC.HaloWindow/
 ├── POC.Hotkey/
 └── POC.RustFFI/
@@ -449,10 +449,10 @@ platforms/windows/
 
 ```csharp
 // Interop/AetherCore.cs
-public class AetherException : Exception
+public class AlephException : Exception
 {
     public int ErrorCode { get; }
-    public AetherException(int code, string message) : base(message)
+    public AlephException(int code, string message) : base(message)
         => ErrorCode = code;
 }
 
@@ -464,10 +464,10 @@ public void Process(string input, string? context)
     {
         throw result switch
         {
-            -1 => new AetherException(result, "Invalid argument"),
-            -2 => new AetherException(result, "Invalid UTF-8"),
-            -3 => new AetherException(result, "Core not initialized"),
-            _ => new AetherException(result, $"Unknown error: {result}")
+            -1 => new AlephException(result, "Invalid argument"),
+            -2 => new AlephException(result, "Invalid UTF-8"),
+            -3 => new AlephException(result, "Core not initialized"),
+            _ => new AlephException(result, $"Unknown error: {result}")
         };
     }
 }

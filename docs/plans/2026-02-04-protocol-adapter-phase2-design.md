@@ -234,7 +234,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
             // Keep native OllamaProvider
             Ok(Arc::new(OllamaProvider::new(name, config)?))
         }
-        unknown => Err(AetherError::invalid_config(...))
+        unknown => Err(AlephError::invalid_config(...))
     }
 }
 ```
@@ -269,7 +269,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
 
 | Criterion | Verification |
 |-----------|--------------|
-| All existing tests pass | `cargo test -p aethecore` |
+| All existing tests pass | `cargo test -p alephcore` |
 | Claude features complete | Extended Thinking, Vision, Streaming |
 | Gemini features complete | Thinking, Vision, Streaming |
 | Net code reduction | `git diff --stat main` shows -1,500+ lines |

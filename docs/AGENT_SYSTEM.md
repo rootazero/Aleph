@@ -6,7 +6,7 @@
 
 ## Overview
 
-The Agent System implements the **Observe-Think-Act-Feedback (OTAF)** loop, the heart of Aether's intelligence.
+The Agent System implements the **Observe-Think-Act-Feedback (OTAF)** loop, the heart of Aleph's intelligence.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -144,7 +144,7 @@ pub enum ThinkingLevel {
 
 ### Provider Fallback
 
-When a provider doesn't support extended thinking, Aether falls back gracefully:
+When a provider doesn't support extended thinking, Aleph falls back gracefully:
 
 ```
 User requests: thinking = High

@@ -34,7 +34,7 @@ pub mod installer;
 pub mod registry;
 pub mod types;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use serde::{Deserialize, Serialize};
 
 /// SKILL.md frontmatter structure
@@ -103,7 +103,7 @@ impl Skill {
 
         // Check for YAML frontmatter delimiter
         if !content.starts_with("---") {
-            return Err(AetherError::invalid_config(
+            return Err(AlephError::invalid_config(
                 "SKILL.md must start with YAML frontmatter (---)",
             ));
         }
@@ -111,7 +111,7 @@ impl Skill {
         // Find the closing delimiter
         let rest = &content[3..]; // Skip opening ---
         let end_pos = rest.find("\n---").ok_or_else(|| {
-            AetherError::invalid_config("SKILL.md missing closing frontmatter delimiter (---)")
+            AlephError::invalid_config("SKILL.md missing closing frontmatter delimiter (---)")
         })?;
 
         // Extract frontmatter YAML
@@ -121,18 +121,18 @@ impl Skill {
         // Parse YAML frontmatter
         let frontmatter: SkillFrontmatter =
             serde_yaml::from_str(frontmatter_yaml).map_err(|e| {
-                AetherError::invalid_config(format!("Invalid SKILL.md frontmatter YAML: {}", e))
+                AlephError::invalid_config(format!("Invalid SKILL.md frontmatter YAML: {}", e))
             })?;
 
         // Validate required fields
         if frontmatter.name.is_empty() {
-            return Err(AetherError::invalid_config(
+            return Err(AlephError::invalid_config(
                 "SKILL.md frontmatter missing required 'name' field",
             ));
         }
 
         if frontmatter.description.is_empty() {
-            return Err(AetherError::invalid_config(
+            return Err(AlephError::invalid_config(
                 "SKILL.md frontmatter missing required 'description' field",
             ));
         }
@@ -226,7 +226,7 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 
     // Ensure skills directory exists
     fs::create_dir_all(&skills_dir)
-        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create skills directory: {}", e)))?;
 
     // Check if bundle skills directory exists
     if !bundle_skills_dir.exists() {
@@ -239,7 +239,7 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 
     // Iterate through bundled skills
     let entries = fs::read_dir(bundle_skills_dir).map_err(|e| {
-        AetherError::config(format!("Failed to read bundle skills directory: {}", e))
+        AlephError::config(format!("Failed to read bundle skills directory: {}", e))
     })?;
 
     let mut copied_count = 0;
@@ -271,7 +271,7 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 
                 // Create skill directory and copy SKILL.md
                 fs::create_dir_all(&target_dir).map_err(|e| {
-                    AetherError::config(format!(
+                    AlephError::config(format!(
                         "Failed to create skill directory {}: {}",
                         target_dir.display(),
                         e
@@ -280,7 +280,7 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 
                 let target_skill_md = target_dir.join("SKILL.md");
                 fs::copy(&skill_md, &target_skill_md).map_err(|e| {
-                    AetherError::config(format!("Failed to copy SKILL.md for {}: {}", skill_id, e))
+                    AlephError::config(format!("Failed to copy SKILL.md for {}: {}", skill_id, e))
                 })?;
 
                 info!(skill_id = %skill_id, "Installed built-in skill");
@@ -307,12 +307,12 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 /// List all installed skills
 ///
 /// Scans multiple skills directories and returns info for each valid skill.
-/// Uses multi-location discovery to support both ~/.aether/skills and ~/.claude/skills.
+/// Uses multi-location discovery to support both ~/.aleph/skills and ~/.claude/skills.
 pub fn list_installed_skills() -> Result<Vec<SkillInfo>> {
-    // Use multi-location discovery to support both ~/.aether/skills and ~/.claude/skills
+    // Use multi-location discovery to support both ~/.aleph/skills and ~/.claude/skills
     // This enables Claude Code compatibility by scanning:
     // - Project level: .aether/skills/, .claude/skills/
-    // - Global level: ~/.aether/skills, ~/.claude/skills
+    // - Global level: ~/.aleph/skills, ~/.claude/skills
     let registry = SkillsRegistry::with_auto_discover(None)?;
     registry.load_all()?;
 
@@ -329,7 +329,7 @@ pub fn delete_skill(skill_id: String) -> Result<()> {
     let skill_path = skills_dir.join(&skill_id);
 
     if !skill_path.exists() {
-        return Err(AetherError::invalid_config(format!(
+        return Err(AlephError::invalid_config(format!(
             "Skill '{}' not found",
             skill_id
         )));
@@ -337,7 +337,7 @@ pub fn delete_skill(skill_id: String) -> Result<()> {
 
     // Remove the entire skill directory
     fs::remove_dir_all(&skill_path).map_err(|e| {
-        AetherError::config(format!("Failed to delete skill '{}': {}", skill_id, e))
+        AlephError::config(format!("Failed to delete skill '{}': {}", skill_id, e))
     })?;
 
     info!(skill_id = %skill_id, "Deleted skill");
@@ -353,7 +353,7 @@ pub fn install_skill_from_url(url: String) -> Result<SkillInfo> {
 
     // Ensure skills directory exists
     fs::create_dir_all(&skills_dir)
-        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create skills directory: {}", e)))?;
 
     // Use the installer to download and install (synchronous)
     let installer = SkillsInstaller::new(skills_dir);
@@ -378,7 +378,7 @@ pub fn install_skills_from_zip(zip_path: String) -> Result<Vec<String>> {
 
     // Verify ZIP file exists
     if !zip_path.exists() {
-        return Err(AetherError::invalid_config(format!(
+        return Err(AlephError::invalid_config(format!(
             "ZIP file not found: {}",
             zip_path.display()
         )));
@@ -386,14 +386,14 @@ pub fn install_skills_from_zip(zip_path: String) -> Result<Vec<String>> {
 
     // Ensure skills directory exists
     fs::create_dir_all(&skills_dir)
-        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create skills directory: {}", e)))?;
 
     // Use the installer to extract and install
     let installer = SkillsInstaller::new(skills_dir);
 
     // Use tokio runtime to call async method
     let runtime = tokio::runtime::Runtime::new()
-        .map_err(|e| AetherError::config(format!("Failed to create async runtime: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create async runtime: {}", e)))?;
 
     let installed = runtime.block_on(installer.install_from_zip(&zip_path))?;
 

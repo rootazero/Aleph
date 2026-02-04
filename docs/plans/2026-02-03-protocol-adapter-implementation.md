@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Refactor Aether's provider architecture from "Vendor-Centric" to "Protocol-Centric" by introducing ProtocolAdapter trait and HttpProvider container.
+**Goal:** Refactor Aleph's provider architecture from "Vendor-Centric" to "Protocol-Centric" by introducing ProtocolAdapter trait and HttpProvider container.
 
 **Architecture:** Introduce a `ProtocolAdapter` trait that handles protocol-specific logic (request building, response parsing), and a generic `HttpProvider` that uses adapters via composition. This eliminates ~600 lines of redundant wrapper code.
 
@@ -145,7 +145,7 @@ pub use adapter::RequestPayload;
 
 ```bash
 cd /Volumes/TBU4/Workspace/Aether/.worktrees/protocol-adapter
-cargo test -p aethecore adapter::tests --no-fail-fast
+cargo test -p alephcore adapter::tests --no-fail-fast
 ```
 
 Expected: 2 tests pass
@@ -239,7 +239,7 @@ use futures::stream::BoxStream;
 **Step 3: Run build to verify**
 
 ```bash
-cargo build -p aethecore 2>&1 | head -20
+cargo build -p alephcore 2>&1 | head -20
 ```
 
 Expected: Build succeeds (warnings OK)
@@ -285,7 +285,7 @@ pub use openai::OpenAiProtocol;
 //! Used by: OpenAI, DeepSeek, Moonshot, Doubao, vLLM, etc.
 
 use crate::config::ProviderConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::openai::types::{
     ChatCompletionRequest, ChatCompletionResponse, ContentBlock, ImageUrl, Message, MessageContent,
@@ -578,7 +578,7 @@ impl ProtocolAdapter for OpenAiProtocol {
         let api_key = config
             .api_key
             .as_ref()
-            .ok_or_else(|| AetherError::invalid_config("API key is required"))?;
+            .ok_or_else(|| AlephError::invalid_config("API key is required"))?;
 
         debug!(
             endpoint = %endpoint,
@@ -601,7 +601,7 @@ impl ProtocolAdapter for OpenAiProtocol {
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
             error!(status = %status, error = %error_text, "OpenAI API error");
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "API error ({}): {}",
                 status, error_text
             )));
@@ -609,14 +609,14 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
             error!(error = %e, "Failed to parse OpenAI response");
-            AetherError::provider(format!("Failed to parse response: {}", e))
+            AlephError::provider(format!("Failed to parse response: {}", e))
         })?;
 
         completion
             .choices
             .first()
             .map(|c| c.message.content.clone())
-            .ok_or_else(|| AetherError::provider("No response choices"))
+            .ok_or_else(|| AlephError::provider("No response choices"))
     }
 
     async fn parse_stream(
@@ -627,7 +627,7 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "API error ({}): {}",
                 status, error_text
             )));
@@ -635,10 +635,10 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         let stream = response
             .bytes_stream()
-            .map_err(|e| AetherError::network(format!("Stream error: {}", e)))
+            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
             .try_filter_map(|chunk| async move {
                 let text = std::str::from_utf8(&chunk)
-                    .map_err(|e| AetherError::provider(format!("UTF-8 error: {}", e)))?;
+                    .map_err(|e| AlephError::provider(format!("UTF-8 error: {}", e)))?;
 
                 let mut result = String::new();
                 for line in text.lines() {
@@ -731,7 +731,7 @@ pub use protocols::OpenAiProtocol;
 **Step 4: Run tests**
 
 ```bash
-cargo test -p aethecore protocols::openai::tests --no-fail-fast
+cargo test -p alephcore protocols::openai::tests --no-fail-fast
 ```
 
 Expected: 4 tests pass
@@ -818,11 +818,11 @@ impl HttpProvider {
         let request = self.adapter.build_request(&payload, &self.config, false)?;
         let response = request.send().await.map_err(|e| {
             if e.is_timeout() {
-                crate::error::AetherError::Timeout {
+                crate::error::AlephError::Timeout {
                     suggestion: Some("Request timed out. Try again or switch providers.".into()),
                 }
             } else {
-                crate::error::AetherError::network(format!("Network error: {}", e))
+                crate::error::AlephError::network(format!("Network error: {}", e))
             }
         })?;
         self.adapter.parse_response(response).await
@@ -836,7 +836,7 @@ impl HttpProvider {
     ) -> Result<BoxStream<'static, Result<String>>> {
         let request = self.adapter.build_request(&payload, &self.config, true)?;
         let response = request.send().await.map_err(|e| {
-            crate::error::AetherError::network(format!("Network error: {}", e))
+            crate::error::AlephError::network(format!("Network error: {}", e))
         })?;
         self.adapter.parse_stream(response).await
     }
@@ -983,7 +983,7 @@ pub use http_provider::HttpProvider;
 **Step 3: Build and verify**
 
 ```bash
-cargo build -p aethecore 2>&1 | tail -10
+cargo build -p alephcore 2>&1 | tail -10
 ```
 
 Expected: Build succeeds
@@ -1161,7 +1161,7 @@ pub use presets::{get_preset, ProviderPreset, PRESETS};
 **Step 3: Run tests**
 
 ```bash
-cargo test -p aethecore presets::tests --no-fail-fast
+cargo test -p alephcore presets::tests --no-fail-fast
 ```
 
 Expected: 4 tests pass
@@ -1266,7 +1266,7 @@ mod tests {
 **Step 5: Run tests**
 
 ```bash
-cargo test -p aethecore config::types::provider --no-fail-fast
+cargo test -p alephcore config::types::provider --no-fail-fast
 ```
 
 Expected: 4 tests pass
@@ -1338,7 +1338,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(config.timeout_seconds))
                 .build()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
+                .map_err(|e| AlephError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
 
             let adapter = Arc::new(protocols::OpenAiProtocol::new(client));
             let provider = HttpProvider::new(name.to_string(), config, adapter)?;
@@ -1363,7 +1363,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
             Ok(Arc::new(provider))
         }
 
-        unknown => Err(AetherError::invalid_config(format!(
+        unknown => Err(AlephError::invalid_config(format!(
             "Unknown protocol: '{}'. Supported: openai, claude, anthropic, gemini, ollama, mock.",
             unknown
         ))),
@@ -1382,7 +1382,7 @@ use std::sync::Arc;
 **Step 3: Run existing tests**
 
 ```bash
-cargo test -p aethecore providers::tests --no-fail-fast
+cargo test -p alephcore providers::tests --no-fail-fast
 ```
 
 Expected: All existing factory tests pass
@@ -1440,7 +1440,7 @@ rm core/src/providers/openai_compatible.rs
 **Step 3: Build and verify**
 
 ```bash
-cargo build -p aethecore 2>&1 | tail -20
+cargo build -p alephcore 2>&1 | tail -20
 ```
 
 Expected: Build succeeds
@@ -1448,7 +1448,7 @@ Expected: Build succeeds
 **Step 4: Run all tests**
 
 ```bash
-cargo test -p aethecore --no-fail-fast 2>&1 | tail -30
+cargo test -p alephcore --no-fail-fast 2>&1 | tail -30
 ```
 
 Expected: Tests pass (same baseline failures as before)
@@ -1476,7 +1476,7 @@ These are now handled by HttpProvider + OpenAiProtocol + presets."
 **Step 1: Run full test suite**
 
 ```bash
-cargo test -p aethecore 2>&1 | grep -E "(passed|failed|FAILED)"
+cargo test -p alephcore 2>&1 | grep -E "(passed|failed|FAILED)"
 ```
 
 Expected: Same number of passes as baseline, no new failures

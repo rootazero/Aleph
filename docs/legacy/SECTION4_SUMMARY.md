@@ -121,13 +121,13 @@ case .error:
 #### UI Changes:
 Added menu item to status bar dropdown:
 ```
-About Aether
+About Aleph
 ─────────────
 Settings...
 ─────────────
 Mute Sounds     ← NEW (or "Unmute Sounds")
 ─────────────
-Quit Aether
+Quit Aleph
 ```
 
 #### Implementation:
@@ -373,7 +373,7 @@ All tasks from Section 4 (halo-audio-feedback) are implemented:
    ```bash
    cd /Users/zouguojun/Workspace/Aether
    xcodegen generate
-   open Aether.xcodeproj
+   open Aleph.xcodeproj
    # Click Run (Cmd+R)
    ```
 

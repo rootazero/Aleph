@@ -4,7 +4,7 @@
 //! implementation is a no-op, but users can implement custom rerankers (e.g.,
 //! Cohere, cross-encoder models) for improved retrieval quality.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use async_trait::async_trait;
 
 /// Result of reranking operation
@@ -57,7 +57,7 @@ pub trait Reranker: Send + Sync {
         query: &str,
         items: Vec<Self::Item>,
         top_k: usize,
-    ) -> Result<RerankResult<Self::Item>, AetherError>;
+    ) -> Result<RerankResult<Self::Item>, AlephError>;
 
     /// Get the name of this reranker
     fn name(&self) -> &str;
@@ -95,7 +95,7 @@ impl<T: Send + Sync + 'static> Reranker for NoOpReranker<T> {
         _query: &str,
         items: Vec<Self::Item>,
         top_k: usize,
-    ) -> Result<RerankResult<Self::Item>, AetherError> {
+    ) -> Result<RerankResult<Self::Item>, AlephError> {
         let truncated = items.into_iter().take(top_k).collect();
         Ok(RerankResult::without_scores(truncated))
     }

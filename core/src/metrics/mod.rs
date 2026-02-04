@@ -7,7 +7,7 @@
 /// # Usage
 ///
 /// ```rust,no_run
-/// use aethecore::metrics::StageTimer;
+/// use alephcore::metrics::StageTimer;
 ///
 /// // Simple timing
 /// let _timer = StageTimer::start("clipboard_read");
@@ -77,7 +77,7 @@ pub fn get_warning_multiplier(policy: Option<&MetricsPolicy>) -> f64 {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use aethecore::metrics::StageTimer;
+/// use alephcore::metrics::StageTimer;
 ///
 /// {
 ///     let _timer = StageTimer::start("example_stage");
@@ -153,7 +153,7 @@ impl StageTimer {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use aethecore::metrics::StageTimer;
+    /// use alephcore::metrics::StageTimer;
     ///
     /// let _timer = StageTimer::start("ai_request")
     ///     .with_meta("provider", "OpenAI")
@@ -248,7 +248,7 @@ impl Drop for StageTimer {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use aethecore::time_stage;
+/// use alephcore::time_stage;
 ///
 /// {
 ///     let _timer = time_stage!("clipboard_read");

@@ -22,9 +22,9 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 
 ## Pre-Test Setup
 
-- [ ] Build Rust core: `cd Aether/core && cargo build`
+- [ ] Build Rust core: `cd Aleph/core && cargo build`
 - [ ] Generate Xcode project: `xcodegen generate`
-- [ ] Build and run Aether app: Open in Xcode and press Cmd+R
+- [ ] Build and run Aleph app: Open in Xcode and press Cmd+R
 - [ ] Verify app launches without errors
 - [ ] Verify menu bar icon appears
 
@@ -46,7 +46,7 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Click "Save"
 - [ ] Verify provider appears in list with "✓ Configured" status
 - [ ] Verify API key is NOT visible in config.toml (only stored in Keychain)
-  - Check: `cat ~/.aether/config.toml | grep "sk-test-key"`
+  - Check: `cat ~/.aleph/config.toml | grep "sk-test-key"`
   - Expected: No matches (key should not be in file)
 
 ### 1.2 Test Provider Connection
@@ -140,7 +140,7 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Drag rule #2 (`^/draw`) to position #1
 - [ ] Verify order changes in UI
 - [ ] Verify config.toml reflects new order
-  - Check: `cat ~/.aether/config.toml`
+  - Check: `cat ~/.aleph/config.toml`
   - Expected: Rules appear in dragged order
 
 ### 2.5 Edit Rule
@@ -201,7 +201,7 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Close Settings window
 - [ ] Select some text in any app (e.g., "Hello world" in Notes)
 - [ ] Press new hotkey: `Cmd + Shift + A`
-- [ ] Verify Aether responds (Halo appears)
+- [ ] Verify Aleph responds (Halo appears)
 - [ ] Expected: Text is cut and processed
 
 ### 3.3 Conflict Detection
@@ -231,7 +231,7 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Current Cancel hotkey: `Escape`
 - [ ] Change to: `Cmd + .`
 - [ ] Save
-- [ ] Test: Start Aether operation, press `Cmd + .`
+- [ ] Test: Start Aleph operation, press `Cmd + .`
 - [ ] Verify operation is cancelled
 
 ## 4. Behavior Settings
@@ -313,8 +313,8 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
   - Change hotkey to `Cmd + Shift + A`
   - Set input mode to `Copy`
   - Set typing speed to `100`
-- [ ] Quit Aether app (Cmd + Q)
-- [ ] Relaunch Aether
+- [ ] Quit Aleph app (Cmd + Q)
+- [ ] Relaunch Aleph
 - [ ] Open Settings
 - [ ] Verify ALL settings persisted:
   - [x] OpenAI provider exists with correct config
@@ -328,8 +328,8 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Check Keychain Access app
 - [ ] Search for "Aether"
 - [ ] Verify API keys are stored with correct provider names:
-  - `Aether:openai` → `sk-test-key-12345`
-  - `Aether:claude` → `sk-ant-test-key`
+  - `Aleph:openai` → `sk-test-key-12345`
+  - `Aleph:claude` → `sk-ant-test-key`
 - [ ] Verify keys are marked as "Application Password"
 - [ ] Verify "Where" field shows: "Aether"
 
@@ -340,11 +340,11 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Open Settings window (keep it open)
 - [ ] Open Terminal and edit config:
   ```bash
-  nano ~/.aether/config.toml
+  nano ~/.aleph/config.toml
   ```
 - [ ] Change `default_hotkey` from `Command+Grave` to `Command+Shift+B`
 - [ ] Save file (Ctrl+O, Enter, Ctrl+X)
-- [ ] Switch back to Aether Settings window
+- [ ] Switch back to Aleph Settings window
 - [ ] Verify toast notification appears: "⚡ Settings updated from file"
 - [ ] Verify UI refreshes with new hotkey value
 - [ ] Verify update happens within **1 second** of file save

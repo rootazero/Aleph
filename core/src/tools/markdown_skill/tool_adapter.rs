@@ -1,6 +1,6 @@
 //! Markdown CLI Tool Adapter
 //!
-//! Implements AetherToolDyn for Markdown-defined CLI tools.
+//! Implements AlephToolDyn for Markdown-defined CLI tools.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -10,7 +10,7 @@ use tracing::warn;
 
 use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
-use crate::tools::AetherToolDyn;
+use crate::tools::AlephToolDyn;
 
 use super::parser::{extract_first_paragraph, extract_markdown_section};
 use super::spec::{AetherSkillSpec, SandboxMode};
@@ -172,7 +172,7 @@ impl MarkdownCliTool {
     pub async fn call(&self, args: Value) -> Result<MarkdownToolOutput> {
         // Build CLI command from args
         let cli_args = self.args_to_cli(&args).map_err(|e| {
-            crate::error::AetherError::IoError(
+            crate::error::AlephError::IoError(
                 format!("[{}] Failed to convert args to CLI: {}", self.spec.name, e)
             )
         })?;
@@ -180,17 +180,17 @@ impl MarkdownCliTool {
         // Execute based on sandbox mode
         let output = match self.get_sandbox_mode() {
             SandboxMode::Host => self.execute_on_host(&cli_args).await.map_err(|e| {
-                crate::error::AetherError::IoError(
+                crate::error::AlephError::IoError(
                     format!("[{}] Host execution failed: {}", self.spec.name, e)
                 )
             })?,
             SandboxMode::Docker => self.execute_in_docker(&cli_args).await.map_err(|e| {
-                crate::error::AetherError::IoError(
+                crate::error::AlephError::IoError(
                     format!("[{}] Docker execution failed: {}", self.spec.name, e)
                 )
             })?,
             SandboxMode::VirtualFs => self.execute_in_virtualfs(&cli_args).await.map_err(|e| {
-                crate::error::AetherError::IoError(
+                crate::error::AlephError::IoError(
                     format!("[{}] VirtualFs execution failed: {}", self.spec.name, e)
                 )
             })?,
@@ -286,8 +286,8 @@ impl MarkdownCliTool {
     }
 }
 
-// Implementation of AetherToolDyn for runtime tool server integration
-impl AetherToolDyn for MarkdownCliTool {
+// Implementation of AlephToolDyn for runtime tool server integration
+impl AlephToolDyn for MarkdownCliTool {
     fn name(&self) -> &str {
         &self.spec.name
     }

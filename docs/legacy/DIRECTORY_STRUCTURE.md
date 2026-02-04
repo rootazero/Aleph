@@ -1,10 +1,10 @@
-# Aether Directory Structure
+# Aleph Directory Structure
 
 This document provides a detailed view of the project's directory structure.
 
 ## Overview
 
-Aether is a Monorepo with platform-specific directories:
+Aleph is a Monorepo with platform-specific directories:
 - **macOS**: Native Swift + SwiftUI with XcodeGen
 - **Tauri**: Cross-platform (Windows, Linux) with React + TypeScript
 - **Windows (Native)**: ARCHIVED - use Tauri instead
@@ -223,7 +223,7 @@ aether/
 │       ├── providers/                 # AI provider implementations
 │       │   ├── mod.rs, rig_providers.rs
 │       │
-│       ├── rig_tools/                 # AetherTool implementations (search, web_fetch, etc.)
+│       ├── rig_tools/                 # AlephTool implementations (search, web_fetch, etc.)
 │       │   ├── mod.rs, error.rs, mcp_wrapper.rs
 │       │   ├── search.rs, web_fetch.rs, youtube.rs, file_ops.rs
 │       │   ├── skill_reader.rs        # read_skill, list_skills tools (NEW)
@@ -272,12 +272,12 @@ aether/
 ├── platforms/
 │   ├── macos/                         # macOS Application
 │   │   ├── project.yml                # XcodeGen configuration
-│   │   ├── Aether/
+│   │   ├── Aleph/
 │   │   │   ├── Info.plist
-│   │   │   ├── Aether.entitlements
+│   │   │   ├── Aleph.entitlements
 │   │   │   ├── config.example.toml
 │   │   │   ├── Assets.xcassets/       # App icons, colors
-│   │   │   ├── Frameworks/            # libaethecore.dylib
+│   │   │   ├── Frameworks/            # libalephcore.dylib
 │   │   │   ├── Generated/             # Reference bindings
 │   │   │   ├── Resources/
 │   │   │   │   ├── en.lproj/          # English localization
@@ -287,7 +287,7 @@ aether/
 │   │   │   └── Sources/
 │   │   │       ├── main.swift         # NSApplicationMain entry
 │   │   │       ├── AppDelegate.swift  # Menu bar lifecycle
-│   │   │       ├── AetherBridgingHeader.h
+│   │   │       ├── AlephBridgingHeader.h
 │   │   │       ├── Generated/         # UniFFI Swift bindings
 │   │   │       │   ├── aether.swift
 │   │   │       │   ├── aetherFFI.h
@@ -311,8 +311,8 @@ aether/
 │   │   │       ├── Store/             # State store
 │   │   │       ├── Utils/             # Utilities
 │   │   │       └── Vision/            # Screen capture UI
-│   │   ├── AetherTests/               # Unit tests
-│   │   └── AetherUITests/             # UI tests
+│   │   ├── AlephTests/               # Unit tests
+│   │   └── AlephUITests/             # UI tests
 │   │
 │   ├── tauri/                         # Tauri Cross-Platform (Windows, Linux)
 │   │   ├── package.json               # pnpm workspace config
@@ -327,7 +327,7 @@ aether/
 │   │
 │   └── windows/                       # [ARCHIVED] Windows Native
 │       ├── ARCHIVED.md                # Archive notice
-│       ├── Aether.sln                 # Visual Studio solution
+│       ├── Aleph.sln                 # Visual Studio solution
 │       └── ...                        # See ARCHIVED.md
 │
 ├── shared/                            # Cross-Platform Resources

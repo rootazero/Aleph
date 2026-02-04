@@ -10,7 +10,7 @@ use futures::Stream;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::client::McpClient;
 use crate::mcp::context_injector::ContextInjector;
 use crate::mcp::jsonrpc::mcp::{
@@ -110,7 +110,7 @@ impl SamplingHandler {
     ) -> Result<SamplingResponse> {
         // Parse the request
         let mut request: SamplingRequest = serde_json::from_value(params).map_err(|e| {
-            AetherError::IoError(format!("Failed to parse sampling request: {}", e))
+            AlephError::IoError(format!("Failed to parse sampling request: {}", e))
         })?;
 
         tracing::debug!(
@@ -140,7 +140,7 @@ impl SamplingHandler {
         // Get callback
         let callback = self.callback.read().await;
         let cb = callback.as_ref().ok_or_else(|| {
-            AetherError::IoError("No sampling callback registered".to_string())
+            AlephError::IoError("No sampling callback registered".to_string())
         })?;
 
         // Invoke callback

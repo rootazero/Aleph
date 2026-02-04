@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::model_router::{PromptAnalyzer, PromptAnalyzerConfig};
+//! use alephcore::dispatcher::model_router::{PromptAnalyzer, PromptAnalyzerConfig};
 //!
 //! let analyzer = PromptAnalyzer::new(PromptAnalyzerConfig::default());
 //! let features = analyzer.analyze("请用 Rust 写一个快速排序算法");

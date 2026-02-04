@@ -1,4 +1,4 @@
-# Aether Documentation
+# Aleph Documentation
 
 ## Current Documentation
 

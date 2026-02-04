@@ -1,7 +1,7 @@
 //! DreamDaemon: background memory consolidation and graph decay.
 
 use crate::config::{DreamingConfig as ConfigDreamingConfig, GraphDecayPolicy, MemoryConfig, MemoryDecayPolicy};
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryEntry};
 use crate::memory::database::VectorDatabase;
 use crate::memory::decay::DecayConfig;
@@ -162,7 +162,7 @@ impl DreamDaemon {
     pub fn from_config(
         database: Arc<VectorDatabase>,
         config: &MemoryConfig,
-    ) -> Result<Self, AetherError> {
+    ) -> Result<Self, AlephError> {
         let (window_start, window_end) = parse_window(&config.dreaming)?;
         let graph_decay = graph_decay_from_policy(&config.graph_decay);
         let memory_decay = decay_config_from_policy(&config.memory_decay);
@@ -204,7 +204,7 @@ impl DreamDaemon {
         }
     }
 
-    async fn check_and_run(&self) -> Result<(), AetherError> {
+    async fn check_and_run(&self) -> Result<(), AlephError> {
         if !self.config.enabled {
             return Ok(());
         }
@@ -329,7 +329,7 @@ impl DreamDaemon {
         &self,
         run_start: i64,
         run_date: String,
-    ) -> Result<DreamRunReport, AetherError> {
+    ) -> Result<DreamRunReport, AlephError> {
         let activity_snapshot = last_activity_timestamp().max(run_start);
 
         let since = run_start - DEFAULT_LOOKBACK_HOURS * 3600;
@@ -423,15 +423,15 @@ fn activity_detected(snapshot: i64) -> bool {
     last_activity_timestamp() > snapshot
 }
 
-fn parse_window(config: &ConfigDreamingConfig) -> Result<(NaiveTime, NaiveTime), AetherError> {
+fn parse_window(config: &ConfigDreamingConfig) -> Result<(NaiveTime, NaiveTime), AlephError> {
     let start = NaiveTime::parse_from_str(&config.window_start_local, "%H:%M").map_err(|_| {
-        AetherError::config(format!(
+        AlephError::config(format!(
             "Invalid dreaming.window_start_local '{}', expected HH:MM",
             config.window_start_local
         ))
     })?;
     let end = NaiveTime::parse_from_str(&config.window_end_local, "%H:%M").map_err(|_| {
-        AetherError::config(format!(
+        AlephError::config(format!(
             "Invalid dreaming.window_end_local '{}', expected HH:MM",
             config.window_end_local
         ))

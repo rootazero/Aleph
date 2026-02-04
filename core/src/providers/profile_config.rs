@@ -1,4 +1,4 @@
-//! Profile configuration for ~/.aether/profiles.toml
+//! Profile configuration for ~/.aleph/profiles.toml
 //!
 //! This module provides TOML-based configuration for auth profiles with:
 //! - Environment variable resolution for API keys
@@ -163,7 +163,7 @@ impl ProfilesConfig {
         Self::default()
     }
 
-    /// Load configuration from default path (~/.aether/profiles.toml)
+    /// Load configuration from default path (~/.aleph/profiles.toml)
     pub fn load_default() -> ProfileConfigResult<Self> {
         let path = Self::default_path();
         if path.exists() {

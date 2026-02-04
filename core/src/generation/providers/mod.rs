@@ -21,8 +21,8 @@
 //! Use `create_provider()` to create providers from configuration:
 //!
 //! ```rust,ignore
-//! use aethecore::config::GenerationProviderConfig;
-//! use aethecore::generation::providers::create_provider;
+//! use alephcore::config::GenerationProviderConfig;
+//! use alephcore::generation::providers::create_provider;
 //!
 //! let config = GenerationProviderConfig {
 //!     provider_type: "openai".to_string(),
@@ -87,9 +87,9 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::config::GenerationProviderConfig;
-/// use aethecore::generation::providers::create_provider;
-/// use aethecore::generation::GenerationType;
+/// use alephcore::config::GenerationProviderConfig;
+/// use alephcore::generation::providers::create_provider;
+/// use alephcore::generation::GenerationType;
 ///
 /// // Create a DALL-E provider
 /// let config = GenerationProviderConfig {

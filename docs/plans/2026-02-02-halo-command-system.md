@@ -37,7 +37,7 @@ This plan:
 ```swift
 //
 //  HaloInputCoordinator.swift
-//  Aether
+//  Aleph
 //
 //  Lightweight coordinator for Halo input handling.
 //  Replaces MultiTurnCoordinator with minimal command-focused logic.
@@ -65,7 +65,7 @@ final class HaloInputCoordinator {
     // MARK: - Dependencies
 
     private weak var haloWindow: HaloWindow?
-    private weak var core: AetherCore?
+    private weak var core: AlephCore?
 
     // MARK: - State
 
@@ -82,7 +82,7 @@ final class HaloInputCoordinator {
     // MARK: - Configuration
 
     /// Configure coordinator with dependencies
-    func configure(haloWindow: HaloWindow?, core: AetherCore?) {
+    func configure(haloWindow: HaloWindow?, core: AlephCore?) {
         self.haloWindow = haloWindow
         self.core = core
         print("[HaloInputCoordinator] Configured")
@@ -465,7 +465,7 @@ EOF
 ```swift
 //
 //  HaloCommandListView.swift
-//  Aether
+//  Aleph
 //
 //  Command list panel view for the / command.
 //  Displays available skills/commands with search filtering.
@@ -1118,7 +1118,7 @@ EOF
 
 **Step 1: Build the project**
 
-Run: `cd platforms/macos && xcodebuild -scheme Aether -configuration Debug build 2>&1 | head -100`
+Run: `cd platforms/macos && xcodebuild -scheme Aleph -configuration Debug build 2>&1 | head -100`
 Expected: Build succeeds (or only warnings, no errors)
 
 **Step 2: Fix any compilation errors**

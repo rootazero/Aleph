@@ -6,7 +6,7 @@
 
 ## Overview
 
-Aether's extension system allows third-party tools via:
+Aleph's extension system allows third-party tools via:
 - **WASM Plugins**: Fast, sandboxed WebAssembly modules
 - **Node.js Plugins**: JavaScript/TypeScript extensions
 - **Manifest-driven**: Declarative plugin definitions
@@ -52,7 +52,7 @@ Aether's extension system allows third-party tools via:
 ### Directory Layout
 
 ```
-~/.aether/plugins/
+~/.aleph/plugins/
 ├── my-plugin/
 │   ├── aether_plugin.toml    # Plugin manifest
 │   ├── package.json          # (Node.js) or
@@ -246,7 +246,7 @@ impl PluginDiscovery {
 
 ### Search Paths
 
-1. `~/.aether/plugins/` (user plugins)
+1. `~/.aleph/plugins/` (user plugins)
 2. `/usr/local/share/aether/plugins/` (system plugins)
 3. `./plugins/` (project plugins)
 
@@ -357,7 +357,7 @@ pub struct SkillTool {
     definition: SkillDefinition,
 }
 
-impl AetherToolDyn for SkillTool {
+impl AlephToolDyn for SkillTool {
     fn name(&self) -> &str {
         &self.name
     }
@@ -379,7 +379,7 @@ impl AetherToolDyn for SkillTool {
   "extensions": {
     "enabled": true,
     "searchPaths": [
-      "~/.aether/plugins",
+      "~/.aleph/plugins",
       "./plugins"
     ],
     "runtimes": {
@@ -873,7 +873,7 @@ Response:
 
 ## Channel Plugins (P2)
 
-Channel plugins enable messaging integrations, allowing Aether to communicate through various platforms like Telegram, Discord, Slack, or custom messaging systems.
+Channel plugins enable messaging integrations, allowing Aleph to communicate through various platforms like Telegram, Discord, Slack, or custom messaging systems.
 
 ### What Are Channel Plugins?
 
@@ -1032,7 +1032,7 @@ impl ChannelManager {
 
 ## Provider Plugins (P2)
 
-Provider plugins allow custom AI backends to be integrated into Aether, enabling support for self-hosted models, specialized APIs, or proprietary systems.
+Provider plugins allow custom AI backends to be integrated into Aleph, enabling support for self-hosted models, specialized APIs, or proprietary systems.
 
 ### What Are Provider Plugins?
 
@@ -1173,7 +1173,7 @@ async function* handleStream(
 
 ### PluginProviderAdapter API
 
-The adapter bridges plugin providers with Aether's provider system:
+The adapter bridges plugin providers with Aleph's provider system:
 
 ```rust
 pub struct PluginProviderAdapter {
@@ -1182,7 +1182,7 @@ pub struct PluginProviderAdapter {
     runtime: Arc<dyn PluginRuntime>,
 }
 
-impl AetherProvider for PluginProviderAdapter {
+impl AlephProvider for PluginProviderAdapter {
     async fn list_models(&self) -> Result<Vec<ModelInfo>>;
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatStream>;

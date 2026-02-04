@@ -2,7 +2,7 @@
 //!
 //! Provides a lightweight entity-relation graph for disambiguation and filtering.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryEntry};
 use crate::memory::database::VectorDatabase;
 use chrono::Utc;
@@ -182,7 +182,7 @@ impl GraphStore {
         kind: &str,
         aliases: &[String],
         metadata: Option<Value>,
-    ) -> Result<GraphNode, AetherError> {
+    ) -> Result<GraphNode, AlephError> {
         let conn = self.database.conn.lock().unwrap_or_else(|e| e.into_inner());
         let normalized = Self::normalize_name(name);
         let now = Utc::now().timestamp();
@@ -196,7 +196,7 @@ impl GraphStore {
                 LIMIT 1
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare graph node lookup: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare graph node lookup: {}", e)))?;
 
         let existing: Option<(String, String, String, String, String, i64, i64, f64)> = stmt
             .query_row([kind, normalized.as_str()], |row| {
@@ -212,7 +212,7 @@ impl GraphStore {
                 ))
             })
             .optional()
-            .map_err(|e| AetherError::config(format!("Failed to query graph node: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to query graph node: {}", e)))?;
 
         let mut alias_set: HashSet<String> = HashSet::new();
         let mut alias_list: Vec<String> = Vec::new();
@@ -244,9 +244,9 @@ impl GraphStore {
             }
 
             let aliases_json = serde_json::to_string(&alias_list)
-                .map_err(|e| AetherError::config(format!("Failed to serialize aliases: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to serialize aliases: {}", e)))?;
             let metadata_json = serde_json::to_string(&metadata_value).map_err(|e| {
-                AetherError::config(format!("Failed to serialize metadata: {}", e))
+                AlephError::config(format!("Failed to serialize metadata: {}", e))
             })?;
 
             conn.execute(
@@ -257,7 +257,7 @@ impl GraphStore {
                 "#,
                 rusqlite::params![aliases_json, metadata_json, now, id],
             )
-            .map_err(|e| AetherError::config(format!("Failed to update graph node: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to update graph node: {}", e)))?;
 
             // Ensure canonical name is included in aliases list for lookup
             let canonical_norm = Self::normalize_name(&existing_name);
@@ -281,9 +281,9 @@ impl GraphStore {
             let id = format!("gn_{}", Uuid::new_v4());
             alias_list = aliases.to_vec();
             let aliases_json = serde_json::to_string(&alias_list)
-                .map_err(|e| AetherError::config(format!("Failed to serialize aliases: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to serialize aliases: {}", e)))?;
             let metadata_json = serde_json::to_string(&metadata_value).map_err(|e| {
-                AetherError::config(format!("Failed to serialize metadata: {}", e))
+                AlephError::config(format!("Failed to serialize metadata: {}", e))
             })?;
 
             conn.execute(
@@ -293,7 +293,7 @@ impl GraphStore {
                 "#,
                 rusqlite::params![id, name, kind, aliases_json, metadata_json, now, now],
             )
-            .map_err(|e| AetherError::config(format!("Failed to insert graph node: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to insert graph node: {}", e)))?;
 
             let mut alias_full = alias_list.clone();
             alias_full.push(name.to_string());
@@ -317,7 +317,7 @@ impl GraphStore {
         conn: &rusqlite::Connection,
         node_id: &str,
         aliases: &[String],
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let mut stmt = conn
             .prepare(
                 r#"
@@ -325,13 +325,13 @@ impl GraphStore {
                 VALUES (?1, ?2, ?3)
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare alias insert: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare alias insert: {}", e)))?;
 
         for alias in aliases {
             let normalized = Self::normalize_name(alias);
             stmt.execute(rusqlite::params![alias, normalized, node_id])
                 .map_err(|e| {
-                    AetherError::config(format!("Failed to insert graph alias: {}", e))
+                    AlephError::config(format!("Failed to insert graph alias: {}", e))
                 })?;
         }
         Ok(())
@@ -346,7 +346,7 @@ impl GraphStore {
         context_key: &str,
         confidence: f32,
         weight_delta: f32,
-    ) -> Result<GraphEdge, AetherError> {
+    ) -> Result<GraphEdge, AlephError> {
         let conn = self.database.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().timestamp();
 
@@ -362,7 +362,7 @@ impl GraphStore {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .optional()
-            .map_err(|e| AetherError::config(format!("Failed to query graph edge: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to query graph edge: {}", e)))?;
 
         if let Some((id, weight, existing_conf, _, decay_score)) = existing {
             let new_weight = weight + weight_delta;
@@ -375,7 +375,7 @@ impl GraphStore {
                 "#,
                 rusqlite::params![new_weight, new_conf, now, now, id],
             )
-            .map_err(|e| AetherError::config(format!("Failed to update graph edge: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to update graph edge: {}", e)))?;
 
             return Ok(GraphEdge {
                 id,
@@ -413,7 +413,7 @@ impl GraphStore {
                 now
             ],
         )
-        .map_err(|e| AetherError::config(format!("Failed to insert graph edge: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert graph edge: {}", e)))?;
 
         Ok(GraphEdge {
             id,
@@ -437,7 +437,7 @@ impl GraphStore {
         node_id: &str,
         weight: f32,
         source: &str,
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let conn = self.database.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             r#"
@@ -446,7 +446,7 @@ impl GraphStore {
             "#,
             rusqlite::params![memory_id, node_id, weight, source],
         )
-        .map_err(|e| AetherError::config(format!("Failed to link memory entity: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to link memory entity: {}", e)))?;
         Ok(())
     }
 
@@ -455,7 +455,7 @@ impl GraphStore {
         &self,
         name_or_alias: &str,
         context_key: Option<&str>,
-    ) -> Result<Vec<ResolvedEntity>, AetherError> {
+    ) -> Result<Vec<ResolvedEntity>, AlephError> {
         let conn = self.database.conn.lock().unwrap_or_else(|e| e.into_inner());
         let normalized = Self::normalize_name(name_or_alias);
 
@@ -471,7 +471,7 @@ impl GraphStore {
                 WHERE lower(n.name) = ?1 OR a.normalized_alias = ?1
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare resolve query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare resolve query: {}", e)))?;
 
         let mut raw: Vec<(String, bool, i64, f32)> = Vec::new();
         let rows = stmt
@@ -482,10 +482,10 @@ impl GraphStore {
                 let decay_score: f32 = row.get(7)?;
                 Ok((id, alias_match > 0, updated_at, decay_score))
             })
-            .map_err(|e| AetherError::config(format!("Failed to resolve entities: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to resolve entities: {}", e)))?;
 
         for row in rows {
-            raw.push(row.map_err(|e| AetherError::config(format!("Failed to parse entity: {}", e)))?);
+            raw.push(row.map_err(|e| AlephError::config(format!("Failed to parse entity: {}", e)))?);
         }
 
         if raw.is_empty() {
@@ -555,16 +555,16 @@ impl GraphStore {
     pub async fn get_memory_ids_for_entity(
         &self,
         node_id: &str,
-    ) -> Result<Vec<String>, AetherError> {
+    ) -> Result<Vec<String>, AlephError> {
         let conn = self.database.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT memory_id FROM memory_entities WHERE node_id = ?1")
-            .map_err(|e| AetherError::config(format!("Failed to prepare memory lookup: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare memory lookup: {}", e)))?;
         let ids = stmt
             .query_map([node_id], |row| row.get(0))
-            .map_err(|e| AetherError::config(format!("Failed to query memory ids: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query memory ids: {}", e)))?
             .collect::<Result<Vec<String>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse memory ids: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse memory ids: {}", e)))?;
         Ok(ids)
     }
 
@@ -572,7 +572,7 @@ impl GraphStore {
     pub async fn apply_decay(
         &self,
         config: &GraphDecayConfig,
-    ) -> Result<GraphDecayReport, AetherError> {
+    ) -> Result<GraphDecayReport, AlephError> {
         let conn = self.database.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().timestamp();
         let mut report = GraphDecayReport::default();
@@ -580,19 +580,19 @@ impl GraphStore {
         // Decay edges
         let mut edge_stmt = conn
             .prepare("SELECT id, last_seen_at, decay_score FROM graph_edges")
-            .map_err(|e| AetherError::config(format!("Failed to prepare edge decay: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare edge decay: {}", e)))?;
         let edges = edge_stmt
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, f32>(2)?)))
-            .map_err(|e| AetherError::config(format!("Failed to query edges: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query edges: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse edges: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse edges: {}", e)))?;
 
         for (edge_id, last_seen, decay_score) in edges {
             let days = ((now - last_seen).max(0) as f32) / 86400.0;
             let mut new_score = decay_score * (1.0 - config.edge_decay_per_day).powf(days);
             if new_score < config.min_score {
                 conn.execute("DELETE FROM graph_edges WHERE id = ?1", rusqlite::params![edge_id])
-                    .map_err(|e| AetherError::config(format!("Failed to prune edge: {}", e)))?;
+                    .map_err(|e| AlephError::config(format!("Failed to prune edge: {}", e)))?;
                 report.pruned_edges += 1;
             } else {
                 if new_score > 1.0 {
@@ -602,32 +602,32 @@ impl GraphStore {
                     "UPDATE graph_edges SET decay_score = ?1, updated_at = ?2 WHERE id = ?3",
                     rusqlite::params![new_score, now, edge_id],
                 )
-                .map_err(|e| AetherError::config(format!("Failed to update edge decay: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to update edge decay: {}", e)))?;
             }
         }
 
         // Decay nodes
         let mut node_stmt = conn
             .prepare("SELECT id, updated_at, decay_score FROM graph_nodes")
-            .map_err(|e| AetherError::config(format!("Failed to prepare node decay: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare node decay: {}", e)))?;
         let nodes = node_stmt
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, f32>(2)?)))
-            .map_err(|e| AetherError::config(format!("Failed to query nodes: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query nodes: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse nodes: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse nodes: {}", e)))?;
 
         for (node_id, updated_at, decay_score) in nodes {
             let days = ((now - updated_at).max(0) as f32) / 86400.0;
             let mut new_score = decay_score * (1.0 - config.node_decay_per_day).powf(days);
             if new_score < config.min_score {
                 conn.execute("DELETE FROM graph_nodes WHERE id = ?1", rusqlite::params![node_id.clone()])
-                    .map_err(|e| AetherError::config(format!("Failed to prune node: {}", e)))?;
+                    .map_err(|e| AlephError::config(format!("Failed to prune node: {}", e)))?;
                 conn.execute("DELETE FROM graph_aliases WHERE node_id = ?1", rusqlite::params![node_id.clone()])
-                    .map_err(|e| AetherError::config(format!("Failed to prune node aliases: {}", e)))?;
+                    .map_err(|e| AlephError::config(format!("Failed to prune node aliases: {}", e)))?;
                 conn.execute("DELETE FROM memory_entities WHERE node_id = ?1", rusqlite::params![node_id.clone()])
-                    .map_err(|e| AetherError::config(format!("Failed to prune node links: {}", e)))?;
+                    .map_err(|e| AlephError::config(format!("Failed to prune node links: {}", e)))?;
                 conn.execute("DELETE FROM graph_edges WHERE from_id = ?1 OR to_id = ?1", rusqlite::params![node_id])
-                    .map_err(|e| AetherError::config(format!("Failed to prune node edges: {}", e)))?;
+                    .map_err(|e| AlephError::config(format!("Failed to prune node edges: {}", e)))?;
                 report.pruned_nodes += 1;
             } else {
                 if new_score > 1.0 {
@@ -637,7 +637,7 @@ impl GraphStore {
                     "UPDATE graph_nodes SET decay_score = ?1, updated_at = ?2 WHERE id = ?3",
                     rusqlite::params![new_score, now, node_id],
                 )
-                .map_err(|e| AetherError::config(format!("Failed to update node decay: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to update node decay: {}", e)))?;
             }
         }
 
@@ -649,7 +649,7 @@ impl GraphStore {
         &self,
         fact: &crate::memory::context::MemoryFact,
         memories: &[MemoryEntry],
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let mut context_map: HashMap<String, String> = HashMap::new();
         for memory in memories {
             let key = format!("app:{}|window:{}", memory.context.app_bundle_id, memory.context.window_title);

@@ -94,7 +94,7 @@ pub enum PluginOrigin {
     Config,
     /// Workspace local .aether/extensions/ (priority 3)
     Workspace,
-    /// Global ~/.aether/extensions/ (priority 2)
+    /// Global ~/.aleph/extensions/ (priority 2)
     Global,
     /// Bundled with binary (priority 1 - lowest)
     Bundled,
@@ -1353,7 +1353,7 @@ pub struct PackageJson {
     pub license: Option<String>,
     #[serde(default)]
     pub keywords: Option<Vec<String>>,
-    /// Aether-specific extension configuration
+    /// Aleph-specific extension configuration
     #[serde(default)]
     pub aether: Option<AetherPackageConfig>,
 }
@@ -1408,10 +1408,10 @@ impl PackageRepository {
     }
 }
 
-/// Aether-specific configuration in package.json
+/// Aleph-specific configuration in package.json
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AetherPackageConfig {
+pub struct AlephPackageConfig {
     /// Extension entry points
     #[serde(default)]
     pub extensions: Vec<String>,
@@ -1513,7 +1513,7 @@ use crate::extension::types::PluginKind;
 
 /// aether.plugin.json structure
 #[derive(Debug, Clone, Deserialize)]
-pub struct AetherPluginJson {
+pub struct AlephPluginJson {
     /// Unique plugin identifier
     pub id: String,
     /// Display name
@@ -1564,7 +1564,7 @@ pub fn parse_aether_plugin_json(path: &Path) -> Result<PluginManifest, Extension
     let content = std::fs::read_to_string(path)
         .map_err(|e| ExtensionError::Io(e.to_string()))?;
 
-    let plugin: AetherPluginJson = serde_json::from_str(&content)
+    let plugin: AlephPluginJson = serde_json::from_str(&content)
         .map_err(|e| ExtensionError::InvalidManifest(format!("Invalid aether.plugin.json: {}", e)))?;
 
     // Validate plugin ID

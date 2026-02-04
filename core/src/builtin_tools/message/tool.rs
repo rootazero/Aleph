@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use tracing::{debug, warn};
 
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 use super::types::{
     ChannelCapabilities, DeleteParams, EditParams, MessageAction, MessageOperations,
@@ -339,7 +339,7 @@ impl MessageTool {
 }
 
 #[async_trait]
-impl AetherTool for MessageTool {
+impl AlephTool for MessageTool {
     const NAME: &'static str = "message";
     const DESCRIPTION: &'static str = "Perform message operations on messaging channels. \
         Supports: reply (respond to a message), edit (modify existing message), \

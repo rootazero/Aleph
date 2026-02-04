@@ -1,6 +1,6 @@
 # Runtime Manager 设计文档
 
-> 统一管理 Aether 外挂运行时（uv、fnm、yt-dlp 等）
+> 统一管理 Aleph 外挂运行时（uv、fnm、yt-dlp 等）
 
 **日期**: 2026-01-18
 **状态**: 已批准
@@ -9,7 +9,7 @@
 
 ## 1. 概述
 
-Aether 作为 AI Agent 中间件，需要支持 JS/TS 和 Python 运行时来执行本地 MCP server 和脚本。本设计引入统一的 Runtime Manager 模块，采用 trait-based 架构管理所有外挂运行时。
+Aleph 作为 AI Agent 中间件，需要支持 JS/TS 和 Python 运行时来执行本地 MCP server 和脚本。本设计引入统一的 Runtime Manager 模块，采用 trait-based 架构管理所有外挂运行时。
 
 ### 核心决策
 
@@ -28,7 +28,7 @@ Aether 作为 AI Agent 中间件，需要支持 JS/TS 和 Python 运行时来执
 ## 2. 目录结构
 
 ```
-~/.aether/
+~/.aleph/
 ├── config.toml
 ├── memory.db
 ├── models/
@@ -74,7 +74,7 @@ Aether 作为 AI Agent 中间件，需要支持 JS/TS 和 Python 运行时来执
 ## 3. Rust 模块结构
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── runtimes/
 │   ├── mod.rs              # 模块入口，导出公共 API
 │   ├── manager.rs          # RuntimeManager trait 定义
@@ -172,7 +172,7 @@ impl RuntimeRegistry {
     /// Get runtime by id, auto-install if needed
     pub async fn require(&self, id: &str) -> Result<Arc<dyn RuntimeManager>> {
         let runtime = self.runtimes.get(id)
-            .ok_or_else(|| AetherError::config(format!("Unknown runtime: {}", id)))?;
+            .ok_or_else(|| AlephError::config(format!("Unknown runtime: {}", id)))?;
 
         if !runtime.is_installed() {
             runtime.install().await?;
@@ -350,7 +350,7 @@ impl RuntimeRegistry {
 ### 启动时后台检查
 
 ```rust
-impl AetherCore {
+impl AlephCore {
     pub async fn init() -> Result<Self> {
         let runtime_registry = RuntimeRegistry::new()?;
 
@@ -391,7 +391,7 @@ impl Manifest {
 
 ```rust
 // error.rs 新增
-pub enum AetherError {
+pub enum AlephError {
     #[error("Runtime error: {message}")]
     Runtime {
         message: String,
@@ -400,7 +400,7 @@ pub enum AetherError {
     },
 }
 
-impl AetherError {
+impl AlephError {
     pub fn runtime(id: &str, msg: impl Into<String>) -> Self {
         Self::Runtime {
             message: msg.into(),
@@ -420,19 +420,19 @@ impl AetherError {
 interface RuntimeRegistry {
     constructor();
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     sequence<RuntimeInfo> list_runtimes();
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     boolean is_installed(string runtime_id);
 
-    [Throws=AetherError, Async]
+    [Throws=AlephError, Async]
     void install_runtime(string runtime_id);
 
-    [Throws=AetherError, Async]
+    [Throws=AlephError, Async]
     sequence<UpdateInfo> check_updates();
 
-    [Throws=AetherError, Async]
+    [Throws=AlephError, Async]
     void update_runtime(string runtime_id);
 };
 

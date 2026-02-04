@@ -13,7 +13,7 @@ use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
 use crate::mcp::manager::McpManagerHandle;
 use crate::mcp::ResourceContent;
-use crate::tools::AetherToolDyn;
+use crate::tools::AlephToolDyn;
 
 /// Arguments for mcp_read_resource tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -45,7 +45,7 @@ impl McpReadResourceTool {
     }
 }
 
-impl AetherToolDyn for McpReadResourceTool {
+impl AlephToolDyn for McpReadResourceTool {
     fn name(&self) -> &str {
         "mcp_read_resource"
     }
@@ -76,8 +76,8 @@ impl AetherToolDyn for McpReadResourceTool {
                 .handle
                 .get_client(server_id)
                 .await
-                .map_err(|e| crate::error::AetherError::tool(format!("Failed to get client: {}", e)))?
-                .ok_or_else(|| crate::error::AetherError::NotFound(
+                .map_err(|e| crate::error::AlephError::tool(format!("Failed to get client: {}", e)))?
+                .ok_or_else(|| crate::error::AlephError::NotFound(
                     format!("MCP server not found: {}", server_id)
                 ))?;
 

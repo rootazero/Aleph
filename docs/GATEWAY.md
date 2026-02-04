@@ -6,7 +6,7 @@
 
 ## Overview
 
-The Gateway is Aether's control plane, providing:
+The Gateway is Aleph's control plane, providing:
 - WebSocket server for real-time communication
 - JSON-RPC 2.0 protocol for structured requests
 - Multi-channel message routing (Telegram, Discord, iMessage, CLI)
@@ -365,7 +365,7 @@ Client Connect
 Configuration changes are detected via file watcher:
 
 ```
-~/.aether/config.json modified
+~/.aleph/config.json modified
     │
     ▼
 ┌─────────────────────────────────┐

@@ -16,8 +16,8 @@
 //! # Usage
 //!
 //! ```ignore
-//! use aethecore::executor::SingleStepExecutor;
-//! use aethecore::agent_loop::{Action, ActionResult};
+//! use alephcore::executor::SingleStepExecutor;
+//! use alephcore::agent_loop::{Action, ActionResult};
 //!
 //! // Create executor
 //! let executor = SingleStepExecutor::new(tool_registry);
@@ -36,7 +36,7 @@ use tracing::{debug, error, info};
 
 use crate::agent_loop::{Action, ActionExecutor, ActionResult};
 use crate::dispatcher::UnifiedTool;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// Normalize tool name by extracting base tool name from various formats
 ///
@@ -190,7 +190,7 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
                 error!(tool = tool_name, error = %e, "Tool execution failed");
                 let retryable = matches!(
                     e,
-                    AetherError::NetworkError { .. } | AetherError::Timeout { .. }
+                    AlephError::NetworkError { .. } | AlephError::Timeout { .. }
                 );
                 ActionResult::ToolError {
                     error: e.to_string(),

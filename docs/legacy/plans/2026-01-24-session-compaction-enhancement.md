@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Enhance Aether's session compaction system to match OpenCode's capabilities for effective token control and context preservation.
+**Goal:** Enhance Aleph's session compaction system to match OpenCode's capabilities for effective token control and context preservation.
 
 **Architecture:** Implement three-layer compaction: (1) Smart pruning with protection mechanisms, (2) LLM-driven summarization with dedicated compaction agent, (3) filterCompacted history boundary detection. Add cache-aware token tracking and configurable compaction policies.
 
@@ -10,9 +10,9 @@
 
 ---
 
-## Gap Analysis: OpenCode vs Aether
+## Gap Analysis: OpenCode vs Aleph
 
-| Feature | OpenCode | Aether | Gap |
+| Feature | OpenCode | Aleph | Gap |
 |---------|----------|--------|-----|
 | **Overflow Detection** | Real-time check before each iteration | Stubbed EventHandler | Critical |
 | **History Filtering** | filterCompacted() creates natural breakpoints | None | Critical |
@@ -430,7 +430,7 @@ impl SessionCompactor {
         &self,
         session: &ExecutionSession,
         thinker: Option<&dyn Thinker>,
-    ) -> Result<String, AetherError> {
+    ) -> Result<String, AlephError> {
         // Build context from session parts
         let context = self.build_summary_context(session);
 
@@ -718,7 +718,7 @@ impl EventHandler for SessionCompactor {
         }
 
         match event {
-            AetherEvent::LoopContinue(loop_state) => {
+            AlephEvent::LoopContinue(loop_state) => {
                 // Check if we need compaction based on token count
                 let limit = self.token_tracker.get_model_limit(&loop_state.model);
 
@@ -733,7 +733,7 @@ impl EventHandler for SessionCompactor {
                 }
                 Ok(vec![])
             }
-            AetherEvent::ToolCallCompleted(_) => {
+            AlephEvent::ToolCallCompleted(_) => {
                 // Always prune after tool completion if enabled
                 if self.config.prune_enabled {
                     // Trigger pruning (lightweight operation)

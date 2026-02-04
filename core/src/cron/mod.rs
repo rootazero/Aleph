@@ -32,7 +32,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::cron::{CronService, CronConfig, CronJob};
+//! use alephcore::cron::{CronService, CronConfig, CronJob};
 //!
 //! let config = CronConfig::default();
 //! let mut service = CronService::new(config)?;

@@ -55,8 +55,8 @@ impl std::fmt::Display for SessionKind {
 ///
 /// # Example
 /// ```
-/// use aethecore::routing::session_key::SessionKey;
-/// use aethecore::builtin_tools::sessions::helpers::{classify_session_kind, SessionKind};
+/// use alephcore::routing::session_key::SessionKey;
+/// use alephcore::builtin_tools::sessions::helpers::{classify_session_kind, SessionKind};
 ///
 /// let key = SessionKey::main("main");
 /// assert_eq!(classify_session_kind(&key), SessionKind::Main);
@@ -84,8 +84,8 @@ pub fn classify_session_kind(key: &SessionKey) -> SessionKind {
 ///
 /// # Example
 /// ```
-/// use aethecore::routing::session_key::SessionKey;
-/// use aethecore::builtin_tools::sessions::helpers::resolve_display_key;
+/// use alephcore::routing::session_key::SessionKey;
+/// use alephcore::builtin_tools::sessions::helpers::resolve_display_key;
 ///
 /// let key = SessionKey::main("main");
 /// assert_eq!(resolve_display_key(&key), "agent:main:main");
@@ -107,8 +107,8 @@ pub fn resolve_display_key(key: &SessionKey) -> String {
 ///
 /// # Example
 /// ```
-/// use aethecore::routing::session_key::SessionKey;
-/// use aethecore::builtin_tools::sessions::helpers::parse_session_key;
+/// use alephcore::routing::session_key::SessionKey;
+/// use alephcore::builtin_tools::sessions::helpers::parse_session_key;
 ///
 /// let key = parse_session_key("agent:main:main").unwrap();
 /// assert!(matches!(key, SessionKey::Main { .. }));
@@ -136,8 +136,8 @@ pub fn parse_session_key(display: &str) -> Result<SessionKey, String> {
 ///
 /// # Example
 /// ```
-/// use aethecore::routing::session_key::{SessionKey, DmScope};
-/// use aethecore::builtin_tools::sessions::helpers::derive_channel;
+/// use alephcore::routing::session_key::{SessionKey, DmScope};
+/// use alephcore::builtin_tools::sessions::helpers::derive_channel;
 ///
 /// let key = SessionKey::dm("main", "telegram", "user123", DmScope::PerChannelPeer);
 /// assert_eq!(derive_channel(&key), "telegram");

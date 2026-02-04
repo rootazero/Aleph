@@ -8,9 +8,9 @@
 
 ## 1. 背景与问题
 
-### 1.1 当前 Aether vs OpenClaw 对比
+### 1.1 当前 Aleph vs OpenClaw 对比
 
-| 对比维度 | OpenClaw | Aether (当前) | 差距 |
+| 对比维度 | OpenClaw | Aleph (当前) | 差距 |
 |----------|----------|---------------|------|
 | **消息流架构** | 单一 WebSocket 路径，150ms 节流 | FFI + Gateway 双路径 | 2x 代码量 |
 | **状态管理** | 3 种状态 (delta/final/error) | 16+ HaloState 变体 | 5x 复杂度 |

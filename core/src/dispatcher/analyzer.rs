@@ -43,7 +43,7 @@ const SINGLE_STEP_LENGTH_THRESHOLD: usize = 10;
 
 use crate::dispatcher::agent_types::TaskGraph;
 use crate::dispatcher::planner::{LlmTaskPlanner, TaskPlanner};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 
 /// Result of task analysis
@@ -374,7 +374,7 @@ fn extract_json(response: &str) -> Result<String> {
         }
     }
 
-    Err(AetherError::other(
+    Err(AlephError::other(
         "Could not extract JSON from response",
     ))
 }

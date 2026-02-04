@@ -1,11 +1,11 @@
-# Aether Tauri 跨平台版本设计文档
+# Aleph Tauri 跨平台版本设计文档
 
 > 创建日期：2026-01-22
 > 状态：已确认
 
 ## 概述
 
-为 Aether 设计 Tauri 版本，用于支持 Windows 和 Linux 平台，最大限度复刻 macOS Swift 版本的效果。
+为 Aleph 设计 Tauri 版本，用于支持 Windows 和 Linux 平台，最大限度复刻 macOS Swift 版本的效果。
 
 ### 核心原则
 
@@ -312,7 +312,7 @@ const tabGroups = [
 
 ```
 菜单栏状态项 (System Tray)
-├─ About Aether
+├─ About Aleph
 ├─ ───────────
 ├─ Default Provider ──→ 子菜单
 │  ├─ OpenAI

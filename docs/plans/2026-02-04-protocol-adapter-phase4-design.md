@@ -159,7 +159,7 @@ pub struct ProtocolDefinition {
 For scenarios similar to existing protocols, only describe differences:
 
 ```yaml
-# ~/.aether/protocols/groq-custom.yaml
+# ~/.aleph/protocols/groq-custom.yaml
 name: groq-custom
 extends: openai
 base_url: https://api.groq.com/openai/v1
@@ -188,7 +188,7 @@ differences:
 For completely different protocols:
 
 ```yaml
-# ~/.aether/protocols/exotic.yaml
+# ~/.aleph/protocols/exotic.yaml
 name: exotic-ai
 protocol_type: custom
 
@@ -337,7 +337,7 @@ impl ProtocolLoader {
 ### 5.3 Configuration File Extension
 
 ```yaml
-# ~/.aether/config.yaml
+# ~/.aleph/config.yaml
 protocol_extensions:
   - path: ./custom-protocols/my-provider.yaml
   - path: /etc/aether/shared-protocols/company.yaml
@@ -493,7 +493,7 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
     let adapter = ProtocolRegistry::global()
         .get(&protocol_name)
         .ok_or_else(|| {
-            AetherError::invalid_config(format!(
+            AlephError::invalid_config(format!(
                 "Unknown protocol: '{}'. Available: {:?}",
                 protocol_name,
                 ProtocolRegistry::global().list_protocols()
@@ -750,7 +750,7 @@ providers:
 For providers similar to OpenAI:
 
 ```yaml
-# ~/.aether/protocols/groq-custom.yaml
+# ~/.aleph/protocols/groq-custom.yaml
 name: groq-custom
 extends: openai
 base_url: https://api.groq.com/openai/v1
@@ -779,7 +779,7 @@ providers:
 For completely different protocols:
 
 ```yaml
-# ~/.aether/protocols/custom-api.yaml
+# ~/.aleph/protocols/custom-api.yaml
 name: custom-api
 protocol_type: custom
 base_url: https://api.custom.com
@@ -801,7 +801,7 @@ response_mapping:
 
 ### Hot Reload
 
-Aether automatically watches `~/.aether/protocols/` for changes.
+Aleph automatically watches `~/.aleph/protocols/` for changes.
 Edit your protocol file and it will reload within 2 seconds.
 ```
 
@@ -822,7 +822,7 @@ Update `docs/ARCHITECTURE.md` Providers section:
 
 3. **Adapter Lookup**: Query `ProtocolRegistry`
    - Built-in: `openai`, `anthropic`, `gemini`, `ollama`
-   - Custom: User-defined in `~/.aether/protocols/`
+   - Custom: User-defined in `~/.aleph/protocols/`
 
 ### Protocol Registry
 

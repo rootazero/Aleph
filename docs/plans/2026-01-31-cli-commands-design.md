@@ -6,7 +6,7 @@
 
 ## Overview
 
-扩展现有 `aether_gateway.rs` binary，添加四组新命令：
+扩展现有 `aleph_gateway.rs` binary，添加四组新命令：
 1. **gateway call** — 通用 RPC 调用
 2. **config** — 配置管理
 3. **channels** — 渠道管理
@@ -50,7 +50,7 @@ aether
 ## Architecture
 
 ```
-core/src/bin/aether_gateway.rs     # 主入口 (修改)
+core/src/bin/aleph_gateway.rs     # 主入口 (修改)
     │
     ├── Commands enum              # Clap subcommands
     │   ├── Start, Stop, Status    # 已有
@@ -216,7 +216,7 @@ core/src/
 │   ├── channels.rs                # channels commands impl
 │   └── cron.rs                    # cron commands impl
 ├── bin/
-│   └── aether_gateway.rs          # Modify: add new subcommands
+│   └── aleph_gateway.rs          # Modify: add new subcommands
 └── lib.rs                         # Export cli module
 ```
 

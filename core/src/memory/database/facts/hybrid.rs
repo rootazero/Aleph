@@ -1,6 +1,6 @@
 //! Hybrid search operations combining vector similarity and FTS5
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::database::core::VectorDatabase;
 use rusqlite::params;
@@ -31,10 +31,10 @@ impl VectorDatabase {
         min_score: f32,
         candidate_limit: usize,
         result_limit: usize,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         let embedding_bytes = Self::serialize_embedding(query_embedding);
         let conn = self.conn.lock().map_err(|e| {
-            AetherError::config(format!("Failed to lock database: {}", e))
+            AlephError::config(format!("Failed to lock database: {}", e))
         })?;
 
         // Prepare FTS5 query (tokenize and AND together)
@@ -74,7 +74,7 @@ impl VectorDatabase {
         min_score: f32,
         candidate_limit: usize,
         result_limit: usize,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         // Use a two-step approach:
         // 1. Get vector matches
         // 2. Get FTS matches
@@ -99,7 +99,7 @@ impl VectorDatabase {
             WHERE f.is_valid = 1
             ORDER BY v.distance ASC
             "#,
-        ).map_err(|e| AetherError::config(format!("Failed to prepare vector query: {}", e)))?;
+        ).map_err(|e| AlephError::config(format!("Failed to prepare vector query: {}", e)))?;
 
         let vec_results: Vec<(String, MemoryFact, f32)> = vec_stmt
             .query_map(
@@ -135,7 +135,7 @@ impl VectorDatabase {
                     }, vec_score as f32))
                 },
             )
-            .map_err(|e| AetherError::config(format!("Failed to execute vector query: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to execute vector query: {}", e)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -149,7 +149,7 @@ impl VectorDatabase {
             ORDER BY bm25(facts_fts)
             LIMIT ?2
             "#,
-        ).map_err(|e| AetherError::config(format!("Failed to prepare FTS query: {}", e)))?;
+        ).map_err(|e| AlephError::config(format!("Failed to prepare FTS query: {}", e)))?;
 
         let fts_scores: std::collections::HashMap<String, f32> = fts_stmt
             .query_map(
@@ -160,7 +160,7 @@ impl VectorDatabase {
                     Ok((id, score as f32))
                 },
             )
-            .map_err(|e| AetherError::config(format!("Failed to execute FTS query: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to execute FTS query: {}", e)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -205,7 +205,7 @@ impl VectorDatabase {
         embedding_bytes: &[u8],
         min_score: f32,
         limit: usize,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         let mut stmt = conn.prepare(
             r#"
             WITH vec_matches AS (
@@ -224,7 +224,7 @@ impl VectorDatabase {
             WHERE f.is_valid = 1
             ORDER BY vm.distance ASC
             "#,
-        ).map_err(|e| AetherError::config(format!("Failed to prepare vector query: {}", e)))?;
+        ).map_err(|e| AlephError::config(format!("Failed to prepare vector query: {}", e)))?;
 
         let facts: Vec<MemoryFact> = stmt
             .query_map(
@@ -259,7 +259,7 @@ impl VectorDatabase {
                     })
                 },
             )
-            .map_err(|e| AetherError::config(format!("Failed to execute vector query: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to execute vector query: {}", e)))?
             .filter_map(|r| r.ok())
             .filter(|f| f.similarity_score.unwrap_or(0.0) >= min_score)
             .collect();

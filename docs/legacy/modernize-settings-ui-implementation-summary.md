@@ -292,7 +292,7 @@
 **最终验证**:
 - ✅ Rust核心库编译成功（release模式）
 - ✅ UniFFI绑定生成成功
-- ✅ libaethecore.dylib复制到Frameworks目录（10MB）
+- ✅ libalephcore.dylib复制到Frameworks目录（10MB）
 - ✅ 所有Swift文件语法验证通过
 
 ---
@@ -319,8 +319,8 @@
 - MemoryView.swift
 
 **测试文件**: 2个
-- AetherTests/UI/ModernSettingsUITests.swift
-- AetherUITests/ModernSettingsUITestsXCUI.swift
+- AlephTests/UI/ModernSettingsUITests.swift
+- AlephUITests/ModernSettingsUITestsXCUI.swift
 
 **总代码行数**: ~8000行Swift代码
 
@@ -515,7 +515,7 @@
 
 2. **执行自动化测试**
    ```bash
-   xcodebuild test -project Aether.xcodeproj -scheme Aether
+   xcodebuild test -project Aleph.xcodeproj -scheme Aleph
    ```
 
 3. **执行性能测试**
@@ -657,4 +657,4 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 
 **文档创建日期**: 2025-12-26
 **项目状态**: ✅ 实施基本完成，待实际环境测试和最后润色
-**维护者**: Aether Development Team
+**维护者**: Aleph Development Team

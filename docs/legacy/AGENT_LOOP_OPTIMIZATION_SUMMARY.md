@@ -304,7 +304,7 @@ export AETHER_SKILL_MAX_STEPS=200
 
 **自定义缓存配置**:
 ```rust
-use aethecore::executor::{ToolCacheConfig, SingleStepExecutor};
+use alephcore::executor::{ToolCacheConfig, SingleStepExecutor};
 
 let mut cache_config = ToolCacheConfig::default();
 cache_config.ttl_seconds = 600;  // 10 分钟
@@ -435,7 +435,7 @@ cargo test --lib
 ```bash
 cd platforms/macos
 xcodegen generate
-open Aether.xcodeproj
+open Aleph.xcodeproj
 # 构建并运行
 # 触发 classical-poetry skill 验证
 ```
@@ -480,7 +480,7 @@ export AETHER_SKILL_MAX_STEPS=30
 **优先级**: 📝 Optional (长期架构优化)
 
 **目标**:
-- 支持从 `~/.aether/config.toml` 读取配置
+- 支持从 `~/.aleph/config.toml` 读取配置
 - 支持 skill 级别的配置覆盖
 
 **预计工作量**: 2-3 天

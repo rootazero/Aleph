@@ -285,8 +285,8 @@ impl Default for BehaviorConfig {
 ### 语法检查 ✅
 ```bash
 $ python3 verify_swift_syntax.py \
-    Aether/Sources/BehaviorSettingsView.swift \
-    Aether/Sources/SettingsView.swift
+    Aleph/Sources/BehaviorSettingsView.swift \
+    Aleph/Sources/SettingsView.swift
 ✅ All syntax checks passed!
 ```
 
@@ -296,7 +296,7 @@ $ xcodegen generate
 ⚙️  Generating plists...
 ⚙️  Generating project...
 ⚙️  Writing project...
-Created project at /Users/zouguojun/Workspace/Aether/Aether.xcodeproj
+Created project at /Users/zouguojun/Workspace/Aether/Aleph.xcodeproj
 ```
 
 ## 待办事项（需要 Rust Core 支持）
@@ -311,7 +311,7 @@ private func saveSettings() {
 
 **需要的 Rust API (UniFFI):**
 ```rust
-interface AetherCore {
+interface AlephCore {
     // Update behavior configuration
     fn update_behavior(behavior: BehaviorConfig) -> Result<(), ConfigError>;
 }

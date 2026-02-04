@@ -82,7 +82,7 @@ WorldModel 采用 **三策略混合**处理 Raw Events：
 
 ### 2.1 核心职责
 
-WorldModel 是 Aether 的"认知中枢"，负责：
+WorldModel 是 Aleph 的"认知中枢"，负责：
 - **订阅** DaemonEventBus 的 Raw Events
 - **推理** 用户活动、任务上下文、环境约束
 - **发布** Derived Events 到 Bus
@@ -421,7 +421,7 @@ pub async fn start_worldmodel(
 
 ### 3.1 核心职责
 
-Dispatcher 是 Aether 的"执行中枢"，负责：
+Dispatcher 是 Aleph 的"执行中枢"，负责：
 - **订阅** DaemonEventBus 的 Derived Events
 - **评估** PolicyEngine 的规则匹配
 - **调度** 高风险动作（需用户确认）或低风险动作（自动执行）
@@ -1427,7 +1427,7 @@ impl Counter {
 /// WorldModel 配置
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorldModelConfig {
-    /// 状态文件路径（默认：~/.aether/worldmodel_state.json）
+    /// 状态文件路径（默认：~/.aleph/worldmodel_state.json）
     pub state_path: Option<PathBuf>,
 
     /// 批量处理间隔（秒）
@@ -1968,7 +1968,7 @@ pub async fn run() -> Result<()> {
 |---------|--------|---------|
 | **Gateway** | IPC 通知 | 需要添加 `notify_urgent_actions` 和 `notify_lazy_review` RPC 方法 |
 | **Perception Layer** | DaemonEventBus | 直接复用，无需修改 |
-| **Config System** | `~/.aether/daemon.toml` | 添加 `[worldmodel]` 和 `[dispatcher]` 配置段 |
+| **Config System** | `~/.aleph/daemon.toml` | 添加 `[worldmodel]` 和 `[dispatcher]` 配置段 |
 | **Memory System** | 未来集成 | Phase 3/4 MVP 不依赖 Memory，Phase 5 可接入 |
 
 ---

@@ -1,7 +1,7 @@
 /// Compression session operations
 ///
 /// Track and manage memory compression sessions.
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{CompressionSession, ContextAnchor, MemoryEntry};
 use rusqlite::{params, OptionalExtension};
 
@@ -13,7 +13,7 @@ impl VectorDatabase {
         &self,
         since_timestamp: i64,
         limit: u32,
-    ) -> Result<Vec<MemoryEntry>, AetherError> {
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut stmt = conn
@@ -26,7 +26,7 @@ impl VectorDatabase {
                 LIMIT ?2
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let memories = stmt
             .query_map(params![since_timestamp, limit], |row| {
@@ -55,26 +55,26 @@ impl VectorDatabase {
                     similarity_score: None,
                 })
             })
-            .map_err(|e| AetherError::config(format!("Failed to query memories: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query memories: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse memory rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse memory rows: {}", e)))?;
 
         Ok(memories)
     }
 
     /// Set the last compression timestamp
-    pub async fn set_last_compression_timestamp(&self, timestamp: i64) -> Result<(), AetherError> {
+    pub async fn set_last_compression_timestamp(&self, timestamp: i64) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('last_compression_timestamp', ?1)",
             params![timestamp.to_string()],
         )
-        .map_err(|e| AetherError::config(format!("Failed to update compression timestamp: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to update compression timestamp: {}", e)))?;
         Ok(())
     }
 
     /// Get the last compression timestamp
-    pub async fn get_last_compression_timestamp(&self) -> Result<Option<i64>, AetherError> {
+    pub async fn get_last_compression_timestamp(&self) -> Result<Option<i64>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let timestamp: Option<String> = conn
             .query_row(
@@ -92,12 +92,12 @@ impl VectorDatabase {
     pub async fn record_compression_session(
         &self,
         session: CompressionSession,
-    ) -> Result<(), AetherError> {
+    ) -> Result<(), AlephError> {
         let source_ids_json = serde_json::to_string(&session.source_memory_ids)
-            .map_err(|e| AetherError::config(format!("Failed to serialize source_ids: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to serialize source_ids: {}", e)))?;
         let extracted_ids_json =
             serde_json::to_string(&session.extracted_fact_ids).map_err(|e| {
-                AetherError::config(format!("Failed to serialize extracted_ids: {}", e))
+                AlephError::config(format!("Failed to serialize extracted_ids: {}", e))
             })?;
 
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -117,7 +117,7 @@ impl VectorDatabase {
                 session.duration_ms as i64,
             ],
         )
-        .map_err(|e| AetherError::config(format!("Failed to record compression session: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to record compression session: {}", e)))?;
 
         Ok(())
     }

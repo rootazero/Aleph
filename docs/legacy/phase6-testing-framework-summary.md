@@ -149,7 +149,7 @@
 
 #### 3.2 Xcode项目生成
 - ✅ `xcodegen generate` - 成功生成项目
-- ✅ 新测试文件自动包含在 AetherTests 和 AetherUITests 目标中
+- ✅ 新测试文件自动包含在 AlephTests 和 AlephUITests 目标中
 
 ## 测试框架架构
 
@@ -157,12 +157,12 @@
 Phase 6: 全面测试
 │
 ├─ 6.1 功能测试（Functional Testing）
-│  ├─ 自动化: AetherTests/UI/ModernSettingsUITests.swift (27 tests)
+│  ├─ 自动化: AlephTests/UI/ModernSettingsUITests.swift (27 tests)
 │  └─ 手动测试指南: docs/modernize-settings-ui-testing-plan.md (6.1节)
 │
 ├─ 6.2 视觉测试（Visual Testing）
 │  ├─ 手动测试指南: docs/visual-testing-guide.md（详细检查清单）
-│  ├─ 自动化辅助: AetherUITests/ModernSettingsUITestsXCUI.swift（部分UI验证）
+│  ├─ 自动化辅助: AlephUITests/ModernSettingsUITestsXCUI.swift（部分UI验证）
 │  └─ 截图归档: docs/screenshots/{light-mode,dark-mode,auto-mode}/
 │
 ├─ 6.3 性能测试（Performance Testing）
@@ -221,7 +221,7 @@ Phase 6 测试框架已经建立完成，接下来需要在实际环境中执行
 ### 1. 自动化测试执行
 ```bash
 # 运行单元测试
-xcodebuild test -project Aether.xcodeproj -scheme Aether -destination 'platform=macOS'
+xcodebuild test -project Aleph.xcodeproj -scheme Aleph -destination 'platform=macOS'
 
 # 或在Xcode中：Cmd+U
 ```
@@ -312,4 +312,4 @@ Phase 6 测试框架已完整建立，包括：
 
 **文档创建日期**: 2025-12-26
 **Phase 6 状态**: 测试框架已建立 ✅，待实际执行 ⏳
-**维护者**: Aether Development Team
+**维护者**: Aleph Development Team

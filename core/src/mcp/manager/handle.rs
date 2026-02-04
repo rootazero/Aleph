@@ -15,7 +15,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use super::types::{
     McpCommand, McpManagerConfig, McpManagerEvent, McpServerInfo, McpServerStatusDetail,
 };
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::{McpClient, McpPrompt, McpResource, McpTool};
 
 /// Handle for interacting with the MCP Manager actor
@@ -71,11 +71,11 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::AddServer { config, respond_to })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))?
-            .map_err(AetherError::other)
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))?
+            .map_err(AlephError::other)
     }
 
     /// Remove a server by ID
@@ -90,11 +90,11 @@ impl McpManagerHandle {
                 respond_to,
             })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))?
-            .map_err(AetherError::other)
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))?
+            .map_err(AlephError::other)
     }
 
     /// Restart a specific server
@@ -109,11 +109,11 @@ impl McpManagerHandle {
                 respond_to,
             })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))?
-            .map_err(AetherError::other)
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))?
+            .map_err(AlephError::other)
     }
 
     /// Start a stopped server
@@ -128,11 +128,11 @@ impl McpManagerHandle {
                 respond_to,
             })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))?
-            .map_err(AetherError::other)
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))?
+            .map_err(AlephError::other)
     }
 
     /// Stop a running server
@@ -147,11 +147,11 @@ impl McpManagerHandle {
                 respond_to,
             })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))?
-            .map_err(AetherError::other)
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))?
+            .map_err(AlephError::other)
     }
 
     // ===== Query Methods =====
@@ -168,10 +168,10 @@ impl McpManagerHandle {
                 respond_to,
             })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
     /// List all registered servers
@@ -183,10 +183,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::ListServers { respond_to })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
     /// Get detailed status for a specific server
@@ -204,10 +204,10 @@ impl McpManagerHandle {
                 respond_to,
             })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
     // ===== Aggregation Methods (P1) =====
@@ -222,10 +222,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::AggregateTools { respond_to })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
     /// Get aggregated resources from all healthy servers
@@ -237,10 +237,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::AggregateResources { respond_to })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
     /// Get aggregated prompts from all healthy servers
@@ -252,10 +252,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::AggregatePrompts { respond_to })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
     // ===== Config Methods =====
@@ -270,11 +270,11 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::ReloadConfig { respond_to })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))?
-            .map_err(AetherError::other)
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))?
+            .map_err(AlephError::other)
     }
 
     // ===== Control Methods =====
@@ -288,10 +288,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::Shutdown { respond_to })
             .await
-            .map_err(|_| AetherError::channel_closed("McpManager command channel closed"))?;
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
 
         rx.await
-            .map_err(|_| AetherError::channel_closed("McpManager response channel closed"))
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
     // ===== Sampling Methods =====
@@ -424,12 +424,12 @@ mod tests {
 
         // All methods should return ChannelClosed errors
         let result = handle.list_servers().await;
-        assert!(matches!(result, Err(AetherError::ChannelClosed(_))));
+        assert!(matches!(result, Err(AlephError::ChannelClosed(_))));
 
         let result = handle
             .add_server(McpManagerConfig::stdio("test", "Test", "/bin/true"))
             .await;
-        assert!(matches!(result, Err(AetherError::ChannelClosed(_))));
+        assert!(matches!(result, Err(AlephError::ChannelClosed(_))));
     }
 
     #[test]

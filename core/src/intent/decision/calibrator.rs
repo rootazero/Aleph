@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use aethecore::intent::{ConfidenceCalibrator, CalibratorConfig, RoutingLayer, IntentSignal};
+//! use alephcore::intent::{ConfidenceCalibrator, CalibratorConfig, RoutingLayer, IntentSignal};
 //!
 //! let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
 //!

@@ -31,7 +31,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::providers::failover::{FailoverProvider, FailoverConfig, ProviderEntry};
+//! use alephcore::providers::failover::{FailoverProvider, FailoverConfig, ProviderEntry};
 //!
 //! let config = FailoverConfig {
 //!     providers: vec![
@@ -55,7 +55,7 @@
 //! ```
 
 use crate::config::ProviderConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::{create_provider, AiProvider};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -234,7 +234,7 @@ impl FailoverProvider {
         }
 
         if provider_states.is_empty() {
-            return Err(AetherError::invalid_config(
+            return Err(AlephError::invalid_config(
                 "Failover provider requires at least one provider",
             ));
         }
@@ -447,7 +447,7 @@ impl AiProvider for FailoverProvider {
             }
 
             // All providers failed
-            Err(AetherError::provider(format!(
+            Err(AlephError::provider(format!(
                 "All {} providers failed. Last error: {}",
                 provider_count,
                 last_error.unwrap_or_else(|| "Unknown error".to_string())
@@ -486,11 +486,11 @@ impl AiProvider for FailoverProvider {
 
 impl FailoverProvider {
     /// Check if an error should not be retried
-    fn is_non_retryable_error(error: &AetherError) -> bool {
+    fn is_non_retryable_error(error: &AlephError) -> bool {
         match error {
-            AetherError::AuthenticationError { .. } => true,
-            AetherError::InvalidConfig { .. } => true,
-            AetherError::RateLimitError { .. } => false, // Can retry after delay
+            AlephError::AuthenticationError { .. } => true,
+            AlephError::InvalidConfig { .. } => true,
+            AlephError::RateLimitError { .. } => false, // Can retry after delay
             _ => false,
         }
     }

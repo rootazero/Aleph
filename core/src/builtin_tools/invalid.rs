@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dispatcher::ToolCategory;
 use crate::error::Result;
-use crate::AetherTool;
+use crate::AlephTool;
 
 /// Arguments for the Invalid tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -73,7 +73,7 @@ impl InvalidTool {
 }
 
 #[async_trait]
-impl AetherTool for InvalidTool {
+impl AlephTool for InvalidTool {
     const NAME: &'static str = "invalid";
     const DESCRIPTION: &'static str =
         "Internal tool for handling invalid tool calls. Returns error information and available alternatives.";
@@ -129,7 +129,7 @@ mod tests {
             error: "Tool not found in registry".to_string(),
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
 
         assert!(!result.success);
         assert!(result.message.contains("unknown_tool"));
@@ -146,7 +146,7 @@ mod tests {
             error: "Not found".to_string(),
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
 
         assert!(!result.success);
         assert!(result.suggestion.contains("No tools are currently available"));
@@ -162,7 +162,7 @@ mod tests {
             error: "Not found".to_string(),
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
 
         // Should show first 20 and indicate more exist
         assert!(result.suggestion.contains("tool_0"));
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn test_invalid_tool_definition() {
         let tool = InvalidTool::empty();
-        let def = AetherTool::definition(&tool);
+        let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "invalid");
         assert_eq!(def.category, ToolCategory::Builtin);

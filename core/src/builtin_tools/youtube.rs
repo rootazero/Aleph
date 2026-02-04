@@ -1,6 +1,6 @@
 //! YouTube transcript tool for extracting video transcripts
 //!
-//! Implements AetherTool trait for AI agent integration.
+//! Implements AlephTool trait for AI agent integration.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -10,7 +10,7 @@ use tracing::{debug, info};
 use super::error::ToolError;
 use crate::config::VideoConfig;
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 use crate::video::{VideoTranscript, YouTubeExtractor};
 
 
@@ -148,9 +148,9 @@ impl Clone for YouTubeTool {
     }
 }
 
-/// Implementation of AetherTool trait for YouTubeTool
+/// Implementation of AlephTool trait for YouTubeTool
 #[async_trait]
-impl AetherTool for YouTubeTool {
+impl AlephTool for YouTubeTool {
     const NAME: &'static str = "youtube";
     const DESCRIPTION: &'static str =
         "Extract transcript from a YouTube video URL. Returns the video title and full transcript text. Use this when user provides a YouTube URL or asks about video content.";
@@ -166,7 +166,7 @@ impl AetherTool for YouTubeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::AetherTool;
+    use crate::tools::AlephTool;
 
     #[test]
     fn test_youtube_args() {
@@ -195,8 +195,8 @@ mod tests {
     #[test]
     fn test_youtube_tool_definition() {
         let tool = YouTubeTool::new();
-        // Test AetherTool::definition()
-        let def = AetherTool::definition(&tool);
+        // Test AlephTool::definition()
+        let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "youtube");
         assert!(!def.description.is_empty());

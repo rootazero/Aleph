@@ -1,6 +1,6 @@
-# Aether Build Commands
+# Aleph Build Commands
 
-This document provides all build commands for the Aether project.
+This document provides all build commands for the Aleph project.
 
 ## Quick Reference
 
@@ -10,7 +10,7 @@ This document provides all build commands for the Aether project.
 | Build Rust (release) | `cd core && cargo build --release` |
 | Run tests | `cd core && cargo test` |
 | Generate Xcode project | `cd platforms/macos && xcodegen generate` |
-| Build macOS app | `xcodebuild -project Aether.xcodeproj -scheme Aether build` |
+| Build macOS app | `xcodebuild -project Aleph.xcodeproj -scheme Aleph build` |
 | Run Tauri dev | `cd platforms/tauri && pnpm tauri dev` |
 | Build Tauri release | `cd platforms/tauri && pnpm tauri build` |
 
@@ -28,7 +28,7 @@ cargo build --release
 
 # Generate UniFFI bindings (macOS)
 cargo run --bin uniffi-bindgen generate \
-  --library target/release/libaethecore.dylib \
+  --library target/release/libalephcore.dylib \
   --language swift \
   --out-dir ../platforms/macos/Aether/Sources/Generated/
 ```
@@ -38,9 +38,9 @@ cargo run --bin uniffi-bindgen generate \
 ```bash
 cd platforms/macos/
 xcodegen generate                  # Generate Xcode project
-open Aether.xcodeproj              # Open in Xcode
+open Aleph.xcodeproj              # Open in Xcode
 # Or:
-xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build
+xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Release build
 ```
 
 ## Building Tauri Client (Cross-platform)

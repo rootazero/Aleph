@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make Aether behave as a true AI agent - directly executing tasks with plan/confirm flow instead of over-asking questions.
+**Goal:** Make Aleph behave as a true AI agent - directly executing tasks with plan/confirm flow instead of over-asking questions.
 
 **Architecture:**
 - IntentClassifier (3-level: regex → keywords → LLM) in `intent/` module
@@ -26,7 +26,7 @@
 **Step 1: Write failing test for TaskCategory**
 
 ```rust
-// In Aether/core/src/intent/task_category.rs
+// In Aleph/core/src/intent/task_category.rs
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41,13 +41,13 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd Aether/core && cargo test task_category -v`
+Run: `cd Aleph/core && cargo test task_category -v`
 Expected: FAIL with "cannot find type TaskCategory"
 
 **Step 3: Write TaskCategory implementation**
 
 ```rust
-// In Aether/core/src/intent/task_category.rs
+// In Aleph/core/src/intent/task_category.rs
 
 /// Categories of executable tasks
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -85,13 +85,13 @@ impl TaskCategory {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd Aether/core && cargo test task_category -v`
+Run: `cd Aleph/core && cargo test task_category -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent/task_category.rs
+git add Aleph/core/src/intent/task_category.rs
 git commit -m "feat(intent): add TaskCategory enum for executable task classification"
 ```
 
@@ -131,13 +131,13 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd Aether/core && cargo test execution_intent -v`
+Run: `cd Aleph/core && cargo test execution_intent -v`
 Expected: FAIL
 
 **Step 3: Write ExecutionIntent implementation**
 
 ```rust
-// In Aether/core/src/intent/classifier.rs
+// In Aleph/core/src/intent/classifier.rs
 
 use super::task_category::TaskCategory;
 
@@ -181,13 +181,13 @@ impl ExecutionIntent {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd Aether/core && cargo test execution_intent -v`
+Run: `cd Aleph/core && cargo test execution_intent -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent/classifier.rs
+git add Aleph/core/src/intent/classifier.rs
 git commit -m "feat(intent): add ExecutionIntent enum and ExecutableTask struct"
 ```
 
@@ -229,7 +229,7 @@ fn test_l1_regex_no_match() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd Aether/core && cargo test l1_regex -v`
+Run: `cd Aleph/core && cargo test l1_regex -v`
 Expected: FAIL with "cannot find value IntentClassifier"
 
 **Step 3: Write L1 regex implementation**
@@ -302,13 +302,13 @@ impl Default for IntentClassifier {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd Aether/core && cargo test l1_regex -v`
+Run: `cd Aleph/core && cargo test l1_regex -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent/classifier.rs
+git add Aleph/core/src/intent/classifier.rs
 git commit -m "feat(intent): implement L1 regex pattern matching for IntentClassifier"
 ```
 
@@ -343,7 +343,7 @@ fn test_l2_keywords_no_match() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd Aether/core && cargo test l2_keywords -v`
+Run: `cd Aleph/core && cargo test l2_keywords -v`
 Expected: FAIL with "no method named match_keywords"
 
 **Step 3: Write L2 keyword implementation**
@@ -400,13 +400,13 @@ impl IntentClassifier {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd Aether/core && cargo test l2_keywords -v`
+Run: `cd Aleph/core && cargo test l2_keywords -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent/classifier.rs
+git add Aleph/core/src/intent/classifier.rs
 git commit -m "feat(intent): implement L2 keyword matching for IntentClassifier"
 ```
 
@@ -437,7 +437,7 @@ async fn test_classify_conversational() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd Aether/core && cargo test test_classify -v`
+Run: `cd Aleph/core && cargo test test_classify -v`
 Expected: FAIL
 
 **Step 3: Write classify implementation**
@@ -471,13 +471,13 @@ impl IntentClassifier {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd Aether/core && cargo test test_classify -v`
+Run: `cd Aleph/core && cargo test test_classify -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent/classifier.rs
+git add Aleph/core/src/intent/classifier.rs
 git commit -m "feat(intent): implement async classify() method with L1/L2 fallback"
 ```
 
@@ -516,13 +516,13 @@ pub use crate::intent::{ExecutableTask, ExecutionIntent, IntentClassifier, TaskC
 
 **Step 3: Run full test suite**
 
-Run: `cd Aether/core && cargo test intent -v`
+Run: `cd Aleph/core && cargo test intent -v`
 Expected: All intent tests PASS
 
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/intent/mod.rs Aether/core/src/lib.rs
+git add Aleph/core/src/intent/mod.rs Aleph/core/src/lib.rs
 git commit -m "feat(intent): export IntentClassifier and related types"
 ```
 
@@ -556,7 +556,7 @@ mod tests {
 **Step 3: Write implementation**
 
 ```rust
-// In Aether/core/src/intent/parameters.rs
+// In Aleph/core/src/intent/parameters.rs
 
 /// How to organize files
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -637,7 +637,7 @@ impl TaskParameters {
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent/parameters.rs
+git add Aleph/core/src/intent/parameters.rs
 git commit -m "feat(intent): add TaskParameters for execution defaults"
 ```
 
@@ -671,7 +671,7 @@ fn test_preset_match_file_organize() {
 **Step 3: Write implementation**
 
 ```rust
-// In Aether/core/src/intent/presets.rs
+// In Aleph/core/src/intent/presets.rs
 
 use super::parameters::{OrganizeMethod, ParameterSource, TaskParameters};
 use super::task_category::TaskCategory;
@@ -729,7 +729,7 @@ impl PresetRegistry {
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent/presets.rs
+git add Aleph/core/src/intent/presets.rs
 git commit -m "feat(intent): add PresetRegistry for default scenarios"
 ```
 
@@ -762,7 +762,7 @@ async fn test_defaults_resolver_preset() {
 **Step 3: Write implementation**
 
 ```rust
-// In Aether/core/src/intent/defaults.rs
+// In Aleph/core/src/intent/defaults.rs
 
 use super::classifier::ExecutableTask;
 use super::parameters::{ParameterSource, TaskParameters};
@@ -822,7 +822,7 @@ impl Default for DefaultsResolver {
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent/defaults.rs
+git add Aleph/core/src/intent/defaults.rs
 git commit -m "feat(intent): add DefaultsResolver with 3-tier strategy"
 ```
 
@@ -853,13 +853,13 @@ pub use task_category::TaskCategory;
 
 **Step 2: Run tests**
 
-Run: `cd Aether/core && cargo test intent -v`
+Run: `cd Aleph/core && cargo test intent -v`
 Expected: All PASS
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/src/intent/mod.rs
+git add Aleph/core/src/intent/mod.rs
 git commit -m "feat(intent): export DefaultsResolver and parameter types"
 ```
 
@@ -889,7 +889,7 @@ fn test_agent_prompt_generation() {
 **Step 3: Write implementation**
 
 ```rust
-// In Aether/core/src/intent/agent_prompt.rs
+// In Aleph/core/src/intent/agent_prompt.rs
 
 /// Agent mode prompt template
 pub struct AgentModePrompt;
@@ -959,7 +959,7 @@ impl Default for AgentModePrompt {
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent/agent_prompt.rs
+git add Aleph/core/src/intent/agent_prompt.rs
 git commit -m "feat(intent): add AgentModePrompt template"
 ```
 
@@ -1022,7 +1022,7 @@ pub fn build_prompt_with_intent(
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/payload/assembler.rs
+git add Aleph/core/src/payload/assembler.rs
 git commit -m "feat(payload): add agent mode prompt injection based on intent"
 ```
 
@@ -1069,7 +1069,7 @@ interface ExecutionIntentFfi {
 **Step 2: Create FFI conversion module**
 
 ```rust
-// In Aether/core/src/intent_ffi.rs
+// In Aleph/core/src/intent_ffi.rs
 
 use crate::intent::{ExecutableTask, ExecutionIntent, TaskCategory};
 
@@ -1141,13 +1141,13 @@ impl From<ExecutionIntent> for ExecutionIntentFfi {
 
 **Step 4: Run UniFFI bindgen**
 
-Run: `cd Aether/core && cargo build`
+Run: `cd Aleph/core && cargo build`
 Expected: BUILD SUCCESS
 
 **Step 5: Commit**
 
 ```bash
-git add Aether/core/src/intent_ffi.rs Aether/core/src/aether.udl Aether/core/src/lib.rs
+git add Aleph/core/src/intent_ffi.rs Aleph/core/src/aether.udl Aleph/core/src/lib.rs
 git commit -m "feat(ffi): add UniFFI bindings for intent classification types"
 ```
 
@@ -1213,7 +1213,7 @@ struct AgentPlanSummary: Equatable {
 **Step 4: Commit**
 
 ```bash
-git add Aether/Sources/HaloState.swift
+git add Aleph/Sources/HaloState.swift
 git commit -m "feat(ui): add agent execution states to HaloState"
 ```
 
@@ -1308,7 +1308,7 @@ struct AgentPlanView: View {
 **Step 2: Commit**
 
 ```bash
-git add Aether/Sources/Components/AgentPlanView.swift
+git add Aleph/Sources/Components/AgentPlanView.swift
 git commit -m "feat(ui): add AgentPlanView component for plan confirmation"
 ```
 
@@ -1362,7 +1362,7 @@ struct AgentProgressView: View {
 **Step 2: Commit**
 
 ```bash
-git add Aether/Sources/Components/AgentProgressView.swift
+git add Aleph/Sources/Components/AgentProgressView.swift
 git commit -m "feat(ui): add AgentProgressView component for execution progress"
 ```
 
@@ -1403,7 +1403,7 @@ if let ExecutionIntent::Executable(task) = &intent {
 
 **Step 2: Add event handler method**
 
-Add to AetherEventHandler trait:
+Add to AlephEventHandler trait:
 ```rust
 fn on_agent_mode_detected(&self, task: ExecutableTaskFfi);
 ```
@@ -1446,7 +1446,7 @@ async fn test_full_intent_classification_flow() {
 
 **Step 2: Run all tests**
 
-Run: `cd Aether/core && cargo test`
+Run: `cd Aleph/core && cargo test`
 Expected: All PASS
 
 **Step 3: Final commit**

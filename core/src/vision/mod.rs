@@ -20,7 +20,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::vision::{VisionService, VisionRequest, VisionTask, CaptureMode};
+//! use alephcore::vision::{VisionService, VisionRequest, VisionTask, CaptureMode};
 //!
 //! let service = VisionService::new(config, provider_registry);
 //! let request = VisionRequest {

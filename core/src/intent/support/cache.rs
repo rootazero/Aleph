@@ -10,7 +10,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use aethecore::intent::cache::{IntentCache, CacheConfig, CachedIntent};
+//! use alephcore::intent::cache::{IntentCache, CacheConfig, CachedIntent};
 //!
 //! let cache = IntentCache::new(CacheConfig::default());
 //!

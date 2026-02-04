@@ -138,7 +138,7 @@ To migrate:
 ### Core Types
 
 ```rust
-use aethecore::three_layer::{
+use alephcore::three_layer::{
     // Safety
     Capability, CapabilityLevel, CapabilityGate, CapabilityDenied,
     PathSandbox, SandboxViolation,

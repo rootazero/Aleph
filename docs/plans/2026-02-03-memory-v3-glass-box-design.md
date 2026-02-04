@@ -1,4 +1,4 @@
-# Aether Memory System v3: "Glass Box" Architecture
+# Aleph Memory System v3: "Glass Box" Architecture
 
 > 设计日期: 2026-02-03
 > 状态: Draft
@@ -11,7 +11,7 @@
 ### 1.1 核心隐喻：Glass Box (透明盒)
 
 Memory v2 追求"拟人化"——Ebbinghaus 衰减、信号驱动压缩、动态联想。
-这些特性让 Aether 的记忆更像人脑，但也让它变成了一个**黑盒**：
+这些特性让 Aleph 的记忆更像人脑，但也让它变成了一个**黑盒**：
 用户无法直观理解 AI 记住了什么、为什么忘记、当前在想什么。
 
 v3 的目标是在保留 v2 智能特性的前提下，打造一个**透明盒**：
@@ -220,7 +220,7 @@ System Prompt
 ### 4.1 问题陈述
 
 v2 依赖 DreamDaemon 在"空闲时间"执行衰减计算和清理。但作为 CLI 工具，
-Aether 的生命周期往往很短（执行完命令就退出），DreamDaemon 可能永远
+Aleph 的生命周期往往很短（执行完命令就退出），DreamDaemon 可能永远
 没有机会运行，导致记忆库只增不减，长期使用后查询性能和 Token 消耗失控。
 
 ### 4.2 设计方案
@@ -541,7 +541,7 @@ if matches!(reason, TriggerReason::TokenThreshold { .. }) {
 ### 6.2 文件锁机制
 
 ```
-~/.aether/
+~/.aleph/
 ├── memory.db          # SQLite 数据库
 ├── memory.db-wal      # WAL 日志
 ├── memory.db-shm      # 共享内存
@@ -647,7 +647,7 @@ $ aether memory list
 ID          TYPE        STRENGTH  CONTENT (truncated)
 ─────────────────────────────────────────────────────────────
 f8a3b...   preference   0.92     用户偏好使用 Rust 而非 Go
-c2d1e...   knowledge    0.78     Aether 项目使用 sqlite-vec
+c2d1e...   knowledge    0.78     Aleph 项目使用 sqlite-vec
 a9f0c...   personal     1.00     用户的 GitHub 用户名是 x
 
 # 筛选选项
@@ -1071,7 +1071,7 @@ manual_only = false             # 是否仅手动触发
 ### 9.1 完整配置结构
 
 ```toml
-# ~/.aether/config.toml
+# ~/.aleph/config.toml
 
 [memory]
 enabled = true
@@ -1193,7 +1193,7 @@ max_token_window = 200000
 
 配置加载优先级：
 ```
-项目级 (.aether/config.toml) > 用户级 (~/.aether/config.toml) > 默认值
+项目级 (.aether/config.toml) > 用户级 (~/.aleph/config.toml) > 默认值
 ```
 
 ---
@@ -1282,7 +1282,7 @@ Migration available: 003_glass_box
 
 # 执行迁移
 $ aether memory migrate
-Backing up database to ~/.aether/memory.db.backup.20260203...
+Backing up database to ~/.aleph/memory.db.backup.20260203...
 Applying migration 003_glass_box...
 Migration complete. Database now at version 3.
 ```
@@ -1376,7 +1376,7 @@ pub enum FactSpecificity {
 pub enum TemporalScope {
     /// 长期有效："用户的母语是中文"
     Permanent,
-    /// 上下文相关："用户当前在做 Aether 项目"
+    /// 上下文相关："用户当前在做 Aleph 项目"
     #[default]
     Contextual,
     /// 短期有效："用户今天想专注写文档"
@@ -1398,7 +1398,7 @@ For each fact, determine:
    - instance: Specific occurrence ("User used anyhow on 2026-01-15")
 5. temporal_scope:
    - permanent: Always true ("User's native language is Chinese")
-   - contextual: True in current context ("User is working on Aether")
+   - contextual: True in current context ("User is working on Aleph")
    - ephemeral: Short-term ("User wants to focus on docs today")
 
 Output JSON array. Skip trivial or redundant facts."#
@@ -1756,7 +1756,7 @@ $ cat .aether/scratchpad.md
 #### M2: Lazy Decay Engine
 ```bash
 # 模拟 60 天未访问的记忆
-$ sqlite3 ~/.aether/memory.db "UPDATE memory_facts SET last_accessed = strftime('%s','now') - 5184000 WHERE id = 'test123'"
+$ sqlite3 ~/.aleph/memory.db "UPDATE memory_facts SET last_accessed = strftime('%s','now') - 5184000 WHERE id = 'test123'"
 
 # 检索时应被过滤
 $ aether memory list --query "test"

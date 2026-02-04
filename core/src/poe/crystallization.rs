@@ -132,8 +132,8 @@ pub struct ExperienceRecord {
 /// ## Example
 ///
 /// ```rust,ignore
-/// use aethecore::poe::{ChannelCrystallizer, ExperienceRecorder};
-/// use aethecore::skill_evolution::EvolutionTracker;
+/// use alephcore::poe::{ChannelCrystallizer, ExperienceRecorder};
+/// use alephcore::skill_evolution::EvolutionTracker;
 ///
 /// // Create the crystallizer and background worker
 /// let tracker = EvolutionTracker::new("evolution.db")?;
@@ -351,8 +351,8 @@ fn truncate(s: &str, max_len: usize) -> String {
 /// ## Usage
 ///
 /// ```rust,ignore
-/// use aethecore::poe::ExperienceCrystallizer;
-/// use aethecore::skill_evolution::EvolutionTracker;
+/// use alephcore::poe::ExperienceCrystallizer;
+/// use alephcore::skill_evolution::EvolutionTracker;
 ///
 /// let tracker = Arc::new(EvolutionTracker::new("evolution.db")?);
 /// let crystallizer = ExperienceCrystallizer::new(tracker);

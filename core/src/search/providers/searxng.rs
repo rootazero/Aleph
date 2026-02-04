@@ -1,4 +1,4 @@
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// SearXNG search provider
 ///
@@ -28,7 +28,7 @@ struct SearxngResult {
 impl SearxngProvider {
     pub fn new(base_url: String) -> Result<Self> {
         if base_url.is_empty() {
-            return Err(AetherError::invalid_config("SearXNG base URL is required"));
+            return Err(AlephError::invalid_config("SearXNG base URL is required"));
         }
 
         Ok(Self {
@@ -36,7 +36,7 @@ impl SearxngProvider {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .map_err(|e| AetherError::network(e.to_string()))?,
+                .map_err(|e| AlephError::network(e.to_string()))?,
         })
     }
 }
@@ -53,17 +53,17 @@ impl SearchProvider for SearxngProvider {
             .timeout(std::time::Duration::from_secs(options.timeout_seconds))
             .send()
             .await
-            .map_err(|e| AetherError::network(e.to_string()))?;
+            .map_err(|e| AlephError::network(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "SearXNG API error: {}",
                 response.status()
             )));
         }
 
         let searxng_response: SearxngResponse = response.json().await.map_err(|e| {
-            AetherError::provider(format!("Failed to parse SearXNG response: {}", e))
+            AlephError::provider(format!("Failed to parse SearXNG response: {}", e))
         })?;
 
         // Convert to unified format

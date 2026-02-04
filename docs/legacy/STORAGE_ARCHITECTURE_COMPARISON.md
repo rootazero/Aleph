@@ -3,7 +3,7 @@
 ## 旧架构（冗余）
 
 ```
-~/.aether/
+~/.aleph/
 ├── output/
 │   └── {topic_id}/
 │       ├── file1.txt      ← AI生成（原始）
@@ -33,7 +33,7 @@
 ## 新架构（简化）
 
 ```
-~/.aether/
+~/.aleph/
 ├── output/
 │   └── {topic_id}/
 │       ├── file1.txt      ← AI生成（唯一存储）
@@ -67,8 +67,8 @@
 **旧设计：**
 ```swift
 // 所有附件都是相对路径
-localPath: "generated/msg123/file.txt"  // 相对于 ~/.aether/attachments/
-localPath: "user/msg123/upload.png"      // 相对于 ~/.aether/attachments/
+localPath: "generated/msg123/file.txt"  // 相对于 ~/.aleph/attachments/
+localPath: "user/msg123/upload.png"      // 相对于 ~/.aleph/attachments/
 ```
 
 **新设计：**
@@ -77,10 +77,10 @@ localPath: "user/msg123/upload.png"      // 相对于 ~/.aether/attachments/
 localPath: "/Users/.../output/topic123/file.txt"  // 绝对路径
 
 // 用户上传：相对路径（不变）
-localPath: "user/msg123/upload.png"  // 相对于 ~/.aether/attachments/
+localPath: "user/msg123/upload.png"  // 相对于 ~/.aleph/attachments/
 
 // 远程缓存：相对路径（不变）
-localPath: "cached/msg123/remote.jpg"  // 相对于 ~/.aether/attachments/
+localPath: "cached/msg123/remote.jpg"  // 相对于 ~/.aleph/attachments/
 ```
 
 ### 文件URL解析
@@ -174,13 +174,13 @@ func deleteFilesForMessage(_ messageId: String) -> Int {
 **可选清理：**
 ```bash
 # 1. 删除空的 generated 目录
-rmdir ~/.aether/attachments/generated 2>/dev/null || true
+rmdir ~/.aleph/attachments/generated 2>/dev/null || true
 
 # 2. 查看是否有旧的 generated 文件
-ls -la ~/.aether/attachments/generated/*/
+ls -la ~/.aleph/attachments/generated/*/
 
 # 3. 如果确认不需要，可以删除
-# rm -rf ~/.aether/attachments/generated
+# rm -rf ~/.aleph/attachments/generated
 ```
 
 ---

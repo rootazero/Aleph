@@ -5,7 +5,7 @@
 
 ## Overview
 
-Successfully implemented the app exclusion list feature to prevent Aether from storing memories for sensitive applications (e.g., password managers, Keychain Access).
+Successfully implemented the app exclusion list feature to prevent Aleph from storing memories for sensitive applications (e.g., password managers, Keychain Access).
 
 ## Implementation Details
 
@@ -37,7 +37,7 @@ The exclusion check happens in `MemoryIngestion::store_memory()` (lines 63-69):
 ```rust
 // Check if app is excluded
 if self.config.excluded_apps.contains(&context.app_bundle_id) {
-    return Err(AetherError::config(format!(
+    return Err(AlephError::config(format!(
         "App is excluded from memory: {}",
         context.app_bundle_id
     )));
@@ -51,7 +51,7 @@ This check occurs **before**:
 
 Ensuring complete privacy - no data from excluded apps ever enters the memory system.
 
-### 3. Integration with AetherCore (core.rs)
+### 3. Integration with AlephCore (core.rs)
 
 The config is properly passed through the entire pipeline:
 

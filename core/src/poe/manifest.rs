@@ -12,8 +12,8 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use aethecore::poe::manifest::ManifestBuilder;
-//! use aethecore::providers::AiProvider;
+//! use alephcore::poe::manifest::ManifestBuilder;
+//! use alephcore::providers::AiProvider;
 //!
 //! let builder = ManifestBuilder::new(provider)
 //!     .with_experience_tracker(tracker);
@@ -256,7 +256,7 @@ Generate a Success Manifest for this task.",
         let json_str = self.extract_json(response);
         
         serde_json::from_str(&json_str).map_err(|e| {
-            crate::error::AetherError::other(format!(
+            crate::error::AlephError::other(format!(
                 "Failed to parse generated manifest: {}. Raw: {}", 
                 e, 
                 truncate_string(&json_str, 200)
@@ -317,7 +317,7 @@ Generate a Success Manifest for this task.",
     ) -> Result<SuccessManifest> {
         // 1. Serialize current manifest
         let current_json = serde_json::to_string_pretty(current)
-            .map_err(|e| crate::error::AetherError::other(
+            .map_err(|e| crate::error::AlephError::other(
                 format!("Failed to serialize manifest: {}", e)
             ))?;
 

@@ -106,7 +106,7 @@ impl ResilientTask for PodcastTask {
             // For demonstration, simulate occasional failure
             #[cfg(test)]
             {
-                return Err(crate::error::AetherError::NetworkError {
+                return Err(crate::error::AlephError::NetworkError {
                     message: "TTS service unavailable".to_string(),
                     suggestion: None,
                 });

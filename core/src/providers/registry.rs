@@ -2,7 +2,7 @@
 ///
 /// This module provides a registry to store and retrieve AI providers by name.
 /// It ensures providers are uniquely registered and provides convenient lookup methods.
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust
-/// use aethecore::providers::{ProviderRegistry, MockProvider};
+/// use alephcore::providers::{ProviderRegistry, MockProvider};
 /// use std::sync::Arc;
 ///
 /// let mut registry = ProviderRegistry::new();
@@ -42,7 +42,7 @@ impl ProviderRegistry {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::providers::ProviderRegistry;
+    /// use alephcore::providers::ProviderRegistry;
     ///
     /// let registry = ProviderRegistry::new();
     /// assert_eq!(registry.names().len(), 0);
@@ -63,12 +63,12 @@ impl ProviderRegistry {
     /// # Returns
     ///
     /// * `Ok(())` - Provider registered successfully
-    /// * `Err(AetherError::InvalidConfig)` - Provider name already exists
+    /// * `Err(AlephError::InvalidConfig)` - Provider name already exists
     ///
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::providers::{ProviderRegistry, MockProvider};
+    /// use alephcore::providers::{ProviderRegistry, MockProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = ProviderRegistry::new();
@@ -83,7 +83,7 @@ impl ProviderRegistry {
     /// ```
     pub fn register(&mut self, name: String, provider: Arc<dyn AiProvider>) -> Result<()> {
         if self.providers.contains_key(&name) {
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "Provider '{}' is already registered",
                 name
             )));
@@ -106,7 +106,7 @@ impl ProviderRegistry {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::providers::{ProviderRegistry, MockProvider};
+    /// use alephcore::providers::{ProviderRegistry, MockProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = ProviderRegistry::new();
@@ -133,7 +133,7 @@ impl ProviderRegistry {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::providers::{ProviderRegistry, MockProvider};
+    /// use alephcore::providers::{ProviderRegistry, MockProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = ProviderRegistry::new();
@@ -162,7 +162,7 @@ impl ProviderRegistry {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::providers::{ProviderRegistry, MockProvider};
+    /// use alephcore::providers::{ProviderRegistry, MockProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = ProviderRegistry::new();
@@ -180,7 +180,7 @@ impl ProviderRegistry {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::providers::{ProviderRegistry, MockProvider};
+    /// use alephcore::providers::{ProviderRegistry, MockProvider};
     /// use std::sync::Arc;
     ///
     /// let mut registry = ProviderRegistry::new();
@@ -198,7 +198,7 @@ impl ProviderRegistry {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::providers::ProviderRegistry;
+    /// use alephcore::providers::ProviderRegistry;
     ///
     /// let registry = ProviderRegistry::new();
     /// assert!(registry.is_empty());
@@ -247,7 +247,7 @@ mod tests {
         let result = registry.register("openai".to_string(), provider2);
         assert!(result.is_err());
 
-        if let Err(AetherError::InvalidConfig { message, .. }) = result {
+        if let Err(AlephError::InvalidConfig { message, .. }) = result {
             assert!(message.contains("already registered"));
         } else {
             panic!("Expected InvalidConfig error");

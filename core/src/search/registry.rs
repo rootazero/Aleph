@@ -1,4 +1,4 @@
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::search::{ProviderTestResult, SearchOptions, SearchProvider, SearchResult};
 /// Search provider registry and router
 ///
@@ -83,7 +83,7 @@ impl SearchRegistry {
             }
         }
 
-        Err(AetherError::provider(format!(
+        Err(AlephError::provider(format!(
             "All search providers failed for query: {}",
             query
         )))
@@ -216,7 +216,7 @@ mod tests {
 
         async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
             if self.should_fail {
-                return Err(AetherError::network("Mock provider failure"));
+                return Err(AlephError::network("Mock provider failure"));
             }
 
             let mut results = Vec::new();

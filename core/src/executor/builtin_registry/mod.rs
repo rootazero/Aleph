@@ -16,7 +16,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use aethecore::executor::{BuiltinToolRegistry, SingleStepExecutor};
+//! use alephcore::executor::{BuiltinToolRegistry, SingleStepExecutor};
 //!
 //! let registry = BuiltinToolRegistry::new();
 //! let executor = SingleStepExecutor::new(Arc::new(registry));

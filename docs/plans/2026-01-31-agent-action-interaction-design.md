@@ -5,7 +5,7 @@
 
 ## 概述
 
-将 suggestion 和 question 模块深度集成到 Aether 的 agent_loop 架构中，采用 **结构化优先，非结构化作为 fallback** 的策略。
+将 suggestion 和 question 模块深度集成到 Aleph 的 agent_loop 架构中，采用 **结构化优先，非结构化作为 fallback** 的策略。
 
 ## 设计原则
 
@@ -586,7 +586,7 @@ impl CliLoopCallback {
 
 ## 与现有架构的关系
 
-本设计增强了 Aether 现有的 agent_loop 架构，主要改动集中在：
+本设计增强了 Aleph 现有的 agent_loop 架构，主要改动集中在：
 
 1. **Decision 类型扩展** — 更丰富的用户交互类型
 2. **UserAnswer 结构化** — 替代简单的 String 返回

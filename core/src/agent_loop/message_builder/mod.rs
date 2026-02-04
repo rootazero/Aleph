@@ -22,8 +22,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::agent_loop::{MessageBuilder, MessageBuilderConfig};
-//! use aethecore::components::ExecutionSession;
+//! use alephcore::agent_loop::{MessageBuilder, MessageBuilderConfig};
+//! use alephcore::components::ExecutionSession;
 //!
 //! let config = MessageBuilderConfig::default();
 //! let builder = MessageBuilder::new(config);

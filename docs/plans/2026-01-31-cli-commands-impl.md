@@ -4,7 +4,7 @@
 
 **Goal:** 实现核心 CLI 命令：gateway call, config, channels, cron
 
-**Architecture:** 创建 `core/src/cli/` 模块，包含 RPC 客户端和命令实现，扩展 `aether_gateway.rs` 添加新 subcommands
+**Architecture:** 创建 `core/src/cli/` 模块，包含 RPC 客户端和命令实现，扩展 `aleph_gateway.rs` 添加新 subcommands
 
 **Tech Stack:** Rust, Clap 4, tokio-tungstenite, serde_json
 
@@ -20,7 +20,7 @@
 **Step 1: Create cli/mod.rs**
 
 ```rust
-//! CLI utilities for Aether Gateway commands.
+//! CLI utilities for Aleph Gateway commands.
 
 pub mod error;
 pub mod client;
@@ -376,7 +376,7 @@ git commit -m "feat(cli): add output formatting utilities"
 ## Task 4: Add Gateway Subcommand to Binary
 
 **Files:**
-- Modify: `core/src/bin/aether_gateway.rs`
+- Modify: `core/src/bin/aleph_gateway.rs`
 
 **Step 1: Add Gateway command enum variant**
 
@@ -435,7 +435,7 @@ Add the function:
 ```rust
 #[cfg(feature = "gateway")]
 async fn handle_gateway_command(action: GatewayAction) -> Result<(), Box<dyn std::error::Error>> {
-    use aethecore::cli::{GatewayClient, print_json};
+    use alephcore::cli::{GatewayClient, print_json};
 
     match action {
         GatewayAction::Call { method, params, url, timeout } => {
@@ -460,7 +460,7 @@ async fn handle_gateway_command(action: GatewayAction) -> Result<(), Box<dyn std
 
 ```bash
 cargo check
-git add core/src/bin/aether_gateway.rs
+git add core/src/bin/aleph_gateway.rs
 git commit -m "feat(cli): add gateway call command"
 ```
 
@@ -469,7 +469,7 @@ git commit -m "feat(cli): add gateway call command"
 ## Task 5: Add Config Subcommand
 
 **Files:**
-- Modify: `core/src/bin/aether_gateway.rs`
+- Modify: `core/src/bin/aleph_gateway.rs`
 - Create: `core/src/cli/config.rs`
 
 **Step 1: Create cli/config.rs**
@@ -702,7 +702,7 @@ Some(Command::Config { action }) => {
 ```rust
 #[cfg(feature = "gateway")]
 async fn handle_config_command(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
-    use aethecore::cli::{GatewayClient, OutputFormat, config};
+    use alephcore::cli::{GatewayClient, OutputFormat, config};
 
     match action {
         ConfigAction::Get { path, json, url } => {
@@ -745,7 +745,7 @@ pub mod config;
 
 ```bash
 cargo check
-git add core/src/cli/config.rs core/src/cli/mod.rs core/src/bin/aether_gateway.rs
+git add core/src/cli/config.rs core/src/cli/mod.rs core/src/bin/aleph_gateway.rs
 git commit -m "feat(cli): add config commands"
 ```
 
@@ -755,7 +755,7 @@ git commit -m "feat(cli): add config commands"
 
 **Files:**
 - Create: `core/src/cli/channels.rs`
-- Modify: `core/src/bin/aether_gateway.rs`
+- Modify: `core/src/bin/aleph_gateway.rs`
 
 **Step 1: Create cli/channels.rs**
 
@@ -893,7 +893,7 @@ Some(Command::Channels { action }) => {
 ```rust
 #[cfg(feature = "gateway")]
 async fn handle_channels_command(action: ChannelsAction) -> Result<(), Box<dyn std::error::Error>> {
-    use aethecore::cli::{GatewayClient, OutputFormat, channels};
+    use alephcore::cli::{GatewayClient, OutputFormat, channels};
 
     match action {
         ChannelsAction::List { json, url } => {
@@ -922,7 +922,7 @@ pub mod channels;
 
 ```bash
 cargo check
-git add core/src/cli/channels.rs core/src/cli/mod.rs core/src/bin/aether_gateway.rs
+git add core/src/cli/channels.rs core/src/cli/mod.rs core/src/bin/aleph_gateway.rs
 git commit -m "feat(cli): add channels commands"
 ```
 
@@ -932,7 +932,7 @@ git commit -m "feat(cli): add channels commands"
 
 **Files:**
 - Create: `core/src/cli/cron.rs`
-- Modify: `core/src/bin/aether_gateway.rs`
+- Modify: `core/src/bin/aleph_gateway.rs`
 
 **Step 1: Create cli/cron.rs**
 
@@ -1090,7 +1090,7 @@ Some(Command::Cron { action }) => {
 ```rust
 #[cfg(feature = "gateway")]
 async fn handle_cron_command(action: CronAction) -> Result<(), Box<dyn std::error::Error>> {
-    use aethecore::cli::{GatewayClient, OutputFormat, cron};
+    use alephcore::cli::{GatewayClient, OutputFormat, cron};
 
     match action {
         CronAction::List { json, url } => {
@@ -1123,7 +1123,7 @@ pub mod cron;
 
 ```bash
 cargo check
-git add core/src/cli/cron.rs core/src/cli/mod.rs core/src/bin/aether_gateway.rs
+git add core/src/cli/cron.rs core/src/cli/mod.rs core/src/bin/aleph_gateway.rs
 git commit -m "feat(cli): add cron commands"
 ```
 
@@ -1228,17 +1228,17 @@ git commit -m "feat(gateway): add channels and cron RPC handlers"
 
 ```bash
 cd /Volumes/TBU4/Workspace/Aether/core
-cargo build --features gateway --bin aether-gateway
+cargo build --features gateway --bin aleph-gateway
 ```
 
 **Step 2: Test help output**
 
 ```bash
-./target/debug/aether-gateway --help
-./target/debug/aether-gateway gateway --help
-./target/debug/aether-gateway config --help
-./target/debug/aether-gateway channels --help
-./target/debug/aether-gateway cron --help
+./target/debug/aleph-gateway --help
+./target/debug/aleph-gateway gateway --help
+./target/debug/aleph-gateway config --help
+./target/debug/aleph-gateway channels --help
+./target/debug/aleph-gateway cron --help
 ```
 
 **Step 3: Run unit tests**
@@ -1265,12 +1265,12 @@ All commands support --json flag for machine-readable output."
 
 ## Success Criteria
 
-- [ ] `aether-gateway gateway call health` works
-- [ ] `aether-gateway config get` shows configuration
-- [ ] `aether-gateway config set general.language zh-Hans` updates config
-- [ ] `aether-gateway config schema` outputs JSON Schema
-- [ ] `aether-gateway channels list` shows channels
-- [ ] `aether-gateway cron list` shows jobs
+- [ ] `aleph-gateway gateway call health` works
+- [ ] `aleph-gateway config get` shows configuration
+- [ ] `aleph-gateway config set general.language zh-Hans` updates config
+- [ ] `aleph-gateway config schema` outputs JSON Schema
+- [ ] `aleph-gateway channels list` shows channels
+- [ ] `aleph-gateway cron list` shows jobs
 - [ ] All commands support `--json` flag
 - [ ] All commands support `--url` for custom Gateway
 - [ ] Unit tests pass

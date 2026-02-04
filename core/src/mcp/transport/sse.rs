@@ -18,7 +18,7 @@ use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::{mpsc, RwLock};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
 
@@ -133,7 +133,7 @@ impl SseTransport {
     /// # Returns
     ///
     /// * `Ok(())` - If the listener started successfully
-    /// * `Err(AetherError)` - If starting the listener failed
+    /// * `Err(AlephError)` - If starting the listener failed
     pub async fn start_event_listener(&self) -> Result<()> {
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
@@ -215,7 +215,7 @@ impl SseTransport {
         }
 
         let mut es = EventSource::new(request).map_err(|e| {
-            AetherError::IoError(format!("Failed to create EventSource: {}", e))
+            AlephError::IoError(format!("Failed to create EventSource: {}", e))
         })?;
 
         tracing::debug!(server = %server_name, "SSE EventSource created, waiting for events");
@@ -240,7 +240,7 @@ impl SseTransport {
                     let error_str = e.to_string();
                     if error_str.contains("connection") || error_str.contains("closed") {
                         tracing::warn!(server = %server_name, error = %e, "SSE connection error");
-                        return Err(AetherError::IoError(format!("SSE connection error: {}", e)));
+                        return Err(AlephError::IoError(format!("SSE connection error: {}", e)));
                     } else {
                         tracing::debug!(server = %server_name, error = %e, "SSE non-fatal error");
                     }
@@ -337,7 +337,7 @@ impl SseTransport {
 impl McpTransport for SseTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let body = serde_json::to_string(request).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize request: {}", e))
+            AlephError::IoError(format!("Failed to serialize request: {}", e))
         })?;
 
         tracing::debug!(
@@ -347,7 +347,7 @@ impl McpTransport for SseTransport {
         );
 
         let response = self.build_request(body).send().await.map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "SSE request to '{}' failed: {}",
                 self.server_name, e
             ))
@@ -356,18 +356,18 @@ impl McpTransport for SseTransport {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "SSE HTTP {} from '{}': {}",
                 status, self.server_name, body
             )));
         }
 
         let text = response.text().await.map_err(|e| {
-            AetherError::IoError(format!("Failed to read response: {}", e))
+            AlephError::IoError(format!("Failed to read response: {}", e))
         })?;
 
         serde_json::from_str(&text).map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Failed to parse response from '{}': {} (body: {})",
                 self.server_name, e, text
             ))
@@ -376,7 +376,7 @@ impl McpTransport for SseTransport {
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
         let body = serde_json::to_string(notification).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize notification: {}", e))
+            AlephError::IoError(format!("Failed to serialize notification: {}", e))
         })?;
 
         tracing::debug!(
@@ -386,7 +386,7 @@ impl McpTransport for SseTransport {
         );
 
         let response = self.build_request(body).send().await.map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "SSE notification to '{}' failed: {}",
                 self.server_name, e
             ))
@@ -523,7 +523,7 @@ impl SseTransport {
     /// Internal helper to send a JSON-RPC response via HTTP POST
     async fn send_json_rpc_response(&self, response: &JsonRpcResponse) -> Result<()> {
         let response_json = serde_json::to_string(response).map_err(|e| {
-            AetherError::IoError(format!("Failed to serialize response: {}", e))
+            AlephError::IoError(format!("Failed to serialize response: {}", e))
         })?;
 
         let http_response = self
@@ -531,11 +531,11 @@ impl SseTransport {
             .send()
             .await
             .map_err(|e| {
-                AetherError::IoError(format!("Failed to send response: {}", e))
+                AlephError::IoError(format!("Failed to send response: {}", e))
             })?;
 
         if !http_response.status().is_success() {
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Server returned error status: {}",
                 http_response.status()
             )));

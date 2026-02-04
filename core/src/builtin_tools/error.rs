@@ -31,14 +31,14 @@ impl fmt::Display for ToolError {
 
 impl std::error::Error for ToolError {}
 
-impl From<ToolError> for crate::error::AetherError {
+impl From<ToolError> for crate::error::AlephError {
     fn from(e: ToolError) -> Self {
         match e {
-            ToolError::Network(msg) => crate::error::AetherError::network(msg),
-            ToolError::InvalidArgs(msg) => crate::error::AetherError::tool(msg),
-            ToolError::Execution(msg) => crate::error::AetherError::tool(msg),
-            ToolError::ExecutionFailed(msg) => crate::error::AetherError::tool(msg),
-            ToolError::NotFound(msg) => crate::error::AetherError::NotFound(msg),
+            ToolError::Network(msg) => crate::error::AlephError::network(msg),
+            ToolError::InvalidArgs(msg) => crate::error::AlephError::tool(msg),
+            ToolError::Execution(msg) => crate::error::AlephError::tool(msg),
+            ToolError::ExecutionFailed(msg) => crate::error::AlephError::tool(msg),
+            ToolError::NotFound(msg) => crate::error::AlephError::NotFound(msg),
         }
     }
 }

@@ -1,8 +1,8 @@
-# Aether 热键问题修复报告
+# Aleph 热键问题修复报告
 
 ## 问题描述
 
-用户在备忘录中输入"hello"并按热键调取Aether Agent时遇到以下问题：
+用户在备忘录中输入"hello"并按热键调取Aleph Agent时遇到以下问题：
 
 1. **剪切板内容错误**：获取的是之前的剪切板内容，而非当前选中的文本
 2. **无限乱码输出**：AI返回了大量文本（可能是从错误的剪切板内容生成的），打字机模式无限输出乱码
@@ -261,9 +261,9 @@ let response_preview = if response.chars().count() > 100 {
 ### 编译验证
 
 ```bash
-cd Aether/core && cargo build --release
-cp target/release/libaethecore.dylib ../Frameworks/
-xcodebuild -project Aether.xcodeproj -scheme Aether build
+cd Aleph/core && cargo build --release
+cp target/release/libalephcore.dylib ../Frameworks/
+xcodebuild -project Aleph.xcodeproj -scheme Aleph build
 ```
 
 ✅ **编译成功** - 所有Unicode字符处理现已安全

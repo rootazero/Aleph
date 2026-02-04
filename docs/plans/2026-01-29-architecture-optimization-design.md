@@ -1,4 +1,4 @@
-# Aether 架构优化实施规划
+# Aleph 架构优化实施规划
 
 > **创建日期**: 2026-01-29
 > **状态**: 待实施
@@ -8,7 +8,7 @@
 
 ## 执行摘要
 
-本文档基于架构审查报告，制定了 Aether 项目的渐进式优化路线图。采用 4 阶段实施策略：
+本文档基于架构审查报告，制定了 Aleph 项目的渐进式优化路线图。采用 4 阶段实施策略：
 
 1. **阶段 1: 快速清理** — rig-core 残留清理 (0.5-1 天)
 2. **阶段 2: 核心问题修复** — FFI 删除 + Session Key + Block Streaming (9-13 天)
@@ -46,7 +46,7 @@ core/src/rig_tools/  →  core/src/builtin_tools/
 
 ```rust
 // 旧: "Agent configuration based on rig-core library"
-// 新: "Agent configuration for self-implemented AetherTool system"
+// 新: "Agent configuration for self-implemented AlephTool system"
 ```
 
 ### 1.4 CLAUDE.md 技术栈更新
@@ -56,7 +56,7 @@ core/src/rig_tools/  →  core/src/builtin_tools/
 | **Agent Runtime** | Rust + async/await + rig-core |
 
 # 新
-| **Agent Runtime** | Rust + async/await + AetherTool |
+| **Agent Runtime** | Rust + async/await + AlephTool |
 ```
 
 ### 1.5 历史文档归档
@@ -75,16 +75,16 @@ docs/legacy/rig-core-era/
 ```markdown
 # rig-core 时代文档归档
 
-本目录包含 Aether 早期使用 rig-core 框架时的设计文档。
-项目已于 2025 年迁移到自研 AetherTool 系统。
+本目录包含 Aleph 早期使用 rig-core 框架时的设计文档。
+项目已于 2025 年迁移到自研 AlephTool 系统。
 
 这些文档仅供历史参考，不再反映当前架构。
 ```
 
 ### 1.6 验证清单
 
-- [ ] `cargo build -p aethecore` 成功
-- [ ] `cargo test -p aethecore` 通过
+- [ ] `cargo build -p alephcore` 成功
+- [ ] `cargo test -p alephcore` 通过
 - [ ] `grep -r "rig-core" core/src/` 无结果（除注释说明）
 - [ ] `grep -r "rig_tools" core/src/` 无结果
 
@@ -121,10 +121,10 @@ docs/legacy/rig-core-era/
 | `core/src/aether.udl` | 1 | 69KB |
 | `platforms/macos/.../Generated/` | UniFFI 生成 | ~100KB |
 
-#### AetherConnectionManager (Swift)
+#### AlephConnectionManager (Swift)
 
 ```swift
-class AetherConnectionManager: ObservableObject {
+class AlephConnectionManager: ObservableObject {
     enum State {
         case disconnected
         case connecting
@@ -522,7 +522,7 @@ config/
 ├── env_vars.rs
 ├── migration.rs
 └── types/
-    ├── root.rs     # AetherConfig
+    ├── root.rs     # AlephConfig
     ├── agents.rs
     ├── gateway.rs
     ├── channels.rs
@@ -664,4 +664,4 @@ docs/
 
 ---
 
-*文档生成于 2026-01-29 | Aether 架构优化 Brainstorming 会议*
+*文档生成于 2026-01-29 | Aleph 架构优化 Brainstorming 会议*

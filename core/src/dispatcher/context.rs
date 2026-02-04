@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```rust
-//! use aethecore::dispatcher::{TaskContext, TaskOutput};
+//! use alephcore::dispatcher::{TaskContext, TaskOutput};
 //!
 //! let mut ctx = TaskContext::new("Analyze and summarize the document");
 //!

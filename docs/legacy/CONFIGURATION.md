@@ -1,6 +1,6 @@
 # Configuration Schema
 
-This document describes Aether's configuration schema stored in `~/.aether/config.toml`.
+This document describes Aleph's configuration schema stored in `~/.aleph/config.toml`.
 
 ## Complete Configuration Example
 
@@ -666,7 +666,7 @@ capabilities = ["image"]
 
 ## Runtime Management
 
-Runtimes (Python, Node.js, yt-dlp) are managed automatically by Aether. No user configuration is required.
+Runtimes (Python, Node.js, yt-dlp) are managed automatically by Aleph. No user configuration is required.
 
 **Auto-Installed Runtimes**:
 | Runtime | Tool | Purpose |

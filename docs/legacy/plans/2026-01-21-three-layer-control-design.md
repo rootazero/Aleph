@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document describes the Three-Layer Control architecture for Aether, addressing the critical risks of the single-pipeline Agent Loop approach:
+This document describes the Three-Layer Control architecture for Aleph, addressing the critical risks of the single-pipeline Agent Loop approach:
 
 - **Cost Risk**: Unlimited loop could cost $100+ overnight
 - **Rabbit Hole Risk**: Agent may deviate from main task (e.g., spending 30 minutes on image recognition instead of buying tickets)
@@ -242,7 +242,7 @@ pub enum SkillNodeType {
 ### YAML Definition Format (User Custom Skills)
 
 ```yaml
-# ~/.aether/skills/my_research.yaml
+# ~/.aleph/skills/my_research.yaml
 id: my_research
 name: "My Research Skill"
 description: "Custom research workflow"
@@ -566,7 +566,7 @@ pub struct ThreeLayerOrchestrator { /* new implementation */ }
 ```rust
 // core/src/ffi/processing.rs
 
-impl AetherCore {
+impl AlephCore {
     pub async fn process(&self, input: String, options: ProcessOptions) -> ProcessResult {
         if self.config.orchestrator.use_three_layer_control {
             // New path

@@ -151,7 +151,7 @@ pub mod anthropic;
 
 ```bash
 cd /Volumes/TBU4/Workspace/Aether/.worktrees/protocol-adapter-phase2
-cargo check -p aethecore 2>&1 | tail -10
+cargo check -p alephcore 2>&1 | tail -10
 ```
 
 **Step 6: Commit**
@@ -186,7 +186,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::anthropic::{
     ContentBlock, ErrorResponse, ImageSource, Message, MessageContent, MessagesRequest,
@@ -407,7 +407,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         let api_key = config
             .api_key
             .as_ref()
-            .ok_or_else(|| AetherError::invalid_config("API key is required"))?;
+            .ok_or_else(|| AlephError::invalid_config("API key is required"))?;
 
         debug!(
             endpoint = %endpoint,
@@ -434,13 +434,13 @@ impl ProtocolAdapter for AnthropicProtocol {
             if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&error_text) {
                 let msg = error_response.error.message;
                 return match status.as_u16() {
-                    401 => Err(AetherError::authentication("Anthropic", &msg)),
-                    429 => Err(AetherError::rate_limit(format!("Anthropic: {}", msg))),
-                    _ => Err(AetherError::provider(format!("Anthropic error: {}", msg))),
+                    401 => Err(AlephError::authentication("Anthropic", &msg)),
+                    429 => Err(AlephError::rate_limit(format!("Anthropic: {}", msg))),
+                    _ => Err(AlephError::provider(format!("Anthropic error: {}", msg))),
                 };
             }
 
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Anthropic error ({}): {}",
                 status, error_text
             )));
@@ -448,7 +448,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         let response_body: MessagesResponse = response.json().await.map_err(|e| {
             error!(error = %e, "Failed to parse Anthropic response");
-            AetherError::provider(format!("Failed to parse response: {}", e))
+            AlephError::provider(format!("Failed to parse response: {}", e))
         })?;
 
         // Extract text from content blocks
@@ -471,7 +471,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Anthropic streaming error ({}): {}",
                 status, error_text
             )));
@@ -480,7 +480,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         let stream = response
             .bytes_stream()
             .map(move |chunk| {
-                let bytes = chunk.map_err(|e| AetherError::network(e.to_string()))?;
+                let bytes = chunk.map_err(|e| AlephError::network(e.to_string()))?;
                 let text = String::from_utf8_lossy(&bytes);
 
                 let mut result = String::new();
@@ -577,7 +577,7 @@ pub use anthropic::AnthropicProtocol;
 
 ```bash
 cd /Volumes/TBU4/Workspace/Aether/.worktrees/protocol-adapter-phase2
-cargo test -p aethecore protocols::anthropic --no-fail-fast
+cargo test -p alephcore protocols::anthropic --no-fail-fast
 ```
 
 **Step 4: Commit**
@@ -659,7 +659,7 @@ Replace `test_all_presets_use_openai_protocol` with:
 **Step 4: Run tests**
 
 ```bash
-cargo test -p aethecore presets --no-fail-fast
+cargo test -p alephcore presets --no-fail-fast
 ```
 
 **Step 5: Commit**
@@ -690,7 +690,7 @@ Replace the Claude/Anthropic case (lines 159-163):
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(config.timeout_seconds))
                 .build()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
+                .map_err(|e| AlephError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
 
             let adapter = Arc::new(protocols::AnthropicProtocol::new(client));
             let provider = HttpProvider::new(name.to_string(), config, adapter)?;
@@ -701,7 +701,7 @@ Replace the Claude/Anthropic case (lines 159-163):
 **Step 2: Run existing tests**
 
 ```bash
-cargo test -p aethecore providers::tests --no-fail-fast
+cargo test -p alephcore providers::tests --no-fail-fast
 ```
 
 **Step 3: Commit**
@@ -744,13 +744,13 @@ rm core/src/providers/claude.rs
 **Step 3: Build and verify**
 
 ```bash
-cargo build -p aethecore 2>&1 | tail -10
+cargo build -p alephcore 2>&1 | tail -10
 ```
 
 **Step 4: Run tests**
 
 ```bash
-cargo test -p aethecore --no-fail-fast 2>&1 | grep -E "(passed|failed)"
+cargo test -p alephcore --no-fail-fast 2>&1 | grep -E "(passed|failed)"
 ```
 
 **Step 5: Commit**
@@ -904,7 +904,7 @@ pub use gemini_legacy::GeminiProvider;
 **Step 6: Run cargo check**
 
 ```bash
-cargo check -p aethecore 2>&1 | tail -10
+cargo check -p alephcore 2>&1 | tail -10
 ```
 
 **Step 7: Commit**
@@ -939,7 +939,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 //! Handles Google Gemini generateContent API format.
 
 use crate::config::ProviderConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::gemini::{
     Content, GenerateContentRequest, GenerateContentResponse, GenerationConfig, InlineData, Part,
@@ -978,7 +978,7 @@ impl GeminiProtocol {
         let api_key = config
             .api_key
             .as_ref()
-            .ok_or_else(|| AetherError::invalid_config("Gemini API key is required"))?;
+            .ok_or_else(|| AlephError::invalid_config("Gemini API key is required"))?;
 
         let action = if is_streaming {
             "streamGenerateContent"
@@ -1174,14 +1174,14 @@ impl ProtocolAdapter for GeminiProtocol {
             // Try to parse structured error
             if let Ok(parsed) = serde_json::from_str::<GenerateContentResponse>(&error_text) {
                 if let Some(err) = parsed.error {
-                    return Err(AetherError::provider(format!(
+                    return Err(AlephError::provider(format!(
                         "Gemini error ({}): {}",
                         err.code, err.message
                     )));
                 }
             }
 
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Gemini error ({}): {}",
                 status, error_text
             )));
@@ -1189,12 +1189,12 @@ impl ProtocolAdapter for GeminiProtocol {
 
         let response_body: GenerateContentResponse = response.json().await.map_err(|e| {
             error!(error = %e, "Failed to parse Gemini response");
-            AetherError::provider(format!("Failed to parse response: {}", e))
+            AlephError::provider(format!("Failed to parse response: {}", e))
         })?;
 
         // Check for error in response
         if let Some(err) = response_body.error {
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Gemini error ({}): {}",
                 err.code, err.message
             )));
@@ -1221,7 +1221,7 @@ impl ProtocolAdapter for GeminiProtocol {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Gemini streaming error ({}): {}",
                 status, error_text
             )));
@@ -1230,7 +1230,7 @@ impl ProtocolAdapter for GeminiProtocol {
         let stream = response
             .bytes_stream()
             .map(move |chunk| {
-                let bytes = chunk.map_err(|e| AetherError::network(e.to_string()))?;
+                let bytes = chunk.map_err(|e| AlephError::network(e.to_string()))?;
                 let text = String::from_utf8_lossy(&bytes);
 
                 let mut result = String::new();
@@ -1311,7 +1311,7 @@ pub use gemini::GeminiProtocol;
 **Step 3: Run tests**
 
 ```bash
-cargo test -p aethecore protocols::gemini --no-fail-fast
+cargo test -p alephcore protocols::gemini --no-fail-fast
 ```
 
 **Step 4: Commit**
@@ -1384,7 +1384,7 @@ Replace the gemini case (lines 164-167) in mod.rs:
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(config.timeout_seconds))
                 .build()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
+                .map_err(|e| AlephError::invalid_config(format!("Failed to build HTTP client: {}", e)))?;
 
             let adapter = Arc::new(protocols::GeminiProtocol::new(client));
             let provider = HttpProvider::new(name.to_string(), config, adapter)?;
@@ -1395,8 +1395,8 @@ Replace the gemini case (lines 164-167) in mod.rs:
 **Step 4: Run tests**
 
 ```bash
-cargo test -p aethecore providers::tests --no-fail-fast
-cargo test -p aethecore presets --no-fail-fast
+cargo test -p alephcore providers::tests --no-fail-fast
+cargo test -p alephcore presets --no-fail-fast
 ```
 
 **Step 5: Commit**
@@ -1435,13 +1435,13 @@ rm core/src/providers/gemini_legacy.rs
 **Step 3: Build and verify**
 
 ```bash
-cargo build -p aethecore 2>&1 | tail -10
+cargo build -p alephcore 2>&1 | tail -10
 ```
 
 **Step 4: Run tests**
 
 ```bash
-cargo test -p aethecore --no-fail-fast 2>&1 | grep -E "(passed|failed)"
+cargo test -p alephcore --no-fail-fast 2>&1 | grep -E "(passed|failed)"
 ```
 
 **Step 5: Commit**
@@ -1489,13 +1489,13 @@ Remove `pub use openai::OpenAiProvider;` from providers/mod.rs if present.
 **Step 5: Build and verify**
 
 ```bash
-cargo build -p aethecore 2>&1 | tail -10
+cargo build -p alephcore 2>&1 | tail -10
 ```
 
 **Step 6: Run tests**
 
 ```bash
-cargo test -p aethecore --no-fail-fast 2>&1 | grep -E "(passed|failed)"
+cargo test -p alephcore --no-fail-fast 2>&1 | grep -E "(passed|failed)"
 ```
 
 **Step 7: Commit**
@@ -1517,7 +1517,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 **Step 1: Run full test suite**
 
 ```bash
-cargo test -p aethecore 2>&1 | grep -E "(passed|failed|FAILED)"
+cargo test -p alephcore 2>&1 | grep -E "(passed|failed|FAILED)"
 ```
 
 **Step 2: Verify code reduction**

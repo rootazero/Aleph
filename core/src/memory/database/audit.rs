@@ -1,14 +1,14 @@
 /// Audit log database operations
 ///
 /// Provides methods for storing and retrieving audit log entries for memory operations.
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::audit::{AuditAction, AuditActor, AuditDetails, AuditEntry};
 use crate::memory::database::VectorDatabase;
 use rusqlite::params;
 
 impl VectorDatabase {
     /// Insert an audit log entry
-    pub async fn insert_audit_entry(&self, entry: &AuditEntry) -> Result<(), AetherError> {
+    pub async fn insert_audit_entry(&self, entry: &AuditEntry) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let details_json = entry.details_json();
@@ -28,7 +28,7 @@ impl VectorDatabase {
                 entry.created_at,
             ],
         )
-        .map_err(|e| AetherError::config(format!("Failed to insert audit entry: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert audit entry: {}", e)))?;
 
         Ok(())
     }
@@ -37,7 +37,7 @@ impl VectorDatabase {
     pub async fn get_audit_entries_for_fact(
         &self,
         fact_id: &str,
-    ) -> Result<Vec<AuditEntry>, AetherError> {
+    ) -> Result<Vec<AuditEntry>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut stmt = conn
@@ -49,11 +49,11 @@ impl VectorDatabase {
                 ORDER BY created_at ASC
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare statement: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare statement: {}", e)))?;
 
         let entries = stmt
             .query_map(params![fact_id], |row| Ok(Self::row_to_audit_entry(row)))
-            .map_err(|e| AetherError::config(format!("Failed to query audit entries: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query audit entries: {}", e)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -64,7 +64,7 @@ impl VectorDatabase {
     pub async fn get_recent_audit_entries(
         &self,
         limit: usize,
-    ) -> Result<Vec<AuditEntry>, AetherError> {
+    ) -> Result<Vec<AuditEntry>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut stmt = conn
@@ -76,11 +76,11 @@ impl VectorDatabase {
                 LIMIT ?1
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare statement: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare statement: {}", e)))?;
 
         let entries = stmt
             .query_map(params![limit], |row| Ok(Self::row_to_audit_entry(row)))
-            .map_err(|e| AetherError::config(format!("Failed to query audit entries: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query audit entries: {}", e)))?
             .filter_map(|r| r.ok())
             .collect();
 

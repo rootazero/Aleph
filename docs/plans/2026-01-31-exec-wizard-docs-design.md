@@ -1,4 +1,4 @@
-# Aether: exec.* / wizard.* / 文档系统设计
+# Aleph: exec.* / wizard.* / 文档系统设计
 
 > 日期: 2026-01-31
 > 状态: 待实施
@@ -8,7 +8,7 @@
 
 ## 概述
 
-本设计覆盖 Aether 与 OpenClaw 对齐的最后两项工作：
+本设计覆盖 Aleph 与 OpenClaw 对齐的最后两项工作：
 
 | 项目 | 范围 | 复杂度 |
 |------|------|--------|
@@ -111,11 +111,11 @@ pub struct ExecApprovalRecord {
 ### 1.2 文件存储格式
 
 ```json5
-// ~/.aether/exec-approvals.json
+// ~/.aleph/exec-approvals.json
 {
   "version": 1,
   "socket": {
-    "path": "~/.aether/exec-approvals.sock",
+    "path": "~/.aleph/exec-approvals.sock",
     "token": "base64url-encoded-token"
   },
   "defaults": {
@@ -622,7 +622,7 @@ impl WizardFlow for OnboardingFlow {
 | **2. 流程选择** | `phase2_flow_choice` | select | QuickStart（推荐）/ Advanced |
 | **3. 模式选择** | `phase3_mode` | select | Local（本机）/ Remote（远程 Gateway）|
 | **4. Auth 配置** | `phase4_auth` | select + text | 多提供商选择 + API key 输入 |
-| **5. Workspace** | `phase5_workspace` | text | 工作目录，默认 `~/.aether/workspace` |
+| **5. Workspace** | `phase5_workspace` | text | 工作目录，默认 `~/.aleph/workspace` |
 | **6. Gateway** | `phase6_gateway` | multi | 端口/绑定/认证模式/Tailscale |
 | **7. Channels** | `phase7_channels` | multi | Telegram/Discord/iMessage 等 |
 | **8. Daemon** | `phase8_daemon` | select + action | LaunchAgent / systemd 安装 |
@@ -687,8 +687,8 @@ docs/
 
 ```toml
 [book]
-title = "Aether Documentation"
-authors = ["Aether Team"]
+title = "Aleph Documentation"
+authors = ["Aleph Team"]
 language = "zh"
 multilingual = false
 src = "src"
@@ -860,7 +860,7 @@ Phase 6: 文档系统 (2 天)
 - [ ] 4 个 RPC 方法全部实现并通过测试
 - [ ] CLI 向导 10 阶段流程完整
 - [ ] macOS App 向导 UI 正常工作
-- [ ] 配置正确写入 `~/.aether/config.json`
+- [ ] 配置正确写入 `~/.aleph/config.json`
 - [ ] Daemon 安装正常（macOS LaunchAgent / Linux systemd）
 
 ### 文档系统

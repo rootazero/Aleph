@@ -1,7 +1,7 @@
 /// Core VectorDatabase struct and initialization
 ///
 /// Contains the database connection, schema setup, and migration logic.
-use crate::error::AetherError;
+use crate::error::AlephError;
 use rusqlite::{params, Connection, OptionalExtension};
 use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;
@@ -21,11 +21,11 @@ impl VectorDatabase {
     ///
     /// Includes migration logic for embedding dimension changes.
     /// When embedding dimension changes (e.g., 512 -> 384), old data is cleared.
-    pub fn new(db_path: PathBuf) -> Result<Self, AetherError> {
+    pub fn new(db_path: PathBuf) -> Result<Self, AlephError> {
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                AetherError::config(format!("Failed to create database directory: {}", e))
+                AlephError::config(format!("Failed to create database directory: {}", e))
             })?;
         }
 
@@ -39,7 +39,7 @@ impl VectorDatabase {
         }
 
         let conn = Connection::open(&db_path)
-            .map_err(|e| AetherError::config(format!("Failed to open database: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to open database: {}", e)))?;
 
         // Check if migration is needed (dimension change)
         let needs_migration = Self::check_needs_migration(&conn)?;
@@ -47,7 +47,7 @@ impl VectorDatabase {
         if needs_migration {
             // Drop old memories table for dimension migration
             conn.execute_batch("DROP TABLE IF EXISTS memories;")
-                .map_err(|e| AetherError::config(format!("Failed to drop old table: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to drop old table: {}", e)))?;
 
             tracing::info!(
                 old_dim = 384,
@@ -292,7 +292,7 @@ impl VectorDatabase {
             END;
             "#,
         )
-        .map_err(|e| AetherError::config(format!("Failed to create schema: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create schema: {}", e)))?;
 
         // Migrate existing data to vec0 tables (for upgrades from old schema)
         Self::migrate_to_vec0(&conn)?;
@@ -302,7 +302,7 @@ impl VectorDatabase {
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
             params![CURRENT_EMBEDDING_DIM.to_string()],
         )
-        .map_err(|e| AetherError::config(format!("Failed to update schema_info: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -311,7 +311,7 @@ impl VectorDatabase {
     }
 
     /// Migrate existing memories and facts to vec0 tables
-    fn migrate_to_vec0(conn: &Connection) -> Result<(), AetherError> {
+    fn migrate_to_vec0(conn: &Connection) -> Result<(), AlephError> {
         // Check if migration needed (vec tables exist but empty, memories table has data)
         let memories_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
@@ -336,7 +336,7 @@ impl VectorDatabase {
                 [],
             )
             .map_err(|e| {
-                AetherError::config(format!("Failed to migrate memories to vec0: {}", e))
+                AlephError::config(format!("Failed to migrate memories to vec0: {}", e))
             })?;
 
             tracing::info!("Memories migration complete");
@@ -369,7 +369,7 @@ impl VectorDatabase {
                 [],
             )
             .map_err(|e| {
-                AetherError::config(format!("Failed to migrate facts to vec0: {}", e))
+                AlephError::config(format!("Failed to migrate facts to vec0: {}", e))
             })?;
 
             tracing::info!("Facts migration complete");
@@ -379,7 +379,7 @@ impl VectorDatabase {
     }
 
     /// Check if database needs migration due to dimension change
-    fn check_needs_migration(conn: &Connection) -> Result<bool, AetherError> {
+    fn check_needs_migration(conn: &Connection) -> Result<bool, AlephError> {
         // Check if schema_info table exists
         let table_exists: bool = conn
             .query_row(

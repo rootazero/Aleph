@@ -32,8 +32,8 @@ use tracing::{debug, error, info};
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::providers::GoogleVeoProvider;
-/// use aethecore::generation::GenerationProvider;
+/// use alephcore::generation::providers::GoogleVeoProvider;
+/// use alephcore::generation::GenerationProvider;
 ///
 /// let provider = GoogleVeoProvider::new(
 ///     "your-api-key",
@@ -67,7 +67,7 @@ impl GoogleVeoProvider {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::providers::GoogleVeoProvider;
+    /// use alephcore::generation::providers::GoogleVeoProvider;
     ///
     /// // Default configuration
     /// let provider = GoogleVeoProvider::new("api-key", None, None);

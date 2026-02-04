@@ -8,7 +8,7 @@
 
 ## Overview
 
-This design adds three core capabilities to complete Aether's **Sub-Agent Orchestration + Authentication Management + Lifecycle Control** loop:
+This design adds three core capabilities to complete Aleph's **Sub-Agent Orchestration + Authentication Management + Lifecycle Control** loop:
 
 1. **SessionsSpawnTool** - Independent tool for spawning child sessions with model/thinking overrides
 2. **AuthProfile Manager** - Hybrid storage architecture for API key management
@@ -18,7 +18,7 @@ This design adds three core capabilities to complete Aether's **Sub-Agent Orches
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Aether Gateway                           │
+│                        Aleph Gateway                           │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
@@ -150,7 +150,7 @@ Key insight: **Rate Limit is per-Key, not per-Agent.** If Agent A exhausts Key #
 ### Three-Layer Storage Architecture
 
 ```
-~/.aether/
+~/.aleph/
 ├── profiles.toml                    # Global config (user-maintained)
 └── agents/
     └── {agent_id}/
@@ -162,13 +162,13 @@ In Memory:
 
 | Layer | Location | Content | Maintained By |
 |-------|----------|---------|---------------|
-| **Static Config** | `~/.aether/profiles.toml` | API Keys, Provider URLs | User manually |
+| **Static Config** | `~/.aleph/profiles.toml` | API Keys, Provider URLs | User manually |
 | **Runtime State** | Memory `Arc<RwLock>` | Cooldown, Rate Limit | Auto, not persisted |
-| **Persistent Stats** | `~/.aether/agents/{id}/state.json` | Token usage, Budget | Auto, per-agent |
+| **Persistent Stats** | `~/.aleph/agents/{id}/state.json` | Token usage, Budget | Auto, per-agent |
 
 ### Global Config Definition
 
-**File:** `~/.aether/profiles.toml`
+**File:** `~/.aleph/profiles.toml`
 
 ```toml
 [profiles.anthropic_main]
@@ -210,7 +210,7 @@ pub type RuntimeStatusMap = DashMap<String, RuntimeStatus>;
 
 ### Per-Agent Persistent Stats
 
-**File:** `~/.aether/agents/{agent_id}/state.json`
+**File:** `~/.aleph/agents/{agent_id}/state.json`
 
 ```rust
 #[derive(Serialize, Deserialize, Default)]
@@ -292,7 +292,7 @@ impl AuthProfileManager {
 **Choice: EventBus Integration (Option C)**
 
 Rationale:
-- **Unified "Stream" Philosophy** — Aether's core is Streaming; Run completion is naturally an event
+- **Unified "Stream" Philosophy** — Aleph's core is Streaming; Run completion is naturally an event
 - **Multi-Subscriber Support** — CLI, GUI, Logs can all subscribe to the same run's events
 - **Solves Message Queueing** — `queueEmbeddedPiMessage` becomes just another event type
 
@@ -767,7 +767,7 @@ Phase 5: Testing & Documentation
 ### Config Schema Extension
 
 ```toml
-# ~/.aether/config.toml new fields
+# ~/.aleph/config.toml new fields
 
 [agents.defaults.subagents]
 allow_agents = ["*"]  # or ["translator", "coder"]
@@ -779,7 +779,7 @@ default_timeout_seconds = 300
 
 ## Summary
 
-This design completes Aether's sub-agent orchestration capabilities:
+This design completes Aleph's sub-agent orchestration capabilities:
 
 | Component | Decision | Key Benefit |
 |-----------|----------|-------------|

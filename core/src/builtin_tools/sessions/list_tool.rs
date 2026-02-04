@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::gateway::context::GatewayContext;
 use crate::gateway::session_manager::{SessionMetadata, StoredMessage};
 use crate::routing::session_key::SessionKey;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 /// Arguments for the sessions_list tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -139,7 +139,7 @@ impl SessionsListTool {
 }
 
 #[async_trait]
-impl AetherTool for SessionsListTool {
+impl AlephTool for SessionsListTool {
     const NAME: &'static str = "sessions_list";
     const DESCRIPTION: &'static str =
         "List sessions accessible to this agent. Use to discover other sessions for cross-session communication.";
@@ -174,7 +174,7 @@ impl AetherTool for SessionsListTool {
             .map_err(|e| {
                 let msg = format!("Failed to list sessions: {}", e);
                 notify_tool_result(Self::NAME, &msg, false);
-                crate::error::AetherError::other(msg)
+                crate::error::AlephError::other(msg)
             })?;
 
         debug!(total_sessions = all_sessions.len(), "Raw session list retrieved");
@@ -409,7 +409,7 @@ mod tests {
             message_limit: None,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(result.count, 0);
         assert!(result.sessions.is_empty());
     }
@@ -435,7 +435,7 @@ mod tests {
             message_limit: None,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(result.count, 2);
     }
 
@@ -462,7 +462,7 @@ mod tests {
             message_limit: None,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(result.count, 1);
         assert_eq!(result.sessions[0].kind, "task");
     }
@@ -487,7 +487,7 @@ mod tests {
             message_limit: None,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(result.count, 3);
     }
 
@@ -529,7 +529,7 @@ mod tests {
             message_limit: None,
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         // Should only see "main" sessions, not "work"
         assert_eq!(result.count, 1);
         assert!(result.sessions[0].key.contains("main"));
@@ -555,7 +555,7 @@ mod tests {
             message_limit: Some(10),
         };
 
-        let result = AetherTool::call(&tool, args).await.unwrap();
+        let result = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(result.count, 1);
 
         let session = &result.sessions[0];
@@ -570,7 +570,7 @@ mod tests {
         let context = create_test_context(temp.path().to_path_buf());
         let tool = SessionsListTool::new(context, "main");
 
-        let def = AetherTool::definition(&tool);
+        let def = AlephTool::definition(&tool);
         assert_eq!(def.name, "sessions_list");
         assert!(!def.description.is_empty());
     }

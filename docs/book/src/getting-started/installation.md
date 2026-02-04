@@ -1,6 +1,6 @@
 # Installation
 
-This guide covers installing Aether on your system.
+This guide covers installing Aleph on your system.
 
 ## Prerequisites
 
@@ -18,10 +18,10 @@ git clone https://github.com/anthropics/aether.git
 cd aether
 
 # Build the core library and CLI
-cargo build --release -p aethecore --features gateway
+cargo build --release -p alephcore --features gateway
 
 # Install the CLI
-cargo install --path core --bin aether-gateway
+cargo install --path core --bin aleph-gateway
 ```
 
 ### Using Cargo
@@ -49,15 +49,15 @@ aether health
 
 ## Directory Structure
 
-Aether creates the following directories:
+Aleph creates the following directories:
 
 | Path | Purpose |
 |------|---------|
-| `~/.aether/` | Main configuration directory |
-| `~/.aether/config.json` | Primary configuration file |
-| `~/.aether/sessions/` | SQLite session databases |
-| `~/.aether/logs/` | Application logs |
-| `~/.aether/plugins/` | Installed plugins |
+| `~/.aleph/` | Main configuration directory |
+| `~/.aleph/config.json` | Primary configuration file |
+| `~/.aleph/sessions/` | SQLite session databases |
+| `~/.aleph/logs/` | Application logs |
+| `~/.aleph/plugins/` | Installed plugins |
 
 ## Next Steps
 

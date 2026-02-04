@@ -1,4 +1,4 @@
-# Aether
+# Aleph
 
 > *"This is the first time in human history that a machine's soul has been given a body."*
 > — Ghost in the Shell
@@ -46,7 +46,7 @@ cargo install aether-cli
 aether wizard
 
 # Start chatting
-aether chat "Hello, Aether!"
+aether chat "Hello, Aleph!"
 ```
 
 ## Documentation Sections
@@ -63,7 +63,7 @@ aether chat "Hello, Aether!"
 
 ## Philosophy
 
-Aether is built on a five-layer emergence architecture:
+Aleph is built on a five-layer emergence architecture:
 
 1. **Sea of Knowledge** - AI's pre-training foundation
 2. **Domain Classification** - Organized expertise

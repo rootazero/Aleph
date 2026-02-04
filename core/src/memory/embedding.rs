@@ -2,7 +2,7 @@
 ///
 /// This module provides local embedding inference for semantic similarity search
 /// using the bge-small-zh-v1.5 model optimized for Chinese text.
-use crate::error::AetherError;
+use crate::error::AlephError;
 use fastembed::{EmbeddingModel as FastEmbedModel, InitOptions, TextEmbedding};
 use once_cell::sync::OnceCell;
 use std::path::PathBuf;
@@ -28,7 +28,7 @@ impl EmbeddingModel {
     ///
     /// # Returns
     /// * `Result<Self>` - New EmbeddingModel instance
-    pub fn new(model_dir: PathBuf) -> Result<Self, AetherError> {
+    pub fn new(model_dir: PathBuf) -> Result<Self, AlephError> {
         Ok(Self {
             model: OnceCell::new(),
             model_path: model_dir,
@@ -37,26 +37,26 @@ impl EmbeddingModel {
 
     /// Get default model directory path
     ///
-    /// Returns the path to fastembed cache directory: ~/.aether/models/fastembed
+    /// Returns the path to fastembed cache directory: ~/.aleph/models/fastembed
     /// This is where model files will be downloaded and cached.
     ///
     /// Cross-platform support:
-    /// - Unix: ~/.aether/models/fastembed
+    /// - Unix: ~/.aleph/models/fastembed
     /// - Windows: %USERPROFILE%\.aether\models\fastembed
-    pub fn get_default_model_path() -> Result<PathBuf, AetherError> {
+    pub fn get_default_model_path() -> Result<PathBuf, AlephError> {
         Ok(crate::utils::paths::get_models_dir()?.join("fastembed"))
     }
 
     /// Get the fastembed cache directory
     ///
     /// Creates the directory if it doesn't exist and returns the path.
-    fn get_cache_dir() -> Result<PathBuf, AetherError> {
+    fn get_cache_dir() -> Result<PathBuf, AlephError> {
         let cache_dir = Self::get_default_model_path()?;
 
         // Create directory if it doesn't exist
         if !cache_dir.exists() {
             std::fs::create_dir_all(&cache_dir).map_err(|e| {
-                AetherError::config(format!("Failed to create model cache directory: {}", e))
+                AlephError::config(format!("Failed to create model cache directory: {}", e))
             })?;
         }
 
@@ -64,7 +64,7 @@ impl EmbeddingModel {
     }
 
     /// Initialize fastembed model (lazy)
-    fn ensure_initialized(&self) -> Result<&TextEmbedding, AetherError> {
+    fn ensure_initialized(&self) -> Result<&TextEmbedding, AlephError> {
         self.model.get_or_try_init(|| {
             let cache_dir = Self::get_cache_dir()?;
             tracing::info!(
@@ -78,7 +78,7 @@ impl EmbeddingModel {
                     .with_show_download_progress(true),
             )
             .map_err(|e| {
-                AetherError::config(format!("Failed to initialize embedding model: {}", e))
+                AlephError::config(format!("Failed to initialize embedding model: {}", e))
             })
         })
     }
@@ -90,7 +90,7 @@ impl EmbeddingModel {
     ///
     /// # Returns
     /// * `Result<Vec<f32>>` - 512-dimensional embedding vector (normalized)
-    pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>, AetherError> {
+    pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>, AlephError> {
         use std::time::Instant;
 
         let start = Instant::now();
@@ -99,12 +99,12 @@ impl EmbeddingModel {
 
         let embeddings = model
             .embed(vec![text], None)
-            .map_err(|e| AetherError::config(format!("Embedding failed: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Embedding failed: {}", e)))?;
 
         let embedding = embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| AetherError::config("No embedding returned"))?;
+            .ok_or_else(|| AlephError::config("No embedding returned"))?;
 
         let duration = start.elapsed();
         tracing::debug!(
@@ -126,14 +126,14 @@ impl EmbeddingModel {
     }
 
     /// Embed multiple texts in batch
-    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AetherError> {
+    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
         let model = self.ensure_initialized()?;
 
         let texts_vec: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
 
         model
             .embed(texts_vec, None)
-            .map_err(|e| AetherError::config(format!("Batch embedding failed: {}", e)))
+            .map_err(|e| AlephError::config(format!("Batch embedding failed: {}", e)))
     }
 
     /// Get embedding dimension

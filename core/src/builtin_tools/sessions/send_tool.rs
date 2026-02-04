@@ -34,7 +34,7 @@ use crate::gateway::context::GatewayContext;
 use crate::gateway::event_emitter::NoOpEventEmitter;
 use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::router::SessionKey;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 
 use super::super::notify_tool_start;
 use super::helpers::parse_session_key;
@@ -452,9 +452,9 @@ fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> Sess
     }
 }
 
-/// Implementation of AetherTool trait for SessionsSendTool
+/// Implementation of AlephTool trait for SessionsSendTool
 #[async_trait]
-impl AetherTool for SessionsSendTool {
+impl AlephTool for SessionsSendTool {
     const NAME: &'static str = "sessions_send";
     const DESCRIPTION: &'static str =
         "Send a message to another session (same or different agent). \
@@ -613,7 +613,7 @@ mod tests {
             timeout_seconds: 30,
         };
 
-        let output = AetherTool::call(&tool, args).await.unwrap();
+        let output = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(output.status, SessionsSendStatus::Error);
         assert!(output.error.is_some());
         assert!(output.error.unwrap().contains("GatewayContext not configured"));

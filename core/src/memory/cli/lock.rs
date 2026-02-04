@@ -62,7 +62,7 @@ impl MemoryLock {
     ///
     /// # Arguments
     /// * `mode` - Read or Write lock
-    /// * `lock_path` - Path to the lock file (typically ~/.aether/memory.lock)
+    /// * `lock_path` - Path to the lock file (typically ~/.aleph/memory.lock)
     ///
     /// # Returns
     /// * `Ok(MemoryLock)` - Lock acquired successfully
@@ -139,7 +139,7 @@ impl MemoryLock {
         })
     }
 
-    /// Acquire a lock using the default lock path (~/.aether/memory.lock)
+    /// Acquire a lock using the default lock path (~/.aleph/memory.lock)
     pub fn acquire_default(mode: LockMode) -> Result<Self, LockError> {
         let lock_path = Self::default_lock_path()?;
         Self::acquire(mode, lock_path)

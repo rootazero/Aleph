@@ -71,7 +71,7 @@ pub struct PipelineResult {
 /// ## Example
 ///
 /// ```rust,ignore
-/// use aethecore::skill_evolution::{SolidificationPipeline, EvolutionTracker};
+/// use alephcore::skill_evolution::{SolidificationPipeline, EvolutionTracker};
 ///
 /// let tracker = Arc::new(EvolutionTracker::new("evolution.db")?);
 /// let pipeline = SolidificationPipeline::new(tracker);

@@ -408,7 +408,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 
 use super::types::{Spec, SpecMetadata, SpecTarget};
@@ -479,7 +479,7 @@ impl SpecWriter {
         let json_str = extract_json(response);
 
         let parsed: SpecResponse = serde_json::from_str(&json_str).map_err(|e| {
-            AetherError::ParseError(format!("Failed to parse spec response: {}", e))
+            AlephError::ParseError(format!("Failed to parse spec response: {}", e))
         })?;
 
         // Generate ID
@@ -622,7 +622,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tracing::{debug, info};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 
 use super::spec_writer::extract_json;
@@ -728,7 +728,7 @@ Target Language: {}
         let json_str = extract_json(response);
 
         let parsed: Vec<TestCaseResponse> = serde_json::from_str(&json_str).map_err(|e| {
-            AetherError::ParseError(format!("Failed to parse test cases: {}", e))
+            AlephError::ParseError(format!("Failed to parse test cases: {}", e))
         })?;
 
         let tests = parsed
@@ -873,7 +873,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use crate::thinking::ThinkLevel;
 
@@ -1056,7 +1056,7 @@ Evaluate against the acceptance criteria and test results.
 
         let parsed: EvaluationResponse = serde_json::from_str(&json_str).map_err(|e| {
             warn!(error = %e, response = %response, "Failed to parse evaluation");
-            AetherError::ParseError(format!("Failed to parse evaluation: {}", e))
+            AlephError::ParseError(format!("Failed to parse evaluation: {}", e))
         })?;
 
         Ok(EvaluationResult {

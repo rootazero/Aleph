@@ -19,7 +19,7 @@
 1. **80% 简单场景**：低电量提醒、开会静音等简单条件判断
 2. **20% 复杂场景**：历史回溯、趋势检测、模式识别（如"过去 2 小时编码无休息"）
 3. **安全性**：规则引擎必须沙箱化，防止无限循环、内存泄漏、恶意代码执行
-4. **性能**：轻量级，符合 Aether 的 Frugal Resources 原则
+4. **性能**：轻量级，符合 Aleph 的 Frugal Resources 原则
 5. **渐进增强**：从简单声明式规则平滑过渡到复杂表达式
 
 **设计哲学**：
@@ -50,7 +50,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    User Layer                            │
-│  ~/.aether/policies.yaml (YAML + Rhai Expressions)      │
+│  ~/.aleph/policies.yaml (YAML + Rhai Expressions)      │
 └────────────────────────┬────────────────────────────────┘
                          │
                          ↓
@@ -147,7 +147,7 @@ impl PolicyEngine {
 ### 2.1 YAML Schema
 
 ```yaml
-# ~/.aether/policies.yaml
+# ~/.aleph/policies.yaml
 
 - name: String               # 规则名称（必填）
   enabled: Boolean           # 是否启用（默认 true）
@@ -606,7 +606,7 @@ impl HistoryApi {
 - ❌ Hot Reload（Phase 5.2）
 
 **验收标准**：
-- 用户可编辑 `~/.aether/policies.yaml`
+- 用户可编辑 `~/.aleph/policies.yaml`
 - 重启 Daemon 后规则生效
 - 复杂规则（如 Smart Break Reminder）能正确触发
 
@@ -844,6 +844,6 @@ Phase 5 的设计完美平衡了以下目标：
 
 > "Logic belongs to Policy, not Infrastructure."
 
-通过将业务逻辑从 Rust 代码转移到 YAML 配置，Aether 真正成为了用户可塑造的智能助手，而非僵化的自动化工具。
+通过将业务逻辑从 Rust 代码转移到 YAML 配置，Aleph 真正成为了用户可塑造的智能助手，而非僵化的自动化工具。
 
 **下一步**：创建 Phase 5 实施计划（Implementation Plan）。

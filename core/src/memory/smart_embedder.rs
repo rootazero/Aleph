@@ -11,7 +11,7 @@
 //! - Supports: 100+ languages including English, Chinese, Japanese, etc.
 //! - Size: ~470MB (downloaded on first use)
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -109,8 +109,8 @@ impl SmartEmbedder {
 
     /// Get the default cache directory for fastembed models
     ///
-    /// Returns: `~/.aether/models/fastembed/`
-    pub fn default_cache_dir() -> Result<PathBuf, AetherError> {
+    /// Returns: `~/.aleph/models/fastembed/`
+    pub fn default_cache_dir() -> Result<PathBuf, AlephError> {
         Ok(crate::utils::paths::get_models_dir()?.join("fastembed"))
     }
 
@@ -126,7 +126,7 @@ impl SmartEmbedder {
     /// # Returns
     ///
     /// A 384-dimensional embedding vector
-    pub async fn embed(&self, text: &str) -> Result<Vec<f32>, AetherError> {
+    pub async fn embed(&self, text: &str) -> Result<Vec<f32>, AlephError> {
         let mut state = self.state.lock().await;
         self.ensure_loaded(&mut state)?;
         state.last_used = Instant::now();
@@ -134,12 +134,12 @@ impl SmartEmbedder {
         let model = state.model.as_ref().unwrap();
         let embeddings = model
             .embed(vec![text.to_string()], None)
-            .map_err(|e| AetherError::config(format!("Embedding failed: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Embedding failed: {}", e)))?;
 
         embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| AetherError::config("No embedding returned"))
+            .ok_or_else(|| AlephError::config("No embedding returned"))
     }
 
     /// Generate embeddings for multiple texts in batch
@@ -153,7 +153,7 @@ impl SmartEmbedder {
     /// # Returns
     ///
     /// A vector of 384-dimensional embedding vectors
-    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AetherError> {
+    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -167,7 +167,7 @@ impl SmartEmbedder {
 
         model
             .embed(texts_owned, None)
-            .map_err(|e| AetherError::config(format!("Batch embedding failed: {}", e)))
+            .map_err(|e| AlephError::config(format!("Batch embedding failed: {}", e)))
     }
 
     /// Check if the model is currently loaded
@@ -195,7 +195,7 @@ impl SmartEmbedder {
     }
 
     /// Ensure the model is loaded
-    fn ensure_loaded(&self, state: &mut InnerState) -> Result<(), AetherError> {
+    fn ensure_loaded(&self, state: &mut InnerState) -> Result<(), AlephError> {
         if state.model.is_none() {
             tracing::info!(
                 model = self.model_name(),
@@ -206,7 +206,7 @@ impl SmartEmbedder {
             // Create cache directory if needed
             if !self.cache_dir.exists() {
                 std::fs::create_dir_all(&self.cache_dir).map_err(|e| {
-                    AetherError::config(format!("Failed to create cache directory: {}", e))
+                    AlephError::config(format!("Failed to create cache directory: {}", e))
                 })?;
             }
 
@@ -215,7 +215,7 @@ impl SmartEmbedder {
                     .with_cache_dir(self.cache_dir.clone())
                     .with_show_download_progress(true),
             )
-            .map_err(|e| AetherError::config(format!("Failed to load embedding model: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to load embedding model: {}", e)))?;
 
             tracing::info!(
                 model = self.model_name(),

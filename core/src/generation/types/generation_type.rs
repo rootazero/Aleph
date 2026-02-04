@@ -5,7 +5,7 @@
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::GenerationType;
+/// use alephcore::generation::GenerationType;
 ///
 /// let gen_type = GenerationType::Image;
 /// assert!(gen_type.supports_style());

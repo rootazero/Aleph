@@ -1,4 +1,4 @@
-# Aether 热键优化 - Ultrathink 改进报告
+# Aleph 热键优化 - Ultrathink 改进报告
 
 ## 问题背景
 
@@ -121,7 +121,7 @@ DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
 ```
 用户操作: 选中"hello" + 按热键`
 
-Aether内部:
+Aleph内部:
 1. 💾 保存原剪切板: "https://example.com"（用户1小时前复制的）
 2. 📋 Cmd+C → 剪切板变化 → 检测到选中文本
 3. 🤖 AI处理"hello"
@@ -138,7 +138,7 @@ Aether内部:
 ```
 用户操作: 光标在文档中 + 按热键`
 
-Aether内部:
+Aleph内部:
 1. 💾 保存原剪切板: "user@example.com"
 2. 📋 Cmd+C → 剪切板无变化 → 检测到无选中文本
 3. 🔄 自动Cmd+A全选整个文档
@@ -158,7 +158,7 @@ Aether内部:
 ```
 用户操作: 在Finder中按热键`
 
-Aether内部:
+Aleph内部:
 1. 💾 保存原剪切板: nil（空）
 2. 📋 Cmd+C → 无变化
 3. 🔄 Cmd+A → Cmd+C → 依然无变化

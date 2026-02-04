@@ -1,7 +1,7 @@
 # UnifiedSaveBar Manual Testing Guide
 
 ## Application Status
-✅ Aether is running (PID: 78061)
+✅ Aleph is running (PID: 78061)
 
 ## Test Checklist for BehaviorSettingsView
 

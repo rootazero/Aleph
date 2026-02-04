@@ -12,7 +12,7 @@ use super::download::{download_file, set_executable};
 #[cfg(target_os = "linux")]
 use super::download::extract_tar_xz;
 use super::manager::{RuntimeManager, UpdateInfo};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{debug, info};
@@ -73,17 +73,17 @@ impl FfmpegRuntime {
 
         tokio::task::spawn_blocking(move || {
             let file = std::fs::File::open(&zip_path_clone).map_err(|e| {
-                AetherError::runtime("ffmpeg", format!("Failed to open zip: {}", e))
+                AlephError::runtime("ffmpeg", format!("Failed to open zip: {}", e))
             })?;
 
             let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-                AetherError::runtime("ffmpeg", format!("Failed to read zip: {}", e))
+                AlephError::runtime("ffmpeg", format!("Failed to read zip: {}", e))
             })?;
 
             // Find ffmpeg binary - handle various archive structures
             for i in 0..archive.len() {
                 let mut entry = archive.by_index(i).map_err(|e| {
-                    AetherError::runtime("ffmpeg", format!("Failed to read zip entry: {}", e))
+                    AlephError::runtime("ffmpeg", format!("Failed to read zip entry: {}", e))
                 })?;
 
                 let name = entry.name().to_string();
@@ -101,15 +101,15 @@ impl FfmpegRuntime {
                     // Found the binary
                     let mut contents = Vec::new();
                     entry.read_to_end(&mut contents).map_err(|e| {
-                        AetherError::runtime("ffmpeg", format!("Failed to extract: {}", e))
+                        AlephError::runtime("ffmpeg", format!("Failed to extract: {}", e))
                     })?;
 
                     std::fs::write(&binary_path, contents).map_err(|e| {
-                        AetherError::runtime("ffmpeg", format!("Failed to write binary: {}", e))
+                        AlephError::runtime("ffmpeg", format!("Failed to write binary: {}", e))
                     })?;
 
                     debug!(path = ?binary_path, "Extracted ffmpeg binary");
-                    return Ok::<(), AetherError>(());
+                    return Ok::<(), AlephError>(());
                 }
             }
 
@@ -124,13 +124,13 @@ impl FfmpegRuntime {
                 }
             }
 
-            Err(AetherError::runtime(
+            Err(AlephError::runtime(
                 "ffmpeg",
                 "ffmpeg binary not found in archive",
             ))
         })
         .await
-        .map_err(|e| AetherError::runtime("ffmpeg", format!("Task join error: {}", e)))??;
+        .map_err(|e| AlephError::runtime("ffmpeg", format!("Task join error: {}", e)))??;
 
         // Set executable permission
         set_executable(&self.binary_path())?;
@@ -155,7 +155,7 @@ impl FfmpegRuntime {
             // Create a temp directory for extraction
             let temp_dir = install_dir.join("temp_extract");
             std::fs::create_dir_all(&temp_dir).map_err(|e| {
-                AetherError::runtime("ffmpeg", format!("Failed to create temp dir: {}", e))
+                AlephError::runtime("ffmpeg", format!("Failed to create temp dir: {}", e))
             })?;
 
             // Extract tar.xz with strip_components=1 to remove top-level directory
@@ -165,11 +165,11 @@ impl FfmpegRuntime {
             let extracted_ffmpeg = temp_dir.join("ffmpeg");
             if extracted_ffmpeg.exists() {
                 std::fs::rename(&extracted_ffmpeg, &binary_path).map_err(|e| {
-                    AetherError::runtime("ffmpeg", format!("Failed to move ffmpeg binary: {}", e))
+                    AlephError::runtime("ffmpeg", format!("Failed to move ffmpeg binary: {}", e))
                 })?;
                 debug!(path = ?binary_path, "Extracted ffmpeg binary from tar.xz");
             } else {
-                return Err(AetherError::runtime(
+                return Err(AlephError::runtime(
                     "ffmpeg",
                     "ffmpeg binary not found in tar.xz archive",
                 ));
@@ -178,10 +178,10 @@ impl FfmpegRuntime {
             // Cleanup temp directory
             let _ = std::fs::remove_dir_all(&temp_dir);
 
-            Ok::<(), AetherError>(())
+            Ok::<(), AlephError>(())
         })
         .await
-        .map_err(|e| AetherError::runtime("ffmpeg", format!("Task join error: {}", e)))??;
+        .map_err(|e| AlephError::runtime("ffmpeg", format!("Task join error: {}", e)))??;
 
         // Set executable permission
         set_executable(&self.binary_path())?;
@@ -217,7 +217,7 @@ impl RuntimeManager for FfmpegRuntime {
 
         let install_dir = self.install_dir();
         tokio::fs::create_dir_all(&install_dir).await.map_err(|e| {
-            AetherError::runtime("ffmpeg", format!("Failed to create directory: {}", e))
+            AlephError::runtime("ffmpeg", format!("Failed to create directory: {}", e))
         })?;
 
         // Platform-specific installation

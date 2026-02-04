@@ -1,6 +1,6 @@
 # Agent执行模式设计
 
-> 解决Aether AI助手过度询问问题，使其具备真正的Agent能力
+> 解决Aleph AI助手过度询问问题，使其具备真正的Agent能力
 
 ## 问题背景
 
@@ -231,7 +231,7 @@ impl DefaultsResolver {
 ### 第一层：用户偏好存储
 
 ```toml
-# ~/.aether/preferences.toml（自动生成）
+# ~/.aleph/preferences.toml（自动生成）
 [file_organize]
 default_method = "by_extension"    # 用户上次选择
 conflict_resolution = "rename"     # 冲突时自动重命名

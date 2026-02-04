@@ -8,7 +8,7 @@
 > - `core/src/thinker/prompt_builder.rs` - PromptConfig.skill_mode
 > - [SKILLS.md](./SKILLS.md) - 用户文档
 
-基于 Claude 官方 Skills 规范，重新设计 Aether 的 Skills 功能。
+基于 Claude 官方 Skills 规范，重新设计 Aleph 的 Skills 功能。
 
 ## 1. 问题分析
 
@@ -18,7 +18,7 @@
 
 **根因分析**：
 
-| 方面 | Claude 官方架构 | Aether 当前实现 | 问题 |
+| 方面 | Claude 官方架构 | Aleph 当前实现 | 问题 |
 |------|----------------|-----------------|------|
 | 加载模式 | 渐进式 (Progressive Disclosure) | 一次性全量注入 | Token 浪费 |
 | 加载时机 | Agent 主动读取 | 系统被动注入 | 心智模型错误 |
@@ -49,7 +49,7 @@
 └─────────────────────────────────────────────────────┘
 
 
-Aether 当前：系统被动注入
+Aleph 当前：系统被动注入
 ┌─────────────────────────────────────────────────────┐
 │ System Prompt + Context Information:               │
 │   ## Skill Instructions                            │  ← 作为上下文注入
@@ -94,7 +94,7 @@ Agent 通过工具调用访问这些文件：
 2. **Agent 主动读取** - 通过工具调用获取完整指令
 3. **工具返回内容 = 任务指令** - Agent 将其视为必须执行的内容
 
-## 3. Aether 实现方案
+## 3. Aleph 实现方案
 
 ### 3.1 架构概览
 
@@ -125,7 +125,7 @@ Agent 通过工具调用访问这些文件：
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Skills Directory                            │
-│  ~/.aether/skills/                                       │
+│  ~/.aleph/skills/                                       │
 │  ├── refine-text/                                               │
 │  │   ├── SKILL.md                                               │
 │  │   └── examples/                                              │
@@ -339,7 +339,7 @@ pub struct SkillMetadata {
    └─ 发起工具调用
 
 4. ReadSkillTool 执行
-   ├─ 读取 ~/.aether/skills/refine-text/SKILL.md
+   ├─ 读取 ~/.aleph/skills/refine-text/SKILL.md
    ├─ 返回完整内容
    └─ ActionResult::ToolSuccess { output: { content: "..." } }
 

@@ -1,10 +1,10 @@
 # Permission Authorization Architecture
 
-This document describes Aether's permission system architecture for macOS.
+This document describes Aleph's permission system architecture for macOS.
 
 ## Overview
 
-Aether's permission system uses a **three-layer protection architecture** to eliminate crashes and restart loops:
+Aleph's permission system uses a **three-layer protection architecture** to eliminate crashes and restart loops:
 
 1. **Swift UI Layer** - Passive monitoring + waterfall guidance
 2. **Rust Core Layer** - Panic protection + permission pre-check
@@ -35,7 +35,7 @@ Aether's permission system uses a **three-layer protection architecture** to eli
 **Design**:
 - Step 1: Accessibility permission
 - Step 2: Input Monitoring permission (enabled only after Step 1)
-- "Enter Aether" button shown when both permissions granted
+- "Enter Aleph" button shown when both permissions granted
 - User manually clicks button to restart (not automatic)
 
 ### PermissionChecker (Swift)
@@ -47,7 +47,7 @@ Aether's permission system uses a **three-layer protection architecture** to eli
 - `hasInputMonitoringViaHID()` - Uses `IOHIDManager` for accurate detection
 - `openSystemSettings(for:)` - Deep links to specific permission panes
 
-### AetherCore Permission Pre-check (Rust)
+### AlephCore Permission Pre-check (Rust)
 
 **Location**: `Aether/core/src/core.rs`
 
@@ -55,7 +55,7 @@ Aether's permission system uses a **three-layer protection architecture** to eli
 - `has_input_monitoring_permission` field (set by Swift via UniFFI)
 - `set_input_monitoring_permission(granted: bool)` - UniFFI method
 - `start_listening()` checks permission before calling `rdev::listen()`
-- Returns `AetherError::PermissionDenied` if permission missing
+- Returns `AlephError::PermissionDenied` if permission missing
 
 ### rdev Panic Protection (Rust)
 
@@ -90,11 +90,11 @@ UI auto-progresses to Step 2 (Input Monitoring)
     |
 User grants Input Monitoring -> PermissionManager detects
     |
-"Enter Aether" button appears
+"Enter Aleph" button appears
     |
 User clicks button -> App restarts
     |
-App relaunches with permissions -> Initializes AetherCore
+App relaunches with permissions -> Initializes AlephCore
 ```
 
 ### Runtime Permission Check (Rust Layer)
@@ -118,7 +118,7 @@ App remains functional (degraded mode)
 1. **Passive Monitoring, No Auto-Restart**
    - PermissionManager only updates UI state
    - macOS Accessibility permission is real-time effective (no restart needed)
-   - User controls restart timing via "Enter Aether" button
+   - User controls restart timing via "Enter Aleph" button
 
 2. **Rust Core Panic Protection**
    - `catch_unwind()` prevents `rdev::listen()` panic from crashing app

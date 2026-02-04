@@ -1,6 +1,6 @@
 # Claude Agent Skills Integration
 
-Aether supports the [Claude Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) open standard, enabling users to extend AI capabilities through structured instruction injection.
+Aleph supports the [Claude Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) open standard, enabling users to extend AI capabilities through structured instruction injection.
 
 ## Table of Contents
 
@@ -33,7 +33,7 @@ Claude Agent Skills are **not executable code** but rather **structured instruct
 
 ## Progressive Disclosure Architecture
 
-Aether implements Claude's official **Progressive Disclosure** pattern for skills:
+Aleph implements Claude's official **Progressive Disclosure** pattern for skills:
 
 ### Three-Level Loading
 
@@ -87,7 +87,7 @@ Agent: "I'll use the refine-text skill"
 
 ## Hybrid Mode
 
-Aether uses a **hybrid approach** that combines the best of both modes:
+Aleph uses a **hybrid approach** that combines the best of both modes:
 
 ### 1. Slash Command Mode (Pre-load)
 
@@ -241,7 +241,7 @@ Use the `/skill` command followed by the skill name:
 
 ### Auto-Matching (Optional)
 
-When enabled in configuration, Aether can automatically match user intent to appropriate skills based on the skill's description.
+When enabled in configuration, Aleph can automatically match user intent to appropriate skills based on the skill's description.
 
 ```toml
 [skills]
@@ -253,7 +253,7 @@ auto_match_enabled = true  # Default: false
 
 ## Installing Skills
 
-Aether provides three methods to install Skills:
+Aleph provides three methods to install Skills:
 
 ### 1. GitHub URL Installation
 
@@ -288,7 +288,7 @@ my-skills.zip
 Copy skill folders directly to the skills directory:
 
 ```bash
-~/.aether/skills/
+~/.aleph/skills/
 ├── skill-name-1/
 │   └── SKILL.md
 ├── skill-name-2/
@@ -311,10 +311,10 @@ Navigate to **Settings > Skills** to:
 
 ### File System
 
-Skills are stored in `~/.aether/skills/`. Each skill has its own directory:
+Skills are stored in `~/.aleph/skills/`. Each skill has its own directory:
 
 ```
-~/.aether/skills/
+~/.aleph/skills/
 ├── refine-text/
 │   └── SKILL.md
 ├── translate/
@@ -357,7 +357,7 @@ To edit a skill, modify the `SKILL.md` file directly. Changes take effect immedi
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Skills Directory                             │
-│  ~/.aether/skills/                                        │
+│  ~/.aleph/skills/                                        │
 │  ├── refine-text/                                                │
 │  │   ├── SKILL.md           # Level 2: Instructions             │
 │  │   └── EXAMPLES.md        # Level 3: Resources                │
@@ -396,7 +396,7 @@ To edit a skill, modify the `SKILL.md` file directly. Changes take effect immedi
    └─ Issues tool call
 
 4. ReadSkillTool executes
-   ├─ Read ~/.aether/skills/refine-text/SKILL.md
+   ├─ Read ~/.aleph/skills/refine-text/SKILL.md
    ├─ Return full content
    └─ ActionResult::ToolSuccess { output: { content: "..." } }
 
@@ -451,7 +451,7 @@ auto_match_enabled = false  # Enable automatic skill matching (default: false)
 ### Directory Structure
 
 ```
-~/.aether/
+~/.aleph/
 ├── config.toml
 ├── skills/
 │   ├── refine-text/
@@ -467,7 +467,7 @@ auto_match_enabled = false  # Enable automatic skill matching (default: false)
 
 ## Built-in Skills
 
-Aether includes three built-in skills that are installed on first launch:
+Aleph includes three built-in skills that are installed on first launch:
 
 ### refine-text
 
@@ -512,13 +512,13 @@ Aether includes three built-in skills that are installed on first launch:
 ### Step 1: Create Directory
 
 ```bash
-mkdir -p ~/.aether/skills/my-skill
+mkdir -p ~/.aleph/skills/my-skill
 ```
 
 ### Step 2: Create SKILL.md
 
 ```bash
-cat > ~/.aether/skills/my-skill/SKILL.md << 'EOF'
+cat > ~/.aleph/skills/my-skill/SKILL.md << 'EOF'
 ---
 name: my-skill
 description: Description of what this skill does.
@@ -564,7 +564,7 @@ The skill appears immediately in Settings > Skills and can be used with:
 **Symptoms**: `/skill <name>` returns "Skill not found"
 
 **Solutions**:
-1. Check skill exists in `~/.aether/skills/<name>/SKILL.md`
+1. Check skill exists in `~/.aleph/skills/<name>/SKILL.md`
 2. Verify SKILL.md has valid YAML frontmatter
 3. Refresh skills list in Settings > Skills
 4. Check logs for parsing errors
@@ -601,5 +601,5 @@ The skill appears immediately in Settings > Skills and can be used with:
 ---
 
 **Last Updated**: 2026-01-23
-**Implemented In**: Aether v0.1.0
+**Implemented In**: Aleph v0.1.0
 **OpenSpec Changes**: `add-skills-capability`, `skills-progressive-disclosure`

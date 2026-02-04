@@ -66,7 +66,7 @@ fn default_timeout() -> u64 {
 }
 
 fn default_user_data_dir() -> String {
-    "~/.aether/browser".to_string()
+    "~/.aleph/browser".to_string()
 }
 
 fn default_viewport_width() -> u32 {

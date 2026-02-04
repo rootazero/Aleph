@@ -3,29 +3,29 @@
 //! Self-implemented tool traits replacing rig-core dependency.
 //!
 //! This module provides:
-//! - `AetherTool`: Static dispatch trait for compile-time known tools
-//! - `AetherToolDyn`: Dynamic dispatch trait for runtime-loaded tools (MCP, plugins)
-//! - `AetherToolServer`: Tool server with hot-reload support
+//! - `AlephTool`: Static dispatch trait for compile-time known tools
+//! - `AlephToolDyn`: Dynamic dispatch trait for runtime-loaded tools (MCP, plugins)
+//! - `AlephToolServer`: Tool server with hot-reload support
 //!
 //! # Architecture
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │                    AetherTool (static)                       │
+//! │                    AlephTool (static)                       │
 //! │   Compile-time known tools with typed Args/Output           │
 //! │   Auto JSON Schema generation via schemars                   │
 //! └─────────────────────────────────┬───────────────────────────┘
 //!                                   │ Blanket impl
 //!                                   ▼
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │                   AetherToolDyn (dynamic)                    │
+//! │                   AlephToolDyn (dynamic)                    │
 //! │   Runtime dispatch with JSON Value args                      │
 //! │   Used by: MCP tools, plugin tools, hot-reloaded tools      │
 //! └─────────────────────────────────┬───────────────────────────┘
 //!                                   │
 //!                                   ▼
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │                   AetherToolServer                           │
+//! │                   AlephToolServer                           │
 //! │   Hot-reload enabled tool registry                           │
 //! │   Thread-safe add/remove/list/call operations               │
 //! └─────────────────────────────────────────────────────────────┘
@@ -38,5 +38,5 @@ mod traits;
 // Markdown skill system
 pub mod markdown_skill;
 
-pub use server::{AetherToolServer, AetherToolServerHandle, ToolUpdateInfo};
-pub use traits::{AetherTool, AetherToolDyn};
+pub use server::{AlephToolServer, AlephToolServerHandle, ToolUpdateInfo};
+pub use traits::{AlephTool, AlephToolDyn};

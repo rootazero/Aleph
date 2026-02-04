@@ -1,6 +1,6 @@
 //! package.json parser for Node.js plugins
 //!
-//! This module parses npm `package.json` files that contain an "aether" field
+//! This module parses npm `package.json` files that contain an "aleph" field
 //! for plugin metadata. This allows Node.js packages to function as Aether plugins.
 
 use super::types::{AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission};
@@ -151,8 +151,8 @@ struct AetherConfig {
 
 /// Parse a package.json file into a PluginManifest
 ///
-/// The package.json must have an "aether" field to be recognized as an Aether plugin.
-/// If no "aether" field is present, returns an error.
+/// The package.json must have an "aleph" field to be recognized as an Aether plugin.
+/// If no "aleph" field is present, returns an error.
 ///
 /// # Arguments
 /// * `path` - Path to the package.json file
@@ -189,7 +189,7 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
     let id = aether.id.unwrap_or_else(|| sanitize_npm_package_name(&pkg.name));
 
     // Validate plugin ID
-    super::aether_plugin::validate_plugin_id(&id).map_err(|e| {
+    super::aleph_plugin::validate_plugin_id(&id).map_err(|e| {
         ExtensionError::invalid_manifest(path, format!("Invalid plugin ID '{}': {}", id, e))
     })?;
 
@@ -252,7 +252,7 @@ fn sanitize_npm_package_name(name: &str) -> String {
     }
 
     // Use the shared sanitization logic
-    super::aether_plugin::sanitize_plugin_id(&stripped)
+    super::aleph_plugin::sanitize_plugin_id(&stripped)
 }
 
 #[cfg(test)]
@@ -266,7 +266,7 @@ mod tests {
             "version": "1.0.0",
             "description": "A test plugin",
             "main": "dist/index.js",
-            "aether": {}
+            "aleph": {}
         }"#;
 
         let manifest =
@@ -285,7 +285,7 @@ mod tests {
         let content = r#"{
             "name": "@org/my-plugin",
             "version": "2.0.0",
-            "aether": {
+            "aleph": {
                 "id": "custom-id",
                 "name": "Custom Plugin",
                 "entry": "src/main.js",
@@ -311,7 +311,7 @@ mod tests {
         let content = r#"{
             "name": "test-plugin",
             "author": "John Doe <john@example.com> (https://example.com)",
-            "aether": {}
+            "aleph": {}
         }"#;
 
         let manifest =
@@ -331,7 +331,7 @@ mod tests {
                 "name": "Jane Doe",
                 "email": "jane@example.com"
             },
-            "aether": {}
+            "aleph": {}
         }"#;
 
         let manifest =
@@ -348,7 +348,7 @@ mod tests {
         let content = r#"{
             "name": "test-plugin",
             "repository": "https://github.com/user/repo",
-            "aether": {}
+            "aleph": {}
         }"#;
 
         let manifest =
@@ -368,7 +368,7 @@ mod tests {
                 "type": "git",
                 "url": "https://github.com/user/repo.git"
             },
-            "aether": {}
+            "aleph": {}
         }"#;
 
         let manifest =
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn test_parse_package_json_missing_name() {
         let content = r#"{
-            "aether": {}
+            "aleph": {}
         }"#;
 
         let result = parse_package_json_content(content, Path::new("/test/package.json"));
@@ -408,7 +408,7 @@ mod tests {
     fn test_parse_package_json_config_schema() {
         let content = r#"{
             "name": "test-plugin",
-            "aether": {
+            "aleph": {
                 "configSchema": {
                     "type": "object",
                     "properties": {
@@ -454,7 +454,7 @@ mod tests {
         let content = r#"{
             "name": "@myorg/awesome-plugin",
             "version": "1.0.0",
-            "aether": {}
+            "aleph": {}
         }"#;
 
         let manifest =

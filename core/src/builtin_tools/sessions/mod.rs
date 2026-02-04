@@ -19,11 +19,11 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::builtin_tools::sessions::{SessionsListTool, SessionsListArgs};
-//! use aethecore::builtin_tools::sessions::{SessionsSendTool, SessionsSendArgs};
-//! use aethecore::builtin_tools::sessions::{SessionsSpawnTool, SessionsSpawnArgs};
-//! use aethecore::gateway::context::GatewayContext;
-//! use aethecore::tools::AetherTool;
+//! use alephcore::builtin_tools::sessions::{SessionsListTool, SessionsListArgs};
+//! use alephcore::builtin_tools::sessions::{SessionsSendTool, SessionsSendArgs};
+//! use alephcore::builtin_tools::sessions::{SessionsSpawnTool, SessionsSpawnArgs};
+//! use alephcore::gateway::context::GatewayContext;
+//! use alephcore::tools::AlephTool;
 //!
 //! // Create tools with gateway context
 //! let list_tool = SessionsListTool::new(gateway_context.clone(), "main");

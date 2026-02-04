@@ -4,7 +4,7 @@
 //!
 //! Manages the lifecycle of project-local scratchpad files.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use std::path::PathBuf;
 use tokio::fs;
 
@@ -76,10 +76,10 @@ impl ScratchpadManager {
     }
 
     /// Ensure the .aether directory exists
-    pub async fn ensure_dir(&self) -> Result<(), AetherError> {
+    pub async fn ensure_dir(&self) -> Result<(), AlephError> {
         fs::create_dir_all(self.aether_dir())
             .await
-            .map_err(|e| AetherError::other(format!("Failed to create .aether dir: {}", e)))
+            .map_err(|e| AlephError::other(format!("Failed to create .aether dir: {}", e)))
     }
 
     /// Check if scratchpad file exists
@@ -88,7 +88,7 @@ impl ScratchpadManager {
     }
 
     /// Check if scratchpad has meaningful content (not just template)
-    pub async fn has_content(&self) -> Result<bool, AetherError> {
+    pub async fn has_content(&self) -> Result<bool, AlephError> {
         if !self.exists() {
             return Ok(false);
         }
@@ -117,14 +117,14 @@ impl ScratchpadManager {
     }
 
     /// Read scratchpad content
-    pub async fn read(&self) -> Result<String, AetherError> {
+    pub async fn read(&self) -> Result<String, AlephError> {
         fs::read_to_string(self.scratchpad_path())
             .await
-            .map_err(|e| AetherError::other(format!("Failed to read scratchpad: {}", e)))
+            .map_err(|e| AlephError::other(format!("Failed to read scratchpad: {}", e)))
     }
 
     /// Write content to scratchpad (creates backup if configured)
-    pub async fn write(&self, content: &str) -> Result<(), AetherError> {
+    pub async fn write(&self, content: &str) -> Result<(), AlephError> {
         self.ensure_dir().await?;
 
         // Backup existing file if configured
@@ -137,17 +137,17 @@ impl ScratchpadManager {
 
         fs::write(self.scratchpad_path(), content)
             .await
-            .map_err(|e| AetherError::other(format!("Failed to write scratchpad: {}", e)))
+            .map_err(|e| AlephError::other(format!("Failed to write scratchpad: {}", e)))
     }
 
     /// Initialize scratchpad with default template
-    pub async fn initialize(&self, objective: Option<&str>) -> Result<(), AetherError> {
+    pub async fn initialize(&self, objective: Option<&str>) -> Result<(), AlephError> {
         let content = generate_scratchpad(objective, &self.session_id);
         self.write(&content).await
     }
 
     /// Append a note to the Notes section
-    pub async fn append_note(&self, note: &str) -> Result<(), AetherError> {
+    pub async fn append_note(&self, note: &str) -> Result<(), AlephError> {
         let mut content = if self.exists() {
             self.read().await?
         } else {
@@ -169,7 +169,7 @@ impl ScratchpadManager {
     }
 
     /// Update the objective
-    pub async fn set_objective(&self, objective: &str) -> Result<(), AetherError> {
+    pub async fn set_objective(&self, objective: &str) -> Result<(), AlephError> {
         let mut content = if self.exists() {
             self.read().await?
         } else {
@@ -190,7 +190,7 @@ impl ScratchpadManager {
     }
 
     /// Update plan items
-    pub async fn set_plan(&self, items: &[&str]) -> Result<(), AetherError> {
+    pub async fn set_plan(&self, items: &[&str]) -> Result<(), AlephError> {
         let mut content = if self.exists() {
             self.read().await?
         } else {
@@ -218,7 +218,7 @@ impl ScratchpadManager {
     }
 
     /// Mark a plan item as complete
-    pub async fn complete_item(&self, item_index: usize) -> Result<(), AetherError> {
+    pub async fn complete_item(&self, item_index: usize) -> Result<(), AlephError> {
         let mut content = self.read().await?;
 
         // Find and replace the nth "- [ ]" with "- [x]"
@@ -244,7 +244,7 @@ impl ScratchpadManager {
     }
 
     /// Clear scratchpad (reset to empty template)
-    pub async fn clear(&self) -> Result<(), AetherError> {
+    pub async fn clear(&self) -> Result<(), AlephError> {
         self.write(DEFAULT_TEMPLATE).await
     }
 

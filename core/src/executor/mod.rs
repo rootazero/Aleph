@@ -14,8 +14,8 @@
 //! # Usage
 //!
 //! ```ignore
-//! use aethecore::executor::{ExecutionResult, ExecutionContext, ExecutorError};
-//! use aethecore::executor::{SingleStepExecutor, SingleStepConfig};
+//! use alephcore::executor::{ExecutionResult, ExecutionContext, ExecutorError};
+//! use alephcore::executor::{SingleStepExecutor, SingleStepConfig};
 //!
 //! // Create executor
 //! let executor = SingleStepExecutor::new(config);

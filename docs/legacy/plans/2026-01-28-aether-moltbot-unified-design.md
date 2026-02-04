@@ -1,4 +1,4 @@
-# Aether → Rust Moltbot: Unified Architecture & Implementation Design
+# Aleph → Rust Moltbot: Unified Architecture & Implementation Design
 
 **Date:** 2026-01-28
 **Status:** Design Phase
@@ -13,7 +13,7 @@
 
 ## Executive Summary
 
-This document outlines a comprehensive architectural redesign of Aether, inspired by [Moltbot](https://github.com/moltbot/moltbot)'s proven design patterns. The redesign adopts Moltbot's WebSocket Gateway control plane while extending its capabilities with Aether's unique features.
+This document outlines a comprehensive architectural redesign of Aleph, inspired by [Moltbot](https://github.com/moltbot/moltbot)'s proven design patterns. The redesign adopts Moltbot's WebSocket Gateway control plane while extending its capabilities with Aleph's unique features.
 
 ### Core Objectives
 
@@ -62,7 +62,7 @@ This document outlines a comprehensive architectural redesign of Aether, inspire
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Aether Gateway (Rust)                             │
+│                    Aleph Gateway (Rust)                             │
 │                 WebSocket Server :18789                              │
 │                                                                      │
 │  ┌────────────────────────────────────────────────────────────────┐ │
@@ -163,7 +163,7 @@ This document outlines a comprehensive architectural redesign of Aether, inspire
   "id": "req-123",
   "method": "agent.run",
   "params": {
-    "input": "Hello, Aether",
+    "input": "Hello, Aleph",
     "session_key": "agent:main:main"
   }
 }
@@ -246,7 +246,7 @@ system.version {}
 
 **Agent Instance Isolation:**
 ```
-~/.aether/
+~/.aleph/
 ├── agents/
 │   ├── main/
 │   │   ├── workspace/          # Independent working directory
@@ -263,7 +263,7 @@ system.version {}
 
 **Configuration Example:**
 ```toml
-# ~/.aether/config.toml
+# ~/.aleph/config.toml
 
 [gateway]
 host = "127.0.0.1"
@@ -372,7 +372,7 @@ pub enum SessionMode {
 - **Expiration:** Delete ephemeral sessions after 24h, archived sessions after 30 days
 
 **Persistence:**
-- SQLite storage (`~/.aether/agents/{agent_id}/sessions.db`)
+- SQLite storage (`~/.aleph/agents/{agent_id}/sessions.db`)
 - Auto-compression (keep last 50 messages per session)
 - Cross-device sync via Gateway (Main sessions only)
 
@@ -722,7 +722,7 @@ pub async fn handle_health(&self) -> JsonRpcResult<HealthStatus> {
 ```bash
 $ aether doctor
 
-🔍 Aether Diagnostics
+🔍 Aleph Diagnostics
 
 ✓ Gateway process: Running (PID 12345)
 ✓ WebSocket connection: OK (ws://127.0.0.1:18789)
@@ -1225,7 +1225,7 @@ core/src/tools/            // ENHANCED: Local tools
 ├── cron.rs
 └── webhook.rs
 
-~/.aether/config.toml      // Multi-agent + extended features config
+~/.aleph/config.toml      // Multi-agent + extended features config
 ```
 
 **Key Tasks:**
@@ -1531,7 +1531,7 @@ fn bench_event_broadcast() {
 
 **Key Learnings from Moltbot:**
 
-| Aspect | Moltbot Approach | Aether Adaptation |
+| Aspect | Moltbot Approach | Aleph Adaptation |
 |--------|------------------|-------------------|
 | **Control Plane** | Single Gateway WebSocket | Direct port |
 | **Local-First** | 127.0.0.1 bind, optional Tailscale | Same |
@@ -1602,7 +1602,7 @@ aether/
 │       └── dispatcher/               # DEPRECATED/REMOVED
 ├── platforms/
 │   └── macos/
-│       └── Aether/Sources/
+│       └── Aleph/Sources/
 │           ├── Gateway/             # NEW: WebSocket client
 │           │   ├── GatewayClient.swift
 │           │   ├── ProtocolModels.swift
@@ -1618,7 +1618,7 @@ aether/
 ### Appendix D: Configuration Schema
 
 ```toml
-# ~/.aether/config.toml
+# ~/.aleph/config.toml
 
 [gateway]
 host = "127.0.0.1"

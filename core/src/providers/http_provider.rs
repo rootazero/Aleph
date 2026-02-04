@@ -60,11 +60,11 @@ impl HttpProvider {
         let request = self.adapter.build_request(&payload, &self.config, false)?;
         let response = request.send().await.map_err(|e| {
             if e.is_timeout() {
-                crate::error::AetherError::Timeout {
+                crate::error::AlephError::Timeout {
                     suggestion: Some("Request timed out. Try again or switch providers.".into()),
                 }
             } else {
-                crate::error::AetherError::network(format!("Network error: {}", e))
+                crate::error::AlephError::network(format!("Network error: {}", e))
             }
         })?;
         self.adapter.parse_response(response).await
@@ -78,7 +78,7 @@ impl HttpProvider {
     ) -> Result<BoxStream<'static, Result<String>>> {
         let request = self.adapter.build_request(&payload, &self.config, true)?;
         let response = request.send().await.map_err(|e| {
-            crate::error::AetherError::network(format!("Network error: {}", e))
+            crate::error::AlephError::network(format!("Network error: {}", e))
         })?;
         self.adapter.parse_stream(response).await
     }

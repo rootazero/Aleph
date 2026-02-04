@@ -1,4 +1,4 @@
-# Aether Cowork Mode Design
+# Aleph Cowork Mode Design
 
 > **Date**: 2026-01-15
 > **Status**: Draft
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-Aether Cowork is a **local-first AI task orchestration system** that goes beyond Claude's cloud-based Cowork offering. It enables complex, multi-step task execution with multi-model collaboration, file system access, code execution, and professional document generation—all while maintaining user privacy by running entirely on the local machine.
+Aleph Cowork is a **local-first AI task orchestration system** that goes beyond Claude's cloud-based Cowork offering. It enables complex, multi-step task execution with multi-model collaboration, file system access, code execution, and professional document generation—all while maintaining user privacy by running entirely on the local machine.
 
 ## Table of Contents
 
@@ -44,11 +44,11 @@ Claude's Cowork (research preview, January 2026) brings agentic capabilities to 
 - Single model (Claude only)
 - No cross-application workflows
 
-### Aether's Opportunity
+### Aleph's Opportunity
 
-Aether can deliver a superior experience by leveraging its existing infrastructure:
+Aleph can deliver a superior experience by leveraging its existing infrastructure:
 
-| Aether Advantage | Implementation |
+| Aleph Advantage | Implementation |
 |------------------|----------------|
 | Local-first privacy | All processing on user's machine |
 | Multi-model support | Route tasks to optimal AI models |
@@ -83,7 +83,7 @@ Aether can deliver a superior experience by leveraging its existing infrastructu
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                  Aether Cowork - Modular Architecture           │
+│                  Aleph Cowork - Modular Architecture           │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
@@ -113,7 +113,7 @@ Aether can deliver a superior experience by leveraging its existing infrastructu
 │                              │                                   │
 │                              ▼                                   │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │                 Existing Aether Core                        │ │
+│  │                 Existing Aleph Core                        │ │
 │  │  Provider │ Memory │ Search │ MCP │ Skills │ Router         │ │
 │  └────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
@@ -175,7 +175,7 @@ Each module has a single responsibility:
 Clear module boundaries with explicit dependencies:
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── cowork/
 │   ├── mod.rs           # Public API
 │   ├── planner/         # Task planning
@@ -610,9 +610,9 @@ reasoning = "claude-opus"
 
 ---
 
-## Comparison: Claude Cowork vs Aether Cowork
+## Comparison: Claude Cowork vs Aleph Cowork
 
-| Aspect | Claude Cowork | Aether Cowork |
+| Aspect | Claude Cowork | Aleph Cowork |
 |--------|--------------|---------------|
 | Execution | Remote VM sandbox | Local execution + optional sandbox |
 | AI Models | Claude only | Multi-model orchestration |
@@ -627,9 +627,9 @@ reasoning = "claude-opus"
 ## References
 
 - [Claude Cowork Documentation](https://support.claude.com/en/articles/13345190-getting-started-with-cowork)
-- [Aether Architecture](./ARCHITECTURE.md)
-- [Aether MCP Integration](./MCP_INTEGRATION.md)
-- [Aether Skills System](./SKILLS.md)
+- [Aleph Architecture](./ARCHITECTURE.md)
+- [Aleph MCP Integration](./MCP_INTEGRATION.md)
+- [Aleph Skills System](./SKILLS.md)
 
 ---
 

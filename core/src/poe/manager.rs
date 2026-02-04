@@ -118,9 +118,9 @@ impl PoeConfig {
 /// ## Example
 ///
 /// ```rust,ignore
-/// use aethecore::poe::{PoeManager, PoeConfig, PoeTask, SuccessManifest};
-/// use aethecore::poe::worker::AgentLoopWorker;
-/// use aethecore::poe::validation::CompositeValidator;
+/// use alephcore::poe::{PoeManager, PoeConfig, PoeTask, SuccessManifest};
+/// use alephcore::poe::worker::AgentLoopWorker;
+/// use alephcore::poe::validation::CompositeValidator;
 ///
 /// let worker = AgentLoopWorker::new("/workspace".into());
 /// let validator = CompositeValidator::new(provider);

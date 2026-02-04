@@ -3,7 +3,7 @@
 //! This module handles saving configuration to TOML files with atomic writes.
 
 use crate::config::Config;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::fs;
 use std::path::Path;
 use tracing::{debug, error, info};
@@ -23,7 +23,7 @@ impl Config {
     /// * `path` - Target path for config file
     ///
     /// # Errors
-    /// * `AetherError::InvalidConfig` - Failed to serialize or write config
+    /// * `AlephError::InvalidConfig` - Failed to serialize or write config
     ///
     /// # Example
     /// ```rust,ignore
@@ -44,7 +44,7 @@ impl Config {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 error!(directory = %parent.display(), error = %e, "Failed to create config directory");
-                AetherError::invalid_config(format!(
+                AlephError::invalid_config(format!(
                     "Failed to create config directory {}: {}",
                     parent.display(),
                     e
@@ -56,7 +56,7 @@ impl Config {
         // Serialize to TOML
         let contents = toml::to_string_pretty(self).map_err(|e| {
             error!(error = %e, "Failed to serialize config to TOML");
-            AetherError::invalid_config(format!("Failed to serialize config: {}", e))
+            AlephError::invalid_config(format!("Failed to serialize config: {}", e))
         })?;
 
         debug!(
@@ -71,7 +71,7 @@ impl Config {
         // Write to temp file
         fs::write(&temp_path, &contents).map_err(|e| {
             error!(temp_path = %temp_path.display(), error = %e, "Failed to write temp file");
-            AetherError::invalid_config(format!(
+            AlephError::invalid_config(format!(
                 "Failed to write temp config file {}: {}",
                 temp_path.display(),
                 e
@@ -88,7 +88,7 @@ impl Config {
                 .open(&temp_path)
                 .map_err(|e| {
                     error!(temp_path = %temp_path.display(), error = %e, "Failed to open temp file for fsync");
-                    AetherError::invalid_config(format!(
+                    AlephError::invalid_config(format!(
                         "Failed to open temp file for fsync: {}",
                         e
                     ))
@@ -97,7 +97,7 @@ impl Config {
             // Sync file data and metadata
             file.sync_all().map_err(|e| {
                 error!(temp_path = %temp_path.display(), error = %e, "Failed to fsync temp file");
-                AetherError::invalid_config(format!("Failed to fsync temp file: {}", e))
+                AlephError::invalid_config(format!("Failed to fsync temp file: {}", e))
             })?;
 
             debug!(temp_path = %temp_path.display(), "Fsynced temp file to disk");
@@ -113,7 +113,7 @@ impl Config {
             );
             // Clean up temp file on error
             let _ = fs::remove_file(&temp_path);
-            AetherError::invalid_config(format!(
+            AlephError::invalid_config(format!(
                 "Failed to rename temp config to {}: {}",
                 path.display(),
                 e
@@ -128,13 +128,13 @@ impl Config {
             let mut perms = fs::metadata(path)
                 .map_err(|e| {
                     error!(path = %path.display(), error = %e, "Failed to get file metadata");
-                    AetherError::invalid_config(format!("Failed to get file metadata: {}", e))
+                    AlephError::invalid_config(format!("Failed to get file metadata: {}", e))
                 })?
                 .permissions();
             perms.set_mode(0o600); // Owner read/write only
             fs::set_permissions(path, perms).map_err(|e| {
                 error!(path = %path.display(), error = %e, "Failed to set file permissions to 600");
-                AetherError::invalid_config(format!("Failed to set file permissions: {}", e))
+                AlephError::invalid_config(format!("Failed to set file permissions: {}", e))
             })?;
             debug!(path = %path.display(), "Set file permissions to 600 (owner read/write only)");
         }
@@ -150,7 +150,7 @@ impl Config {
 
     /// Save configuration to default path with atomic write
     ///
-    /// This is a convenience method that saves to ~/.aether/config.toml
+    /// This is a convenience method that saves to ~/.aleph/config.toml
     /// using atomic write operation.
     ///
     /// # Example
@@ -192,7 +192,7 @@ impl Config {
 
         // Read existing file
         let existing_contents = fs::read_to_string(&path).map_err(|e| {
-            AetherError::invalid_config(format!(
+            AlephError::invalid_config(format!(
                 "Failed to read config for incremental save: {}",
                 e
             ))
@@ -200,12 +200,12 @@ impl Config {
 
         // Parse existing as toml::Value
         let mut existing: toml::Value = toml::from_str(&existing_contents).map_err(|e| {
-            AetherError::invalid_config(format!("Failed to parse existing config: {}", e))
+            AlephError::invalid_config(format!("Failed to parse existing config: {}", e))
         })?;
 
         // Serialize current config to toml::Value
         let current: toml::Value = toml::Value::try_from(self).map_err(|e| {
-            AetherError::invalid_config(format!("Failed to serialize current config: {}", e))
+            AlephError::invalid_config(format!("Failed to serialize current config: {}", e))
         })?;
 
         // Only update specified sections
@@ -250,13 +250,13 @@ impl Config {
 
         // Serialize back to TOML string
         let new_contents = toml::to_string_pretty(&existing).map_err(|e| {
-            AetherError::invalid_config(format!("Failed to serialize updated config: {}", e))
+            AlephError::invalid_config(format!("Failed to serialize updated config: {}", e))
         })?;
 
         // Write with atomic operation (same as save_to_file)
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, &new_contents).map_err(|e| {
-            AetherError::invalid_config(format!("Failed to write temp config: {}", e))
+            AlephError::invalid_config(format!("Failed to write temp config: {}", e))
         })?;
 
         // fsync on Unix
@@ -266,19 +266,19 @@ impl Config {
                 .write(true)
                 .open(&temp_path)
                 .map_err(|e| {
-                    AetherError::invalid_config(format!(
+                    AlephError::invalid_config(format!(
                         "Failed to open temp file for fsync: {}",
                         e
                     ))
                 })?;
             file.sync_all()
-                .map_err(|e| AetherError::invalid_config(format!("Failed to fsync: {}", e)))?;
+                .map_err(|e| AlephError::invalid_config(format!("Failed to fsync: {}", e)))?;
         }
 
         // Atomic rename
         fs::rename(&temp_path, &path).map_err(|e| {
             let _ = fs::remove_file(&temp_path);
-            AetherError::invalid_config(format!("Failed to rename temp config: {}", e))
+            AlephError::invalid_config(format!("Failed to rename temp config: {}", e))
         })?;
 
         // Set permissions on Unix

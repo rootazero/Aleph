@@ -1,4 +1,4 @@
-# Aether Workspace Configuration
+# Aleph Workspace Configuration
 # This workspace manages the shared Rust core library for cross-platform builds
 
 [workspace]
@@ -10,7 +10,7 @@ exclude = ["platforms/tauri/src-tauri"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/user/aether"
+repository = "https://github.com/rootazero/Aleph"
 rust-version = "1.92"
 
 [workspace.dependencies]

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 /// WorldModel configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorldModelConfig {
-    /// State file path (default: ~/.aether/worldmodel_state.json)
+    /// State file path (default: ~/.aleph/worldmodel_state.json)
     pub state_path: Option<PathBuf>,
 
     /// Batch processing interval (seconds)

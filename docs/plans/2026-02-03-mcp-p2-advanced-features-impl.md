@@ -386,10 +386,10 @@ Replace the placeholder `listen_for_events` method with real implementation:
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(0)) // No timeout for SSE
             .build()
-            .map_err(|e| crate::error::AetherError::IoError(format!("Failed to create SSE client: {}", e)))?;
+            .map_err(|e| crate::error::AlephError::IoError(format!("Failed to create SSE client: {}", e)))?;
 
         let mut es = EventSource::new(client.get(&self.config.url))
-            .map_err(|e| crate::error::AetherError::IoError(format!("Failed to create EventSource: {}", e)))?;
+            .map_err(|e| crate::error::AlephError::IoError(format!("Failed to create EventSource: {}", e)))?;
 
         tracing::info!(
             server = %self.name,
@@ -591,7 +591,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::mcp::{
     SamplingContent, SamplingMessage, SamplingRequest, SamplingResponse, StopReason,
 };
@@ -639,7 +639,7 @@ impl SamplingHandler {
     pub async fn handle_request(&self, request_id: u64, params: Value) -> Result<SamplingResponse> {
         // Parse the request
         let request: SamplingRequest = serde_json::from_value(params).map_err(|e| {
-            AetherError::IoError(format!("Failed to parse sampling request: {}", e))
+            AlephError::IoError(format!("Failed to parse sampling request: {}", e))
         })?;
 
         tracing::debug!(
@@ -651,7 +651,7 @@ impl SamplingHandler {
         // Get callback
         let callback = self.callback.read().await;
         let cb = callback.as_ref().ok_or_else(|| {
-            AetherError::IoError("No sampling callback registered".to_string())
+            AlephError::IoError("No sampling callback registered".to_string())
         })?;
 
         // Invoke callback
@@ -906,7 +906,7 @@ Add field to `SseTransport`:
         }
 
         let response_json = serde_json::to_string(&response)
-            .map_err(|e| crate::error::AetherError::IoError(format!("Failed to serialize response: {}", e)))?;
+            .map_err(|e| crate::error::AlephError::IoError(format!("Failed to serialize response: {}", e)))?;
 
         let http_response = request
             .header("Content-Type", "application/json")
@@ -914,10 +914,10 @@ Add field to `SseTransport`:
             .timeout(self.config.timeout)
             .send()
             .await
-            .map_err(|e| crate::error::AetherError::IoError(format!("Failed to send response: {}", e)))?;
+            .map_err(|e| crate::error::AlephError::IoError(format!("Failed to send response: {}", e)))?;
 
         if !http_response.status().is_success() {
-            return Err(crate::error::AetherError::IoError(format!(
+            return Err(crate::error::AlephError::IoError(format!(
                 "Server returned error status: {}",
                 http_response.status()
             )));

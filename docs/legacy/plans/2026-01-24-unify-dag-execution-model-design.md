@@ -6,7 +6,7 @@
 
 ## Problem Statement
 
-Aether currently has two disconnected execution systems:
+Aleph currently has two disconnected execution systems:
 
 1. **Agent Loop** - Single-tool sequential execution via `Decision::UseTool`
 2. **DAG Scheduler** - Full parallel execution, but only via FFI
@@ -134,7 +134,7 @@ ActionResult::GraphResult { completed, failed, outputs }
 ```rust
 pub struct BatchExecute;
 
-impl AetherTool for BatchExecute {
+impl AlephTool for BatchExecute {
     const NAME: &'static str = "batch_execute";
     const DESCRIPTION: &'static str =
         "Execute multiple tools in a single call for better performance.";

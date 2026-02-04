@@ -16,7 +16,7 @@ use serde_json::Value;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use aethecore::config::diff_config;
+/// use alephcore::config::diff_config;
 ///
 /// let prev = Config { port: 8080, host: "localhost".to_string() };
 /// let next = Config { port: 9090, host: "localhost".to_string() };

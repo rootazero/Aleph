@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Aether",
+  "productName": "Aleph",
   "version": "0.1.0",
   "identifier": "com.aether.app",
   "build": {
@@ -29,7 +29,7 @@
       },
       {
         "label": "settings",
-        "title": "Aether Settings",
+        "title": "Aleph Settings",
         "url": "/settings.html",
         "width": 900,
         "height": 650,
@@ -57,9 +57,9 @@
     "targets": ["dmg", "nsis", "deb", "appimage"],
     "category": "Productivity",
     "shortDescription": "AI-powered system assistant",
-    "longDescription": "Aether is a system-level AI middleware that brings AI intelligence directly to your cursor without context switching.",
-    "copyright": "Copyright 2024 Aether Team",
-    "publisher": "Aether",
+    "longDescription": "Aleph is a system-level AI middleware that brings AI intelligence directly to your cursor without context switching.",
+    "copyright": "Copyright 2024 Aleph Team",
+    "publisher": "Aleph",
     "windows": {
       "nsis": {
         "installMode": "currentUser",

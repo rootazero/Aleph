@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Enhance Aether's event system, compaction strategy, and message structure to match OpenCode's capabilities.
+**Goal:** Enhance Aleph's event system, compaction strategy, and message structure to match OpenCode's capabilities.
 
 **Architecture:** Three-layer enhancement - GlobalBus for cross-agent events, Smart Compaction for intelligent context management, and enriched SessionPart types for detailed execution tracking.
 
@@ -12,7 +12,7 @@
 
 ## Background
 
-Based on analysis of OpenCode's implementation, Aether needs enhancements in:
+Based on analysis of OpenCode's implementation, Aleph needs enhancements in:
 
 1. **Event Bus** - Add GlobalBus for cross-agent communication + FFI subscription API
 2. **Smart Compaction** - Intelligent tool output truncation, turn protection, token budget management
@@ -83,7 +83,7 @@ pub struct GlobalBus {
 pub struct GlobalEvent {
     pub source_agent_id: String,
     pub source_session_id: String,
-    pub event: AetherEvent,
+    pub event: AlephEvent,
     pub timestamp: i64,
     pub sequence: u64,
 }
@@ -111,7 +111,7 @@ impl GlobalBus {
     }
 
     /// EventBus auto-broadcasts to GlobalBus on publish
-    pub async fn broadcast(&self, agent_id: &str, session_id: &str, event: AetherEvent) {
+    pub async fn broadcast(&self, agent_id: &str, session_id: &str, event: AlephEvent) {
         let global_event = GlobalEvent {
             source_agent_id: agent_id.into(),
             source_session_id: session_id.into(),
@@ -144,20 +144,20 @@ impl GlobalBus {
 
 ```swift
 // Swift API
-class AetherEventSubscription {
+class AlephEventSubscription {
     let subscriptionId: String
 
     static func subscribe(
         sessionId: String? = nil,       // nil = all sessions
         eventTypes: [EventType],        // Required
         handler: @escaping (AetherEvent) -> Void
-    ) -> AetherEventSubscription
+    ) -> AlephEventSubscription
 
     func unsubscribe()
 }
 
 // Usage Example
-let sub = AetherEventSubscription.subscribe(
+let sub = AlephEventSubscription.subscribe(
     sessionId: "session-123",
     eventTypes: [.toolCallStarted, .toolCallCompleted, .loopStop]
 ) { event in
@@ -202,7 +202,7 @@ pub trait EventSubscriptionHandler: Send + Sync {
 
 | Mode | Use Case | Implementation |
 |------|----------|----------------|
-| **Compile-time** | Basic events (session start/stop) | Existing `AetherEventHandler` trait methods |
+| **Compile-time** | Basic events (session start/stop) | Existing `AlephEventHandler` trait methods |
 | **Runtime** | Dynamic subscriptions (specific session's tool events) | `subscribe_events()` API |
 
 ---

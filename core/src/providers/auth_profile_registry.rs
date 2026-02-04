@@ -24,7 +24,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::providers::auth_profile_registry::AuthProfileProviderRegistry;
+//! use alephcore::providers::auth_profile_registry::AuthProfileProviderRegistry;
 //!
 //! // Create registry from auth profile store
 //! let store = AuthProfileStore::new();
@@ -45,7 +45,7 @@ use std::sync::{Arc, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::config::ProviderConfig;
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::providers::{
     auth_profiles::{
         AuthProfileCredential, AuthProfileFailureReason, AuthProfileStore,
@@ -156,11 +156,11 @@ impl AuthProfileProviderRegistry {
     fn create_provider_from_credential(
         &self,
         cred: &AuthProfileCredential,
-    ) -> Result<Arc<dyn AiProvider>, AetherError> {
+    ) -> Result<Arc<dyn AiProvider>, AlephError> {
         let api_key = cred.resolve_key().map(|s| s.to_string());
 
         if api_key.is_none() || api_key.as_ref().is_some_and(|k| k.is_empty()) {
-            return Err(AetherError::invalid_config("Auth profile has no valid key"));
+            return Err(AlephError::invalid_config("Auth profile has no valid key"));
         }
 
         let provider_config = ProviderConfig {
@@ -286,8 +286,8 @@ impl AiProvider for NoProfileProvider {
         _system_prompt: Option<&str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<String>> + Send + '_>> {
         Box::pin(async {
-            Err(AetherError::provider(
-                "No auth profiles configured. Please add an API key to ~/.aether/auth-profiles.json"
+            Err(AlephError::provider(
+                "No auth profiles configured. Please add an API key to ~/.aleph/auth-profiles.json"
             ))
         })
     }

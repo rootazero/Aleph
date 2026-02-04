@@ -23,8 +23,8 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::extension::{ChannelManager, PluginLoader};
-//! use aethecore::extension::registry::ChannelRegistration;
+//! use alephcore::extension::{ChannelManager, PluginLoader};
+//! use alephcore::extension::registry::ChannelRegistration;
 //!
 //! let mut manager = ChannelManager::new();
 //! let mut loader = PluginLoader::new();

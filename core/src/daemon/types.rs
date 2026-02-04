@@ -26,9 +26,9 @@ pub struct DaemonConfig {
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
-            socket_path: "~/.aether/daemon.sock".to_string(),
-            binary_path: PathBuf::from("~/.aether/bin/aether-daemon"),
-            log_dir: PathBuf::from("~/.aether/logs"),
+            socket_path: "~/.aleph/daemon.sock".to_string(),
+            binary_path: PathBuf::from("~/.aleph/bin/aether-daemon"),
+            log_dir: PathBuf::from("~/.aleph/logs"),
             nice_value: 10,
             soft_mem_limit: 512 * 1024 * 1024,  // 512MB
             hard_mem_limit: 1024 * 1024 * 1024, // 1GB

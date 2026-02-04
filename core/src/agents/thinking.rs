@@ -21,14 +21,14 @@
 //! # Example
 //!
 //! ```rust
-//! use aethecore::agents::thinking::{ThinkLevel, normalize_think_level};
+//! use alephcore::agents::thinking::{ThinkLevel, normalize_think_level};
 //!
 //! // Parse user input
 //! let level = normalize_think_level("ultrathink").unwrap();
 //! assert_eq!(level, ThinkLevel::High);
 //!
 //! // Check model support
-//! use aethecore::agents::thinking::supports_xhigh_thinking;
+//! use alephcore::agents::thinking::supports_xhigh_thinking;
 //! let supports = supports_xhigh_thinking("claude", "claude-opus-4-5-20251101");
 //! ```
 
@@ -187,7 +187,7 @@ impl std::str::FromStr for ThinkLevel {
 /// # Examples
 ///
 /// ```rust
-/// use aethecore::agents::thinking::{normalize_think_level, ThinkLevel};
+/// use alephcore::agents::thinking::{normalize_think_level, ThinkLevel};
 ///
 /// assert_eq!(normalize_think_level("think"), Some(ThinkLevel::Minimal));
 /// assert_eq!(normalize_think_level("ultrathink"), Some(ThinkLevel::High));

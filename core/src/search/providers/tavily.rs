@@ -1,4 +1,4 @@
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// Tavily AI search provider
 ///
@@ -42,7 +42,7 @@ struct TavilyResult {
 impl TavilyProvider {
     pub fn new(api_key: String) -> Result<Self> {
         if api_key.is_empty() {
-            return Err(AetherError::invalid_config("Tavily API key is required"));
+            return Err(AlephError::invalid_config("Tavily API key is required"));
         }
 
         Ok(Self {
@@ -50,7 +50,7 @@ impl TavilyProvider {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .map_err(|e| AetherError::network(e.to_string()))?,
+                .map_err(|e| AlephError::network(e.to_string()))?,
         })
     }
 }
@@ -82,17 +82,17 @@ impl SearchProvider for TavilyProvider {
             .timeout(std::time::Duration::from_secs(options.timeout_seconds))
             .send()
             .await
-            .map_err(|e| AetherError::network(e.to_string()))?;
+            .map_err(|e| AlephError::network(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Tavily API error: {}",
                 response.status()
             )));
         }
 
         let tavily_response: TavilyResponse = response.json().await.map_err(|e| {
-            AetherError::provider(format!("Failed to parse Tavily response: {}", e))
+            AlephError::provider(format!("Failed to parse Tavily response: {}", e))
         })?;
 
         // Convert to unified format

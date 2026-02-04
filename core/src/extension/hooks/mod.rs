@@ -13,7 +13,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::extension::hooks::{HookExecutor, HookContext};
+//! use alephcore::extension::hooks::{HookExecutor, HookContext};
 //!
 //! let executor = HookExecutor::new(hooks);
 //!

@@ -87,7 +87,7 @@ fn get_patterns() -> &'static PiiPatterns {
 ///
 /// # Examples
 /// ```rust,ignore
-/// use aethecore::utils::pii::scrub_pii;
+/// use alephcore::utils::pii::scrub_pii;
 ///
 /// let text = "Contact me at john@example.com or call 123-456-7890";
 /// let scrubbed = scrub_pii(text);

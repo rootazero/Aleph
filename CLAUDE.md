@@ -56,7 +56,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ### 🧠 Agent 设计思想：POE 架构
 
-Aether 的 Agent 核心采用 **POE (Principle-Operation-Evaluation)** 架构，融合双系统认知模型：
+Aleph 的 Agent 核心采用 **POE (Principle-Operation-Evaluation)** 架构，融合双系统认知模型：
 
 - **第一性原理** — 先定义成功契约，再开始执行
 - **启发式思考** — System 1 (快速直觉) + System 2 (深度推理) 协同
@@ -68,7 +68,7 @@ Aether 的 Agent 核心采用 **POE (Principle-Operation-Evaluation)** 架构，
 
 ## 🏗️ 架构概览
 
-**Aether 是一个自托管的个人 AI 助手**，通过 WebSocket Gateway 统一管理多渠道消息、Agent 执行、工具调用和记忆系统。
+**Aleph 是一个自托管的个人 AI 助手**，通过 WebSocket Gateway 统一管理多渠道消息、Agent 执行、工具调用和记忆系统。
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -107,7 +107,7 @@ Aether 的 Agent 核心采用 **POE (Principle-Operation-Evaluation)** 架构，
 | **Agent Loop** | Observe-Think-Act-Feedback 循环，状态机驱动 | [Agent System](docs/AGENT_SYSTEM.md) |
 | **Thinker** | LLM 交互，Thinking Levels，流式响应 | [Agent System](docs/AGENT_SYSTEM.md) |
 | **Dispatcher** | 任务编排，DAG 调度，多步执行 | [Agent System](docs/AGENT_SYSTEM.md) |
-| **Tool Server** | AetherTool trait，19+ 内置工具 | [Tool System](docs/TOOL_SYSTEM.md) |
+| **Tool Server** | AlephTool trait，19+ 内置工具 | [Tool System](docs/TOOL_SYSTEM.md) |
 | **Memory** | Facts DB + sqlite-vec，混合检索 (Vector + BM25) | [Memory System](docs/MEMORY_SYSTEM.md) |
 | **Extension** | WASM + Node.js 插件运行时 | [Extension System](docs/EXTENSION_SYSTEM.md) |
 | **Exec** | Shell 执行安全，审批工作流 | [Security](docs/SECURITY.md) |
@@ -120,7 +120,7 @@ Aether 的 Agent 核心采用 **POE (Principle-Operation-Evaluation)** 架构，
 
 ```
 aether/
-├── core/                           # Rust Core (aethecore crate)
+├── core/                           # Rust Core (alephcore crate)
 │   └── src/
 │       ├── gateway/                # WebSocket 控制面 (34 files)
 │       │   ├── handlers/           # RPC 方法处理器 (33 handlers)
@@ -131,7 +131,7 @@ aether/
 │       ├── dispatcher/             # 任务编排 (22 subdirs)
 │       ├── executor/               # 工具执行引擎
 │       ├── providers/              # AI 提供商 (21 files)
-│       ├── tools/                  # AetherTool trait
+│       ├── tools/                  # AlephTool trait
 │       ├── builtin_tools/          # 内置工具 (19 files)
 │       ├── memory/                 # 记忆系统 (18 files)
 │       ├── extension/              # 插件系统 (17 files)
@@ -185,10 +185,10 @@ aether/
 cd core && cargo build && cargo test
 
 # 启动 Gateway
-cargo run -p aethecore --features gateway
+cargo run -p alephcore --features gateway
 
 # macOS App
-cd platforms/macos && xcodegen generate && open Aether.xcodeproj
+cd platforms/macos && xcodegen generate && open Aleph.xcodeproj
 
 # Tauri App
 cd platforms/tauri && pnpm install && pnpm tauri dev
@@ -214,7 +214,7 @@ plugin-wasm = ["extism"]
 - Install Python package: cd ~/.uv/python3 && uv pip install <package>
 - Xcode generation: cd platforms/macos && xcodegen generate
 - Syntax validation: ~/.uv/python3/bin/python Scripts/verify_swift_syntax.py <file.swift>
-- Xcode build cache cleanup: rm -rf ~/Library/Developer/Xcode/DerivedData/Aether-*
+- Xcode build cache cleanup: rm -rf ~/Library/Developer/Xcode/DerivedData/(Aleph)-*
 - This project uses XcodeGen to manage the Xcode project. See docs/XCODEGEN_README.md for detailed workflow instructions.
 
 ### 分支策略
@@ -244,7 +244,7 @@ Example: `gateway: add WebSocket server foundation`
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 完整系统架构、模块依赖、数据流 |
 | [AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md) | Agent Loop、Thinker、Dispatcher |
 | [GATEWAY.md](docs/GATEWAY.md) | WebSocket 协议、RPC 方法、Channels |
-| [TOOL_SYSTEM.md](docs/TOOL_SYSTEM.md) | AetherTool trait、内置工具、开发指南 |
+| [TOOL_SYSTEM.md](docs/TOOL_SYSTEM.md) | AlephTool trait、内置工具、开发指南 |
 | [MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md) | Facts DB、混合检索、压缩策略 |
 | [EXTENSION_SYSTEM.md](docs/EXTENSION_SYSTEM.md) | WASM/Node.js 插件、manifest 格式 |
 | [SECURITY.md](docs/SECURITY.md) | Exec 审批、权限规则、allowlist |

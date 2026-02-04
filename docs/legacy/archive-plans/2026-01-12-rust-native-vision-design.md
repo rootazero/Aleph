@@ -4,7 +4,7 @@ Date: 2026-01-12
 
 ## Overview
 
-Implement native screen understanding capabilities in Aether using xcap + image crates for screen capture and AI providers (Claude/GPT-4o) for OCR and image understanding.
+Implement native screen understanding capabilities in Aleph using xcap + image crates for screen capture and AI providers (Claude/GPT-4o) for OCR and image understanding.
 
 ## Goals
 
@@ -86,8 +86,8 @@ dictionary VisionResult {
     u64 processing_time_ms;
 };
 
-// AetherCore new methods
-interface AetherCore {
+// AlephCore new methods
+interface AlephCore {
     // ... existing methods ...
 
     [Async]
@@ -195,7 +195,7 @@ impl VisionService {
 
         // Check if provider supports vision capability
         if !provider.capabilities().supports_vision {
-            return Err(AetherError::ProviderNotSupportsVision(provider.name()));
+            return Err(AlephError::ProviderNotSupportsVision(provider.name()));
         }
 
         provider.send_multimodal(image, prompt).await
@@ -309,7 +309,7 @@ class ScreenCaptureCoordinator: ObservableObject {
         guard let pngData = bitmap.representation(using: .png, properties: [:]) else { return }
 
         Task {
-            let result = try await AetherCore.shared.extractText(Array(pngData))
+            let result = try await AlephCore.shared.extractText(Array(pngData))
 
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(result, forType: .string)
@@ -403,7 +403,7 @@ prompt = "Please extract all text from the image, preserving original format and
 ## File Structure
 
 ```
-Aether/
+Aleph/
 ├── core/src/
 │   ├── vision/
 │   │   ├── mod.rs              # VisionService main module
@@ -427,7 +427,7 @@ Aether/
 |------|---------|--------------|
 | 1 | Rust: Define UDL interface (VisionRequest, VisionResult) | None |
 | 2 | Rust: Implement VisionService core logic | Step 1 |
-| 3 | Rust: Integrate into AetherCore, generate UniFFI bindings | Step 2 |
+| 3 | Rust: Integrate into AlephCore, generate UniFFI bindings | Step 2 |
 | 4 | Swift: Implement ScreenCaptureOverlayView (selection UI) | None |
 | 5 | Swift: Implement ScreenCaptureCoordinator | Step 3, 4 |
 | 6 | Swift: Implement VisionHotkeyManager + integration | Step 5 |

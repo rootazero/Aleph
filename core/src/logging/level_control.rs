@@ -94,7 +94,7 @@ pub fn init_log_level() {
         // Try to read from RUST_LOG environment variable
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
             // Parse the log level from RUST_LOG
-            // Format can be "debug", "aethecore=debug", etc.
+            // Format can be "debug", "alephcore=debug", etc.
             let level_str = rust_log
                 .split(',')
                 .next()

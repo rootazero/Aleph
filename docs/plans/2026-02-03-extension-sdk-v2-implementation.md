@@ -1,4 +1,4 @@
-# Aether Extension SDK V2 - P0 Implementation Plan
+# Aleph Extension SDK V2 - P0 Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
@@ -60,11 +60,11 @@ use super::types::{
     ConfigSchema, ConfigUiHints, PluginAuthor, PluginKind, PluginManifest, PluginPermission,
 };
 use super::{sanitize_plugin_id, validate_plugin_id};
-use crate::AetherError;
+use crate::AlephError;
 
 /// Root structure for aether_plugin.toml
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AetherPluginToml {
+pub struct AlephPluginToml {
     pub plugin: PluginSection,
 
     #[serde(default)]
@@ -227,10 +227,10 @@ pub struct CapabilitiesSection {
 }
 
 /// Parse aether_plugin.toml from a directory
-pub async fn parse_aether_plugin_toml(dir: &Path) -> Result<PluginManifest, AetherError> {
+pub async fn parse_aether_plugin_toml(dir: &Path) -> Result<PluginManifest, AlephError> {
     let toml_path = dir.join("aether_plugin.toml");
     let content = fs::read_to_string(&toml_path).await.map_err(|e| {
-        AetherError::PluginLoad(format!(
+        AlephError::PluginLoad(format!(
             "Failed to read aether_plugin.toml at {}: {}",
             toml_path.display(),
             e
@@ -241,10 +241,10 @@ pub async fn parse_aether_plugin_toml(dir: &Path) -> Result<PluginManifest, Aeth
 }
 
 /// Parse aether_plugin.toml content synchronously
-pub fn parse_aether_plugin_toml_sync(dir: &Path) -> Result<PluginManifest, AetherError> {
+pub fn parse_aether_plugin_toml_sync(dir: &Path) -> Result<PluginManifest, AlephError> {
     let toml_path = dir.join("aether_plugin.toml");
     let content = std::fs::read_to_string(&toml_path).map_err(|e| {
-        AetherError::PluginLoad(format!(
+        AlephError::PluginLoad(format!(
             "Failed to read aether_plugin.toml at {}: {}",
             toml_path.display(),
             e
@@ -258,9 +258,9 @@ pub fn parse_aether_plugin_toml_sync(dir: &Path) -> Result<PluginManifest, Aethe
 pub fn parse_aether_plugin_toml_content(
     content: &str,
     plugin_dir: &Path,
-) -> Result<PluginManifest, AetherError> {
-    let toml: AetherPluginToml = toml::from_str(content).map_err(|e| {
-        AetherError::PluginLoad(format!("Failed to parse aether_plugin.toml: {}", e))
+) -> Result<PluginManifest, AlephError> {
+    let toml: AlephPluginToml = toml::from_str(content).map_err(|e| {
+        AlephError::PluginLoad(format!("Failed to parse aether_plugin.toml: {}", e))
     })?;
 
     // Validate or sanitize plugin ID
@@ -276,7 +276,7 @@ pub fn parse_aether_plugin_toml_content(
         Some("wasm") => PluginKind::Wasm,
         Some("static") | None => PluginKind::Static,
         Some(k) => {
-            return Err(AetherError::PluginLoad(format!(
+            return Err(AlephError::PluginLoad(format!(
                 "Unknown plugin kind: {}",
                 k
             )))
@@ -497,7 +497,7 @@ At the top of the file (around line 10, with other mod declarations), add:
 mod aether_plugin_toml;
 pub use aether_plugin_toml::{
     parse_aether_plugin_toml, parse_aether_plugin_toml_content, parse_aether_plugin_toml_sync,
-    AetherPluginToml, CapabilitiesSection, CommandSection, HookSection, PermissionsSection,
+    AlephPluginToml, CapabilitiesSection, CommandSection, HookSection, PermissionsSection,
     PromptSection, ServiceSection, ToolSection,
 };
 ```
@@ -507,7 +507,7 @@ pub use aether_plugin_toml::{
 Find `parse_manifest_from_dir()` (around line 200) and update the detection logic:
 
 ```rust
-pub async fn parse_manifest_from_dir(dir: &Path) -> Result<PluginManifest, AetherError> {
+pub async fn parse_manifest_from_dir(dir: &Path) -> Result<PluginManifest, AlephError> {
     // V2: TOML format (preferred)
     let toml_path = dir.join("aether_plugin.toml");
     if toml_path.exists() {
@@ -532,7 +532,7 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> Result<PluginManifest, Aethe
         return parse_aether_plugin(&dir.join(".claude-plugin")).await;
     }
 
-    Err(AetherError::PluginLoad(format!(
+    Err(AlephError::PluginLoad(format!(
         "No plugin manifest found in {}. Expected aether_plugin.toml, aether.plugin.json, or package.json with 'aether' field.",
         dir.display()
     )))
@@ -544,7 +544,7 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> Result<PluginManifest, Aethe
 Find `parse_manifest_from_dir_sync()` (around line 244) and apply the same TOML-first logic:
 
 ```rust
-pub fn parse_manifest_from_dir_sync(dir: &Path) -> Result<PluginManifest, AetherError> {
+pub fn parse_manifest_from_dir_sync(dir: &Path) -> Result<PluginManifest, AlephError> {
     // V2: TOML format (preferred)
     let toml_path = dir.join("aether_plugin.toml");
     if toml_path.exists() {
@@ -569,7 +569,7 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> Result<PluginManifest, Aether
         return parse_aether_plugin_sync(&dir.join(".claude-plugin"));
     }
 
-    Err(AetherError::PluginLoad(format!(
+    Err(AlephError::PluginLoad(format!(
         "No plugin manifest found in {}. Expected aether_plugin.toml, aether.plugin.json, or package.json with 'aether' field.",
         dir.display()
     )))
@@ -815,7 +815,7 @@ Add these methods to the `impl HookExecutor` block (after existing `execute` met
         &self,
         event: HookEvent,
         mut context: HookContext,
-    ) -> Result<(HookContext, Option<String>), AetherError> {
+    ) -> Result<(HookContext, Option<String>), AlephError> {
         let mut hooks: Vec<_> = self.hooks
             .iter()
             .filter(|h| h.event == event && h.kind == HookKind::Interceptor)
@@ -915,7 +915,7 @@ Add these methods to the `impl HookExecutor` block (after existing `execute` met
         &self,
         hook: &HookConfig,
         context: &HookContext,
-    ) -> Result<HookResult, AetherError> {
+    ) -> Result<HookResult, AlephError> {
         let mut result = HookResult::default();
 
         for action in &hook.actions {
@@ -1135,7 +1135,7 @@ Find `impl ComponentLoader` and add:
         &self,
         manifest: &PluginManifest,
         plugin_dir: &Path,
-    ) -> Result<Option<ExtensionSkill>, AetherError> {
+    ) -> Result<Option<ExtensionSkill>, AlephError> {
         let prompt_config = match &manifest.prompt_v2 {
             Some(p) => p,
             None => return Ok(None),
@@ -1149,7 +1149,7 @@ Find `impl ComponentLoader` and add:
         // Read prompt file
         let prompt_path = plugin_dir.join(&prompt_config.file);
         let content = tokio::fs::read_to_string(&prompt_path).await.map_err(|e| {
-            AetherError::PluginLoad(format!(
+            AlephError::PluginLoad(format!(
                 "Failed to read prompt file {}: {}",
                 prompt_path.display(),
                 e
@@ -1184,7 +1184,7 @@ Find `impl ComponentLoader` and add:
         &self,
         manifest: &PluginManifest,
         plugin_dir: &Path,
-    ) -> Result<Vec<ExtensionSkill>, AetherError> {
+    ) -> Result<Vec<ExtensionSkill>, AlephError> {
         let tools = match &manifest.tools_v2 {
             Some(t) => t,
             None => return Ok(vec![]),
@@ -1197,7 +1197,7 @@ Find `impl ComponentLoader` and add:
                 let path = plugin_dir.join(instruction_file);
                 if path.exists() {
                     let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
-                        AetherError::PluginLoad(format!(
+                        AlephError::PluginLoad(format!(
                             "Failed to read instruction file {}: {}",
                             path.display(),
                             e
@@ -1338,10 +1338,10 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use std::fs;
 
-use aethecore::extension::manifest::{
+use alephcore::extension::manifest::{
     parse_aether_plugin_toml_content, parse_manifest_from_dir_sync,
 };
-use aethecore::extension::types::{HookKind, HookPriority, PromptScope};
+use alephcore::extension::types::{HookKind, HookPriority, PromptScope};
 
 /// Create a temporary V2 plugin directory
 fn create_test_plugin(toml_content: &str, skill_content: Option<&str>) -> TempDir {
@@ -1473,7 +1473,7 @@ shell = false
 
     assert!(!manifest.permissions.is_empty());
     // Verify network permissions converted
-    assert!(manifest.permissions.iter().any(|p| matches!(p, aethecore::extension::manifest::types::PluginPermission::Network(s) if s.contains("postgres"))));
+    assert!(manifest.permissions.iter().any(|p| matches!(p, alephcore::extension::manifest::types::PluginPermission::Network(s) if s.contains("postgres"))));
 }
 
 #[test]

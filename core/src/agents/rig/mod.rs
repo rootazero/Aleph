@@ -1,7 +1,7 @@
-//! Agent Configuration Module for AetherTool System
+//! Agent Configuration Module for AlephTool System
 //!
 //! This module provides configuration and tool server functionality for AI agents
-//! using the self-implemented AetherTool system with tool calling support.
+//! using the self-implemented AlephTool system with tool calling support.
 //!
 //! # Architecture
 //!
@@ -12,7 +12,7 @@
 //! │              Agent Loop (self-implemented)          │
 //! │                                                      │
 //! │  ┌─────────────────────────────────────────────────┐│
-//! │  │ AetherTool ToolServer for hot-reload support    ││
+//! │  │ AlephTool ToolServer for hot-reload support    ││
 //! │  │ - SearchTool, WebFetchTool, YouTubeTool         ││
 //! │  │ - McpToolWrapper (hot-reload MCP tools)         ││
 //! │  └─────────────────────────────────────────────────┘│

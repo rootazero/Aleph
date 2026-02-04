@@ -3,7 +3,7 @@
 //! Extracts structured facts from conversation memories using LLM.
 //! Facts are third-person statements about the user.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 
 /// Safely truncate a string at character boundaries (UTF-8 safe)
 fn truncate_str(s: &str, max_chars: usize) -> String {
@@ -58,7 +58,7 @@ impl FactExtractor {
     pub async fn extract_facts(
         &self,
         memories: &[MemoryEntry],
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         if memories.is_empty() {
             return Ok(Vec::new());
         }
@@ -72,7 +72,7 @@ impl FactExtractor {
             .provider
             .process(&prompt, Some(&system_prompt))
             .await
-            .map_err(|e| AetherError::other(format!("LLM extraction failed: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("LLM extraction failed: {}", e)))?;
 
         // Parse response
         let extracted = self.parse_extraction_response(&response, memories)?;
@@ -84,7 +84,7 @@ impl FactExtractor {
                 .embedder
                 .embed(&extracted_fact.content)
                 .await
-                .map_err(|e| AetherError::other(format!("Embedding generation failed: {}", e)))?;
+                .map_err(|e| AlephError::other(format!("Embedding generation failed: {}", e)))?;
 
             let fact = MemoryFact::new(
                 extracted_fact.content,
@@ -189,13 +189,13 @@ EXAMPLE OUTPUT:
         &self,
         response: &str,
         memories: &[MemoryEntry],
-    ) -> Result<Vec<ExtractedFact>, AetherError> {
+    ) -> Result<Vec<ExtractedFact>, AlephError> {
         // Try to find JSON in the response
         let json_str = self.extract_json_from_response(response)?;
 
         // Parse JSON
         let parsed: ExtractionResponse = serde_json::from_str(&json_str).map_err(|e| {
-            AetherError::other(format!(
+            AlephError::other(format!(
                 "Failed to parse extraction response: {}. Response: {}",
                 e, json_str
             ))
@@ -226,7 +226,7 @@ EXAMPLE OUTPUT:
     }
 
     /// Extract JSON from potentially wrapped response
-    fn extract_json_from_response(&self, response: &str) -> Result<String, AetherError> {
+    fn extract_json_from_response(&self, response: &str) -> Result<String, AlephError> {
         let trimmed = response.trim();
 
         // Try to find JSON object directly
@@ -279,7 +279,7 @@ EXAMPLE OUTPUT:
             }
         }
 
-        Err(AetherError::other(format!(
+        Err(AlephError::other(format!(
             "Could not find valid JSON in response: {}",
             truncate_str(trimmed, 200)
         )))

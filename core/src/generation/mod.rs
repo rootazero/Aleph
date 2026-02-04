@@ -13,7 +13,7 @@
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::generation::{GenerationProvider, GenerationRequest, GenerationType};
+/// use alephcore::generation::{GenerationProvider, GenerationRequest, GenerationType};
 /// use std::sync::Arc;
 ///
 /// async fn example(provider: Arc<dyn GenerationProvider>) {
@@ -70,7 +70,7 @@ pub use types::{
 /// # Example Implementation
 ///
 /// ```rust,ignore
-/// use aethecore::generation::{
+/// use alephcore::generation::{
 ///     GenerationProvider, GenerationRequest, GenerationOutput, GenerationResult,
 ///     GenerationType, GenerationData,
 /// };
@@ -124,7 +124,7 @@ pub trait GenerationProvider: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{GenerationProvider, GenerationRequest};
+    /// use alephcore::generation::{GenerationProvider, GenerationRequest};
     ///
     /// async fn generate_image(provider: &dyn GenerationProvider) {
     ///     let request = GenerationRequest::image("A cat wearing a hat");
@@ -153,7 +153,7 @@ pub trait GenerationProvider: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{GenerationProvider, GenerationType};
+    /// use alephcore::generation::{GenerationProvider, GenerationType};
     ///
     /// fn check_support(provider: &dyn GenerationProvider) {
     ///     let types = provider.supported_types();
@@ -289,7 +289,7 @@ pub trait GenerationProvider: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
+    /// use alephcore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
     ///
     /// async fn edit_image(provider: &dyn GenerationProvider) {
     ///     let request = GenerationRequest::image("Add a hat to the person")
@@ -337,7 +337,7 @@ pub trait GenerationProvider: Send + Sync {
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::generation::{MockGenerationProvider, GenerationRequest, GenerationProvider};
+/// use alephcore::generation::{MockGenerationProvider, GenerationRequest, GenerationProvider};
 ///
 /// # tokio_test::block_on(async {
 /// let provider = MockGenerationProvider::new("mock-dalle");
@@ -504,7 +504,7 @@ impl GenerationProvider for MockGenerationProvider {
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::create_mock_generation_provider;
+/// use alephcore::generation::create_mock_generation_provider;
 ///
 /// let provider = create_mock_generation_provider();
 /// assert_eq!(provider.name(), "mock");

@@ -26,14 +26,14 @@ mint install yonaskolb/XcodeGen
 当你创建新的 Swift 文件、资源文件或其他项目文件时：
 
 ```bash
-# 在 Aether/Sources/ 中创建新文件
-touch Aether/Sources/NewFeature.swift
+# 在 Aleph/Sources/ 中创建新文件
+touch Aleph/Sources/NewFeature.swift
 
 # 运行 XcodeGen 重新生成项目
 xcodegen generate
 
 # 打开 Xcode（项目会自动包含新文件）
-open Aether.xcodeproj
+open Aleph.xcodeproj
 ```
 
 ### 2. 修改项目配置时
@@ -48,7 +48,7 @@ vim project.yml
 xcodegen generate
 
 # 验证更改
-open Aether.xcodeproj
+open Aleph.xcodeproj
 ```
 
 ### 3. 添加新 Target 时
@@ -61,7 +61,7 @@ targets:
     type: framework
     platform: macOS
     sources:
-      - path: Aether/NewTarget
+      - path: Aleph/NewTarget
 ```
 
 然后运行：
@@ -75,7 +75,7 @@ xcodegen generate
 ### 基本配置
 
 ```yaml
-name: Aether                  # 项目名称
+name: Aleph                  # 项目名称
 options:
   bundleIdPrefix: Rootazero   # Bundle ID 前缀
   deploymentTarget:
@@ -107,9 +107,9 @@ options:
 ### 源代码目录结构
 
 ```
-Aether/
+Aleph/
 ├── Sources/              # Swift 源文件（自动包含）
-│   ├── AetherApp.swift
+│   ├── AlephApp.swift
 │   ├── AppDelegate.swift
 │   ├── HaloWindow.swift
 │   └── Generated/        # UniFFI 生成的绑定
@@ -117,10 +117,10 @@ Aether/
 ├── Resources/            # 资源文件
 │   └── Info.plist
 ├── Frameworks/           # 框架和库
-│   └── libaethecore.dylib
+│   └── libalephcore.dylib
 ├── Assets.xcassets/      # 资源目录
 ├── Info.plist            # 主 Info.plist
-└── Aether.entitlements   # 权限配置
+└── Aleph.entitlements   # 权限配置
 ```
 
 ### Git 版本控制
@@ -135,7 +135,7 @@ Aether/
 
 ```bash
 # 删除旧项目并重新生成
-rm -rf Aether.xcodeproj
+rm -rf Aleph.xcodeproj
 xcodegen generate
 ```
 
@@ -150,10 +150,10 @@ xcodegen generate --spec project.yml
 
 ```bash
 # 列出所有 targets
-xcodebuild -list -project Aether.xcodeproj
+xcodebuild -list -project Aleph.xcodeproj
 
 # 查看特定 target 的设置
-xcodebuild -showBuildSettings -project Aether.xcodeproj -target Aether
+xcodebuild -showBuildSettings -project Aleph.xcodeproj -target Aleph
 ```
 
 ## 团队协作指南
@@ -168,7 +168,7 @@ git pull
 xcodegen generate
 
 # 打开项目
-open Aether.xcodeproj
+open Aleph.xcodeproj
 ```
 
 ### 提交代码前
@@ -191,7 +191,7 @@ git commit -m "Add new feature"
 **解决方案**：
 ```bash
 # 确保文件在正确的目录下
-ls Aether/Sources/
+ls Aleph/Sources/
 
 # 重新生成项目
 xcodegen generate
@@ -209,7 +209,7 @@ xcodegen generate
 **解决方案**：
 ```bash
 # 手动运行绑定生成脚本
-cd Aether/core
+cd Aleph/core
 cargo run --bin uniffi-bindgen generate src/aether.udl \
   --language swift \
   --out-dir ../Sources/Generated/
@@ -227,7 +227,7 @@ xcodegen generate
 
 ```yaml
 targets:
-  Aether:
+  Aleph:
     settings:
       base:
         CUSTOM_SETTING: value
@@ -242,7 +242,7 @@ targets:
 
 ```yaml
 targets:
-  Aether:
+  Aleph:
     dependencies:
       - framework: path/to/Framework.framework
         embed: true
@@ -253,7 +253,7 @@ targets:
 
 ```yaml
 targets:
-  Aether:
+  Aleph:
     preBuildScripts:
       - name: "Custom Script"
         script: |
@@ -265,7 +265,7 @@ targets:
 
 - [XcodeGen 官方文档](https://github.com/yonaskolb/XcodeGen/blob/master/Docs/ProjectSpec.md)
 - [XcodeGen 示例项目](https://github.com/yonaskolb/XcodeGen/tree/master/Docs/Examples)
-- [Aether 项目 CLAUDE.md](./CLAUDE.md) - 项目架构说明
+- [Aleph 项目 CLAUDE.md](./CLAUDE.md) - 项目架构说明
 
 ## 快速参考
 
@@ -277,10 +277,10 @@ brew install xcodegen
 xcodegen generate
 
 # 清理并重新生成
-rm -rf Aether.xcodeproj && xcodegen generate
+rm -rf Aleph.xcodeproj && xcodegen generate
 
 # 打开项目
-open Aether.xcodeproj
+open Aleph.xcodeproj
 
 # 验证配置
 xcodegen generate --spec project.yml

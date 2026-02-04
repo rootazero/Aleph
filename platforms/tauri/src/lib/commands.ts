@@ -304,7 +304,7 @@ export const commands = {
   getAutostartEnabled: () => invoke<boolean>('get_autostart_enabled'),
   setAutostartEnabled: (enabled: boolean) => invoke('set_autostart_enabled', { enabled }),
 
-  // Paths (~/.config/aether/*)
+  // Paths (~/.config/aleph/*)
   getAetherPaths: () => invoke<AetherPaths>('get_aether_paths'),
 
   // ============================================================================

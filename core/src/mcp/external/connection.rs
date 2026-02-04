@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{mcp as mcp_types, IdGenerator, JsonRpcNotification, JsonRpcRequest};
 use crate::mcp::transport::{McpTransport, StdioTransport};
 use crate::mcp::types::McpTool;
@@ -84,7 +84,7 @@ impl McpServerConnection {
         )
         .await
         .map_err(|_| {
-            AetherError::Timeout {
+            AlephError::Timeout {
                 suggestion: Some(format!(
                     "MCP server '{}' connection timed out after {}s. Check if the server is installed and responding.",
                     name,
@@ -157,13 +157,13 @@ impl McpServerConnection {
             self.id_gen.next(),
             "initialize",
             serde_json::to_value(&params).map_err(|e| {
-                AetherError::IoError(format!("Failed to serialize initialize params: {}", e))
+                AlephError::IoError(format!("Failed to serialize initialize params: {}", e))
             })?,
         );
 
         let response = self.transport.send_request(&request).await?;
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "MCP server '{}' initialize failed: {}",
                 self.name, e
             ))
@@ -172,7 +172,7 @@ impl McpServerConnection {
         // Parse initialize result
         let init_result: mcp_types::InitializeResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse initialize result from '{}': {}",
                     self.name, e
                 ))
@@ -227,7 +227,7 @@ impl McpServerConnection {
         let response = self.transport.send_request(&request).await?;
 
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "MCP server '{}' tools/list failed: {}",
                 self.name, e
             ))
@@ -235,7 +235,7 @@ impl McpServerConnection {
 
         let tools_result: mcp_types::ToolsListResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse tools list from '{}': {}",
                     self.name, e
                 ))
@@ -282,7 +282,7 @@ impl McpServerConnection {
         let response = self.transport.send_request(&request).await?;
 
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "MCP server '{}' resources/list failed: {}",
                 self.name, e
             ))
@@ -290,7 +290,7 @@ impl McpServerConnection {
 
         let resources_result: mcp_types::ResourcesListResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse resources list from '{}': {}",
                     self.name, e
                 ))
@@ -334,7 +334,7 @@ impl McpServerConnection {
         let response = self.transport.send_request(&request).await?;
 
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "MCP server '{}' prompts/list failed: {}",
                 self.name, e
             ))
@@ -342,7 +342,7 @@ impl McpServerConnection {
 
         let prompts_result: mcp_types::PromptsListResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse prompts list from '{}': {}",
                     self.name, e
                 ))
@@ -426,7 +426,7 @@ impl McpServerConnection {
             self.id_gen.next(),
             "tools/call",
             serde_json::to_value(&params).map_err(|e| {
-                AetherError::IoError(format!("Failed to serialize tool call params: {}", e))
+                AlephError::IoError(format!("Failed to serialize tool call params: {}", e))
             })?,
         );
 
@@ -438,7 +438,7 @@ impl McpServerConnection {
 
         let response = self.transport.send_request(&request).await?;
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Tool call '{}' on '{}' failed: {}",
                 tool_name, self.name, e
             ))
@@ -465,7 +465,7 @@ impl McpServerConnection {
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Tool '{}' returned error: {}",
                 tool_name, error_text
             )));
@@ -508,7 +508,7 @@ impl McpServerConnection {
             self.id_gen.next(),
             "resources/read",
             serde_json::to_value(&params).map_err(|e| {
-                AetherError::IoError(format!("Failed to serialize resource read params: {}", e))
+                AlephError::IoError(format!("Failed to serialize resource read params: {}", e))
             })?,
         );
 
@@ -520,7 +520,7 @@ impl McpServerConnection {
 
         let response = self.transport.send_request(&request).await?;
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Resource read '{}' on '{}' failed: {}",
                 resource_uri, self.name, e
             ))
@@ -528,7 +528,7 @@ impl McpServerConnection {
 
         let read_result: mcp_types::ResourceReadResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse resource read result from '{}': {}",
                     self.name, e
                 ))
@@ -546,7 +546,7 @@ impl McpServerConnection {
                     let data = base64::engine::general_purpose::STANDARD
                         .decode(&blob)
                         .map_err(|e| {
-                            AetherError::IoError(format!("Failed to decode blob: {}", e))
+                            AlephError::IoError(format!("Failed to decode blob: {}", e))
                         })?;
                     Ok(crate::mcp::resources::ResourceContent::Binary {
                         data,
@@ -579,7 +579,7 @@ impl McpServerConnection {
             self.id_gen.next(),
             "prompts/get",
             serde_json::to_value(&params).map_err(|e| {
-                AetherError::IoError(format!("Failed to serialize prompt get params: {}", e))
+                AlephError::IoError(format!("Failed to serialize prompt get params: {}", e))
             })?,
         );
 
@@ -591,7 +591,7 @@ impl McpServerConnection {
 
         let response = self.transport.send_request(&request).await?;
         let result = response.into_result().map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Prompt get '{}' on '{}' failed: {}",
                 prompt_name, self.name, e
             ))
@@ -599,7 +599,7 @@ impl McpServerConnection {
 
         let get_result: mcp_types::PromptGetResult =
             serde_json::from_value(result).map_err(|e| {
-                AetherError::IoError(format!(
+                AlephError::IoError(format!(
                     "Failed to parse prompt get result from '{}': {}",
                     self.name, e
                 ))

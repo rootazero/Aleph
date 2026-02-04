@@ -32,8 +32,8 @@ use super::types::{ImagineRequest, MidjourneyMode, PROVIDER_NAME};
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::providers::{MidjourneyProvider, MidjourneyMode};
-/// use aethecore::generation::GenerationProvider;
+/// use alephcore::generation::providers::{MidjourneyProvider, MidjourneyMode};
+/// use alephcore::generation::GenerationProvider;
 ///
 /// let provider = MidjourneyProvider::builder("your-api-key")
 ///     .mode(MidjourneyMode::Fast)
@@ -67,8 +67,8 @@ impl MidjourneyProvider {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::providers::MidjourneyProvider;
-    /// use aethecore::GenerationProvider; // Import trait for name() method
+    /// use alephcore::generation::providers::MidjourneyProvider;
+    /// use alephcore::GenerationProvider; // Import trait for name() method
     ///
     /// let provider = MidjourneyProvider::new("your-api-key");
     /// assert_eq!(provider.name(), "midjourney");
@@ -86,7 +86,7 @@ impl MidjourneyProvider {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use aethecore::generation::providers::{MidjourneyProvider, MidjourneyMode};
+    /// use alephcore::generation::providers::{MidjourneyProvider, MidjourneyMode};
     ///
     /// let provider = MidjourneyProvider::builder("your-api-key")
     ///     .mode(MidjourneyMode::Relax)

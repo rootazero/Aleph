@@ -47,8 +47,8 @@
 //! # Usage
 //!
 //! ```ignore
-//! use aethecore::intent::IntentClassifier;
-//! use aethecore::config::KeywordPolicy;
+//! use alephcore::intent::IntentClassifier;
+//! use alephcore::config::KeywordPolicy;
 //!
 //! // Basic usage (L1 + L2 only)
 //! let classifier = IntentClassifier::new();

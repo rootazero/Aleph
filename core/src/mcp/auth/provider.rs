@@ -18,7 +18,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::auth::storage::{ClientInfo, OAuthStorage, OAuthTokens};
 
 /// OAuth server metadata (from .well-known/oauth-authorization-server)
@@ -103,18 +103,18 @@ impl OAuthProvider {
         );
 
         let response = self.client.get(&url).send().await.map_err(|e| {
-            AetherError::IoError(format!("Failed to fetch OAuth metadata: {}", e))
+            AlephError::IoError(format!("Failed to fetch OAuth metadata: {}", e))
         })?;
 
         if !response.status().is_success() {
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "OAuth metadata request failed with status {}",
                 response.status()
             )));
         }
 
         response.json::<OAuthServerMetadata>().await.map_err(|e| {
-            AetherError::IoError(format!("Failed to parse OAuth metadata: {}", e))
+            AlephError::IoError(format!("Failed to parse OAuth metadata: {}", e))
         })
     }
 
@@ -123,7 +123,7 @@ impl OAuthProvider {
     /// Uses OAuth 2.0 Dynamic Client Registration (RFC 7591)
     pub async fn register_client(&self, metadata: &OAuthServerMetadata) -> Result<ClientInfo> {
         let registration_endpoint = metadata.registration_endpoint.as_ref().ok_or_else(|| {
-            AetherError::IoError(
+            AlephError::IoError(
                 "Server does not support dynamic client registration".to_string(),
             )
         })?;
@@ -143,11 +143,11 @@ impl OAuthProvider {
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| AetherError::IoError(format!("Client registration failed: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Client registration failed: {}", e)))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Client registration failed: {}",
                 body
             )));
@@ -162,7 +162,7 @@ impl OAuthProvider {
         }
 
         let reg_response: RegistrationResponse = response.json().await.map_err(|e| {
-            AetherError::IoError(format!("Failed to parse registration response: {}", e))
+            AlephError::IoError(format!("Failed to parse registration response: {}", e))
         })?;
 
         let client_info = ClientInfo {
@@ -200,7 +200,7 @@ impl OAuthProvider {
 
         // Build authorization URL
         let mut url = url::Url::parse(&metadata.authorization_endpoint).map_err(|e| {
-            AetherError::IoError(format!("Invalid authorization endpoint: {}", e))
+            AlephError::IoError(format!("Invalid authorization endpoint: {}", e))
         })?;
 
         url.query_pairs_mut()
@@ -250,20 +250,20 @@ impl OAuthProvider {
     ) -> Result<OAuthTokens> {
         // Get stored state and code verifier
         let entry = self.storage.get_entry(&self.server_name).await?.ok_or_else(|| {
-            AetherError::IoError("No pending authorization found".to_string())
+            AlephError::IoError("No pending authorization found".to_string())
         })?;
 
         let stored_state = entry.oauth_state.ok_or_else(|| {
-            AetherError::IoError("No stored state found".to_string())
+            AlephError::IoError("No stored state found".to_string())
         })?;
 
         let code_verifier = entry.code_verifier.ok_or_else(|| {
-            AetherError::IoError("No code verifier found".to_string())
+            AlephError::IoError("No code verifier found".to_string())
         })?;
 
         // Verify state matches
         if stored_state != received_state {
-            return Err(AetherError::IoError(
+            return Err(AlephError::IoError(
                 "State mismatch - possible CSRF attack".to_string(),
             ));
         }
@@ -283,11 +283,11 @@ impl OAuthProvider {
             .form(&params)
             .send()
             .await
-            .map_err(|e| AetherError::IoError(format!("Token exchange failed: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Token exchange failed: {}", e)))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Token exchange failed: {}",
                 body
             )));
@@ -321,10 +321,10 @@ impl OAuthProvider {
             .storage
             .get_tokens(&self.server_name)
             .await?
-            .ok_or_else(|| AetherError::IoError("No tokens to refresh".to_string()))?;
+            .ok_or_else(|| AlephError::IoError("No tokens to refresh".to_string()))?;
 
         let refresh_token = current_tokens.refresh_token.ok_or_else(|| {
-            AetherError::IoError("No refresh token available".to_string())
+            AlephError::IoError("No refresh token available".to_string())
         })?;
 
         self.refresh_token_with(metadata, client_id, &refresh_token)
@@ -353,11 +353,11 @@ impl OAuthProvider {
             .form(&params)
             .send()
             .await
-            .map_err(|e| AetherError::IoError(format!("Token refresh failed: {}", e)))?;
+            .map_err(|e| AlephError::IoError(format!("Token refresh failed: {}", e)))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(AetherError::IoError(format!(
+            return Err(AlephError::IoError(format!(
                 "Token refresh failed: {}",
                 body
             )));
@@ -487,7 +487,7 @@ async fn parse_token_response(response: reqwest::Response) -> Result<OAuthTokens
     }
 
     let token_response: TokenResponse = response.json().await.map_err(|e| {
-        AetherError::IoError(format!("Failed to parse token response: {}", e))
+        AlephError::IoError(format!("Failed to parse token response: {}", e))
     })?;
 
     let expires_at = token_response.expires_in.map(|exp| {

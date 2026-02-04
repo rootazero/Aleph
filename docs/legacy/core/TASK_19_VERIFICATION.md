@@ -120,7 +120,7 @@ cargo clippy --all-targets -- -D warnings
 ```
 User selects text in Notes.app
 ↓
-Aether captures: com.apple.Notes
+Aleph captures: com.apple.Notes
 ↓
 Check: NOT in excluded_apps
 ↓
@@ -131,7 +131,7 @@ Memory stored successfully
 ```
 User selects text in Keychain Access
 ↓
-Aether captures: com.apple.keychainaccess
+Aleph captures: com.apple.keychainaccess
 ↓
 Check: IN excluded_apps
 ↓
@@ -165,7 +165,7 @@ Users can:
 
 - [x] **Functionality**: Feature works as specified
 - [x] **Test Coverage**: 100% coverage for exclusion logic
-- [x] **Integration**: Properly integrated with AetherCore
+- [x] **Integration**: Properly integrated with AlephCore
 - [x] **Performance**: No negative performance impact
 - [x] **Security**: Privacy guarantees verified
 - [x] **Documentation**: Complete and accurate

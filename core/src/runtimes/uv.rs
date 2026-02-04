@@ -8,7 +8,7 @@ use super::download::{
     set_executable,
 };
 use super::manager::{RuntimeManager, UpdateInfo};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::path::PathBuf;
 use std::process::Command;
 use tracing::{debug, info};
@@ -84,7 +84,7 @@ impl UvRuntime {
     /// Uses `uv pip install` for fast package installation.
     pub async fn install_package(&self, package: &str) -> Result<()> {
         if !self.is_installed() {
-            return Err(AetherError::runtime("uv", "uv is not installed"));
+            return Err(AlephError::runtime("uv", "uv is not installed"));
         }
 
         info!(package = %package, "Installing Python package");
@@ -99,11 +99,11 @@ impl UvRuntime {
                 package,
             ])
             .output()
-            .map_err(|e| AetherError::runtime("uv", format!("Failed to install package: {}", e)))?;
+            .map_err(|e| AlephError::runtime("uv", format!("Failed to install package: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AetherError::runtime(
+            return Err(AlephError::runtime(
                 "uv",
                 format!("Failed to install {}: {}", package, stderr),
             ));
@@ -139,11 +139,11 @@ impl UvRuntime {
         let output = Command::new(self.uv_binary())
             .args(["venv", &venv_path.to_string_lossy()])
             .output()
-            .map_err(|e| AetherError::runtime("uv", format!("Failed to create venv: {}", e)))?;
+            .map_err(|e| AlephError::runtime("uv", format!("Failed to create venv: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AetherError::runtime(
+            return Err(AlephError::runtime(
                 "uv",
                 format!("Failed to create venv: {}", stderr),
             ));
@@ -183,7 +183,7 @@ impl RuntimeManager for UvRuntime {
 
         let uv_dir = self.uv_dir();
         std::fs::create_dir_all(&uv_dir).map_err(|e| {
-            AetherError::runtime("uv", format!("Failed to create uv directory: {}", e))
+            AlephError::runtime("uv", format!("Failed to create uv directory: {}", e))
         })?;
 
         // Download uv tarball

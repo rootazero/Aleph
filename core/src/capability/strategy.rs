@@ -142,7 +142,7 @@ pub trait CapabilityStrategy: Send + Sync {
     /// ```ignore
     /// fn validate_config(&self) -> Result<()> {
     ///     if self.api_key.is_empty() {
-    ///         return Err(AetherError::Config("API key is required".into()));
+    ///         return Err(AlephError::Config("API key is required".into()));
     ///     }
     ///     Ok(())
     /// }
@@ -507,7 +507,7 @@ impl Default for CompositeCapabilityExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::AetherError;
+    use crate::error::AlephError;
     use crate::payload::{ContextAnchor, ContextFormat, Intent, PayloadBuilder};
 
     /// Mock strategy for testing
@@ -565,7 +565,7 @@ mod tests {
             if self.config_valid {
                 Ok(())
             } else {
-                Err(AetherError::config("Invalid config"))
+                Err(AlephError::config("Invalid config"))
             }
         }
 

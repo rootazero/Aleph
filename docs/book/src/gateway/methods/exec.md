@@ -180,7 +180,7 @@ Patterns support glob-style matching:
 
 ## IPC Integration
 
-For CLI integration, Aether supports Unix socket IPC:
+For CLI integration, Aleph supports Unix socket IPC:
 
 ```
 /tmp/aether-exec-{user}.sock

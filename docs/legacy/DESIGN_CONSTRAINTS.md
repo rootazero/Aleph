@@ -1,6 +1,6 @@
-# Aether Design Constraints
+# Aleph Design Constraints
 
-This document outlines the key design constraints, anti-patterns to avoid, and critical success factors for the Aether project.
+This document outlines the key design constraints, anti-patterns to avoid, and critical success factors for the Aleph project.
 
 ## Key Design Constraints
 

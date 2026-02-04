@@ -21,8 +21,8 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use crate::dispatcher::ToolDefinition;
-use crate::error::{AetherError, Result};
-use crate::tools::{AetherToolDyn, AetherToolServer};
+use crate::error::{AlephError, Result};
+use crate::tools::{AlephToolDyn, AlephToolServer};
 
 use super::tool_generator::{GeneratedToolDefinition, ToolGenerator};
 
@@ -339,7 +339,7 @@ impl SubprocessTool {
     }
 }
 
-impl AetherToolDyn for SubprocessTool {
+impl AlephToolDyn for SubprocessTool {
     fn name(&self) -> &str {
         &self.definition.name
     }
@@ -360,7 +360,7 @@ impl AetherToolDyn for SubprocessTool {
         Box::pin(async move {
             // Check confirmation requirement
             if self.definition.requires_confirmation && !self.is_confirmed() {
-                return Err(AetherError::Other {
+                return Err(AlephError::Other {
                     message: format!(
                         "Tool '{}' requires confirmation before first use",
                         self.definition.name
@@ -371,7 +371,7 @@ impl AetherToolDyn for SubprocessTool {
 
             // Check self-test
             if !self.definition.self_tested {
-                return Err(AetherError::Other {
+                return Err(AlephError::Other {
                     message: format!(
                         "Tool '{}' has not been self-tested",
                         self.definition.name
@@ -381,7 +381,7 @@ impl AetherToolDyn for SubprocessTool {
             }
 
             let entrypoint_path = self.package_dir.join(&self.definition.entrypoint);
-            let input_json = serde_json::to_string(&args).map_err(|e| AetherError::Other {
+            let input_json = serde_json::to_string(&args).map_err(|e| AlephError::Other {
                 message: format!("Failed to serialize input: {}", e),
                 suggestion: None,
             })?;
@@ -390,7 +390,7 @@ impl AetherToolDyn for SubprocessTool {
                 "python" => ("python3", vec![entrypoint_path.to_str().unwrap_or("")]),
                 "node" => ("node", vec![entrypoint_path.to_str().unwrap_or("")]),
                 _ => {
-                    return Err(AetherError::Other {
+                    return Err(AlephError::Other {
                         message: format!("Unsupported runtime: {}", self.definition.runtime),
                         suggestion: None,
                     })
@@ -404,19 +404,19 @@ impl AetherToolDyn for SubprocessTool {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| AetherError::Other {
+                .map_err(|e| AlephError::Other {
                     message: format!("Failed to spawn process: {}", e),
                     suggestion: None,
                 })?;
 
-            let mut stdin = child.stdin.take().ok_or_else(|| AetherError::Other {
+            let mut stdin = child.stdin.take().ok_or_else(|| AlephError::Other {
                 message: "Failed to get stdin".to_string(),
                 suggestion: None,
             })?;
 
             tokio::io::AsyncWriteExt::write_all(&mut stdin, input_json.as_bytes())
                 .await
-                .map_err(|e| AetherError::Other {
+                .map_err(|e| AlephError::Other {
                     message: format!("Failed to write to stdin: {}", e),
                     suggestion: None,
                 })?;
@@ -427,25 +427,25 @@ impl AetherToolDyn for SubprocessTool {
                 child.wait_with_output(),
             )
             .await
-            .map_err(|_| AetherError::Other {
+            .map_err(|_| AlephError::Other {
                 message: "Tool execution timed out".to_string(),
                 suggestion: None,
             })?
-            .map_err(|e| AetherError::Other {
+            .map_err(|e| AlephError::Other {
                 message: format!("Failed to wait for process: {}", e),
                 suggestion: None,
             })?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(AetherError::Other {
+                return Err(AlephError::Other {
                     message: format!("Tool execution failed: {}", stderr),
                     suggestion: None,
                 });
             }
 
             let stdout = String::from_utf8_lossy(&output.stdout);
-            serde_json::from_str(&stdout).map_err(|e| AetherError::Other {
+            serde_json::from_str(&stdout).map_err(|e| AlephError::Other {
                 message: format!("Failed to parse tool output: {}", e),
                 suggestion: None,
             })
@@ -476,7 +476,7 @@ impl ToolRegistrar {
     pub async fn register(
         &self,
         tool_name: &str,
-        server: &AetherToolServer,
+        server: &AlephToolServer,
         skip_test: bool,
     ) -> Result<()> {
         let definition = self.generator.load_definition(tool_name)?;
@@ -485,7 +485,7 @@ impl ToolRegistrar {
         if !definition.self_tested && !skip_test {
             let report = self.tester.run_self_test(tool_name).await?;
             if !report.passed {
-                return Err(AetherError::Other {
+                return Err(AlephError::Other {
                     message: format!("Self-test failed for tool '{}'", tool_name),
                     suggestion: Some("Review the test report and fix issues".to_string()),
                 });
@@ -507,7 +507,7 @@ impl ToolRegistrar {
     }
 
     /// Register all tested tools
-    pub async fn register_all_tested(&self, server: &AetherToolServer) -> Result<usize> {
+    pub async fn register_all_tested(&self, server: &AlephToolServer) -> Result<usize> {
         let tools = self.generator.list_tools()?;
         let mut registered = 0;
 
@@ -525,12 +525,12 @@ impl ToolRegistrar {
     }
 
     /// Unregister a generated tool from the ToolServer
-    pub async fn unregister(&self, tool_name: &str, server: &AetherToolServer) -> Result<()> {
+    pub async fn unregister(&self, tool_name: &str, server: &AlephToolServer) -> Result<()> {
         if server.remove_tool(tool_name).await {
             info!(tool_name = %tool_name, "Unregistered generated tool");
             Ok(())
         } else {
-            Err(AetherError::Other {
+            Err(AlephError::Other {
                 message: format!("Tool '{}' not found in server", tool_name),
                 suggestion: None,
             })

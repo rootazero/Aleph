@@ -2,7 +2,7 @@
 
 > *"The mind is not a vessel to be filled, but a fire to be kindled."* — Plutarch
 
-This document outlines the four core design principles that guide Aether's Agent architecture.
+This document outlines the four core design principles that guide Aleph's Agent architecture.
 
 ---
 
@@ -10,7 +10,7 @@ This document outlines the four core design principles that guide Aether's Agent
 
 **Core Idea**: Define success before starting execution.
 
-Traditional AI agents jump straight into action, hoping to stumble upon the right solution. Aether takes a different approach: **anchor on the fundamental goal first**.
+Traditional AI agents jump straight into action, hoping to stumble upon the right solution. Aleph takes a different approach: **anchor on the fundamental goal first**.
 
 Before any task execution, the Agent generates a **Success Manifest** — a contract that explicitly defines:
 - What does "done" look like?
@@ -21,7 +21,7 @@ This prevents the common failure mode where an agent "completes" a task but miss
 
 ```
 ❌ Traditional: User Request → Execute → Hope it's right
-✅ Aether:     User Request → Define Success → Execute → Validate Against Contract
+✅ Aleph:     User Request → Define Success → Execute → Validate Against Contract
 ```
 
 **Why it matters**: When you know what success looks like, every action becomes purposeful. No more aimless exploration or self-deception.
@@ -32,9 +32,9 @@ This prevents the common failure mode where an agent "completes" a task but miss
 
 **Core Idea**: Combine fast intuition with deep reasoning.
 
-Inspired by Daniel Kahneman's dual-process theory, Aether implements a **System 1 + System 2** cognitive architecture:
+Inspired by Daniel Kahneman's dual-process theory, Aleph implements a **System 1 + System 2** cognitive architecture:
 
-| System | Characteristics | Role in Aether |
+| System | Characteristics | Role in Aleph |
 |--------|-----------------|----------------|
 | **System 1** | Fast, intuitive, experience-driven | Heuristic rules, experience retrieval, pattern matching |
 | **System 2** | Slow, logical, deliberate | LLM reasoning, semantic validation, contract generation |
@@ -52,7 +52,7 @@ This mirrors how expert humans solve problems: experienced developers don't anal
 
 **Core Idea**: Crystallize successful experiences for future reuse.
 
-Every successful task execution is an opportunity to learn. Aether implements an **Experience Crystallizer** that:
+Every successful task execution is an opportunity to learn. Aleph implements an **Experience Crystallizer** that:
 
 1. **Records** successful solution paths
 2. **Detects patterns** across similar tasks
@@ -71,7 +71,7 @@ Single Success → Experience Entry (vector DB)
 - Apply proven solution patterns as starting points
 - Continuously refine based on outcomes
 
-This transforms Aether from a stateless chatbot into an **adaptive intelligence** that genuinely improves over time.
+This transforms Aleph from a stateless chatbot into an **adaptive intelligence** that genuinely improves over time.
 
 ---
 

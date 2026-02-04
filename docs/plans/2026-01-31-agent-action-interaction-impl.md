@@ -162,7 +162,7 @@ pub enum TextValidation {
 
 **Step 3: Run test to verify**
 
-Run: `cargo test -p aethecore question::tests --lib 2>&1 | tail -20`
+Run: `cargo test -p alephcore question::tests --lib 2>&1 | tail -20`
 Expected: All tests pass
 
 **Step 4: Commit**
@@ -317,7 +317,7 @@ impl Default for UserAnswer {
 
 **Step 3: Run test to verify**
 
-Run: `cargo test -p aethecore answer::tests --lib 2>&1 | tail -20`
+Run: `cargo test -p alephcore answer::tests --lib 2>&1 | tail -20`
 Expected: All tests pass
 
 **Step 4: Commit**
@@ -352,7 +352,7 @@ pub use question::{ChoiceOption, QuestionKind, TextValidation};
 
 **Step 2: Run build to verify**
 
-Run: `cargo build -p aethecore 2>&1 | tail -10`
+Run: `cargo build -p alephcore 2>&1 | tail -10`
 Expected: Build succeeds
 
 **Step 3: Commit**
@@ -529,7 +529,7 @@ fn test_user_response_rich() {
 
 **Step 15: Run tests**
 
-Run: `cargo test -p aethecore decision::tests --lib 2>&1 | tail -20`
+Run: `cargo test -p alephcore decision::tests --lib 2>&1 | tail -20`
 Expected: All tests pass
 
 **Step 16: Commit**
@@ -748,7 +748,7 @@ async fn test_collecting_callback_user_question() {
 
 **Step 9: Run tests**
 
-Run: `cargo test -p aethecore callback::tests --lib 2>&1 | tail -20`
+Run: `cargo test -p alephcore callback::tests --lib 2>&1 | tail -20`
 Expected: All tests pass
 
 **Step 10: Commit**
@@ -858,7 +858,7 @@ async fn test_ask_user_rich_handling() {
 
 **Step 4: Run tests**
 
-Run: `cargo test -p aethecore agent_loop::tests --lib 2>&1 | tail -30`
+Run: `cargo test -p alephcore agent_loop::tests --lib 2>&1 | tail -30`
 Expected: All tests pass
 
 **Step 5: Commit**
@@ -1153,17 +1153,17 @@ git commit -m "feat(agent-loop): add CLI callback implementation with inquire"
 
 **Step 1: Build without cli-interaction feature**
 
-Run: `cargo build -p aethecore 2>&1 | tail -10`
+Run: `cargo build -p alephcore 2>&1 | tail -10`
 Expected: Build succeeds
 
 **Step 2: Build with cli-interaction feature**
 
-Run: `cargo build -p aethecore --features cli-interaction 2>&1 | tail -10`
+Run: `cargo build -p alephcore --features cli-interaction 2>&1 | tail -10`
 Expected: Build succeeds
 
 **Step 3: Run all agent_loop tests**
 
-Run: `cargo test -p aethecore agent_loop --lib 2>&1 | tail -30`
+Run: `cargo test -p alephcore agent_loop --lib 2>&1 | tail -30`
 Expected: All tests pass (may skip cli-interaction tests without feature)
 
 **Step 4: Final commit (if any cleanup needed)**

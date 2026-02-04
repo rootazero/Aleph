@@ -293,7 +293,7 @@ pub use run_event_bus::{
 
 **Step 4: Run compilation check**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -10`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -10`
 Expected: No errors (warnings OK)
 
 **Step 5: Commit**
@@ -718,7 +718,7 @@ pub use profile_manager::{
 
 **Step 4: Run compilation check**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -10`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -10`
 Expected: No errors
 
 **Step 5: Commit**
@@ -727,7 +727,7 @@ Expected: No errors
 git add core/src/providers/profile_config.rs core/src/providers/profile_manager.rs core/src/providers/mod.rs
 git commit -m "feat(providers): add AuthProfileManager with hybrid storage
 
-- ProfilesConfig for TOML parsing (~/.aether/profiles.toml)
+- ProfilesConfig for TOML parsing (~/.aleph/profiles.toml)
 - RuntimeStatus in-memory for cooldown (not persisted)
 - AgentState per-agent for usage tracking
 - EffectiveProfile combines config + status"
@@ -748,7 +748,7 @@ git commit -m "feat(providers): add AuthProfileManager with hybrid storage
 
 use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 use crate::gateway::GatewayContext;
-use crate::tools::traits::AetherTool;
+use crate::tools::traits::AlephTool;
 use anyhow::Result;
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -943,7 +943,7 @@ impl SessionsSpawnTool {
 }
 
 #[async_trait]
-impl AetherTool for SessionsSpawnTool {
+impl AlephTool for SessionsSpawnTool {
     const NAME: &'static str = "sessions_spawn";
     const DESCRIPTION: &'static str = r#"Spawn a new child session to execute a task.
 
@@ -1025,7 +1025,7 @@ pub use spawn_tool::{
 
 **Step 3: Run tests**
 
-Run: `cargo test -p aethecore spawn --lib -- --nocapture`
+Run: `cargo test -p alephcore spawn --lib -- --nocapture`
 Expected: All 3 tests pass
 
 **Step 4: Commit**
@@ -1446,12 +1446,12 @@ git commit -m "feat(config): add subagents config for allow_agents
 ```rust
 // core/tests/subagent_orchestration_test.rs
 
-use aethecore::gateway::run_event_bus::{ActiveRunHandle, RunEvent, RunStatus, wait_for_run_end};
-use aethecore::builtin_tools::sessions::{
+use alephcore::gateway::run_event_bus::{ActiveRunHandle, RunEvent, RunStatus, wait_for_run_end};
+use alephcore::builtin_tools::sessions::{
     SessionsSpawnTool, SessionsSpawnArgs, CleanupPolicy, SpawnStatus,
 };
-use aethecore::providers::profile_manager::{AuthProfileManager, ProfileUsage};
-use aethecore::tools::traits::AetherTool;
+use alephcore::providers::profile_manager::{AuthProfileManager, ProfileUsage};
+use alephcore::tools::traits::AlephTool;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -1484,7 +1484,7 @@ async fn test_run_event_bus_lifecycle() {
     assert!(result.is_ok());
 
     match result.unwrap() {
-        aethecore::gateway::run_event_bus::RunEndResult::Completed { output, .. } => {
+        alephcore::gateway::run_event_bus::RunEndResult::Completed { output, .. } => {
             assert_eq!(output, "Task done");
         }
         _ => panic!("Expected Completed"),
@@ -1537,7 +1537,7 @@ api_key = "sk-test"
     assert!(profile.is_some());
 
     // Mark as failed
-    manager.mark_failure("test_profile", aethecore::providers::auth_profiles::AuthProfileFailureReason::RateLimit);
+    manager.mark_failure("test_profile", alephcore::providers::auth_profiles::AuthProfileFailureReason::RateLimit);
 
     // Profile should be in cooldown
     let profiles = manager.list_profiles();
@@ -1549,7 +1549,7 @@ api_key = "sk-test"
 
 **Step 2: Run tests**
 
-Run: `cargo test -p aethecore subagent_orchestration --test '*' -- --nocapture`
+Run: `cargo test -p alephcore subagent_orchestration --test '*' -- --nocapture`
 Expected: All tests pass
 
 **Step 3: Commit**

@@ -112,7 +112,7 @@ impl ReloadPlan {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use aethecore::config::{build_reload_plan, diff_config};
+/// use alephcore::config::{build_reload_plan, diff_config};
 ///
 /// let changes = diff_config(&prev_config, &next_config);
 /// let plan = build_reload_plan(&changes);

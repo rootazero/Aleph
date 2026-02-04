@@ -2,13 +2,13 @@
 
 > **Date**: 2026-01-20
 > **Status**: Approved
-> **Goal**: 将 Cowork 功能融入 Aether 核心，实现 Manus 式的无缝 AI Agent 体验
+> **Goal**: 将 Cowork 功能融入 Aleph 核心，实现 Manus 式的无缝 AI Agent 体验
 
 ## 1. 背景与问题
 
 ### 当前架构的问题
 
-Aether 当前存在多个功能重叠的模块：
+Aleph 当前存在多个功能重叠的模块：
 
 | 模块 | 职责 | 问题 |
 |------|------|------|
@@ -194,7 +194,7 @@ pub struct UnifiedExecutor {
     executor_registry: Arc<ExecutorRegistry>,
 
     /// 事件回调
-    event_handler: Arc<dyn AetherEventHandler>,
+    event_handler: Arc<dyn AlephEventHandler>,
 }
 
 impl UnifiedExecutor {
@@ -290,7 +290,7 @@ pub struct ExecutionResult {
 pub async fn process(
     input: &str,
     options: &ProcessOptions,
-    handler: Arc<dyn AetherEventHandler>,
+    handler: Arc<dyn AlephEventHandler>,
 ) -> Result<ProcessResult, ProcessError> {
 
     // L1: 斜杠命令快速路由
@@ -393,9 +393,9 @@ struct ExecutionProgressView: View {
 ### 7.3 回调桥接修改
 
 ```swift
-// platforms/macos/Aether/Sources/Bridge/AetherEventHandler.swift
+// platforms/macos/Aether/Sources/Bridge/AlephEventHandler.swift
 
-protocol AetherEventHandler {
+protocol AlephEventHandler {
     // 删除
     // func onAgentModeDetected(task: ExecutableTask)
 
@@ -521,7 +521,7 @@ pub fn migrate_config(old: &OldConfig) -> NewConfig {
     - 保留旧代码作为 fallback（可选）
 
 2.2 修改回调接口
-    - 更新 AetherEventHandler trait
+    - 更新 AlephEventHandler trait
     - 新增 on_plan_created 等回调
 
 2.3 集成测试

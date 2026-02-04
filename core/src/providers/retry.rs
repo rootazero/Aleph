@@ -4,7 +4,7 @@
 /// exponential backoff strategy. Inspired by OpenCode's retry.ts.
 use crate::config::RetryPolicy;
 use crate::dispatcher::DEFAULT_MAX_RETRIES;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -19,7 +19,7 @@ pub const RETRY_MAX_DELAY_WITH_HEADERS_MS: u64 = i32::MAX as u64; // ~24 days (m
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 
 /// Determines if an error is retryable using default policy.
-fn is_retryable(error: &AetherError) -> bool {
+fn is_retryable(error: &AlephError) -> bool {
     let default_policy = RetryPolicy::default();
     is_retryable_with_policy(error, &default_policy)
 }
@@ -36,11 +36,11 @@ fn is_retryable(error: &AetherError) -> bool {
 /// - Rate limit errors (429) - UNLESS it's an overloaded error
 /// - Invalid configuration
 /// - Provider-specific errors not matching policy
-fn is_retryable_with_policy(error: &AetherError, policy: &RetryPolicy) -> bool {
+fn is_retryable_with_policy(error: &AlephError, policy: &RetryPolicy) -> bool {
     match error {
-        AetherError::NetworkError { .. } => policy.retry_on_network_error,
-        AetherError::Timeout { .. } => policy.retry_on_timeout,
-        AetherError::ProviderError { message, .. } => {
+        AlephError::NetworkError { .. } => policy.retry_on_network_error,
+        AlephError::Timeout { .. } => policy.retry_on_timeout,
+        AlephError::ProviderError { message, .. } => {
             // Check for overloaded messages (retryable like OpenCode)
             if is_overloaded_message(message) {
                 return true;
@@ -52,13 +52,13 @@ fn is_retryable_with_policy(error: &AetherError, policy: &RetryPolicy) -> bool {
                 .any(|code| message.contains(&code.to_string()))
         }
         // Rate limit with retry-after is potentially retryable
-        AetherError::RateLimitError { message, .. } => {
+        AlephError::RateLimitError { message, .. } => {
             // Match OpenCode: retry on "too_many_requests" or overloaded
             is_overloaded_message(message)
         }
         // Don't retry these errors
-        AetherError::AuthenticationError { .. } => false,
-        AetherError::InvalidConfig { .. } => false,
+        AlephError::AuthenticationError { .. } => false,
+        AlephError::InvalidConfig { .. } => false,
         _ => false,
     }
 }
@@ -78,7 +78,7 @@ fn is_overloaded_message(message: &str) -> bool {
 /// Extended retryable check that returns the reason if retryable
 ///
 /// Matches OpenCode's retryable() function signature.
-pub fn retryable_reason(error: &AetherError) -> Option<String> {
+pub fn retryable_reason(error: &AlephError) -> Option<String> {
     let default_policy = RetryPolicy::default();
     if is_retryable_with_policy(error, &default_policy) {
         Some(format!("{}", error))
@@ -147,7 +147,7 @@ pub fn parse_retry_after(value: &str) -> Option<u64> {
 ///
 /// # Returns
 /// * `Ok(T)` - If operation succeeds
-/// * `Err(AetherError)` - If all retry attempts fail
+/// * `Err(AlephError)` - If all retry attempts fail
 ///
 /// # Retry Strategy
 /// - Attempt 1: Immediate
@@ -157,9 +157,9 @@ pub fn parse_retry_after(value: &str) -> Option<u64> {
 ///
 /// # Example
 /// ```rust,ignore
-/// use aethecore::providers::retry::retry_with_backoff;
+/// use alephcore::providers::retry::retry_with_backoff;
 ///
-/// async fn fetch_data() -> Result<String, aethecore::error::AetherError> {
+/// async fn fetch_data() -> Result<String, alephcore::error::AlephError> {
 ///     // ... network request
 ///     Ok("data".to_string())
 /// }
@@ -236,7 +236,7 @@ where
 ///
 /// # Returns
 /// * `Ok(T)` - If operation succeeds
-/// * `Err(AetherError)` - If all retry attempts fail
+/// * `Err(AlephError)` - If all retry attempts fail
 pub async fn retry_with_policy<F, Fut, T>(mut operation: F, policy: &RetryPolicy) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -310,23 +310,23 @@ mod tests {
     #[test]
     fn test_is_retryable() {
         // Retryable errors
-        assert!(is_retryable(&AetherError::network("connection failed")));
-        assert!(is_retryable(&AetherError::Timeout { suggestion: None }));
-        assert!(is_retryable(&AetherError::provider(
+        assert!(is_retryable(&AlephError::network("connection failed")));
+        assert!(is_retryable(&AlephError::Timeout { suggestion: None }));
+        assert!(is_retryable(&AlephError::provider(
             "500 Internal Server Error"
         )));
-        assert!(is_retryable(&AetherError::provider(
+        assert!(is_retryable(&AlephError::provider(
             "503 Service Unavailable"
         )));
 
         // Non-retryable errors
-        assert!(!is_retryable(&AetherError::authentication(
+        assert!(!is_retryable(&AlephError::authentication(
             "Test",
             "invalid key"
         )));
-        assert!(!is_retryable(&AetherError::rate_limit("quota exceeded")));
-        assert!(!is_retryable(&AetherError::invalid_config("bad config")));
-        assert!(!is_retryable(&AetherError::provider("400 Bad Request")));
+        assert!(!is_retryable(&AlephError::rate_limit("quota exceeded")));
+        assert!(!is_retryable(&AlephError::invalid_config("bad config")));
+        assert!(!is_retryable(&AlephError::provider("400 Bad Request")));
     }
 
     #[tokio::test]
@@ -339,7 +339,7 @@ mod tests {
                 let counter = counter_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, AetherError>("success".to_string())
+                    Ok::<_, AlephError>("success".to_string())
                 }
             },
             Some(3),
@@ -362,9 +362,9 @@ mod tests {
                 async move {
                     let count = counter.fetch_add(1, Ordering::SeqCst);
                     if count < 2 {
-                        Err(AetherError::network("temporary failure"))
+                        Err(AlephError::network("temporary failure"))
                     } else {
-                        Ok::<_, AetherError>("success".to_string())
+                        Ok::<_, AlephError>("success".to_string())
                     }
                 }
             },
@@ -387,7 +387,7 @@ mod tests {
                 let counter = counter_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Err(AetherError::network("persistent failure"))
+                    Err(AlephError::network("persistent failure"))
                 }
             },
             Some(3),
@@ -408,7 +408,7 @@ mod tests {
                 let counter = counter_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Err(AetherError::authentication("OpenAI", "invalid key"))
+                    Err(AlephError::authentication("OpenAI", "invalid key"))
                 }
             },
             Some(3),
@@ -430,7 +430,7 @@ mod tests {
                 let counter = counter_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Err(AetherError::network("failure"))
+                    Err(AlephError::network("failure"))
                 }
             },
             Some(5),
@@ -503,12 +503,12 @@ mod tests {
     #[test]
     fn test_retryable_reason() {
         // Retryable
-        assert!(retryable_reason(&AetherError::network("connection failed")).is_some());
-        assert!(retryable_reason(&AetherError::Timeout { suggestion: None }).is_some());
-        assert!(retryable_reason(&AetherError::provider("500 Internal Server Error")).is_some());
+        assert!(retryable_reason(&AlephError::network("connection failed")).is_some());
+        assert!(retryable_reason(&AlephError::Timeout { suggestion: None }).is_some());
+        assert!(retryable_reason(&AlephError::provider("500 Internal Server Error")).is_some());
 
         // Not retryable
-        assert!(retryable_reason(&AetherError::authentication("Test", "invalid key")).is_none());
-        assert!(retryable_reason(&AetherError::invalid_config("bad config")).is_none());
+        assert!(retryable_reason(&AlephError::authentication("Test", "invalid key")).is_none());
+        assert!(retryable_reason(&AlephError::invalid_config("bad config")).is_none());
     }
 }

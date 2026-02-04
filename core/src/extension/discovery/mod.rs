@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::extension::discovery::{DiscoveryConfig, discover_all};
+//! use alephcore::extension::discovery::{DiscoveryConfig, discover_all};
 //!
 //! let config = DiscoveryConfig {
 //!     workspace_dir: Some("/path/to/project".into()),
@@ -78,7 +78,7 @@ impl DiscoveryConfig {
 /// Scans all 4 layers in order:
 /// 1. Config-specified paths (highest priority)
 /// 2. Workspace `.aether/extensions` and `.claude/extensions`
-/// 3. Global `~/.aether/extensions` and `~/.claude/extensions`
+/// 3. Global `~/.aleph/extensions` and `~/.claude/extensions`
 /// 4. Bundled plugins (lowest priority)
 ///
 /// Returns resolved plugins with conflicts resolved based on origin priority.

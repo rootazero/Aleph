@@ -224,9 +224,9 @@ context_format = "markdown"         # 上下文格式
 
 ### 编译与测试
 
-- [ ] `cargo build --package aethecore` 成功
-- [ ] `cargo clippy --package aethecore` 无警告
-- [ ] `cargo test --package aethecore` 全部通过（> 80% 覆盖率）
+- [ ] `cargo build --package alephcore` 成功
+- [ ] `cargo clippy --package alephcore` 无警告
+- [ ] `cargo test --package alephcore` 全部通过（> 80% 覆盖率）
 - [ ] `xcodegen generate && xcodebuild build` 成功
 
 ### 性能指标
@@ -249,7 +249,7 @@ context_format = "markdown"         # 上下文格式
 ### 新增模块
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── payload/                    # 🆕 Payload 模块
 │   ├── mod.rs                  # AgentPayload 核心结构
 │   ├── intent.rs               # Intent 枚举
@@ -270,13 +270,13 @@ Aether/core/src/
 ### 修改的文件
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── lib.rs                      # 注册 payload 和 capability 模块
 ├── config/mod.rs               # 扩展 RoutingRuleConfig（+3 字段）
 ├── router/mod.rs               # 新增 route_with_extended_info()
 └── core.rs                     # 重构 process_with_ai_internal()
 
-Aether/Sources/Components/Organisms/
+Aleph/Sources/Components/Organisms/
 └── RoutingView.swift           # 新增 Capabilities UI
 ```
 
@@ -334,25 +334,25 @@ cargo install cargo-tarpaulin
 
 ```bash
 # 编译检查
-cargo check --package aethecore
+cargo check --package alephcore
 
 # 运行测试
-cargo test --package aethecore
+cargo test --package alephcore
 
 # Clippy 检查
-cargo clippy --package aethecore -- -D warnings
+cargo clippy --package alephcore -- -D warnings
 
 # 格式化代码
 cargo fmt
 
 # 生成覆盖率报告
-cargo tarpaulin --package aethecore --out Html
+cargo tarpaulin --package alephcore --out Html
 
 # 生成 Xcode 项目
 xcodegen generate
 
 # Swift 编译
-xcodebuild -project Aether.xcodeproj -scheme Aether build
+xcodebuild -project Aleph.xcodeproj -scheme Aleph build
 ```
 
 ---
@@ -366,7 +366,7 @@ xcodebuild -project Aether.xcodeproj -scheme Aether build
 - [Builder Pattern in Rust](https://rust-unofficial.github.io/patterns/patterns/creational/builder.html)
 - [SwiftUI Property Wrappers](https://developer.apple.com/documentation/swiftui/property-wrappers)
 
-### Aether 项目文档
+### Aleph 项目文档
 
 - [CLAUDE.md](../CLAUDE.md) - 项目总体架构
 - [DEVELOPMENT_PHASES.md](../docs/DEVELOPMENT_PHASES.md) - 开发阶段规划
@@ -399,8 +399,8 @@ xcodebuild -project Aether.xcodeproj -scheme Aether build
 
 ```bash
 # 提交前检查清单
-cargo test --package aethecore
-cargo clippy --package aethecore
+cargo test --package alephcore
+cargo clippy --package alephcore
 cargo fmt --check
 xcodebuild build
 
@@ -444,7 +444,7 @@ info!(
 
 查看日志：
 ```bash
-RUST_LOG=aethecore=debug cargo run
+RUST_LOG=alephcore=debug cargo run
 ```
 
 ### Q5: 如果测试失败怎么办？
@@ -498,7 +498,7 @@ RUST_LOG=aethecore=debug cargo run
 
 如有问题，请通过以下方式联系：
 
-- **GitHub Issues**: [Aether Issues](https://github.com/your-org/aether/issues)
+- **GitHub Issues**: [Aleph Issues](https://github.com/your-org/aether/issues)
 - **文档反馈**: 直接修改本文档并提交 PR
 
 ---
@@ -568,8 +568,8 @@ cargo test payload::
 cargo test assembler::
 
 # 完整测试
-cargo test --package aethecore
+cargo test --package alephcore
 
 # 覆盖率
-cargo tarpaulin --package aethecore
+cargo tarpaulin --package alephcore
 ```

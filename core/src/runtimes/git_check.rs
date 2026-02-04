@@ -3,7 +3,7 @@
 //! Lightweight utility to check if Git is available on the system.
 //! Does not manage Git installation - only checks and provides install hints.
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::process::Command;
 
 /// Check if Git is available, return version if found
@@ -14,7 +14,7 @@ use std::process::Command;
 ///
 /// # Example
 /// ```no_run
-/// use aethecore::runtimes::git_check;
+/// use alephcore::runtimes::git_check;
 ///
 /// match git_check::ensure_git_available() {
 ///     Ok(version) => println!("Git found: {}", version),
@@ -31,7 +31,7 @@ pub fn ensure_git_available() -> Result<String> {
     }
 
     tracing::warn!("Git not found in PATH");
-    Err(AetherError::other(get_install_hint()))
+    Err(AlephError::other(get_install_hint()))
 }
 
 /// Get platform-specific installation hint

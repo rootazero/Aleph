@@ -8,19 +8,19 @@
 //! **Read Paths (by priority, later overrides earlier):**
 //! - `~/.claude/skills/` - Claude Code compatible (read-only)
 //! - `~/.claude/commands/` - Claude Code compatible (read-only)
-//! - `~/.aether/skills/` - Aether native
-//! - `~/.aether/commands/` - Aether native
-//! - `~/.aether/plugins/` - Aether native
+//! - `~/.aleph/skills/` - Aether native
+//! - `~/.aleph/commands/` - Aether native
+//! - `~/.aleph/plugins/` - Aether native
 //! - `./.claude/skills/` - Project-level Claude Code (read-only)
 //! - `./.claude/commands/` - Project-level Claude Code (read-only)
 //!
 //! **Write Paths:**
-//! - Always use `~/.aether/` for writing
+//! - Always use `~/.aleph/` for writing
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::discovery::{DiscoveryManager, DiscoveryConfig};
+//! use alephcore::discovery::{DiscoveryManager, DiscoveryConfig};
 //!
 //! let config = DiscoveryConfig::default();
 //! let manager = DiscoveryManager::new(config)?;
@@ -130,7 +130,7 @@ impl DiscoveryManager {
         Self::new(DiscoveryConfig::default())
     }
 
-    /// Get the Aether home directory (~/.aether/)
+    /// Get the Aether home directory (~/.aleph/)
     pub fn aether_home(&self) -> DiscoveryResult<PathBuf> {
         aether_home_dir()
     }

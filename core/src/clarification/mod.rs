@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use aethecore::clarification::{ClarificationRequest, ClarificationType, ClarificationOption};
+//! use alephcore::clarification::{ClarificationRequest, ClarificationType, ClarificationOption};
 //!
 //! // Create a select-type clarification
 //! let request = ClarificationRequest::select(
@@ -170,7 +170,7 @@ impl ClarificationRequest {
     ///
     /// Example:
     /// ```rust,no_run
-    /// use aethecore::clarification::{ClarificationRequest, QuestionGroup, ClarificationOption};
+    /// use alephcore::clarification::{ClarificationRequest, QuestionGroup, ClarificationOption};
     ///
     /// let request = ClarificationRequest::multi_group(
     ///     "poetry-config",
@@ -275,7 +275,7 @@ impl ClarificationResult {
     /// Example:
     /// ```rust
     /// use std::collections::HashMap;
-    /// use aethecore::clarification::ClarificationResult;
+    /// use alephcore::clarification::ClarificationResult;
     ///
     /// let mut answers = HashMap::new();
     /// answers.insert("yunsh".to_string(), "cilin".to_string());

@@ -1,4 +1,4 @@
-//! FileOpsTool implementation with AetherTool trait
+//! FileOpsTool implementation with AlephTool trait
 
 use std::path::Path;
 
@@ -7,7 +7,7 @@ use tracing::info;
 
 use crate::error::Result;
 use crate::builtin_tools::error::ToolError;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 use super::batch::{execute_batch_move, execute_organize};
 use super::ops::{
     execute_copy, execute_delete, execute_list, execute_mkdir, execute_move, execute_read,
@@ -43,11 +43,11 @@ impl FileOpsTool {
 - organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Others)
 
 PATH RESOLUTION:
-- Relative paths (e.g., "output.pdf", "images/photo.jpg") → resolved to ~/.aether/output/
+- Relative paths (e.g., "output.pdf", "images/photo.jpg") → resolved to ~/.aleph/output/
 - Home paths (e.g., "~/Desktop/file.txt") → expanded to user's home directory
 - Absolute paths (e.g., "/Users/name/file.txt") → used as-is
 
-DEFAULT OUTPUT: When generating files (PDFs, images, translations), use relative paths like "article.pdf" or "translated.txt". They will be saved to the default output directory (~/.aether/output/), which is always writable.
+DEFAULT OUTPUT: When generating files (PDFs, images, translations), use relative paths like "article.pdf" or "translated.txt". They will be saved to the default output directory (~/.aleph/output/), which is always writable.
 
 IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead of multiple 'move' calls!"#;
 
@@ -186,9 +186,9 @@ impl Clone for FileOpsTool {
 }
 
 /// Implementation of rig's Tool trait for FileOpsTool
-/// Implementation of AetherTool trait for FileOpsTool
+/// Implementation of AlephTool trait for FileOpsTool
 #[async_trait]
-impl AetherTool for FileOpsTool {
+impl AlephTool for FileOpsTool {
     const NAME: &'static str = "file_ops";
     const DESCRIPTION: &'static str = r#"Perform file system operations. Operations:
 - list: List directory contents with file types and sizes

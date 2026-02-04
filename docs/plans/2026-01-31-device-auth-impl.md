@@ -30,7 +30,7 @@ Note: `hmac`, `sha2`, and `lru` are already present in the file.
 
 **Step 2: Verify compilation**
 
-Run: `cargo build -p aethecore --features gateway`
+Run: `cargo build -p alephcore --features gateway`
 Expected: Compiles successfully
 
 **Step 3: Commit**
@@ -247,7 +247,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cargo test -p aethecore crypto --features gateway`
+Run: `cargo test -p alephcore crypto --features gateway`
 Expected: All tests pass
 
 **Step 3: Commit**
@@ -1025,7 +1025,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cargo test -p aethecore store --features gateway`
+Run: `cargo test -p alephcore store --features gateway`
 Expected: All tests pass
 
 **Step 3: Commit**
@@ -1231,7 +1231,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cargo test -p aethecore device --features gateway`
+Run: `cargo test -p alephcore device --features gateway`
 Expected: All tests pass
 
 **Step 3: Commit**
@@ -1291,7 +1291,7 @@ pub use token::TokenManager;
 
 **Step 2: Verify compilation**
 
-Run: `cargo build -p aethecore --features gateway`
+Run: `cargo build -p alephcore --features gateway`
 Expected: Compiles (may have warnings about unused imports, that's OK)
 
 **Step 3: Commit**
@@ -1643,7 +1643,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cargo test -p aethecore token --features gateway`
+Run: `cargo test -p alephcore token --features gateway`
 Expected: All tests pass
 
 **Step 3: Commit**
@@ -2138,7 +2138,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cargo test -p aethecore pairing --features gateway`
+Run: `cargo test -p alephcore pairing --features gateway`
 Expected: All tests pass
 
 **Step 3: Commit**
@@ -2154,12 +2154,12 @@ git commit -m "feat(security): rewrite PairingManager with 8-char Base32 codes a
 
 **Step 1: Run all security tests**
 
-Run: `cargo test -p aethecore --features gateway -- security`
+Run: `cargo test -p alephcore --features gateway -- security`
 Expected: All tests pass
 
 **Step 2: Run full test suite**
 
-Run: `cargo test -p aethecore --features gateway`
+Run: `cargo test -p alephcore --features gateway`
 Expected: Pass (same 2 pre-existing failures in p3_router)
 
 **Step 3: Commit if all tests pass**

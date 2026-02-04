@@ -1,4 +1,4 @@
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// Brave Search API provider
 ///
@@ -33,7 +33,7 @@ struct BraveResult {
 impl BraveProvider {
     pub fn new(api_key: String) -> Result<Self> {
         if api_key.is_empty() {
-            return Err(AetherError::invalid_config("Brave API key is required"));
+            return Err(AlephError::invalid_config("Brave API key is required"));
         }
 
         Ok(Self {
@@ -41,7 +41,7 @@ impl BraveProvider {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .map_err(|e| AetherError::network(e.to_string()))?,
+                .map_err(|e| AlephError::network(e.to_string()))?,
         })
     }
 }
@@ -57,10 +57,10 @@ impl SearchProvider for BraveProvider {
             .timeout(std::time::Duration::from_secs(options.timeout_seconds))
             .send()
             .await
-            .map_err(|e| AetherError::network(e.to_string()))?;
+            .map_err(|e| AlephError::network(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Brave API error: {}",
                 response.status()
             )));
@@ -69,7 +69,7 @@ impl SearchProvider for BraveProvider {
         let brave_response: BraveResponse = response
             .json()
             .await
-            .map_err(|e| AetherError::provider(format!("Failed to parse Brave response: {}", e)))?;
+            .map_err(|e| AlephError::provider(format!("Failed to parse Brave response: {}", e)))?;
 
         let results = brave_response
             .web

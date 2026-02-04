@@ -177,7 +177,7 @@ impl GenerationMetadata {
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::{GenerationOutput, GenerationType, GenerationData, GenerationMetadata};
+/// use alephcore::generation::{GenerationOutput, GenerationType, GenerationData, GenerationMetadata};
 ///
 /// let output = GenerationOutput::new(
 ///     GenerationType::Image,

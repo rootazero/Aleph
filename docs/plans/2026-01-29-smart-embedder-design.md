@@ -191,13 +191,13 @@ impl SmartEmbedder {
 ```rust
 impl SmartEmbedder {
     /// Single text embedding
-    pub async fn embed(&self, text: &str) -> Result<Vec<f32>, AetherError> {
+    pub async fn embed(&self, text: &str) -> Result<Vec<f32>, AlephError> {
         let embeddings = self.embed_batch(&[text]).await?;
         Ok(embeddings.into_iter().next().unwrap())
     }
 
     /// Batch embedding (reduces lock contention)
-    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AetherError> {
+    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -331,7 +331,7 @@ candidate_pool_size = 100
 pub const CURRENT_EMBEDDING_DIM: u32 = 384;  // Changed from 512
 
 impl VectorDatabase {
-    pub async fn initialize(&self) -> Result<(), AetherError> {
+    pub async fn initialize(&self) -> Result<(), AlephError> {
         let conn = self.conn.lock().await;
 
         // Check if migration needed (dimension change)
@@ -389,7 +389,7 @@ pub trait Reranker: Send + Sync {
         query: &str,
         candidates: &[(String, String)],  // (doc_id, doc_text)
         top_k: usize,
-    ) -> Result<Vec<RerankResult>, AetherError>;
+    ) -> Result<Vec<RerankResult>, AlephError>;
 }
 
 pub struct RerankResult {
@@ -407,7 +407,7 @@ impl Reranker for NoOpReranker {
         _query: &str,
         candidates: &[(String, String)],
         top_k: usize,
-    ) -> Result<Vec<RerankResult>, AetherError> {
+    ) -> Result<Vec<RerankResult>, AlephError> {
         Ok(candidates
             .iter()
             .take(top_k)
@@ -445,13 +445,13 @@ use once_cell::sync::OnceCell;
 static SMART_EMBEDDER: OnceCell<Arc<SmartEmbedder>> = OnceCell::new();
 
 /// Initialize global SmartEmbedder (call once at startup)
-pub fn init_embedder(config: &SemanticCacheConfigToml) -> Result<(), AetherError> {
+pub fn init_embedder(config: &SemanticCacheConfigToml) -> Result<(), AlephError> {
     let cache_dir = SmartEmbedder::default_cache_dir()?;
     let embedder = SmartEmbedder::new(cache_dir, config.model_ttl_secs);
 
     SMART_EMBEDDER
         .set(Arc::new(embedder))
-        .map_err(|_| AetherError::AlreadyInitialized("SmartEmbedder"))?;
+        .map_err(|_| AlephError::AlreadyInitialized("SmartEmbedder"))?;
 
     Ok(())
 }

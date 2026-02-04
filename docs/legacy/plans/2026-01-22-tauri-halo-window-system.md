@@ -123,7 +123,7 @@ import { create } from 'zustand';
 import { commands } from '@/lib/commands';
 import {
   subscribeToAetherEvents,
-  type AetherEventHandlers,
+  type AlephEventHandlers,
   type StreamChunkPayload,
   type CompletePayload,
   type ErrorPayload,
@@ -477,7 +477,7 @@ export const useUnifiedHaloStore = create<UnifiedHaloStore>((set, get) => ({
     const store = get();
     if (store.unsubscribe) return;
 
-    const handlers: AetherEventHandlers = {
+    const handlers: AlephEventHandlers = {
       onThinking: () => set({ isProcessing: true }),
       onStreamChunk: (payload: StreamChunkPayload) => {
         const { messages, streamingContent } = get();

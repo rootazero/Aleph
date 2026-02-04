@@ -1,4 +1,4 @@
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// Google Custom Search Engine provider
 ///
@@ -30,10 +30,10 @@ struct GoogleItem {
 impl GoogleProvider {
     pub fn new(api_key: String, engine_id: String) -> Result<Self> {
         if api_key.is_empty() {
-            return Err(AetherError::invalid_config("Google API key is required"));
+            return Err(AlephError::invalid_config("Google API key is required"));
         }
         if engine_id.is_empty() {
-            return Err(AetherError::invalid_config(
+            return Err(AlephError::invalid_config(
                 "Google Custom Search Engine ID is required",
             ));
         }
@@ -44,7 +44,7 @@ impl GoogleProvider {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .map_err(|e| AetherError::network(e.to_string()))?,
+                .map_err(|e| AlephError::network(e.to_string()))?,
         })
     }
 }
@@ -64,17 +64,17 @@ impl SearchProvider for GoogleProvider {
             .timeout(std::time::Duration::from_secs(options.timeout_seconds))
             .send()
             .await
-            .map_err(|e| AetherError::network(e.to_string()))?;
+            .map_err(|e| AlephError::network(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Google API error: {}",
                 response.status()
             )));
         }
 
         let google_response: GoogleResponse = response.json().await.map_err(|e| {
-            AetherError::provider(format!("Failed to parse Google response: {}", e))
+            AlephError::provider(format!("Failed to parse Google response: {}", e))
         })?;
 
         let results = google_response

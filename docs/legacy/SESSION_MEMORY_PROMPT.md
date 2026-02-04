@@ -1,4 +1,4 @@
-# Aether AI Provider 集成 - 会话记忆 Prompt
+# Aleph AI Provider 集成 - 会话记忆 Prompt
 
 > **用途**: 当继续实施 `integrate-ai-providers` 的后续 Phase（5-10）时，将此 prompt 提供给 Claude，以快速恢复上下文。
 
@@ -16,7 +16,7 @@
 
 ### 用户交互流程
 1. 用户选中文本，按 `Cmd+~`
-2. Aether 模拟 `Cmd+X`（文本"消失"）
+2. Aleph 模拟 `Cmd+X`（文本"消失"）
 3. 光标处显示"Halo"动画（透明覆盖层）
 4. 后端路由到合适的 AI Provider
 5. Halo 消失，结果通过 `Cmd+V` 粘贴回去
@@ -30,7 +30,7 @@
 - `ProviderConfig` 结构（TOML 配置）
 - `ProviderRegistry`（provider 管理）
 - `MockProvider`（测试用）
-- 扩展 `AetherError`（新增 AuthenticationError、RateLimitError 等）
+- 扩展 `AlephError`（新增 AuthenticationError、RateLimitError 等）
 
 **测试**: 31 tests passed
 
@@ -120,7 +120,7 @@ pub struct ProviderConfig {
 
 ### 3. 错误处理
 ```rust
-pub enum AetherError {
+pub enum AlephError {
     AuthenticationError(String),  // 401 - Invalid API key
     RateLimitError(String),       // 429 - Rate limit exceeded
     ProviderError(String),        // 4xx/5xx - API errors
@@ -136,7 +136,7 @@ pub enum AetherError {
 
 ### 文件结构
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── providers/
 │   ├── mod.rs           # Exports all providers
 │   ├── openai.rs        # ✅ OpenAI implementation
@@ -146,7 +146,7 @@ Aether/core/src/
 │   └── registry.rs      # ✅ Provider registry
 ├── config.rs            # ✅ ProviderConfig + Config
 ├── error.rs             # ✅ Extended with new error types
-├── core.rs              # AetherCore (需集成 Router)
+├── core.rs              # AlephCore (需集成 Router)
 └── router/              # ⚠️ 待实现（Phase 5）
 ```
 
@@ -208,7 +208,7 @@ provider = "openai"
 - Prompt 增强（在用户输入前添加 "Past Context:"）
 - 异步存储交互（`tokio::spawn()`）
 
-### Phase 7: AetherCore Integration
+### Phase 7: AlephCore Integration
 - 添加 `router: Arc<Router>` 字段到 `AetherCore`
 - 实现 `process_with_ai()` pipeline
 - 更新 `process_clipboard()` 调用 AI
@@ -216,7 +216,7 @@ provider = "openai"
 
 ### Phase 8: Configuration & Testing
 - 创建 `config.example.toml`
-- 实现配置加载（`~/.aether/config.toml`）
+- 实现配置加载（`~/.aleph/config.toml`）
 - 编写集成测试（`tests/integration_ai.rs`）
 - 性能基准测试（`benches/ai_benchmarks.rs`）
 
@@ -241,7 +241,7 @@ provider = "openai"
 - 配置驱动（避免硬编码）
 
 ### 2. 错误处理原则
-- 使用 `AetherError` 统一错误类型
+- 使用 `AlephError` 统一错误类型
 - 提供清晰的用户友好错误消息
 - 区分可重试错误（Network）和不可重试错误（Authentication）
 
@@ -266,7 +266,7 @@ provider = "openai"
 
 ### 编译与测试
 ```bash
-cd Aether/core
+cd Aleph/core
 
 # 编译 Rust core
 cargo build
@@ -296,7 +296,7 @@ cargo run --bin uniffi-bindgen generate src/aether.udl \
   --out-dir ../Sources/Generated/
 
 # 复制 dylib 到 Frameworks
-cp target/release/libaethecore.dylib ../Frameworks/
+cp target/release/libalephcore.dylib ../Frameworks/
 ```
 
 ### macOS 构建（Phase 9）
@@ -305,10 +305,10 @@ cp target/release/libaethecore.dylib ../Frameworks/
 xcodegen generate
 
 # 打开 Xcode
-open Aether.xcodeproj
+open Aleph.xcodeproj
 
 # 命令行构建
-xcodebuild -project Aether.xcodeproj -scheme Aether build
+xcodebuild -project Aleph.xcodeproj -scheme Aleph build
 ```
 
 ---
@@ -319,7 +319,7 @@ xcodebuild -project Aether.xcodeproj -scheme Aether build
 - `Aether/core/src/providers/` - AI Provider 实现
 - `Aether/core/src/router/` - Router 实现（待添加）
 - `Aether/core/src/memory/` - Memory 模块（已实现，待集成）
-- `Aether/core/src/core.rs` - AetherCore（待集成 Router）
+- `Aether/core/src/core.rs` - AlephCore（待集成 Router）
 
 ### 配置
 - `Aether/core/Cargo.toml` - Rust 依赖

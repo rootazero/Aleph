@@ -55,30 +55,30 @@ Successfully implemented Task 20 (Memory Management API) and Task 21 (Settings U
 All memory management methods are properly exposed via UniFFI:
 
 ```idl
-interface AetherCore {
-  [Throws=AetherError]
+interface AlephCore {
+  [Throws=AlephError]
   MemoryStats get_memory_stats();
 
-  [Throws=AetherError]
+  [Throws=AlephError]
   sequence<MemoryEntry> search_memories(string app_bundle_id, string? window_title, u32 limit);
 
-  [Throws=AetherError]
+  [Throws=AlephError]
   void delete_memory(string id);
 
-  [Throws=AetherError]
+  [Throws=AlephError]
   u64 clear_memories(string? app_bundle_id, string? window_title);
 
   MemoryConfig get_memory_config();
 
-  [Throws=AetherError]
+  [Throws=AlephError]
   void update_memory_config(MemoryConfig config);
 
   void set_current_context(CapturedContext context);
 
-  [Throws=AetherError]
+  [Throws=AlephError]
   string store_interaction_memory(string user_input, string ai_output);
 
-  [Throws=AetherError]
+  [Throws=AlephError]
   string retrieve_and_augment_prompt(string base_prompt, string user_input);
 };
 ```
@@ -231,11 +231,11 @@ Interactive memory management interface:
        .tag(SettingsTab.memory)
    ```
 
-3. Added AetherCore parameter to SettingsView
+3. Added AlephCore parameter to SettingsView
    ```swift
-   let core: AetherCore?
+   let core: AlephCore?
 
-   init(themeEngine: ThemeEngine, core: AetherCore? = nil) {
+   init(themeEngine: ThemeEngine, core: AlephCore? = nil) {
        self.themeEngine = themeEngine
        self.core = core
    }
@@ -247,14 +247,14 @@ Interactive memory management interface:
        if let core = core {
            MemoryView(core: core)
        } else {
-           Text("Memory management requires AetherCore initialization")
+           Text("Memory management requires AlephCore initialization")
                .foregroundColor(.secondary)
        }
    ```
 
 ##### AppDelegate.swift Updates
 
-Modified settings window creation to pass AetherCore instance:
+Modified settings window creation to pass AlephCore instance:
 
 ```swift
 let settingsView = SettingsView(themeEngine: themeEngine, core: core)
@@ -326,7 +326,7 @@ All Rust core memory APIs have comprehensive unit tests:
    ↓
 2. **SwiftUI bindings update @State variables**
    ↓
-3. **Swift calls AetherCore methods via UniFFI**
+3. **Swift calls AlephCore methods via UniFFI**
    ↓
 4. **Rust core processes request via async runtime**
    ↓
@@ -338,7 +338,7 @@ All Rust core memory APIs have comprehensive unit tests:
 
 ### Security Considerations
 
-- ✅ All memory data stored locally in `~/.aether/memory.db`
+- ✅ All memory data stored locally in `~/.aleph/memory.db`
 - ✅ No network transmission of raw memory data
 - ✅ PII scrubbing before storage (implemented in Task 18)
 - ✅ App exclusion list prevents sensitive app tracking
@@ -368,7 +368,7 @@ All Rust core memory APIs have comprehensive unit tests:
 
 ### Build Artifacts
 - `Aether/Sources/Generated/aether.swift` (regenerated with new APIs)
-- `Aether.xcodeproj/` (regenerated with xcodegen)
+- `Aleph.xcodeproj/` (regenerated with xcodegen)
 
 ## Next Steps
 
@@ -394,7 +394,7 @@ All Rust core memory APIs have comprehensive unit tests:
 
 ```bash
 # Verify Rust core compiles
-cd Aether/core
+cd Aleph/core
 cargo build --release
 
 # Verify all tests pass
@@ -408,7 +408,7 @@ cd ../..
 xcodegen generate
 
 # Check for Swift syntax errors (requires full Xcode for module resolution)
-# swiftc -typecheck Aether/Sources/MemoryView.swift
+# swiftc -typecheck Aleph/Sources/MemoryView.swift
 ```
 
 ## Conclusion
@@ -421,4 +421,4 @@ Task 20 and Task 21 are **COMPLETED** and ready for manual testing in Xcode. The
 4. ✅ **Error Handling** - Graceful degradation and user feedback
 5. ✅ **Documentation** - Code comments and implementation notes
 
-The memory management system is now fully integrated into the Aether application and ready for end-to-end testing with real AI providers (Task 24).
+The memory management system is now fully integrated into the Aleph application and ready for end-to-end testing with real AI providers (Task 24).

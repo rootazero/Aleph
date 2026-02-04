@@ -9,7 +9,7 @@ use tracing::{info, warn};
 
 use crate::error::Result;
 use crate::skill_evolution::types::SolidificationSuggestion;
-use crate::tools::{AetherToolDyn, AetherToolServer};
+use crate::tools::{AlephToolDyn, AlephToolServer};
 
 use super::generator::{MarkdownSkillGenerator, MarkdownSkillGeneratorConfig};
 use super::loader::load_skills_from_dir;
@@ -26,7 +26,7 @@ pub struct EvolutionAutoLoader {
     generator: MarkdownSkillGenerator,
 
     /// Tool server for registering loaded skills
-    tool_server: Arc<AetherToolServer>,
+    tool_server: Arc<AlephToolServer>,
 
     /// Track generated skill paths for later management
     generated_skills: std::sync::RwLock<Vec<PathBuf>>,
@@ -34,7 +34,7 @@ pub struct EvolutionAutoLoader {
 
 impl EvolutionAutoLoader {
     /// Create a new auto-loader with default configuration
-    pub fn new(tool_server: Arc<AetherToolServer>) -> Self {
+    pub fn new(tool_server: Arc<AlephToolServer>) -> Self {
         Self {
             generator: MarkdownSkillGenerator::new(),
             tool_server,
@@ -44,7 +44,7 @@ impl EvolutionAutoLoader {
 
     /// Create with custom generator configuration
     pub fn with_config(
-        tool_server: Arc<AetherToolServer>,
+        tool_server: Arc<AlephToolServer>,
         config: MarkdownSkillGeneratorConfig,
     ) -> Self {
         Self {
@@ -84,7 +84,7 @@ impl EvolutionAutoLoader {
         // Track generated skill
         let skill_dir = skill_path
             .parent()
-            .ok_or_else(|| crate::error::AetherError::Other {
+            .ok_or_else(|| crate::error::AlephError::Other {
                 message: "Invalid skill path".to_string(),
                 suggestion: None,
             })?
@@ -229,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_auto_loader_creation() {
-        let tool_server = Arc::new(AetherToolServer::new());
+        let tool_server = Arc::new(AlephToolServer::new());
         let loader = EvolutionAutoLoader::new(tool_server);
 
         assert_eq!(loader.get_generated_skills().len(), 0);
@@ -238,7 +238,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_from_suggestion() {
         let temp_dir = TempDir::new().unwrap();
-        let tool_server = Arc::new(AetherToolServer::new());
+        let tool_server = Arc::new(AlephToolServer::new());
 
         let config = MarkdownSkillGeneratorConfig {
             output_dir: temp_dir.path().to_path_buf(),
@@ -264,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn test_batch_load() {
         let temp_dir = TempDir::new().unwrap();
-        let tool_server = Arc::new(AetherToolServer::new());
+        let tool_server = Arc::new(AlephToolServer::new());
 
         let config = MarkdownSkillGeneratorConfig {
             output_dir: temp_dir.path().to_path_buf(),
@@ -293,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn test_clear_tracking() {
         let temp_dir = TempDir::new().unwrap();
-        let tool_server = Arc::new(AetherToolServer::new());
+        let tool_server = Arc::new(AlephToolServer::new());
 
         let config = MarkdownSkillGeneratorConfig {
             output_dir: temp_dir.path().to_path_buf(),

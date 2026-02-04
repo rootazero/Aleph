@@ -6,7 +6,7 @@
 
 ## 概述
 
-成功实施 Phase 1 的所有 5 个任务，为 Aether 的 AI 提供商集成奠定了坚实的基础。
+成功实施 Phase 1 的所有 5 个任务，为 Aleph 的 AI 提供商集成奠定了坚实的基础。
 
 ## 完成的任务
 
@@ -40,7 +40,7 @@
 - `InvalidConfig(String)` - 配置错误
 
 **实现内容**:
-- 每个错误类型都有便捷构造函数（如 `AetherError::network()`)
+- 每个错误类型都有便捷构造函数（如 `AlephError::network()`)
 - UniFFI 定义已更新，支持跨 FFI 边界传递
 - 完整的单元测试覆盖
 
@@ -136,7 +136,7 @@ cargo test config --lib      # 8 passed
 ## 代码结构
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── error.rs                     # ✅ 扩展了 7 个新错误类型
 ├── config.rs                    # ✅ 新增 GeneralConfig 和 ProviderConfig
 ├── aether.udl                   # ✅ 更新 UniFFI 定义
@@ -156,7 +156,7 @@ async-trait = "0.1"  # 用于 async trait 方法
 ## UniFFI 更新
 
 **`aether.udl` 变更**:
-- 新增 7 个错误类型到 `AetherError` enum
+- 新增 7 个错误类型到 `AlephError` enum
 - 新增 `GeneralConfig` dictionary
 - `Config` dictionary 不再直接暴露（因 HashMap 限制）
 

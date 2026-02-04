@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use aethecore::gateway::run_event_bus::{ActiveRunHandle, RunEvent, wait_for_run_end};
+//! use alephcore::gateway::run_event_bus::{ActiveRunHandle, RunEvent, wait_for_run_end};
 //! use std::time::Duration;
 //!
 //! // Create a new run handle

@@ -7,7 +7,7 @@ use super::prompt::build_prompt;
 use super::{CaptureMode, VisionRequest, VisionResult, VisionTask};
 use crate::clipboard::{ImageData, ImageFormat as ClipboardImageFormat};
 use crate::config::Config;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::{create_provider, AiProvider};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use std::io::Cursor;
@@ -57,7 +57,7 @@ impl VisionService {
     /// # Returns
     ///
     /// * `Ok(VisionResult)` - Processing result with extracted text/description
-    /// * `Err(AetherError)` - Processing error
+    /// * `Err(AlephError)` - Processing error
     pub async fn process_vision(
         &self,
         request: VisionRequest,
@@ -77,7 +77,7 @@ impl VisionService {
 
         // 2. Check if provider supports vision
         if !provider.supports_vision() {
-            return Err(AetherError::provider(format!(
+            return Err(AlephError::provider(format!(
                 "Provider '{}' does not support vision/image input. Please configure a vision-capable provider (e.g., Claude, GPT-4o, Gemini) as your default.",
                 provider.name()
             )));
@@ -131,7 +131,7 @@ impl VisionService {
     /// # Returns
     ///
     /// * `Ok(String)` - Extracted text
-    /// * `Err(AetherError)` - Processing error
+    /// * `Err(AlephError)` - Processing error
     pub async fn extract_text(&self, image_data: Vec<u8>, app_config: &Config) -> Result<String> {
         let request = VisionRequest {
             image_data,
@@ -151,7 +151,7 @@ impl VisionService {
         // Get default provider name from config
         let default_provider_name = config.general.default_provider.as_ref().ok_or_else(|| {
             tracing::error!("[OCR-Vision] No default_provider in config.general");
-            AetherError::invalid_config(
+            AlephError::invalid_config(
                 "No default provider configured. Please set a default provider in settings."
                     .to_string(),
             )
@@ -169,7 +169,7 @@ impl VisionService {
                 available_providers = ?config.providers.keys().collect::<Vec<_>>(),
                 "[OCR-Vision] Provider not found in config.providers"
             );
-            AetherError::invalid_config(format!(
+            AlephError::invalid_config(format!(
                 "Default provider '{}' not found in configuration. Available: {:?}",
                 default_provider_name,
                 config.providers.keys().collect::<Vec<_>>()
@@ -190,7 +190,7 @@ impl VisionService {
                 provider = %default_provider_name,
                 "[OCR-Vision] Provider is disabled"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "Default provider '{}' is disabled",
                 default_provider_name
             )));
@@ -222,7 +222,7 @@ impl VisionService {
     fn preprocess_image(&self, data: &[u8]) -> Result<ProcessedImage> {
         // Load image from memory
         let img = image::load_from_memory(data)
-            .map_err(|e| AetherError::other(format!("Failed to load image: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to load image: {}", e)))?;
 
         let original_width = img.width();
         let original_height = img.height();
@@ -244,7 +244,7 @@ impl VisionService {
         let mut cursor = Cursor::new(&mut buffer);
 
         img.write_to(&mut cursor, ImageFormat::Jpeg)
-            .map_err(|e| AetherError::other(format!("Failed to encode image: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to encode image: {}", e)))?;
 
         Ok(ProcessedImage {
             data: buffer,

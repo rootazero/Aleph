@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement the POE (Principle-Operation-Evaluation) architecture to transform Aether from a chat-based assistant into a goal-oriented professional agent.
+**Goal:** Implement the POE (Principle-Operation-Evaluation) architecture to transform Aleph from a chat-based assistant into a goal-oriented professional agent.
 
 **Architecture:** Independent `poe/` module that wraps existing `AgentLoop` as a Worker. POE Manager orchestrates the P→O→E cycle with entropy-based budget control. Reuses `spec_driven::LlmJudge` for semantic validation.
 
@@ -91,7 +91,7 @@ touch core/src/poe/validation/composite.rs
 
 **Step 5: Verify compilation**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -5`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -5`
 Expected: Errors about empty files (we'll fix in next tasks)
 
 **Step 6: Commit**
@@ -503,7 +503,7 @@ pub struct ExperienceOutcome {
 
 **Step 2: Verify compilation**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -10`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -10`
 Expected: Errors about missing budget/validation/worker/manager modules (expected, we'll implement next)
 
 **Step 3: Commit**
@@ -756,12 +756,12 @@ mod tests {
 
 **Step 2: Verify compilation**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -5`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -5`
 Expected: Still errors about missing validation/worker/manager (expected)
 
 **Step 3: Run tests**
 
-Run: `cargo test -p aethecore budget:: 2>&1 | tail -20`
+Run: `cargo test -p alephcore budget:: 2>&1 | tail -20`
 Expected: Budget tests should pass
 
 **Step 4: Commit**
@@ -1348,11 +1348,11 @@ grep -q "^regex" core/Cargo.toml || echo 'regex = "1"' >> core/Cargo.toml
 
 **Step 4: Verify compilation**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -5`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -5`
 
 **Step 5: Run tests**
 
-Run: `cargo test -p aethecore hard:: 2>&1 | tail -20`
+Run: `cargo test -p alephcore hard:: 2>&1 | tail -20`
 Expected: Hard validation tests pass
 
 **Step 6: Commit**
@@ -1397,7 +1397,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use crate::agents::thinking::ThinkLevel;
 use crate::poe::types::{JudgeTarget, ModelTier, SoftMetric, SoftRuleResult, ValidationRule};
@@ -1527,7 +1527,7 @@ impl SemanticValidator {
             JudgeTarget::File(path) => {
                 tokio::fs::read_to_string(path)
                     .await
-                    .map_err(|e| AetherError::internal(format!(
+                    .map_err(|e| AlephError::internal(format!(
                         "Failed to read file {}: {}",
                         path.display(),
                         e
@@ -1544,8 +1544,8 @@ impl SemanticValidator {
                         .output(),
                 )
                 .await
-                .map_err(|_| AetherError::internal("Command timed out"))?
-                .map_err(|e| AetherError::internal(format!("Command failed: {}", e)))?;
+                .map_err(|_| AlephError::internal("Command timed out"))?
+                .map_err(|e| AlephError::internal(format!("Command failed: {}", e)))?;
 
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1561,7 +1561,7 @@ impl SemanticValidator {
         let json_str = extract_json(response);
 
         serde_json::from_str(&json_str).map_err(|e| {
-            AetherError::internal(format!(
+            AlephError::internal(format!(
                 "Failed to parse judge response: {}. Response: {}",
                 e,
                 response.chars().take(200).collect::<String>()
@@ -1641,7 +1641,7 @@ That's my verdict."#;
 
 **Step 2: Verify compilation**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -5`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -5`
 
 **Step 3: Commit**
 
@@ -1985,7 +1985,7 @@ mod tests {
 
 **Step 2: Verify compilation**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -5`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -5`
 
 **Step 3: Commit**
 
@@ -2179,7 +2179,7 @@ impl Worker for MockWorker {
 
 **Step 2: Verify compilation**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -5`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -5`
 
 **Step 3: Commit**
 
@@ -2463,11 +2463,11 @@ mod tests {
 
 **Step 2: Verify compilation**
 
-Run: `cargo build -p aethecore 2>&1 | grep -E "^error" | head -5`
+Run: `cargo build -p alephcore 2>&1 | grep -E "^error" | head -5`
 
 **Step 3: Run tests**
 
-Run: `cargo test -p aethecore poe:: 2>&1 | tail -30`
+Run: `cargo test -p alephcore poe:: 2>&1 | tail -30`
 
 **Step 4: Commit**
 
@@ -2508,7 +2508,7 @@ Update `core/src/poe/mod.rs`:
 //! # Example
 //!
 //! ```ignore
-//! use aethecore::poe::{PoeManager, PoeTask, SuccessManifest, ValidationRule};
+//! use alephcore::poe::{PoeManager, PoeTask, SuccessManifest, ValidationRule};
 //!
 //! // Define success criteria
 //! let manifest = SuccessManifest::new("task-1", "Add user authentication")
@@ -2554,12 +2554,12 @@ pub mod poe;
 
 **Step 3: Full compilation check**
 
-Run: `cargo build -p aethecore 2>&1 | tail -20`
+Run: `cargo build -p alephcore 2>&1 | tail -20`
 Expected: Successful build with only warnings
 
 **Step 4: Run all POE tests**
 
-Run: `cargo test -p aethecore poe 2>&1 | tail -30`
+Run: `cargo test -p alephcore poe 2>&1 | tail -30`
 Expected: All tests pass
 
 **Step 5: Commit**
@@ -2727,7 +2727,7 @@ async fn test_poe_command_validation() {
 
 **Step 2: Run integration tests**
 
-Run: `cargo test -p aethecore poe::tests 2>&1 | tail -30`
+Run: `cargo test -p alephcore poe::tests 2>&1 | tail -30`
 Expected: All tests pass
 
 **Step 3: Commit**

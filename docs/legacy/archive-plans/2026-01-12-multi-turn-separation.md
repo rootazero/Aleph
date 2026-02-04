@@ -34,7 +34,7 @@ And add to target dependencies:
 
 ```yaml
 targets:
-  Aether:
+  Aleph:
     dependencies:
       - package: GRDB
 ```
@@ -64,7 +64,7 @@ git commit -m "feat: add GRDB.swift dependency for conversation persistence"
 ```swift
 //
 //  ConversationModels.swift
-//  Aether
+//  Aleph
 //
 //  Data models for conversation persistence.
 //
@@ -127,7 +127,7 @@ enum MessageRole: String, Codable, DatabaseValueConvertible {
 ```swift
 //
 //  ConversationStore.swift
-//  Aether
+//  Aleph
 //
 //  SQLite persistence for multi-turn conversations.
 //
@@ -210,13 +210,13 @@ final class ConversationStore {
 
 **Step 3: Verify compilation**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | tail -5`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | tail -5`
 Expected: BUILD SUCCEEDED
 
 **Step 4: Commit**
 
 ```bash
-git add Aether/Sources/Store/
+git add Aleph/Sources/Store/
 git commit -m "feat: add ConversationStore with SQLite database setup"
 ```
 
@@ -323,13 +323,13 @@ Add to `ConversationStore`:
 
 **Step 2: Verify compilation**
 
-Run: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: BUILD SUCCEEDED
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/Store/ConversationStore.swift
+git add Aleph/Sources/Store/ConversationStore.swift
 git commit -m "feat: add Topic CRUD operations to ConversationStore"
 ```
 
@@ -414,13 +414,13 @@ Add to `ConversationStore`:
 
 **Step 2: Verify compilation**
 
-Run: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: BUILD SUCCEEDED
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/Store/ConversationStore.swift
+git add Aleph/Sources/Store/ConversationStore.swift
 git commit -m "feat: add Message CRUD operations to ConversationStore"
 ```
 
@@ -441,7 +441,7 @@ git commit -m "feat: add Message CRUD operations to ConversationStore"
 //! Uses a lightweight AI call to generate concise titles from conversation content.
 
 use crate::providers::AiProvider;
-use crate::error::AetherError;
+use crate::error::AlephError;
 
 const TITLE_PROMPT: &str = r#"Based on the following conversation, generate a very short title (maximum 15 Chinese characters or 30 English characters). Return ONLY the title, nothing else.
 
@@ -533,13 +533,13 @@ In `Aether/core/src/aether.udl`, add to interface:
     string generate_topic_title(string user_input, string ai_response);
 ```
 
-**Step 4: Implement in AetherCore**
+**Step 4: Implement in AlephCore**
 
 In `Aether/core/src/lib.rs`, add to `AetherCore` impl:
 
 ```rust
     /// Generate a title for a conversation topic
-    pub async fn generate_topic_title(&self, user_input: String, ai_response: String) -> Result<String, AetherError> {
+    pub async fn generate_topic_title(&self, user_input: String, ai_response: String) -> Result<String, AlephError> {
         let provider = self.get_provider()?;
         Ok(title_generator::generate_title(provider.as_ref(), &user_input, &ai_response).await)
     }
@@ -547,18 +547,18 @@ In `Aether/core/src/lib.rs`, add to `AetherCore` impl:
 
 **Step 5: Run tests**
 
-Run: `cd Aether/core && cargo test title_generator`
+Run: `cd Aleph/core && cargo test title_generator`
 Expected: All tests pass
 
 **Step 6: Build and generate bindings**
 
-Run: `cd Aether/core && cargo build --release && cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/`
+Run: `cd Aleph/core && cargo build --release && cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/`
 Expected: Build succeeds, bindings generated
 
 **Step 7: Commit**
 
 ```bash
-git add Aether/core/src/title_generator.rs Aether/core/src/lib.rs Aether/core/src/aether.udl Aether/Sources/Generated/
+git add Aleph/core/src/title_generator.rs Aleph/core/src/lib.rs Aleph/core/src/aether.udl Aleph/Sources/Generated/
 git commit -m "feat(core): add generate_topic_title API for conversation topics"
 ```
 
@@ -576,7 +576,7 @@ git commit -m "feat(core): add generate_topic_title API for conversation topics"
 ```swift
 //
 //  ConversationDisplayWindow.swift
-//  Aether
+//  Aleph
 //
 //  Floating window for displaying multi-turn conversation history.
 //  Positioned at top-right corner, draggable, with fixed width and adaptive height.
@@ -711,13 +711,13 @@ final class ConversationDisplayWindow: NSWindow {
 
 **Step 2: Verify compilation**
 
-Run: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: Error about missing ConversationDisplayViewModel/View (expected, will create next)
 
 **Step 3: Commit partial progress**
 
 ```bash
-git add Aether/Sources/MultiTurn/
+git add Aleph/Sources/MultiTurn/
 git commit -m "feat: add ConversationDisplayWindow framework (WIP)"
 ```
 
@@ -733,7 +733,7 @@ git commit -m "feat: add ConversationDisplayWindow framework (WIP)"
 ```swift
 //
 //  ConversationDisplayViewModel.swift
-//  Aether
+//  Aleph
 //
 //  View model for conversation display window.
 //
@@ -851,13 +851,13 @@ final class ConversationDisplayViewModel: ObservableObject {
 
 **Step 2: Verify compilation**
 
-Run: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: Error about missing ConversationDisplayView (expected, will create next)
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/ConversationDisplayViewModel.swift
+git add Aleph/Sources/MultiTurn/ConversationDisplayViewModel.swift
 git commit -m "feat: add ConversationDisplayViewModel"
 ```
 
@@ -873,7 +873,7 @@ git commit -m "feat: add ConversationDisplayViewModel"
 ```swift
 //
 //  ConversationDisplayView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI view for displaying conversation history.
 //
@@ -1091,13 +1091,13 @@ struct VisualEffectView: NSViewRepresentable {
 
 **Step 2: Verify compilation**
 
-Run: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: BUILD SUCCEEDED
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/ConversationDisplayView.swift
+git add Aleph/Sources/MultiTurn/ConversationDisplayView.swift
 git commit -m "feat: add ConversationDisplayView with message bubbles"
 ```
 
@@ -1114,7 +1114,7 @@ git commit -m "feat: add ConversationDisplayView with message bubbles"
 ```swift
 //
 //  MultiTurnInputWindow.swift
-//  Aether
+//  Aleph
 //
 //  Input window for multi-turn conversation mode.
 //  Centered on screen, supports text input and // command for topic list.
@@ -1247,7 +1247,7 @@ final class MultiTurnInputWindow: NSWindow {
 ```swift
 //
 //  MultiTurnInputView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI view for multi-turn input window.
 //
@@ -1481,13 +1481,13 @@ struct TopicRowView: View {
 
 **Step 3: Verify compilation**
 
-Run: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: BUILD SUCCEEDED
 
 **Step 4: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/MultiTurnInputWindow.swift Aether/Sources/MultiTurn/MultiTurnInputView.swift
+git add Aleph/Sources/MultiTurn/MultiTurnInputWindow.swift Aleph/Sources/MultiTurn/MultiTurnInputView.swift
 git commit -m "feat: add MultiTurnInputWindow with topic list support"
 ```
 
@@ -1505,7 +1505,7 @@ git commit -m "feat: add MultiTurnInputWindow with topic list support"
 ```swift
 //
 //  MultiTurnCoordinator.swift
-//  Aether
+//  Aleph
 //
 //  Coordinator for multi-turn conversation mode.
 //  Manages input window, display window, persistence, and AI interaction.
@@ -1525,7 +1525,7 @@ final class MultiTurnCoordinator {
 
     // MARK: - Dependencies
 
-    private weak var core: AetherCore?
+    private weak var core: AlephCore?
 
     // MARK: - Windows
 
@@ -1559,7 +1559,7 @@ final class MultiTurnCoordinator {
     // MARK: - Configuration
 
     /// Configure with dependencies
-    func configure(core: AetherCore) {
+    func configure(core: AlephCore) {
         self.core = core
     }
 
@@ -1717,13 +1717,13 @@ final class MultiTurnCoordinator {
 
 **Step 2: Verify compilation**
 
-Run: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: BUILD SUCCEEDED (or errors about ConversationTurn which we'll fix)
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/MultiTurn/MultiTurnCoordinator.swift
+git add Aleph/Sources/MultiTurn/MultiTurnCoordinator.swift
 git commit -m "feat: add MultiTurnCoordinator framework"
 ```
 
@@ -1754,13 +1754,13 @@ MultiTurnCoordinator.shared.handleHotkey()
 
 **Step 3: Verify compilation**
 
-Run: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: BUILD SUCCEEDED
 
 **Step 4: Commit**
 
 ```bash
-git add Aether/Sources/AppDelegate.swift
+git add Aleph/Sources/AppDelegate.swift
 git commit -m "feat: integrate MultiTurnCoordinator into AppDelegate"
 ```
 
@@ -1789,13 +1789,13 @@ Keep:
 
 **Step 2: Verify compilation**
 
-Run: `xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: BUILD SUCCEEDED
 
 **Step 3: Commit**
 
 ```bash
-git add Aether/Sources/Coordinator/UnifiedInputCoordinator.swift
+git add Aleph/Sources/Coordinator/UnifiedInputCoordinator.swift
 git commit -m "refactor: simplify UnifiedInputCoordinator, remove multi-turn logic"
 ```
 
@@ -1820,7 +1820,7 @@ Add to top of each file:
 **Step 2: Commit**
 
 ```bash
-git add Aether/Sources/Coordinator/ConversationCoordinator.swift Aether/Sources/Utils/ConversationManager.swift
+git add Aleph/Sources/Coordinator/ConversationCoordinator.swift Aleph/Sources/Utils/ConversationManager.swift
 git commit -m "refactor: mark ConversationCoordinator and ConversationManager as deprecated"
 ```
 
@@ -1863,16 +1863,16 @@ Create a manual testing checklist:
 
 **Step 1: Run full test suite**
 
-Run: `cd Aether/core && cargo test`
+Run: `cd Aleph/core && cargo test`
 Expected: All tests pass
 
 **Step 2: Generate final bindings**
 
-Run: `cd Aether/core && cargo build --release && cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/ && cp target/release/libaethecore.dylib ../Frameworks/`
+Run: `cd Aleph/core && cargo build --release && cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/ && cp target/release/libalephcore.dylib ../Frameworks/`
 
 **Step 3: Final build verification**
 
-Run: `xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build 2>&1 | grep -E "(BUILD|error:)"`
+Run: `xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Release build 2>&1 | grep -E "(BUILD|error:)"`
 Expected: BUILD SUCCEEDED
 
 **Step 4: Create summary commit**

@@ -336,13 +336,13 @@ pub use keyword::{KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule};
 
 **Step 3: Run tests to verify**
 
-Run: `cd Aether/core && cargo test intent::keyword --lib`
+Run: `cd Aleph/core && cargo test intent::keyword --lib`
 Expected: All tests PASS
 
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/intent/keyword.rs Aether/core/src/intent/mod.rs
+git add Aleph/core/src/intent/keyword.rs Aleph/core/src/intent/mod.rs
 git commit -m "feat(intent): add KeywordIndex module with weighted scoring and CJK support"
 ```
 
@@ -526,13 +526,13 @@ pub use keyword::{KeywordPolicy, KeywordRuleConfig, WeightedKeyword};
 
 **Step 3: Run tests**
 
-Run: `cd Aether/core && cargo test config::types::policies::keyword --lib`
+Run: `cd Aleph/core && cargo test config::types::policies::keyword --lib`
 Expected: All tests PASS
 
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/config/types/policies/keyword.rs Aether/core/src/config/types/policies/mod.rs
+git add Aleph/core/src/config/types/policies/keyword.rs Aleph/core/src/config/types/policies/mod.rs
 git commit -m "feat(config): add KeywordPolicy for configurable keyword matching rules"
 ```
 
@@ -701,13 +701,13 @@ fn test_enhanced_keyword_exclusion() {
 
 **Step 6: Run tests**
 
-Run: `cd Aether/core && cargo test intent::classifier --lib`
+Run: `cd Aleph/core && cargo test intent::classifier --lib`
 Expected: All tests PASS
 
 **Step 7: Commit**
 
 ```bash
-git add Aether/core/src/intent/classifier.rs
+git add Aleph/core/src/intent/classifier.rs
 git commit -m "feat(intent): integrate KeywordIndex for enhanced L2 matching"
 ```
 
@@ -827,13 +827,13 @@ impl Default for IntentClassifier {
 
 **Step 5: Run tests**
 
-Run: `cd Aether/core && cargo test intent::classifier --lib`
+Run: `cd Aleph/core && cargo test intent::classifier --lib`
 Expected: All tests PASS
 
 **Step 6: Commit**
 
 ```bash
-git add Aether/core/src/intent/classifier.rs
+git add Aleph/core/src/intent/classifier.rs
 git commit -m "feat(intent): connect AiIntentDetector as L3 fallback"
 ```
 
@@ -854,12 +854,12 @@ pub use types::policies::keyword::{KeywordPolicy, KeywordRuleConfig, WeightedKey
 
 **Step 2: Run full test suite**
 
-Run: `cd Aether/core && cargo test --lib`
+Run: `cd Aleph/core && cargo test --lib`
 Expected: All tests PASS
 
 **Step 3: Build check**
 
-Run: `cd Aether/core && cargo build`
+Run: `cd Aleph/core && cargo build`
 Expected: Build succeeds without errors
 
 **Step 4: Commit**
@@ -923,7 +923,7 @@ git commit -m "feat(intent): complete intent routing enhancement with KeywordInd
 **Step 2: Commit**
 
 ```bash
-git add Aether/core/src/intent/mod.rs
+git add Aleph/core/src/intent/mod.rs
 git commit -m "docs(intent): update module documentation with three-layer architecture"
 ```
 

@@ -1,4 +1,4 @@
-# Phase 7: Next Steps - Aether vs Moltbot Gap Analysis
+# Phase 7: Next Steps - Aleph vs Moltbot Gap Analysis
 
 **Date**: 2026-01-28
 **Status**: Planning
@@ -162,7 +162,7 @@ pub enum ConfigEvent {
 **Gateway Integration**:
 
 ```rust
-// In aether_gateway.rs
+// In aleph_gateway.rs
 let config_watcher = ConfigWatcher::new(config_path)?;
 let mut config_rx = config_watcher.subscribe();
 
@@ -278,7 +278,7 @@ ui/
 **Gateway Static Serving**:
 
 ```rust
-// In aether_gateway.rs
+// In aleph_gateway.rs
 
 // Serve WebChat UI at /
 let app = Router::new()
@@ -319,7 +319,7 @@ let app = Router::new()
 **Implementation Summary:**
 - Created `hot_reload.rs` with ConfigWatcher using notify-debouncer-full
 - Added RPC handlers: config.reload, config.get, config.validate, config.path
-- Integrated hot reload into aether_gateway.rs
+- Integrated hot reload into aleph_gateway.rs
 - Events broadcast to connected clients on config change
 
 ### Phase 7.2: Device Pairing ✅ ALREADY IMPLEMENTED
@@ -336,7 +336,7 @@ let app = Router::new()
 - `core/src/gateway/security/pairing.rs` - Pairing flow management
 - `core/src/gateway/security/token.rs` - Token generation/validation
 - `core/src/gateway/handlers/auth.rs` - RPC handlers
-- `core/src/bin/aether_gateway.rs` - CLI commands (pairing/devices subcommands)
+- `core/src/bin/aleph_gateway.rs` - CLI commands (pairing/devices subcommands)
 
 ### Phase 7.3: WebChat UI ✅ COMPLETE
 - [x] Access at http://127.0.0.1:18790/ (separate HTTP port)

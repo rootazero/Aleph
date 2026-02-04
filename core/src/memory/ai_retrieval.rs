@@ -17,7 +17,7 @@
 //! ```
 
 use crate::config::AiRetrievalPolicy;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::memory::context::MemoryEntry;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
@@ -236,7 +236,7 @@ impl AiMemoryRetriever {
             .process(&prompt, Some(&system_prompt))
             .await
             .map_err(|e| {
-                AetherError::config(format!(
+                AlephError::config(format!(
                     "AI memory selection failed: {}. Falling back to recent memories.",
                     e
                 ))

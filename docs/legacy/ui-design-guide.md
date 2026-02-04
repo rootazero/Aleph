@@ -2,11 +2,11 @@
 
 ## Overview
 
-This document records the design decisions, visual specifications, and usage guidelines for the modernized Aether Settings interface. It serves as the source of truth for maintaining visual consistency and design quality.
+This document records the design decisions, visual specifications, and usage guidelines for the modernized Aleph Settings interface. It serves as the source of truth for maintaining visual consistency and design quality.
 
 ## Design Goals
 
-1. **Modern & Professional**: Contemporary macOS aesthetic that reflects Aether's position as a high-end AI middleware
+1. **Modern & Professional**: Contemporary macOS aesthetic that reflects Aleph's position as a high-end AI middleware
 2. **Clarity & Hierarchy**: Clear visual hierarchy making configuration intuitive
 3. **Consistency**: Unified design language across all settings tabs
 4. **Native Feel**: Feels like a built-in macOS application
@@ -680,4 +680,4 @@ When updating design:
 **Document Version**: 1.0
 **Last Updated**: 2025-12-26
 **Design Reference**: docs/uisample.png
-**Maintained By**: Aether Development Team
+**Maintained By**: Aleph Development Team

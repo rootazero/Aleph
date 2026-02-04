@@ -1,54 +1,54 @@
 //! Tool execution implementations for builtin tools
 //!
-//! Note: Most tools now use AetherTool::call_json directly from registry.rs.
+//! Note: Most tools now use AlephTool::call_json directly from registry.rs.
 //! This file only contains execute_* methods for tools that haven't been
-//! migrated to AetherTool (video/audio generation, delegate).
+//! migrated to AlephTool (video/audio generation, delegate).
 
 use serde_json::Value;
 use tracing::info;
 
 use crate::agents::sub_agents::{DelegateArgs, DelegateTool};
-use crate::error::{AetherError, Result};
-use crate::tools::AetherTool;
+use crate::error::{AlephError, Result};
+use crate::tools::AlephTool;
 
 use super::BuiltinToolRegistry;
 
 impl BuiltinToolRegistry {
     /// Execute the video generation tool
     ///
-    /// Note: Video generation has not been migrated to AetherTool yet
+    /// Note: Video generation has not been migrated to AlephTool yet
     /// as it uses the generation registry directly.
     pub(crate) async fn execute_video_generate(&self, arguments: Value) -> Result<Value> {
         use crate::generation::{GenerationRequest, GenerationType};
 
         let registry = self.generation_registry.as_ref().ok_or_else(|| {
-            AetherError::tool("Video generation not available: no generation registry configured")
+            AlephError::tool("Video generation not available: no generation registry configured")
         })?;
 
         // Parse arguments
         let obj = arguments.as_object().ok_or_else(|| {
-            AetherError::tool("Invalid generate_video arguments: expected object")
+            AlephError::tool("Invalid generate_video arguments: expected object")
         })?;
 
         let prompt = obj
             .get("prompt")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AetherError::tool("Missing required parameter: prompt"))?;
+            .ok_or_else(|| AlephError::tool("Missing required parameter: prompt"))?;
 
         let provider_name = obj.get("provider").and_then(|v| v.as_str());
 
         // Get provider from registry
         let (name, provider) = {
             let reg = registry.read().map_err(|e| {
-                AetherError::tool(format!("Failed to acquire registry lock: {}", e))
+                AlephError::tool(format!("Failed to acquire registry lock: {}", e))
             })?;
 
             if let Some(pname) = provider_name {
                 let p = reg.get(pname).ok_or_else(|| {
-                    AetherError::tool(format!("Provider '{}' not found", pname))
+                    AlephError::tool(format!("Provider '{}' not found", pname))
                 })?;
                 if !p.supports(GenerationType::Video) {
-                    return Err(AetherError::tool(format!(
+                    return Err(AlephError::tool(format!(
                         "Provider '{}' does not support video generation",
                         pname
                     )));
@@ -56,7 +56,7 @@ impl BuiltinToolRegistry {
                 (pname.to_string(), p)
             } else {
                 reg.first_for_type(GenerationType::Video)
-                    .ok_or_else(|| AetherError::tool("No video generation provider available"))?
+                    .ok_or_else(|| AlephError::tool("No video generation provider available"))?
             }
         };
 
@@ -65,7 +65,7 @@ impl BuiltinToolRegistry {
         // Create request and generate
         let request = GenerationRequest::video(prompt);
         let output = provider.generate(request).await.map_err(|e| {
-            AetherError::tool(format!("Video generation failed: {}", e))
+            AlephError::tool(format!("Video generation failed: {}", e))
         })?;
 
         // Build result
@@ -86,39 +86,39 @@ impl BuiltinToolRegistry {
 
     /// Execute the audio generation tool
     ///
-    /// Note: Audio generation has not been migrated to AetherTool yet
+    /// Note: Audio generation has not been migrated to AlephTool yet
     /// as it uses the generation registry directly.
     pub(crate) async fn execute_audio_generate(&self, arguments: Value) -> Result<Value> {
         use crate::generation::{GenerationRequest, GenerationType};
 
         let registry = self.generation_registry.as_ref().ok_or_else(|| {
-            AetherError::tool("Audio generation not available: no generation registry configured")
+            AlephError::tool("Audio generation not available: no generation registry configured")
         })?;
 
         // Parse arguments
         let obj = arguments.as_object().ok_or_else(|| {
-            AetherError::tool("Invalid generate_audio arguments: expected object")
+            AlephError::tool("Invalid generate_audio arguments: expected object")
         })?;
 
         let prompt = obj
             .get("prompt")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AetherError::tool("Missing required parameter: prompt"))?;
+            .ok_or_else(|| AlephError::tool("Missing required parameter: prompt"))?;
 
         let provider_name = obj.get("provider").and_then(|v| v.as_str());
 
         // Get provider from registry
         let (name, provider) = {
             let reg = registry.read().map_err(|e| {
-                AetherError::tool(format!("Failed to acquire registry lock: {}", e))
+                AlephError::tool(format!("Failed to acquire registry lock: {}", e))
             })?;
 
             if let Some(pname) = provider_name {
                 let p = reg.get(pname).ok_or_else(|| {
-                    AetherError::tool(format!("Provider '{}' not found", pname))
+                    AlephError::tool(format!("Provider '{}' not found", pname))
                 })?;
                 if !p.supports(GenerationType::Audio) {
-                    return Err(AetherError::tool(format!(
+                    return Err(AlephError::tool(format!(
                         "Provider '{}' does not support audio generation",
                         pname
                     )));
@@ -126,7 +126,7 @@ impl BuiltinToolRegistry {
                 (pname.to_string(), p)
             } else {
                 reg.first_for_type(GenerationType::Audio)
-                    .ok_or_else(|| AetherError::tool("No audio generation provider available"))?
+                    .ok_or_else(|| AlephError::tool("No audio generation provider available"))?
             }
         };
 
@@ -135,7 +135,7 @@ impl BuiltinToolRegistry {
         // Create request and generate
         let request = GenerationRequest::audio(prompt);
         let output = provider.generate(request).await.map_err(|e| {
-            AetherError::tool(format!("Audio generation failed: {}", e))
+            AlephError::tool(format!("Audio generation failed: {}", e))
         })?;
 
         // Build result
@@ -157,18 +157,18 @@ impl BuiltinToolRegistry {
     /// Execute the delegate tool for sub-agent delegation
     pub(crate) async fn execute_delegate(&self, arguments: Value) -> Result<Value> {
         let dispatcher = self.sub_agent_dispatcher.as_ref().ok_or_else(|| {
-            AetherError::tool("delegate not available: no sub_agent_dispatcher configured")
+            AlephError::tool("delegate not available: no sub_agent_dispatcher configured")
         })?;
 
         let args: DelegateArgs = serde_json::from_value(arguments).map_err(|e| {
-            AetherError::tool(format!("Invalid delegate arguments: {}", e))
+            AlephError::tool(format!("Invalid delegate arguments: {}", e))
         })?;
 
-        // Create a temporary DelegateTool and execute via AetherTool trait
+        // Create a temporary DelegateTool and execute via AlephTool trait
         let tool = DelegateTool::new(std::sync::Arc::clone(dispatcher));
-        let result = AetherTool::call(&tool, args).await?;
+        let result = AlephTool::call(&tool, args).await?;
 
         serde_json::to_value(result)
-            .map_err(|e| AetherError::tool(format!("Failed to serialize result: {}", e)))
+            .map_err(|e| AlephError::tool(format!("Failed to serialize result: {}", e)))
     }
 }

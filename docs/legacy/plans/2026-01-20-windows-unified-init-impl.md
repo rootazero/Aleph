@@ -351,13 +351,13 @@ git commit -m "feat(ffi): add first-time initialization C ABI functions"
 ## Task 4: Build Windows DLL and Generate Bindings
 
 **Files:**
-- Build output: `target/release/aethecore.dll`
+- Build output: `target/release/alephcore.dll`
 - Generated: `platforms/windows/Aether/Interop/NativeMethods.g.cs`
 
 **Step 1: Build the Rust core with cabi feature**
 
 Run: `cd core && cargo build --release --no-default-features --features cabi`
-Expected: Build succeeds, produces `target/release/libaethecore.dll` (or `.so` on other platforms)
+Expected: Build succeeds, produces `target/release/libalephcore.dll` (or `.so` on other platforms)
 
 **Step 2: Verify csbindgen regenerates bindings**
 
@@ -376,7 +376,7 @@ git commit -m "build: regenerate Windows P/Invoke bindings with init functions"
 
 ---
 
-## Task 5: Add IInitProgressHandler Interface to AetherCore.cs
+## Task 5: Add IInitProgressHandler Interface to AlephCore.cs
 
 **Files:**
 - Modify: `platforms/windows/Aether/Interop/AetherCore.cs`
@@ -430,7 +430,7 @@ git commit -m "feat(windows): add IInitProgressHandler interface"
 
 ---
 
-## Task 6: Add Initialization Methods to AetherCore.cs
+## Task 6: Add Initialization Methods to AlephCore.cs
 
 **Files:**
 - Modify: `platforms/windows/Aether/Interop/AetherCore.cs`
@@ -581,7 +581,7 @@ private static unsafe void OnInitError(byte* phase, byte* message, int isRetryab
 
 ```bash
 git add platforms/windows/Aether/Interop/AetherCore.cs
-git commit -m "feat(windows): add first-time initialization methods to AetherCore"
+git commit -m "feat(windows): add first-time initialization methods to AlephCore"
 ```
 
 ---
@@ -596,10 +596,10 @@ git commit -m "feat(windows): add first-time initialization methods to AetherCor
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <ContentDialog
-    x:Class="Aether.Windows.InitializationDialog"
+    x:Class="Aleph.Windows.InitializationDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Initializing Aether"
+    Title="Initializing Aleph"
     PrimaryButtonText=""
     SecondaryButtonText=""
     CloseButtonText=""
@@ -670,9 +670,9 @@ git commit -m "feat(windows): create InitializationDialog XAML"
 ```csharp
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Aether.Interop;
+using Aleph.Interop;
 
-namespace Aether.Windows;
+namespace Aleph.Windows;
 
 /// <summary>
 /// Dialog for first-time initialization progress.
@@ -851,7 +851,7 @@ Change `GetConfigPath()` (around line 406-416):
 ```csharp
 private static string GetConfigPath()
 {
-    // Use ~/.aether/ for cross-platform consistency
+    // Use ~/.aleph/ for cross-platform consistency
     // Directory creation is handled by first-time initialization
     var configDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -932,7 +932,7 @@ private async Task RunFirstTimeInitializationAsync()
     _initDialog.RetryRequested += async () =>
     {
         // Run init again on background thread
-        await Task.Run(() => AetherCore.RunFirstTimeInit(_initDialog));
+        await Task.Run(() => AlephCore.RunFirstTimeInit(_initDialog));
     };
 
     while (shouldRetry && !success)
@@ -941,7 +941,7 @@ private async Task RunFirstTimeInitializationAsync()
         var dialogTask = _initDialog.ShowAsync();
 
         // Run initialization on background thread
-        await Task.Run(() => AetherCore.RunFirstTimeInit(_initDialog));
+        await Task.Run(() => AlephCore.RunFirstTimeInit(_initDialog));
 
         // Wait for dialog to close (either success, quit, or retry)
         await dialogTask;
@@ -989,7 +989,7 @@ private void ContinueStartup()
     // Cleanup old update files
     _autoUpdateService?.CleanupOldUpdates();
 
-    System.Diagnostics.Debug.WriteLine("Aether started successfully");
+    System.Diagnostics.Debug.WriteLine("Aleph started successfully");
 }
 ```
 
@@ -1012,10 +1012,10 @@ private void InitializeServices()
         _screenCaptureService = new ScreenCaptureService();
 
         // 4. Initialize Rust core (directories already created by first-time init)
-        _aetherCore = new AetherCore(_dispatcherQueue!);
+        _aetherCore = new AlephCore(_dispatcherQueue!);
         if (!_aetherCore.Initialize())
         {
-            System.Diagnostics.Debug.WriteLine("Warning: Aether core initialization failed");
+            System.Diagnostics.Debug.WriteLine("Warning: Aleph core initialization failed");
         }
 
         // 5. Initialize hotkey service
@@ -1042,7 +1042,7 @@ private void InitializeServices()
 Add at top of file:
 
 ```csharp
-using Aether.Windows;
+using Aleph.Windows;
 ```
 
 **Step 5: Commit**
@@ -1054,7 +1054,7 @@ git commit -m "feat(windows): add first-time initialization check to startup"
 
 ---
 
-## Task 11: Update AetherCore.Initialize to Remove configPath
+## Task 11: Update AlephCore.Initialize to Remove configPath
 
 **Files:**
 - Modify: `platforms/windows/Aether/Interop/AetherCore.cs`
@@ -1120,7 +1120,7 @@ public unsafe bool Initialize()
 
 ```bash
 git add platforms/windows/Aether/Interop/AetherCore.cs
-git commit -m "refactor(windows): simplify AetherCore.Initialize"
+git commit -m "refactor(windows): simplify AlephCore.Initialize"
 ```
 
 ---
@@ -1135,7 +1135,7 @@ git commit -m "refactor(windows): simplify AetherCore.Initialize"
 On Windows:
 ```powershell
 cd platforms/windows
-dotnet build Aether.sln
+dotnet build Aleph.sln
 ```
 
 **Step 2: Manual test first-time initialization**

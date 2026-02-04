@@ -13,7 +13,7 @@ use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
 
 // =============================================================================
-// AetherTool - Static Dispatch Trait
+// AlephTool - Static Dispatch Trait
 // =============================================================================
 
 /// Static dispatch tool trait for compile-time known tools.
@@ -28,7 +28,7 @@ use crate::error::Result;
 /// # Example
 ///
 /// ```rust,ignore
-/// use crate::tools::AetherTool;
+/// use crate::tools::AlephTool;
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
@@ -47,7 +47,7 @@ use crate::error::Result;
 /// }
 ///
 /// #[async_trait::async_trait]
-/// impl AetherTool for SearchTool {
+/// impl AlephTool for SearchTool {
 ///     const NAME: &'static str = "search";
 ///     const DESCRIPTION: &'static str = "Search the web for information";
 ///
@@ -61,7 +61,7 @@ use crate::error::Result;
 /// }
 /// ```
 #[async_trait]
-pub trait AetherTool: Clone + Send + Sync + 'static {
+pub trait AlephTool: Clone + Send + Sync + 'static {
     /// Tool name used in function calls (e.g., "search", "file_read")
     const NAME: &'static str;
 
@@ -155,7 +155,7 @@ pub trait AetherTool: Clone + Send + Sync + 'static {
 }
 
 // =============================================================================
-// AetherToolDyn - Dynamic Dispatch Trait
+// AlephToolDyn - Dynamic Dispatch Trait
 // =============================================================================
 
 /// Dynamic dispatch tool trait for runtime-loaded tools.
@@ -165,13 +165,13 @@ pub trait AetherTool: Clone + Send + Sync + 'static {
 /// - Plugin tools with dynamic registration
 /// - Hot-reloaded tools
 ///
-/// Unlike `AetherTool`, this trait uses `Value` for arguments and output,
+/// Unlike `AlephTool`, this trait uses `Value` for arguments and output,
 /// enabling runtime flexibility at the cost of compile-time type safety.
 ///
 /// # Object Safety
 ///
-/// This trait is object-safe and can be used with `dyn AetherToolDyn`.
-pub trait AetherToolDyn: Send + Sync {
+/// This trait is object-safe and can be used with `dyn AlephToolDyn`.
+pub trait AlephToolDyn: Send + Sync {
     /// Get the tool name
     fn name(&self) -> &str;
 
@@ -185,26 +185,26 @@ pub trait AetherToolDyn: Send + Sync {
 }
 
 // =============================================================================
-// Blanket Implementation: AetherTool → AetherToolDyn
+// Blanket Implementation: AlephTool → AlephToolDyn
 // =============================================================================
 
-/// Blanket implementation allowing any `AetherTool` to be used as `AetherToolDyn`.
+/// Blanket implementation allowing any `AlephTool` to be used as `AlephToolDyn`.
 ///
 /// This enables storing static tools in dynamic collections:
 ///
 /// ```rust,ignore
-/// let tools: Vec<Box<dyn AetherToolDyn>> = vec![
+/// let tools: Vec<Box<dyn AlephToolDyn>> = vec![
 ///     Box::new(SearchTool::new()),
 ///     Box::new(WebFetchTool::new()),
 /// ];
 /// ```
-impl<T: AetherTool> AetherToolDyn for T {
+impl<T: AlephTool> AlephToolDyn for T {
     fn name(&self) -> &str {
         T::NAME
     }
 
     fn definition(&self) -> ToolDefinition {
-        AetherTool::definition(self)
+        AlephTool::definition(self)
     }
 
     fn call(&self, args: Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
@@ -235,7 +235,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl AetherTool for TestTool {
+    impl AlephTool for TestTool {
         const NAME: &'static str = "test_tool";
         const DESCRIPTION: &'static str = "A test tool";
 
@@ -253,7 +253,7 @@ mod tests {
     fn test_tool_definition() {
         let tool = TestTool;
         // Use fully qualified syntax to avoid ambiguity with blanket impl
-        let def = AetherTool::definition(&tool);
+        let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "test_tool");
         assert_eq!(def.description, "A test tool");
@@ -264,7 +264,7 @@ mod tests {
     async fn test_tool_call() {
         let tool = TestTool;
         // Use fully qualified syntax to avoid ambiguity with blanket impl
-        let result = AetherTool::call(&tool, TestArgs {
+        let result = AlephTool::call(&tool, TestArgs {
             message: "hello".to_string(),
         })
         .await
@@ -277,14 +277,14 @@ mod tests {
     async fn test_tool_call_json() {
         let tool = TestTool;
         let args = serde_json::json!({ "message": "world" });
-        let result = AetherTool::call_json(&tool, args).await.unwrap();
+        let result = AlephTool::call_json(&tool, args).await.unwrap();
 
         assert_eq!(result["result"], "Echo: world");
     }
 
     #[tokio::test]
     async fn test_tool_dyn_dispatch() {
-        let tool: Box<dyn AetherToolDyn> = Box::new(TestTool);
+        let tool: Box<dyn AlephToolDyn> = Box::new(TestTool);
 
         assert_eq!(tool.name(), "test_tool");
 
@@ -299,7 +299,7 @@ mod tests {
     struct ExampleTool;
 
     #[async_trait]
-    impl AetherTool for ExampleTool {
+    impl AlephTool for ExampleTool {
         const NAME: &'static str = "example_tool";
         const DESCRIPTION: &'static str = "A tool with examples";
 
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn test_tool_with_examples() {
         let tool = ExampleTool;
-        let def = AetherTool::definition(&tool);
+        let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "example_tool");
         assert!(def.llm_context.is_some());
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn test_tool_without_examples() {
         let tool = TestTool;
-        let def = AetherTool::definition(&tool);
+        let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "test_tool");
         assert!(def.llm_context.is_none());

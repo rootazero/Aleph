@@ -109,7 +109,7 @@ match result {
 **File**: `Aether/core/src/aether.udl`
 
 ```
-interface AetherCore {
+interface AlephCore {
     // Existing methods...
 
     // New delete APIs
@@ -127,7 +127,7 @@ interface AetherCore {
 
 ```rust
 impl VectorDatabase {
-    pub fn delete_by_topic_id(&self, topic_id: &str) -> Result<usize, AetherError> {
+    pub fn delete_by_topic_id(&self, topic_id: &str) -> Result<usize, AlephError> {
         let conn = self.conn.lock()?;
 
         // Get memory IDs for fact cleanup
@@ -150,7 +150,7 @@ impl VectorDatabase {
         Ok(deleted)
     }
 
-    pub fn clear_all(&self) -> Result<usize, AetherError> {
+    pub fn clear_all(&self) -> Result<usize, AlephError> {
         let conn = self.conn.lock()?;
 
         conn.execute("DELETE FROM memory_facts", [])?;

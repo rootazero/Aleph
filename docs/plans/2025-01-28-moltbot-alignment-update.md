@@ -4,7 +4,7 @@
 
 ## 概述
 
-本次更新将 Aether 的 CLAUDE.md 与 Moltbot 的最新架构进行了全面对齐，补充了缺失的关键设计模式。
+本次更新将 Aleph 的 CLAUDE.md 与 Moltbot 的最新架构进行了全面对齐，补充了缺失的关键设计模式。
 
 ## 更新内容
 

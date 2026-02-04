@@ -1,6 +1,6 @@
 //! DreamDaemon persistence helpers.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, FactType, MemoryEntry};
 use crate::memory::database::core::VectorDatabase;
 use crate::memory::decay::{DecayConfig, MemoryStrength};
@@ -13,7 +13,7 @@ impl VectorDatabase {
         &self,
         since_timestamp: i64,
         limit: u32,
-    ) -> Result<Vec<MemoryEntry>, AetherError> {
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -29,7 +29,7 @@ impl VectorDatabase {
             LIMIT ?2
             "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare memory query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare memory query: {}", e)))?;
 
         let memories = stmt
             .query_map(params![since_timestamp, limit], |row| {
@@ -53,15 +53,15 @@ impl VectorDatabase {
                     ai_output,
                 ))
             })
-            .map_err(|e| AetherError::config(format!("Failed to query memories: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query memories: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse memories: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse memories: {}", e)))?;
 
         Ok(memories)
     }
 
     /// Insert or replace a daily insight entry.
-    pub async fn upsert_daily_insight(&self, insight: DailyInsight) -> Result<(), AetherError> {
+    pub async fn upsert_daily_insight(&self, insight: DailyInsight) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             r#"
@@ -75,7 +75,7 @@ impl VectorDatabase {
                 insight.created_at,
             ],
         )
-        .map_err(|e| AetherError::config(format!("Failed to store daily insight: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to store daily insight: {}", e)))?;
 
         Ok(())
     }
@@ -84,7 +84,7 @@ impl VectorDatabase {
     pub async fn get_daily_insight(
         &self,
         date: Option<&str>,
-    ) -> Result<Option<DailyInsight>, AetherError> {
+    ) -> Result<Option<DailyInsight>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let row = if let Some(date) = date {
@@ -101,7 +101,7 @@ impl VectorDatabase {
                 },
             )
             .optional()
-            .map_err(|e| AetherError::config(format!("Failed to query daily insight: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query daily insight: {}", e)))?
         } else {
             conn.query_row(
                 "SELECT date, content, source_memory_count, created_at FROM daily_insights ORDER BY date DESC LIMIT 1",
@@ -116,14 +116,14 @@ impl VectorDatabase {
                 },
             )
             .optional()
-            .map_err(|e| AetherError::config(format!("Failed to query daily insight: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query daily insight: {}", e)))?
         };
 
         Ok(row)
     }
 
     /// Retrieve DreamDaemon status.
-    pub async fn get_dream_status(&self) -> Result<DreamStatus, AetherError> {
+    pub async fn get_dream_status(&self) -> Result<DreamStatus, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let row: Option<(Option<i64>, Option<String>, Option<i64>)> = conn
@@ -133,7 +133,7 @@ impl VectorDatabase {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
-            .map_err(|e| AetherError::config(format!("Failed to query dream status: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to query dream status: {}", e)))?;
 
         if let Some((last_run_at, last_status, last_duration_ms)) = row {
             Ok(DreamStatus {
@@ -147,7 +147,7 @@ impl VectorDatabase {
     }
 
     /// Update DreamDaemon status row (singleton).
-    pub async fn set_dream_status(&self, status: DreamStatus) -> Result<(), AetherError> {
+    pub async fn set_dream_status(&self, status: DreamStatus) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let duration_ms: Option<i64> = status.last_duration_ms.map(|v| v as i64);
 
@@ -158,7 +158,7 @@ impl VectorDatabase {
             "#,
             params![status.last_run_at, status.last_status, duration_ms],
         )
-        .map_err(|e| AetherError::config(format!("Failed to update dream status: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to update dream status: {}", e)))?;
 
         Ok(())
     }
@@ -167,7 +167,7 @@ impl VectorDatabase {
     pub async fn apply_fact_decay(
         &self,
         config: &DecayConfig,
-    ) -> Result<MemoryDecayReport, AetherError> {
+    ) -> Result<MemoryDecayReport, AlephError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -182,7 +182,7 @@ impl VectorDatabase {
                 WHERE is_valid = 1
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare fact decay query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare fact decay query: {}", e)))?;
 
         let rows = stmt
             .query_map([], |row| {
@@ -194,9 +194,9 @@ impl VectorDatabase {
                     row.get::<_, f32>(4)?,
                 ))
             })
-            .map_err(|e| AetherError::config(format!("Failed to query facts: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to read facts: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to read facts: {}", e)))?;
 
         let mut report = MemoryDecayReport::default();
 
@@ -226,7 +226,7 @@ impl VectorDatabase {
                     params![fact_id, now, new_confidence],
                 )
                 .map_err(|e| {
-                    AetherError::config(format!("Failed to prune decayed fact: {}", e))
+                    AlephError::config(format!("Failed to prune decayed fact: {}", e))
                 })?;
                 report.pruned_facts += 1;
             } else if (new_confidence - confidence).abs() > 0.0001 {
@@ -235,7 +235,7 @@ impl VectorDatabase {
                     params![fact_id, new_confidence],
                 )
                 .map_err(|e| {
-                    AetherError::config(format!("Failed to update decayed fact: {}", e))
+                    AlephError::config(format!("Failed to update decayed fact: {}", e))
                 })?;
                 report.updated_facts += 1;
             }

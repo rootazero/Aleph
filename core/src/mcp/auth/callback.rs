@@ -16,7 +16,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::time::timeout;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// Default port for the callback server
 pub const DEFAULT_CALLBACK_PORT: u16 = 19877;
@@ -80,7 +80,7 @@ impl CallbackServer {
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
 
         let listener = TcpListener::bind(addr).await.map_err(|e| {
-            AetherError::IoError(format!(
+            AlephError::IoError(format!(
                 "Failed to bind callback server to port {}: {}",
                 self.port, e
             ))
@@ -134,10 +134,10 @@ impl CallbackServer {
                 tracing::info!("OAuth callback received");
                 Ok(callback_result)
             }
-            Ok(None) => Err(AetherError::IoError(
+            Ok(None) => Err(AlephError::IoError(
                 "Callback server closed unexpectedly".to_string(),
             )),
-            Err(_) => Err(AetherError::IoError(format!(
+            Err(_) => Err(AlephError::IoError(format!(
                 "OAuth callback timeout after {} seconds",
                 self.timeout_duration.as_secs()
             ))),

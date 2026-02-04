@@ -1,7 +1,7 @@
 //! Main YouTube transcript extractor implementation
 
 use crate::config::VideoConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::video::transcript::VideoTranscript;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -52,7 +52,7 @@ impl YouTubeExtractor {
     ///
     /// # Returns
     /// * `Ok(VideoTranscript)` - The extracted transcript
-    /// * `Err(AetherError)` - If extraction fails
+    /// * `Err(AlephError)` - If extraction fails
     pub async fn extract_transcript(&self, url: &str) -> Result<VideoTranscript> {
         // 1. Parse video ID from URL
         let video_id = parse_video_id(url)?;
@@ -128,7 +128,7 @@ impl YouTubeExtractor {
             )
             .send()
             .await
-            .map_err(|e| AetherError::video(format!("Failed to fetch caption: {}", e)))?;
+            .map_err(|e| AlephError::video(format!("Failed to fetch caption: {}", e)))?;
 
         if response.status().is_success() {
             let content_length = response
@@ -139,7 +139,7 @@ impl YouTubeExtractor {
 
             if content_length != Some(0) {
                 let text = response.text().await.map_err(|e| {
-                    AetherError::video(format!("Failed to read caption response: {}", e))
+                    AlephError::video(format!("Failed to read caption response: {}", e))
                 })?;
 
                 if !text.is_empty() {
@@ -165,11 +165,11 @@ impl YouTubeExtractor {
             )
             .send()
             .await
-            .map_err(|e| AetherError::video(format!("Failed to fetch caption: {}", e)))?;
+            .map_err(|e| AlephError::video(format!("Failed to fetch caption: {}", e)))?;
 
         if response.status().is_success() {
             let text = response.text().await.map_err(|e| {
-                AetherError::video(format!("Failed to read caption response: {}", e))
+                AlephError::video(format!("Failed to read caption response: {}", e))
             })?;
 
             if !text.is_empty() {
@@ -197,11 +197,11 @@ impl YouTubeExtractor {
             .get(url)
             .send()
             .await
-            .map_err(|e| AetherError::video(format!("Failed to fetch page: {}", e)))?;
+            .map_err(|e| AlephError::video(format!("Failed to fetch page: {}", e)))?;
 
         let status = response.status();
         if !status.is_success() {
-            return Err(AetherError::video(format!("HTTP error: {}", status)));
+            return Err(AlephError::video(format!("HTTP error: {}", status)));
         }
 
         // Check content length header for early empty response detection
@@ -213,7 +213,7 @@ impl YouTubeExtractor {
 
         if content_length == Some(0) {
             debug!("YouTube returned empty response (Content-Length: 0) - anti-bot protection");
-            return Err(AetherError::video_with_suggestion(
+            return Err(AlephError::video_with_suggestion(
                 "YouTube returned empty response",
                 "This may be due to rate limiting or anti-bot protection. Try again in a few minutes.",
             ));
@@ -222,11 +222,11 @@ impl YouTubeExtractor {
         let text = response
             .text()
             .await
-            .map_err(|e| AetherError::video(format!("Failed to read response: {}", e)))?;
+            .map_err(|e| AlephError::video(format!("Failed to read response: {}", e)))?;
 
         // Double check for empty body
         if text.is_empty() {
-            return Err(AetherError::video_with_suggestion(
+            return Err(AlephError::video_with_suggestion(
                 "YouTube returned empty response body",
                 "This may be due to rate limiting. Try again later.",
             ));
@@ -260,7 +260,7 @@ impl YouTubeExtractor {
             }
         }
 
-        Err(AetherError::video(
+        Err(AlephError::video(
             "Could not find or parse player response in page",
         ))
     }
@@ -287,10 +287,10 @@ impl YouTubeExtractor {
             .and_then(|c| c.get("playerCaptionsTracklistRenderer"))
             .and_then(|r| r.get("captionTracks"))
             .and_then(|t| t.as_array())
-            .ok_or_else(|| AetherError::video("No captions available for this video"))?;
+            .ok_or_else(|| AlephError::video("No captions available for this video"))?;
 
         if caption_tracks.is_empty() {
-            return Err(AetherError::video("No captions available for this video"));
+            return Err(AlephError::video("No captions available for this video"));
         }
 
         // Helper to check if language code matches (handles variants like zh-Hans, zh-Hant)
@@ -324,12 +324,12 @@ impl YouTubeExtractor {
                 })
             })
             .or_else(|| caption_tracks.first())
-            .ok_or_else(|| AetherError::video("No suitable caption track found"))?;
+            .ok_or_else(|| AlephError::video("No suitable caption track found"))?;
 
         let url = track
             .get("baseUrl")
             .and_then(|u| u.as_str())
-            .ok_or_else(|| AetherError::video("Caption URL not found in track"))?;
+            .ok_or_else(|| AlephError::video("Caption URL not found in track"))?;
 
         let language = track
             .get("languageCode")

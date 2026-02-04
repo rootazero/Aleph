@@ -88,7 +88,7 @@ impl CompositeValidator {
             .hard_validator
             .validate_all(&manifest.hard_constraints)
             .await
-            .map_err(crate::error::AetherError::other)?;
+            .map_err(crate::error::AlephError::other)?;
 
         // Check for hard failures
         let hard_failures: Vec<&RuleResult> =

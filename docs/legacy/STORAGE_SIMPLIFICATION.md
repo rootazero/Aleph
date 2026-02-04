@@ -15,7 +15,7 @@
 
 **更新文档注释：**
 ```swift
-/// ~/.aether/
+/// ~/.aleph/
 /// ├── conversations.db
 /// ├── output/{topicId}/             # AI-generated files (referenced, not copied)
 /// └── attachments/
@@ -67,7 +67,7 @@ var fileURL: URL? {
 
 ### 目录结构
 ```
-~/.aether/
+~/.aleph/
 ├── output/
 │   ├── {topic_id_1}/          # 会话1的AI生成文件
 │   │   ├── dielianhua_final.txt
@@ -128,7 +128,7 @@ var fileURL: URL? {
 2. 新生成的文件不会再复制到这里
 3. 可以选择清理旧的 generated 目录：
    ```bash
-   rm -rf ~/.aether/attachments/generated
+   rm -rf ~/.aleph/attachments/generated
    ```
 
 ## 测试验证
@@ -154,7 +154,7 @@ var fileURL: URL? {
 ### 删除空目录
 ```bash
 # 如果 generated 目录是空的，可以删除
-rmdir ~/.aether/attachments/generated 2>/dev/null || true
+rmdir ~/.aleph/attachments/generated 2>/dev/null || true
 ```
 
 ### 数据库清理（可选）

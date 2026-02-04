@@ -18,8 +18,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
-//! use aethecore::generation::providers::ReplicateProvider;
+//! use alephcore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
+//! use alephcore::generation::providers::ReplicateProvider;
 //!
 //! let provider = ReplicateProvider::builder("r8_xxx")
 //!     .add_model("flux", "black-forest-labs/flux-schnell")

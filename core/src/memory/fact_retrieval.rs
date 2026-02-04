@@ -3,7 +3,7 @@
 //! Retrieves relevant context with priority given to compressed facts
 //! over raw memories. Falls back to raw memories when facts are insufficient.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{MemoryEntry, MemoryFact};
 use crate::memory::database::VectorDatabase;
 use crate::memory::smart_embedder::SmartEmbedder;
@@ -82,13 +82,13 @@ impl FactRetrieval {
     /// Priority:
     /// 1. Compressed facts (from memory_facts table)
     /// 2. Raw memories (fallback when facts insufficient)
-    pub async fn retrieve(&self, query: &str) -> Result<RetrievalResult, AetherError> {
+    pub async fn retrieve(&self, query: &str) -> Result<RetrievalResult, AlephError> {
         // Generate query embedding
         let query_embedding = self
             .embedder
             .embed(query)
             .await
-            .map_err(|e| AetherError::other(format!("Failed to embed query: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
 
         // 1. Search facts first
         let facts = self
@@ -133,12 +133,12 @@ impl FactRetrieval {
         query: &str,
         max_facts: u32,
         max_raw_fallback: u32,
-    ) -> Result<RetrievalResult, AetherError> {
+    ) -> Result<RetrievalResult, AlephError> {
         let query_embedding = self
             .embedder
             .embed(query)
             .await
-            .map_err(|e| AetherError::other(format!("Failed to embed query: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
 
         let facts = self
             .database

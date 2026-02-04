@@ -28,7 +28,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::extension::{ExtensionManager, ExtensionConfig};
+//! use alephcore::extension::{ExtensionManager, ExtensionConfig};
 //!
 //! // Create manager with default configuration
 //! let manager = ExtensionManager::new(ExtensionConfig::default()).await?;
@@ -1068,10 +1068,10 @@ pub fn is_valid_plugin_dir(path: &std::path::Path) -> bool {
 
 /// Get the default plugins directory
 ///
-/// Returns `~/.aether/plugins/`
+/// Returns `~/.aleph/plugins/`
 pub fn default_plugins_dir() -> std::path::PathBuf {
     crate::discovery::aether_plugins_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("~/.aether/plugins"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("~/.aleph/plugins"))
 }
 
 // =============================================================================

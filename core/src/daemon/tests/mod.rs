@@ -17,6 +17,6 @@ mod tests {
     fn test_daemon_module_exists() {
         // This test ensures the daemon module is properly declared
         let config = DaemonConfig::default();
-        assert_eq!(config.socket_path, "~/.aether/daemon.sock");
+        assert_eq!(config.socket_path, "~/.aleph/daemon.sock");
     }
 }

@@ -6,7 +6,7 @@
 
 ## Overview
 
-Aether's memory system provides:
+Aleph's memory system provides:
 - **Facts Database**: SQLite + sqlite-vec for structured storage
 - **Hybrid Retrieval**: Vector similarity + BM25 keyword search
 - **Context Augmentation**: Inject relevant memories into prompts
@@ -263,7 +263,7 @@ impl ContextAugmenter {
 
 ```
 <relevant_memories>
-- API keys are configured in ~/.aether/config.json under "providers" (source: session, 2 days ago)
+- API keys are configured in ~/.aleph/config.json under "providers" (source: session, 2 days ago)
 - The user prefers Claude over GPT for code tasks (source: user, 1 week ago)
 </relevant_memories>
 ```

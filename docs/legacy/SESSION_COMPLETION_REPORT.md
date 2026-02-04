@@ -48,7 +48,7 @@ Successfully completed **critical crash fix** and finalized **Phase 1 & 2** of t
    - Upgraded rdev dependency to git main branch
    - Added detailed comments explaining the fix
 
-2. **Aether/Frameworks/libaethecore.dylib**
+2. **Aether/Frameworks/libalephcore.dylib**
    - Rebuilt with rdev 0.6.0
    - Size reduced from 33MB to 10.5MB
 
@@ -145,7 +145,7 @@ Thread 6 (rdev listener):
 
 ### Code Changes
 ```diff
-# Aether/core/Cargo.toml
+# Aleph/core/Cargo.toml
 - rdev = "0.5"
 + # Use rdev from git main branch - contains fixes for macOS main thread issues
 + rdev = { git = "https://github.com/Narsil/rdev.git", branch = "main" }
@@ -220,7 +220,7 @@ Thread 6 (rdev listener):
 
 ### Files to Watch
 - `Aether/core/Cargo.lock` - ensure rdev git dependency is locked
-- `Aether/Frameworks/libaethecore.dylib` - must be rebuilt after Rust changes
+- `Aether/Frameworks/libalephcore.dylib` - must be rebuilt after Rust changes
 - Console.app - monitor for any new TCC or dispatch queue errors
 
 ---
@@ -253,14 +253,14 @@ Thread 6 (rdev listener):
 
 ```bash
 # 1. Locate the Release build
-open /Users/zouguojun/Library/Developer/Xcode/DerivedData/Aether-*/Build/Products/Release/
+open /Users/zouguojun/Library/Developer/Xcode/DerivedData/Aleph-*/Build/Products/Release/
 
-# 2. Launch Aether.app
+# 2. Launch Aleph.app
 # 3. Follow testing guide in docs/TESTING_CRASH_FIX.md
 # 4. Focus on Test 3: Type in other applications without crash
 
 # 5. If crash occurs, collect logs:
-ls -lt ~/Library/Logs/DiagnosticReports/ | grep Aether | head -5
+ls -lt ~/Library/Logs/DiagnosticReports/ | grep Aleph | head -5
 ```
 
 **Expected Result**: ✅ No crash when typing in Safari, TextEdit, VSCode, etc.

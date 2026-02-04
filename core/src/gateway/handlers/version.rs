@@ -8,7 +8,7 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 /// Handle version requests
 ///
 /// Returns a JSON object with:
-/// - `name`: Server name ("aether-gateway")
+/// - `name`: Server name ("aleph-gateway")
 /// - `version`: Crate version from Cargo.toml
 /// - `protocol`: Protocol version ("json-rpc-2.0")
 ///
@@ -21,13 +21,13 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 /// # Example Response
 ///
 /// ```json
-/// {"jsonrpc":"2.0","result":{"name":"aether-gateway","version":"0.1.0","protocol":"json-rpc-2.0"},"id":1}
+/// {"jsonrpc":"2.0","result":{"name":"aleph-gateway","version":"0.1.0","protocol":"json-rpc-2.0"},"id":1}
 /// ```
 pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::success(
         request.id,
         json!({
-            "name": "aether-gateway",
+            "name": "aleph-gateway",
             "version": env!("CARGO_PKG_VERSION"),
             "protocol": "json-rpc-2.0"
         }),
@@ -47,7 +47,7 @@ mod tests {
         assert!(response.is_success());
 
         let result = response.result.unwrap();
-        assert_eq!(result["name"], "aether-gateway");
+        assert_eq!(result["name"], "aleph-gateway");
         assert_eq!(result["protocol"], "json-rpc-2.0");
         assert!(result["version"].is_string());
     }

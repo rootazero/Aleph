@@ -10,8 +10,8 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use aethecore::skill_evolution::{SkillCompiler, EvolutionTracker};
-//! use aethecore::skills::SkillsRegistry;
+//! use alephcore::skill_evolution::{SkillCompiler, EvolutionTracker};
+//! use alephcore::skills::SkillsRegistry;
 //!
 //! let tracker = Arc::new(EvolutionTracker::new("evolution.db")?);
 //! let registry = Arc::new(SkillsRegistry::with_auto_discover(None)?);
@@ -35,7 +35,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::config::EvolutionConfig;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use crate::skills::SkillsRegistry;
 
@@ -209,14 +209,14 @@ impl SkillCompiler {
     /// Preview what a skill would look like without creating it.
     pub fn preview_skill(&self, request_id: &str) -> Result<String> {
         let request = self.approvals.get(request_id)?.ok_or_else(|| {
-            AetherError::Other {
+            AlephError::Other {
                 message: format!("Request not found: {}", request_id),
                 suggestion: None,
             }
         })?;
 
         if request.status != ApprovalStatus::Pending {
-            return Err(AetherError::Other {
+            return Err(AlephError::Other {
                 message: format!("Request is not pending: {:?}", request.status),
                 suggestion: None,
             });
@@ -246,13 +246,13 @@ impl SkillCompiler {
                 ..
             } => (skill_id, file_path),
             GenerationResult::AlreadyExists { skill_id } => {
-                return Err(AetherError::Other {
+                return Err(AlephError::Other {
                     message: format!("Skill '{}' already exists", skill_id),
                     suggestion: Some("Use a different name or delete the existing skill".to_string()),
                 });
             }
             GenerationResult::Failed { reason } => {
-                return Err(AetherError::Other {
+                return Err(AlephError::Other {
                     message: format!("Failed to generate skill: {}", reason),
                     suggestion: None,
                 });
@@ -337,13 +337,13 @@ impl SkillCompiler {
                 ..
             } => (skill_id, file_path),
             GenerationResult::AlreadyExists { skill_id } => {
-                return Err(AetherError::Other {
+                return Err(AlephError::Other {
                     message: format!("Skill '{}' already exists", skill_id),
                     suggestion: None,
                 });
             }
             GenerationResult::Failed { reason } => {
-                return Err(AetherError::Other {
+                return Err(AlephError::Other {
                     message: format!("Failed to generate skill: {}", reason),
                     suggestion: None,
                 });

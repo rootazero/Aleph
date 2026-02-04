@@ -8,7 +8,7 @@
 /// - **Retryable**: Temporary failures that may succeed on retry (rate limits, timeouts)
 /// - **User Action Required**: Errors that need user intervention (invalid API key, quota exceeded)
 /// - **Fallback Recommended**: Errors where switching providers may help (unsupported feature)
-use crate::error::AetherError;
+use crate::error::AlephError;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -17,7 +17,7 @@ use thiserror::Error;
 /// # Example
 ///
 /// ```rust
-/// use aethecore::generation::GenerationError;
+/// use alephcore::generation::GenerationError;
 /// use std::time::Duration;
 ///
 /// let error = GenerationError::rate_limit("Too many requests", Some(Duration::from_secs(60)));
@@ -306,7 +306,7 @@ impl GenerationError {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::GenerationError;
+    /// use alephcore::generation::GenerationError;
     /// use std::time::Duration;
     ///
     /// let rate_limit = GenerationError::rate_limit("Too many requests", None);
@@ -341,7 +341,7 @@ impl GenerationError {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::GenerationError;
+    /// use alephcore::generation::GenerationError;
     ///
     /// let auth_error = GenerationError::authentication("Invalid key", "openai");
     /// assert!(auth_error.needs_user_action());
@@ -368,7 +368,7 @@ impl GenerationError {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::GenerationError;
+    /// use alephcore::generation::GenerationError;
     ///
     /// let unsupported = GenerationError::unsupported_feature(
     ///     "Video generation not available",
@@ -399,7 +399,7 @@ impl GenerationError {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::generation::GenerationError;
+    /// use alephcore::generation::GenerationError;
     /// use std::time::Duration;
     ///
     /// let error = GenerationError::rate_limit(
@@ -566,55 +566,55 @@ impl GenerationError {
     }
 }
 
-/// Convert GenerationError to AetherError for integration with core error handling
-impl From<GenerationError> for AetherError {
+/// Convert GenerationError to AlephError for integration with core error handling
+impl From<GenerationError> for AlephError {
     fn from(err: GenerationError) -> Self {
         match err {
             GenerationError::AuthenticationError { message, provider } => {
-                AetherError::authentication(provider, message)
+                AlephError::authentication(provider, message)
             }
-            GenerationError::RateLimitError { message, .. } => AetherError::rate_limit(message),
+            GenerationError::RateLimitError { message, .. } => AlephError::rate_limit(message),
             GenerationError::QuotaExceededError { message, .. } => {
-                AetherError::rate_limit(format!("Quota exceeded: {}", message))
+                AlephError::rate_limit(format!("Quota exceeded: {}", message))
             }
-            GenerationError::TimeoutError { duration } => AetherError::Timeout {
+            GenerationError::TimeoutError { duration } => AlephError::Timeout {
                 suggestion: Some(format!(
                     "Generation timed out after {} seconds. Try a simpler request.",
                     duration.as_secs()
                 )),
             },
-            GenerationError::NetworkError { message } => AetherError::network(message),
+            GenerationError::NetworkError { message } => AlephError::network(message),
             GenerationError::InvalidParametersError { message, .. } => {
-                AetherError::invalid_config(message)
+                AlephError::invalid_config(message)
             }
             GenerationError::ContentFilteredError { message, .. } => {
-                AetherError::provider(format!("Content filtered: {}", message))
+                AlephError::provider(format!("Content filtered: {}", message))
             }
             GenerationError::UnsupportedFeatureError { message, .. } => {
-                AetherError::provider(message)
+                AlephError::provider(message)
             }
-            GenerationError::ProviderError { message, .. } => AetherError::provider(message),
-            GenerationError::Cancelled => AetherError::cancelled(),
-            GenerationError::InternalError { message } => AetherError::other(message),
+            GenerationError::ProviderError { message, .. } => AlephError::provider(message),
+            GenerationError::Cancelled => AlephError::cancelled(),
+            GenerationError::InternalError { message } => AlephError::other(message),
             GenerationError::ModelNotFoundError { model, provider } => {
-                AetherError::invalid_config(format!("Model '{}' not found on {}", model, provider))
+                AlephError::invalid_config(format!("Model '{}' not found on {}", model, provider))
             }
             GenerationError::UnsupportedGenerationTypeError {
                 generation_type,
                 provider,
-            } => AetherError::provider(format!(
+            } => AlephError::provider(format!(
                 "{} does not support {} generation",
                 provider, generation_type
             )),
             GenerationError::UnsupportedFormatError { format, .. } => {
-                AetherError::invalid_config(format!("Unsupported format: {}", format))
+                AlephError::invalid_config(format!("Unsupported format: {}", format))
             }
             GenerationError::UnsupportedDimensionError { message, .. } => {
-                AetherError::invalid_config(message)
+                AlephError::invalid_config(message)
             }
-            GenerationError::JobFailedError { message, .. } => AetherError::provider(message),
-            GenerationError::DownloadError { message, .. } => AetherError::network(message),
-            GenerationError::SerializationError { message } => AetherError::IoError(message),
+            GenerationError::JobFailedError { message, .. } => AlephError::provider(message),
+            GenerationError::DownloadError { message, .. } => AlephError::network(message),
+            GenerationError::SerializationError { message } => AlephError::IoError(message),
         }
     }
 }
@@ -850,52 +850,52 @@ mod tests {
     #[test]
     fn test_from_generation_error_to_aether_error() {
         let gen_err = GenerationError::authentication("Invalid key", "openai");
-        let aether_err: AetherError = gen_err.into();
+        let aether_err: AlephError = gen_err.into();
 
         assert!(matches!(
             aether_err,
-            AetherError::AuthenticationError { .. }
+            AlephError::AuthenticationError { .. }
         ));
     }
 
     #[test]
     fn test_from_rate_limit_to_aether_error() {
         let gen_err = GenerationError::rate_limit("Too many requests", None);
-        let aether_err: AetherError = gen_err.into();
+        let aether_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AetherError::RateLimitError { .. }));
+        assert!(matches!(aether_err, AlephError::RateLimitError { .. }));
     }
 
     #[test]
     fn test_from_timeout_to_aether_error() {
         let gen_err = GenerationError::timeout(Duration::from_secs(30));
-        let aether_err: AetherError = gen_err.into();
+        let aether_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AetherError::Timeout { .. }));
+        assert!(matches!(aether_err, AlephError::Timeout { .. }));
     }
 
     #[test]
     fn test_from_network_to_aether_error() {
         let gen_err = GenerationError::network("Connection failed");
-        let aether_err: AetherError = gen_err.into();
+        let aether_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AetherError::NetworkError { .. }));
+        assert!(matches!(aether_err, AlephError::NetworkError { .. }));
     }
 
     #[test]
     fn test_from_cancelled_to_aether_error() {
         let gen_err = GenerationError::cancelled();
-        let aether_err: AetherError = gen_err.into();
+        let aether_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AetherError::Cancelled));
+        assert!(matches!(aether_err, AlephError::Cancelled));
     }
 
     #[test]
     fn test_from_provider_error_to_aether_error() {
         let gen_err = GenerationError::provider("Server error", Some(500), "openai");
-        let aether_err: AetherError = gen_err.into();
+        let aether_err: AlephError = gen_err.into();
 
-        assert!(matches!(aether_err, AetherError::ProviderError { .. }));
+        assert!(matches!(aether_err, AlephError::ProviderError { .. }));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use tracing::{debug, warn};
 
 use super::{ExecutionContext, TaskExecutor};
 use crate::dispatcher::agent_types::{Task, TaskResult, TaskType};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// Registry for task executors
 ///
@@ -51,7 +51,7 @@ impl ExecutorRegistry {
     pub async fn execute(&self, task: &Task, ctx: &ExecutionContext) -> Result<TaskResult> {
         let executor = self.find_executor(&task.task_type).ok_or_else(|| {
             warn!("No executor found for task type: {:?}", task.task_type);
-            AetherError::Other {
+            AlephError::Other {
                 message: format!(
                     "No executor found for task type: {}",
                     task.task_type.category()

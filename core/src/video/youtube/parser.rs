@@ -1,6 +1,6 @@
 //! Transcript parsing utilities for various formats (XML, JSON3, VTT)
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::video::transcript::TranscriptSegment;
 use regex::Regex;
 
@@ -16,7 +16,7 @@ pub fn parse_transcript_data(data: &str) -> Result<Vec<TranscriptSegment>> {
     } else if trimmed.starts_with("WEBVTT") {
         parse_transcript_vtt(data)
     } else {
-        Err(AetherError::video("Unknown transcript format"))
+        Err(AlephError::video("Unknown transcript format"))
     }
 }
 
@@ -31,11 +31,11 @@ pub fn parse_transcript_vtt(vtt: &str) -> Result<Vec<TranscriptSegment>> {
     let timestamp_regex = Regex::new(
         r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})",
     )
-    .map_err(|e| AetherError::video(format!("Invalid VTT regex: {}", e)))?;
+    .map_err(|e| AlephError::video(format!("Invalid VTT regex: {}", e)))?;
 
     // Tag removal regex for VTT formatting tags
     let tag_regex = Regex::new(r"<[^>]+>")
-        .map_err(|e| AetherError::video(format!("Invalid tag regex: {}", e)))?;
+        .map_err(|e| AlephError::video(format!("Invalid tag regex: {}", e)))?;
 
     let lines: Vec<&str> = vtt.lines().collect();
     let mut i = 0;
@@ -125,7 +125,7 @@ pub fn parse_transcript_vtt(vtt: &str) -> Result<Vec<TranscriptSegment>> {
     }
 
     if deduped.is_empty() {
-        return Err(AetherError::video("No transcript segments found in VTT"));
+        return Err(AlephError::video("No transcript segments found in VTT"));
     }
 
     Ok(deduped)
@@ -161,7 +161,7 @@ pub fn parse_transcript_xml(xml: &str) -> Result<Vec<TranscriptSegment>> {
     // <text start="0.0" dur="2.5">Hello everyone</text>
     let text_regex =
         Regex::new(r#"<text\s+start="([^"]+)"\s+dur="([^"]+)"[^>]*>([^<]*)</text>"#)
-            .map_err(|e| AetherError::video(format!("Invalid regex: {}", e)))?;
+            .map_err(|e| AlephError::video(format!("Invalid regex: {}", e)))?;
 
     for caps in text_regex.captures_iter(xml) {
         let start: f64 = caps
@@ -185,7 +185,7 @@ pub fn parse_transcript_xml(xml: &str) -> Result<Vec<TranscriptSegment>> {
     }
 
     if segments.is_empty() {
-        return Err(AetherError::video("No transcript segments found in XML"));
+        return Err(AlephError::video("No transcript segments found in XML"));
     }
 
     Ok(segments)
@@ -194,12 +194,12 @@ pub fn parse_transcript_xml(xml: &str) -> Result<Vec<TranscriptSegment>> {
 /// Parse YouTube transcript JSON3 format (alternative format)
 pub fn parse_transcript_json(json: &str) -> Result<Vec<TranscriptSegment>> {
     let value: serde_json::Value = serde_json::from_str(json)
-        .map_err(|e| AetherError::video(format!("Failed to parse transcript JSON: {}", e)))?;
+        .map_err(|e| AlephError::video(format!("Failed to parse transcript JSON: {}", e)))?;
 
     let events = value
         .get("events")
         .and_then(|e| e.as_array())
-        .ok_or_else(|| AetherError::video("No events in transcript JSON"))?;
+        .ok_or_else(|| AlephError::video("No events in transcript JSON"))?;
 
     let mut segments = Vec::new();
 
@@ -234,7 +234,7 @@ pub fn parse_transcript_json(json: &str) -> Result<Vec<TranscriptSegment>> {
     }
 
     if segments.is_empty() {
-        return Err(AetherError::video("No transcript segments found in JSON"));
+        return Err(AlephError::video("No transcript segments found in JSON"));
     }
 
     Ok(segments)

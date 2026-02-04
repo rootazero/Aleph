@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Replace Aether's 3-layer routing system with rig-core library, using its built-in Memory, Vector Store, and Tool Calling capabilities.
+**Goal:** Replace Aleph's 3-layer routing system with rig-core library, using its built-in Memory, Vector Store, and Tool Calling capabilities.
 
 **Architecture:** Single rig Agent handles all requests autonomously. Tools implemented via rig's `Tool` trait. Memory via rig-sqlite with fastembed embeddings. Simplified UniFFI interface hides rig internals from Swift layer.
 
@@ -38,7 +38,7 @@ Expected: Compiling rig-core, rig-sqlite...
 **Step 3: Commit**
 
 ```bash
-git add Aether/core/Cargo.toml
+git add Aleph/core/Cargo.toml
 git commit -m "deps: add rig-core and rig-sqlite dependencies"
 ```
 
@@ -106,7 +106,7 @@ impl Default for AgentConfig {
             model: "gpt-4o".to_string(),
             temperature: default_temperature(),
             max_tokens: default_max_tokens(),
-            system_prompt: "You are Aether, an intelligent assistant.".to_string(),
+            system_prompt: "You are Aleph, an intelligent assistant.".to_string(),
         }
     }
 }
@@ -233,7 +233,7 @@ Expected: test result: ok. 2 passed
 **Step 8: Commit**
 
 ```bash
-git add Aether/core/src/agent Aether/core/src/store
+git add Aleph/core/src/agent Aleph/core/src/store
 git commit -m "feat: add agent and store module skeletons"
 ```
 
@@ -428,7 +428,7 @@ Expected: test result: ok. 2 passed
 **Step 7: Commit**
 
 ```bash
-git add Aether/core/src/rig_tools
+git add Aleph/core/src/rig_tools
 git commit -m "feat: add rig_tools module skeletons"
 ```
 
@@ -465,7 +465,7 @@ Expected: test result: ok. 1400+ passed
 **Step 4: Commit**
 
 ```bash
-git add Aether/core/src/lib.rs
+git add Aleph/core/src/lib.rs
 git commit -m "feat: register agent, store, rig_tools modules"
 ```
 
@@ -505,7 +505,7 @@ Replace `Aether/core/src/store/sqlite.rs`:
 ```rust
 //! SQLite vector store implementation using rig-sqlite
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use fastembed::{EmbeddingModel as FastEmbedModel, InitOptions, TextEmbedding};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -554,13 +554,13 @@ impl MemoryStore {
         // Create parent directory if needed
         if let Some(parent) = Path::new(db_path).parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                AetherError::config(format!("Failed to create db directory: {}", e))
+                AlephError::config(format!("Failed to create db directory: {}", e))
             })?;
         }
 
         // Open SQLite connection
         let conn = Connection::open(db_path).map_err(|e| {
-            AetherError::config(format!("Failed to open database: {}", e))
+            AlephError::config(format!("Failed to open database: {}", e))
         })?;
 
         // Initialize embedding model
@@ -568,7 +568,7 @@ impl MemoryStore {
             InitOptions::new(FastEmbedModel::BGESmallZHV15)
                 .with_show_download_progress(true),
         ).map_err(|e| {
-            AetherError::config(format!("Failed to initialize embedding model: {}", e))
+            AlephError::config(format!("Failed to initialize embedding model: {}", e))
         })?;
 
         let store = Self {
@@ -601,7 +601,7 @@ impl MemoryStore {
                 embedding BLOB NOT NULL
             )",
             [],
-        ).map_err(|e| AetherError::config(format!("Failed to create table: {}", e)))?;
+        ).map_err(|e| AlephError::config(format!("Failed to create table: {}", e)))?;
 
         debug!("Database schema initialized");
         Ok(())
@@ -630,7 +630,7 @@ impl MemoryStore {
                 entry.app_context,
                 embedding_bytes,
             ],
-        ).map_err(|e| AetherError::config(format!("Failed to insert memory: {}", e)))?;
+        ).map_err(|e| AlephError::config(format!("Failed to insert memory: {}", e)))?;
 
         debug!(id = %entry.id, "Memory stored");
         Ok(())
@@ -643,7 +643,7 @@ impl MemoryStore {
         let conn = self.conn.read().await;
         let mut stmt = conn.prepare(
             "SELECT id, user_input, assistant_response, timestamp, app_context, embedding FROM memories"
-        ).map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+        ).map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let entries: Vec<(MemoryEntry, Vec<f32>)> = stmt
             .query_map([], |row| {
@@ -659,7 +659,7 @@ impl MemoryStore {
                     Self::bytes_to_embedding(&embedding_bytes),
                 ))
             })
-            .map_err(|e| AetherError::config(format!("Query failed: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Query failed: {}", e)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -682,7 +682,7 @@ impl MemoryStore {
     pub async fn clear(&self) -> Result<()> {
         let conn = self.conn.write().await;
         conn.execute("DELETE FROM memories", [])
-            .map_err(|e| AetherError::config(format!("Failed to clear memories: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to clear memories: {}", e)))?;
         info!("All memories cleared");
         Ok(())
     }
@@ -691,12 +691,12 @@ impl MemoryStore {
     fn embed_text(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embedding_model
             .embed(vec![text], None)
-            .map_err(|e| AetherError::config(format!("Embedding failed: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Embedding failed: {}", e)))?;
 
         embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| AetherError::config("No embedding returned"))
+            .ok_or_else(|| AlephError::config("No embedding returned"))
     }
 
     /// Convert embedding to bytes
@@ -820,7 +820,7 @@ Expected: test result: ok. 3 passed
 **Step 7: Commit**
 
 ```bash
-git add Aether/core/src/store/sqlite.rs Aether/core/Cargo.toml
+git add Aleph/core/src/store/sqlite.rs Aleph/core/Cargo.toml
 git commit -m "feat: implement MemoryStore with SQLite and fastembed"
 ```
 
@@ -858,7 +858,7 @@ Replace `Aether/core/src/agent/manager.rs`:
 ```rust
 //! Rig Agent Manager - core entry point
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::store::MemoryStore;
 use super::config::AgentConfig;
 use std::sync::Arc;
@@ -998,7 +998,7 @@ Expected: test result: ok. 4 passed
 **Step 7: Commit**
 
 ```bash
-git add Aether/core/src/agent/
+git add Aleph/core/src/agent/
 git commit -m "feat: implement RigAgentManager with process methods"
 ```
 
@@ -1223,7 +1223,7 @@ Expected: test result: ok. 4 passed
 **Step 6: Commit**
 
 ```bash
-git add Aether/core/src/rig_tools/search.rs
+git add Aleph/core/src/rig_tools/search.rs
 git commit -m "feat: implement SearchTool with Tavily API"
 ```
 
@@ -1458,7 +1458,7 @@ Expected: test result: ok. 4 passed
 **Step 6: Commit**
 
 ```bash
-git add Aether/core/src/rig_tools/web_fetch.rs
+git add Aleph/core/src/rig_tools/web_fetch.rs
 git commit -m "feat: implement WebFetchTool with HTML extraction"
 ```
 
@@ -1478,11 +1478,11 @@ Create `Aether/core/src/aether_v2.udl`:
 ```webidl
 namespace aether_v2 {
     [Throws=AetherV2Error]
-    AetherV2Core init_v2(string config_path, AetherV2EventHandler handler);
+    AlephV2Core init_v2(string config_path, AlephV2EventHandler handler);
 };
 
 [Error]
-enum AetherV2Error {
+enum AlephV2Error {
     "Config",
     "Provider",
     "Tool",
@@ -1490,7 +1490,7 @@ enum AetherV2Error {
     "Cancelled",
 };
 
-callback interface AetherV2EventHandler {
+callback interface AlephV2EventHandler {
     void on_thinking();
     void on_tool_start(string tool_name);
     void on_tool_result(string tool_name, string result);
@@ -1500,7 +1500,7 @@ callback interface AetherV2EventHandler {
     void on_memory_stored();
 };
 
-interface AetherV2Core {
+interface AlephV2Core {
     [Throws=AetherV2Error]
     void process(string input, ProcessOptionsV2? options);
 
@@ -1542,7 +1542,7 @@ dictionary MemoryItemV2 {
 **Step 2: Commit**
 
 ```bash
-git add Aether/core/src/aether_v2.udl
+git add Aleph/core/src/aether_v2.udl
 git commit -m "feat: add simplified UniFFI interface (v2)"
 ```
 
@@ -1568,7 +1568,7 @@ use tracing::{error, info};
 
 /// Error type for UniFFI v2
 #[derive(Debug, thiserror::Error, uniffi::Error)]
-pub enum AetherV2Error {
+pub enum AlephV2Error {
     #[error("Configuration error: {message}")]
     Config { message: String },
     #[error("Provider error: {message}")]
@@ -1581,15 +1581,15 @@ pub enum AetherV2Error {
     Cancelled,
 }
 
-impl From<crate::error::AetherError> for AetherV2Error {
-    fn from(e: crate::error::AetherError) -> Self {
-        AetherV2Error::Config { message: e.to_string() }
+impl From<crate::error::AlephError> for AlephV2Error {
+    fn from(e: crate::error::AlephError) -> Self {
+        AlephV2Error::Config { message: e.to_string() }
     }
 }
 
 /// Event handler callback interface
 #[uniffi::export(callback_interface)]
-pub trait AetherV2EventHandler: Send + Sync {
+pub trait AlephV2EventHandler: Send + Sync {
     fn on_thinking(&self);
     fn on_tool_start(&self, tool_name: String);
     fn on_tool_result(&self, tool_name: String, result: String);
@@ -1649,20 +1649,20 @@ impl From<MemoryEntry> for MemoryItemV2 {
 
 /// Core v2 implementation
 #[derive(uniffi::Object)]
-pub struct AetherV2Core {
+pub struct AlephV2Core {
     manager: Arc<RwLock<RigAgentManager>>,
     memory_store: Option<Arc<RwLock<MemoryStore>>>,
-    handler: Arc<dyn AetherV2EventHandler>,
+    handler: Arc<dyn AlephV2EventHandler>,
     runtime: tokio::runtime::Handle,
 }
 
-/// Initialize AetherV2Core
+/// Initialize AlephV2Core
 #[uniffi::export]
 pub fn init_v2(
     config_path: String,
-    handler: Arc<dyn AetherV2EventHandler>,
-) -> Result<Arc<AetherV2Core>, AetherV2Error> {
-    info!(config_path = %config_path, "Initializing AetherV2Core");
+    handler: Arc<dyn AlephV2EventHandler>,
+) -> Result<Arc<AetherV2Core>, AlephV2Error> {
+    info!(config_path = %config_path, "Initializing AlephV2Core");
 
     // Create runtime if not in async context
     let runtime = tokio::runtime::Handle::try_current()
@@ -1686,13 +1686,13 @@ pub fn init_v2(
 }
 
 #[uniffi::export]
-impl AetherV2Core {
+impl AlephV2Core {
     /// Process user input
     pub fn process(
         &self,
         input: String,
         options: Option<ProcessOptionsV2>,
-    ) -> Result<(), AetherV2Error> {
+    ) -> Result<(), AlephV2Error> {
         let _options = options.unwrap_or_default();
         let handler = Arc::clone(&self.handler);
         let manager = Arc::clone(&self.manager);
@@ -1739,9 +1739,9 @@ impl AetherV2Core {
     }
 
     /// Search memory
-    pub fn search_memory(&self, query: String, limit: u32) -> Result<Vec<MemoryItemV2>, AetherV2Error> {
+    pub fn search_memory(&self, query: String, limit: u32) -> Result<Vec<MemoryItemV2>, AlephV2Error> {
         let store = self.memory_store.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory { message: "Memory store not initialized".to_string() }
+            AlephV2Error::Memory { message: "Memory store not initialized".to_string() }
         })?;
 
         let store_clone = Arc::clone(store);
@@ -1757,20 +1757,20 @@ impl AetherV2Core {
     }
 
     /// Clear all memory
-    pub fn clear_memory(&self) -> Result<(), AetherV2Error> {
+    pub fn clear_memory(&self) -> Result<(), AlephV2Error> {
         let store = self.memory_store.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory { message: "Memory store not initialized".to_string() }
+            AlephV2Error::Memory { message: "Memory store not initialized".to_string() }
         })?;
 
         let store_clone = Arc::clone(store);
         self.runtime.block_on(async {
             let store_guard = store_clone.read().await;
             store_guard.clear().await
-        }).map_err(|e| AetherV2Error::Memory { message: e.to_string() })
+        }).map_err(|e| AlephV2Error::Memory { message: e.to_string() })
     }
 
     /// Reload configuration
-    pub fn reload_config(&self) -> Result<(), AetherV2Error> {
+    pub fn reload_config(&self) -> Result<(), AlephV2Error> {
         // TODO: Implement config reload
         info!("Config reload requested");
         Ok(())
@@ -1794,7 +1794,7 @@ mod tests {
         }
     }
 
-    impl AetherV2EventHandler for TestHandler {
+    impl AlephV2EventHandler for TestHandler {
         fn on_thinking(&self) {}
         fn on_tool_start(&self, _: String) {}
         fn on_tool_result(&self, _: String, _: String) {}
@@ -1852,7 +1852,7 @@ Expected: test result: ok. 2 passed
 **Step 6: Commit**
 
 ```bash
-git add Aether/core/src/uniffi_v2.rs Aether/core/src/lib.rs
+git add Aleph/core/src/uniffi_v2.rs Aleph/core/src/lib.rs
 git commit -m "feat: implement UniFFI v2 bindings"
 ```
 

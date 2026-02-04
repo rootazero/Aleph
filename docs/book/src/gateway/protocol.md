@@ -1,6 +1,6 @@
 # Gateway Protocol
 
-The Aether Gateway uses JSON-RPC 2.0 over WebSocket for all communication.
+The Aleph Gateway uses JSON-RPC 2.0 over WebSocket for all communication.
 
 ## Connection
 

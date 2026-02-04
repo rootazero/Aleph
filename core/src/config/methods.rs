@@ -4,7 +4,7 @@
 
 use crate::config::Config;
 use crate::config::types::{RoutingRuleConfig, UnifiedToolsConfig};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use tracing::{debug, error};
 
 impl Config {
@@ -69,7 +69,7 @@ impl Config {
     ///
     /// # Returns
     /// * `Ok(())` - Successfully set default provider
-    /// * `Err(AetherError::InvalidConfig)` - Provider not found or disabled
+    /// * `Err(AlephError::InvalidConfig)` - Provider not found or disabled
     pub fn set_default_provider(&mut self, name: &str) -> Result<()> {
         match self.providers.get(name) {
             Some(config) if config.enabled => {
@@ -79,14 +79,14 @@ impl Config {
             }
             Some(_) => {
                 error!(provider = %name, "Cannot set disabled provider as default");
-                Err(AetherError::invalid_config(format!(
+                Err(AlephError::invalid_config(format!(
                     "Provider '{}' is not enabled",
                     name
                 )))
             }
             None => {
                 error!(provider = %name, "Provider not found in config");
-                Err(AetherError::invalid_config(format!(
+                Err(AlephError::invalid_config(format!(
                     "Provider '{}' not found",
                     name
                 )))
@@ -125,7 +125,7 @@ impl Config {
     ///
     /// # Example
     /// ```rust,ignore
-    /// # use aethecore::config::{Config, RoutingRuleConfig};
+    /// # use alephcore::config::{Config, RoutingRuleConfig};
     /// let mut config = Config::default();
     /// config.add_rule_at_top(RoutingRuleConfig {
     ///     regex: r"^\[VSCode\]".to_string(),
@@ -149,12 +149,12 @@ impl Config {
     ///
     /// # Returns
     /// * `Ok(())` - Rule removed successfully
-    /// * `Err(AetherError::InvalidConfig)` - Index out of bounds
+    /// * `Err(AlephError::InvalidConfig)` - Index out of bounds
     ///
     /// # Example
     /// ```rust,ignore
-    /// # use aethecore::config::Config;
-    /// # fn example() -> aethecore::error::Result<()> {
+    /// # use alephcore::config::Config;
+    /// # fn example() -> alephcore::error::Result<()> {
     /// let mut config = Config::default();
     /// // Assuming rule exists at index 0
     /// config.remove_rule(0)?;
@@ -178,7 +178,7 @@ impl Config {
                 max_index = self.rules.len().saturating_sub(1),
                 "Rule index out of bounds"
             );
-            Err(AetherError::invalid_config(format!(
+            Err(AlephError::invalid_config(format!(
                 "Rule index {} out of bounds (valid range: 0-{})",
                 index,
                 self.rules.len().saturating_sub(1)
@@ -196,12 +196,12 @@ impl Config {
     ///
     /// # Returns
     /// * `Ok(())` - Rule moved successfully
-    /// * `Err(AetherError::InvalidConfig)` - Invalid indices
+    /// * `Err(AlephError::InvalidConfig)` - Invalid indices
     ///
     /// # Example
     /// ```rust,ignore
-    /// # use aethecore::config::Config;
-    /// # fn example() -> aethecore::error::Result<()> {
+    /// # use alephcore::config::Config;
+    /// # fn example() -> alephcore::error::Result<()> {
     /// let mut config = Config::default();
     /// // Move rule from index 2 to index 0 (highest priority)
     /// config.move_rule(2, 0)?;
@@ -215,7 +215,7 @@ impl Config {
                 max_index = self.rules.len().saturating_sub(1),
                 "Source rule index out of bounds"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "Source index {} out of bounds (valid range: 0-{})",
                 from,
                 self.rules.len().saturating_sub(1)
@@ -227,7 +227,7 @@ impl Config {
                 max_index = self.rules.len().saturating_sub(1),
                 "Target rule index out of bounds"
             );
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "Target index {} out of bounds (valid range: 0-{})",
                 to,
                 self.rules.len().saturating_sub(1)
@@ -251,7 +251,7 @@ impl Config {
     ///
     /// # Example
     /// ```rust,ignore
-    /// # use aethecore::config::Config;
+    /// # use alephcore::config::Config;
     /// let config = Config::default();
     /// if let Some(rule) = config.get_rule(0) {
     ///     println!("First rule: {}", rule.regex);

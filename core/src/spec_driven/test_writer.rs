@@ -7,7 +7,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tracing::{debug, info};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 
 use super::spec_writer::extract_json;
@@ -112,7 +112,7 @@ Target Language: {}
         let json_str = extract_json(response);
 
         let parsed: Vec<TestCaseResponse> = serde_json::from_str(&json_str).map_err(|e| {
-            AetherError::Other {
+            AlephError::Other {
                 message: format!("Failed to parse test cases: {}", e),
                 suggestion: Some("Ensure the LLM returned a valid JSON array".to_string()),
             }

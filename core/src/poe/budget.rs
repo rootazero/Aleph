@@ -13,7 +13,7 @@
 //! # Example
 //!
 //! ```rust
-//! use aethecore::poe::budget::{PoeBudget, BudgetStatus};
+//! use alephcore::poe::budget::{PoeBudget, BudgetStatus};
 //!
 //! let mut budget = PoeBudget::new(5, 100_000);
 //!
@@ -117,7 +117,7 @@ impl PoeBudget {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::poe::budget::PoeBudget;
+    /// use alephcore::poe::budget::PoeBudget;
     ///
     /// let budget = PoeBudget::new(5, 100_000);
     /// assert_eq!(budget.remaining_attempts(), 5);
@@ -142,7 +142,7 @@ impl PoeBudget {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::poe::budget::PoeBudget;
+    /// use alephcore::poe::budget::PoeBudget;
     ///
     /// let mut budget = PoeBudget::new(2, 1000);
     /// assert!(!budget.exhausted());
@@ -172,7 +172,7 @@ impl PoeBudget {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::poe::budget::PoeBudget;
+    /// use alephcore::poe::budget::PoeBudget;
     ///
     /// let mut budget = PoeBudget::new(10, 100_000);
     ///
@@ -224,7 +224,7 @@ impl PoeBudget {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::poe::budget::PoeBudget;
+    /// use alephcore::poe::budget::PoeBudget;
     ///
     /// let mut budget = PoeBudget::new(5, 100_000);
     /// budget.record_attempt(1500, 0.7);
@@ -276,7 +276,7 @@ impl PoeBudget {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::poe::budget::PoeBudget;
+    /// use alephcore::poe::budget::PoeBudget;
     ///
     /// let mut budget = PoeBudget::new(10, 100_000);
     ///
@@ -340,7 +340,7 @@ impl PoeBudget {
     /// # Example
     ///
     /// ```rust
-    /// use aethecore::poe::budget::{PoeBudget, BudgetStatus};
+    /// use alephcore::poe::budget::{PoeBudget, BudgetStatus};
     ///
     /// let mut budget = PoeBudget::new(5, 100_000);
     /// budget.record_attempt(1000, 0.8);

@@ -1,4 +1,4 @@
-# Aether 热键无法工作问题诊断与解决方案
+# Aleph 热键无法工作问题诊断与解决方案
 
 ## 问题现象
 
@@ -8,7 +8,7 @@
 [Aether] Accessibility permission not granted, requesting...
 [EventHandler] Escape key monitor installed
 [Memory] Warning: No tokio runtime, skipping background cleanup task
-[Aether] AetherCore initialized
+[Aether] AlephCore initialized
 [EventHandler] State changed: listening
 [Aether] Hotkey listening started (⌘~)
 [EventHandler] VoiceOver announcement: Listening for input
@@ -74,7 +74,7 @@ os_unix.c:51043: (2) open(/private/var/db/DetachedSignatures) - No such file or 
 ```yaml
 info:
   properties:
-    NSAccessibilityUsageDescription: "Aether needs Accessibility permission to detect global hotkeys and capture window context for memory features."
+    NSAccessibilityUsageDescription: "Aleph needs Accessibility permission to detect global hotkeys and capture window context for memory features."
 ```
 
 2. **Aether/core/src/hotkey/rdev_listener.rs** - 在 start_listening 前检查权限
@@ -93,7 +93,7 @@ private func initializeRustCore() {
 
     // 有权限，正常初始化
     do {
-        core = try AetherCore(handler: eventHandler!)
+        core = try AlephCore(handler: eventHandler!)
         try core?.startListening()
     } catch {
         // 错误处理
@@ -123,29 +123,29 @@ private func initializeRustCore() {
 ### 1. 清空权限并重新测试
 
 ```bash
-# 完全退出 Aether
-killall Aether
+# 完全退出 Aleph
+killall Aleph
 
 # 清理 TCC 数据库（需要重启系统）
-# 或者手动在系统设置中移除 Aether 的辅助功能权限
+# 或者手动在系统设置中移除 Aleph 的辅助功能权限
 
 # 清理构建缓存
-rm -rf ~/Library/Developer/Xcode/DerivedData/Aether-*
+rm -rf ~/Library/Developer/Xcode/DerivedData/Aleph-*
 
 # 重新构建并运行
 xcodegen generate
-open Aether.xcodeproj
+open Aleph.xcodeproj
 # 在 Xcode 中点击 Run (Cmd+R)
 ```
 
 ### 2. 验证权限提示流程
 
-1. 启动 Aether（没有辅助功能权限）
+1. 启动 Aleph（没有辅助功能权限）
 2. **预期**：1.5秒后显示权限提示（居中显示）
 3. 点击「打开系统设置」
 4. 在系统设置中授予权限
 5. **问题**：此时热键仍然不工作（需要重启应用）
-6. 完全退出 Aether，重新启动
+6. 完全退出 Aleph，重新启动
 7. **预期**：热键现在应该正常工作
 
 ### 3. 验证热键功能

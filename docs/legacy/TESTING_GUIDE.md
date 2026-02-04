@@ -1,4 +1,4 @@
-# Aether Testing Guide
+# Aleph Testing Guide
 
 This document provides step-by-step instructions for completing the remaining manual testing tasks for the `add-macos-client-and-halo-overlay` change.
 
@@ -6,21 +6,21 @@ This document provides step-by-step instructions for completing the remaining ma
 
 1. **Build Rust Core**:
    ```bash
-   cd Aether/core
+   cd Aleph/core
    cargo build --release
    ```
 
 2. **Configure Xcode Build Phase** (if not already done):
-   - Open `Aether.xcodeproj`
-   - Select Aether target → Build Phases
+   - Open `Aleph.xcodeproj`
+   - Select Aleph target → Build Phases
    - Add "Run Script" phase before "Compile Sources"
    - Script: `${SRCROOT}/Scripts/copy_rust_libs.sh`
-   - Input Files: `${SRCROOT}/Aether/core/target/release/libaethecore.dylib`
-   - Output Files: `${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libaethecore.dylib`
+   - Input Files: `${SRCROOT}/Aether/core/target/release/libalephcore.dylib`
+   - Output Files: `${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libalephcore.dylib`
 
 3. **Build and Run App**:
    ```bash
-   open Aether.xcodeproj
+   open Aleph.xcodeproj
    # Press Cmd+R in Xcode to build and run
    ```
 
@@ -50,14 +50,14 @@ This document provides step-by-step instructions for completing the remaining ma
 **Steps:**
 1. Click the sparkles icon in menu bar
 2. Verify menu appears with items:
-   - About Aether
+   - About Aleph
    - ---
    - Settings...
    - ---
-   - Quit Aether
-3. Click "About Aether" → verify alert with version info
+   - Quit Aleph
+3. Click "About Aleph" → verify alert with version info
 4. Click "Settings..." → verify settings window opens
-5. Click "Quit Aether" → verify app quits
+5. Click "Quit Aleph" → verify app quits
 
 **Expected Result:**
 - Menu displays correctly
@@ -95,7 +95,7 @@ This document provides step-by-step instructions for completing the remaining ma
 2. Filter by "Aether"
 3. Launch the app
 4. Check for log messages:
-   - `[Aether] AetherCore initialized`
+   - `[Aether] AlephCore initialized`
    - `[Aether] Hotkey listening started (⌘~)`
 
 **Expected Result:**
@@ -132,7 +132,7 @@ This document provides step-by-step instructions for completing the remaining ma
 **Sample Test:**
 ```swift
 import XCTest
-@testable import Aether
+@testable import Aleph
 
 class HaloStateTests: XCTestCase {
     func testStateTransitions() {
@@ -222,7 +222,7 @@ class HaloStateTests: XCTestCase {
 1. Click menu bar icon → Settings...
 2. Verify window appears
 3. Check window properties:
-   - Title: "Aether Settings"
+   - Title: "Aleph Settings"
    - Size: 800x550 pixels
    - Has 4 tabs: General, Providers, Routing, Shortcuts
 4. Try resizing window (min 700x500, max 1200x800)
@@ -290,7 +290,7 @@ class HaloStateTests: XCTestCase {
 2. Launch app
 3. Permission alert should appear
 4. Click "Open System Settings"
-5. Enable Aether in Privacy & Security → Accessibility
+5. Enable Aleph in Privacy & Security → Accessibility
 6. Verify app detects permission automatically (polling every 2s)
 
 **Expected Result:**
@@ -312,7 +312,7 @@ class HaloStateTests: XCTestCase {
 **Steps:**
 1. Launch app
 2. Trigger Halo a few times
-3. Quit via menu bar → Quit Aether
+3. Quit via menu bar → Quit Aleph
 4. Check Console.app for:
    - `[Aether] Core stopped successfully`
 5. Verify no error messages or crashes
@@ -329,7 +329,7 @@ class HaloStateTests: XCTestCase {
 #### ✅ Task 18.6: Test error scenarios
 
 **Test Case 1: Missing dylib**
-1. Rename `libaethecore.dylib` in app bundle
+1. Rename `libalephcore.dylib` in app bundle
 2. Launch app
 3. Verify error alert appears with retry information
 4. Check retry logic (max 3 attempts with 2s, 4s, 6s delays)

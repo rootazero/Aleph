@@ -1,4 +1,4 @@
-# Aether 超越 OpenClaw 设计文档
+# Aleph 超越 OpenClaw 设计文档
 
 > 设计日期: 2026-01-31
 > 状态: 已验证，待实现
@@ -7,9 +7,9 @@
 
 ## 1. 核心定位
 
-**Aether 的角色**：不是 OpenClaw 的简单克隆，而是用 Rust 重写并超越的系统。
+**Aleph 的角色**：不是 OpenClaw 的简单克隆，而是用 Rust 重写并超越的系统。
 
-| 维度 | OpenClaw | Aether |
+| 维度 | OpenClaw | Aleph |
 |------|----------|--------|
 | 语言 | TypeScript (2000+ 文件) | Rust (255K+ 行，54 模块) |
 | Memory | Vector + FTS5 | **Ebbinghaus 衰减 + 关联聚类 + 三路冲突** |
@@ -19,8 +19,8 @@
 | 韧性执行 | 基础重试 | **三级防御**（重试 → 降级 → 通知） |
 
 **核心隐喻**：
-- Aether 是 **"AI Manager"**，指挥其他 AI（如 Claude Code）干活
-- Aether 是 **"产品经理 + 架构师"**，Claude Code 是 **"高级工程师"**
+- Aleph 是 **"AI Manager"**，指挥其他 AI（如 Claude Code）干活
+- Aleph 是 **"产品经理 + 架构师"**，Claude Code 是 **"高级工程师"**
 
 ---
 
@@ -68,7 +68,7 @@
 
 ## 3. PtySupervisor 详细设计
 
-**核心理念**：Aether 不重复造轮子，而是成为 Claude Code 的"监管者"。
+**核心理念**：Aleph 不重复造轮子，而是成为 Claude Code 的"监管者"。
 
 ### 3.1 架构图
 
@@ -173,7 +173,7 @@ fn monitor_output(mut reader: Box<dyn Read + Send>, event_bus: EventBus) {
 
 ### 3.3 规格驱动开发闭环
 
-1. 用户输入需求 → Aether 生成 `specs/*.spiky` + `tests/*_test.py`
+1. 用户输入需求 → Aleph 生成 `specs/*.spiky` + `tests/*_test.py`
 2. PtySupervisor 启动 Claude Code → 注入指令
 3. 拦截确认提示 → SecurityKernel 判断 → 自动/手动审批
 4. 任务完成 → LLM Judge 运行测试
@@ -411,7 +411,7 @@ Stage 3: 固化建议 (触发阈值后)
 Stage 4: Skill 自动更新 (用户确认后)
   • 生成 Skill 补丁
   • 用户预览 diff
-  • 写入 ~/.aether/skills/
+  • 写入 ~/.aleph/skills/
   • Git Commit + Push
 ```
 
@@ -448,7 +448,7 @@ M6 (韧性执行) ──────────► 独立，可并行开发
 - [x] ANSI 清洗层 (strip_ansi_escapes)
 - [x] 基础 stdin/stdout 交互测试
 
-**验收**: ✅ Aether 能启动 Claude Code 并读取输出
+**验收**: ✅ Aleph 能启动 Claude Code 并读取输出
 
 ### Milestone 2: SecurityKernel 规则引擎
 

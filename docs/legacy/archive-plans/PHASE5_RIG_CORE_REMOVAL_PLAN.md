@@ -2,13 +2,13 @@
 
 ## 目标
 
-从 Aether Core 中完全移除 `rig-core` 和 `rig-sqlite` 依赖，统一使用自实现的工具系统。
+从 Aleph Core 中完全移除 `rig-core` 和 `rig-sqlite` 依赖，统一使用自实现的工具系统。
 
 ## 当前状态
 
 ### 已完成（Phase 1-4）
-- ✅ `AetherTool` trait 系统（`core/src/tools/`）
-- ✅ 12 个内置工具迁移到 AetherTool
+- ✅ `AlephTool` trait 系统（`core/src/tools/`）
+- ✅ 12 个内置工具迁移到 AlephTool
 - ✅ `BuiltinToolRegistry` 使用 `call_json` 直接执行
 - ✅ 删除 `RigAgentManager`（主代码路径不再依赖）
 
@@ -181,11 +181,11 @@ impl ToolDyn for McpToolWrapper { ... }
 
 **目标**:
 ```rust
-use crate::tools::AetherToolDyn;
+use crate::tools::AlephToolDyn;
 use crate::dispatcher::ToolDefinition;
 use crate::error::Result;
 
-impl AetherToolDyn for McpToolWrapper {
+impl AlephToolDyn for McpToolWrapper {
     fn name(&self) -> &str { &self.name }
 
     fn definition(&self) -> ToolDefinition {
@@ -231,7 +231,7 @@ impl rig::tool::Tool for SearchTool {
 }
 ```
 
-**保留**: 只保留 `AetherTool` 实现
+**保留**: 只保留 `AlephTool` 实现
 
 #### 5.2.3 更新 DelegateTool
 
@@ -244,13 +244,13 @@ use rig::tool::{Tool, ToolError};
 impl Tool for DelegateTool { ... }
 ```
 
-**目标**: 迁移到 `AetherTool`
+**目标**: 迁移到 `AlephTool`
 ```rust
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 use crate::error::Result;
 
 #[async_trait]
-impl AetherTool for DelegateTool {
+impl AlephTool for DelegateTool {
     const NAME: &'static str = "delegate";
     const DESCRIPTION: &'static str = "Delegate a task to a specialized sub-agent";
 
@@ -280,8 +280,8 @@ let (tool_server_handle, registered_tools) = {
     (tool_server_handle, registered_tools)
 };
 
-// AetherCore 中存储:
-pub struct AetherCore {
+// AlephCore 中存储:
+pub struct AlephCore {
     pub(crate) tool_server_handle: ToolServerHandle,
     pub(crate) registered_tools: Arc<RwLock<Vec<String>>>,
     // ...
@@ -392,7 +392,7 @@ impl Default for ToolRegistryHandle {
 // Before:
 use rig::tool::server::ToolServerHandle;
 
-pub struct AetherCore {
+pub struct AlephCore {
     pub(crate) tool_server_handle: ToolServerHandle,
     // ...
 }
@@ -400,7 +400,7 @@ pub struct AetherCore {
 // After:
 use crate::tools::ToolRegistryHandle;
 
-pub struct AetherCore {
+pub struct AlephCore {
     pub(crate) tool_registry: ToolRegistryHandle,
     // ...
 }
@@ -595,6 +595,6 @@ Phase 5.4 (清理)  ← 依赖 Phase 5.1-5.3
 完成 Phase 5 后的可选优化：
 
 1. **重命名模块**: `rig_tools` → `builtin_tools`
-2. **统一错误类型**: 合并 `ToolError` 到 `AetherError`
+2. **统一错误类型**: 合并 `ToolError` 到 `AlephError`
 3. **性能优化**: 移除 rig-core 后的编译时间和二进制大小对比
 4. **文档更新**: 更新架构文档，移除 rig-core 相关说明

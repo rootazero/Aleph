@@ -4,7 +4,7 @@
 
 **Goal:** Build the event bus core infrastructure with type-safe broadcast channels, event types, and handler traits.
 
-**Architecture:** Create a new `event/` module with EventBus using tokio broadcast channels, AetherEvent enum for type-safe events, and EventHandler trait for component subscription.
+**Architecture:** Create a new `event/` module with EventBus using tokio broadcast channels, AlephEvent enum for type-safe events, and EventHandler trait for component subscription.
 
 **Tech Stack:** tokio (broadcast channel), serde (serialization), chrono (timestamps), uuid (event IDs)
 
@@ -22,8 +22,8 @@
 **Step 1: Create event module directory and mod.rs**
 
 ```rust
-// Aether/core/src/event/mod.rs
-//! Event-driven architecture for Aether's agentic loop.
+// Aleph/core/src/event/mod.rs
+//! Event-driven architecture for Aleph's agentic loop.
 //!
 //! This module provides:
 //! - `EventBus`: Type-safe broadcast channel for component communication
@@ -37,7 +37,7 @@ mod types;
 pub use bus::{EventBus, EventSubscriber};
 pub use handler::{EventContext, EventHandler, EventHandlerRegistry};
 pub use types::{
-    AetherEvent, EventType, TimestampedEvent,
+    AlephEvent, EventType, TimestampedEvent,
     // Input events
     InputEvent,
     // Planning events
@@ -67,7 +67,7 @@ Expected: Error about missing files (bus.rs, handler.rs, types.rs)
 **Step 3: Commit module structure placeholder**
 
 ```bash
-git add Aether/core/src/event/mod.rs
+git add Aleph/core/src/event/mod.rs
 git commit -m "feat(event): add event module structure placeholder"
 ```
 
@@ -81,7 +81,7 @@ git commit -m "feat(event): add event module structure placeholder"
 **Step 1: Write event type definitions**
 
 ```rust
-// Aether/core/src/event/types.rs
+// Aleph/core/src/event/types.rs
 //! Event type definitions for the event-driven architecture.
 
 use serde::{Deserialize, Serialize};
@@ -103,13 +103,13 @@ fn next_sequence() -> u64 {
 /// Timestamped event wrapper for history tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimestampedEvent {
-    pub event: AetherEvent,
+    pub event: AlephEvent,
     pub timestamp: i64,
     pub sequence: u64,
 }
 
 impl TimestampedEvent {
-    pub fn new(event: AetherEvent) -> Self {
+    pub fn new(event: AlephEvent) -> Self {
         Self {
             event,
             timestamp: chrono::Utc::now().timestamp_millis(),
@@ -163,7 +163,7 @@ pub enum EventType {
 /// Unified event enum - all events in the system
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
-pub enum AetherEvent {
+pub enum AlephEvent {
     // Input events
     InputReceived(InputEvent),
 
@@ -200,7 +200,7 @@ pub enum AetherEvent {
     AiResponseGenerated(AiResponse),
 }
 
-impl AetherEvent {
+impl AlephEvent {
     /// Get the event type discriminant
     pub fn event_type(&self) -> EventType {
         match self {
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn test_event_type_mapping() {
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_event_serialization() {
-        let event = AetherEvent::ToolCallCompleted(ToolCallResult {
+        let event = AlephEvent::ToolCallCompleted(ToolCallResult {
             call_id: "123".to_string(),
             tool: "search".to_string(),
             input: serde_json::json!({"query": "test"}),
@@ -550,7 +550,7 @@ mod tests {
         });
 
         let json = serde_json::to_string(&event).unwrap();
-        let parsed: AetherEvent = serde_json::from_str(&json).unwrap();
+        let parsed: AlephEvent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.event_type(), EventType::ToolCallCompleted);
     }
@@ -570,10 +570,10 @@ Expected: Tests should pass once all files are created
 **Step 4: Commit types module**
 
 ```bash
-git add Aether/core/src/event/types.rs
+git add Aleph/core/src/event/types.rs
 git commit -m "feat(event): add event type definitions
 
-- Add AetherEvent enum with all event variants
+- Add AlephEvent enum with all event variants
 - Add EventType discriminant for subscription filtering
 - Add TimestampedEvent wrapper with sequence numbers
 - Add all event payload structs (InputEvent, ToolCallResult, etc.)
@@ -590,7 +590,7 @@ git commit -m "feat(event): add event type definitions
 **Step 1: Write EventBus implementation**
 
 ```rust
-// Aether/core/src/event/bus.rs
+// Aleph/core/src/event/bus.rs
 //! Event bus implementation using tokio broadcast channels.
 
 use crate::event::types::{AetherEvent, EventType, TimestampedEvent};
@@ -669,7 +669,7 @@ impl EventBus {
     /// Publish an event to all subscribers
     ///
     /// Returns the number of active subscribers that received the event.
-    pub async fn publish(&self, event: AetherEvent) -> usize {
+    pub async fn publish(&self, event: AlephEvent) -> usize {
         let timestamped = TimestampedEvent::new(event);
 
         trace!(
@@ -842,7 +842,7 @@ mod tests {
         let bus = EventBus::new();
         let mut subscriber = bus.subscribe();
 
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "hello".to_string(),
             topic_id: None,
             context: None,
@@ -946,7 +946,7 @@ Expected: Tests should pass once handler.rs is created
 **Step 4: Commit bus module**
 
 ```bash
-git add Aether/core/src/event/bus.rs
+git add Aleph/core/src/event/bus.rs
 git commit -m "feat(event): implement EventBus with broadcast channels
 
 - Add EventBus using tokio broadcast for multi-subscriber support
@@ -965,7 +965,7 @@ git commit -m "feat(event): implement EventBus with broadcast channels
 **Step 1: Write EventHandler trait and registry**
 
 ```rust
-// Aether/core/src/event/handler.rs
+// Aleph/core/src/event/handler.rs
 //! Event handler trait and registry for component subscriptions.
 
 use crate::event::bus::EventBus;
@@ -1390,7 +1390,7 @@ Expected: All tests pass
 **Step 4: Commit handler module**
 
 ```bash
-git add Aether/core/src/event/handler.rs
+git add Aleph/core/src/event/handler.rs
 git commit -m "feat(event): implement EventHandler trait and registry
 
 - Add EventHandler trait for component subscriptions
@@ -1422,7 +1422,7 @@ Add after the existing re-exports section (around line 280):
 ```rust
 // Event system exports (event-driven agentic loop)
 pub use crate::event::{
-    AetherEvent, EventBus, EventBusConfig, EventContext, EventHandler,
+    AlephEvent, EventBus, EventBusConfig, EventContext, EventHandler,
     EventHandlerRegistry, EventSubscriber, EventType, HandlerError, TimestampedEvent,
     // Event payload types
     AiResponse, CompactionInfo, ErrorKind, InputContext, InputEvent, LoopState,
@@ -1446,7 +1446,7 @@ Expected: All tests pass
 **Step 5: Commit integration**
 
 ```bash
-git add Aether/core/src/lib.rs Aether/core/src/event/mod.rs
+git add Aleph/core/src/lib.rs Aleph/core/src/event/mod.rs
 git commit -m "feat(event): integrate event module into library
 
 - Add event module declaration to lib.rs
@@ -1465,7 +1465,7 @@ git commit -m "feat(event): integrate event module into library
 **Step 1: Create integration test file**
 
 ```rust
-// Aether/core/src/event/integration_test.rs
+// Aleph/core/src/event/integration_test.rs
 //! Integration tests for the event system.
 
 #[cfg(test)]
@@ -1491,7 +1491,7 @@ mod tests {
             event: &AetherEvent,
             _ctx: &EventContext,
         ) -> Result<Vec<AetherEvent>, HandlerError> {
-            if let AetherEvent::InputReceived(input) = event {
+            if let AlephEvent::InputReceived(input) = event {
                 // Simulate: detect intent and request tool call
                 Ok(vec![AetherEvent::ToolCallRequested(ToolCallRequest {
                     tool: "search".to_string(),
@@ -1520,7 +1520,7 @@ mod tests {
             event: &AetherEvent,
             _ctx: &EventContext,
         ) -> Result<Vec<AetherEvent>, HandlerError> {
-            if let AetherEvent::ToolCallRequested(req) = event {
+            if let AlephEvent::ToolCallRequested(req) = event {
                 Ok(vec![AetherEvent::ToolCallCompleted(ToolCallResult {
                     call_id: uuid::Uuid::new_v4().to_string(),
                     tool: req.tool.clone(),
@@ -1724,7 +1724,7 @@ Expected: All tests pass
 **Step 5: Commit integration test**
 
 ```bash
-git add Aether/core/src/event/integration_test.rs Aether/core/src/event/mod.rs
+git add Aleph/core/src/event/integration_test.rs Aleph/core/src/event/mod.rs
 git commit -m "test(event): add integration tests for event flow
 
 - Add MockIntentAnalyzer, MockToolExecutor, MockLoopController
@@ -1765,7 +1765,7 @@ git commit -m "docs(event): Phase 1 complete - event infrastructure ready
 
 Event-driven architecture foundation:
 - EventBus: Type-safe broadcast channels with history
-- AetherEvent: Unified event enum with 19 variants
+- AlephEvent: Unified event enum with 19 variants
 - EventHandler: Trait for component subscriptions
 - EventHandlerRegistry: Lifecycle management
 

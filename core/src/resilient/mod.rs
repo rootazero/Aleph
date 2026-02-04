@@ -8,7 +8,7 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use aethecore::resilient::{ResilientTask, ResilienceConfig, TaskOutcome};
+//! use alephcore::resilient::{ResilientTask, ResilienceConfig, TaskOutcome};
 //!
 //! struct PodcastTask { /* ... */ }
 //!

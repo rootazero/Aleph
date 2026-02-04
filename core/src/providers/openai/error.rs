@@ -2,17 +2,17 @@
 ///
 /// Error parsing and conversion utilities for OpenAI API responses.
 
-use crate::error::AetherError;
+use crate::error::AlephError;
 use tracing::error;
 
 use super::types::ErrorResponse;
 
-/// Parse error response and convert to AetherError
+/// Parse error response and convert to AlephError
 pub async fn handle_error(
     provider_name: &str,
     endpoint: &str,
     response: reqwest::Response,
-) -> AetherError {
+) -> AlephError {
     let status = response.status();
 
     // Try to read the raw response body first for logging
@@ -32,16 +32,16 @@ pub async fn handle_error(
         let error_msg = error_response.error.message;
 
         return match status.as_u16() {
-            401 => AetherError::authentication(
+            401 => AlephError::authentication(
                 provider_name,
                 &format!("Invalid API key for {}: {}", provider_name, error_msg),
             ),
-            429 => AetherError::rate_limit(format!("{} rate limit: {}", provider_name, error_msg)),
-            500..=599 => AetherError::provider(format!(
+            429 => AlephError::rate_limit(format!("{} rate limit: {}", provider_name, error_msg)),
+            500..=599 => AlephError::provider(format!(
                 "{} server error ({}): {}",
                 provider_name, status, error_msg
             )),
-            _ => AetherError::provider(format!(
+            _ => AlephError::provider(format!(
                 "{} API error ({}): {}",
                 provider_name, status, error_msg
             )),
@@ -50,13 +50,13 @@ pub async fn handle_error(
 
     // Fallback if we can't parse the error response
     match status.as_u16() {
-        401 => AetherError::authentication(
+        401 => AlephError::authentication(
             provider_name,
             &format!("Invalid API key for {}", provider_name),
         ),
-        429 => AetherError::rate_limit(format!("{} rate limit exceeded", provider_name)),
-        500..=599 => AetherError::provider(format!("{} server error: {}", provider_name, status)),
-        _ => AetherError::provider(format!(
+        429 => AlephError::rate_limit(format!("{} rate limit exceeded", provider_name)),
+        500..=599 => AlephError::provider(format!("{} server error: {}", provider_name, status)),
+        _ => AlephError::provider(format!(
             "{} API error ({}): {}",
             provider_name,
             status,

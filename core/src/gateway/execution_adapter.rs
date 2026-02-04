@@ -20,7 +20,7 @@ use super::execution_engine::{ExecutionError, RunRequest, RunStatus};
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::gateway::{ExecutionAdapter, RunRequest};
+/// use alephcore::gateway::{ExecutionAdapter, RunRequest};
 ///
 /// async fn handle_message(
 ///     adapter: Arc<dyn ExecutionAdapter>,

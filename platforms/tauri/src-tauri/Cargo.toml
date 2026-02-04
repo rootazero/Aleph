@@ -1,12 +1,12 @@
 [package]
-name = "aether-tauri"
+name = "aleph-tauri"
 version = "0.1.0"
-description = "Aether cross-platform version using Tauri"
-authors = ["Aether Team"]
+description = "Aleph cross-platform version using Tauri"
+authors = ["Aleph Team"]
 edition = "2021"
 
 [lib]
-name = "aether_tauri_lib"
+name = "aleph_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -26,8 +26,8 @@ tauri-plugin-store = "2"
 # Directories
 dirs = "5"
 
-# Aether Core
-aethecore = { path = "../../../core", default-features = false }
+# Aleph Core
+alephcore = { path = "../../../core", default-features = false }
 
 # Async
 tokio = { version = "1", features = ["full"] }

@@ -21,7 +21,7 @@ use crate::dispatcher::{
     DEFAULT_MAX_FILE_SIZE, DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE,
     DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE,
 };
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// File metadata returned by operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,26 +165,26 @@ impl FileOpsExecutor {
         let canonical_path = self
             .permission_checker
             .check_path(path)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         // Check file size
         let metadata =
-            fs::metadata(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
+            fs::metadata(&canonical_path).map_err(|e| AlephError::IoError(e.to_string()))?;
         self.permission_checker
             .check_file_size(metadata.len())
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         // Read file
         let mut file =
-            File::open(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
+            File::open(&canonical_path).map_err(|e| AlephError::IoError(e.to_string()))?;
         let mut content = String::new();
         file.read_to_string(&mut content)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         let result = ReadResult {
             content,
             metadata: FileMetadata::from_path(&canonical_path)
-                .map_err(|e| AetherError::IoError(e.to_string()))?,
+                .map_err(|e| AlephError::IoError(e.to_string()))?,
             encoding: "utf-8".to_string(),
         };
 
@@ -215,12 +215,12 @@ impl FileOpsExecutor {
         let canonical_path = self
             .permission_checker
             .check_path(path)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         // Create parent directories if needed
         if let Some(parent) = canonical_path.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent).map_err(|e| AetherError::IoError(e.to_string()))?;
+                fs::create_dir_all(parent).map_err(|e| AlephError::IoError(e.to_string()))?;
                 debug!("Created parent directories: {:?}", parent);
             }
         }
@@ -233,11 +233,11 @@ impl FileOpsExecutor {
             .create(true)
             .truncate(true)
             .open(&canonical_path)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         let bytes_written = content.len() as u64;
         file.write_all(content.as_bytes())
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         let result = WriteResult {
             path: canonical_path.clone(),
@@ -274,28 +274,28 @@ impl FileOpsExecutor {
         let from_canonical = self
             .permission_checker
             .check_path(from)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         let to_canonical = self
             .permission_checker
             .check_path(to)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         // Get file size before move
         let metadata =
-            fs::metadata(&from_canonical).map_err(|e| AetherError::IoError(e.to_string()))?;
+            fs::metadata(&from_canonical).map_err(|e| AlephError::IoError(e.to_string()))?;
         let bytes = metadata.len();
 
         // Create parent directories if needed
         if let Some(parent) = to_canonical.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent).map_err(|e| AetherError::IoError(e.to_string()))?;
+                fs::create_dir_all(parent).map_err(|e| AlephError::IoError(e.to_string()))?;
             }
         }
 
         // Perform move
         fs::rename(&from_canonical, &to_canonical)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         let result = MoveResult {
             from: from_canonical.clone(),
@@ -324,23 +324,23 @@ impl FileOpsExecutor {
         let from_canonical = self
             .permission_checker
             .check_path(from)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         let to_canonical = self
             .permission_checker
             .check_path(to)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         // Create parent directories if needed
         if let Some(parent) = to_canonical.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent).map_err(|e| AetherError::IoError(e.to_string()))?;
+                fs::create_dir_all(parent).map_err(|e| AlephError::IoError(e.to_string()))?;
             }
         }
 
         // Perform copy
         let bytes = fs::copy(&from_canonical, &to_canonical)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         let result = MoveResult {
             from: from_canonical.clone(),
@@ -370,22 +370,22 @@ impl FileOpsExecutor {
         let canonical_path = self
             .permission_checker
             .check_path(path)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         let metadata =
-            fs::metadata(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
+            fs::metadata(&canonical_path).map_err(|e| AlephError::IoError(e.to_string()))?;
         let was_dir = metadata.is_dir();
         let mut items_deleted = 1;
 
         if was_dir {
             // Count items in directory
             items_deleted = fs::read_dir(&canonical_path)
-                .map_err(|e| AetherError::IoError(e.to_string()))?
+                .map_err(|e| AlephError::IoError(e.to_string()))?
                 .count()
                 + 1;
-            fs::remove_dir_all(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
+            fs::remove_dir_all(&canonical_path).map_err(|e| AlephError::IoError(e.to_string()))?;
         } else {
-            fs::remove_file(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
+            fs::remove_file(&canonical_path).map_err(|e| AlephError::IoError(e.to_string()))?;
         }
 
         let result = DeleteResult {
@@ -420,7 +420,7 @@ impl FileOpsExecutor {
         let canonical_dir = self
             .permission_checker
             .check_path(dir)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         // Build full glob pattern
         let full_pattern = canonical_dir.join(pattern);
@@ -428,7 +428,7 @@ impl FileOpsExecutor {
 
         let mut matches = Vec::new();
 
-        for entry in glob(&pattern_str).map_err(|e| AetherError::IoError(e.to_string()))? {
+        for entry in glob(&pattern_str).map_err(|e| AlephError::IoError(e.to_string()))? {
             match entry {
                 Ok(path) => {
                     // Check if path is allowed (not in denied paths)
@@ -473,14 +473,14 @@ impl FileOpsExecutor {
         let canonical_path = self
             .permission_checker
             .check_path(path)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+            .map_err(|e| AlephError::IoError(e.to_string()))?;
 
         let mut entries = Vec::new();
 
         for entry in
-            fs::read_dir(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?
+            fs::read_dir(&canonical_path).map_err(|e| AlephError::IoError(e.to_string()))?
         {
-            let entry = entry.map_err(|e| AetherError::IoError(e.to_string()))?;
+            let entry = entry.map_err(|e| AlephError::IoError(e.to_string()))?;
             let entry_path = entry.path();
 
             // Check if entry path is allowed
@@ -607,7 +607,7 @@ impl TaskExecutor for FileOpsExecutor {
         let file_op = match &task.task_type {
             TaskType::FileOperation(op) => op,
             _ => {
-                return Err(AetherError::other(format!(
+                return Err(AlephError::other(format!(
                     "FileOpsExecutor cannot handle task type: {:?}",
                     task.task_type
                 )));

@@ -305,8 +305,8 @@
   "conversation": {
     "title": "对话",
     "startPrompt": "开始对话",
-    "startDescription": "在下方输入消息，开始与 Aether AI 聊天。",
-    "inputPlaceholder": "问 Aether 任何问题...",
+    "startDescription": "在下方输入消息，开始与 Aleph AI 聊天。",
+    "inputPlaceholder": "问 Aleph 任何问题...",
     "clearMessages": "清除消息",
     "processing": "处理中..."
   },

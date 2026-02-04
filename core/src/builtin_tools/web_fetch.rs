@@ -1,12 +1,12 @@
 //! Web fetch tool for retrieving and extracting content from web pages
 //!
-//! Implements AetherTool trait for AI agent integration.
+//! Implements AlephTool trait for AI agent integration.
 
 use async_trait::async_trait;
 use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AlephTool;
 use reqwest::Client;
 use schemars::JsonSchema;
 use scraper::{Html, Selector};
@@ -265,9 +265,9 @@ impl Clone for WebFetchTool {
     }
 }
 
-/// Implementation of AetherTool trait for WebFetchTool
+/// Implementation of AlephTool trait for WebFetchTool
 #[async_trait]
-impl AetherTool for WebFetchTool {
+impl AlephTool for WebFetchTool {
     const NAME: &'static str = "web_fetch";
     const DESCRIPTION: &'static str = "Fetch and extract text content from a web page URL.";
 
@@ -282,7 +282,7 @@ impl AetherTool for WebFetchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::AetherTool;
+    use crate::tools::AlephTool;
 
     #[test]
     fn test_web_fetch_args() {
@@ -308,7 +308,7 @@ mod tests {
         };
 
         // Use fully qualified syntax
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_ok(), "Expected success, got: {:?}", result);
 
         let result = result.unwrap();
@@ -329,10 +329,10 @@ mod tests {
         };
 
         // Use fully qualified syntax to avoid ambiguity
-        let result = AetherTool::call(&tool, args).await;
+        let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err(), "Expected error for invalid URL");
 
-        // Error is now AetherError
+        // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
         assert!(err_msg.contains("Invalid URL format"), "Expected 'Invalid URL format' error, got: {}", err_msg);

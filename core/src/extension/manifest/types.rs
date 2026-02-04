@@ -9,8 +9,8 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-// V2 field types from aether_plugin_toml module
-use super::aether_plugin_toml::{
+// V2 field types from aleph_plugin_toml module
+use super::aleph_plugin_toml::{
     CapabilitiesSection, ChannelSection, CommandSection, HookSection, HttpRouteSection,
     PromptSection, ProviderSection, ServiceSection, ToolSection,
 };

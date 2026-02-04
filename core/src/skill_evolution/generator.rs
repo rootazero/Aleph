@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use tracing::info;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::types::{GenerationResult, SolidificationSuggestion};
 
@@ -43,9 +43,9 @@ impl SkillGenerator {
         }
     }
 
-    /// Create with default skills directory (~/.aether/skills)
+    /// Create with default skills directory (~/.aleph/skills)
     pub fn with_default_dir() -> Result<Self> {
-        let home = dirs::home_dir().ok_or_else(|| AetherError::Other {
+        let home = dirs::home_dir().ok_or_else(|| AlephError::Other {
             message: "Could not determine home directory".to_string(),
             suggestion: None,
         })?;
@@ -91,14 +91,14 @@ impl SkillGenerator {
             );
 
         // Create directory
-        fs::create_dir_all(&skill_dir).map_err(|e| AetherError::Other {
+        fs::create_dir_all(&skill_dir).map_err(|e| AlephError::Other {
             message: format!("Failed to create skill directory: {}", e),
             suggestion: None,
         })?;
 
         // Write SKILL.md
         let file_path = skill_dir.join("SKILL.md");
-        fs::write(&file_path, &content).map_err(|e| AetherError::Other {
+        fs::write(&file_path, &content).map_err(|e| AlephError::Other {
             message: format!("Failed to write SKILL.md: {}", e),
             suggestion: None,
         })?;

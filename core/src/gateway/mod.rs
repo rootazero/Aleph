@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::gateway::GatewayServer;
+//! use alephcore::gateway::GatewayServer;
 //! use std::net::SocketAddr;
 //!
 //! let addr: SocketAddr = "127.0.0.1:18789".parse().unwrap();

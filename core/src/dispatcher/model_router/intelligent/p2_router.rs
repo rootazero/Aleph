@@ -30,7 +30,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::model_router::{P2IntelligentRouter, P2RouterConfig};
+//! use alephcore::dispatcher::model_router::{P2IntelligentRouter, P2RouterConfig};
 //!
 //! let router = P2IntelligentRouter::new(config)?;
 //!

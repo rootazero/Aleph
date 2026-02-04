@@ -1,6 +1,6 @@
 # Agent Loop Architecture
 
-This document describes Aether's Agent Loop implementation, including safety mechanisms, retry logic, and tool execution patterns.
+This document describes Aleph's Agent Loop implementation, including safety mechanisms, retry logic, and tool execution patterns.
 
 ## Overview
 
@@ -131,7 +131,7 @@ The `FfiLoopCallback` publishes Part events for real-time UI rendering:
 
 ```rust
 pub struct FfiLoopCallback {
-    handler: Arc<dyn AetherEventHandler>,
+    handler: Arc<dyn AlephEventHandler>,
     bus: Arc<EventBus>,
     session_id: RwLock<String>,
     active_tool_calls: RwLock<HashMap<String, ToolCallPart>>,
@@ -274,7 +274,7 @@ Prevents large outputs from overflowing context:
 **Cleanup scheduler**:
 - Retention: 7 days
 - Cleanup interval: 1 hour
-- Location: `~/.aether/tool_output/`
+- Location: `~/.aleph/tool_output/`
 
 ---
 
@@ -288,7 +288,7 @@ Skills are discovered from multiple locations in priority order:
 Priority Order:
 1. .aether/skills/     (project level, traverse up to git root)
 2. .claude/skills/     (project level, Claude Code compatible)
-3. ~/.aether/skills (global)
+3. ~/.aleph/skills (global)
 4. ~/.claude/skills    (global, Claude Code compatible)
 ```
 

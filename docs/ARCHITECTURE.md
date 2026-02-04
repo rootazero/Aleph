@@ -1,4 +1,4 @@
-# Aether Architecture
+# Aleph Architecture
 
 > Complete system architecture overview
 
@@ -188,7 +188,7 @@ Thinker Decision (tool_use)
 │   • Capture output                                  │
 └─────────────────────────────────────────────────────┘
     │
-    ├─── Builtin Tool (AetherTool trait)
+    ├─── Builtin Tool (AlephTool trait)
     │       • Direct Rust execution
     │
     ├─── MCP Tool (Model Context Protocol)
@@ -210,7 +210,7 @@ Thinker Decision (tool_use)
 | **dispatcher** | `core/src/dispatcher/` | Task orchestration, tool filtering |
 | **executor** | `core/src/executor/` | Tool execution engine |
 | **providers** | `core/src/providers/` | AI provider implementations |
-| **tools** | `core/src/tools/` | AetherTool trait, tool server |
+| **tools** | `core/src/tools/` | AlephTool trait, tool server |
 | **builtin_tools** | `core/src/builtin_tools/` | Built-in tool implementations |
 | **memory** | `core/src/memory/` | Facts DB, hybrid retrieval |
 | **extension** | `core/src/extension/` | Plugin system (WASM, Node.js) |
@@ -226,7 +226,7 @@ Thinker Decision (tool_use)
 
 ### Protocol Adapter Architecture
 
-Aether uses a layered protocol adapter system supporting multiple AI provider protocols:
+Aleph uses a layered protocol adapter system supporting multiple AI provider protocols:
 
 **Layer 1: Built-in Protocols** (Compiled Rust)
 - `OpenAiProtocol` - OpenAI-compatible APIs
@@ -237,7 +237,7 @@ Aether uses a layered protocol adapter system supporting multiple AI provider pr
 **Layer 2: Configurable Protocols** (YAML-based, hot-reload)
 - Minimal configuration mode - Extend existing protocols with differences
 - Full template mode - Completely custom protocol implementations
-- Loaded from `~/.aether/protocols/` directory
+- Loaded from `~/.aleph/protocols/` directory
 - Changes detected within 600ms (500ms debounce + processing)
 
 **Layer 3: Extension Protocols** (Future)
@@ -260,7 +260,7 @@ ProtocolRegistry.get(name)
 
 #### Hot Reload Mechanism
 
-1. `notify-debouncer-full` watches `~/.aether/protocols/`
+1. `notify-debouncer-full` watches `~/.aleph/protocols/`
 2. File change detected (Create/Modify/Delete)
 3. YAML parsed into `ProtocolDefinition`
 4. `ConfigurableProtocol` created
@@ -304,7 +304,7 @@ plugin-all = ["plugin-wasm", "plugin-nodejs"]
 
 ```
 platforms/macos/
-├── Aether/
+├── Aleph/
 │   ├── Sources/
 │   │   ├── App/              # App lifecycle
 │   │   ├── Gateway/          # WebSocket client

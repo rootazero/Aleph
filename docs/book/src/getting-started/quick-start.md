@@ -1,6 +1,6 @@
 # Quick Start
 
-Get Aether running in under 5 minutes.
+Get Aleph running in under 5 minutes.
 
 ## 1. Run the Setup Wizard
 
@@ -28,7 +28,7 @@ aether gateway run --daemon
 
 The gateway listens on `ws://127.0.0.1:18789` by default.
 
-## 3. Chat with Aether
+## 3. Chat with Aleph
 
 ```bash
 # Simple chat

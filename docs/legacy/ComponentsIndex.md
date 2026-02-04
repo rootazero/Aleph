@@ -653,7 +653,7 @@ ProvidersView
 ## File Structure
 
 ```
-Aether/Sources/
+Aleph/Sources/
 ├── DesignSystem/
 │   ├── DesignTokens.swift        (Foundation)
 │   └── ThemeManager.swift         (Foundation)
@@ -790,4 +790,4 @@ ProviderCard(...)
 
 **Document Version**: 1.0
 **Last Updated**: 2025-12-26
-**Maintained By**: Aether Development Team
+**Maintained By**: Aleph Development Team

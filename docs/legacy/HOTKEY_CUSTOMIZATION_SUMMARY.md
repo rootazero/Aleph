@@ -46,7 +46,7 @@ struct Hotkey {
 ### 3. 预设快捷键库 (`PresetShortcut`)
 
 **6 个预设组合：**
-1. `Command + Grave` (⌘ + ~) - Aether 默认快捷键
+1. `Command + Grave` (⌘ + ~) - Aleph 默认快捷键
 2. `Command + Shift + A` - 流行的 AI 助手快捷键
 3. `Control + Space` - 类似 Spotlight
 4. `Option + Space` - Alfred 风格
@@ -153,10 +153,10 @@ static func detectConflict(for hotkey: Hotkey) -> String? {
 ### 语法检查 ✅
 ```bash
 $ python3 verify_swift_syntax.py \
-    Aether/Sources/HotkeyRecorderView.swift \
-    Aether/Sources/ShortcutsView.swift
-✅ Aether/Sources/HotkeyRecorderView.swift: OK
-✅ Aether/Sources/ShortcutsView.swift: OK
+    Aleph/Sources/HotkeyRecorderView.swift \
+    Aleph/Sources/ShortcutsView.swift
+✅ Aleph/Sources/HotkeyRecorderView.swift: OK
+✅ Aleph/Sources/ShortcutsView.swift: OK
 ```
 
 ### Xcode 项目生成 ✅
@@ -165,7 +165,7 @@ $ xcodegen generate
 ⚙️  Generating plists...
 ⚙️  Generating project...
 ⚙️  Writing project...
-Created project at /Users/zouguojun/Workspace/Aether/Aether.xcodeproj
+Created project at /Users/zouguojun/Workspace/Aether/Aleph.xcodeproj
 ```
 
 ## 下一步工作
@@ -189,7 +189,7 @@ Created project at /Users/zouguojun/Workspace/Aether/Aether.xcodeproj
   - 按选定速度动画显示示例文本
 
 ### Section 6: Config Hot-Reload (Swift + Rust)
-- [ ] 6.1 在 `AetherEventHandler` 添加 `onConfigChanged` 回调
+- [ ] 6.1 在 `AlephEventHandler` 添加 `onConfigChanged` 回调
 - [ ] 6.2 在 `EventHandler.swift` 实现回调处理
 - [ ] 6.3 更新 SettingsView 监听配置变更
 
@@ -207,7 +207,7 @@ private func saveHotkey(_ hotkey: Hotkey) {
 
 **需要的 Rust API (UniFFI):**
 ```rust
-interface AetherCore {
+interface AlephCore {
     // Update shortcuts configuration
     fn update_shortcuts(shortcuts: ShortcutsConfig) -> Result<(), ConfigError>;
 

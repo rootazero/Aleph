@@ -323,10 +323,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::AddServer(config, resp_tx))
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?;
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?;
         resp_rx
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?
     }
 
     /// Remove an MCP server
@@ -335,10 +335,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::RemoveServer(id.to_string(), resp_tx))
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?;
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?;
         resp_rx
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?
     }
 
     /// Restart an MCP server
@@ -347,10 +347,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::RestartServer(id.to_string(), resp_tx))
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?;
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?;
         resp_rx
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?
     }
 
     /// Start an MCP server
@@ -359,10 +359,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::StartServer(id.to_string(), resp_tx))
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?;
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?;
         resp_rx
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?
     }
 
     /// Stop an MCP server
@@ -371,10 +371,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::StopServer(id.to_string(), resp_tx))
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?;
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?;
         resp_rx
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?
     }
 
     // === Query Methods ===
@@ -469,10 +469,10 @@ impl McpManagerHandle {
         self.tx
             .send(McpCommand::ReloadConfig(resp_tx))
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?;
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?;
         resp_rx
             .await
-            .map_err(|_| crate::error::AetherError::ChannelClosed)?
+            .map_err(|_| crate::error::AlephError::ChannelClosed)?
     }
 
     /// Shutdown the manager
@@ -564,7 +564,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 use super::types::McpServerConfig;
 
@@ -609,11 +609,11 @@ impl McpPersistentConfig {
         }
 
         let content = fs::read_to_string(path).await.map_err(|e| {
-            AetherError::ConfigError(format!("Failed to read MCP config: {}", e))
+            AlephError::ConfigError(format!("Failed to read MCP config: {}", e))
         })?;
 
         let config: Self = serde_json::from_str(&content).map_err(|e| {
-            AetherError::ConfigError(format!("Failed to parse MCP config: {}", e))
+            AlephError::ConfigError(format!("Failed to parse MCP config: {}", e))
         })?;
 
         tracing::info!(
@@ -630,16 +630,16 @@ impl McpPersistentConfig {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await.map_err(|e| {
-                AetherError::ConfigError(format!("Failed to create config directory: {}", e))
+                AlephError::ConfigError(format!("Failed to create config directory: {}", e))
             })?;
         }
 
         let content = serde_json::to_string_pretty(self).map_err(|e| {
-            AetherError::ConfigError(format!("Failed to serialize MCP config: {}", e))
+            AlephError::ConfigError(format!("Failed to serialize MCP config: {}", e))
         })?;
 
         fs::write(path, content).await.map_err(|e| {
-            AetherError::ConfigError(format!("Failed to write MCP config: {}", e))
+            AlephError::ConfigError(format!("Failed to write MCP config: {}", e))
         })?;
 
         tracing::info!(
@@ -879,7 +879,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::client::{ExternalServerConfig, McpClient};
 use crate::mcp::prompts::McpPrompt;
 use crate::mcp::types::{McpResource, McpTool};
@@ -1105,7 +1105,7 @@ impl McpManagerActor {
     /// Restart a server
     async fn restart_server(&mut self, id: &str) -> Result<()> {
         let config = self.config.get_server(id).cloned().ok_or_else(|| {
-            AetherError::NotFound(format!("MCP server not found: {}", id))
+            AlephError::NotFound(format!("MCP server not found: {}", id))
         })?;
 
         self.stop_server_internal(id).await;
@@ -1118,7 +1118,7 @@ impl McpManagerActor {
     /// Start a server by ID
     async fn start_server(&mut self, id: &str) -> Result<()> {
         let config = self.config.get_server(id).cloned().ok_or_else(|| {
-            AetherError::NotFound(format!("MCP server not found: {}", id))
+            AlephError::NotFound(format!("MCP server not found: {}", id))
         })?;
 
         self.start_server_internal(&config).await
@@ -1148,7 +1148,7 @@ impl McpManagerActor {
         match config.transport.as_str() {
             "stdio" => {
                 let command = config.command.as_ref().ok_or_else(|| {
-                    AetherError::ConfigError(format!("Missing command for stdio server: {}", id))
+                    AlephError::ConfigError(format!("Missing command for stdio server: {}", id))
                 })?;
 
                 let ext_config = ExternalServerConfig {
@@ -1165,7 +1165,7 @@ impl McpManagerActor {
             }
             "http" | "sse" => {
                 let url = config.url.as_ref().ok_or_else(|| {
-                    AetherError::ConfigError(format!("Missing URL for HTTP/SSE server: {}", id))
+                    AlephError::ConfigError(format!("Missing URL for HTTP/SSE server: {}", id))
                 })?;
 
                 let transport = match config.transport.as_str() {
@@ -1180,7 +1180,7 @@ impl McpManagerActor {
                 client.start_remote_server(remote_config).await?;
             }
             other => {
-                return Err(AetherError::ConfigError(format!(
+                return Err(AlephError::ConfigError(format!(
                     "Unknown transport type: {}",
                     other
                 )));
@@ -2054,4 +2054,4 @@ This implementation plan covers **P0 (basic infrastructure)** with:
 **Testing Strategy:**
 - Each task includes unit tests
 - Integration test after Task 5: Start Gateway with McpManager, call RPC methods
-- Manual test: Add an MCP server config, restart Aether, verify server auto-starts
+- Manual test: Add an MCP server config, restart Aleph, verify server auto-starts

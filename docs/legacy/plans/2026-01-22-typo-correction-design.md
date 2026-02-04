@@ -5,7 +5,7 @@
 
 ## 概述
 
-为 Aether 添加快速文本纠错功能，通过双击空格快捷键触发，对当前输入框中的文字进行错别字和语法纠正。
+为 Aleph 添加快速文本纠错功能，通过双击空格快捷键触发，对当前输入框中的文字进行错别字和语法纠正。
 
 ## 功能规格
 
@@ -177,7 +177,7 @@ interface CorrectionResult {
     Error(string message);
 };
 
-namespace aethecore {
+namespace alephcore {
     [Async]
     CorrectionResult correct_typo(string text);
 };
@@ -186,7 +186,7 @@ namespace aethecore {
 ### 调用链路
 
 ```
-Swift: AetherCore.correctTypo(text)
+Swift: AlephCore.correctTypo(text)
   → UniFFI 生成的绑定
     → Rust: correct_typo(text)
       → TypoCorrector.correct()
@@ -248,7 +248,7 @@ class TypoCorrectionCoordinator {
             let cleanText = String(text.dropLast(2))
 
             // 3. 调用 Rust Core 纠错
-            let result = await AetherCore.shared.correctTypo(cleanText)
+            let result = await AlephCore.shared.correctTypo(cleanText)
 
             // 4. 如果有改动，替换文字
             if result.hasChanges {
@@ -327,7 +327,7 @@ TypoCorrectionCoordinator.triggerCorrection()
     ├─▶ AccessibilityHelper.getFocusedText()
     │
     ▼
-AetherCore.correctTypo(text)  ──FFI──▶  correct_typo()
+AlephCore.correctTypo(text)  ──FFI──▶  correct_typo()
                                               │
                                               ▼
                                         TypoCorrector.correct()

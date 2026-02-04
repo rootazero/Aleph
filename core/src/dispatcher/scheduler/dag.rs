@@ -433,7 +433,7 @@ impl DagScheduler {
                             (
                                 task_id.clone(),
                                 task_name,
-                                Err(crate::error::AetherError::NotFound(format!(
+                                Err(crate::error::AlephError::NotFound(format!(
                                     "Task '{}' not found in graph",
                                     task_id
                                 ))),
@@ -602,7 +602,7 @@ async fn execute_with_retry(
     }
 
     Err(last_error.unwrap_or_else(|| {
-        crate::error::AetherError::Other {
+        crate::error::AlephError::Other {
             message: format!("Task '{}' failed with unknown error", task.id),
             suggestion: None,
         }
@@ -800,7 +800,7 @@ mod tests {
     #[async_trait]
     impl GraphTaskExecutor for FailingExecutor {
         async fn execute(&self, task: &Task, _context: &str) -> crate::error::Result<TaskOutput> {
-            Err(crate::error::AetherError::Other {
+            Err(crate::error::AlephError::Other {
                 message: format!("Task '{}' intentionally failed", task.id),
                 suggestion: None,
             })

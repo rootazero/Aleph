@@ -16,12 +16,12 @@ use tracing::{info, warn};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::tools::markdown_skill::{load_skills_from_dir, MarkdownCliTool};
-use crate::tools::AetherToolServer;
+use crate::tools::AlephToolServer;
 
 // Global ToolServer for Markdown skills
 // This is shared across all RPC calls
-static MARKDOWN_SKILLS_SERVER: Lazy<Arc<RwLock<AetherToolServer>>> =
-    Lazy::new(|| Arc::new(RwLock::new(AetherToolServer::new())));
+static MARKDOWN_SKILLS_SERVER: Lazy<Arc<RwLock<AlephToolServer>>> =
+    Lazy::new(|| Arc::new(RwLock::new(AlephToolServer::new())));
 
 // Track loaded skill paths for reload
 static SKILL_PATHS: Lazy<Arc<RwLock<std::collections::HashMap<String, PathBuf>>>> =

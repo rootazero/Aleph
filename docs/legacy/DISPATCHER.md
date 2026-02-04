@@ -1,4 +1,4 @@
-# Dispatcher Layer (Aether Cortex)
+# Dispatcher Layer (Aleph Cortex)
 
 The Dispatcher Layer provides intelligent tool routing with confidence-based confirmation.
 
@@ -108,7 +108,7 @@ Swift: CommandCompletionManager auto-refreshes command list
 
 ## Task Orchestration (Cowork)
 
-Cowork is Aether's multi-task orchestration system that decomposes complex user requests into DAG-structured task graphs and executes them with parallel scheduling.
+Cowork is Aleph's multi-task orchestration system that decomposes complex user requests into DAG-structured task graphs and executes them with parallel scheduling.
 
 ### Architecture
 

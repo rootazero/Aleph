@@ -87,7 +87,7 @@ impl Default for GatewayConfig {
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::gateway::GatewayServer;
+/// use alephcore::gateway::GatewayServer;
 /// use std::net::SocketAddr;
 ///
 /// #[tokio::main]
@@ -113,7 +113,7 @@ impl GatewayServer {
     /// Create a new Gateway server with default configuration
     pub fn new(addr: SocketAddr) -> Self {
         // Start protocol file watcher for hot-reload
-        // If it fails (e.g., no ~/.aether/protocols), log and continue without watching
+        // If it fails (e.g., no ~/.aleph/protocols), log and continue without watching
         let protocol_watcher = match ProtocolLoader::start_watching() {
             Ok(watcher) => watcher,
             Err(e) => {

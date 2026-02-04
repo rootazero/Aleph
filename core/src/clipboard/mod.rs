@@ -66,7 +66,7 @@ impl ImageData {
 
         let parts: Vec<&str> = data_uri.split(',').collect();
         if parts.len() != 2 {
-            return Err(crate::error::AetherError::other(
+            return Err(crate::error::AlephError::other(
                 "Invalid Base64 data URI format".to_string(),
             ));
         }
@@ -81,14 +81,14 @@ impl ImageData {
         } else if header.contains("image/gif") {
             ImageFormat::Gif
         } else {
-            return Err(crate::error::AetherError::other(format!(
+            return Err(crate::error::AlephError::other(format!(
                 "Unsupported image MIME type: {}",
                 header
             )));
         };
 
         let decoded = general_purpose::STANDARD.decode(base64_data).map_err(|e| {
-            crate::error::AetherError::other(format!("Base64 decoding failed: {}", e))
+            crate::error::AlephError::other(format!("Base64 decoding failed: {}", e))
         })?;
 
         Ok(Self::new(decoded, format))

@@ -2,11 +2,11 @@
 
 ## Overview
 
-Aether's Protocol Adapter system allows you to add support for new AI providers **without modifying or recompiling the Rust codebase**. Define new protocols using YAML configuration files that are automatically loaded and hot-reloaded when you make changes.
+Aleph's Protocol Adapter system allows you to add support for new AI providers **without modifying or recompiling the Rust codebase**. Define new protocols using YAML configuration files that are automatically loaded and hot-reloaded when you make changes.
 
 ### What is a Protocol Adapter?
 
-A protocol adapter translates between Aether's standardized internal representation of AI requests and the specific API format required by each LLM provider. Instead of hardcoding these translations in Rust, you can define them declaratively in YAML files.
+A protocol adapter translates between Aleph's standardized internal representation of AI requests and the specific API format required by each LLM provider. Instead of hardcoding these translations in Rust, you can define them declaratively in YAML files.
 
 ### Key Benefits
 
@@ -21,7 +21,7 @@ A protocol adapter translates between Aether's standardized internal representat
 
 ### Step 1: Create Protocol Configuration
 
-Create `~/.aether/protocols/my-provider.yaml`:
+Create `~/.aleph/protocols/my-provider.yaml`:
 
 ```yaml
 name: my-custom-provider
@@ -36,7 +36,7 @@ differences:
 
 ### Step 2: Use in Provider Config
 
-Add to your `~/.aether/config.toml`:
+Add to your `~/.aleph/config.toml`:
 
 ```toml
 [[providers]]
@@ -48,7 +48,7 @@ api_key = "your-api-key"
 
 ### Step 3: Hot Reload
 
-Aether watches `~/.aether/protocols/` and automatically reloads when you edit files. Changes take effect within 500ms - no restart required!
+Aleph watches `~/.aleph/protocols/` and automatically reloads when you edit files. Changes take effect within 500ms - no restart required!
 
 **Try it**:
 1. Edit `my-provider.yaml` (change base_url)
@@ -122,7 +122,7 @@ differences:
   # OpenRouter-specific headers (future feature)
   # extra_headers:
   #   HTTP-Referer: https://aether.app
-  #   X-Title: Aether Assistant
+  #   X-Title: Aleph Assistant
 ```
 
 #### Example 4: Together AI
@@ -231,7 +231,7 @@ custom:
 
 ## Template Syntax
 
-Aether uses **Handlebars** template syntax for request transformation.
+Aleph uses **Handlebars** template syntax for request transformation.
 
 ### Available Variables
 
@@ -317,7 +317,7 @@ request_template:
 
 ## JSONPath Syntax
 
-Aether uses **JSONPath** to extract values from provider responses.
+Aleph uses **JSONPath** to extract values from provider responses.
 
 ### Basic Usage
 
@@ -440,7 +440,7 @@ response_mapping:
   error: "$.error.message"  # JSONPath for error messages
 ```
 
-If the error path matches, Aether will return an error instead of trying to extract content.
+If the error path matches, Aleph will return an error instead of trying to extract content.
 
 ### Advanced JSONPath
 
@@ -456,9 +456,9 @@ If the error path matches, Aether will return an error instead of trying to extr
 
 ### How It Works
 
-Aether uses the `notify` crate to watch for filesystem changes:
+Aleph uses the `notify` crate to watch for filesystem changes:
 
-1. **File Watch**: Monitors `~/.aether/protocols/` directory
+1. **File Watch**: Monitors `~/.aleph/protocols/` directory
 2. **Change Detection**: Detects Create/Modify/Delete events
 3. **Debouncing**: 500ms delay to handle rapid successive changes
 4. **Reload**: Re-parses YAML and updates registry
@@ -469,7 +469,7 @@ Aether uses the `notify` crate to watch for filesystem changes:
 #### Default Directory
 
 ```
-~/.aether/protocols/*.yaml
+~/.aleph/protocols/*.yaml
 ```
 
 All `.yaml` files in this directory are automatically loaded on startup and watched for changes.
@@ -496,31 +496,31 @@ paths = [
 
 1. **Create a test protocol**:
    ```bash
-   cat > ~/.aether/protocols/test.yaml << EOF
+   cat > ~/.aleph/protocols/test.yaml << EOF
    name: test-protocol
    extends: openai
    base_url: https://api.test.com
    EOF
    ```
 
-2. **Start Aether** with logging:
+2. **Start Aleph** with logging:
    ```bash
    RUST_LOG=info aether gateway
    ```
 
 3. **Verify initial load**:
    ```
-   INFO  Loaded protocol 'test-protocol' from ~/.aether/protocols/test.yaml
+   INFO  Loaded protocol 'test-protocol' from ~/.aleph/protocols/test.yaml
    ```
 
 4. **Edit the file** (change base_url):
    ```bash
-   sed -i 's/api.test.com/api.v2.test.com/' ~/.aether/protocols/test.yaml
+   sed -i 's/api.test.com/api.v2.test.com/' ~/.aleph/protocols/test.yaml
    ```
 
 5. **Watch for reload**:
    ```
-   INFO  Protocol file changed: ~/.aether/protocols/test.yaml
+   INFO  Protocol file changed: ~/.aleph/protocols/test.yaml
    INFO  Reloaded protocol 'test-protocol'
    ```
 
@@ -530,7 +530,7 @@ paths = [
 
 - **Edit in place**: Modify existing files rather than deleting and recreating
 - **Save once**: Some editors create temporary files; configure to save directly
-- **Check logs**: Monitor Aether logs to confirm reload
+- **Check logs**: Monitor Aleph logs to confirm reload
 - **Test incrementally**: Make small changes and test between edits
 
 ## Troubleshooting
@@ -543,7 +543,7 @@ paths = [
 
 1. **File doesn't exist**
    ```bash
-   ls -la ~/.aether/protocols/my-provider.yaml
+   ls -la ~/.aleph/protocols/my-provider.yaml
    ```
    **Fix**: Create the file or check the filename
 
@@ -552,15 +552,15 @@ paths = [
    - File name doesn't matter (can be different from protocol name)
 
    ```yaml
-   # File: ~/.aether/protocols/groq.yaml
+   # File: ~/.aleph/protocols/groq.yaml
    name: groq-custom  # This is what you reference in config
    ```
 
 3. **YAML not loading**
-   - Check Aether logs for parse errors
+   - Check Aleph logs for parse errors
    - Validate YAML syntax:
      ```bash
-     python -c "import yaml; yaml.safe_load(open('~/.aether/protocols/my-provider.yaml'))"
+     python -c "import yaml; yaml.safe_load(open('~/.aleph/protocols/my-provider.yaml'))"
      ```
 
 ### Invalid YAML Syntax
@@ -809,13 +809,13 @@ See `examples/protocols/` for complete, working examples:
 
 ```bash
 # Create protocols directory
-mkdir -p ~/.aether/protocols
+mkdir -p ~/.aleph/protocols
 
 # Copy example as starting point
-cp examples/protocols/groq-custom.yaml ~/.aether/protocols/my-provider.yaml
+cp examples/protocols/groq-custom.yaml ~/.aleph/protocols/my-provider.yaml
 
 # Edit for your provider
-nano ~/.aether/protocols/my-provider.yaml
+nano ~/.aleph/protocols/my-provider.yaml
 ```
 
 ### Provider-Specific Examples
@@ -910,7 +910,7 @@ custom:
 
 ### Protocol Resolution Order
 
-When you specify a protocol in your provider config, Aether resolves it in this order:
+When you specify a protocol in your provider config, Aleph resolves it in this order:
 
 ```
 1. Dynamic Protocols (YAML-loaded)
@@ -1057,7 +1057,7 @@ request_template:
 You can define multiple protocol variants:
 
 ```yaml
-# ~/.aether/protocols/openai-gpt4.yaml
+# ~/.aleph/protocols/openai-gpt4.yaml
 name: openai-gpt4
 extends: openai
 differences:
@@ -1065,7 +1065,7 @@ differences:
     temperature:
       default: 0.2  # Lower for GPT-4
 
-# ~/.aether/protocols/openai-gpt3.yaml
+# ~/.aleph/protocols/openai-gpt3.yaml
 name: openai-gpt3
 extends: openai
 differences:

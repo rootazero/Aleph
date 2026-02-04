@@ -42,7 +42,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::model_router::ensemble::*;
+//! use alephcore::dispatcher::model_router::ensemble::*;
 //!
 //! // Configure ensemble for reasoning tasks
 //! let config = EnsembleConfig::new(EnsembleMode::BestOfN { n: 2 })

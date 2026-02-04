@@ -67,7 +67,7 @@ impl Default for ExecApprovalsFile {
 /// Socket configuration for approval communication
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SocketConfig {
-    /// Socket path (default: ~/.aether/exec-approvals.sock)
+    /// Socket path (default: ~/.aleph/exec-approvals.sock)
     #[serde(default)]
     pub path: Option<String>,
 
@@ -79,7 +79,7 @@ pub struct SocketConfig {
 impl Default for SocketConfig {
     fn default() -> Self {
         Self {
-            path: Some("~/.aether/exec-approvals.sock".into()),
+            path: Some("~/.aleph/exec-approvals.sock".into()),
             token: None,
         }
     }

@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::extension::{PluginHttpHandler, PluginLoader};
+//! use alephcore::extension::{PluginHttpHandler, PluginLoader};
 //! use std::sync::Arc;
 //! use tokio::sync::RwLock;
 //!
@@ -230,7 +230,7 @@ impl PluginHttpHandler {
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::extension::match_path;
+/// use alephcore::extension::match_path;
 ///
 /// let params = match_path("/api/users/{id}", "/api/users/123").unwrap();
 /// assert_eq!(params.get("id"), Some(&"123".to_string()));

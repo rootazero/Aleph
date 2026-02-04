@@ -1,10 +1,10 @@
 //! Plugin manifest parsing and validation
 //!
-//! This module provides unified manifest parsing for Aether plugins from multiple formats:
+//! This module provides unified manifest parsing for Aleph plugins from multiple formats:
 //!
-//! 1. **aether.plugin.toml** (V2 preferred) - TOML format with rich section-based config
-//! 2. **aether.plugin.json** (V1 JSON) - Native Aether plugin manifest
-//! 3. **package.json** (Node.js plugins) - Standard npm package with "aether" field
+//! 1. **aleph.plugin.toml** (V2 preferred) - TOML format with rich section-based config
+//! 2. **aleph.plugin.json** (V1 JSON) - Native Aleph plugin manifest
+//! 3. **package.json** (Node.js plugins) - Standard npm package with "aleph" field
 //! 4. **.claude-plugin/plugin.json** (Legacy) - Claude Code plugin format
 //!
 //! # Auto-Detection
@@ -12,33 +12,33 @@
 //! The `parse_manifest_from_dir()` function automatically detects the manifest format:
 //! - If `aether.plugin.toml` exists, parse it as V2 TOML manifest (preferred)
 //! - Otherwise, if `aether.plugin.json` exists, parse it as V1 JSON manifest
-//! - Otherwise, if `package.json` exists with "aether" field, parse it as Node.js plugin
+//! - Otherwise, if `package.json` exists with "aleph" field, parse it as Node.js plugin
 //! - Otherwise, if `.claude-plugin/plugin.json` exists, parse it as legacy Claude plugin
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::extension::manifest::parse_manifest_from_dir;
+//! use alephcore::extension::manifest::parse_manifest_from_dir;
 //! use std::path::Path;
 //!
 //! let manifest = parse_manifest_from_dir(Path::new("/path/to/plugin")).await?;
 //! println!("Plugin: {} v{:?}", manifest.id, manifest.version);
 //! ```
 
-mod aether_plugin;
-mod aether_plugin_toml;
+mod aleph_plugin;
+mod aleph_plugin_toml;
 mod package_json;
 mod types;
 
-pub use aether_plugin::{
-    parse_aether_plugin, parse_aether_plugin_content, sanitize_plugin_id, validate_plugin_id,
+pub use aleph_plugin::{
+    parse_aleph_plugin, parse_aleph_plugin_content, sanitize_plugin_id, validate_plugin_id,
 };
-pub use aether_plugin_toml::{
-    convert_permissions, parse_aether_plugin_toml, parse_aether_plugin_toml_content,
-    parse_aether_plugin_toml_sync, AetherPluginToml, CapabilitiesSection, ChannelSection,
+pub use aleph_plugin_toml::{
+    convert_permissions, parse_aleph_plugin_toml, parse_aleph_plugin_toml_content,
+    parse_aleph_plugin_toml_sync, AlephPluginToml, CapabilitiesSection, ChannelSection,
     CommandSection, FilesystemPermission, HookSection, HttpRouteSection, PermissionsSection,
     PluginAuthorToml, PluginSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
-    AETHER_PLUGIN_TOML,
+    ALEPH_PLUGIN_TOML,
 };
 pub use package_json::{parse_package_json, parse_package_json_content};
 pub use types::{AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission};
@@ -172,8 +172,8 @@ pub use legacy::LegacyPluginManifest as PluginManifestLegacy;
 // Manifest File Names
 // =============================================================================
 
-/// Aether native manifest filename
-pub const AETHER_PLUGIN_MANIFEST: &str = "aether.plugin.json";
+/// Aleph native manifest filename
+pub const ALEPH_PLUGIN_MANIFEST: &str = "aleph.plugin.json";
 
 /// npm package manifest filename
 pub const PACKAGE_JSON: &str = "package.json";
@@ -188,9 +188,9 @@ pub const CLAUDE_PLUGIN_MANIFEST: &str = ".claude-plugin/plugin.json";
 /// Parse a plugin manifest from a directory
 ///
 /// This function auto-detects the manifest format by checking for:
-/// 1. `aether.plugin.toml` - V2 TOML format (preferred)
-/// 2. `aether.plugin.json` - V1 JSON manifest
-/// 3. `package.json` with "aether" field - Node.js plugin
+/// 1. `aleph.plugin.toml` - V2 TOML format (preferred)
+/// 2. `aleph.plugin.json` - V1 JSON manifest
+/// 3. `package.json` with "aleph" field - Node.js plugin
 /// 4. `.claude-plugin/plugin.json` - Legacy Claude plugin format
 ///
 /// The returned manifest will have `root_dir` set to the directory path.
@@ -209,33 +209,33 @@ pub const CLAUDE_PLUGIN_MANIFEST: &str = ".claude-plugin/plugin.json";
 /// assert_eq!(manifest.root_dir, PathBuf::from("/plugins/my-plugin"));
 /// ```
 pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManifest> {
-    // 1. Check for aether.plugin.toml (V2 preferred)
-    let toml_path = dir.join(AETHER_PLUGIN_TOML);
+    // 1. Check for aleph.plugin.toml (V2 preferred)
+    let toml_path = dir.join(ALEPH_PLUGIN_TOML);
     if toml_path.exists() {
-        return parse_aether_plugin_toml(dir).await;
+        return parse_aleph_plugin_toml(dir).await;
     }
 
-    // 2. Check for aether.plugin.json (V1)
-    let aether_manifest_path = dir.join(AETHER_PLUGIN_MANIFEST);
-    if aether_manifest_path.exists() {
-        let mut manifest = parse_aether_plugin(&aether_manifest_path).await?;
+    // 2. Check for aleph.plugin.json (V1)
+    let aleph_manifest_path = dir.join(ALEPH_PLUGIN_MANIFEST);
+    if aleph_manifest_path.exists() {
+        let mut manifest = parse_aleph_plugin(&aleph_manifest_path).await?;
         manifest.root_dir = dir.to_path_buf();
         return Ok(manifest);
     }
 
-    // 3. Check for package.json with aether field
+    // 3. Check for package.json with aleph field
     let package_json_path = dir.join(PACKAGE_JSON);
     if package_json_path.exists() {
-        // Try to parse - will fail if no "aether" field
+        // Try to parse - will fail if no "aleph" field
         match parse_package_json(&package_json_path).await {
             Ok(mut manifest) => {
                 manifest.root_dir = dir.to_path_buf();
                 return Ok(manifest);
             }
             Err(ExtensionError::InvalidManifest { message, .. })
-                if message.contains("Missing 'aether' field") =>
+                if message.contains("Missing 'aleph' field") =>
             {
-                // package.json exists but is not an Aether plugin - continue checking
+                // package.json exists but is not an Aleph plugin - continue checking
             }
             Err(e) => return Err(e),
         }
@@ -252,8 +252,8 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManife
     Err(ExtensionError::invalid_manifest(
         dir,
         format!(
-            "No plugin manifest found. Expected {}, {}, or {} with 'aether' field",
-            AETHER_PLUGIN_TOML, AETHER_PLUGIN_MANIFEST, PACKAGE_JSON
+            "No plugin manifest found. Expected {}, {}, or {} with 'aleph' field",
+            ALEPH_PLUGIN_TOML, ALEPH_PLUGIN_MANIFEST, PACKAGE_JSON
         ),
     ))
 }
@@ -262,17 +262,17 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManife
 ///
 /// Useful for tests and non-async contexts.
 pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
-    // 1. Check for aether.plugin.toml (V2 preferred)
-    let toml_path = dir.join(AETHER_PLUGIN_TOML);
+    // 1. Check for aleph.plugin.toml (V2 preferred)
+    let toml_path = dir.join(ALEPH_PLUGIN_TOML);
     if toml_path.exists() {
-        return parse_aether_plugin_toml_sync(dir);
+        return parse_aleph_plugin_toml_sync(dir);
     }
 
-    // 2. Check for aether.plugin.json (V1)
-    let aether_manifest_path = dir.join(AETHER_PLUGIN_MANIFEST);
-    if aether_manifest_path.exists() {
-        let content = std::fs::read_to_string(&aether_manifest_path)?;
-        let mut manifest = parse_aether_plugin_content(&content, &aether_manifest_path)?;
+    // 2. Check for aleph.plugin.json (V1)
+    let aleph_manifest_path = dir.join(ALEPH_PLUGIN_MANIFEST);
+    if aleph_manifest_path.exists() {
+        let content = std::fs::read_to_string(&aleph_manifest_path)?;
+        let mut manifest = parse_aleph_plugin_content(&content, &aleph_manifest_path)?;
         manifest.root_dir = dir.to_path_buf();
         return Ok(manifest);
     }
@@ -287,7 +287,7 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
                 return Ok(manifest);
             }
             Err(ExtensionError::InvalidManifest { message, .. })
-                if message.contains("Missing 'aether' field") =>
+                if message.contains("Missing 'aleph' field") =>
             {
                 // Continue checking
             }
@@ -306,8 +306,8 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
     Err(ExtensionError::invalid_manifest(
         dir,
         format!(
-            "No plugin manifest found. Expected {}, {}, or {} with 'aether' field",
-            AETHER_PLUGIN_TOML, AETHER_PLUGIN_MANIFEST, PACKAGE_JSON
+            "No plugin manifest found. Expected {}, {}, or {} with 'aleph' field",
+            ALEPH_PLUGIN_TOML, ALEPH_PLUGIN_MANIFEST, PACKAGE_JSON
         ),
     ))
 }
@@ -481,9 +481,9 @@ Body content."#;
     }
 
     #[test]
-    fn test_parse_manifest_from_dir_aether_plugin() {
+    fn test_parse_manifest_from_dir_aleph_plugin() {
         let temp_dir = TempDir::new().unwrap();
-        let manifest_path = temp_dir.path().join("aether.plugin.json");
+        let manifest_path = temp_dir.path().join("aleph.plugin.json");
 
         std::fs::write(
             &manifest_path,
@@ -514,7 +514,7 @@ Body content."#;
                 "name": "npm-plugin",
                 "version": "2.0.0",
                 "main": "dist/index.js",
-                "aether": {
+                "aleph": {
                     "id": "npm-plugin"
                 }
             }"#,
@@ -530,13 +530,13 @@ Body content."#;
     }
 
     #[test]
-    fn test_parse_manifest_from_dir_prefers_aether_plugin() {
+    fn test_parse_manifest_from_dir_prefers_aleph_plugin() {
         let temp_dir = TempDir::new().unwrap();
 
         // Create both manifests
         std::fs::write(
-            temp_dir.path().join("aether.plugin.json"),
-            r#"{"id": "aether-version"}"#,
+            temp_dir.path().join("aleph.plugin.json"),
+            r#"{"id": "aleph-version"}"#,
         )
         .unwrap();
 
@@ -544,7 +544,7 @@ Body content."#;
             temp_dir.path().join("package.json"),
             r#"{
                 "name": "npm-version",
-                "aether": {}
+                "aleph": {}
             }"#,
         )
         .unwrap();
@@ -552,7 +552,7 @@ Body content."#;
         let manifest = parse_manifest_from_dir_sync(temp_dir.path()).unwrap();
 
         // Should prefer aether.plugin.json
-        assert_eq!(manifest.id, "aether-version");
+        assert_eq!(manifest.id, "aleph-version");
     }
 
     #[test]
@@ -601,7 +601,7 @@ Body content."#;
         )
         .unwrap();
 
-        // Should fail because package.json exists but has no "aether" field
+        // Should fail because package.json exists but has no "aleph" field
         let result = parse_manifest_from_dir_sync(temp_dir.path());
         assert!(result.is_err());
     }
@@ -611,7 +611,7 @@ Body content."#;
         let temp_dir = TempDir::new().unwrap();
 
         std::fs::write(
-            temp_dir.path().join("aether.plugin.json"),
+            temp_dir.path().join("aleph.plugin.json"),
             r#"{"id": "async-test"}"#,
         )
         .unwrap();
@@ -625,7 +625,7 @@ Body content."#;
         let temp_dir = TempDir::new().unwrap();
 
         std::fs::write(
-            temp_dir.path().join("aether.plugin.toml"),
+            temp_dir.path().join("aleph.plugin.toml"),
             r#"
 [plugin]
 id = "toml-plugin"
@@ -649,7 +649,7 @@ version = "1.0.0"
 
         // Create both TOML and JSON manifests
         std::fs::write(
-            temp_dir.path().join("aether.plugin.toml"),
+            temp_dir.path().join("aleph.plugin.toml"),
             r#"
 [plugin]
 id = "toml-version"
@@ -659,7 +659,7 @@ name = "TOML Version"
         .unwrap();
 
         std::fs::write(
-            temp_dir.path().join("aether.plugin.json"),
+            temp_dir.path().join("aleph.plugin.json"),
             r#"{"id": "json-version"}"#,
         )
         .unwrap();
@@ -676,7 +676,7 @@ name = "TOML Version"
 
         // Create all manifest types
         std::fs::write(
-            temp_dir.path().join("aether.plugin.toml"),
+            temp_dir.path().join("aleph.plugin.toml"),
             r#"
 [plugin]
 id = "toml-version"
@@ -685,7 +685,7 @@ id = "toml-version"
         .unwrap();
 
         std::fs::write(
-            temp_dir.path().join("aether.plugin.json"),
+            temp_dir.path().join("aleph.plugin.json"),
             r#"{"id": "json-version"}"#,
         )
         .unwrap();
@@ -694,7 +694,7 @@ id = "toml-version"
             temp_dir.path().join("package.json"),
             r#"{
                 "name": "npm-version",
-                "aether": {"id": "npm-version"}
+                "aleph": {"id": "npm-version"}
             }"#,
         )
         .unwrap();
@@ -710,7 +710,7 @@ id = "toml-version"
         let temp_dir = TempDir::new().unwrap();
 
         std::fs::write(
-            temp_dir.path().join("aether.plugin.toml"),
+            temp_dir.path().join("aleph.plugin.toml"),
             r#"
 [plugin]
 id = "async-toml-test"
@@ -728,7 +728,7 @@ id = "async-toml-test"
 
         // Create both TOML and JSON
         std::fs::write(
-            temp_dir.path().join("aether.plugin.toml"),
+            temp_dir.path().join("aleph.plugin.toml"),
             r#"
 [plugin]
 id = "async-toml-version"
@@ -737,7 +737,7 @@ id = "async-toml-version"
         .unwrap();
 
         std::fs::write(
-            temp_dir.path().join("aether.plugin.json"),
+            temp_dir.path().join("aleph.plugin.json"),
             r#"{"id": "async-json-version"}"#,
         )
         .unwrap();

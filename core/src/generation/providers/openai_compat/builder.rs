@@ -18,8 +18,8 @@ use super::types::{DEFAULT_COLOR, DEFAULT_MODEL, DEFAULT_TIMEOUT_SECS};
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::generation::providers::OpenAiCompatProviderBuilder;
-/// use aethecore::generation::GenerationType;
+/// use alephcore::generation::providers::OpenAiCompatProviderBuilder;
+/// use alephcore::generation::GenerationType;
 ///
 /// let provider = OpenAiCompatProviderBuilder::new("my-proxy", "sk-xxx", "https://api.proxy.com")
 ///     .model("dall-e-3")

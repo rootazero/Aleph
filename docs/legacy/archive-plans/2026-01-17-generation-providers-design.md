@@ -1,4 +1,4 @@
-# Aether 媒体生成供应商支持设计
+# Aleph 媒体生成供应商支持设计
 
 **日期**: 2026-01-17
 **状态**: 已批准
@@ -8,7 +8,7 @@
 
 ## 概述
 
-为 Aether 添加图像/视频/音频生成供应商支持，使用户能够通过自然语言或命令直接生成多媒体内容。
+为 Aleph 添加图像/视频/音频生成供应商支持，使用户能够通过自然语言或命令直接生成多媒体内容。
 
 ## 需求总结
 
@@ -442,7 +442,7 @@ impl GenerationRouter {
 pub struct GenerationTaskManager {
     config: GenerationConfig,
     active_tasks: Arc<RwLock<HashMap<String, GenerationTask>>>,
-    event_handler: Arc<dyn AetherEventHandler>,
+    event_handler: Arc<dyn AlephEventHandler>,
 }
 
 pub struct GenerationTask {
@@ -459,7 +459,7 @@ pub enum TaskStatus {
     Pending,
     Running { progress: f32 },
     Completed(GenerationOutput),
-    Failed(AetherError),
+    Failed(AlephError),
 }
 
 impl GenerationTaskManager {
@@ -586,7 +586,7 @@ pub struct GenerationExecutor {
     registry: Arc<GenerationProviderRegistry>,
     router: GenerationRouter,
     config: GenerationConfig,
-    event_handler: Arc<dyn AetherEventHandler>,
+    event_handler: Arc<dyn AlephEventHandler>,
 }
 
 impl GenerationExecutor {
@@ -702,7 +702,7 @@ dictionary GenerationOutput {
     u64 size_bytes;
 };
 
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
     // 生成相关回调
     void on_generation_started(string task_id, GenerationType gen_type, string prompt);
     void on_generation_progress(string task_id, f32 progress);
@@ -712,14 +712,14 @@ callback interface AetherEventHandler {
     void on_content_filtered(string prompt, string reason, string? suggestion);
 };
 
-interface AetherCore {
-    [Throws=AetherError]
+interface AlephCore {
+    [Throws=AlephError]
     GenerationResult generate(GenerationRequest request);
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     GenerationProgress get_generation_progress(string task_id);
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     void cancel_generation(string task_id);
 
     sequence<string> list_generation_providers();
@@ -730,14 +730,14 @@ interface AetherCore {
 ### Swift 集成
 
 ```swift
-// Aether/Sources/GenerationHandler.swift
+// Aleph/Sources/GenerationHandler.swift
 
 class GenerationHandler: ObservableObject {
     @Published var activeTask: GenerationTask?
     @Published var progress: Float = 0
     @Published var status: GenerationStatus = .idle
 
-    private let core: AetherCore
+    private let core: AlephCore
     private let haloWindow: HaloWindow
 
     func generate(_ request: GenerationRequest) async {
@@ -757,7 +757,7 @@ class GenerationHandler: ObservableObject {
 }
 
 // EventHandler 扩展
-extension EventHandler: AetherEventHandler {
+extension EventHandler: AlephEventHandler {
     func onGenerationStarted(taskId: String, genType: GenerationType, prompt: String) {
         DispatchQueue.main.async {
             self.haloWindow.showProgress(prompt: prompt)
@@ -786,7 +786,7 @@ extension EventHandler: AetherEventHandler {
 ### 新增/修改文件清单
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── generation/                     # 【新增目录】
 │   ├── mod.rs                      # 模块导出、trait 定义
 │   ├── request.rs                  # GenerationRequest/Params
@@ -813,7 +813,7 @@ Aether/core/src/
 ├── lib.rs                          # 【修改】
 └── aether.udl                      # 【修改】
 
-Aether/Sources/
+Aleph/Sources/
 ├── GenerationHandler.swift         # 【新增】
 ├── EventHandler.swift              # 【修改】
 └── HaloWindow.swift                # 【修改】

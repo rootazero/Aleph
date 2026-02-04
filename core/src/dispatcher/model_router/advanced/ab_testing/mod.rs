@@ -39,7 +39,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::model_router::ab_testing::*;
+//! use alephcore::dispatcher::model_router::ab_testing::*;
 //!
 //! // Create experiment configuration
 //! let experiment = ExperimentConfig::new("test-gemini-routing")

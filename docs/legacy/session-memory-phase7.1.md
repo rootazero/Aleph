@@ -173,7 +173,7 @@ Router 可以通过调用 `provider.supports_vision()` 来过滤 provider 列表
 4. `Aether/core/src/providers/mod.rs` - AiProvider trait 扩展
 5. `Aether/core/src/providers/openai.rs` - Vision API 支持
 6. `Aether/core/src/providers/claude.rs` - Vision API 支持
-7. `Aether/core/src/core.rs` - AetherCore 图片方法
+7. `Aether/core/src/core.rs` - AlephCore 图片方法
 8. `Aether/core/src/lib.rs` - 导出 ImageData 和 ImageFormat
 9. `Aether/core/src/aether.udl` - UniFFI 绑定定义
 

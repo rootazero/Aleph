@@ -32,7 +32,7 @@ fn test_plugin_host_script_exists() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_plugin_host_script_exists`
+Run: `cargo test -p alephcore test_plugin_host_script_exists`
 Expected: FAIL with "couldn't read plugin-host.js"
 
 **Step 3: Create plugin-host.js**
@@ -157,7 +157,7 @@ process.on('uncaughtException', (err) => {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_plugin_host_script_exists`
+Run: `cargo test -p alephcore test_plugin_host_script_exists`
 Expected: PASS
 
 **Step 5: Commit**
@@ -200,7 +200,7 @@ fn test_nodejs_runtime_uses_embedded_host() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_nodejs_runtime_uses_embedded_host`
+Run: `cargo test -p alephcore test_nodejs_runtime_uses_embedded_host`
 Expected: FAIL with "no function named `with_embedded_host`"
 
 **Step 3: Add with_embedded_host constructor**
@@ -232,7 +232,7 @@ In `core/src/extension/runtime/nodejs/process.rs`, update `start()` to write emb
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_nodejs_runtime_uses_embedded_host`
+Run: `cargo test -p alephcore test_nodejs_runtime_uses_embedded_host`
 Expected: PASS
 
 **Step 5: Commit**
@@ -277,7 +277,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_plugin_loader_new`
+Run: `cargo test -p alephcore test_plugin_loader_new`
 Expected: FAIL with "cannot find module `plugin_loader`"
 
 **Step 3: Create PluginLoader**
@@ -394,7 +394,7 @@ impl Drop for PluginLoader {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_plugin_loader_new`
+Run: `cargo test -p alephcore test_plugin_loader_new`
 Expected: PASS
 
 **Step 5: Commit**
@@ -435,7 +435,7 @@ async fn test_extension_manager_has_plugin_loader() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_extension_manager_has_plugin_loader`
+Run: `cargo test -p alephcore test_extension_manager_has_plugin_loader`
 Expected: FAIL with "no method named `call_plugin_tool`"
 
 **Step 3: Add PluginLoader to ExtensionManager**
@@ -475,7 +475,7 @@ impl ExtensionManager {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_extension_manager_has_plugin_loader`
+Run: `cargo test -p alephcore test_extension_manager_has_plugin_loader`
 Expected: PASS
 
 **Step 5: Commit**
@@ -521,7 +521,7 @@ fn test_call_tool_params() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_call_tool_params`
+Run: `cargo test -p alephcore test_call_tool_params`
 Expected: FAIL with "cannot find type `CallToolParams`"
 
 **Step 3: Add handle_call_tool**
@@ -575,7 +575,7 @@ pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_call_tool_params`
+Run: `cargo test -p alephcore test_call_tool_params`
 Expected: PASS
 
 **Step 5: Commit**
@@ -627,7 +627,7 @@ async fn test_call_tool_with_nonexistent_plugin() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_call_tool_with_nonexistent_plugin`
+Run: `cargo test -p alephcore test_call_tool_with_nonexistent_plugin`
 Expected: PASS (placeholder returns success)
 
 **Step 3: Implement full wiring**
@@ -650,7 +650,7 @@ pub struct HandlerContext {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_call_tool_with_nonexistent_plugin`
+Run: `cargo test -p alephcore test_call_tool_with_nonexistent_plugin`
 Expected: PASS with proper error response
 
 **Step 5: Commit**
@@ -691,7 +691,7 @@ fn test_load_plugin_params() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_load_plugin_params`
+Run: `cargo test -p alephcore test_load_plugin_params`
 Expected: FAIL with "cannot find type `LoadPluginParams`"
 
 **Step 3: Add handlers**
@@ -723,7 +723,7 @@ pub async fn handle_unload(request: JsonRpcRequest) -> JsonRpcResponse {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_load_plugin_params`
+Run: `cargo test -p alephcore test_load_plugin_params`
 Expected: PASS
 
 **Step 5: Commit**
@@ -765,7 +765,7 @@ fn test_plugin_handlers_registered() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_plugin_handlers_registered`
+Run: `cargo test -p alephcore test_plugin_handlers_registered`
 Expected: FAIL (some methods not registered)
 
 **Step 3: Register all plugin handlers**
@@ -795,7 +795,7 @@ impl HandlerRegistry {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_plugin_handlers_registered`
+Run: `cargo test -p alephcore test_plugin_handlers_registered`
 Expected: PASS
 
 **Step 5: Commit**
@@ -827,7 +827,7 @@ EOF
 ```rust
 //! Integration test for plugin runtime system
 
-use aethecore::extension::{ExtensionManager, ExtensionConfig};
+use alephcore::extension::{ExtensionManager, ExtensionConfig};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -879,7 +879,7 @@ async fn test_nodejs_plugin_tool_call() {
     let plugin_path = create_test_plugin(temp.path());
 
     let config = ExtensionConfig {
-        discovery: aethecore::discovery::DiscoveryConfig {
+        discovery: alephcore::discovery::DiscoveryConfig {
             global_dir: Some(temp.path().to_path_buf()),
             ..Default::default()
         },
@@ -903,7 +903,7 @@ async fn test_nodejs_plugin_tool_call() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore --test plugin_runtime_test`
+Run: `cargo test -p alephcore --test plugin_runtime_test`
 Expected: FAIL (test file doesn't exist or fails)
 
 **Step 3: Implement and fix issues**
@@ -912,7 +912,7 @@ Create the test file, then iterate on fixes until it passes.
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore --test plugin_runtime_test`
+Run: `cargo test -p alephcore --test plugin_runtime_test`
 Expected: PASS
 
 **Step 5: Commit**
@@ -935,7 +935,7 @@ EOF
 ## Task 10: Add CLI Command for Plugin Management
 
 **Files:**
-- Modify: `core/src/bin/aether_gateway.rs` or create `core/src/cli/plugins.rs`
+- Modify: `core/src/bin/aleph_gateway.rs` or create `core/src/cli/plugins.rs`
 
 **Step 1: Write the failing test**
 

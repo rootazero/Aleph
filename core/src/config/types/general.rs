@@ -22,7 +22,7 @@ pub struct GeneralConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     /// Custom output directory for generated files (images, PDFs, etc.)
-    /// If None, uses default: ~/.aether/output/
+    /// If None, uses default: ~/.aleph/output/
     /// This directory is used as the default destination when AI generates files
     /// without specifying an absolute path.
     #[serde(default, skip_serializing_if = "Option::is_none")]

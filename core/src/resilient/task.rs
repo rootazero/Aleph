@@ -37,7 +37,7 @@ pub trait ResilientTask: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Self::Output>> + Send + 'a>> {
         let _ = ctx;
         Box::pin(async {
-            Err(crate::error::AetherError::Other {
+            Err(crate::error::AlephError::Other {
                 message: "No fallback available".to_string(),
                 suggestion: None,
             })
@@ -62,7 +62,7 @@ pub trait ResilientTask: Send + Sync {
     /// Check if a specific error should be retried.
     ///
     /// Override to customize retry behavior.
-    fn should_retry(&self, error: &crate::error::AetherError, attempt: u32) -> bool {
+    fn should_retry(&self, error: &crate::error::AlephError, attempt: u32) -> bool {
         let config = self.config();
         if attempt >= config.max_attempts {
             return false;
@@ -71,9 +71,9 @@ pub trait ResilientTask: Send + Sync {
         // Check error type
         matches!(
             error,
-            crate::error::AetherError::NetworkError { .. }
-                | crate::error::AetherError::RateLimitError { .. }
-                | crate::error::AetherError::ProviderError { .. }
+            crate::error::AlephError::NetworkError { .. }
+                | crate::error::AlephError::RateLimitError { .. }
+                | crate::error::AlephError::ProviderError { .. }
         )
     }
 
@@ -186,7 +186,7 @@ where
             fb(ctx)
         } else {
             Box::pin(async {
-                Err(crate::error::AetherError::Other {
+                Err(crate::error::AlephError::Other {
                     message: "No fallback available".to_string(),
                     suggestion: None,
                 })
@@ -226,7 +226,7 @@ mod tests {
             let should_fail = self.should_fail;
             Box::pin(async move {
                 if should_fail {
-                    Err(crate::error::AetherError::Other {
+                    Err(crate::error::AlephError::Other {
                         message: "Test failure".to_string(),
                         suggestion: None,
                     })

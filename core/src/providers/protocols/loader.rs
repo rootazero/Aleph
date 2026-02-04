@@ -6,7 +6,7 @@
 //!
 //! # Architecture
 //!
-//! Uses the `notify-debouncer-full` crate to watch `~/.aether/protocols/` for changes:
+//! Uses the `notify-debouncer-full` crate to watch `~/.aleph/protocols/` for changes:
 //! - **Debouncing**: 500ms delay to avoid rapid-fire reloads on single file writes
 //! - **Event filtering**: Only reacts to .yaml/.yml file changes
 //! - **Auto-reload**: Modified files are automatically re-loaded into ProtocolRegistry
@@ -36,7 +36,7 @@
 //! - `core/src/config/watcher.rs` (config file hot-reload)
 //! - `core/src/extension/watcher.rs` (extension file hot-reload)
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, ProtocolRegistry};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
@@ -53,12 +53,12 @@ impl ProtocolLoader {
     pub async fn load_from_file(path: &Path) -> Result<()> {
         // Read YAML file
         let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-            AetherError::invalid_config(format!("Failed to read protocol file {:?}: {}", path, e))
+            AlephError::invalid_config(format!("Failed to read protocol file {:?}: {}", path, e))
         })?;
 
         // Parse as ProtocolDefinition
         let def: ProtocolDefinition = serde_yaml::from_str(&content).map_err(|e| {
-            AetherError::invalid_config(format!("Failed to parse protocol YAML {:?}: {}", path, e))
+            AlephError::invalid_config(format!("Failed to parse protocol YAML {:?}: {}", path, e))
         })?;
 
         // Create ConfigurableProtocol
@@ -80,14 +80,14 @@ impl ProtocolLoader {
     pub async fn load_from_dir(dir: &Path) -> Result<()> {
         // Check if directory exists
         if !dir.exists() {
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "Protocol directory does not exist: {:?}",
                 dir
             )));
         }
 
         if !dir.is_dir() {
-            return Err(AetherError::invalid_config(format!(
+            return Err(AlephError::invalid_config(format!(
                 "Path is not a directory: {:?}",
                 dir
             )));
@@ -95,7 +95,7 @@ impl ProtocolLoader {
 
         // Read directory entries
         let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
-            AetherError::invalid_config(format!("Failed to read directory {:?}: {}", dir, e))
+            AlephError::invalid_config(format!("Failed to read directory {:?}: {}", dir, e))
         })?;
 
         let mut loaded_count = 0;
@@ -103,7 +103,7 @@ impl ProtocolLoader {
 
         // Process each entry
         while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            AetherError::invalid_config(format!("Failed to read directory entry: {}", e))
+            AlephError::invalid_config(format!("Failed to read directory entry: {}", e))
         })? {
             let path = entry.path();
 
@@ -140,7 +140,7 @@ impl ProtocolLoader {
         Ok(())
     }
 
-    /// Start hot reload watcher for ~/.aether/protocols
+    /// Start hot reload watcher for ~/.aleph/protocols
     ///
     /// # Watcher Lifecycle
     ///
@@ -175,9 +175,9 @@ impl ProtocolLoader {
     /// }
     /// ```
     pub fn start_watching() -> Result<Option<Debouncer<RecommendedWatcher, FileIdMap>>> {
-        // Get ~/.aether/protocols path
+        // Get ~/.aleph/protocols path
         let home = std::env::var("HOME").map_err(|_| {
-            AetherError::invalid_config("HOME environment variable not set".to_string())
+            AlephError::invalid_config("HOME environment variable not set".to_string())
         })?;
         let protocols_dir = PathBuf::from(home).join(".aether").join("protocols");
 
@@ -238,14 +238,14 @@ impl ProtocolLoader {
                 }
             },
         )
-        .map_err(|e| AetherError::invalid_config(format!("Failed to create watcher: {}", e)))?;
+        .map_err(|e| AlephError::invalid_config(format!("Failed to create watcher: {}", e)))?;
 
         // Watch directory non-recursively
         debouncer
             .watcher()
             .watch(&dir, RecursiveMode::NonRecursive)
             .map_err(|e| {
-                AetherError::invalid_config(format!("Failed to watch directory {:?}: {}", dir, e))
+                AlephError::invalid_config(format!("Failed to watch directory {:?}: {}", dir, e))
             })?;
 
         info!(

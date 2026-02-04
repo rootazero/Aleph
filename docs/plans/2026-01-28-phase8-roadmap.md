@@ -1,4 +1,4 @@
-# Phase 8: Aether vs Moltbot Gap Analysis & Roadmap
+# Phase 8: Aleph vs Moltbot Gap Analysis & Roadmap
 
 **Date**: 2026-01-28
 **Status**: Planning
@@ -7,13 +7,13 @@
 
 ## Executive Summary
 
-经过对 Moltbot 源码的深入分析，本文档总结了 Aether 与 Moltbot 的功能差距，并规划 Phase 8 的实施路线。
+经过对 Moltbot 源码的深入分析，本文档总结了 Aleph 与 Moltbot 的功能差距，并规划 Phase 8 的实施路线。
 
 ---
 
 ## Current State Comparison
 
-### Aether 已实现 ✅
+### Aleph 已实现 ✅
 
 | 组件 | 状态 | 对应 Moltbot |
 |------|------|-------------|
@@ -32,7 +32,7 @@
 | **CLI Channel** | ✅ 完整 | (测试用) |
 | **iMessage Channel** | ✅ 完整 | `src/imessage/` |
 
-### Aether 缺失功能 ❌
+### Aleph 缺失功能 ❌
 
 | 功能 | 优先级 | Moltbot 参考 | 复杂度 |
 |------|--------|-------------|--------|

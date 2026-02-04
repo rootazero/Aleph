@@ -2,7 +2,7 @@
 
 ## 一、概述
 
-**搜索能力集成**已于 2026-01-04 完成，为 Aether Agent 提供了强大的**实时联网搜索能力**，使 AI 能够访问最新的网络信息。
+**搜索能力集成**已于 2026-01-04 完成，为 Aleph Agent 提供了强大的**实时联网搜索能力**，使 AI 能够访问最新的网络信息。
 
 ### 1.1 核心特性
 
@@ -286,7 +286,7 @@ pub struct SearchBackendConfig {
 
 ### 5.2 配置示例
 
-**文件**: `~/.aether/config.toml`
+**文件**: `~/.aleph/config.toml`
 
 ```toml
 [search]
@@ -358,8 +358,8 @@ context_format = "markdown"
 ### 7.1 代码示例
 
 ```rust
-use aethecore::search::{SearchRegistry, SearchOptions, SearchProvider};
-use aethecore::search::providers::TavilyProvider;
+use alephcore::search::{SearchRegistry, SearchOptions, SearchProvider};
+use alephcore::search::providers::TavilyProvider;
 
 // 1. 创建提供商
 let tavily = TavilyProvider::new("tvly-api-key".to_string())?;
@@ -389,8 +389,8 @@ for result in results {
 ### 7.2 与 CapabilityExecutor 集成
 
 ```rust
-use aethecore::capability::CapabilityExecutor;
-use aethecore::payload::{PayloadBuilder, Intent, Capability, ContextFormat};
+use alephcore::capability::CapabilityExecutor;
+use alephcore::payload::{PayloadBuilder, Intent, Capability, ContextFormat};
 
 // 1. 创建搜索注册中心
 let mut registry = SearchRegistry::new("tavily".to_string());
@@ -451,7 +451,7 @@ A: 可能的原因：
 
 检查日志：
 ```bash
-RUST_LOG=aethecore::capability=debug cargo run
+RUST_LOG=alephcore::capability=debug cargo run
 ```
 
 **Q3: API Key 无效**
@@ -473,13 +473,13 @@ curl -X POST https://api.tavily.com/search \
 
 ```bash
 # 详细搜索日志
-RUST_LOG=aethecore::search=debug,aethecore::capability=debug
+RUST_LOG=alephcore::search=debug,alephcore::capability=debug
 
 # 仅错误日志
-RUST_LOG=aethecore=error
+RUST_LOG=alephcore=error
 
 # 跟踪 HTTP 请求
-RUST_LOG=reqwest=trace,aethecore::search=debug
+RUST_LOG=reqwest=trace,alephcore::search=debug
 ```
 
 ---

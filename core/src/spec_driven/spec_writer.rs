@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tracing::{debug, info};
 
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 
 use super::types::{Spec, SpecMetadata, SpecTarget};
@@ -79,7 +79,7 @@ impl SpecWriter {
         let json_str = extract_json(response);
 
         let parsed: SpecResponse = serde_json::from_str(&json_str).map_err(|e| {
-            AetherError::Other {
+            AlephError::Other {
                 message: format!("Failed to parse spec response: {}", e),
                 suggestion: Some("Ensure the LLM returned valid JSON".to_string()),
             }

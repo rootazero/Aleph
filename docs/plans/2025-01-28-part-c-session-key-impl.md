@@ -751,7 +751,7 @@ use std::collections::HashMap;
 ///
 /// ```
 /// use std::collections::HashMap;
-/// use aethecore::routing::identity_links::resolve_linked_peer_id;
+/// use alephcore::routing::identity_links::resolve_linked_peer_id;
 ///
 /// let mut links = HashMap::new();
 /// links.insert("john".to_string(), vec!["telegram:123".to_string(), "discord:456".to_string()]);

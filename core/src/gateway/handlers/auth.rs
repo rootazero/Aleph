@@ -283,7 +283,7 @@ pub async fn handle_connect(
                 code: code.to_string(),
                 expires_in: remaining,
                 message: format!(
-                    "Enter code {} to approve this device, or run: aether-gateway pairing approve {}",
+                    "Enter code {} to approve this device, or run: aleph-gateway pairing approve {}",
                     code, code
                 ),
             }),
@@ -322,7 +322,7 @@ pub async fn handle_connect(
             code: code.clone(),
             expires_in,
             message: format!(
-                "Enter code {} to approve this device, or run: aether-gateway pairing approve {}",
+                "Enter code {} to approve this device, or run: aleph-gateway pairing approve {}",
                 code, code
             ),
         }),
@@ -634,7 +634,7 @@ pub fn create_hello_notification(require_auth: bool) -> JsonRpcRequest {
         "hello",
         Some(json!(HelloParams {
             version: "1".to_string(),
-            server: format!("aether-gateway/{}", env!("CARGO_PKG_VERSION")),
+            server: format!("aleph-gateway/{}", env!("CARGO_PKG_VERSION")),
             auth_required: require_auth,
         })),
     )

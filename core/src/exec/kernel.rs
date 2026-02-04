@@ -11,7 +11,7 @@ use regex::Regex;
 /// # Example
 ///
 /// ```rust
-/// use aethecore::exec::SecurityKernel;
+/// use alephcore::exec::SecurityKernel;
 ///
 /// let kernel = SecurityKernel::default();
 ///
@@ -21,7 +21,7 @@ use regex::Regex;
 ///
 /// // Safe command
 /// let risk = kernel.assess("ls -la");
-/// assert_eq!(risk, aethecore::exec::RiskLevel::Safe);
+/// assert_eq!(risk, alephcore::exec::RiskLevel::Safe);
 /// ```
 #[derive(Debug, Clone)]
 #[derive(Default)]

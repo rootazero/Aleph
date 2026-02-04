@@ -1,8 +1,8 @@
-# Aether Window System - Complete Design Plan
+# Aleph Window System - Complete Design Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 完整的 Aether 窗口系统设计与实现规划,包括 Liquid Glass 视觉效果、统一对话窗口、命令/主题列表、Halo 状态窗口等所有 UI 组件。
+**Goal:** 完整的 Aleph 窗口系统设计与实现规划,包括 Liquid Glass 视觉效果、统一对话窗口、命令/主题列表、Halo 状态窗口等所有 UI 组件。
 
 **Architecture:** 基于 Metal + SwiftUI 的分层架构,Metal 层处理 Liquid Glass 视觉效果(极光背景、气泡融合、玻璃折射),SwiftUI 层处理文字内容和交互逻辑。所有窗口共享统一的"幽灵"美学设计语言。
 
@@ -38,7 +38,7 @@
 ### 窗口层级结构
 
 ```
-Aether Window System
+Aleph Window System
 ├── HaloWindow (level: .floating)
 │   ├── 总是位于最上层
 │   ├── 光标位置的临时状态提示
@@ -890,12 +890,12 @@ func addMessage(_ message: ConversationMessage)
 func clearMessages()
 
 // Plan confirmation
-func setPendingPlanConfirmation(_ confirmation: PendingPlanConfirmation, core: AetherCore)
+func setPendingPlanConfirmation(_ confirmation: PendingPlanConfirmation, core: AlephCore)
 func approvePlan()
 func rejectPlan()
 
 // User input request
-func setPendingUserInputRequest(requestId: String, question: String, options: [String], core: AetherCore)
+func setPendingUserInputRequest(requestId: String, question: String, options: [String], core: AlephCore)
 func submitUserInput(_ selectedOptions: [String])
 
 // Progress tracking
@@ -1148,7 +1148,7 @@ enum Layout {
 
 ## 总结
 
-这份设计规划涵盖了 Aether 窗口系统的完整架构:
+这份设计规划涵盖了 Aleph 窗口系统的完整架构:
 
 1. **Liquid Glass 视觉效果**: Metal 三层渲染管线,实现极光背景、气泡融合、玻璃折射
 2. **统一对话窗口**: 动态高度调整,底部锚点定位,支持多种显示模式

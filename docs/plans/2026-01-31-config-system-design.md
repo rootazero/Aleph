@@ -6,7 +6,7 @@
 
 ## Overview
 
-为 Aether 配置系统添加：
+为 Aleph 配置系统添加：
 1. **全 TOML 格式** — 统一核心配置和扩展配置
 2. **JSON Schema 生成** — 使用 schemars 自动生成
 3. **UI Hints 系统** — 字段标签、帮助文本、分组
@@ -20,7 +20,7 @@
 │                    配置系统架构                              │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  ~/.aether/config.toml          workspace/aether.toml       │
+│  ~/.aleph/config.toml          workspace/aether.toml       │
 │         │                              │                    │
 │         ▼                              ▼                    │
 │  ┌─────────────┐                ┌─────────────┐            │
@@ -75,7 +75,7 @@
 
 **New (aether.toml):**
 ```toml
-# Aether 项目配置
+# Aleph 项目配置
 # schema: https://aether.ai/config.json
 
 model = "anthropic/claude-opus-4-5"
@@ -304,7 +304,7 @@ pub struct ConfigSchemaResponse {
     pub schema: serde_json::Value,
     /// UI rendering hints
     pub ui_hints: ConfigUiHints,
-    /// Aether version
+    /// Aleph version
     pub version: String,
     /// Generation timestamp (ISO 8601)
     pub generated_at: String,
@@ -381,7 +381,7 @@ registry.register("config.schema", handle_config_schema);
 
 ## Part 5: Hot Reload Integration
 
-Aether already has `ConfigWatcher` (336 lines) but not enabled. Need to integrate into Gateway with reload plan logic.
+Aleph already has `ConfigWatcher` (336 lines) but not enabled. Need to integrate into Gateway with reload plan logic.
 
 ### Reload Plan Design
 

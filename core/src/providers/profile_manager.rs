@@ -2,9 +2,9 @@
 //!
 //! Manages auth profiles with a three-tier storage architecture:
 //!
-//! 1. **Global Config** (~/.aether/profiles.toml) - User-maintained, TOML format
+//! 1. **Global Config** (~/.aleph/profiles.toml) - User-maintained, TOML format
 //! 2. **Runtime State** (memory) - Cooldowns, not persisted across restarts
-//! 3. **Per-Agent State** (~/.aether/agents/{id}/state.json) - Usage tracking, persisted
+//! 3. **Per-Agent State** (~/.aleph/agents/{id}/state.json) - Usage tracking, persisted
 //!
 //! # Architecture
 //!
@@ -27,7 +27,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::providers::profile_manager::{AuthProfileManager, EffectiveProfile};
+//! use alephcore::providers::profile_manager::{AuthProfileManager, EffectiveProfile};
 //!
 //! // Create manager
 //! let manager = AuthProfileManager::new()?;
@@ -176,7 +176,7 @@ pub struct ProfileOverride {
     pub disabled: bool,
 }
 
-/// Per-agent state (persisted to ~/.aether/agents/{id}/state.json)
+/// Per-agent state (persisted to ~/.aleph/agents/{id}/state.json)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentState {
     /// Usage statistics per profile
@@ -350,7 +350,7 @@ pub struct AuthProfileManager {
     /// Path to profiles.toml
     config_path: PathBuf,
 
-    /// Base directory for agent state (~/.aether/agents)
+    /// Base directory for agent state (~/.aleph/agents)
     agents_dir: PathBuf,
 
     /// Cached agent states

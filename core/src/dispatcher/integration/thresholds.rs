@@ -50,7 +50,7 @@ pub enum ConfidenceAction {
 /// # Example
 ///
 /// ```rust,ignore
-/// use aethecore::dispatcher::ConfidenceThresholds;
+/// use alephcore::dispatcher::ConfidenceThresholds;
 ///
 /// let thresholds = ConfidenceThresholds::default();
 ///

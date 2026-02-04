@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use aethecore::intent::{IntentAggregator, AggregatorConfig, CalibratedSignal, RoutingLayer};
+//! use alephcore::intent::{IntentAggregator, AggregatorConfig, CalibratedSignal, RoutingLayer};
 //!
 //! let aggregator = IntentAggregator::new(AggregatorConfig::default());
 //!

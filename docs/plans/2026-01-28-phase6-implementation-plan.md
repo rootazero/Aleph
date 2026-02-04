@@ -81,9 +81,9 @@ impl GatewayProviderConfig {
 }
 ```
 
-#### 0.3 更新 aether-gateway 二进制
+#### 0.3 更新 aleph-gateway 二进制
 
-**文件:** `core/src/bin/aether_gateway.rs`
+**文件:** `core/src/bin/aleph_gateway.rs`
 
 ```rust
 // 初始化 Provider Registry
@@ -107,7 +107,7 @@ server.handlers_mut().register("agent.run", move |req| {
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # 启动 Gateway
-cargo run --features gateway --bin aether-gateway
+cargo run --features gateway --bin aleph-gateway
 
 # 测试真实 Agent 执行
 echo '{"jsonrpc":"2.0","method":"agent.run","params":{"input":"What is 2+2?"},"id":"1"}' | websocat -t ws://127.0.0.1:18789
@@ -124,10 +124,10 @@ echo '{"jsonrpc":"2.0","method":"agent.run","params":{"input":"What is 2+2?"},"i
 
 #### 1.1 Session 存储结构
 
-**目录:** `~/.aether/sessions/`
+**目录:** `~/.aleph/sessions/`
 
 ```
-~/.aether/sessions/
+~/.aleph/sessions/
 ├── main.jsonl           # 主会话
 ├── telegram_123.jsonl   # Telegram DM
 ├── discord_456.jsonl    # Discord channel
@@ -249,13 +249,13 @@ storage.append_message(&session_key, &assistant_message).await?;
 
 ```bash
 # 启动 Gateway
-cargo run --features gateway --bin aether-gateway
+cargo run --features gateway --bin aleph-gateway
 
 # 发送消息
 echo '{"jsonrpc":"2.0","method":"agent.run","params":{"input":"Remember my name is Alice"},"id":"1"}' | websocat -t ws://127.0.0.1:18789
 
 # 检查 JSONL 文件
-cat ~/.aether/sessions/main.jsonl
+cat ~/.aleph/sessions/main.jsonl
 
 # 再次发送，验证历史
 echo '{"jsonrpc":"2.0","method":"agent.run","params":{"input":"What is my name?"},"id":"2"}' | websocat -t ws://127.0.0.1:18789
@@ -564,7 +564,7 @@ impl ChannelPlugin for IMessageChannel {
 iMessage 需要 **Full Disk Access** 权限才能读取 `~/Library/Messages/chat.db`:
 
 1. System Preferences → Security & Privacy → Privacy
-2. Full Disk Access → Add Terminal / Aether.app
+2. Full Disk Access → Add Terminal / Aleph.app
 3. 或在 entitlements 中添加:
    ```xml
    <key>com.apple.security.files.user-selected.read-write</key>
@@ -575,14 +575,14 @@ iMessage 需要 **Full Disk Access** 权限才能读取 `~/Library/Messages/chat
 
 ```bash
 # 启动 Gateway (带 iMessage 渠道)
-cargo run --features gateway,imessage --bin aether-gateway
+cargo run --features gateway,imessage --bin aleph-gateway
 
 # 用 iPhone 或另一台 Mac 发送 iMessage 到本机
 # 观察 Gateway 日志，应该能看到:
 # [INFO] iMessage: New message from +1234567890
 
 # 检查 agent 是否响应
-cat ~/.aether/sessions/imessage_default_+1234567890.jsonl
+cat ~/.aleph/sessions/imessage_default_+1234567890.jsonl
 ```
 
 ---
@@ -726,7 +726,7 @@ impl ConfigWatcher {
 - [ ] API Key 从环境变量或配置文件读取
 
 ### P1 验收
-- [ ] 消息持久化到 `~/.aether/sessions/*.jsonl`
+- [ ] 消息持久化到 `~/.aleph/sessions/*.jsonl`
 - [ ] 支持 session 历史加载
 - [ ] Agent 能记住之前的对话
 
@@ -740,7 +740,7 @@ impl ConfigWatcher {
 - [ ] 权限说明文档完成
 
 ### P4 验收
-- [ ] 修改 `~/.aether/config.json5` 后自动生效
+- [ ] 修改 `~/.aleph/config.json5` 后自动生效
 - [ ] 日志显示 "Config reloaded"
 
 ---
@@ -750,4 +750,4 @@ impl ConfigWatcher {
 - Moltbot Gateway: `/Users/zouguojun/Workspace/moltbot/src/gateway/`
 - Moltbot Channels: `/Users/zouguojun/Workspace/moltbot/src/channels/`
 - Moltbot Config: `/Users/zouguojun/Workspace/moltbot/src/config/`
-- Aether CLAUDE.md: `/Users/zouguojun/Workspace/Aether/CLAUDE.md`
+- Aleph CLAUDE.md: `/Users/zouguojun/Workspace/Aether/CLAUDE.md`

@@ -99,7 +99,7 @@ impl McpManagerActor {
     ///
     /// # Arguments
     ///
-    /// * `config_path` - Optional path to config file, defaults to `~/.aether/mcp_config.json`
+    /// * `config_path` - Optional path to config file, defaults to `~/.aleph/mcp_config.json`
     ///
     /// # Returns
     ///

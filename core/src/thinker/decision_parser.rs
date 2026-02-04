@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use crate::agent_loop::{Decision, LlmResponse, Thinking};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 
 /// Parser for LLM decision responses
 pub struct DecisionParser {
@@ -44,7 +44,7 @@ impl DecisionParser {
                     preview = %format!("{}{}", preview, preview_suffix),
                     "LLM did not return JSON action format"
                 );
-                return Err(AetherError::Other {
+                return Err(AlephError::Other {
                     message: "LLM did not return valid JSON action format".to_string(),
                     suggestion: Some(format!(
                         "The LLM returned plain text instead of JSON action. Response preview: '{}{}'",
@@ -63,7 +63,7 @@ impl DecisionParser {
                 json_preview = %json_preview,
                 "Failed to parse extracted JSON as LlmResponse"
             );
-            AetherError::Other {
+            AlephError::Other {
                 message: format!("Failed to parse LLM response JSON: {}", e),
                 suggestion: Some(format!(
                     "Extracted JSON is malformed. Expected format: {{\"reasoning\": \"...\", \"action\": {{\"type\": \"tool|complete|fail|ask_user\", ...}}}}. Got: {}",
@@ -105,7 +105,7 @@ impl DecisionParser {
 
         // If all else fails, treat as a failure
         if self.strict_mode {
-            Err(AetherError::Other {
+            Err(AlephError::Other {
                 message: "Could not parse LLM response into valid decision".to_string(),
                 suggestion: Some("Check the LLM response format".to_string()),
             })
@@ -247,7 +247,7 @@ impl DecisionParser {
         }
 
         // No JSON found at all - return error
-        Err(AetherError::Other {
+        Err(AlephError::Other {
             message: "No JSON object found in response".to_string(),
             suggestion: Some("LLM response does not contain a JSON action object".to_string()),
         })
@@ -507,13 +507,13 @@ impl DecisionParser {
                 arguments,
             } => {
                 if tool_name.is_empty() {
-                    return Err(AetherError::Other {
+                    return Err(AlephError::Other {
                         message: "Tool name cannot be empty".to_string(),
                         suggestion: Some("Provide a valid tool name".to_string()),
                     });
                 }
                 if !arguments.is_object() {
-                    return Err(AetherError::Other {
+                    return Err(AlephError::Other {
                         message: "Tool arguments must be an object".to_string(),
                         suggestion: Some("Provide arguments as a JSON object".to_string()),
                     });
@@ -522,7 +522,7 @@ impl DecisionParser {
             }
             Decision::AskUser { question, .. } => {
                 if question.is_empty() {
-                    return Err(AetherError::Other {
+                    return Err(AlephError::Other {
                         message: "Question cannot be empty".to_string(),
                         suggestion: Some("Provide a question for the user".to_string()),
                     });
@@ -531,13 +531,13 @@ impl DecisionParser {
             }
             Decision::AskUserMultigroup { question, groups } => {
                 if question.is_empty() {
-                    return Err(AetherError::Other {
+                    return Err(AlephError::Other {
                         message: "Question cannot be empty".to_string(),
                         suggestion: Some("Provide a question for the user".to_string()),
                     });
                 }
                 if groups.is_empty() {
-                    return Err(AetherError::Other {
+                    return Err(AlephError::Other {
                         message: "Groups cannot be empty for multi-group question".to_string(),
                         suggestion: Some("Provide at least one question group".to_string()),
                     });
@@ -546,7 +546,7 @@ impl DecisionParser {
             }
             Decision::AskUserRich { question, .. } => {
                 if question.is_empty() {
-                    return Err(AetherError::Other {
+                    return Err(AlephError::Other {
                         message: "Question cannot be empty".to_string(),
                         suggestion: Some("Provide a question for the user".to_string()),
                     });
@@ -555,7 +555,7 @@ impl DecisionParser {
             }
             Decision::Complete { summary } => {
                 if summary.is_empty() {
-                    return Err(AetherError::Other {
+                    return Err(AlephError::Other {
                         message: "Summary cannot be empty".to_string(),
                         suggestion: Some("Provide a summary of what was accomplished".to_string()),
                     });
@@ -564,7 +564,7 @@ impl DecisionParser {
             }
             Decision::Fail { reason } => {
                 if reason.is_empty() {
-                    return Err(AetherError::Other {
+                    return Err(AlephError::Other {
                         message: "Failure reason cannot be empty".to_string(),
                         suggestion: Some("Provide a reason for the failure".to_string()),
                     });

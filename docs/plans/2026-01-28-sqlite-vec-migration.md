@@ -96,11 +96,11 @@ impl VectorDatabase {
     ///
     /// Includes migration logic for embedding dimension changes.
     /// When embedding dimension changes (e.g., 384 -> 512), old data is cleared.
-    pub fn new(db_path: PathBuf) -> Result<Self, AetherError> {
+    pub fn new(db_path: PathBuf) -> Result<Self, AlephError> {
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                AetherError::config(format!("Failed to create database directory: {}", e))
+                AlephError::config(format!("Failed to create database directory: {}", e))
             })?;
         }
 
@@ -114,7 +114,7 @@ impl VectorDatabase {
         }
 
         let conn = Connection::open(&db_path)
-            .map_err(|e| AetherError::config(format!("Failed to open database: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to open database: {}", e)))?;
 
         // ... rest of the function unchanged ...
 ```
@@ -277,7 +277,7 @@ In `core/src/memory/database/core.rs`, modify the `execute_batch` SQL to add vec
             );
             "#,
         )
-        .map_err(|e| AetherError::config(format!("Failed to create schema: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to create schema: {}", e)))?;
 ```
 
 **Step 4: Run test to verify it passes**
@@ -359,10 +359,10 @@ In `core/src/memory/database/memory_ops.rs`, update `insert_memory`:
 
 ```rust
     /// Insert memory entry into database
-    pub async fn insert_memory(&self, memory: MemoryEntry) -> Result<(), AetherError> {
+    pub async fn insert_memory(&self, memory: MemoryEntry) -> Result<(), AlephError> {
         let embedding = memory
             .embedding
-            .ok_or_else(|| AetherError::config("Cannot insert memory without embedding"))?;
+            .ok_or_else(|| AlephError::config("Cannot insert memory without embedding"))?;
 
         // Serialize embedding to bytes for main table
         let embedding_bytes = Self::serialize_embedding(&embedding);
@@ -386,7 +386,7 @@ In `core/src/memory/database/memory_ops.rs`, update `insert_memory`:
                 memory.context.topic_id,
             ],
         )
-        .map_err(|e| AetherError::config(format!("Failed to insert memory: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert memory: {}", e)))?;
 
         // Get the rowid of the inserted memory for vec0 table
         let rowid: i64 = conn
@@ -395,7 +395,7 @@ In `core/src/memory/database/memory_ops.rs`, update `insert_memory`:
                 params![memory.id],
                 |row| row.get(0),
             )
-            .map_err(|e| AetherError::config(format!("Failed to get memory rowid: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to get memory rowid: {}", e)))?;
 
         // Insert into vec0 table with matching rowid
         // sqlite-vec expects the embedding as a blob
@@ -403,7 +403,7 @@ In `core/src/memory/database/memory_ops.rs`, update `insert_memory`:
             "INSERT INTO memories_vec (rowid, embedding) VALUES (?1, ?2)",
             params![rowid, embedding_bytes],
         )
-        .map_err(|e| AetherError::config(format!("Failed to insert into memories_vec: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert into memories_vec: {}", e)))?;
 
         Ok(())
     }
@@ -493,7 +493,7 @@ Replace the `search_memories` function in `core/src/memory/database/memory_ops.r
         window_title: &str,
         query_embedding: &[f32],
         limit: u32,
-    ) -> Result<Vec<MemoryEntry>, AetherError> {
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Serialize query embedding for sqlite-vec
@@ -523,7 +523,7 @@ Replace the `search_memories` function in `core/src/memory/database/memory_ops.r
                 LIMIT ?5
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         // Fetch more candidates to account for context filtering
         let fetch_limit = limit * 3;
@@ -559,9 +559,9 @@ Replace the `search_memories` function in `core/src/memory/database/memory_ops.r
                     })
                 },
             )
-            .map_err(|e| AetherError::config(format!("Failed to query memories: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query memories: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse memory rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse memory rows: {}", e)))?;
 
         Ok(memories)
     }
@@ -649,7 +649,7 @@ Expected: FAIL with "Vec table should be empty after delete"
 
 ```rust
     /// Delete memory by ID
-    pub async fn delete_memory(&self, id: &str) -> Result<(), AetherError> {
+    pub async fn delete_memory(&self, id: &str) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Get rowid before deleting from main table
@@ -660,21 +660,21 @@ Expected: FAIL with "Vec table should be empty after delete"
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| AetherError::config(format!("Failed to get memory rowid: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to get memory rowid: {}", e)))?;
 
         let rows_affected = conn
             .execute("DELETE FROM memories WHERE id = ?1", params![id])
-            .map_err(|e| AetherError::config(format!("Failed to delete memory: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to delete memory: {}", e)))?;
 
         if rows_affected == 0 {
-            return Err(AetherError::config(format!("Memory not found: {}", id)));
+            return Err(AlephError::config(format!("Memory not found: {}", id)));
         }
 
         // Delete from vec0 table using rowid
         if let Some(rid) = rowid {
             conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rid])
                 .map_err(|e| {
-                    AetherError::config(format!("Failed to delete from memories_vec: {}", e))
+                    AlephError::config(format!("Failed to delete from memories_vec: {}", e))
                 })?;
         }
 
@@ -762,14 +762,14 @@ Expected: FAIL
         &self,
         app_bundle_id: Option<&str>,
         window_title: Option<&str>,
-    ) -> Result<u64, AetherError> {
+    ) -> Result<u64, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // If clearing all, also clear vec table
         if app_bundle_id.is_none() && window_title.is_none() {
             conn.execute("DELETE FROM memories_vec", [])
                 .map_err(|e| {
-                    AetherError::config(format!("Failed to clear memories_vec: {}", e))
+                    AlephError::config(format!("Failed to clear memories_vec: {}", e))
                 })?;
         } else {
             // Get rowids to delete from vec table first
@@ -796,10 +796,10 @@ Expected: FAIL
                     .map(|s| s as &dyn rusqlite::ToSql)
                     .collect();
                 let mut stmt = conn.prepare(&query).map_err(|e| {
-                    AetherError::config(format!("Failed to prepare query: {}", e))
+                    AlephError::config(format!("Failed to prepare query: {}", e))
                 })?;
                 stmt.query_map(params_refs.as_slice(), |row| row.get(0))
-                    .map_err(|e| AetherError::config(format!("Failed to query rowids: {}", e)))?
+                    .map_err(|e| AlephError::config(format!("Failed to query rowids: {}", e)))?
                     .filter_map(|r| r.ok())
                     .collect()
             };
@@ -834,7 +834,7 @@ Expected: FAIL
 
         let rows_affected = conn
             .execute(&query, params_refs.as_slice())
-            .map_err(|e| AetherError::config(format!("Failed to clear memories: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to clear memories: {}", e)))?;
 
         Ok(rows_affected as u64)
     }
@@ -916,16 +916,16 @@ Expected: FAIL
     ///
     /// Used when deleting a multi-turn conversation topic to ensure
     /// all related memories are also removed from the database.
-    pub async fn delete_by_topic_id(&self, topic_id: &str) -> Result<u64, AetherError> {
+    pub async fn delete_by_topic_id(&self, topic_id: &str) -> Result<u64, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Get rowids before deleting
         let rowids: Vec<i64> = {
             let mut stmt = conn
                 .prepare("SELECT rowid FROM memories WHERE topic_id = ?1")
-                .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
             stmt.query_map(params![topic_id], |row| row.get(0))
-                .map_err(|e| AetherError::config(format!("Failed to query rowids: {}", e)))?
+                .map_err(|e| AlephError::config(format!("Failed to query rowids: {}", e)))?
                 .filter_map(|r| r.ok())
                 .collect()
         };
@@ -942,7 +942,7 @@ Expected: FAIL
                 params![topic_id],
             )
             .map_err(|e| {
-                AetherError::config(format!("Failed to delete memories by topic_id: {}", e))
+                AlephError::config(format!("Failed to delete memories by topic_id: {}", e))
             })?;
 
         tracing::info!(
@@ -1027,14 +1027,14 @@ Expected: FAIL
 
 ```rust
     /// Insert a memory fact into the database
-    pub async fn insert_fact(&self, fact: MemoryFact) -> Result<(), AetherError> {
+    pub async fn insert_fact(&self, fact: MemoryFact) -> Result<(), AlephError> {
         let embedding_bytes = fact
             .embedding
             .as_ref()
             .map(|e| Self::serialize_embedding(e));
 
         let source_ids_json = serde_json::to_string(&fact.source_memory_ids)
-            .map_err(|e| AetherError::config(format!("Failed to serialize source_ids: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to serialize source_ids: {}", e)))?;
 
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
@@ -1057,7 +1057,7 @@ Expected: FAIL
                 fact.invalidation_reason,
             ],
         )
-        .map_err(|e| AetherError::config(format!("Failed to insert fact: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to insert fact: {}", e)))?;
 
         // Sync to facts_vec if embedding exists
         if let Some(ref emb_bytes) = embedding_bytes {
@@ -1067,13 +1067,13 @@ Expected: FAIL
                     params![fact.id],
                     |row| row.get(0),
                 )
-                .map_err(|e| AetherError::config(format!("Failed to get fact rowid: {}", e)))?;
+                .map_err(|e| AlephError::config(format!("Failed to get fact rowid: {}", e)))?;
 
             conn.execute(
                 "INSERT INTO facts_vec (rowid, embedding) VALUES (?1, ?2)",
                 params![rowid, emb_bytes],
             )
-            .map_err(|e| AetherError::config(format!("Failed to insert into facts_vec: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to insert into facts_vec: {}", e)))?;
         }
 
         Ok(())
@@ -1091,7 +1091,7 @@ Similarly update `insert_facts` for batch operations.
         query_embedding: &[f32],
         limit: u32,
         include_invalid: bool,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let query_bytes = Self::serialize_embedding(query_embedding);
 
@@ -1134,7 +1134,7 @@ Similarly update `insert_facts` for batch operations.
 
         let mut stmt = conn
             .prepare(query)
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let facts = stmt
             .query_map(params![query_bytes, limit], |row| {
@@ -1168,9 +1168,9 @@ Similarly update `insert_facts` for batch operations.
                     similarity_score: Some(similarity as f32),
                 })
             })
-            .map_err(|e| AetherError::config(format!("Failed to query facts: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse fact rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse fact rows: {}", e)))?;
 
         Ok(facts)
     }
@@ -1269,7 +1269,7 @@ EOF
         query_embedding: &[f32],
         threshold: f32,
         exclude_id: Option<&str>,
-    ) -> Result<Vec<MemoryFact>, AetherError> {
+    ) -> Result<Vec<MemoryFact>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let query_bytes = Self::serialize_embedding(query_embedding);
 
@@ -1296,7 +1296,7 @@ EOF
                 ORDER BY vm.distance
                 "#,
             )
-            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let facts: Vec<MemoryFact> = stmt
             .query_map(params![query_bytes, limit], |row| {
@@ -1330,9 +1330,9 @@ EOF
                     similarity_score: Some(similarity as f32),
                 })
             })
-            .map_err(|e| AetherError::config(format!("Failed to query facts: {}", e)))?
+            .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AetherError::config(format!("Failed to parse fact rows: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to parse fact rows: {}", e)))?;
 
         // Filter by threshold and exclude_id
         let similar_facts: Vec<MemoryFact> = facts
@@ -1384,7 +1384,7 @@ When upgrading from old schema (no vec0 tables), we need to populate vec0 tables
 
 ```rust
     /// Migrate existing memories to vec0 tables
-    fn migrate_to_vec0(conn: &Connection) -> Result<(), AetherError> {
+    fn migrate_to_vec0(conn: &Connection) -> Result<(), AlephError> {
         // Check if migration needed (vec tables exist but empty, memories table has data)
         let memories_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
@@ -1409,7 +1409,7 @@ When upgrading from old schema (no vec0 tables), we need to populate vec0 tables
                 [],
             )
             .map_err(|e| {
-                AetherError::config(format!("Failed to migrate memories to vec0: {}", e))
+                AlephError::config(format!("Failed to migrate memories to vec0: {}", e))
             })?;
 
             tracing::info!("Memories migration complete");
@@ -1442,7 +1442,7 @@ When upgrading from old schema (no vec0 tables), we need to populate vec0 tables
                 [],
             )
             .map_err(|e| {
-                AetherError::config(format!("Failed to migrate facts to vec0: {}", e))
+                AlephError::config(format!("Failed to migrate facts to vec0: {}", e))
             })?;
 
             tracing::info!("Facts migration complete");

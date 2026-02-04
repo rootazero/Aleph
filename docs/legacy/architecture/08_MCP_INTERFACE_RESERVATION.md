@@ -143,7 +143,7 @@ MCP 协议定义了三种核心抽象：
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Aether Agent (Client)                              │
+│  Aleph Agent (Client)                              │
 │  ┌───────────────────────────────────────────────┐  │
 │  │  McpClient (JSON-RPC 2.0)                     │  │
 │  │  ├─ list_resources()                          │  │
@@ -479,7 +479,7 @@ impl CapabilityExecutor {
         // 1. 检查 McpClient 是否可用
         let mcp_client = self.mcp_client
             .as_ref()
-            .ok_or_else(|| AetherError::McpNotAvailable)?;
+            .ok_or_else(|| AlephError::McpNotAvailable)?;
 
         // 2. 根据 Intent 决定调用类型
         let mcp_context = match &payload.meta.intent {
@@ -586,7 +586,7 @@ impl McpClient {
         let servers = self.servers.lock().await;
         let server = servers
             .get(&server_name)
-            .ok_or_else(|| AetherError::McpServerNotFound(server_name))?;
+            .ok_or_else(|| AlephError::McpServerNotFound(server_name))?;
 
         server.read_resource(uri).await
     }
@@ -621,7 +621,7 @@ impl McpClient {
             }
         }
 
-        Err(AetherError::McpToolNotFound(tool_name.to_string()))
+        Err(AlephError::McpToolNotFound(tool_name.to_string()))
     }
 
     /// 🔮 获取 Prompt 模板（阶段 3）
@@ -660,7 +660,7 @@ impl McpClient {
         // 例如: "file:///..." -> "filesystem"
         //      "postgres://..." -> "postgres"
         let scheme = uri.split("://").next()
-            .ok_or_else(|| AetherError::InvalidUri(uri.to_string()))?;
+            .ok_or_else(|| AlephError::InvalidUri(uri.to_string()))?;
 
         Ok(scheme.to_string())
     }
@@ -867,7 +867,7 @@ impl McpServerConnection {
         match response.payload {
             JsonRpcPayload::Success { result } => Ok(result),
             JsonRpcPayload::Error { error } => {
-                Err(AetherError::McpError(error.message))
+                Err(AlephError::McpError(error.message))
             }
         }
     }
@@ -942,7 +942,7 @@ impl Drop for McpServerConnection {
 
 ### 4.1 MCP Server 配置
 
-**文件**: `~/.aether/config.toml`
+**文件**: `~/.aleph/config.toml`
 
 ```toml
 [mcp]
@@ -1173,7 +1173,7 @@ mcp_resource_filter = "*.md"  # 仅读取 Markdown 文件
 **文件结构**:
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── mcp/                         # 🔮 MCP 模块（阶段 3 新建）
 │   ├── mod.rs                   # 模块导出
 │   ├── client.rs                # McpClient
@@ -1249,7 +1249,7 @@ impl McpServerManager {
     /// 重启指定 Server
     pub async fn restart_server(&mut self, name: &str) -> Result<()> {
         let server_config = self.config.servers.get(name)
-            .ok_or_else(|| AetherError::McpServerNotFound(name.to_string()))?;
+            .ok_or_else(|| AlephError::McpServerNotFound(name.to_string()))?;
 
         // 停止旧连接
         let mut servers = self.servers.lock().await;
@@ -1660,7 +1660,7 @@ impl MockMcpServer {
                     "content": [{ "type": "text", "text": "Tool result" }]
                 }))
             }
-            _ => Err(AetherError::McpError(format!("Unknown method: {}", method))),
+            _ => Err(AlephError::McpError(format!("Unknown method: {}", method))),
         }
     }
 }
@@ -1829,7 +1829,7 @@ impl McpClient {
     async fn call_tool(&self, name: &str, args: Option<Value>) -> Result<McpToolResult> {
         // 检查权限
         if !self.is_tool_allowed(name) {
-            return Err(AetherError::ToolNotAllowed(name.to_string()));
+            return Err(AlephError::ToolNotAllowed(name.to_string()));
         }
 
         // 检查是否需要确认
@@ -1837,7 +1837,7 @@ impl McpClient {
             // 触发用户确认对话框
             let confirmed = self.request_user_confirmation(name, &args).await?;
             if !confirmed {
-                return Err(AetherError::ToolCallCancelled);
+                return Err(AlephError::ToolCallCancelled);
             }
         }
 

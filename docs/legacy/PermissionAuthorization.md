@@ -130,7 +130,7 @@ struct PermissionGateView: View {
                 .foregroundColor(.blue)
                 .padding(.bottom, 20)
             
-            Text("Aether 需要系统授权")
+            Text("Aleph 需要系统授权")
                 .font(.title)
                 .fontWeight(.bold)
             
@@ -186,7 +186,7 @@ struct PermissionGateView: View {
                         .foregroundColor(.secondary)
                         .padding(.top, 2)
                     
-                    Button("进入 Aether") {
+                    Button("进入 Aleph") {
                         // 在这里切换你的主视图，或者关闭当前窗口
                         // 甚至可以提供一个 "Relaunch App" 的按钮
                         restartApp()
@@ -264,17 +264,17 @@ struct PermissionRow: View {
 
 移除了自动重启： 在 PermissionManager 的 checkPermissions 中，当检测到 accessibilityGranted 变为 true 时，代码只是单纯地更新变量。这直接解决了你的闪退问题。
 
-输入监控的特殊性： 注意 checkInputMonitoringStatus。如果用户在系统设置里勾选了 Input Monitoring，macOS 可能会强制弹窗要求重启。如果 macOS 没有强制杀掉你的 app，你的 manager 会检测到状态变为 true，此时 UI 会显示绿色的勾，并出现“进入 Aether”按钮。
+输入监控的特殊性： 注意 checkInputMonitoringStatus。如果用户在系统设置里勾选了 Input Monitoring，macOS 可能会强制弹窗要求重启。如果 macOS 没有强制杀掉你的 app，你的 manager 会检测到状态变为 true，此时 UI 会显示绿色的勾，并出现“进入 Aleph”按钮。
 
-如果用户点击了“进入 Aether”，我们提供了一个 restartApp() 函数。这把“自杀”的权力交到了用户手里，而不是代码自动触发，体验会顺滑很多。
+如果用户点击了“进入 Aleph”，我们提供了一个 restartApp() 函数。这把“自杀”的权力交到了用户手里，而不是代码自动触发，体验会顺滑很多。
 
 接下来的一步
 
-你可以把这两段代码分别保存，然后在你的 App 入口处（例如 AetherApp.swift）这样写：
+你可以把这两段代码分别保存，然后在你的 App 入口处（例如 AlephApp.swift）这样写：
 
 Swift
 @main
-struct AetherApp: App {
+struct AlephApp: App {
     // 简单的逻辑判断：如果权限不够，显示 GateView，否则显示 MainView
     // 注意：实际项目中建议在 PermissionManager 里加一个 computed property 来决定
     var body: some Scene {
@@ -448,7 +448,7 @@ API: CGEventTapCreate 或 IOHIDManager
 
 3. 为什么在 Xcode 调试环境下问题更严重？
 
-日志中显示你的应用路径在 DerivedData： /Users/zouguojun/Library/Developer/Xcode/DerivedData/Aether-.../Debug/Aether.app
+日志中显示你的应用路径在 DerivedData： /Users/zouguojun/Library/Developer/Xcode/DerivedData/Aleph-.../Debug/Aleph.app
 
 在开发环境（Debug）测试 TCC 权限是极度痛苦的，原因如下：
 
@@ -474,7 +474,7 @@ API: CGEventTapCreate 或 IOHIDManager
 
 对于 Input Monitoring，不要在代码里做“自动检测到授权就重启”。
 
-最佳实践： 当检测到 Input Monitoring 尚未授权时，显示指引 UI。当用户去系统设置里勾选后，macOS 系统会自动弹窗提示用户“Aether 需要退出才能生效”，或者用户手动切回应用。
+最佳实践： 当检测到 Input Monitoring 尚未授权时，显示指引 UI。当用户去系统设置里勾选后，macOS 系统会自动弹窗提示用户“Aleph 需要退出才能生效”，或者用户手动切回应用。
 
 如果系统没有杀掉应用，建议你在 UI 上显示一个显眼的按钮：“授权完成，请重启应用”，让用户手动点击重启，或者点击后你再执行重启逻辑。将控制权交给用户。
 

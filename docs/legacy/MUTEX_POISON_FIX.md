@@ -39,12 +39,12 @@ sed 's/config\.lock()\.unwrap()/config.lock().unwrap_or_else(|e| e.into_inner())
 
 ## About "y?" Character
 
-This is likely **user input** in Notes.app, not Aether output. When testing with unselected text, if the execution fails early (due to PoisonError), no AI response is generated, so the "y?" you saw was probably text you typed yourself while testing.
+This is likely **user input** in Notes.app, not Aleph output. When testing with unselected text, if the execution fails early (due to PoisonError), no AI response is generated, so the "y?" you saw was probably text you typed yourself while testing.
 
 ## Build Status
 
 ✅ **Rust core rebuilt** (9.5MB, 2025-12-31 20:42)
-✅ **libaethecore.dylib updated** in Aether/Frameworks/
+✅ **libalephcore.dylib updated** in Aleph/Frameworks/
 ⏳ **Xcode project needs rebuild** (user will do via Xcode)
 
 ## Testing Plan
@@ -70,7 +70,7 @@ This is likely **user input** in Notes.app, not Aether output. When testing with
 
 ## Next Steps
 
-1. **Open Xcode**: `open Aether.xcodeproj`
+1. **Open Xcode**: `open Aleph.xcodeproj`
 2. **Clean Build** (Cmd+Shift+K)
 3. **Build** (Cmd+B)
 4. **Run** (Cmd+R)

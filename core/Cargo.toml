@@ -1,12 +1,12 @@
 [package]
-name = "aethecore"
+name = "alephcore"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
 
 [lib]
 crate-type = ["rlib"]
-name = "aethecore"
+name = "alephcore"
 
 [features]
 # Default: Gateway-only architecture (no FFI)
@@ -189,8 +189,8 @@ inquire = { version = "0.7", optional = true }
 # No build dependencies - using Gateway WebSocket architecture
 
 [[bin]]
-name = "aether-gateway"
-path = "src/bin/aether_gateway/main.rs"
+name = "aleph-gateway"
+path = "src/bin/aleph_gateway/main.rs"
 required-features = ["gateway"]
 
 [dev-dependencies]

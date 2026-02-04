@@ -7,7 +7,7 @@
 use super::manager::{RuntimeInfo, RuntimeManager, UpdateInfo};
 use super::manifest::Manifest;
 use super::{get_runtimes_dir, FfmpegRuntime, FnmRuntime, UvRuntime, YtDlpRuntime};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ impl RuntimeRegistry {
 
         // Ensure directory exists
         std::fs::create_dir_all(&runtimes_dir).map_err(|e| {
-            AetherError::runtime(
+            AlephError::runtime(
                 "registry",
                 format!("Failed to create runtimes directory: {}", e),
             )
@@ -97,7 +97,7 @@ impl RuntimeRegistry {
         let runtime = self
             .runtimes
             .get(id)
-            .ok_or_else(|| AetherError::runtime("registry", format!("Unknown runtime: {}", id)))?;
+            .ok_or_else(|| AlephError::runtime("registry", format!("Unknown runtime: {}", id)))?;
 
         if !runtime.is_installed() {
             info!(runtime_id = %id, "Runtime not installed, installing...");
@@ -177,10 +177,10 @@ impl RuntimeRegistry {
         let runtime = self
             .runtimes
             .get(id)
-            .ok_or_else(|| AetherError::runtime("registry", format!("Unknown runtime: {}", id)))?;
+            .ok_or_else(|| AlephError::runtime("registry", format!("Unknown runtime: {}", id)))?;
 
         if !runtime.is_installed() {
-            return Err(AetherError::runtime(
+            return Err(AlephError::runtime(
                 id,
                 "Cannot update: runtime is not installed",
             ));

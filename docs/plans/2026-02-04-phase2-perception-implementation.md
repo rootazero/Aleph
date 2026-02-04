@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task.
 
-**Goal:** Implement Aether's Perception Layer with 4 Watchers (Process, File, Time, System) that monitor OS-level events and publish them to a dedicated EventBus.
+**Goal:** Implement Aleph's Perception Layer with 4 Watchers (Process, File, Time, System) that monitor OS-level events and publish them to a dedicated EventBus.
 
 **Architecture:** Build an event-driven sensing system with configurable Watchers, using tokio::broadcast for event distribution and tokio::sync::watch for lifecycle control. Level 0 Watchers (always-on) and Level 1 Watchers (pausable) enable adaptive resource management.
 
@@ -438,7 +438,7 @@ impl Default for PerceptionConfig {
 }
 
 impl PerceptionConfig {
-    /// Load configuration from ~/.aether/perception.toml
+    /// Load configuration from ~/.aleph/perception.toml
     pub fn load() -> Result<Self> {
         let path = dirs::home_dir()
             .ok_or_else(|| DaemonError::Config("HOME environment variable not set".into()))?
@@ -533,7 +533,7 @@ git commit -m "feat(daemon): add perception configuration system
 
 - Add PerceptionConfig with sub-configs for all watchers
 - Support TOML serialization/deserialization
-- Load from ~/.aether/perception.toml with fallback to defaults
+- Load from ~/.aleph/perception.toml with fallback to defaults
 - Path expansion support for ~ in filesystem paths"
 ```
 
@@ -1750,7 +1750,7 @@ Find the `run()` method in `DaemonCli` implementation and replace it with:
 
 ```rust
 async fn run(&self) -> Result<()> {
-    info!("Starting Aether daemon with Perception Layer...");
+    info!("Starting Aleph daemon with Perception Layer...");
 
     // 1. Load configurations
     let config = DaemonConfig::default();
@@ -1834,10 +1834,10 @@ use tracing::{error, info};
 
 **Step 3: Manual integration test**
 
-Run: `cargo run -p aethecore -- daemon run`
+Run: `cargo run -p alephcore -- daemon run`
 
 Expected behavior:
-- Daemon starts with message "Starting Aether daemon with Perception Layer..."
+- Daemon starts with message "Starting Aleph daemon with Perception Layer..."
 - Shows "Registered 4 watchers" (or fewer if some disabled)
 - Each watcher logs its startup
 - Heartbeat events appear every 30 seconds
@@ -2003,7 +2003,7 @@ Create `core/src/daemon/perception/README.md`:
 ```markdown
 # Perception Layer
 
-The Perception Layer is Aether's "sensory system" - a collection of Watchers that monitor OS-level events and convert them into structured events for higher-level reasoning.
+The Perception Layer is Aleph's "sensory system" - a collection of Watchers that monitor OS-level events and convert them into structured events for higher-level reasoning.
 
 ## Architecture
 
@@ -2053,7 +2053,7 @@ The Perception Layer is Aether's "sensory system" - a collection of Watchers tha
 
 ## Configuration
 
-**File:** `~/.aether/perception.toml`
+**File:** `~/.aleph/perception.toml`
 
 ```toml
 enabled = true
@@ -2107,7 +2107,7 @@ Control events:
 ## Usage
 
 ```rust
-use aethecore::daemon::{
+use alephcore::daemon::{
     DaemonEventBus, PerceptionConfig, WatcherRegistry,
     perception::watchers::*,
 };
@@ -2146,7 +2146,7 @@ cargo test --lib daemon::tests::perception_integration
 
 Manual daemon test:
 ```bash
-cargo run -p aethecore -- daemon run
+cargo run -p alephcore -- daemon run
 ```
 
 ## Performance
@@ -2189,10 +2189,10 @@ The Perception Layer continuously monitors OS-level events and publishes them to
 **Quick Start:**
 ```bash
 # Run daemon with perception layer
-cargo run -p aethecore -- daemon run
+cargo run -p alephcore -- daemon run
 
 # Check configuration
-cat ~/.aether/perception.toml
+cat ~/.aleph/perception.toml
 ```
 ```
 
@@ -2216,11 +2216,11 @@ After implementing all tasks:
 
 - [ ] All unit tests pass (`cargo test --lib daemon`)
 - [ ] Integration tests pass (non-ignored)
-- [ ] Manual daemon test successful (`cargo run -p aethecore -- daemon run`)
+- [ ] Manual daemon test successful (`cargo run -p alephcore -- daemon run`)
 - [ ] All 4 watchers emit events correctly
 - [ ] Resource usage within budget (<5% CPU, <50MB RAM)
 - [ ] Graceful shutdown works (Ctrl+C)
-- [ ] Configuration loading from `~/.aether/perception.toml` works
+- [ ] Configuration loading from `~/.aleph/perception.toml` works
 - [ ] Level 1 watcher (FSEventWatcher) can be paused/resumed
 - [ ] Documentation complete and accurate
 

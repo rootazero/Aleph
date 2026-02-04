@@ -21,8 +21,8 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::agent_loop::{LoopState, RequestContext, SessionSync};
-//! use aethecore::components::ExecutionSession;
+//! use alephcore::agent_loop::{LoopState, RequestContext, SessionSync};
+//! use alephcore::components::ExecutionSession;
 //!
 //! let loop_state = LoopState::new("session-1".into(), "Hello".into(), RequestContext::empty());
 //! let session = SessionSync::to_execution_session(&loop_state);

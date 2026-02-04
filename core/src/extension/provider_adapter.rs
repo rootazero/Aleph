@@ -22,7 +22,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::extension::{PluginProviderAdapter, ProviderChatRequest};
+//! use alephcore::extension::{PluginProviderAdapter, ProviderChatRequest};
 //!
 //! // Create adapter from a provider registration
 //! let adapter = PluginProviderAdapter::new(registration, loader);

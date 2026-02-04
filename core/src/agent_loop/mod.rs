@@ -35,7 +35,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use aethecore::agent_loop::{AgentLoop, LoopConfig, NoOpLoopCallback};
+//! use alephcore::agent_loop::{AgentLoop, LoopConfig, NoOpLoopCallback};
 //!
 //! let config = LoopConfig::default();
 //! let agent_loop = AgentLoop::new(thinker, executor, compressor, config);

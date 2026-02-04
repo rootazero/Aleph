@@ -12,7 +12,7 @@ use crate::dispatcher::agent_types::{
     AiTask, AppAuto, AudioGenTask, CodeExec, DocGen, FileOp, ImageGenTask, Language, Task,
     TaskDependency, TaskGraph, TaskType, VideoGenTask,
 };
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 
 /// LLM-based task planner
@@ -34,7 +34,7 @@ impl LlmTaskPlanner {
         // Parse the JSON
         let plan: PlanResponse = serde_json::from_str(&json_str).map_err(|e| {
             error!("Failed to parse LLM response as JSON: {}", e);
-            AetherError::Other {
+            AlephError::Other {
                 message: format!("Invalid task plan JSON: {}", e),
                 suggestion: Some(
                     "The AI response was not valid JSON. Try rephrasing your request.".to_string(),
@@ -77,7 +77,7 @@ impl LlmTaskPlanner {
         // Validate the graph
         graph.validate().map_err(|e| {
             error!("Generated task graph is invalid: {}", e);
-            AetherError::Other {
+            AlephError::Other {
                 message: format!("Invalid task graph: {}", e),
                 suggestion: Some(
                     "The generated task graph has issues. Try rephrasing your request.".to_string(),
@@ -289,7 +289,7 @@ impl TaskPlanner for LlmTaskPlanner {
             .await
             .map_err(|e| {
                 error!("LLM planning request failed: {}", e);
-                AetherError::provider(format!("Planning failed: {}", e))
+                AlephError::provider(format!("Planning failed: {}", e))
             })?;
 
         debug!("Received LLM response, parsing...");
@@ -322,7 +322,7 @@ impl TaskPlanner for LlmTaskPlanner {
             .await
             .map_err(|e| {
                 error!("LLM planning request failed: {}", e);
-                AetherError::provider(format!("Planning failed: {}", e))
+                AlephError::provider(format!("Planning failed: {}", e))
             })?;
 
         debug!("Received LLM response, parsing...");
@@ -370,7 +370,7 @@ fn extract_json(response: &str) -> Result<String> {
         }
     }
 
-    Err(AetherError::Other {
+    Err(AlephError::Other {
         message: "Could not find JSON in response".to_string(),
         suggestion: Some(
             "The AI did not return a valid task plan. Try rephrasing your request.".to_string(),

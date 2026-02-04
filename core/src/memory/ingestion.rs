@@ -3,7 +3,7 @@
 /// This module handles storage of new interactions after successful AI responses.
 /// Process: PII scrubbing → embedding generation → database storage
 use crate::config::MemoryConfig;
-use crate::error::AetherError;
+use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::database::VectorDatabase;
 use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
@@ -57,7 +57,7 @@ impl MemoryIngestion {
         context: ContextAnchor,
         user_input: &str,
         ai_output: &str,
-    ) -> Result<String, AetherError> {
+    ) -> Result<String, AlephError> {
         record_activity();
         debug!(
             app = %context.app_bundle_id,
@@ -70,13 +70,13 @@ impl MemoryIngestion {
         // 1. Check if memory is enabled
         if !self.config.enabled {
             debug!("Memory ingestion skipped: memory disabled");
-            return Err(AetherError::config("Memory is disabled"));
+            return Err(AlephError::config("Memory is disabled"));
         }
 
         // 2. Check if app is excluded
         if self.config.excluded_apps.contains(&context.app_bundle_id) {
             debug!(app = %context.app_bundle_id, "Memory ingestion skipped: app excluded");
-            return Err(AetherError::config(format!(
+            return Err(AlephError::config(format!(
                 "App is excluded from memory: {}",
                 context.app_bundle_id
             )));
@@ -106,7 +106,7 @@ impl MemoryIngestion {
             .embedder
             .embed(&combined_text)
             .await
-            .map_err(|e| AetherError::config(format!("Failed to generate embedding: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to generate embedding: {}", e)))?;
 
         debug!(
             embedding_dim = embedding.len(),
@@ -127,7 +127,7 @@ impl MemoryIngestion {
         self.database
             .insert_memory(memory)
             .await
-            .map_err(|e| AetherError::config(format!("Failed to store memory: {}", e)))?;
+            .map_err(|e| AlephError::config(format!("Failed to store memory: {}", e)))?;
 
         info!(
             memory_id = %memory_id,

@@ -1,6 +1,6 @@
-# Aether Plugin System
+# Aleph Plugin System
 
-Aether's plugin system is fully compatible with Claude Code CLI plugins. Any Claude Code plugin (official or third-party) can be installed and used in Aether without modification.
+Aleph's plugin system is fully compatible with Claude Code CLI plugins. Any Claude Code plugin (official or third-party) can be installed and used in Aleph without modification.
 
 ## Overview
 
@@ -13,10 +13,10 @@ The plugin system supports:
 
 ## Plugin Directory Structure
 
-Plugins are installed in `~/.aether/plugins/`. Each plugin follows the Claude Code directory structure:
+Plugins are installed in `~/.aleph/plugins/`. Each plugin follows the Claude Code directory structure:
 
 ```
-~/.aether/plugins/
+~/.aleph/plugins/
 └── my-plugin/
     ├── .claude-plugin/
     │   └── plugin.json       # Plugin manifest (required)
@@ -116,7 +116,7 @@ Hooks respond to events during AI processing:
 
 ### Hook Events
 
-| Event | Description | Aether EventType |
+| Event | Description | Aleph EventType |
 |-------|-------------|------------------|
 | `PreToolUse` | Before tool execution | `ToolCallRequested` |
 | `PostToolUse` | After tool execution | `ToolCallCompleted` |
@@ -156,14 +156,14 @@ Configure MCP servers in `.mcp.json`:
 
 ### Runtime Resolution
 
-MCP server commands are resolved through Aether's runtime system:
+MCP server commands are resolved through Aleph's runtime system:
 
 - `npx`, `node` → Resolved via fnm (Node.js)
 - `uvx`, `python`, `python3` → Resolved via uv (Python)
 
 ## FFI API
 
-Aether provides both synchronous and asynchronous FFI APIs for plugin management. The async API (UniFFI 0.31+) is recommended for new code.
+Aleph provides both synchronous and asynchronous FFI APIs for plugin management. The async API (UniFFI 0.31+) is recommended for new code.
 
 ### Swift Integration (Async - Recommended)
 
@@ -286,7 +286,7 @@ enum ExtensionAsyncError: Error {
 
 ## Plugin State Persistence
 
-Plugin enable/disable state is stored in `~/.aether/plugins.json`:
+Plugin enable/disable state is stored in `~/.aleph/plugins.json`:
 
 ```json
 {
@@ -318,7 +318,7 @@ The plugin system uses a layered architecture with separate discovery and extens
 │  │  │             │  │             │  │             │   │  │
 │  │  │ Discover:   │  │ Path utils: │  │ Component   │   │  │
 │  │  │ - ~/.claude/│  │ - aether_   │  │ types and   │   │  │
-│  │  │ - ~/.aether/│  │   home()    │  │ discovery   │   │  │
+│  │  │ - ~/.aleph/│  │   home()    │  │ discovery   │   │  │
 │  │  │ - .claude/  │  │ - git_root()│  │ sources     │   │  │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘   │  │
 │  └──────────────────────────────────────────────────────┘  │
@@ -398,7 +398,7 @@ core/src/
 
 The plugin system is designed to be 100% compatible with Claude Code plugins:
 
-| Feature | Claude Code | Aether |
+| Feature | Claude Code | Aleph |
 |---------|-------------|--------|
 | plugin.json manifest | ✅ | ✅ |
 | SKILL.md commands | ✅ | ✅ |

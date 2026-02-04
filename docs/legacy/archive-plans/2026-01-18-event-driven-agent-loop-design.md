@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document describes the redesign of Aether's agent execution system, transitioning from a single-pass processing model to an event-driven agentic loop architecture. The goal is to enable multi-step task execution with intelligent planning, tool chaining, and robust error recovery.
+This document describes the redesign of Aleph's agent execution system, transitioning from a single-pass processing model to an event-driven agentic loop architecture. The goal is to enable multi-step task execution with intelligent planning, tool chaining, and robust error recovery.
 
 ## Design Decisions
 
@@ -37,7 +37,7 @@ pub struct EventBus {
 }
 
 // Unified event enum (type-safe)
-pub enum AetherEvent {
+pub enum AlephEvent {
     // Input events
     InputReceived(InputEvent),
 
@@ -75,7 +75,7 @@ pub enum AetherEvent {
 }
 
 pub struct TimestampedEvent {
-    pub event: AetherEvent,
+    pub event: AlephEvent,
     pub timestamp: i64,
     pub sequence: u64,
 }
@@ -198,7 +198,7 @@ impl EventHandler for LoopController {
         -> Result<Vec<AetherEvent>>
     {
         match event {
-            AetherEvent::ToolCallCompleted(result) => {
+            AlephEvent::ToolCallCompleted(result) => {
                 // 1. Check guard conditions
                 if let Some(stop) = self.check_guards(ctx).await? {
                     return Ok(vec![AetherEvent::LoopStop(stop)]);
@@ -217,7 +217,7 @@ impl EventHandler for LoopController {
                         Ok(vec![AetherEvent::UserQuestionAsked(question)]),
                 }
             }
-            AetherEvent::PlanCreated(plan) => {
+            AlephEvent::PlanCreated(plan) => {
                 // Start executing the first step of the plan
                 if let Some(first_step) = plan.next_executable_step() {
                     Ok(vec![AetherEvent::ToolCallRequested(
@@ -630,12 +630,12 @@ impl EventHandler for SessionRecorder {
 impl SessionRecorder {
     fn event_to_part(&self, event: &AetherEvent) -> Option<SessionPart> {
         match event {
-            AetherEvent::InputReceived(input) => Some(SessionPart::UserInput(UserInputPart {
+            AlephEvent::InputReceived(input) => Some(SessionPart::UserInput(UserInputPart {
                 text: input.text.clone(),
                 context: input.context.clone(),
                 timestamp: input.timestamp,
             })),
-            AetherEvent::ToolCallCompleted(result) => Some(SessionPart::ToolCall(ToolCallPart {
+            AlephEvent::ToolCallCompleted(result) => Some(SessionPart::ToolCall(ToolCallPart {
                 id: result.call_id.clone(),
                 tool_name: result.tool.clone(),
                 input: result.input.clone(),
@@ -646,12 +646,12 @@ impl SessionRecorder {
                 completed_at: Some(result.completed_at),
                 token_usage: result.token_usage.clone(),
             })),
-            AetherEvent::AiResponseGenerated(response) => Some(SessionPart::AiResponse(AiResponsePart {
+            AlephEvent::AiResponseGenerated(response) => Some(SessionPart::AiResponse(AiResponsePart {
                 content: response.content.clone(),
                 reasoning: response.reasoning.clone(),
                 timestamp: response.timestamp,
             })),
-            AetherEvent::PlanCreated(plan) => Some(SessionPart::PlanCreated(PlanPart {
+            AlephEvent::PlanCreated(plan) => Some(SessionPart::PlanCreated(PlanPart {
                 plan: plan.clone(),
                 timestamp: chrono::Utc::now().timestamp(),
             })),
@@ -692,7 +692,7 @@ impl EventHandler for IntentAnalyzer {
     }
 
     async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<Vec<AetherEvent>> {
-        let AetherEvent::InputReceived(input) = event else { return Ok(vec![]) };
+        let AlephEvent::InputReceived(input) = event else { return Ok(vec![]) };
 
         // 1. Use existing classifier to get intent
         let intent = self.classifier.classify(&input.text).await?;
@@ -786,7 +786,7 @@ impl EventHandler for TaskPlanner {
     }
 
     async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<Vec<AetherEvent>> {
-        let AetherEvent::PlanRequested(request) = event else { return Ok(vec![]) };
+        let AlephEvent::PlanRequested(request) = event else { return Ok(vec![]) };
 
         // Get available tools list
         let tools = ctx.tools.list_available();
@@ -929,7 +929,7 @@ impl EventHandler for ToolExecutor {
     }
 
     async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<Vec<AetherEvent>> {
-        let AetherEvent::ToolCallRequested(request) = event else { return Ok(vec![]) };
+        let AlephEvent::ToolCallRequested(request) = event else { return Ok(vec![]) };
 
         // Record tool call start
         let call_id = uuid::Uuid::new_v4().to_string();
@@ -1329,7 +1329,7 @@ Please generate a summary (max 500 words):
 
 ```rust
 // Existing entry - maintain API compatibility
-impl AetherCore {
+impl AlephCore {
     pub fn process(&self, input: String, options: Option<ProcessOptions>) {
         let runtime = self.runtime.clone();
         let bus = self.event_bus.clone();
@@ -1364,9 +1364,9 @@ impl AetherCore {
     }
 }
 
-// AetherCore initialization
-impl AetherCore {
-    pub async fn new(config: AetherConfig, callback: Arc<dyn AetherEventCallback>) -> Result<Self> {
+// AlephCore initialization
+impl AlephCore {
+    pub async fn new(config: AlephConfig, callback: Arc<dyn AlephEventCallback>) -> Result<Self> {
         // Create event bus
         let event_bus = EventBus::new(1024);
 
@@ -1419,7 +1419,7 @@ impl AetherCore {
 ```rust
 // UniFFI callback definition
 #[uniffi::export(callback_interface)]
-pub trait AetherEventCallback: Send + Sync {
+pub trait AlephEventCallback: Send + Sync {
     fn on_session_started(&self, session_id: String);
     fn on_tool_call_started(&self, call_id: String, tool: String);
     fn on_tool_call_completed(&self, call_id: String, output: String);
@@ -1433,11 +1433,11 @@ pub trait AetherEventCallback: Send + Sync {
 
 // Event forwarder - convert internal events to callbacks
 pub struct CallbackBridge {
-    callback: Arc<dyn AetherEventCallback>,
+    callback: Arc<dyn AlephEventCallback>,
 }
 
 impl CallbackBridge {
-    pub fn new(callback: Arc<dyn AetherEventCallback>) -> Self {
+    pub fn new(callback: Arc<dyn AlephEventCallback>) -> Self {
         Self { callback }
     }
 }
@@ -1459,29 +1459,29 @@ impl EventHandler for CallbackBridge {
 
     async fn handle(&self, event: &AetherEvent, ctx: &EventContext) -> Result<Vec<AetherEvent>> {
         match event {
-            AetherEvent::SessionCreated(info) => {
+            AlephEvent::SessionCreated(info) => {
                 self.callback.on_session_started(info.id.clone());
             }
-            AetherEvent::ToolCallStarted(info) => {
+            AlephEvent::ToolCallStarted(info) => {
                 self.callback.on_tool_call_started(
                     info.call_id.clone(),
                     info.tool.clone()
                 );
             }
-            AetherEvent::ToolCallCompleted(result) => {
+            AlephEvent::ToolCallCompleted(result) => {
                 self.callback.on_tool_call_completed(
                     result.call_id.clone(),
                     result.output.to_string()
                 );
             }
-            AetherEvent::ToolCallFailed(error) => {
+            AlephEvent::ToolCallFailed(error) => {
                 self.callback.on_tool_call_failed(
                     error.call_id.clone(),
                     error.error.clone(),
                     error.is_retryable
                 );
             }
-            AetherEvent::LoopContinue(state) => {
+            AlephEvent::LoopContinue(state) => {
                 let session = ctx.session.read().await;
                 self.callback.on_progress_update(
                     session.id.clone(),
@@ -1489,7 +1489,7 @@ impl EventHandler for CallbackBridge {
                     format!("{:?}", state)
                 );
             }
-            AetherEvent::AiResponseGenerated(response) => {
+            AlephEvent::AiResponseGenerated(response) => {
                 let session_id = ctx.session.read().await.id.clone();
                 self.callback.on_response(
                     session_id,
@@ -1497,7 +1497,7 @@ impl EventHandler for CallbackBridge {
                     response.is_final
                 );
             }
-            AetherEvent::LoopStop(reason) => {
+            AlephEvent::LoopStop(reason) => {
                 let session = ctx.session.read().await;
                 match reason {
                     StopReason::Completed => {
@@ -1517,7 +1517,7 @@ impl EventHandler for CallbackBridge {
                     }
                 }
             }
-            AetherEvent::PlanCreated(plan) => {
+            AlephEvent::PlanCreated(plan) => {
                 let session_id = ctx.session.read().await.id.clone();
                 let steps: Vec<String> = plan.steps.iter()
                     .map(|s| s.description.clone())
@@ -1624,14 +1624,14 @@ User: "Search for Rust async best practices, then write an example code"
 ### File Structure Plan
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── lib.rs
 ├── aether.udl
 │
 ├── event/                      # New: Event system
 │   ├── mod.rs
 │   ├── bus.rs                  # EventBus implementation
-│   ├── types.rs                # AetherEvent enum
+│   ├── types.rs                # AlephEvent enum
 │   └── handler.rs              # EventHandler trait
 │
 ├── components/                 # New: Event handler components

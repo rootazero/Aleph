@@ -83,9 +83,9 @@ impl ConfigUiHints {
     /// # Examples
     ///
     /// ```ignore
-    /// use aethecore::config::ui_hints::ConfigUiHints;
+    /// use alephcore::config::ui_hints::ConfigUiHints;
     ///
-    /// let hints = aethecore::config::ui_hints::build_ui_hints();
+    /// let hints = alephcore::config::ui_hints::build_ui_hints();
     ///
     /// // Exact match
     /// let hint = hints.get_hint("general.language");
