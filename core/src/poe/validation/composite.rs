@@ -88,7 +88,7 @@ impl CompositeValidator {
             .hard_validator
             .validate_all(&manifest.hard_constraints)
             .await
-            .map_err(|e| crate::error::AetherError::other(e))?;
+            .map_err(crate::error::AetherError::other)?;
 
         // Check for hard failures
         let hard_failures: Vec<&RuleResult> =
@@ -326,13 +326,13 @@ impl CompositeValidator {
             .take(3)
             .filter_map(|r| {
                 // Extract suggestion from feedback if present
-                r.feedback.as_ref().and_then(|f| {
+                r.feedback.as_ref().map(|f| {
                     // Look for "Suggestion:" in feedback
                     if let Some(idx) = f.find("Suggestion:") {
-                        Some(f[idx + 11..].trim().to_string())
+                        f[idx + 11..].trim().to_string()
                     } else {
                         // Use the whole feedback if no explicit suggestion
-                        Some(format!("Improve: {}", truncate(f, 100)))
+                        format!("Improve: {}", truncate(f, 100))
                     }
                 })
             })

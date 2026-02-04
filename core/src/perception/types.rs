@@ -9,43 +9,34 @@ pub const COORDINATE_SPACE_SCREEN_TOP_LEFT: &str = "screen_points_top_left";
 /// Snapshot target type.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SnapshotTarget {
+    #[default]
     FrontmostWindow,
     Region,
 }
 
-impl Default for SnapshotTarget {
-    fn default() -> Self {
-        Self::FrontmostWindow
-    }
-}
 
 /// Image format for snapshots.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ImageFormat {
+    #[default]
     Png,
     Jpeg,
 }
 
-impl Default for ImageFormat {
-    fn default() -> Self {
-        Self::Png
-    }
-}
 
 /// Merge strategy for shadow DOM.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum MergeStrategy {
+    #[default]
     Iou,
 }
 
-impl Default for MergeStrategy {
-    fn default() -> Self {
-        Self::Iou
-    }
-}
 
 /// Focus hint source type.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

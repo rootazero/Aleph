@@ -2,13 +2,13 @@
 //!
 //! Implements host, Docker, and VirtualFs execution modes for Markdown CLI tools.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use anyhow::Result;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use super::spec::{NetworkMode, SandboxMode};
+use super::spec::NetworkMode;
 use super::tool_adapter::{MarkdownCliTool, MarkdownToolOutput};
 
 impl MarkdownCliTool {

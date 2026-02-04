@@ -290,9 +290,7 @@ const BINARY_THINKING_PROVIDERS: &[&str] = &["z.ai", "zai", "z-ai"];
 /// without granular level control.
 pub fn is_binary_thinking_provider(provider: &str) -> bool {
     let normalized = provider.trim().to_lowercase();
-    BINARY_THINKING_PROVIDERS
-        .iter()
-        .any(|p| *p == normalized.as_str())
+    BINARY_THINKING_PROVIDERS.contains(&normalized.as_str())
 }
 
 /// Check if model supports xhigh (extended) thinking
@@ -348,6 +346,7 @@ pub fn is_level_supported(level: ThinkLevel, provider: &str, model: &str) -> boo
 
 /// Configuration for thinking level in LLM requests
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ThinkingConfig {
     /// Requested thinking level
     pub level: ThinkLevel,
@@ -396,15 +395,6 @@ impl ThinkingConfig {
     }
 }
 
-impl Default for ThinkingConfig {
-    fn default() -> Self {
-        Self {
-            level: ThinkLevel::default(),
-            provider: String::new(),
-            model: String::new(),
-        }
-    }
-}
 
 // =============================================================================
 // ThinkingFallbackState
@@ -547,7 +537,7 @@ fn extract_supported_values(message: &str) -> Vec<String> {
     }
 
     // Fall back to comma/and separated values
-    text.split(|c| c == ',' || c == ' ')
+    text.split([',', ' '])
         .map(|s| {
             s.trim()
                 .trim_matches(|c: char| !c.is_alphabetic())

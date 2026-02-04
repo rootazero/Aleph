@@ -21,8 +21,10 @@ fn default_dm_policy() -> DmPolicy {
 /// DM (Direct Message) policy for unknown senders
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DmPolicy {
     /// Require pairing code for unknown senders
+    #[default]
     Pairing,
     /// Only allow senders in the allowlist
     Allowlist,
@@ -32,17 +34,14 @@ pub enum DmPolicy {
     Disabled,
 }
 
-impl Default for DmPolicy {
-    fn default() -> Self {
-        Self::Pairing
-    }
-}
 
 /// Group message policy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum GroupPolicy {
     /// Allow all groups (require mention by default)
+    #[default]
     Open,
     /// Only allow groups in the allowlist
     Allowlist,
@@ -50,11 +49,6 @@ pub enum GroupPolicy {
     Disabled,
 }
 
-impl Default for GroupPolicy {
-    fn default() -> Self {
-        Self::Open
-    }
-}
 
 /// iMessage channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

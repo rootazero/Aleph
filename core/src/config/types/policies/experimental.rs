@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 /// Controls experimental features that are still being tested.
 /// All flags default to `false` for backward compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Default)]
 pub struct ExperimentalPolicy {
     /// Use the new unified ExecutionIntentDecider instead of legacy IntentClassifier.
     ///
@@ -54,15 +55,6 @@ pub struct ExperimentalPolicy {
     pub verbose_decision_logging: bool,
 }
 
-impl Default for ExperimentalPolicy {
-    fn default() -> Self {
-        Self {
-            use_unified_intent_decider: false,
-            use_new_prompt_system: false,
-            verbose_decision_logging: false,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

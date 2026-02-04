@@ -257,10 +257,10 @@ pub fn build_skill_tool_description(skills: &[ExtensionSkill]) -> String {
     ];
 
     for skill in skills {
-        parts.push(format!("  <skill>"));
+        parts.push("  <skill>".to_string());
         parts.push(format!("    <name>{}</name>", skill.qualified_name()));
         parts.push(format!("    <description>{}</description>", skill.description));
-        parts.push(format!("  </skill>"));
+        parts.push("  </skill>".to_string());
     }
 
     parts.push("</available_skills>".to_string());

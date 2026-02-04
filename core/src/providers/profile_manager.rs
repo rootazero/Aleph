@@ -101,6 +101,7 @@ pub type ProfileManagerResult<T> = Result<T, ProfileManagerError>;
 
 /// Runtime status for a profile (not persisted)
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct RuntimeStatus {
     /// Whether the profile is currently rate limited
     pub is_rate_limited: bool,
@@ -115,16 +116,6 @@ pub struct RuntimeStatus {
     pub last_failure_reason: Option<AuthProfileFailureReason>,
 }
 
-impl Default for RuntimeStatus {
-    fn default() -> Self {
-        Self {
-            is_rate_limited: false,
-            cooldown_until: None,
-            failure_count: 0,
-            last_failure_reason: None,
-        }
-    }
-}
 
 impl RuntimeStatus {
     /// Check if currently in cooldown

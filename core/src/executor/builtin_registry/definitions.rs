@@ -155,7 +155,7 @@ pub fn create_tool_boxed(
         }
         "read_skill" => Some(Box::new(ReadSkillTool::default())),
         "list_skills" => Some(Box::new(SkillListTool::default())),
-        "snapshot_capture" => Some(Box::new(SnapshotCaptureTool::default())),
+        "snapshot_capture" => Some(Box::new(SnapshotCaptureTool)),
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().

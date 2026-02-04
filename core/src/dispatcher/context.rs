@@ -23,8 +23,10 @@ use std::collections::HashMap;
 
 /// Output type classification
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum OutputType {
     /// Plain text output
+    #[default]
     Text,
     /// Structured JSON output
     Json,
@@ -34,11 +36,6 @@ pub enum OutputType {
     Error,
 }
 
-impl Default for OutputType {
-    fn default() -> Self {
-        Self::Text
-    }
-}
 
 /// Task output with value, summary, and type
 #[derive(Debug, Clone, Serialize, Deserialize)]

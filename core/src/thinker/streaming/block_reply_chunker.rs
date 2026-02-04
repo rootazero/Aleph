@@ -241,11 +241,10 @@ impl BlockReplyChunker {
     fn find_paragraph_break(&self, search_str: &str, spans: &[FenceSpan]) -> Option<usize> {
         let mut pos = search_str.len();
         while let Some(found) = search_str[..pos].rfind("\n\n") {
-            if found >= self.config.min_block_size {
-                if !self.config.fence_aware || is_safe_fence_break(spans, found + 1) {
+            if found >= self.config.min_block_size
+                && (!self.config.fence_aware || is_safe_fence_break(spans, found + 1)) {
                     return Some(found + 1);
                 }
-            }
             pos = found;
             if pos == 0 {
                 break;
@@ -268,11 +267,10 @@ impl BlockReplyChunker {
                     true
                 };
 
-                if is_sentence_end {
-                    if !self.config.fence_aware || is_safe_fence_break(spans, i) {
+                if is_sentence_end
+                    && (!self.config.fence_aware || is_safe_fence_break(spans, i)) {
                         return Some(i);
                     }
-                }
             }
         }
         None
@@ -282,11 +280,10 @@ impl BlockReplyChunker {
     fn find_newline_break(&self, search_str: &str, spans: &[FenceSpan]) -> Option<usize> {
         let mut pos = search_str.len();
         while let Some(found) = search_str[..pos].rfind('\n') {
-            if found >= self.config.min_block_size {
-                if !self.config.fence_aware || is_safe_fence_break(spans, found) {
+            if found >= self.config.min_block_size
+                && (!self.config.fence_aware || is_safe_fence_break(spans, found)) {
                     return Some(found);
                 }
-            }
             pos = found;
             if pos == 0 {
                 break;
@@ -299,11 +296,10 @@ impl BlockReplyChunker {
     fn find_word_break(&self, search_str: &str, spans: &[FenceSpan]) -> Option<usize> {
         let mut pos = search_str.len();
         while let Some(found) = search_str[..pos].rfind(' ') {
-            if found >= self.config.min_block_size {
-                if !self.config.fence_aware || is_safe_fence_break(spans, found) {
+            if found >= self.config.min_block_size
+                && (!self.config.fence_aware || is_safe_fence_break(spans, found)) {
                     return Some(found);
                 }
-            }
             pos = found;
             if pos == 0 {
                 break;

@@ -95,7 +95,7 @@ impl BuiltinToolRegistry {
         // Skill reading tools (Progressive Disclosure pattern)
         let read_skill_tool = ReadSkillTool::default();
         let list_skills_tool = SkillListTool::default();
-        let snapshot_capture_tool = SnapshotCaptureTool::default();
+        let snapshot_capture_tool = SnapshotCaptureTool;
 
         // Canvas tool for visual rendering
         let canvas_tool = CanvasTool::new_noop();

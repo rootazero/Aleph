@@ -92,14 +92,14 @@ impl ResultMerger {
         let artifacts: Vec<Artifact> = delegate_result
             .artifacts
             .iter()
-            .map(|a| Self::convert_artifact(a))
+            .map(Self::convert_artifact)
             .collect();
 
         // Convert tool calls
         let tool_calls: Vec<ToolCallRecord> = delegate_result
             .tools_called
             .iter()
-            .map(|tc| Self::convert_tool_call(tc))
+            .map(Self::convert_tool_call)
             .collect();
 
         if delegate_result.success {
@@ -201,7 +201,7 @@ impl ResultMerger {
             delegate_result
                 .artifacts
                 .iter()
-                .map(|a| Self::convert_artifact(a))
+                .map(Self::convert_artifact)
                 .collect()
         } else {
             Vec::new()

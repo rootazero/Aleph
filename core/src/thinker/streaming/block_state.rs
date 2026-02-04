@@ -12,8 +12,10 @@ const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
 
 /// Block state for tracking thinking vs content
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum BlockState {
     /// Normal content (not in thinking block)
+    #[default]
     Content,
     /// Inside a thinking block
     Thinking,
@@ -23,11 +25,6 @@ pub enum BlockState {
     FencedCode,
 }
 
-impl Default for BlockState {
-    fn default() -> Self {
-        Self::Content
-    }
-}
 
 /// Thinking tag parser with state machine
 #[derive(Debug, Clone)]

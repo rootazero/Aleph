@@ -22,7 +22,7 @@ use crate::vision::{VisionConfig, VisionService};
 
 use super::{
     AxLimits, AxNode, AxTree, FocusHint, FocusHintSource, ImageFormat, ImageRef, MergeOptions,
-    PerceptionSnapshot, Rect, SnapshotCaptureArgs, SnapshotRequest, SnapshotTarget, VisionBlock,
+    PerceptionSnapshot, Rect, SnapshotCaptureArgs, SnapshotTarget, VisionBlock,
     VisionLimits,
 };
 
@@ -653,7 +653,7 @@ fn to_top_left(rect: Rect, display_height: f64) -> Rect {
     }
 }
 
-fn infer_mouse_focus(focus_window_ms: u64, display_height: f64) -> Option<FocusHint> {
+fn infer_mouse_focus(focus_window_ms: u64, _display_height: f64) -> Option<FocusHint> {
     let now = Instant::now();
     let point = current_mouse_position()?;
 

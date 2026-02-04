@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Structured user answer
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum UserAnswer {
     /// Confirmation result
     Confirmation { confirmed: bool },
@@ -24,6 +25,7 @@ pub enum UserAnswer {
     /// Text input result
     TextInput { text: String },
     /// User cancelled (applies to all types)
+    #[default]
     Cancelled,
 }
 
@@ -68,11 +70,6 @@ impl UserAnswer {
     }
 }
 
-impl Default for UserAnswer {
-    fn default() -> Self {
-        UserAnswer::Cancelled
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -551,7 +551,7 @@ After finding a relevant skill, use read_skill(skill_id) to load its full instru
 
                             // Skip hidden directories
                             if let Some(name) = skill_dir.file_name() {
-                                if name.to_str().map_or(false, |n| n.starts_with('.')) {
+                                if name.to_str().is_some_and(|n| n.starts_with('.')) {
                                     continue;
                                 }
                             }

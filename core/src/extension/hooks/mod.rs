@@ -27,7 +27,7 @@
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
 use crate::extension::ExtensionError;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -686,7 +686,7 @@ impl HookExecutor {
 /// - `$FILE` / `${FILE}` - File path
 /// - `$TOOL_NAME` / `${TOOL_NAME}` - Tool name
 /// - `$SESSION_ID` / `${SESSION_ID}` - Session ID
-pub fn substitute_variables(template: &str, context: &HookContext, plugin_root: &PathBuf) -> String {
+pub fn substitute_variables(template: &str, context: &HookContext, plugin_root: &Path) -> String {
     let mut result = template.to_string();
     let plugin_root_str = plugin_root.to_string_lossy();
 

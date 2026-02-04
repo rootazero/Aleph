@@ -327,7 +327,7 @@ impl OAuthProvider {
             AetherError::IoError("No refresh token available".to_string())
         })?;
 
-        self.refresh_token_with(&metadata, client_id, &refresh_token)
+        self.refresh_token_with(metadata, client_id, &refresh_token)
             .await
     }
 

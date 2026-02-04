@@ -640,22 +640,19 @@ impl HookKind {
 /// Hook priority levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum HookPriority {
     /// System-level hooks (security, audit) - runs first
     System = -1000,
     /// High priority business logic
     High = -100,
     /// Default priority
+    #[default]
     Normal = 0,
     /// Low priority extensions
     Low = 100,
 }
 
-impl Default for HookPriority {
-    fn default() -> Self {
-        HookPriority::Normal
-    }
-}
 
 impl HookPriority {
     pub fn from_str(s: &str) -> Self {
@@ -779,7 +776,9 @@ pub struct McpServerConfig {
 /// Service state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ServiceState {
+    #[default]
     Stopped,
     Starting,
     Running,
@@ -787,11 +786,6 @@ pub enum ServiceState {
     Failed,
 }
 
-impl Default for ServiceState {
-    fn default() -> Self {
-        ServiceState::Stopped
-    }
-}
 
 /// Running service information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -882,8 +876,10 @@ pub struct ChannelSendRequest {
 /// Represents the current connection status of a plugin channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ChannelState {
     /// Channel is not connected
+    #[default]
     Disconnected,
     /// Channel is attempting to connect
     Connecting,
@@ -895,11 +891,6 @@ pub enum ChannelState {
     Failed,
 }
 
-impl Default for ChannelState {
-    fn default() -> Self {
-        ChannelState::Disconnected
-    }
-}
 
 /// Channel info
 ///

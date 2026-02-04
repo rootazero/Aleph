@@ -12,18 +12,12 @@ use tracing::{info, warn};
 
 /// Configuration for the question manager
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct QuestionManagerConfig {
     /// Default timeout for question requests (0 = no timeout)
     pub timeout_ms: u64,
 }
 
-impl Default for QuestionManagerConfig {
-    fn default() -> Self {
-        Self {
-            timeout_ms: 0, // No timeout by default
-        }
-    }
-}
 
 /// A pending question request waiting for user response
 pub struct PendingQuestion {

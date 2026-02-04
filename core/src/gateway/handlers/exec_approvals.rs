@@ -321,7 +321,7 @@ async fn handle_callback(
     };
 
     // Resolve the approval
-    let resolved = manager.resolve(&approval_id, decision.clone(), Some(params.user_id.clone()));
+    let resolved = manager.resolve(&approval_id, decision, Some(params.user_id.clone()));
 
     if resolved {
         let response_text = ApprovalBridge::decision_response_text(&decision).to_string();

@@ -63,7 +63,7 @@ impl SkillWatcher {
     /// * `config` - Watcher configuration
     pub fn new(
         skills_dir: impl AsRef<Path>,
-        reload_callback: ReloadCallback,
+        _reload_callback: ReloadCallback,
         config: SkillWatcherConfig,
     ) -> Result<Self> {
         let skills_dir = skills_dir.as_ref().to_path_buf();
@@ -190,7 +190,7 @@ impl SkillWatcher {
 
     /// Handle skill reload events
     async fn handle_skill_events(
-        skills_dir: &Path,
+        _skills_dir: &Path,
         events: &[SkillEvent],
         reload_callback: &ReloadCallback,
     ) -> Result<()> {

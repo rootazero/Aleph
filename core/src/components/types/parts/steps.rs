@@ -36,8 +36,10 @@ impl StepStartPart {
 
 /// Reason why a step finished
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub enum StepFinishReason {
     /// Step completed successfully
+    #[default]
     Completed,
     /// Step failed with an error
     Failed,
@@ -49,11 +51,6 @@ pub enum StepFinishReason {
     MaxStepsReached,
 }
 
-impl Default for StepFinishReason {
-    fn default() -> Self {
-        Self::Completed
-    }
-}
 
 /// Token usage for a step (re-exported from event types or defined locally)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -8,6 +8,7 @@ use crate::dispatcher::model_router::{ModelProfile, ModelRoutingRules};
 /// Note: Core execution parameters (confirmation, parallelism, retries) are hardcoded
 /// for security and stability. Only model routing settings are configurable.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct AgentConfig {
     /// Model profiles for multi-model routing
     pub model_profiles: Vec<ModelProfile>,
@@ -16,14 +17,6 @@ pub struct AgentConfig {
     pub routing_rules: Option<ModelRoutingRules>,
 }
 
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            model_profiles: Vec::new(),
-            routing_rules: None,
-        }
-    }
-}
 
 impl AgentConfig {
     /// Create config with model routing enabled

@@ -2,11 +2,11 @@
 //!
 //! Implements AetherToolDyn for Markdown-defined CLI tools.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tracing::{debug, info, warn};
+use std::sync::atomic::AtomicBool;
+use tracing::warn;
 
 use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
@@ -227,15 +227,14 @@ impl MarkdownCliTool {
                 .spec
                 .metadata
                 .aether
-                .as_ref()
-                .and_then(|a| Some(&a.input_hints));
+                .as_ref().map(|a| &a.input_hints);
 
             let mut cli_args = Vec::new();
 
             // Try to preserve order from input_hints definition
             if let Some(hints) = hints {
                 // Ordered by hint definition
-                for (key, _hint) in hints {
+                for key in hints.keys() {
                     if let Some(value) = obj.get(key) {
                         self.append_flag_arg(&mut cli_args, key, value);
                     }

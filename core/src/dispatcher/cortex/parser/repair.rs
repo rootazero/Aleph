@@ -32,8 +32,8 @@ pub fn try_repair(incomplete: &str) -> Option<String> {
 
     // Step 1: Remove trailing dangling comma
     let trimmed = repaired.trim_end();
-    if trimmed.ends_with(',') {
-        repaired = trimmed[..trimmed.len() - 1].to_string();
+    if let Some(stripped) = trimmed.strip_suffix(',') {
+        repaired = stripped.to_string();
     }
 
     // Step 2: Count unclosed brackets and quotes

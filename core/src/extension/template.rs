@@ -106,9 +106,8 @@ impl SkillTemplate {
 
     /// Resolve a file path from the template syntax
     fn resolve_path(&self, path_str: &str) -> ExtensionResult<PathBuf> {
-        let path = if path_str.starts_with("./") {
+        let path = if let Some(relative) = path_str.strip_prefix("./") {
             // Relative path from base_dir
-            let relative = &path_str[2..];
             let resolved = self.base_dir.join(relative);
 
             // Security check: ensure the resolved path is within base_dir

@@ -205,7 +205,7 @@ fn matches_account(rule: &MatchRule, account_id: &str) -> bool {
 }
 
 fn matches_peer(rule: &MatchRule, peer: &RoutePeer) -> bool {
-    rule.peer.as_ref().map_or(false, |p| {
+    rule.peer.as_ref().is_some_and(|p| {
         let kind_matches = match peer.kind {
             RoutePeerKind::Dm => p.kind.eq_ignore_ascii_case("dm"),
             RoutePeerKind::Group => p.kind.eq_ignore_ascii_case("group"),

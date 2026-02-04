@@ -780,7 +780,7 @@ pub fn create_gateway_worker(
         .iter()
         .map(|def| {
             UnifiedTool::new(
-                &format!("builtin:{}", def.name),
+                format!("builtin:{}", def.name),
                 def.name,
                 def.description,
                 ToolSource::Builtin,

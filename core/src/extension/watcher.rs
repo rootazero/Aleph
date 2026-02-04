@@ -177,7 +177,7 @@ impl ExtensionWatcher {
                         let changed_paths: Vec<PathBuf> = events
                             .iter()
                             .flat_map(|e| e.paths.iter().cloned())
-                            .filter(|p| Self::should_watch_file(p))
+                            .filter(Self::should_watch_file)
                             .collect::<HashSet<_>>()
                             .into_iter()
                             .collect();
@@ -269,8 +269,8 @@ impl ExtensionWatcher {
     pub fn add_watch_dir(&self, dir: PathBuf) -> Result<()> {
         let debouncer_lock = self.debouncer.lock().unwrap_or_else(|e| e.into_inner());
 
-        if debouncer_lock.is_some() {
-            if dir.exists() {
+        if debouncer_lock.is_some()
+            && dir.exists() {
                 // Note: We can't call watch on debouncer.watcher() because it's behind Arc<Mutex<>>
                 // For now, restart is required to add new directories
                 drop(debouncer_lock);
@@ -282,7 +282,6 @@ impl ExtensionWatcher {
                     "Cannot add directory to running watcher. Please restart the watcher.",
                 ));
             }
-        }
 
         Ok(())
     }

@@ -217,10 +217,9 @@ impl DreamDaemon {
             return Ok(());
         }
 
-        if !self
+        if self
             .is_running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err()
         {
             return Ok(());
         }
