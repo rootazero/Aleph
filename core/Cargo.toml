@@ -68,6 +68,10 @@ tracing-appender = "0.2"
 # For config file watching
 notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-full = "0.3"
+# For protocol template rendering (configurable protocols)
+handlebars = "5.1"
+# For JSON path extraction (configurable protocols)
+jsonpath-rust = "0.5"
 # For image dimension parsing (still used in AI provider integration)
 image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif"] }
 # For Base64 encoding of images (still used in AI provider integration)
