@@ -1,0 +1,185 @@
+# Example: Full Template Mode
+# Completely custom protocol implementation
+#
+# This example demonstrates a provider with a custom API that doesn't
+# follow OpenAI conventions at all. It shows all available features
+# of the protocol adapter system.
+#
+# Use this when:
+# - The provider's API is completely different from OpenAI
+# - You need full control over request/response structure
+# - The provider uses custom authentication, endpoints, or data formats
+
+name: exotic-ai
+protocol_type: custom
+
+# Base URL for all API requests
+base_url: https://api.exotic.ai
+
+# Authentication configuration
+auth:
+  type: header
+  header: X-API-Token
+  # Template variables available: config.api_key, config.*, env.*
+  value_template: "{{config.api_key}}"
+  # Alternative: use environment variable
+  # value_template: "{{env.EXOTIC_API_KEY}}"
+
+# API endpoint paths (relative to base_url)
+endpoints:
+  chat: "/v2/completions"
+  stream: "/v2/completions/stream"
+  # Optional: models endpoint for model listing
+  models: "/v2/models"
+
+# Request structure mapping
+# This defines how to transform Aether's standard request format
+# into the provider's custom format
+request_template:
+  # Model identifier
+  model_name: "{{config.model}}"
+
+  # Input messages (supports multiple message formats)
+  # Option 1: Simple text input
+  input_text: "{{input}}"
+
+  # Option 2: Structured messages (commented out)
+  # messages: "{{messages}}"
+
+  # System prompt
+  system_instruction: "{{system_prompt}}"
+
+  # Parameters
+  parameters:
+    temperature: "{{config.temperature}}"
+    max_tokens: "{{config.max_tokens}}"
+    top_p: "{{config.top_p}}"
+    # Custom provider-specific parameters
+    creativity_level: "{{config.creativity_level | default: 'medium'}}"
+    safety_mode: "{{config.safety_mode | default: 'strict'}}"
+
+  # User metadata (optional)
+  metadata:
+    user_id: "{{config.user_id}}"
+    session_id: "{{session_id}}"
+
+# Response structure mapping
+# JSONPath expressions to extract data from provider's response
+response_mapping:
+  # Main content path
+  content: "$.output.generated_text"
+
+  # Alternative content paths (fallbacks)
+  content_alternatives:
+    - "$.result.text"
+    - "$.data.completion"
+
+  # Error message path
+  error: "$.error.message"
+
+  # Optional: extract additional metadata
+  model: "$.output.model_used"
+  usage:
+    prompt_tokens: "$.usage.input_tokens"
+    completion_tokens: "$.usage.output_tokens"
+    total_tokens: "$.usage.total_tokens"
+
+  # Finish reason mapping
+  finish_reason:
+    path: "$.output.stop_reason"
+    # Map provider's finish reasons to standard ones
+    mapping:
+      completed: stop
+      length_limit: length
+      content_filtered: content_filter
+      timeout: stop
+
+# Streaming configuration
+stream_config:
+  # Stream format: sse (Server-Sent Events) or ndjson (Newline-Delimited JSON)
+  format: sse
+
+  # SSE event prefix
+  event_prefix: "data: "
+
+  # Marker that indicates end of stream
+  done_marker: "[DONE]"
+
+  # JSONPath to extract content from each chunk
+  content_path: "$.chunk.text"
+
+  # Optional: delta vs. full content mode
+  # delta: each chunk contains only new content
+  # full: each chunk contains full content so far
+  content_mode: delta
+
+  # Optional: finish reason in final chunk
+  finish_reason_path: "$.chunk.finish_reason"
+
+# Field customization
+# Define parameter defaults, ranges, and validation
+request_fields:
+  temperature:
+    type: float
+    default: 0.7
+    range: [0.0, 2.0]
+    description: "Controls randomness in generation"
+
+  max_tokens:
+    type: integer
+    default: 4096
+    range: [1, 32768]
+    description: "Maximum tokens to generate"
+
+  top_p:
+    type: float
+    default: 1.0
+    range: [0.0, 1.0]
+    description: "Nucleus sampling threshold"
+
+  # Custom provider-specific fields
+  creativity_level:
+    type: string
+    default: "medium"
+    allowed_values: ["low", "medium", "high", "maximum"]
+    description: "Provider-specific creativity setting"
+
+  safety_mode:
+    type: string
+    default: "strict"
+    allowed_values: ["off", "relaxed", "strict"]
+    description: "Content safety filtering level"
+
+# Model name mapping
+# Map common model names to provider-specific identifiers
+model_aliases:
+  gpt-4: exotic-ai-premium-v2
+  gpt-3.5-turbo: exotic-ai-fast-v1
+  claude-3-opus: exotic-ai-ultra-v3
+
+# Rate limiting hints (optional)
+# Helps Aether implement smart retry logic
+rate_limits:
+  requests_per_minute: 60
+  tokens_per_minute: 100000
+  concurrent_requests: 5
+
+# Retry configuration (optional)
+retry:
+  max_attempts: 3
+  initial_delay_ms: 1000
+  max_delay_ms: 60000
+  backoff_multiplier: 2.0
+  # Retry on these HTTP status codes
+  retry_on_status: [429, 500, 502, 503, 504]
+
+# Usage:
+# 1. Copy this file to ~/.aether/protocols/exotic-ai.yaml
+# 2. In your provider config (config.toml), reference it:
+#    [[providers]]
+#    name = "exotic"
+#    protocol = "exotic-ai"
+#    api_key = "your-api-key"
+#    model = "exotic-ai-premium-v2"
+# 3. Or use it with CLI:
+#    aether chat --provider exotic --model exotic-ai-premium-v2
