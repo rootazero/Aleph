@@ -94,6 +94,152 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // Anthropic Claude
+    m.insert(
+        "claude",
+        ProviderPreset {
+            base_url: "https://api.anthropic.com",
+            protocol: "anthropic",
+            color: "#d97757",
+        },
+    );
+    m.insert(
+        "anthropic",
+        ProviderPreset {
+            base_url: "https://api.anthropic.com",
+            protocol: "anthropic",
+            color: "#d97757",
+        },
+    );
+
+    // Google Gemini
+    m.insert(
+        "gemini",
+        ProviderPreset {
+            base_url: "https://generativelanguage.googleapis.com",
+            protocol: "gemini",
+            color: "#4285f4",
+        },
+    );
+    m.insert(
+        "google",
+        ProviderPreset {
+            base_url: "https://generativelanguage.googleapis.com",
+            protocol: "gemini",
+            color: "#4285f4",
+        },
+    );
+
+    // Groq - Ultra-fast inference
+    m.insert(
+        "groq",
+        ProviderPreset {
+            base_url: "https://api.groq.com/openai/v1",
+            protocol: "openai",
+            color: "#f55036",
+        },
+    );
+
+    // Together.ai - Open source models
+    m.insert(
+        "together",
+        ProviderPreset {
+            base_url: "https://api.together.xyz/v1",
+            protocol: "openai",
+            color: "#6366f1",
+        },
+    );
+
+    // Perplexity - Search-augmented LLMs
+    m.insert(
+        "perplexity",
+        ProviderPreset {
+            base_url: "https://api.perplexity.ai",
+            protocol: "openai",
+            color: "#20808d",
+        },
+    );
+
+    // Mistral AI - European AI leader
+    m.insert(
+        "mistral",
+        ProviderPreset {
+            base_url: "https://api.mistral.ai/v1",
+            protocol: "openai",
+            color: "#ff7000",
+        },
+    );
+
+    // Cohere - Enterprise focus
+    m.insert(
+        "cohere",
+        ProviderPreset {
+            base_url: "https://api.cohere.ai/v1",
+            protocol: "openai",
+            color: "#39594d",
+        },
+    );
+
+    // Fireworks.ai - Fast API
+    m.insert(
+        "fireworks",
+        ProviderPreset {
+            base_url: "https://api.fireworks.ai/inference/v1",
+            protocol: "openai",
+            color: "#ff6b35",
+        },
+    );
+
+    // Anyscale - Ray ecosystem
+    m.insert(
+        "anyscale",
+        ProviderPreset {
+            base_url: "https://api.endpoints.anyscale.com/v1",
+            protocol: "openai",
+            color: "#00d4aa",
+        },
+    );
+
+    // Replicate - OSS model hosting
+    m.insert(
+        "replicate",
+        ProviderPreset {
+            base_url: "https://api.replicate.com/v1",
+            protocol: "openai",
+            color: "#0c0c0d",
+        },
+    );
+
+    // OpenRouter - Multi-model router
+    m.insert(
+        "openrouter",
+        ProviderPreset {
+            base_url: "https://openrouter.ai/api/v1",
+            protocol: "openai",
+            color: "#7c3aed",
+        },
+    );
+
+    // Lepton AI - Model deployment
+    m.insert(
+        "lepton",
+        ProviderPreset {
+            base_url: "https://api.lepton.ai/api/v1",
+            protocol: "openai",
+            color: "#4f46e5",
+        },
+    );
+
+    // Hyperbolic - GPU marketplace
+    m.insert(
+        "hyperbolic",
+        ProviderPreset {
+            base_url: "https://api.hyperbolic.xyz/v1",
+            protocol: "openai",
+            color: "#8b5cf6",
+        },
+    );
+
     m
 });
 
@@ -108,19 +254,45 @@ mod tests {
 
     #[test]
     fn test_presets_contain_known_vendors() {
+        // OpenAI-compatible (original)
         assert!(PRESETS.contains_key("deepseek"));
         assert!(PRESETS.contains_key("moonshot"));
         assert!(PRESETS.contains_key("doubao"));
         assert!(PRESETS.contains_key("openai"));
+
+        // Native protocols
+        assert!(PRESETS.contains_key("claude"));
+        assert!(PRESETS.contains_key("anthropic"));
+        assert!(PRESETS.contains_key("gemini"));
+        assert!(PRESETS.contains_key("google"));
+
+        // Tier 1: High-priority OpenAI-compatible
+        assert!(PRESETS.contains_key("groq"));
+        assert!(PRESETS.contains_key("together"));
+        assert!(PRESETS.contains_key("perplexity"));
+        assert!(PRESETS.contains_key("mistral"));
+
+        // Tier 2: Medium-priority OpenAI-compatible
+        assert!(PRESETS.contains_key("cohere"));
+        assert!(PRESETS.contains_key("fireworks"));
+        assert!(PRESETS.contains_key("anyscale"));
+        assert!(PRESETS.contains_key("replicate"));
+
+        // Tier 3: Specialized/Regional OpenAI-compatible
+        assert!(PRESETS.contains_key("openrouter"));
+        assert!(PRESETS.contains_key("lepton"));
+        assert!(PRESETS.contains_key("hyperbolic"));
     }
 
     #[test]
-    fn test_all_presets_use_openai_protocol() {
+    fn test_presets_have_valid_protocol() {
+        let valid_protocols = ["openai", "anthropic", "gemini"];
         for (name, preset) in PRESETS.iter() {
-            assert_eq!(
-                preset.protocol, "openai",
-                "Preset '{}' should use openai protocol",
-                name
+            assert!(
+                valid_protocols.contains(&preset.protocol),
+                "Preset '{}' uses invalid protocol '{}'",
+                name,
+                preset.protocol
             );
         }
     }
