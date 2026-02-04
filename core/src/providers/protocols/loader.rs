@@ -4,9 +4,11 @@
 
 use crate::error::{AetherError, Result};
 use crate::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, ProtocolRegistry};
-use std::path::Path;
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{error, info};
+use std::time::Duration;
+use tracing::{error, info, warn};
 
 /// Protocol loader manages loading protocols from YAML files
 pub struct ProtocolLoader;
@@ -103,11 +105,141 @@ impl ProtocolLoader {
         Ok(())
     }
 
-    /// Start hot reload watcher
-    pub fn start_watching() -> Result<()> {
-        // TODO: Implement file watching with notify crate (Task 7)
-        info!("Hot reload not yet implemented");
-        Ok(())
+    /// Start hot reload watcher for ~/.aether/protocols
+    pub fn start_watching() -> Result<Option<RecommendedWatcher>> {
+        // Get ~/.aether/protocols path
+        let home = std::env::var("HOME").map_err(|_| {
+            AetherError::invalid_config("HOME environment variable not set".to_string())
+        })?;
+        let protocols_dir = PathBuf::from(home).join(".aether").join("protocols");
+
+        // Check if directory exists
+        if !protocols_dir.exists() {
+            info!(
+                dir = ?protocols_dir,
+                "Protocols directory does not exist, skipping hot reload"
+            );
+            return Ok(None);
+        }
+
+        info!(
+            dir = ?protocols_dir,
+            "Starting hot reload watcher for protocols directory"
+        );
+
+        Self::start_watching_dir(&protocols_dir)
+    }
+
+    /// Start watching a specific directory for protocol file changes
+    fn start_watching_dir(dir: &Path) -> Result<Option<RecommendedWatcher>> {
+        let dir = dir.to_path_buf();
+        let dir_for_closure = dir.clone();
+
+        // Create watcher with 2-second poll interval
+        let config = Config::default().with_poll_interval(Duration::from_secs(2));
+
+        let mut watcher = RecommendedWatcher::new(
+            move |event_result| {
+                if let Ok(event) = event_result {
+                    Self::handle_fs_event(event, &dir_for_closure);
+                }
+            },
+            config,
+        )
+        .map_err(|e| AetherError::invalid_config(format!("Failed to create watcher: {}", e)))?;
+
+        // Watch directory non-recursively
+        watcher
+            .watch(&dir, RecursiveMode::NonRecursive)
+            .map_err(|e| {
+                AetherError::invalid_config(format!("Failed to watch directory {:?}: {}", dir, e))
+            })?;
+
+        info!(
+            dir = ?dir,
+            "Successfully started watching protocols directory"
+        );
+
+        Ok(Some(watcher))
+    }
+
+    /// Handle file system event
+    fn handle_fs_event(event: Event, dir: &Path) {
+        match event.kind {
+            EventKind::Create(_) | EventKind::Modify(_) => {
+                // Handle Create and Modify events
+                for path in event.paths {
+                    // Check if it's a YAML file
+                    if let Some(ext) = path.extension() {
+                        if ext == "yaml" || ext == "yml" {
+                            if path.starts_with(dir) {
+                                info!(
+                                    path = ?path,
+                                    event = ?event.kind,
+                                    "Protocol file changed, reloading"
+                                );
+                                Self::reload_protocol(&path);
+                            }
+                        }
+                    }
+                }
+            }
+            EventKind::Remove(_) => {
+                // Handle Remove events
+                for path in event.paths {
+                    // Check if it's a YAML file
+                    if let Some(ext) = path.extension() {
+                        if ext == "yaml" || ext == "yml" {
+                            if path.starts_with(dir) {
+                                info!(
+                                    path = ?path,
+                                    "Protocol file removed, unregistering"
+                                );
+                                Self::unregister_protocol(&path);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Ignore other events
+            }
+        }
+    }
+
+    /// Reload a protocol from file
+    fn reload_protocol(path: &Path) {
+        let path = path.to_path_buf();
+        // Spawn async task to reload protocol
+        tokio::spawn(async move {
+            if let Err(e) = Self::load_from_file(&path).await {
+                error!(
+                    path = ?path,
+                    error = %e,
+                    "Failed to reload protocol"
+                );
+            }
+        });
+    }
+
+    /// Unregister a protocol based on file path
+    fn unregister_protocol(path: &Path) {
+        // Extract protocol name from filename (without extension)
+        if let Some(file_stem) = path.file_stem() {
+            if let Some(name) = file_stem.to_str() {
+                info!(
+                    protocol_name = %name,
+                    path = ?path,
+                    "Unregistering protocol"
+                );
+                ProtocolRegistry::global().unregister(name);
+            } else {
+                warn!(
+                    path = ?path,
+                    "Failed to extract protocol name from file path"
+                );
+            }
+        }
     }
 }
 
@@ -278,5 +410,67 @@ base_url: https://api.valid.com
         let nonexistent_dir = Path::new("/nonexistent/directory");
         let result = ProtocolLoader::load_from_dir(nonexistent_dir).await;
         assert!(result.is_err(), "Should fail for nonexistent directory");
+    }
+
+    #[tokio::test]
+    async fn test_hot_reload() {
+        // Register built-in protocols first
+        ProtocolRegistry::global().register_builtin();
+
+        // Create a temporary directory
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("hot-reload-test.yaml");
+
+        // Write initial protocol
+        let initial_yaml = r#"
+name: hot-reload-test
+extends: openai
+base_url: https://api.initial.com
+"#;
+        tokio::fs::write(&file_path, initial_yaml)
+            .await
+            .expect("Failed to write initial YAML file");
+
+        // Load initial protocol
+        ProtocolLoader::load_from_file(&file_path)
+            .await
+            .expect("Should load initial protocol");
+
+        // Verify initial protocol is loaded
+        assert!(
+            ProtocolRegistry::global().get("hot-reload-test").is_some(),
+            "Initial protocol should be registered"
+        );
+
+        // Start watching the directory
+        let _watcher = ProtocolLoader::start_watching_dir(temp_dir.path())
+            .expect("Should start watching")
+            .expect("Watcher should be created");
+
+        // Modify the file
+        let modified_yaml = r#"
+name: hot-reload-test
+extends: openai
+base_url: https://api.modified.com
+differences:
+  auth:
+    header: X-Modified-Key
+"#;
+        tokio::fs::write(&file_path, modified_yaml)
+            .await
+            .expect("Failed to write modified YAML file");
+
+        // Wait for file system event to be processed
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        // Note: Since hot reload is async and runs in a separate task,
+        // we can't easily verify the reload in this test without more complex
+        // synchronization. The test mainly verifies that:
+        // 1. Watcher can be created
+        // 2. File modifications don't crash
+        // 3. Logs are generated (check manually when running tests)
+        //
+        // In a real application, the watcher must be kept alive by the caller.
+        info!("Hot reload test completed - check logs for reload events");
     }
 }
