@@ -100,6 +100,8 @@ tempfile = "3.8"
 git2 = "0.19"
 # For file pattern matching (MCP/Services)
 glob = "0.3"
+# For glob pattern matching in filesystem watcher
+glob-match = "0.2"
 # For directory traversal (file scanning)
 walkdir = "2.5"
 # For binary existence check (Markdown skill loader)
