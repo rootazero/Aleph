@@ -5,6 +5,7 @@
 pub mod config;
 pub mod mode;
 pub mod policy;
+pub mod policies;
 
 pub use config::DispatcherConfig;
 pub use mode::DispatcherMode;

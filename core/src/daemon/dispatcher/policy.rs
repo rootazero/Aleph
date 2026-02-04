@@ -70,10 +70,20 @@ pub struct PolicyEngine {
 }
 
 impl PolicyEngine {
-    /// Create MVP version with empty policy list (policies added in Task 6)
+    /// Create MVP version with 5 initial policies
     pub fn new_mvp() -> Self {
+        use crate::daemon::dispatcher::policies::{
+            HighCpuAlertPolicy, IdleCleanupPolicy, LowBatteryPolicy, FocusModePolicy, MeetingMutePolicy,
+        };
+
         Self {
-            policies: Vec::new(),
+            policies: vec![
+                Box::new(MeetingMutePolicy),
+                Box::new(LowBatteryPolicy),
+                Box::new(FocusModePolicy),
+                Box::new(IdleCleanupPolicy),
+                Box::new(HighCpuAlertPolicy),
+            ],
         }
     }
 
@@ -112,7 +122,7 @@ mod tests {
     #[test]
     fn test_policy_engine_mvp_creation() {
         let engine = PolicyEngine::new_mvp();
-        // Should have no policies initially
-        assert_eq!(engine.policies.len(), 0);
+        // Should have 5 MVP policies registered
+        assert_eq!(engine.policies.len(), 5);
     }
 }
