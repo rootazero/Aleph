@@ -7,6 +7,7 @@ pub mod executor;
 pub mod mode;
 pub mod policy;
 pub mod policies;
+pub mod scripting;
 
 pub use config::DispatcherConfig;
 pub use executor::ActionExecutor;

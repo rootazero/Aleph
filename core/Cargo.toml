@@ -147,6 +147,8 @@ printpdf = "0.7"
 # For Markdown parsing (PDF generation)
 pulldown-cmark = "0.12"
 # For HTTP date parsing (Retry-After header)
+# For custom rules scripting engine (Phase 5)
+rhai = { version = "1.17", features = ["sync", "no_float", "only_i64"] }
 httpdate = "1.0"
 # For concurrent hash maps (per-runId sequence counters)
 dashmap = "5.5"
