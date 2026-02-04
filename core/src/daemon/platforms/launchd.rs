@@ -14,14 +14,15 @@ pub struct LaunchdService {
 }
 
 impl LaunchdService {
-    pub fn new() -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    pub fn new() -> Result<Self> {
+        let home = std::env::var("HOME")
+            .map_err(|_| DaemonError::Config("HOME environment variable not set".to_string()))?;
         let plist_path = PathBuf::from(format!(
             "{}/Library/LaunchAgents/{}.plist",
             home, LAUNCHD_LABEL
         ));
 
-        Self { plist_path }
+        Ok(Self { plist_path })
     }
 
     pub fn plist_path(&self) -> &Path {
@@ -161,9 +162,19 @@ impl ServiceManager for LaunchdService {
             ));
         }
 
-        // Load service
+        // Get user ID for domain targeting
+        let uid_output = Command::new("id")
+            .arg("-u")
+            .output()
+            .await?;
+        let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+
+        // Use modern bootstrap command with domain targeting
+        let plist_path_str = self.plist_path.to_str()
+            .ok_or_else(|| DaemonError::Config("Invalid plist path".to_string()))?;
+
         let output = Command::new("launchctl")
-            .args(["load", self.plist_path.to_str().unwrap()])
+            .args(["bootstrap", &format!("gui/{}", uid), plist_path_str])
             .output()
             .await?;
 
@@ -184,9 +195,16 @@ impl ServiceManager for LaunchdService {
             return Ok(()); // Already stopped
         }
 
-        // Unload service
+        // Get user ID for domain targeting
+        let uid_output = Command::new("id")
+            .arg("-u")
+            .output()
+            .await?;
+        let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+
+        // Use modern bootout command with domain targeting
         let output = Command::new("launchctl")
-            .args(["unload", self.plist_path.to_str().unwrap()])
+            .args(["bootout", &format!("gui/{}", uid), LAUNCHD_LABEL])
             .output()
             .await?;
 
@@ -215,13 +233,24 @@ impl ServiceManager for LaunchdService {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            // Parse PID from output (line like: "PID    Status  Label")
-            if stdout.contains("PID") || stdout.contains(LAUNCHD_LABEL) {
-                return Ok(DaemonStatus::Running);
+            // Parse PID from first column (format: "PID\tStatus\tLabel" or "12345\t0\tlabel")
+            // Skip header line and parse actual PID
+            for line in stdout.lines() {
+                if line.starts_with("PID") || !line.contains(LAUNCHD_LABEL) {
+                    continue;
+                }
+
+                // Extract first column (PID)
+                if let Some(pid_str) = line.split_whitespace().next() {
+                    // Check if PID is a valid number (not "-" which means not running)
+                    if pid_str != "-" && pid_str.parse::<u32>().is_ok() {
+                        return Ok(DaemonStatus::Running);
+                    }
+                }
             }
         }
 
-        Ok(DaemonStatus::Unknown)
+        Ok(DaemonStatus::Stopped)
     }
 
     async fn service_status(&self) -> Result<ServiceStatus> {

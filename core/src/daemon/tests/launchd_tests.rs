@@ -6,13 +6,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_launchd_service_creation() {
-        let service = LaunchdService::new();
+        let service = LaunchdService::new().expect("Failed to create LaunchdService");
         assert!(service.plist_path().to_string_lossy().contains("LaunchAgents"));
     }
 
     #[tokio::test]
     async fn test_launchd_generate_plist() {
-        let service = LaunchdService::new();
+        let service = LaunchdService::new().expect("Failed to create LaunchdService");
         let config = DaemonConfig::default();
         let plist = service.generate_plist(&config).unwrap();
         assert!(plist.contains("com.aether.daemon"));
