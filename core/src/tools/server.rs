@@ -47,6 +47,35 @@ impl ToolRepairInfo {
     }
 }
 
+// =============================================================================
+// Tool Update Types
+// =============================================================================
+
+/// Information about a tool update/replacement operation
+#[derive(Debug, Clone)]
+pub struct ToolUpdateInfo {
+    /// The tool name that was updated
+    pub tool_name: String,
+    /// Whether an existing tool was replaced (true) or newly added (false)
+    pub was_replaced: bool,
+    /// Description of the old tool (if replaced)
+    pub old_description: Option<String>,
+    /// Description of the new tool
+    pub new_description: String,
+}
+
+impl ToolUpdateInfo {
+    /// Check if this was a new addition (not a replacement)
+    pub fn is_new(&self) -> bool {
+        !self.was_replaced
+    }
+
+    /// Check if this was a replacement of an existing tool
+    pub fn is_replacement(&self) -> bool {
+        self.was_replaced
+    }
+}
+
 /// Convert a string to snake_case
 ///
 /// Examples:
@@ -174,6 +203,54 @@ impl AetherToolServer {
     pub async fn add_tool_arc(&self, tool: Arc<dyn AetherToolDyn>) {
         let name = tool.name().to_string();
         self.tools.write().await.insert(name, tool);
+    }
+
+    /// Replace or add a tool with explicit update semantics.
+    ///
+    /// Unlike `add_tool()` which silently replaces, this method returns
+    /// information about whether an existing tool was replaced.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let update_info = server.replace_tool(new_version).await;
+    /// if update_info.was_replaced {
+    ///     println!("Updated {} from v1 to v2", update_info.tool_name);
+    /// } else {
+    ///     println!("Added new tool: {}", update_info.tool_name);
+    /// }
+    /// ```
+    pub async fn replace_tool(&self, tool: impl AetherToolDyn + 'static) -> ToolUpdateInfo {
+        let name = tool.name().to_string();
+        let new_description = tool.definition().description;
+
+        let mut tools = self.tools.write().await;
+        let old_tool = tools.insert(name.clone(), Arc::new(tool));
+
+        ToolUpdateInfo {
+            tool_name: name,
+            was_replaced: old_tool.is_some(),
+            old_description: old_tool.map(|t| t.definition().description),
+            new_description,
+        }
+    }
+
+    /// Replace or add a pre-boxed dynamic tool.
+    ///
+    /// Arc version of `replace_tool()`.
+    pub async fn replace_tool_arc(&self, tool: Arc<dyn AetherToolDyn>) -> ToolUpdateInfo {
+        let name = tool.name().to_string();
+        let new_description = tool.definition().description;
+
+        let mut tools = self.tools.write().await;
+        let old_tool = tools.insert(name.clone(), tool);
+
+        ToolUpdateInfo {
+            tool_name: name,
+            was_replaced: old_tool.is_some(),
+            old_description: old_tool.map(|t| t.definition().description),
+            new_description,
+        }
     }
 
     /// Remove a tool by name.
@@ -474,6 +551,38 @@ impl AetherToolServerHandle {
     pub async fn add_tool_arc(&self, tool: Arc<dyn AetherToolDyn>) {
         let name = tool.name().to_string();
         self.tools.write().await.insert(name, tool);
+    }
+
+    /// Replace or add a tool with explicit update semantics.
+    pub async fn replace_tool(&self, tool: impl AetherToolDyn + 'static) -> ToolUpdateInfo {
+        let name = tool.name().to_string();
+        let new_description = tool.definition().description;
+
+        let mut tools = self.tools.write().await;
+        let old_tool = tools.insert(name.clone(), Arc::new(tool));
+
+        ToolUpdateInfo {
+            tool_name: name,
+            was_replaced: old_tool.is_some(),
+            old_description: old_tool.map(|t| t.definition().description),
+            new_description,
+        }
+    }
+
+    /// Replace or add a pre-boxed dynamic tool.
+    pub async fn replace_tool_arc(&self, tool: Arc<dyn AetherToolDyn>) -> ToolUpdateInfo {
+        let name = tool.name().to_string();
+        let new_description = tool.definition().description;
+
+        let mut tools = self.tools.write().await;
+        let old_tool = tools.insert(name.clone(), tool);
+
+        ToolUpdateInfo {
+            tool_name: name,
+            was_replaced: old_tool.is_some(),
+            old_description: old_tool.map(|t| t.definition().description),
+            new_description,
+        }
     }
 
     /// Remove a tool by name.
