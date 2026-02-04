@@ -170,6 +170,46 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // Cohere - Enterprise focus
+    m.insert(
+        "cohere",
+        ProviderPreset {
+            base_url: "https://api.cohere.ai/v1",
+            protocol: "openai",
+            color: "#39594d",
+        },
+    );
+
+    // Fireworks.ai - Fast API
+    m.insert(
+        "fireworks",
+        ProviderPreset {
+            base_url: "https://api.fireworks.ai/inference/v1",
+            protocol: "openai",
+            color: "#ff6b35",
+        },
+    );
+
+    // Anyscale - Ray ecosystem
+    m.insert(
+        "anyscale",
+        ProviderPreset {
+            base_url: "https://api.endpoints.anyscale.com/v1",
+            protocol: "openai",
+            color: "#00d4aa",
+        },
+    );
+
+    // Replicate - OSS model hosting
+    m.insert(
+        "replicate",
+        ProviderPreset {
+            base_url: "https://api.replicate.com/v1",
+            protocol: "openai",
+            color: "#0c0c0d",
+        },
+    );
+
     m
 });
 
@@ -201,6 +241,12 @@ mod tests {
         assert!(PRESETS.contains_key("together"));
         assert!(PRESETS.contains_key("perplexity"));
         assert!(PRESETS.contains_key("mistral"));
+
+        // Tier 2: Medium-priority OpenAI-compatible
+        assert!(PRESETS.contains_key("cohere"));
+        assert!(PRESETS.contains_key("fireworks"));
+        assert!(PRESETS.contains_key("anyscale"));
+        assert!(PRESETS.contains_key("replicate"));
     }
 
     #[test]
