@@ -100,16 +100,54 @@ pub enum SystemStateType {
     SystemLoad,
 }
 
-/// Derived events from pattern matching
+/// Derived events from pattern matching and inference
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DerivedEvent {
-    /// Pattern matched event
-    PatternMatched {
+    /// User activity type changed
+    ActivityChanged {
         timestamp: DateTime<Utc>,
-        pattern_id: String,
-        raw_events: Vec<RawEvent>,
-        metadata: HashMap<String, serde_json::Value>,
+        old_activity: crate::daemon::worldmodel::ActivityType,
+        new_activity: crate::daemon::worldmodel::ActivityType,
+        confidence: f64,
+    },
+
+    /// Programming session started
+    ProgrammingSessionStarted {
+        timestamp: DateTime<Utc>,
+        session_id: String,
+        language: Option<String>,
+        project_root: Option<PathBuf>,
+    },
+
+    /// Programming session ended
+    ProgrammingSessionEnded {
+        timestamp: DateTime<Utc>,
+        session_id: String,
+        duration: chrono::Duration,
+        language: Option<String>,
+    },
+
+    /// System resource pressure changed
+    ResourcePressureChanged {
+        timestamp: DateTime<Utc>,
+        pressure_type: PressureType,
+        old_level: PressureLevel,
+        new_level: PressureLevel,
+    },
+
+    /// Meeting state changed
+    MeetingStateChanged {
+        timestamp: DateTime<Utc>,
+        is_in_meeting: bool,
+        participants: Option<usize>,
+    },
+
+    /// Idle state changed
+    IdleStateChanged {
+        timestamp: DateTime<Utc>,
+        is_idle: bool,
+        idle_duration: Option<chrono::Duration>,
     },
 
     /// Aggregated event over time window
@@ -117,9 +155,26 @@ pub enum DerivedEvent {
         timestamp: DateTime<Utc>,
         window_start: DateTime<Utc>,
         window_end: DateTime<Utc>,
+        event_type: String,
         event_count: usize,
         summary: serde_json::Value,
     },
+}
+
+/// Resource pressure types
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PressureType {
+    Cpu,
+    Memory,
+    Battery,
+}
+
+/// Resource pressure levels
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PressureLevel {
+    Normal,
+    Warning,
+    Critical,
 }
 
 /// System control events
@@ -149,4 +204,63 @@ pub enum SystemEvent {
         timestamp: DateTime<Utc>,
         error: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_derived_event_serialization() {
+        let event = DerivedEvent::IdleStateChanged {
+            timestamp: Utc::now(),
+            is_idle: true,
+            idle_duration: Some(chrono::Duration::seconds(60)),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: DerivedEvent = serde_json::from_str(&json).unwrap();
+
+        match deserialized {
+            DerivedEvent::IdleStateChanged { is_idle, .. } => {
+                assert!(is_idle);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_pressure_type_serialization() {
+        let pressure = PressureType::Cpu;
+        let json = serde_json::to_string(&pressure).unwrap();
+        let deserialized: PressureType = serde_json::from_str(&json).unwrap();
+        assert_eq!(pressure, deserialized);
+    }
+
+    #[test]
+    fn test_pressure_level_serialization() {
+        let level = PressureLevel::Warning;
+        let json = serde_json::to_string(&level).unwrap();
+        let deserialized: PressureLevel = serde_json::from_str(&json).unwrap();
+        assert_eq!(level, deserialized);
+    }
+
+    #[test]
+    fn test_daemon_event_derived_variant() {
+        let event = DaemonEvent::Derived(DerivedEvent::MeetingStateChanged {
+            timestamp: Utc::now(),
+            is_in_meeting: true,
+            participants: Some(5),
+        });
+
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: DaemonEvent = serde_json::from_str(&json).unwrap();
+
+        match deserialized {
+            DaemonEvent::Derived(DerivedEvent::MeetingStateChanged { is_in_meeting, .. }) => {
+                assert!(is_in_meeting);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
 }

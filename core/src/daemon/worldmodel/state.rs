@@ -10,36 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-// Forward references for Dispatcher types (will be implemented in Task 2)
-// These are placeholder types that will be properly defined in the dispatcher module
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ActionType {
-    MuteSystemAudio,
-    UnmuteSystemAudio,
-    EnableDoNotDisturb,
-    DisableDoNotDisturb,
-    NotifyUser {
-        message: String,
-        priority: NotificationPriority,
-    },
-    AdjustBrightness {
-        level: u8,
-    },
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub enum NotificationPriority {
-    Low,
-    Normal,
-    High,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub enum RiskLevel {
-    Low,
-    Medium,
-    High,
-}
+// Import types from dispatcher module (implemented in Task 2)
+use crate::daemon::dispatcher::policy::{ActionType, NotificationPriority, RiskLevel};
 
 // =============================================================================
 // Layer 1: CoreState (KB-level, must be persisted)
@@ -105,7 +77,7 @@ pub enum ActivityType {
 }
 
 /// Pending action waiting for user confirmation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PendingAction {
     pub action_type: ActionType,
     pub reason: String,
