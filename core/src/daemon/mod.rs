@@ -26,7 +26,7 @@ pub use events::{
     SystemStateType, TimeTrigger,
 };
 pub use ipc::{IpcServer, JsonRpcRequest, JsonRpcResponse};
-pub use perception::PerceptionConfig;
+pub use perception::{PerceptionConfig, WatcherRegistry};
 pub use resource_governor::{GovernorDecision, ResourceGovernor, ResourceLimits};
 pub use service_manager::{ServiceManager, create_service_manager};
 pub use types::{DaemonConfig, DaemonStatus, ServiceStatus};

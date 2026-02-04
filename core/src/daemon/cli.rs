@@ -1,5 +1,10 @@
-use crate::daemon::{create_service_manager, DaemonConfig, Result};
+use crate::daemon::{
+    create_service_manager, DaemonConfig, DaemonEventBus, PerceptionConfig, Result,
+    WatcherRegistry,
+};
+use crate::daemon::perception::watchers::{FSEventWatcher, ProcessWatcher, SystemStateWatcher, TimeWatcher};
 use clap::{Parser, Subcommand};
+use std::sync::Arc;
 use tracing::{error, info};
 
 #[derive(Debug, Parser)]
@@ -106,14 +111,69 @@ impl DaemonCli {
     async fn run(&self) -> Result<()> {
         use crate::daemon::ipc::IpcServer;
 
-        info!("Starting Aether daemon in foreground mode...");
-        info!("Press Ctrl+C to stop");
+        info!("Starting Aether daemon with Perception Layer...");
 
+        // 1. Load configurations
         let config = DaemonConfig::default();
-        let server = IpcServer::new(config.socket_path);
+        let mut perception_config = PerceptionConfig::load()?;
+        perception_config.expand_paths()?;
 
-        // Start IPC server (blocks until Ctrl+C)
-        server.start().await?;
+        // 2. Create EventBus
+        let event_bus = Arc::new(DaemonEventBus::new(1000));
+
+        // 3. Create and register Watchers
+        let mut registry = WatcherRegistry::new();
+
+        if perception_config.enabled {
+            if perception_config.process.enabled {
+                registry.register(Arc::new(ProcessWatcher::new(
+                    perception_config.process.clone(),
+                )));
+            }
+
+            if perception_config.filesystem.enabled {
+                registry.register(Arc::new(FSEventWatcher::new(
+                    perception_config.filesystem.clone(),
+                )));
+            }
+
+            if perception_config.time.enabled {
+                registry.register(Arc::new(TimeWatcher::new(
+                    perception_config.time.clone(),
+                )));
+            }
+
+            if perception_config.system.enabled {
+                registry.register(Arc::new(SystemStateWatcher::new(
+                    perception_config.system.clone(),
+                )));
+            }
+
+            info!("Registered {} watchers", registry.watcher_count());
+
+            // 4. Start all Watchers
+            registry.start_all(event_bus.clone()).await?;
+            info!("All watchers started");
+        } else {
+            info!("Perception layer disabled in configuration");
+        }
+
+        // 5. Start IPC Server
+        let server = IpcServer::new(config.socket_path.clone());
+        let server_handle = tokio::spawn(async move {
+            if let Err(e) = server.start().await {
+                error!("IPC server error: {}", e);
+            }
+        });
+
+        // 6. Wait for Ctrl+C
+        tokio::signal::ctrl_c().await?;
+
+        // 7. Graceful shutdown
+        info!("Shutting down daemon...");
+        registry.shutdown_all().await?;
+        server_handle.abort();
+        info!("Daemon stopped");
 
         Ok(())
     }
