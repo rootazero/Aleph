@@ -36,6 +36,11 @@ pub struct ToolDefinition {
 
     /// Tool category for UI grouping
     pub category: ToolCategory,
+
+    /// Additional LLM context (examples, usage notes)
+    /// Injected into system prompt when tool is available
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_context: Option<String>,
 }
 
 impl ToolDefinition {
@@ -53,12 +58,19 @@ impl ToolDefinition {
             parameters,
             requires_confirmation: false,
             category,
+            llm_context: None,
         }
     }
 
     /// Set requires_confirmation flag
     pub fn with_confirmation(mut self, requires: bool) -> Self {
         self.requires_confirmation = requires;
+        self
+    }
+
+    /// Set LLM context (examples, usage notes)
+    pub fn with_llm_context(mut self, context: String) -> Self {
+        self.llm_context = Some(context);
         self
     }
 
