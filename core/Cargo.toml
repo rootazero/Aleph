@@ -11,8 +11,6 @@ name = "aethecore"
 [features]
 # Default: Gateway-only architecture (no FFI)
 default = ["gateway"]
-# Windows: C ABI for csbindgen P/Invoke bindings (deprecated)
-cabi = []
 # Gateway: WebSocket control plane for Moltbot-style architecture
 gateway = ["dep:tokio-tungstenite", "dep:futures-util", "dep:clap", "dep:tower-http", "dep:axum", "dep:hyper", "dep:hyper-util", "dep:tower", "dep:mime_guess"]
 # Telegram channel support
@@ -173,8 +171,7 @@ extism = { version = "1.7", optional = true }
 inquire = { version = "0.7", optional = true }
 
 [build-dependencies]
-# csbindgen for Windows C# bindings (deprecated)
-csbindgen = "1.9"
+# No build dependencies - using Gateway WebSocket architecture
 
 [[bin]]
 name = "aether-gateway"
