@@ -1,6 +1,6 @@
 using Windows.ApplicationModel.Resources;
 
-namespace Aether.Services;
+namespace Aleph.Services;
 
 /// <summary>
 /// Localization service for accessing localized strings.
@@ -95,7 +95,7 @@ public static class LocalizationService
 
 /// <summary>
 /// Static imports helper for easy localization access.
-/// Add: using static Aether.Services.Localization;
+/// Add: using static Aleph.Services.Localization;
 /// Then use: L("key") directly in code.
 /// </summary>
 public static class Localization

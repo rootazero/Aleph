@@ -4,7 +4,7 @@
     <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <WindowsSdkPackageVersion>10.0.22621.38</WindowsSdkPackageVersion>
-    <RootNamespace>Aether</RootNamespace>
+    <RootNamespace>Aleph</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
@@ -21,7 +21,7 @@
     <EnableMsixTooling>true</EnableMsixTooling>
 
     <!-- Single instance application -->
-    <ApplicationId>com.aether.app</ApplicationId>
+    <ApplicationId>com.aleph.app</ApplicationId>
 
     <!-- Localization: auto-detect system language -->
     <DefaultLanguage>en-US</DefaultLanguage>
@@ -42,7 +42,7 @@
 
   <ItemGroup>
     <!-- Native library -->
-    <None Include="libs\aethecore.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('libs\aethecore.dll')" />
+    <None Include="libs\alephcore.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('libs\alephcore.dll')" />
   </ItemGroup>
 
   <ItemGroup>

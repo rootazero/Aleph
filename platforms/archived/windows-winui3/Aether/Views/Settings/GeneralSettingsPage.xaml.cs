@@ -1,8 +1,8 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Aether.ViewModels;
+using Aleph.ViewModels;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// General settings page - Sound, startup, language, updates, logs, about.

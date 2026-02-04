@@ -1,7 +1,7 @@
 using Microsoft.UI.Xaml.Controls;
-using Aether.ViewModels;
+using Aleph.ViewModels;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// Shortcuts settings page - Hotkey configuration.

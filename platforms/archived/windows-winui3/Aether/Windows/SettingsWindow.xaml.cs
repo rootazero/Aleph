@@ -2,10 +2,10 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Graphics;
 using Windows.ApplicationModel.Resources;
-using Aether.ViewModels;
-using Aether.Views.Settings;
+using Aleph.ViewModels;
+using Aleph.Views.Settings;
 
-namespace Aether.Windows;
+namespace Aleph.Windows;
 
 /// <summary>
 /// Settings window with NavigationView sidebar.
@@ -43,11 +43,11 @@ public sealed partial class SettingsWindow : Window
             var resourceLoader = new ResourceLoader();
             Title = resourceLoader.GetString("SettingsWindowTitle");
             if (string.IsNullOrEmpty(Title))
-                Title = "Aether Settings";
+                Title = "Aleph Settings";
         }
         catch
         {
-            Title = "Aether Settings";
+            Title = "Aleph Settings";
         }
 
         // Set window size

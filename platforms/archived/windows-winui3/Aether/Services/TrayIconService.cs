@@ -4,13 +4,13 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 
-namespace Aether.Services;
+namespace Aleph.Services;
 
 /// <summary>
 /// System tray icon service.
 ///
 /// Provides:
-/// - Tray icon with Aether branding
+/// - Tray icon with Aleph branding
 /// - Right-click context menu
 /// - Double-click to show settings
 /// </summary>
@@ -33,7 +33,7 @@ public sealed class TrayIconService : IDisposable
 
         _trayIcon = new TaskbarIcon
         {
-            ToolTipText = "Aether - AI Assistant",
+            ToolTipText = "Aleph - AI Assistant",
             ContextMenuMode = ContextMenuMode.SecondWindow,
         };
 
@@ -46,7 +46,7 @@ public sealed class TrayIconService : IDisposable
 
         contextMenu.Items.Add(new MenuFlyoutSeparator());
 
-        var aboutItem = new MenuFlyoutItem { Text = "About Aether" };
+        var aboutItem = new MenuFlyoutItem { Text = "About Aleph" };
         aboutItem.Click += (s, e) => ShowAbout();
         contextMenu.Items.Add(aboutItem);
 
@@ -89,10 +89,10 @@ public sealed class TrayIconService : IDisposable
 
         _trayIcon.ToolTipText = status switch
         {
-            TrayStatus.Idle => "Aether - Ready",
-            TrayStatus.Processing => "Aether - Processing...",
-            TrayStatus.Error => "Aether - Error occurred",
-            _ => "Aether"
+            TrayStatus.Idle => "Aleph - Ready",
+            TrayStatus.Processing => "Aleph - Processing...",
+            TrayStatus.Error => "Aleph - Error occurred",
+            _ => "Aleph"
         };
 
         // Could also change icon based on status
@@ -103,16 +103,16 @@ public sealed class TrayIconService : IDisposable
         try
         {
             // Use H.NotifyIcon's GeneratedIconSource to create a star-based icon
-            // representing the Aether dual-star branding (see Assets/AppIcon/AetherTray.svg)
+            // representing the Aleph dual-star branding (see Assets/AppIcon/AlephTray.svg)
             // Note: Windows system tray requires .ico format, so we use GeneratedIconSource
             // for a simplified star representation. The SVG is available for conversion to .ico.
             _trayIcon!.IconSource = new H.NotifyIcon.GeneratedIconSource
             {
-                Text = "✦",  // Four-pointed star for Aether branding
+                Text = "✦",  // Four-pointed star for Aleph branding
                 Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
                     Microsoft.UI.Colors.White),
                 Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
-                    Microsoft.UI.ColorHelper.FromArgb(255, 88, 86, 214)),  // Aether purple accent
+                    Microsoft.UI.ColorHelper.FromArgb(255, 88, 86, 214)),  // Aleph purple accent
                 FontSize = 22,
             };
             System.Diagnostics.Debug.WriteLine("[TrayIcon] Generated icon set successfully");
@@ -127,7 +127,7 @@ public sealed class TrayIconService : IDisposable
     {
         // Show about dialog
         // For now, just log
-        System.Diagnostics.Debug.WriteLine("About Aether requested");
+        System.Diagnostics.Debug.WriteLine("About Aleph requested");
     }
 
     public void Dispose()

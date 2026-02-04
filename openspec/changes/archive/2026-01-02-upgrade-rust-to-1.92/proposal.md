@@ -42,7 +42,7 @@ This change upgrades the Rust codebase to version 1.92 and migrates from externa
 
 **Generated Artifacts**:
 - Regenerate UniFFI Swift bindings (`aleph.swift`, FFI headers)
-- Rebuild release library (`libaethecore.dylib`)
+- Rebuild release library (`libalephcore.dylib`)
 
 ## Overview
 

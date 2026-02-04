@@ -1,4 +1,4 @@
-namespace Aether.Models;
+namespace Aleph.Models;
 
 /// <summary>
 /// Halo window states - complete 21 state machine.

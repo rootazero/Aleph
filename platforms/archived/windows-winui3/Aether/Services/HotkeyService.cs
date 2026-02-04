@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace Aether.Services;
+namespace Aleph.Services;
 
 /// <summary>
 /// Global hotkey service using low-level keyboard hook.

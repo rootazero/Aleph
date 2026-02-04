@@ -2,7 +2,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Aether.Services;
+namespace Aleph.Services;
 
 /// <summary>
 /// Automatic update service for checking and downloading updates.
@@ -46,13 +46,13 @@ public sealed class AutoUpdateService : IDisposable
     /// </summary>
     public event Action<string>? Error;
 
-    public AutoUpdateService(string repoOwner = "anthropics", string repoName = "aether")
+    public AutoUpdateService(string repoOwner = "anthropics", string repoName = "aleph")
     {
         _repoOwner = repoOwner;
         _repoName = repoName;
 
         _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.Add("User-Agent", "Aether-AutoUpdate");
+        _httpClient.DefaultRequestHeaders.Add("User-Agent", "Aleph-AutoUpdate");
         _httpClient.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
 
         // Get current version from assembly
@@ -98,7 +98,7 @@ public sealed class AutoUpdateService : IDisposable
                 ReleaseNotes = release.Body ?? "",
                 PublishedAt = release.PublishedAt,
                 DownloadUrl = windowsAsset?.BrowserDownloadUrl ?? release.HtmlUrl ?? "",
-                FileName = windowsAsset?.Name ?? $"aether-{latestVersion}-windows.zip",
+                FileName = windowsAsset?.Name ?? $"aleph-{latestVersion}-windows.zip",
                 FileSize = windowsAsset?.Size ?? 0,
                 ReleaseUrl = release.HtmlUrl ?? ""
             };
@@ -131,7 +131,7 @@ public sealed class AutoUpdateService : IDisposable
         {
             var downloadPath = Path.Combine(
                 Path.GetTempPath(),
-                "AetherUpdates",
+                "AlephUpdates",
                 updateInfo.FileName
             );
 
@@ -243,7 +243,7 @@ public sealed class AutoUpdateService : IDisposable
     {
         try
         {
-            var updateDir = Path.Combine(Path.GetTempPath(), "AetherUpdates");
+            var updateDir = Path.Combine(Path.GetTempPath(), "AlephUpdates");
             if (Directory.Exists(updateDir))
             {
                 foreach (var file in Directory.GetFiles(updateDir))

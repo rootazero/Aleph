@@ -5,10 +5,10 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using WinRT.Interop;
-using Aether.ViewModels;
-using Aether.Models;
+using Aleph.ViewModels;
+using Aleph.Models;
 
-namespace Aether.Windows;
+namespace Aleph.Windows;
 
 /// <summary>
 /// Halo floating window - the core AI interaction overlay.

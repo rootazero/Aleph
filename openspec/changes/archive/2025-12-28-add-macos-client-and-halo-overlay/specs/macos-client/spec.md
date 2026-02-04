@@ -124,7 +124,7 @@ The client **SHALL** properly initialize and clean up the Rust AlephCore instanc
 
 The client **SHALL** automatically copy the Rust dylib into the app bundle during build.
 
-**Why:** Ensures libaethecore.dylib is available at runtime.
+**Why:** Ensures libalephcore.dylib is available at runtime.
 
 **Acceptance criteria:**
 - Build phase script copies dylib from core/target/release/
@@ -137,6 +137,6 @@ The client **SHALL** automatically copy the Rust dylib into the app bundle durin
 **Given** Rust core is built (cargo build --release)
 **When** Xcode builds the Swift client
 **Then** copy_rust_libs.sh script executes
-**And** libaethecore.dylib is copied to Frameworks/
+**And** libalephcore.dylib is copied to Frameworks/
 **And** install_name_tool sets correct @rpath
 **And** built app can be launched without errors

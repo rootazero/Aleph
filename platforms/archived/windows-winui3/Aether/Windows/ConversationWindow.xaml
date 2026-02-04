@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Window
-    x:Class="Aether.Windows.ConversationWindow"
+    x:Class="Aleph.Windows.ConversationWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:Aether.ViewModels"
-    Title="Aether Conversation">
+    xmlns:vm="using:Aleph.ViewModels"
+    Title="Aleph Conversation">
 
     <Window.SystemBackdrop>
         <MicaBackdrop/>
@@ -216,7 +216,7 @@
                     Width="20"
                     Height="20"/>
                 <TextBlock
-                    Text="Aether is typing..."
+                    Text="Aleph is typing..."
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     VerticalAlignment="Center"/>
                 <Button

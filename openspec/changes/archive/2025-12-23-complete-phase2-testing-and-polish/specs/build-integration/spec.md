@@ -5,7 +5,7 @@ The build system SHALL automate the process of copying and configuring the Rust 
 
 #### Scenario: Automated library copying during Xcode build
 - **WHEN** the Xcode project is built
-- **THEN** the build script SHALL automatically copy `libaethecore.dylib` from the Rust target directory to the app's Frameworks folder
+- **THEN** the build script SHALL automatically copy `libalephcore.dylib` from the Rust target directory to the app's Frameworks folder
 
 #### Scenario: Dynamic library path resolution
 - **WHEN** the Rust library is copied to the app bundle
@@ -35,4 +35,4 @@ The application bundle SHALL be configured with correct runtime search paths for
 
 #### Scenario: Library install name
 - **WHEN** the Rust library is embedded in the bundle
-- **THEN** its install name SHALL be set to `@rpath/libaethecore.dylib` for proper loading
+- **THEN** its install name SHALL be set to `@rpath/libalephcore.dylib` for proper loading

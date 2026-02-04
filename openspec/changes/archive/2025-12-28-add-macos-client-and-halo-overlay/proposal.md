@@ -21,7 +21,7 @@ This is Phase 2 of the Aleph roadmap and enables the core user interaction flow.
 - Implement `AlephEventHandler` protocol to receive callbacks from Rust
 - Create menu bar icon with status indicator
 - Build Settings UI with SwiftUI (providers, routing rules, shortcuts)
-- Integrate Rust library (`libaethecore.dylib`) and Swift bindings
+- Integrate Rust library (`libalephcore.dylib`) and Swift bindings
 - Request macOS Accessibility permissions
 - Handle application lifecycle (launch at login, quit)
 

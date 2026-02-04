@@ -1,10 +1,10 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Aether.ViewModels;
-using Aether.Interop;
+using Aleph.ViewModels;
+using Aleph.Interop;
 using System.Text.Json;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// Behavior Settings page - Output mode, typing speed, and PII protection configuration.
@@ -15,7 +15,7 @@ public sealed partial class BehaviorSettingsPage : UserControl
 
     private bool _hasUnsavedChanges;
     private bool _isLoading = true;
-    private AetherCore? _core;
+    private AlephCore? _core;
 
     public BehaviorSettingsPage()
     {
@@ -204,7 +204,7 @@ public sealed partial class BehaviorSettingsPage : UserControl
             }
         });
 
-        // Save to AetherCore
+        // Save to AlephCore
         var success = await Task.Run(() => _core?.UpdateBehaviorConfig(configJson) ?? false);
 
         if (success)

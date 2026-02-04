@@ -1,4 +1,4 @@
-namespace Aether.ViewModels;
+namespace Aleph.ViewModels;
 
 /// <summary>
 /// Represents the current content display state of the conversation window.

@@ -156,8 +156,8 @@ let current_context = self.current_context.lock().unwrap_or_else(|e| {
 cd Aleph/core
 cargo clean
 cargo build --release
-cargo run --bin uniffi-bindgen -- generate --library target/release/libaethecore.dylib --language swift --out-dir ../Sources/Generated/
-cp target/release/libaethecore.dylib ../Frameworks/
+cargo run --bin uniffi-bindgen -- generate --library target/release/libalephcore.dylib --language swift --out-dir ../Sources/Generated/
+cp target/release/libalephcore.dylib ../Frameworks/
 ```
 
 **Validation**:
@@ -407,7 +407,7 @@ do {
 ## Rollback Plan
 
 If issues are discovered:
-1. Revert to previous `libaethecore.dylib` (backup before deployment)
+1. Revert to previous `libalephcore.dylib` (backup before deployment)
 2. Restore previous Swift code via git
 3. Investigate logs and crash reports
 4. Create hotfix if specific issue identified

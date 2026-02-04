@@ -3,7 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
-namespace Aether.Views.Halo;
+namespace Aleph.Views.Halo;
 
 /// <summary>
 /// Tool execution status view with progress indicator and result display.

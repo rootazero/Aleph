@@ -1,10 +1,10 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Aether.ViewModels;
-using Aether.Interop;
+using Aleph.ViewModels;
+using Aleph.Interop;
 using System.Text.Json;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// Policies Settings page - Read-only view of system policies.
@@ -13,7 +13,7 @@ namespace Aether.Views.Settings;
 public sealed partial class PoliciesSettingsPage : UserControl
 {
     public SettingsViewModel ViewModel { get; set; } = null!;
-    private AetherCore? _core;
+    private AlephCore? _core;
 
     public PoliciesSettingsPage()
     {
@@ -111,10 +111,10 @@ public sealed partial class PoliciesSettingsPage : UserControl
         NetworkAccessValue.Text = "Allowed";
         McpInstallValue.Text = "Allowed";
 
-        // Policy Source - use ~/.config/aether/ for cross-platform consistency
+        // Policy Source - use ~/.config/aleph/ for cross-platform consistency
         var configPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".config", "aether", "config.toml"
+            ".config", "aleph", "config.toml"
         );
         PolicySourceText.Text = $"Local configuration file ({configPath})";
         PolicyLastUpdatedText.Text = $"Last updated: {DateTime.Now:yyyy-MM-dd HH:mm}";
@@ -126,7 +126,7 @@ public sealed partial class PoliciesSettingsPage : UserControl
 
         try
         {
-            // Refresh from AetherCore
+            // Refresh from AlephCore
             await Task.Run(() => _core?.ReloadConfig());
             LoadPolicies();
             ShowStatus("Policies refreshed", InfoBarSeverity.Success);

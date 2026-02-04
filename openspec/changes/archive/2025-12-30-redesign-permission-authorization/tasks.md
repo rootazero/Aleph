@@ -128,13 +128,13 @@
 - [x] **Solution**: Upgrade rdev from 0.5.x to 0.6.0 (git main branch)
 - [x] Modify `Aleph/core/Cargo.toml` to use git version
 - [x] Rebuild Rust library with new rdev version
-- [x] Copy updated `libaethecore.dylib` to `Aleph/Frameworks/`
+- [x] Copy updated `libalephcore.dylib` to `Aleph/Frameworks/`
 - [x] Verify Release build succeeds
 - [ ] Validation: Manual test - type in other apps without crash
 
 **Files modified:**
 - `Aleph/core/Cargo.toml` - Updated rdev dependency to git main
-- `Aleph/Frameworks/libaethecore.dylib` - Rebuilt with rdev 0.6.0
+- `Aleph/Frameworks/libalephcore.dylib` - Rebuilt with rdev 0.6.0
 
 **Acceptance criteria:**
 - ✅ rdev upgraded to git version with main thread fixes

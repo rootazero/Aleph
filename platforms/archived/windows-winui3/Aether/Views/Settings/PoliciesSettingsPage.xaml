@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <UserControl
-    x:Class="Aether.Views.Settings.PoliciesSettingsPage"
+    x:Class="Aleph.Views.Settings.PoliciesSettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
@@ -359,7 +359,7 @@
                                    FontSize="12"/>
                     </StackPanel>
                     <TextBlock x:Name="PolicySourceText"
-                               Text="Local configuration file (~/.config/aether/config.toml)"
+                               Text="Local configuration file (~/.config/aleph/config.toml)"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                FontSize="11"/>
                     <TextBlock x:Name="PolicyLastUpdatedText"

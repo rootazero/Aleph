@@ -25,6 +25,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Aether\Aether.csproj" />
+    <ProjectReference Include="..\Aleph\Aleph.csproj" />
   </ItemGroup>
 </Project>

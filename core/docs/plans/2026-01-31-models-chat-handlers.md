@@ -62,7 +62,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore gateway::handlers::models::tests --no-default-features`
+Run: `cargo test -p alephcore gateway::handlers::models::tests --no-default-features`
 Expected: FAIL with "cannot find module `models`"
 
 **Step 3: Write minimal implementation**
@@ -388,7 +388,7 @@ mod tests {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore gateway::handlers::models::tests --no-default-features`
+Run: `cargo test -p alephcore gateway::handlers::models::tests --no-default-features`
 Expected: PASS
 
 **Step 5: Commit**
@@ -428,7 +428,7 @@ fn test_models_handlers_registered() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_models_handlers_registered --no-default-features`
+Run: `cargo test -p alephcore test_models_handlers_registered --no-default-features`
 Expected: FAIL with "assertion failed: registry.has_method(\"models.list\")"
 
 **Step 3: Write minimal implementation**
@@ -459,7 +459,7 @@ registry.register("models.capabilities", |req| async move {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_models_handlers_registered --no-default-features`
+Run: `cargo test -p alephcore test_models_handlers_registered --no-default-features`
 Expected: PASS
 
 **Step 5: Commit**
@@ -527,7 +527,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore gateway::handlers::chat::tests --no-default-features`
+Run: `cargo test -p alephcore gateway::handlers::chat::tests --no-default-features`
 Expected: FAIL with "cannot find module `chat`"
 
 **Step 3: Write minimal implementation**
@@ -942,7 +942,7 @@ mod tests {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore gateway::handlers::chat::tests --no-default-features`
+Run: `cargo test -p alephcore gateway::handlers::chat::tests --no-default-features`
 Expected: PASS
 
 **Step 5: Commit**
@@ -984,7 +984,7 @@ fn test_chat_handlers_registered() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p aethecore test_chat_handlers_registered --no-default-features`
+Run: `cargo test -p alephcore test_chat_handlers_registered --no-default-features`
 Expected: FAIL with "assertion failed"
 
 **Step 3: Write minimal implementation**
@@ -1034,7 +1034,7 @@ registry.register("chat.clear", |req| async move {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p aethecore test_chat_handlers_registered --no-default-features`
+Run: `cargo test -p alephcore test_chat_handlers_registered --no-default-features`
 Expected: PASS
 
 **Step 5: Commit**
@@ -1063,9 +1063,9 @@ Create `core/tests/models_chat_handlers_test.rs`:
 ```rust
 //! Integration tests for models.* and chat.* RPC handlers
 
-use aethecore::config::Config;
-use aethecore::gateway::handlers::models;
-use aethecore::gateway::protocol::JsonRpcRequest;
+use alephcore::config::Config;
+use alephcore::gateway::handlers::models;
+use alephcore::gateway::protocol::JsonRpcRequest;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -1088,7 +1088,7 @@ async fn test_models_list_empty() {
 
 #[tokio::test]
 async fn test_models_list_with_providers() {
-    use aethecore::config::types::ProviderConfig;
+    use alephcore::config::types::ProviderConfig;
     use std::collections::HashMap;
 
     let mut config = Config::default();
@@ -1125,7 +1125,7 @@ async fn test_models_list_with_providers() {
 
 #[tokio::test]
 async fn test_models_list_filter_enabled() {
-    use aethecore::config::types::ProviderConfig;
+    use alephcore::config::types::ProviderConfig;
     use std::collections::HashMap;
 
     let mut config = Config::default();
@@ -1158,7 +1158,7 @@ async fn test_models_list_filter_enabled() {
 
 #[tokio::test]
 async fn test_models_get_found() {
-    use aethecore::config::types::ProviderConfig;
+    use alephcore::config::types::ProviderConfig;
     use std::collections::HashMap;
 
     let mut config = Config::default();
@@ -1202,7 +1202,7 @@ async fn test_models_get_not_found() {
 
 #[tokio::test]
 async fn test_models_capabilities() {
-    use aethecore::config::types::ProviderConfig;
+    use alephcore::config::types::ProviderConfig;
     use std::collections::HashMap;
 
     let mut config = Config::default();
@@ -1238,7 +1238,7 @@ async fn test_models_capabilities() {
 
 #[test]
 fn test_chat_send_params() {
-    use aethecore::gateway::handlers::chat::SendParams;
+    use alephcore::gateway::handlers::chat::SendParams;
 
     let json = json!({
         "message": "Hello, AI!",
@@ -1254,7 +1254,7 @@ fn test_chat_send_params() {
 
 #[test]
 fn test_chat_history_params() {
-    use aethecore::gateway::handlers::chat::HistoryParams;
+    use alephcore::gateway::handlers::chat::HistoryParams;
 
     let json = json!({
         "session_key": "agent:main:main",
@@ -1268,7 +1268,7 @@ fn test_chat_history_params() {
 
 #[test]
 fn test_chat_clear_params() {
-    use aethecore::gateway::handlers::chat::ClearParams;
+    use alephcore::gateway::handlers::chat::ClearParams;
 
     let json = json!({
         "session_key": "agent:main:main",
@@ -1283,7 +1283,7 @@ fn test_chat_clear_params() {
 
 **Step 2: Run tests**
 
-Run: `cargo test -p aethecore --test models_chat_handlers_test`
+Run: `cargo test -p alephcore --test models_chat_handlers_test`
 Expected: PASS (all tests should pass)
 
 **Step 3: Commit**
@@ -1358,12 +1358,12 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 **Step 1: Run all tests**
 
-Run: `cargo test -p aethecore --lib`
+Run: `cargo test -p alephcore --lib`
 Expected: All tests pass
 
 **Step 2: Run integration tests**
 
-Run: `cargo test -p aethecore --test '*'`
+Run: `cargo test -p alephcore --test '*'`
 Expected: All tests pass
 
 **Step 3: Final commit (if any fixes needed)**

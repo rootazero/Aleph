@@ -98,7 +98,7 @@ This document describes a complete rewrite of Aleph's plugin system, inspired by
 
 1. `~/.aleph/aleph.jsonc` (global)
 2. `./aleph.jsonc` (project-level, find_up)
-3. `AETHER_CONFIG_CONTENT` (environment variable, highest priority)
+3. `ALEPH_CONFIG_CONTENT` (environment variable, highest priority)
 
 ## Configuration Format
 

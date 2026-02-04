@@ -12,10 +12,10 @@ Captured: 2026-01-02 12:30 CST
   - System Time: 18.72s
 
 ### Binary Size
-- **libaethecore.dylib**: 10M (10,485,760 bytes)
+- **libalephcore.dylib**: 10M (10,485,760 bytes)
   - Architecture: arm64 (Apple Silicon)
   - Configuration: Release (optimized)
-  - Location: `target/release/libaethecore.dylib`
+  - Location: `target/release/libalephcore.dylib`
 
 ### Dependencies Removed
 - ✅ `async-trait = "0.1"` - Removed (using native async fn in traits)

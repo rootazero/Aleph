@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
-namespace Aether.ViewModels;
+namespace Aleph.ViewModels;
 
 /// <summary>
 /// ViewModel for ConversationWindow.
@@ -492,7 +492,7 @@ public partial class ConversationViewModel : ObservableObject
         StatusText = "Streaming...";
 
         // Simulate streaming response
-        var response = "I'm Aether, your AI assistant running on Windows. This is a simulated response to demonstrate the streaming functionality. In production, this would be connected to the Rust core which handles AI provider communication.";
+        var response = "I'm Aleph, your AI assistant running on Windows. This is a simulated response to demonstrate the streaming functionality. In production, this would be connected to the Rust core which handles AI provider communication.";
 
         foreach (var word in response.Split(' '))
         {
@@ -534,7 +534,7 @@ public partial class ConversationMessage : ObservableObject
     public string RoleDisplay => Role switch
     {
         MessageRole.User => "You",
-        MessageRole.Assistant => "Aether",
+        MessageRole.Assistant => "Aleph",
         MessageRole.System => "System",
         _ => "Unknown"
     };

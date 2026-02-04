@@ -361,7 +361,7 @@ N/A (initial implementation, no existing code to migrate)
 ## Success Criteria
 
 ✅ **Phase 1 is successful when:**
-1. `cargo build --release` produces `libaethecore.dylib`
+1. `cargo build --release` produces `libalephcore.dylib`
 2. `cargo test` passes all unit tests
 3. `uniffi-bindgen generate src/aleph.udl --language swift` generates valid Swift bindings
 4. Manual test: Pressing Cmd+~ triggers callback with clipboard content

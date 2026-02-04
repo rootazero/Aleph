@@ -1,8 +1,8 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Aether.Models;
+using Aleph.Models;
 
-namespace Aether.ViewModels;
+namespace Aleph.ViewModels;
 
 /// <summary>
 /// ViewModel for HaloWindow.

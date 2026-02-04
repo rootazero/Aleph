@@ -171,7 +171,7 @@ The build system SHALL remove unused crate dependencies to reduce build time and
 **Acceptance Criteria**:
 - Run `cargo tree` to verify no transitive dependents
 - Build time is reduced (measured with `cargo build --timings`)
-- Binary size is reduced (measured with `ls -lh libaethecore.dylib`)
+- Binary size is reduced (measured with `ls -lh libalephcore.dylib`)
 - All tests continue to pass
 
 **Example**: Replace `once_cell::sync::Lazy` with `std::sync::OnceLock` (available in Rust 1.70+)

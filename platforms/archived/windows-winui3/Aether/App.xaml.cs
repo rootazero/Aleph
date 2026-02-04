@@ -1,18 +1,18 @@
-// Aether Windows Application
+// Aleph Windows Application
 // Main entry point - manages lifecycle, services, and windows
 
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Aether.Services;
-using Aether.Interop;
-using Aether.Windows;
-using Aether.Models;
+using Aleph.Services;
+using Aleph.Interop;
+using Aleph.Windows;
+using Aleph.Models;
 
-namespace Aether;
+namespace Aleph;
 
 /// <summary>
-/// Aether Windows application entry point.
+/// Aleph Windows application entry point.
 ///
 /// Responsibilities:
 /// - Single instance enforcement
@@ -37,7 +37,7 @@ public partial class App : Application
     private DispatcherQueue? _dispatcherQueue;
     private TrayIconService? _trayIconService;
     private HotkeyService? _hotkeyService;
-    private AetherCore? _aetherCore;
+    private AlephCore? _alephCore;
     private CursorService? _cursorService;
     private ClipboardService? _clipboardService;
     private ScreenCaptureService? _screenCaptureService;
@@ -49,8 +49,8 @@ public partial class App : Application
     public HotkeyService Hotkeys => _hotkeyService
         ?? throw new InvalidOperationException("HotkeyService not initialized");
 
-    public AetherCore Core => _aetherCore
-        ?? throw new InvalidOperationException("AetherCore not initialized");
+    public AlephCore Core => _alephCore
+        ?? throw new InvalidOperationException("AlephCore not initialized");
 
     public CursorService Cursor => _cursorService
         ?? throw new InvalidOperationException("CursorService not initialized");
@@ -113,7 +113,7 @@ public partial class App : Application
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
         // Check if first-time initialization is needed
-        if (AetherCore.NeedsFirstTimeInit())
+        if (AlephCore.NeedsFirstTimeInit())
         {
             await RunFirstTimeInitializationAsync();
         }
@@ -151,7 +151,7 @@ public partial class App : Application
         _initDialog.RetryRequested += async () =>
         {
             // Run init again on background thread
-            await Task.Run(() => AetherCore.RunFirstTimeInit(_initDialog));
+            await Task.Run(() => AlephCore.RunFirstTimeInit(_initDialog));
         };
 
         while (shouldRetry && !success)
@@ -160,7 +160,7 @@ public partial class App : Application
             var dialogTask = _initDialog.ShowAsync();
 
             // Run initialization on background thread
-            await Task.Run(() => AetherCore.RunFirstTimeInit(_initDialog));
+            await Task.Run(() => AlephCore.RunFirstTimeInit(_initDialog));
 
             // Wait for dialog to close (either success, quit, or retry)
             await dialogTask;
@@ -208,7 +208,7 @@ public partial class App : Application
         // Cleanup old update files
         _autoUpdateService?.CleanupOldUpdates();
 
-        System.Diagnostics.Debug.WriteLine("Aether started successfully");
+        System.Diagnostics.Debug.WriteLine("Aleph started successfully");
     }
 
     private void InitializeServices()
@@ -225,10 +225,10 @@ public partial class App : Application
             _screenCaptureService = new ScreenCaptureService();
 
             // 4. Initialize Rust core
-            _aetherCore = new AetherCore(_dispatcherQueue!);
-            if (!_aetherCore.Initialize())
+            _alephCore = new AlephCore(_dispatcherQueue!);
+            if (!_alephCore.Initialize())
             {
-                System.Diagnostics.Debug.WriteLine("Warning: Aether core initialization failed (DLL may be missing)");
+                System.Diagnostics.Debug.WriteLine("Warning: Aleph core initialization failed (DLL may be missing)");
             }
 
             // 5. Initialize hotkey service
@@ -295,10 +295,10 @@ public partial class App : Application
 
     private void WireUpCoreCallbacks()
     {
-        if (_aetherCore == null || _haloWindow == null) return;
+        if (_alephCore == null || _haloWindow == null) return;
 
         // Stream text callback
-        _aetherCore.StreamReceived += (text) =>
+        _alephCore.StreamReceived += (text) =>
         {
             _dispatcherQueue?.TryEnqueue(() =>
             {
@@ -312,7 +312,7 @@ public partial class App : Application
         };
 
         // Stream complete callback
-        _aetherCore.Completed += (response) =>
+        _alephCore.Completed += (response) =>
         {
             _dispatcherQueue?.TryEnqueue(() =>
             {
@@ -321,7 +321,7 @@ public partial class App : Application
         };
 
         // Error callback
-        _aetherCore.ErrorOccurred += (error, code) =>
+        _alephCore.ErrorOccurred += (error, code) =>
         {
             _dispatcherQueue?.TryEnqueue(() =>
             {
@@ -330,7 +330,7 @@ public partial class App : Application
         };
 
         // Tool execution callback (status: 0=started, 1=completed, 2=failed)
-        _aetherCore.ToolExecuted += (toolName, status, result) =>
+        _alephCore.ToolExecuted += (toolName, status, result) =>
         {
             _dispatcherQueue?.TryEnqueue(() =>
             {
@@ -394,7 +394,7 @@ public partial class App : Application
     /// </summary>
     public Task ProcessUserInputAsync(string input)
     {
-        if (_haloWindow == null || _aetherCore == null) return Task.CompletedTask;
+        if (_haloWindow == null || _alephCore == null) return Task.CompletedTask;
 
         // Show thinking state
         _haloWindow.SetState(HaloState.Thinking);
@@ -403,7 +403,7 @@ public partial class App : Application
         try
         {
             // Send to Rust core (which will trigger callbacks)
-            _aetherCore.Process(input, stream: true);
+            _alephCore.Process(input, stream: true);
         }
         catch (Exception ex)
         {
@@ -434,7 +434,7 @@ public partial class App : Application
     /// </summary>
     public async Task ProcessScreenCaptureAsync()
     {
-        if (_screenCaptureService == null || _aetherCore == null || _haloWindow == null) return;
+        if (_screenCaptureService == null || _alephCore == null || _haloWindow == null) return;
 
         _haloWindow.SetState(HaloState.Processing);
 
@@ -446,7 +446,7 @@ public partial class App : Application
             if (resized != null)
             {
                 // TODO: Send to vision API via Rust core
-                // await _aetherCore.SendImageAsync(resized, "What's on this screen?");
+                // await _alephCore.SendImageAsync(resized, "What's on this screen?");
             }
         }
     }
@@ -481,12 +481,12 @@ public partial class App : Application
 
     private static string GetConfigPath()
     {
-        // Use ~/.config/aether/ for cross-platform consistency
+        // Use ~/.config/aleph/ for cross-platform consistency
         // Directory creation is handled by first-time initialization
         var configDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".config",
-            "aether"
+            "aleph"
         );
         return Path.Combine(configDir, "config.toml");
     }
@@ -500,7 +500,7 @@ public partial class App : Application
         // Cleanup services
         _hotkeyService?.Dispose();
         _trayIconService?.Dispose();
-        _aetherCore?.Dispose();
+        _alephCore?.Dispose();
         _cursorService?.Dispose();
         _screenCaptureService?.Dispose();
         _autoUpdateService?.Dispose();

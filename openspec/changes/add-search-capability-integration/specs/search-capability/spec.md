@@ -15,7 +15,7 @@ The system MUST define a `SearchResult` struct to represent individual search re
 #### Scenario: Creating a search result
 
 ```rust
-use aethecore::search::SearchResult;
+use alephcore::search::SearchResult;
 
 let result = SearchResult::new(
     "Rust Programming Language".to_string(),
@@ -35,7 +35,7 @@ assert!(result.provider.is_none()); // Optional field
 #### Scenario: Serializing search result to JSON
 
 ```rust
-use aethecore::search::SearchResult;
+use alephcore::search::SearchResult;
 use serde_json;
 
 let result = SearchResult {
@@ -69,8 +69,8 @@ The system MUST define a `SearchProvider` trait that all search backend implemen
 #### Scenario: Implementing SearchProvider trait
 
 ```rust
-use aethecore::search::{SearchProvider, SearchResult, SearchOptions};
-use aethecore::error::Result;
+use alephcore::search::{SearchProvider, SearchResult, SearchOptions};
+use alephcore::error::Result;
 use async_trait::async_trait;
 
 struct MockSearchProvider;
@@ -123,7 +123,7 @@ The system MUST define `SearchOptions` struct to configure search behavior (lang
 #### Scenario: Creating search options with defaults
 
 ```rust
-use aethecore::search::SearchOptions;
+use alephcore::search::SearchOptions;
 
 let options = SearchOptions::default();
 
@@ -139,7 +139,7 @@ assert!(options.language.is_none());
 #### Scenario: Customizing search options
 
 ```rust
-use aethecore::search::SearchOptions;
+use alephcore::search::SearchOptions;
 
 let options = SearchOptions {
     language: Some("zh-CN".to_string()),
@@ -167,7 +167,7 @@ The system MUST implement `TavilyProvider` for Tavily AI search API with AI-opti
 #### Scenario: Creating Tavily provider
 
 ```rust
-use aethecore::search::providers::TavilyProvider;
+use alephcore::search::providers::TavilyProvider;
 
 let provider = TavilyProvider::new("tvly-test-key".to_string()).unwrap();
 
@@ -180,7 +180,7 @@ assert!(provider.is_available());
 #### Scenario: Tavily provider rejects empty API key
 
 ```rust
-use aethecore::search::providers::TavilyProvider;
+use alephcore::search::providers::TavilyProvider;
 
 let result = TavilyProvider::new("".to_string());
 
@@ -193,7 +193,7 @@ assert!(matches!(result, Err(AlephError::InvalidConfig { .. })));
 #### Scenario: Executing Tavily search (integration test)
 
 ```rust
-use aethecore::search::{providers::TavilyProvider, SearchOptions};
+use alephcore::search::{providers::TavilyProvider, SearchOptions};
 
 #[tokio::test]
 #[ignore] // Requires real API key
@@ -222,7 +222,7 @@ The system MUST implement `SearxngProvider` for self-hosted SearXNG instances wi
 #### Scenario: Creating SearXNG provider
 
 ```rust
-use aethecore::search::providers::SearxngProvider;
+use alephcore::search::providers::SearxngProvider;
 
 let provider = SearxngProvider::new("http://localhost:8080".to_string()).unwrap();
 
@@ -235,7 +235,7 @@ assert!(provider.is_available());
 #### Scenario: SearXNG provider rejects empty URL
 
 ```rust
-use aethecore::search::providers::SearxngProvider;
+use alephcore::search::providers::SearxngProvider;
 
 let result = SearxngProvider::new("".to_string());
 
@@ -253,7 +253,7 @@ The system MUST implement `BraveProvider` for Brave Search API with privacy and 
 #### Scenario: Creating Brave provider
 
 ```rust
-use aethecore::search::providers::BraveProvider;
+use alephcore::search::providers::BraveProvider;
 
 let provider = BraveProvider::new("BSA_test_key".to_string()).unwrap();
 
@@ -272,7 +272,7 @@ The system MUST implement `GoogleProvider` for Google Custom Search Engine with 
 #### Scenario: Creating Google provider
 
 ```rust
-use aethecore::search::providers::GoogleProvider;
+use alephcore::search::providers::GoogleProvider;
 
 let provider = GoogleProvider::new(
     "AIza_test_key".to_string(),
@@ -294,7 +294,7 @@ The system MUST implement `BingProvider` for Bing Web Search API with cost-effec
 #### Scenario: Creating Bing provider
 
 ```rust
-use aethecore::search::providers::BingProvider;
+use alephcore::search::providers::BingProvider;
 
 let provider = BingProvider::new("ocp-apim-test-key".to_string()).unwrap();
 
@@ -313,7 +313,7 @@ The system MUST implement `ExaProvider` for Exa.ai semantic search API.
 #### Scenario: Creating Exa provider
 
 ```rust
-use aethecore::search::providers::ExaProvider;
+use alephcore::search::providers::ExaProvider;
 
 let provider = ExaProvider::new("exa_test_key".to_string()).unwrap();
 
@@ -332,8 +332,8 @@ The system MUST implement `SearchRegistry` to manage multiple providers and rout
 #### Scenario: Creating registry from config
 
 ```rust
-use aethecore::search::SearchRegistry;
-use aethecore::config::SearchConfig;
+use alephcore::search::SearchRegistry;
+use alephcore::config::SearchConfig;
 use std::collections::HashMap;
 
 let mut backends = HashMap::new();
@@ -362,7 +362,7 @@ assert!(registry.get_provider("tavily").is_some());
 #### Scenario: Fallback to secondary provider on primary failure
 
 ```rust
-use aethecore::search::{SearchRegistry, SearchOptions};
+use alephcore::search::{SearchRegistry, SearchOptions};
 
 #[tokio::test]
 async fn test_fallback_logic() {
@@ -389,8 +389,8 @@ The system MUST implement `CapabilityExecutor::execute_search()` to execute sear
 #### Scenario: Executing search capability
 
 ```rust
-use aethecore::capability::CapabilityExecutor;
-use aethecore::payload::{AgentPayload, Capability};
+use alephcore::capability::CapabilityExecutor;
+use alephcore::payload::{AgentPayload, Capability};
 
 #[tokio::test]
 async fn test_execute_search() {
@@ -415,7 +415,7 @@ async fn test_execute_search() {
 #### Scenario: Extracting search query from user input
 
 ```rust
-use aethecore::capability::CapabilityExecutor;
+use alephcore::capability::CapabilityExecutor;
 
 #[test]
 fn test_extract_search_query() {
@@ -460,7 +460,7 @@ api_key = "tvly-xxx"
 ```
 
 ```rust
-use aethecore::config::Config;
+use alephcore::config::Config;
 
 let config = Config::load_from_file("config.toml").unwrap();
 
@@ -483,8 +483,8 @@ The system MUST format search results in Markdown when assembling prompts.
 #### Scenario: Formatting search results in prompt
 
 ```rust
-use aethecore::payload::{PromptAssembler, AgentPayload, ContextFormat};
-use aethecore::search::SearchResult;
+use alephcore::payload::{PromptAssembler, AgentPayload, ContextFormat};
+use alephcore::search::SearchResult;
 
 let mut payload = AgentPayload::builder()
     .user_query("What is Rust?".to_string())
@@ -519,8 +519,8 @@ The system MUST handle search failures gracefully without crashing the applicati
 #### Scenario: Search timeout does not crash system
 
 ```rust
-use aethecore::capability::CapabilityExecutor;
-use aethecore::payload::{AgentPayload, Capability};
+use alephcore::capability::CapabilityExecutor;
+use alephcore::payload::{AgentPayload, Capability};
 
 #[tokio::test]
 async fn test_search_timeout() {
@@ -546,8 +546,8 @@ async fn test_search_timeout() {
 #### Scenario: Invalid API key returns error but continues
 
 ```rust
-use aethecore::search::providers::TavilyProvider;
-use aethecore::search::SearchOptions;
+use alephcore::search::providers::TavilyProvider;
+use alephcore::search::SearchOptions;
 
 #[tokio::test]
 async fn test_invalid_api_key() {
@@ -572,7 +572,7 @@ The system MUST scrub PII from search queries before sending to external APIs.
 #### Scenario: Scrubbing email from query
 
 ```rust
-use aethecore::privacy::scrub_search_query;
+use alephcore::privacy::scrub_search_query;
 
 let query = "Contact john.doe@example.com for help";
 let scrubbed = scrub_search_query(query);
@@ -585,7 +585,7 @@ assert_eq!(scrubbed, "Contact [EMAIL_REDACTED] for help");
 #### Scenario: Scrubbing phone number from query
 
 ```rust
-use aethecore::privacy::scrub_search_query;
+use alephcore::privacy::scrub_search_query;
 
 let query = "Call +1-555-123-4567 for support";
 let scrubbed = scrub_search_query(query);
@@ -606,8 +606,8 @@ The existing `AgentContext` struct MUST have `search_results` field properly def
 #### Scenario: AgentContext includes search results
 
 ```rust
-use aethecore::payload::{AgentContext, ContextFormat};
-use aethecore::search::SearchResult;
+use alephcore::payload::{AgentContext, ContextFormat};
+use alephcore::search::SearchResult;
 
 let mut context = AgentContext::new(ContextFormat::Markdown);
 context.search_results = Some(vec![
@@ -640,7 +640,7 @@ capabilities = ["search"]
 ```
 
 ```rust
-use aethecore::config::Config;
+use alephcore::config::Config;
 
 let config = Config::load_from_str(toml_str).unwrap();
 let rule = &config.rules[0];

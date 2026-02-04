@@ -49,7 +49,7 @@
 - [ ] 2.2.3 Add `execute_command(path, argument)` to AlephCore interface
 - [ ] 2.2.4 Add `filter_commands(nodes, prefix)` helper method
 - [ ] 2.2.5 Add `get_show_command_hints()` / `set_show_command_hints()` methods
-- [ ] 2.2.6 Rebuild `libaethecore.dylib` with new exports
+- [ ] 2.2.6 Rebuild `libalephcore.dylib` with new exports
 
 ## Phase 3: Swift UI - Command Mode State
 

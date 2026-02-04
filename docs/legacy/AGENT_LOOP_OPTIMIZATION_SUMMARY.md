@@ -23,15 +23,15 @@
 
 **变更**:
 - 将默认 `max_steps` 从 **30** 提升到 **100**
-- 添加环境变量支持: `AETHER_SKILL_MAX_STEPS`
+- 添加环境变量支持: `ALEPH_SKILL_MAX_STEPS`
 - 硬上限保护: 最大 500 步
 - 添加配置日志输出
 
 **代码片段** (第 130-147 行):
 ```rust
-// Default: 100 steps (vs 30 previously), configurable via AETHER_SKILL_MAX_STEPS
+// Default: 100 steps (vs 30 previously), configurable via ALEPH_SKILL_MAX_STEPS
 let default_max_steps = 100;
-let max_steps = std::env::var("AETHER_SKILL_MAX_STEPS")
+let max_steps = std::env::var("ALEPH_SKILL_MAX_STEPS")
     .ok()
     .and_then(|s| s.parse::<usize>().ok())
     .unwrap_or(default_max_steps)
@@ -60,11 +60,11 @@ info!(
 ./aleph
 
 # 临时提升到 150 步
-export AETHER_SKILL_MAX_STEPS=150
+export ALEPH_SKILL_MAX_STEPS=150
 ./aleph
 
 # 测试上限保护（会被限制为 500）
-export AETHER_SKILL_MAX_STEPS=1000
+export ALEPH_SKILL_MAX_STEPS=1000
 ./aleph
 ```
 
@@ -294,10 +294,10 @@ if let Some(violation) = self.check_global_doom_loop() {
 
 ```bash
 # Skill 执行步数 (默认: 100)
-export AETHER_SKILL_MAX_STEPS=150
+export ALEPH_SKILL_MAX_STEPS=150
 
 # 示例：复杂 skill 需要更多步骤
-export AETHER_SKILL_MAX_STEPS=200
+export ALEPH_SKILL_MAX_STEPS=200
 ```
 
 ### 代码配置 (高级)
@@ -460,7 +460,7 @@ let mut config = ToolCacheConfig::default();
 config.enabled = false;
 
 // 临时降低步数
-export AETHER_SKILL_MAX_STEPS=30
+export ALEPH_SKILL_MAX_STEPS=30
 ```
 
 ---

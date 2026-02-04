@@ -1,12 +1,12 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Aether.ViewModels;
+using Aleph.ViewModels;
 using System.Collections.ObjectModel;
 using System.Runtime.InteropServices;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
-namespace Aether.Views.Settings;
+namespace Aleph.Views.Settings;
 
 /// <summary>
 /// Skills Settings page - Claude Agent Skills management.
@@ -54,7 +54,7 @@ public sealed partial class SkillsSettingsPage : UserControl
 
             _skills.Clear();
 
-            // TODO: Load from AetherCore when integrated
+            // TODO: Load from AlephCore when integrated
             // For now, show empty state
 
             UpdateVisibility();
@@ -85,9 +85,9 @@ public sealed partial class SkillsSettingsPage : UserControl
 
     private void UpdateSkillsDirectory()
     {
-        // Use ~/.config/aether/ for cross-platform consistency
+        // Use ~/.config/aleph/ for cross-platform consistency
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        SkillsDirectoryText.Text = Path.Combine(userProfile, ".config", "aether", "skills");
+        SkillsDirectoryText.Text = Path.Combine(userProfile, ".config", "aleph", "skills");
     }
 
     #endregion
@@ -179,7 +179,7 @@ public sealed partial class SkillsSettingsPage : UserControl
 
         try
         {
-            // TODO: Call AetherCore to install skill
+            // TODO: Call AlephCore to install skill
             await Task.Delay(1000); // Simulate installation
 
             // For demo, add a mock skill
@@ -209,7 +209,7 @@ public sealed partial class SkillsSettingsPage : UserControl
 
         try
         {
-            // TODO: Call AetherCore to install from ZIP
+            // TODO: Call AlephCore to install from ZIP
             await Task.Delay(1000); // Simulate installation
 
             // For demo, add a mock skill
@@ -270,7 +270,7 @@ public sealed partial class SkillsSettingsPage : UserControl
         {
             try
             {
-                // TODO: Call AetherCore to delete skill
+                // TODO: Call AlephCore to delete skill
                 _skills.Remove(_skillToDelete);
                 UpdateVisibility();
                 ShowStatus($"Skill '{_skillToDelete.Name}' deleted", InfoBarSeverity.Success);

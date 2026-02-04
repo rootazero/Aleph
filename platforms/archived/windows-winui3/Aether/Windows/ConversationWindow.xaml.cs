@@ -3,9 +3,9 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Windows.Graphics;
 using Windows.System;
-using Aether.ViewModels;
+using Aleph.ViewModels;
 
-namespace Aether.Windows;
+namespace Aleph.Windows;
 
 /// <summary>
 /// Multi-turn conversation window.
@@ -35,7 +35,7 @@ public sealed partial class ConversationWindow : Window
     public ConversationWindow()
     {
         InitializeComponent();
-        Title = "Aether Conversation";
+        Title = "Aleph Conversation";
 
         // Get AppWindow reference for dynamic resizing
         _appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(

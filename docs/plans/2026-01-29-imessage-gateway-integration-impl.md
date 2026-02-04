@@ -1666,7 +1666,7 @@ mod tests {
 
         assert!(router.check_mention("Hey @aleph, help me", &channel_config));
         assert!(router.check_mention("MyBot can you help?", &channel_config));
-        assert!(router.check_mention("Hello AETHER", &channel_config));
+        assert!(router.check_mention("Hello ALEPH", &channel_config));
         assert!(!router.check_mention("Hello world", &channel_config));
     }
 }

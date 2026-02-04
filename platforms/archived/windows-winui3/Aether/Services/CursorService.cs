@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Aether.Services;
+namespace Aleph.Services;
 
 /// <summary>
 /// Cursor and caret position tracking service.
