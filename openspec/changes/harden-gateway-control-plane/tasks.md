@@ -4,7 +4,7 @@
 - [x] Add connection‑level auth gating in `GatewayServer` and wire `AuthContext` into connection handling.
 - [x] Implement `connect` handling in the WS loop to mark connections authenticated and store permissions.
 - [x] Add subscription filtering for outbound events with `events.subscribe` / `events.unsubscribe` / `events.list`.
-- [x] Register auth + pairing + events RPC methods in `aether_gateway` startup.
+- [x] Register auth + pairing + events RPC methods in `aleph_gateway` startup.
 - [x] Register `agent.status` and `agent.cancel` using `ExecutionEngine` (real) and `AgentRunManager` (simulated) paths.
 - [x] Start `InboundMessageRouter` on gateway startup and auto‑start channels when configured.
 - [x] Unify inbound routing to use `AgentRouter` bindings and default agent selection.

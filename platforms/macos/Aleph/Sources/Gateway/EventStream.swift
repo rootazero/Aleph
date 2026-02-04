@@ -27,7 +27,7 @@ final class EventStreamManager: ObservableObject {
 
     // MARK: - Private Properties
 
-    private let logger = Logger(subsystem: "com.aether", category: "EventStream")
+    private let logger = Logger(subsystem: "com.aleph", category: "EventStream")
     private var eventBuffer: [UInt64: StreamEvent] = [:]
     private var nextExpectedSeq: UInt64 = 0
     private var currentRunId: String?

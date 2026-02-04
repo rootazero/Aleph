@@ -1,16 +1,16 @@
 ## ADDED Requirements
 
 ### Requirement: Event Handler Trait Definition
-The system SHALL define an `AetherEventHandler` trait that specifies callback methods for Rust-to-client communication.
+The system SHALL define an `AlephEventHandler` trait that specifies callback methods for Rust-to-client communication.
 
 #### Scenario: Define callback trait
 - **WHEN** defining the event handler interface
 - **THEN** trait includes methods: on_state_changed, on_hotkey_detected, on_error
 - **AND** all methods accept parameters (state, message, etc.)
-- **AND** trait is object-safe (can be used as `dyn AetherEventHandler`)
+- **AND** trait is object-safe (can be used as `dyn AlephEventHandler`)
 
 #### Scenario: Implement event handler in client
-- **WHEN** Swift client implements AetherEventHandler protocol
+- **WHEN** Swift client implements AlephEventHandler protocol
 - **THEN** all callback methods must be implemented
 - **AND** Swift can provide custom logic for each callback
 - **AND** implementation is type-checked at compile time
@@ -70,13 +70,13 @@ The system SHALL ensure callbacks can be invoked safely from any thread.
 - **AND** no data races occur
 
 #### Scenario: Arc-based handler storage
-- **WHEN** AetherCore stores event handler
-- **THEN** handler is wrapped in Arc<dyn AetherEventHandler>
+- **WHEN** AlephCore stores event handler
+- **THEN** handler is wrapped in Arc<dyn AlephEventHandler>
 - **AND** Arc is Send + Sync
 - **AND** handler can be safely shared across threads
 
 ### Requirement: Mock Event Handler for Testing
-The system SHALL provide a mock implementation of AetherEventHandler for testing purposes.
+The system SHALL provide a mock implementation of AlephEventHandler for testing purposes.
 
 #### Scenario: Mock handler records calls
 - **WHEN** creating a mock event handler
@@ -85,7 +85,7 @@ The system SHALL provide a mock implementation of AetherEventHandler for testing
 - **AND** tests can verify callback parameters
 
 #### Scenario: Test callback invocation
-- **WHEN** testing AetherCore logic
+- **WHEN** testing AlephCore logic
 - **THEN** mock handler is injected into core
 - **AND** tests trigger actions (e.g., hotkey detection)
 - **AND** tests verify correct callbacks were made

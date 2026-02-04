@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Enable Aether to read and write images from/to the system clipboard, enabling multimodal AI interactions with vision-capable models (GPT-4 Vision, Claude 3 Opus). Images are encoded as Base64 for API transmission and support standard formats (PNG, JPEG, GIF, WebP).
+Enable Aleph to read and write images from/to the system clipboard, enabling multimodal AI interactions with vision-capable models (GPT-4 Vision, Claude 3 Opus). Images are encoded as Base64 for API transmission and support standard formats (PNG, JPEG, GIF, WebP).
 
 ## ADDED Requirements
 
@@ -31,7 +31,7 @@ The system SHALL read image content from the system clipboard using the arboard 
 
 - **WHEN** clipboard contains only text
 - **AND** client calls `read_image()`
-- **THEN** operation returns `AetherError::ClipboardError`
+- **THEN** operation returns `AlephError::ClipboardError`
 - **AND** error message indicates "No image content available"
 - **AND** text content remains accessible via `read_text()`
 
@@ -39,7 +39,7 @@ The system SHALL read image content from the system clipboard using the arboard 
 
 - **WHEN** clipboard contains image larger than `max_image_size_mb` config (default: 10MB)
 - **AND** client calls `read_image()`
-- **THEN** operation returns `AetherError::ClipboardError`
+- **THEN** operation returns `AlephError::ClipboardError`
 - **AND** error message indicates size limit exceeded
 - **AND** suggestion recommends resizing image
 
@@ -47,7 +47,7 @@ The system SHALL read image content from the system clipboard using the arboard 
 
 - **WHEN** clipboard contains corrupted image bytes
 - **AND** client calls `read_image()`
-- **THEN** operation returns `AetherError::ClipboardError`
+- **THEN** operation returns `AlephError::ClipboardError`
 - **AND** error message indicates "Invalid image format"
 - **AND** no panic or crash occurs
 
@@ -144,7 +144,7 @@ The system SHALL automatically detect image format from clipboard data.
 
 - **WHEN** clipboard contains BMP or TIFF image
 - **AND** client calls `read_image()`
-- **THEN** operation returns `AetherError::UnsupportedFormat`
+- **THEN** operation returns `AlephError::UnsupportedFormat`
 - **AND** error suggests converting to PNG/JPEG
 - **AND** user can paste into image editor for conversion
 
@@ -174,7 +174,7 @@ The system SHALL send clipboard images to vision-capable AI providers using thei
 
 - **WHEN** clipboard contains image
 - **AND** router selects Ollama provider without vision model
-- **THEN** system returns `AetherError::ProviderError`
+- **THEN** system returns `AlephError::ProviderError`
 - **AND** error message indicates "Vision not supported by current provider"
 - **AND** suggestion recommends switching to OpenAI or Claude
 

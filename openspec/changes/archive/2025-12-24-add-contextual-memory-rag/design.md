@@ -5,7 +5,7 @@
 
 ## Overview
 
-This document details the architectural design for Aether's context-aware memory system. The memory module enables Aether to remember past interactions and provide contextually relevant responses based on the user's active application and window.
+This document details the architectural design for Aleph's context-aware memory system. The memory module enables Aleph to remember past interactions and provide contextually relevant responses based on the user's active application and window.
 
 ## Design Goals
 
@@ -33,7 +33,7 @@ This document details the architectural design for Aether's context-aware memory
 ┌───────────────────────────────────────────────────────────────────┐
 │                      Rust Core Library                            │
 │  ┌───────────────────────────────────────────────────────────┐   │
-│  │                      AetherCore                           │   │
+│  │                      AlephCore                           │   │
 │  │  ┌────────────────────────────────────────────────────┐  │   │
 │  │  │            Request Processing Pipeline            │  │   │
 │  │  │  1. Capture context (app+window)                  │  │   │
@@ -61,7 +61,7 @@ This document details the architectural design for Aether's context-aware memory
                             ▼
                 ┌───────────────────────┐
                 │  Local Storage        │
-                │  ~/.aether/    │
+                │  ~/.aleph/    │
                 │  - memory.db          │
                 │  - models/            │
                 └───────────────────────┘
@@ -103,7 +103,7 @@ Rust stores in Arc<Mutex<Option<CapturedContext>>>
 
 **Data Structures**:
 ```rust
-// In aether.udl
+// In aleph.udl
 dictionary CapturedContext {
   string app_bundle_id;       // e.g., "com.apple.Notes"
   string? window_title;       // e.g., "Project Plan.txt"
@@ -265,7 +265,7 @@ impl EmbeddingModel {
 
 **Purpose**: Store new interactions as memories after successful AI responses.
 
-**Trigger Point**: After `AetherCore` receives AI response and sends to user.
+**Trigger Point**: After `AlephCore` receives AI response and sends to user.
 
 **Data Flow**:
 ```
@@ -436,7 +436,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 **Prompt Template**:
 ```
-You are Aether AI, an intelligent assistant that helps users with various tasks.
+You are Aleph AI, an intelligent assistant that helps users with various tasks.
 
 [If memories available:]
 Here are relevant past interactions in this context ({{app_name}} - {{window_title}}):
@@ -949,7 +949,7 @@ After implementation:
 ## Appendix: Code Structure
 
 ```
-Aether/core/src/memory/
+Aleph/core/src/memory/
 ├── mod.rs                  # Public API exports
 ├── database.rs             # VectorDatabase trait + SQLite impl
 ├── embedding.rs            # EmbeddingModel + ONNX inference

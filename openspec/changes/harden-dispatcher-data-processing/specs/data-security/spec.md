@@ -2,7 +2,7 @@
 
 ## Overview
 
-This capability defines requirements for protecting user data and preventing security vulnerabilities in the Aether system, including PII scrubbing, prompt injection protection, and secure data handling.
+This capability defines requirements for protecting user data and preventing security vulnerabilities in the Aleph system, including PII scrubbing, prompt injection protection, and secure data handling.
 
 ---
 

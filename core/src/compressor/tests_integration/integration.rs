@@ -1,4 +1,4 @@
-// Aether/core/src/compressor/tests_integration/integration.rs
+// Aleph/core/src/compressor/tests_integration/integration.rs
 //! Integration tests for the Smart Compaction system.
 //!
 //! These tests verify that:

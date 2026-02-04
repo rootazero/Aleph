@@ -171,7 +171,7 @@ let final_prompt = assembler.get_final_system_prompt(&payload);
 - Assembler can be used for new features
 
 **Phase 2: Integration**
-- Update `AetherCore::process_with_ai_internal()` to use PromptAssembler
+- Update `AlephCore::process_with_ai_internal()` to use PromptAssembler
 - Keep existing routing logic for provider selection
 - Use assembler for prompt construction
 
@@ -350,7 +350,7 @@ let messages = payload.build_messages();
 1. ✅ Implement core data structures (`AgentPayload`, `AgentIntent`, etc.)
 2. ✅ Implement `PromptAssembler` with template library
 3. ✅ Add unit tests for all components
-4. ⬜ Integrate with `AetherCore::process_with_ai_internal()`
+4. ⬜ Integrate with `AlephCore::process_with_ai_internal()`
 5. ⬜ Add UniFFI bindings for Swift access
 6. ⬜ Update Swift layer to use structured payloads
 7. ⬜ Add settings UI for custom command management
@@ -398,5 +398,5 @@ impl PromptAssembler {
 
 - [agentstructure.md](../agentstructure.md) - Original design document
 - [CLAUDE.md](../CLAUDE.md) - Project architecture guidelines
-- [router/mod.rs](../Aether/core/src/router/mod.rs) - Existing routing system
-- [providers/mod.rs](../Aether/core/src/providers/mod.rs) - AI provider abstraction
+- [router/mod.rs](../Aleph/core/src/router/mod.rs) - Existing routing system
+- [providers/mod.rs](../Aleph/core/src/providers/mod.rs) - AI provider abstraction

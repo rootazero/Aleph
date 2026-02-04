@@ -248,7 +248,7 @@ pub use manager::{
 **Step 5: Run tests to verify compilation**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 Expected: Compilation succeeds
@@ -524,7 +524,7 @@ ChannelClosed,
 **Step 4: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 5: Commit**
@@ -597,7 +597,7 @@ impl McpPersistentConfig {
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aether")
+            .join(".aleph")
             .join("mcp_config.json")
     }
 
@@ -838,7 +838,7 @@ pub use types::{
 **Step 4: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test mcp::manager::config
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test mcp::manager::config
 ```
 
 **Step 5: Commit**
@@ -1397,7 +1397,7 @@ NotFound(String),
 **Step 4: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test mcp::manager
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test mcp::manager
 ```
 
 **Step 5: Commit**
@@ -1752,7 +1752,7 @@ Add method to `core/src/gateway/handlers/mod.rs` after line 276:
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 4: Commit**
@@ -1792,7 +1792,7 @@ pub use manager::{
 **Step 2: Run full test suite**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test
 ```
 
 **Step 3: Commit**
@@ -2017,7 +2017,7 @@ pub use types::{
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test mcp::manager::health
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test mcp::manager::health
 ```
 
 **Step 4: Commit**

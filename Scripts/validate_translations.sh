@@ -5,7 +5,7 @@
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RESOURCES_DIR="$PROJECT_DIR/Aether/Resources"
+RESOURCES_DIR="$PROJECT_DIR/Aleph/Resources"
 BASE_STRINGS="$RESOURCES_DIR/en.lproj/Localizable.strings"
 
 echo "🔍 Validating translations across all localizations..."

@@ -8,7 +8,7 @@
 
 ## Why
 
-Users need the ability to manually override the system language preference for Aether's UI. While Aether currently follows the macOS system language (supporting English and Simplified Chinese), there are scenarios where users may want to use a different language for Aether than their system-wide setting:
+Users need the ability to manually override the system language preference for Aleph's UI. While Aleph currently follows the macOS system language (supporting English and Simplified Chinese), there are scenarios where users may want to use a different language for Aleph than their system-wide setting:
 
 1. **Multilingual users** who prefer different languages for different applications
 2. **Testing and development** where developers need to verify different language translations
@@ -26,10 +26,10 @@ This change provides a foundation for better internationalization support while 
 
 **Key Behaviors:**
 - Dropdown will show: "System Default" (auto-detect) + all supported languages (English, 简体中文, and future additions)
-- If user selects "System Default": Aether follows macOS system language
-- If user selects a specific language: Aether overrides with that language
+- If user selects "System Default": Aleph follows macOS system language
+- If user selects a specific language: Aleph overrides with that language
 - **Restart requirement**: Language changes require app restart to take effect (due to Apple's localization caching)
-- Show alert to user after saving: "Language will change after restarting Aether"
+- Show alert to user after saving: "Language will change after restarting Aleph"
 
 ## Impact
 
@@ -39,11 +39,11 @@ This change provides a foundation for better internationalization support while 
 
 ### Affected Code
 - **Swift Layer**:
-  - `Aether/Sources/SettingsView.swift` (`GeneralSettingsView`)
-  - `Aether/Sources/AetherApp.swift` (apply language override on launch)
+  - `Aleph/Sources/SettingsView.swift` (`GeneralSettingsView`)
+  - `Aleph/Sources/AlephApp.swift` (apply language override on launch)
 - **Rust Layer**:
-  - `Aether/core/src/config/mod.rs` (`GeneralConfig` struct)
-  - `Aether/core/src/aether.udl` (UniFFI interface for language config)
+  - `Aleph/core/src/config/mod.rs` (`GeneralConfig` struct)
+  - `Aleph/core/src/aleph.udl` (UniFFI interface for language config)
 
 ### User Experience Impact
 - Minimal - new optional setting in General tab
@@ -64,7 +64,7 @@ This change provides a foundation for better internationalization support while 
 
 ## Success Criteria
 - [ ] Language dropdown appears in General Settings tab
-- [ ] Selecting a language persists to `~/.aether/config.toml`
+- [ ] Selecting a language persists to `~/.aleph/config.toml`
 - [ ] App restart applies the selected language to all UI elements
 - [ ] Selecting "System Default" restores macOS system language behavior
 - [ ] Alert notifies user about restart requirement

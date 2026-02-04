@@ -1,4 +1,4 @@
-//! CLI argument definitions for Aether Gateway
+//! CLI argument definitions for Aleph Gateway
 //!
 //! This module contains all Clap-based command line argument parsing structures.
 
@@ -10,7 +10,7 @@ pub const DEFAULT_PID_FILE: &str = "~/.aleph/gateway.pid";
 /// Default log file location for daemon mode
 pub const DEFAULT_LOG_FILE: &str = "~/.aleph/gateway.log";
 
-/// Aether Gateway - WebSocket control plane for AI agents
+/// Aleph Gateway - WebSocket control plane for AI agents
 #[derive(Parser, Debug)]
 #[command(name = "aleph-gateway")]
 #[command(version, about, long_about = None)]

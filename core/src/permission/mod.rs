@@ -1,4 +1,4 @@
-// Aether/core/src/permission/mod.rs
+// Aleph/core/src/permission/mod.rs
 //! Unified Permission System
 //!
 //! This module implements a rule-based permission system inspired by OpenCode,

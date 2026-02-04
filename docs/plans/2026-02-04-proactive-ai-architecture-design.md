@@ -84,8 +84,8 @@ pub struct WindowsService;  // Windows (future)
 
 ### 2.3 macOS Implementation (LaunchdService)
 
-- **Plist Location:** `~/Library/LaunchAgents/com.aether.daemon.plist`
-- **Binary Path:** `~/.aleph/bin/aether-daemon`
+- **Plist Location:** `~/Library/LaunchAgents/com.aleph.daemon.plist`
+- **Binary Path:** `~/.aleph/bin/aleph-daemon`
 - **Launch Trigger:** User login (`RunAtLoad: true`)
 - **Crash Recovery:** `KeepAlive: true` ensures auto-restart
 - **Resource Limits:**
@@ -349,7 +349,7 @@ impl WorldModel {
 
         loop {
             match rx.recv().await {
-                Ok(AetherEvent::Raw(raw)) => {
+                Ok(AlephEvent::Raw(raw)) => {
                     // 1. Update environment state
                     self.update_environment(raw).await;
 
@@ -366,7 +366,7 @@ impl WorldModel {
                         memory.current_context = new_context.clone();
 
                         // 4. Emit high-level event
-                        self.derived_bus.send(AetherEvent::Derived(
+                        self.derived_bus.send(AlephEvent::Derived(
                             ContextEvent::ActivityChanged(new_context)
                         ));
                     }
@@ -422,7 +422,7 @@ impl Dispatcher {
 
         loop {
             match rx.recv().await {
-                Ok(AetherEvent::Derived(event)) => {
+                Ok(AlephEvent::Derived(event)) => {
                     if let Some(action) = self.match_action(&event).await {
                         self.handle_action(action).await;
                     }
@@ -718,7 +718,7 @@ Phase 5: JARVIS Mode (整合)        [1-2 weeks]
 // Milestone 1.1: Service Manager
 [ ] Implement LaunchdService trait
 [ ] Generate plist file
-[ ] CLI commands: aether daemon install/start/stop/status
+[ ] CLI commands: aleph daemon install/start/stop/status
 [ ] Test: Install and restart macOS, verify auto-start
 
 // Milestone 1.2: IPC Channel

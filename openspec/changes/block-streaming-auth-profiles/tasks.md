@@ -46,7 +46,7 @@
 - [x] Unit tests for ordering scenarios
 
 ### 2.4 Storage
-- [ ] File storage: `~/.aether/agent:{id}/auth-profiles.json`
+- [ ] File storage: `~/.aleph/agent:{id}/auth-profiles.json`
 - [ ] File locking (fs2)
 - [ ] Atomic writes
 

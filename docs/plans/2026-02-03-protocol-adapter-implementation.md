@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, async-trait, reqwest, serde_json, futures
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aether/.worktrees/protocol-adapter`
+**Worktree:** `/Volumes/TBU4/Workspace/Aleph/.worktrees/protocol-adapter`
 
 **Design Doc:** `docs/plans/2026-02-03-protocol-adapter-design.md`
 
@@ -144,7 +144,7 @@ pub use adapter::RequestPayload;
 **Step 3: Run tests to verify**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/protocol-adapter
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/protocol-adapter
 cargo test -p alephcore adapter::tests --no-fail-fast
 ```
 
@@ -1429,7 +1429,7 @@ pub use t8star::T8StarProvider;
 **Step 2: Delete the files**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/protocol-adapter
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/protocol-adapter
 rm core/src/providers/deepseek.rs
 rm core/src/providers/moonshot.rs
 rm core/src/providers/doubao.rs

@@ -2086,7 +2086,7 @@ git commit -m "refactor(ffi): update AlephEventHandler callbacks
 ### Task 5.2: Update macOS Swift Bridge
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Bridge/AetherBridge.swift` (or equivalent)
+- Modify: `platforms/macos/Aleph/Sources/Bridge/AlephBridge.swift` (or equivalent)
 
 **Step 1: Implement new callbacks**
 

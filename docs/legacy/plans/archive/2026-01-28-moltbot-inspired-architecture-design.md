@@ -220,11 +220,11 @@ Moltbot addresses these exact challenges through:
 # ~/.aleph/config.toml
 
 [agents.main]
-workspace = "~/aether-main"
+workspace = "~/aleph-main"
 model = "claude-sonnet-4.5"
 
 [agents.work]
-workspace = "~/aether-work"
+workspace = "~/aleph-work"
 model = "claude-opus-4.5"
 
 [bindings]
@@ -502,7 +502,7 @@ if buffer_size > max_buffer {
 
 **Diagnostics CLI:**
 ```bash
-$ aether doctor
+$ aleph doctor
 
 🔍 Aleph Diagnostics
 
@@ -541,7 +541,7 @@ core/src/gateway/
 ```
 
 **Verification:**
-- [ ] `aether gateway` starts successfully
+- [ ] `aleph gateway` starts successfully
 - [ ] wscat can connect and handshake
 - [ ] Health check responds correctly
 - [ ] Existing UniFFI interfaces still work (no regression)
@@ -584,12 +584,12 @@ core/src/gateway/
 
 **Deliverables:**
 ```swift
-// platforms/macos/Aether/Sources/Gateway/
+// platforms/macos/Aleph/Sources/Gateway/
 ├── GatewayClient.swift        // WebSocket client
 ├── ProtocolModels.swift       // JSON-RPC types
 └── EventStream.swift          // Event handling
 
-// platforms/macos/Aether/Sources/MultiTurn/
+// platforms/macos/Aleph/Sources/MultiTurn/
 ├── UnifiedConversationViewModel.swift  // Subscribe to events
 └── Views/
     ├── ReasoningPartView.swift         // Display streaming reasoning
@@ -598,8 +598,8 @@ core/src/gateway/
 ```
 
 **App Startup Flow:**
-1. Check if Gateway process is running (`pgrep aether`)
-2. If not, launch: `Process().run("aether", args: ["gateway", "--daemon"])`
+1. Check if Gateway process is running (`pgrep aleph`)
+2. If not, launch: `Process().run("aleph", args: ["gateway", "--daemon"])`
 3. Wait for port 18789 to be available (max 5s)
 4. Connect WebSocket client
 5. Initialize UI
@@ -637,10 +637,10 @@ core/src/dispatcher/       // REMOVE or deprecate
 **Configuration Example:**
 ```toml
 [agents.main]
-workspace = "~/aether-main"
+workspace = "~/aleph-main"
 
 [agents.work]
-workspace = "~/aether-work"
+workspace = "~/aleph-work"
 
 [bindings]
 "gui:window1" = "main"
@@ -685,7 +685,7 @@ workspace = "~/aether-work"
    ```bash
    # Install launchd service (macOS)
    # KeepAlive=true ensures auto-restart on crash
-   launchctl load ~/Library/LaunchAgents/com.aether.gateway.plist
+   launchctl load ~/Library/LaunchAgents/com.aleph.gateway.plist
    ```
 
 2. **Client Auto-Reconnect:**
@@ -740,7 +740,7 @@ impl AgentInstance {
     fn new(agent_id: &str) -> Result<Self> {
         let agent_dir = dirs::home_dir()
             .unwrap()
-            .join(".aether/agents")
+            .join(".aleph/agents")
             .join(agent_id);
 
         // Ensure isolation
@@ -749,7 +749,7 @@ impl AgentInstance {
         }
 
         // Validate no path traversal
-        if !agent_dir.starts_with(dirs::home_dir().unwrap().join(".aether/agents")) {
+        if !agent_dir.starts_with(dirs::home_dir().unwrap().join(".aleph/agents")) {
             return Err(anyhow!("Invalid agent directory"));
         }
 
@@ -824,7 +824,7 @@ impl AgentInstance {
 
 - [ ] **Startup Time:** macOS app launch < 2s (including Gateway start)
 - [ ] **Error Messages:** Clear diagnostics on connection failure
-- [ ] **Diagnostics:** `aether doctor` command for troubleshooting
+- [ ] **Diagnostics:** `aleph doctor` command for troubleshooting
 
 ---
 
@@ -860,7 +860,7 @@ impl AgentInstance {
 - [ ] Implement event bus (pub/sub)
 - [ ] Token generation (Keychain storage)
 - [ ] Health check handler
-- [ ] CLI command: `aether gateway`
+- [ ] CLI command: `aleph gateway`
 - [ ] Integration test: connect + echo
 - [ ] Documentation: GATEWAY.md basics
 

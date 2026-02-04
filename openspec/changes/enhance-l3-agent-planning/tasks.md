@@ -28,7 +28,7 @@
 - [x] Add `safety_level` field to `UnifiedTool`
 - [x] Implement `infer_safety_level()` based on tool name and category
 - [x] Add safety level to `UnifiedToolInfo` FFI type
-- [x] Update `aether.udl` with new safety_level field
+- [x] Update `aleph.udl` with new safety_level field
 - [x] Create mapping of known tools to safety levels (search=ReadOnly, delete=IrreversibleHighRisk, etc.)
 
 ### 1.5 schemars Integration for Tool Parameters ✅
@@ -104,11 +104,11 @@
 - [x] Add unit tests for adapter creation (8 tests)
 
 ### 2.7 Agent Event Callbacks ✅
-- [x] Add `on_agent_started()` to `AetherEventHandler`
-- [x] Add `on_agent_tool_started()` to `AetherEventHandler`
-- [x] Add `on_agent_tool_completed()` to `AetherEventHandler`
-- [x] Add `on_agent_completed()` to `AetherEventHandler`
-- [x] Update `aether.udl` with new agent callbacks
+- [x] Add `on_agent_started()` to `AlephEventHandler`
+- [x] Add `on_agent_tool_started()` to `AlephEventHandler`
+- [x] Add `on_agent_tool_completed()` to `AlephEventHandler`
+- [x] Add `on_agent_completed()` to `AlephEventHandler`
+- [x] Update `aleph.udl` with new agent callbacks
 - [x] Update `MockEventHandler` with tracking fields
 - [x] Update integration test event handlers
 
@@ -135,11 +135,11 @@
 - [x] Add logging for rollback operations
 
 ### 3.4 Event Handler Extensions ✅
-- [x] Add `on_plan_started()` callback to `AetherEventHandler` (via `on_agent_started`)
+- [x] Add `on_plan_started()` callback to `AlephEventHandler` (via `on_agent_started`)
 - [x] Add `on_plan_progress()` callback for step updates (via `on_agent_tool_started/completed`)
 - [x] Add `on_plan_completed()` callback for success (via `on_agent_completed`)
 - [x] Add `on_plan_failed()` callback for errors (via `on_agent_completed` with success=false)
-- [x] Update `aether.udl` with new callback methods (done in Phase 2.7)
+- [x] Update `aleph.udl` with new callback methods (done in Phase 2.7)
 - [x] Regenerate UniFFI bindings (done in Phase 2.7)
 
 ## Phase 4: Swift UI Integration ✅

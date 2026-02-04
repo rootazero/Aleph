@@ -119,7 +119,7 @@ Aleph 的 Agent 核心采用 **POE (Principle-Operation-Evaluation)** 架构，�
 ## 📁 项目结构
 
 ```
-aether/
+aleph/
 ├── core/                           # Rust Core (alephcore crate)
 │   └── src/
 │       ├── gateway/                # WebSocket 控制面 (34 files)

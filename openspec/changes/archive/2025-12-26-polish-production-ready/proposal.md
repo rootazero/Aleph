@@ -2,11 +2,11 @@
 
 ## Summary
 
-Polish Aether to production-ready quality through five critical enhancements: image clipboard support for multimodal AI interactions, typewriter output effect for natural AI response delivery, structured logging with privacy protection, comprehensive error handling improvements, and performance profiling with optimizations. This change transforms Aether from a functional prototype into a production-grade system-level AI middleware.
+Polish Aleph to production-ready quality through five critical enhancements: image clipboard support for multimodal AI interactions, typewriter output effect for natural AI response delivery, structured logging with privacy protection, comprehensive error handling improvements, and performance profiling with optimizations. This change transforms Aleph from a functional prototype into a production-grade system-level AI middleware.
 
 ## Background
 
-Aether has successfully completed Phases 1-6:
+Aleph has successfully completed Phases 1-6:
 - ✅ Rust core with UniFFI bindings
 - ✅ Global hotkey and clipboard integration
 - ✅ Halo overlay UI
@@ -47,11 +47,11 @@ However, several production-critical features remain unimplemented:
 
 ### Why Now?
 
-**Competitive Pressure**: Raycast AI and similar tools support vision models. Aether risks becoming "text-only AI assistant" if Phase 7 delays.
+**Competitive Pressure**: Raycast AI and similar tools support vision models. Aleph risks becoming "text-only AI assistant" if Phase 7 delays.
 
 **Production Readiness**: Users report bugs but cannot share diagnostic logs. Phase 7 unblocks self-service debugging and reduces maintainer burden.
 
-**UX Polish**: Typewriter effect transforms Aether from "functional prototype" to "polished product." Small UX details compound into perceived quality.
+**UX Polish**: Typewriter effect transforms Aleph from "functional prototype" to "polished product." Small UX details compound into perceived quality.
 
 **Foundation for Phase 8**: Real-time streaming (Phase 8 goal) requires typewriter infrastructure. Error recovery mechanisms need robust logging. Multimodal memory (image embeddings) needs image clipboard.
 
@@ -88,8 +88,8 @@ However, several production-critical features remain unimplemented:
 - `GeneralSettingsView.swift` - Logging controls
 
 **UniFFI:**
-- `aether.udl` - Image clipboard methods
-- `aether.udl` - Typewriter progress callbacks
+- `aleph.udl` - Image clipboard methods
+- `aleph.udl` - Typewriter progress callbacks
 
 ### Out of Scope
 - Real-time streaming AI responses (future enhancement)
@@ -136,7 +136,7 @@ However, several production-critical features remain unimplemented:
 - Log levels: ERROR, WARN, INFO, DEBUG (controlled by `RUST_LOG` env var)
 - Privacy protection: Scrub PII before logging (reuse `scrub_pii()` from memory module)
 - Log rotation: Daily rotation, keep 7 days, 50MB max per file
-- Log location: `~/.aether/logs/aether-YYYY-MM-DD.log`
+- Log location: `~/.aleph/logs/aleph-YYYY-MM-DD.log`
 
 **Logged Events:**
 - Hotkey trigger (timestamp only, no clipboard content)
@@ -154,12 +154,12 @@ However, several production-critical features remain unimplemented:
 ### 4. Enhanced Error Feedback (MEDIUM PRIORITY)
 
 **Implementation Strategy:**
-- Extend `AetherError` with `suggestion: Option<String>` field
+- Extend `AlephError` with `suggestion: Option<String>` field
 - Add error-specific recovery suggestions
 - Examples:
   - API key invalid → "Please check your API key in Settings → Providers"
   - Network timeout → "Check your internet connection or try again"
-  - Memory database locked → "Close other Aether instances"
+  - Memory database locked → "Close other Aleph instances"
 - Update UniFFI callbacks: `on_error(message: String, suggestion: Option<String>)`
 - Swift UI: Display suggestion in Halo error state
 

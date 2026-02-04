@@ -1,6 +1,6 @@
 //
 //  ClarificationManagerProtocol.swift
-//  Aether
+//  Aleph
 //
 //  Protocol for clarification flow management, enabling dependency injection and testability.
 //

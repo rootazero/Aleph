@@ -1,6 +1,6 @@
 //
 //  PermissionManager.swift
-//  Aether
+//  Aleph
 //
 //  Passive permission monitoring without auto-restart logic.
 //  Polls permission status every 2 seconds and updates published properties.

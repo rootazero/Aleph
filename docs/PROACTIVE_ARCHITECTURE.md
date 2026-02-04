@@ -6,7 +6,7 @@
 
 ## 1. Objective
 
-To evolve `Aether` from a reactive, user-prompted CLI tool into a proactive, autonomous assistant ("JARVIS-like"). It must run in the background, perceive the user's environment, maintain a "World Model," and autonomously initiate helpful actions without explicit commands, while respecting system resources and user privacy.
+To evolve `Aleph` from a reactive, user-prompted CLI tool into a proactive, autonomous assistant ("JARVIS-like"). It must run in the background, perceive the user's environment, maintain a "World Model," and autonomously initiate helpful actions without explicit commands, while respecting system resources and user privacy.
 
 ## 2. Reference Analysis: OpenClaw
 
@@ -41,7 +41,7 @@ To evolve `Aether` from a reactive, user-prompted CLI tool into a proactive, aut
     - Methods: `install()`, `uninstall()`, `start()`, `stop()`, `status()`.
     - Implementations: `LaunchdService` (macOS), `SystemdService` (Linux), `WindowsService`.
 2.  **IPC Server:**
-    - The daemon must expose a local socket (Unix Domain Socket / Named Pipe) to receive commands from the CLI (`aether start`, `aether status`) and send notifications to the UI.
+    - The daemon must expose a local socket (Unix Domain Socket / Named Pipe) to receive commands from the CLI (`aleph start`, `aleph status`) and send notifications to the UI.
 3.  **Resource Governor:**
     - Monitors own CPU/RAM usage. Pauses heavy "proactive" tasks if system load is high or running on battery (critical for "invisible" assistant).
 
@@ -98,7 +98,7 @@ To evolve `Aether` from a reactive, user-prompted CLI tool into a proactive, aut
 
 ### Phase 1: The Backbone (Daemon)
 1.  Implement `ServiceManager` for macOS (`launchd`).
-2.  Create the `aether daemon` CLI subcommand.
+2.  Create the `aleph daemon` CLI subcommand.
 3.  Set up the IPC channel between CLI and Daemon.
 
 ### Phase 2: Senses (Watchers)

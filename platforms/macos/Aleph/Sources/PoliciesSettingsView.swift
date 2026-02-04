@@ -1,6 +1,6 @@
 //
 //  PoliciesSettingsView.swift
-//  Aether
+//  Aleph
 //
 //  Policies settings tab for configuring behavioral parameters.
 //  Implements mechanism-policy separation allowing users to tune system behavior
@@ -12,7 +12,7 @@ import SwiftUI
 /// Policies settings view with UnifiedSaveBar pattern
 struct PoliciesSettingsView: View {
     // Dependencies
-    let core: AetherCore
+    let core: AlephCore
     @Binding var hasUnsavedChanges: Bool
 
     // Current policy values
@@ -542,7 +542,7 @@ struct PoliciesSettingsView: View {
                 isSaving = false
 
                 NotificationCenter.default.post(
-                    name: .aetherConfigSavedInternally,
+                    name: .alephConfigSavedInternally,
                     object: nil
                 )
             }
@@ -570,14 +570,14 @@ struct PoliciesSettingsView: View {
 struct PoliciesSettingsView_Previews: PreviewProvider {
     static var previews: some View {
         // Preview requires a mock core - using constant binding
-        Text("PoliciesSettingsView Preview - requires AetherCore")
+        Text("PoliciesSettingsView Preview - requires AlephCore")
             .frame(width: 600, height: 400)
     }
 }
 
 #Preview("PoliciesSettingsView") {
-    // Note: Full preview requires AetherCore instance
+    // Note: Full preview requires AlephCore instance
     // Using placeholder with constant binding pattern
-    Text("PoliciesSettingsView requires AetherCore")
+    Text("PoliciesSettingsView requires AlephCore")
         .frame(width: 600, height: 400)
 }

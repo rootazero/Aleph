@@ -1,7 +1,7 @@
 # default-provider-management Specification
 
 ## Purpose
-Manage the default provider selection for Aether's AI routing system. The default provider is used when no routing rule matches the user's input. This spec ensures users can visually identify, select, and switch the default provider through both Settings UI and menu bar.
+Manage the default provider selection for Aleph's AI routing system. The default provider is used when no routing rule matches the user's input. This spec ensures users can visually identify, select, and switch the default provider through both Settings UI and menu bar.
 
 ## ADDED Requirements
 
@@ -150,7 +150,7 @@ Changes to the default provider SHALL be persisted to config.toml atomically.
 - **WHEN** the selection is confirmed
 - **THEN** the system SHALL:
   - Update `general.default_provider = "gemini"` in the Config struct
-  - Call `config.save()` to write to ~/.aether/config.toml
+  - Call `config.save()` to write to ~/.aleph/config.toml
   - Use atomic write (temp file + rename) to prevent corruption
   - Set file permissions to 600 (owner read/write only)
 
@@ -158,7 +158,7 @@ Changes to the default provider SHALL be persisted to config.toml atomically.
 - **GIVEN** the user set "claude" as default and quit the app
 - **WHEN** the app is relaunched
 - **THEN** the system SHALL:
-  - Load config from ~/.aether/config.toml
+  - Load config from ~/.aleph/config.toml
   - Read `general.default_provider = "claude"`
   - Validate that "claude" is enabled
   - Display "Default" badge on "claude" in Settings UI
@@ -225,7 +225,7 @@ The Rust core SHALL expose methods for getting and setting the default provider.
     - Save config to disk
     - Return `Ok(())`
   - If validation fails:
-    - Return `Err(AetherError::InvalidConfig("Provider 'gemini' is not enabled"))`
+    - Return `Err(AlephError::InvalidConfig("Provider 'gemini' is not enabled"))`
 
 #### Scenario: Get list of enabled providers for menu bar
 - **GIVEN** the menu bar needs to populate the providers menu

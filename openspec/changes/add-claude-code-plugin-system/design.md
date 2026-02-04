@@ -2,29 +2,29 @@
 
 ## Context
 
-Claude Code CLI (https://code.claude.com) has a well-designed plugin system that allows users to extend Claude's capabilities with custom skills, hooks, agents, and MCP servers. By making Aether's plugin system compatible with this format, we can:
+Claude Code CLI (https://code.claude.com) has a well-designed plugin system that allows users to extend Claude's capabilities with custom skills, hooks, agents, and MCP servers. By making Aleph's plugin system compatible with this format, we can:
 
 1. Leverage existing Claude Code plugins without modification
 2. Allow plugin developers to create plugins that work in both environments
 3. Benefit from Claude Code's plugin marketplace ecosystem
 
 ### Stakeholders
-- End users who want to extend Aether
+- End users who want to extend Aleph
 - Plugin developers
-- Aether maintainers
+- Aleph maintainers
 
 ### Constraints
 - Must parse Claude Code plugin format exactly
-- Must integrate with Aether's existing systems (EventBus, AgentRegistry, McpClient)
-- Must use Aether's runtime managers (fnm, uv) instead of requiring system-installed Node.js/Python
+- Must integrate with Aleph's existing systems (EventBus, AgentRegistry, McpClient)
+- Must use Aleph's runtime managers (fnm, uv) instead of requiring system-installed Node.js/Python
 
 ## Goals / Non-Goals
 
 ### Goals
 - Full compatibility with Claude Code plugin directory structure
 - Support all Claude Code plugin components: commands, skills, agents, hooks, MCP
-- Seamless integration with Aether's existing architecture
-- Zero additional dependencies for users (use Aether's runtimes)
+- Seamless integration with Aleph's existing architecture
+- Zero additional dependencies for users (use Aleph's runtimes)
 
 ### Non-Goals
 - LSP server support (deferred to future phase)
@@ -64,7 +64,7 @@ Claude Code CLI (https://code.claude.com) has a well-designed plugin system that
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Aether Core Integration                              │
+│                         Aleph Core Integration                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
@@ -103,10 +103,10 @@ core/src/plugins/
 
 ### Decision 1: Event Mapping Strategy
 
-**Decision**: Create a bidirectional mapping between Claude Code hook events and Aether EventBus events.
+**Decision**: Create a bidirectional mapping between Claude Code hook events and Aleph EventBus events.
 
 **Mapping Table**:
-| Claude Code Event | Aether EventType | Notes |
+| Claude Code Event | Aleph EventType | Notes |
 |-------------------|------------------|-------|
 | PreToolUse | ToolCall | Before tool execution |
 | PostToolUse | ToolCallCompleted | After successful execution |
@@ -140,7 +140,7 @@ Skills with `disable_model_invocation: false` (default) are included in the syst
 
 ### Decision 3: Runtime Path Resolution
 
-**Decision**: Resolve runtime commands at MCP server start time using Aether's RuntimeRegistry.
+**Decision**: Resolve runtime commands at MCP server start time using Aleph's RuntimeRegistry.
 
 ```rust
 fn resolve_command(&self, cmd: &str) -> PathBuf {
@@ -158,10 +158,10 @@ fn resolve_command(&self, cmd: &str) -> PathBuf {
 
 ### Decision 4: Plugin Storage Location
 
-**Decision**: Store plugins in `~/.aether/plugins/` with state in `~/.aether/plugins.json`.
+**Decision**: Store plugins in `~/.aleph/plugins/` with state in `~/.aleph/plugins.json`.
 
 ```
-~/.aether/
+~/.aleph/
 ├── plugins/
 │   ├── plugin-a/
 │   └── plugin-b/
@@ -298,7 +298,7 @@ Hooks running on every tool call could impact performance.
 - **Mitigation**: Async hook execution, matcher optimization, optional hook disabling.
 
 ### Risk 4: Tool Name Mismatch
-Claude Code uses specific tool names (Write, Edit, Bash) that may differ from Aether's.
+Claude Code uses specific tool names (Write, Edit, Bash) that may differ from Aleph's.
 - **Mitigation**: Maintain tool name alias mapping, document differences.
 
 ## Migration Plan

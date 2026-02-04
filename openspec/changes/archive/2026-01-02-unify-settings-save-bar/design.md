@@ -154,7 +154,7 @@ User clicks test button
     ↓
 Show spinner [⏳]
     ↓
-Call AetherCore.testProviderConnectionWithConfig(workingConfig)
+Call AlephCore.testProviderConnectionWithConfig(workingConfig)
     ↓
 Success: Show ✓ green checkmark + message
 Failure: Show ✗ red X + error (truncated)
@@ -436,8 +436,8 @@ Avoid recomputing `hasUnsavedChanges` on every keystroke:
 ## Dependencies
 
 - Requires `DesignTokens` for consistent styling
-- Requires `AetherCore.updateProvider()` API (already exists)
-- Requires `AetherCore.testProviderConnectionWithConfig()` API (already exists)
+- Requires `AlephCore.updateProvider()` API (already exists)
+- Requires `AlephCore.testProviderConnectionWithConfig()` API (already exists)
 - May benefit from `Toast` notification system (optional)
 
 ---

@@ -6,9 +6,9 @@
 
 ## Why
 
-Aether 作为 OS-Level Inline Agent，需要一种全局的、符合 "Ghost" 美学的交互模式。当 AI 或任何功能需要用户澄清/选择时，传统方案是弹出对话框或聊天气泡，这破坏了 "幽灵般存在" 的沉浸感。
+Aleph 作为 OS-Level Inline Agent，需要一种全局的、符合 "Ghost" 美学的交互模式。当 AI 或任何功能需要用户澄清/选择时，传统方案是弹出对话框或聊天气泡，这破坏了 "幽灵般存在" 的沉浸感。
 
-**Phantom Flow（幽灵流）** 是 Aether 的核心交互模式：
+**Phantom Flow（幽灵流）** 是 Aleph 的核心交互模式：
 - **原地交互**：所有交互在 Halo 内完成，无弹窗
 - **菜单驱动**：通过候选词列表快速选择
 - **行内提示**：通过输入框占位符收集文本
@@ -30,7 +30,7 @@ Aether 作为 OS-Level Inline Agent，需要一种全局的、符合 "Ghost" 美
    - 通过 UniFFI 暴露给 Swift
 
 2. **ClarificationHandler Callback（Rust Core）**
-   - 新增 `AetherEventHandler` 回调方法
+   - 新增 `AlephEventHandler` 回调方法
    - `on_clarification_needed(request)` → 触发 Halo 澄清 UI
    - `on_clarification_completed()` → 恢复正常流程
 
@@ -50,7 +50,7 @@ Aether 作为 OS-Level Inline Agent，需要一种全局的、符合 "Ghost" 美
 - **HaloState**：添加 `.clarification(request: ClarificationRequest, onResult: (ClarificationResult) -> Void)`
 - **HaloView**：扩展以渲染澄清 UI
 - **HaloWindow**：处理澄清模式的窗口尺寸和键盘事件
-- **AetherEventHandler（UniFFI）**：添加澄清相关回调
+- **AlephEventHandler（UniFFI）**：添加澄清相关回调
 
 ## Impact
 
@@ -58,18 +58,18 @@ Aether 作为 OS-Level Inline Agent，需要一种全局的、符合 "Ghost" 美
   - `phantom-flow` (NEW) - 全局交互模式规范
 
 - **Affected code**:
-  - `Aether/core/src/aether.udl` - UniFFI 接口扩展
-  - `Aether/core/src/clarification/` - 新增模块（数据类型）
-  - `Aether/Sources/HaloState.swift` - 澄清状态
-  - `Aether/Sources/HaloView.swift` - 澄清 UI
-  - `Aether/Sources/Components/ClarificationView.swift` - 新增组件
-  - `Aether/Sources/Managers/ClarificationManager.swift` - 新增管理器
+  - `Aleph/core/src/aleph.udl` - UniFFI 接口扩展
+  - `Aleph/core/src/clarification/` - 新增模块（数据类型）
+  - `Aleph/Sources/HaloState.swift` - 澄清状态
+  - `Aleph/Sources/HaloView.swift` - 澄清 UI
+  - `Aleph/Sources/Components/ClarificationView.swift` - 新增组件
+  - `Aleph/Sources/Managers/ClarificationManager.swift` - 新增管理器
 
 - **Breaking changes**: None（增量添加）
 
 ## Design Philosophy
 
-Phantom Flow 遵循 Aether 的 "Ghost" 美学：
+Phantom Flow 遵循 Aleph 的 "Ghost" 美学：
 
 1. **Halo 是光标伴侣**：智能的 IME 扩展，而非传统对话框
 2. **指尖交互**：所有操作在用户当前焦点位置完成

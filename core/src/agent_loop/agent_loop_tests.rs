@@ -199,7 +199,7 @@ async fn test_max_steps_guard() {
 
 #[tokio::test]
 async fn test_compaction_trigger_emits_loop_continue() {
-    use crate::event::{AetherEvent, EventBus, EventType};
+    use crate::event::{AlephEvent, EventBus, EventType};
 
     let event_bus = Arc::new(EventBus::new());
     let mut subscriber = event_bus.subscribe_filtered(vec![EventType::LoopContinue]);
@@ -240,7 +240,7 @@ async fn test_compaction_trigger_emits_loop_continue() {
     // Check that LoopContinue was emitted (on second iteration)
     if let Ok(Some(event)) = subscriber.try_recv() {
         match event.event {
-            AetherEvent::LoopContinue(state) => {
+            AlephEvent::LoopContinue(state) => {
                 assert_eq!(state.iteration, 1); // First iteration after tool call
                 assert_eq!(state.last_tool, Some("search".to_string()));
             }
@@ -252,7 +252,7 @@ async fn test_compaction_trigger_emits_loop_continue() {
 
 #[tokio::test]
 async fn test_compaction_trigger_emits_tool_completed() {
-    use crate::event::{AetherEvent, EventBus, EventType};
+    use crate::event::{AlephEvent, EventBus, EventType};
 
     let event_bus = Arc::new(EventBus::new());
     let mut subscriber = event_bus.subscribe_filtered(vec![EventType::ToolCallCompleted]);
@@ -293,7 +293,7 @@ async fn test_compaction_trigger_emits_tool_completed() {
     // Check that ToolCallCompleted was emitted
     if let Ok(Some(event)) = subscriber.try_recv() {
         match event.event {
-            AetherEvent::ToolCallCompleted(result) => {
+            AlephEvent::ToolCallCompleted(result) => {
                 assert_eq!(result.tool, "search");
                 assert!(result.session_id.is_some());
             }
@@ -304,7 +304,7 @@ async fn test_compaction_trigger_emits_tool_completed() {
 
 #[tokio::test]
 async fn test_compaction_trigger_emits_loop_stop_on_completion() {
-    use crate::event::{AetherEvent, EventBus, EventType, StopReason};
+    use crate::event::{AlephEvent, EventBus, EventType, StopReason};
 
     let event_bus = Arc::new(EventBus::new());
     let mut subscriber = event_bus.subscribe_filtered(vec![EventType::LoopStop]);
@@ -339,7 +339,7 @@ async fn test_compaction_trigger_emits_loop_stop_on_completion() {
     // Check that LoopStop was emitted with Completed reason
     if let Ok(Some(event)) = subscriber.try_recv() {
         match event.event {
-            AetherEvent::LoopStop(reason) => {
+            AlephEvent::LoopStop(reason) => {
                 assert!(matches!(reason, StopReason::Completed));
             }
             _ => panic!("Expected LoopStop event"),
@@ -349,7 +349,7 @@ async fn test_compaction_trigger_emits_loop_stop_on_completion() {
 
 #[tokio::test]
 async fn test_compaction_trigger_emits_loop_stop_on_guard() {
-    use crate::event::{AetherEvent, EventBus, EventType, StopReason};
+    use crate::event::{AlephEvent, EventBus, EventType, StopReason};
 
     let event_bus = Arc::new(EventBus::new());
     let mut subscriber = event_bus.subscribe_filtered(vec![EventType::LoopStop]);
@@ -390,7 +390,7 @@ async fn test_compaction_trigger_emits_loop_stop_on_guard() {
     // Check that LoopStop was emitted with MaxIterationsReached reason
     if let Ok(Some(event)) = subscriber.try_recv() {
         match event.event {
-            AetherEvent::LoopStop(reason) => {
+            AlephEvent::LoopStop(reason) => {
                 assert!(matches!(reason, StopReason::MaxIterationsReached));
             }
             _ => panic!("Expected LoopStop event"),

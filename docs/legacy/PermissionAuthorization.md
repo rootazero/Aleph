@@ -419,7 +419,7 @@ Plaintext
 [PermissionGateView] Restarting application - Reason: Accessibility permission granted
 ...
 [PermissionGateView] Terminating current instance
-[Aether] Application terminating (Core was not initialized)
+[Aleph] Application terminating (Core was not initialized)
 诊断结论： 你的代码中有一段逻辑（可能是 PermissionStatusMonitor 或 PermissionGateView），检测到 辅助功能（Accessibility） 权限变为 true 后，误认为 macOS 会强制杀死应用，于是触发了一个“主动重启”流程（restarting proactively），并执行了 Terminating current instance。
 
 这就解释了为什么“每次进入授权就闪退”——其实是你的代码在检测到权限变更的瞬间，自己退出了。

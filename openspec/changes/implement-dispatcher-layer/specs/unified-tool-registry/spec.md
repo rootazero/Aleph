@@ -69,7 +69,7 @@ The `ToolRegistry` SHALL aggregate tools from all sources during initialization:
 4. Parse config.toml for custom slash commands
 
 #### Scenario: Initial registration
-- **GIVEN** Aether starts with 2 MCP servers and 3 skills
+- **GIVEN** Aleph starts with 2 MCP servers and 3 skills
 - **WHEN** ToolRegistry initializes
 - **THEN** it SHALL contain all Native + MCP + Skill + Custom tools
 - **AND** each tool SHALL have correct source attribution

@@ -1,6 +1,6 @@
 //! Core dispatcher configuration types
 //!
-//! Contains DispatcherConfigToml and AgentConfigToml for the Dispatcher Layer (Aether Cortex).
+//! Contains DispatcherConfigToml and AgentConfigToml for the Dispatcher Layer (Aleph Cortex).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ use tracing::warn;
 // DispatcherConfigToml
 // =============================================================================
 
-/// Configuration for the Dispatcher Layer (Aether Cortex)
+/// Configuration for the Dispatcher Layer (Aleph Cortex)
 ///
 /// The Dispatcher Layer provides intelligent tool routing through three layers:
 /// - L1: Regex-based pattern matching (highest confidence)

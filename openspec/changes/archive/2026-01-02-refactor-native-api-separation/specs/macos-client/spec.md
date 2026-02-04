@@ -105,7 +105,7 @@ The EventHandler SHALL coordinate between native system APIs and Rust core busin
 - **AND** hides Halo when complete
 
 #### Scenario: Handle errors gracefully
-- **WHEN** Rust throws `AetherException`
+- **WHEN** Rust throws `AlephException`
 - **THEN** EventHandler catches exception
 - **AND** updates Halo to show error state
 - **AND** displays user-friendly error message
@@ -121,14 +121,14 @@ The AppDelegate SHALL orchestrate initialization of all native components and Ru
 - **AND** creates ClipboardManager instance
 - **AND** creates KeyboardSimulator instance
 - **AND** creates ContextCapture instance
-- **AND** THEN initializes AetherCore (Rust)
-- **AND** AetherCore does NOT depend on system API access
+- **AND** THEN initializes AlephCore (Rust)
+- **AND** AlephCore does NOT depend on system API access
 
 #### Scenario: Handle permission errors
 - **WHEN** Accessibility permission is not granted
 - **THEN** shows PermissionGateView
 - **AND** does NOT start GlobalHotkeyMonitor
-- **AND** does NOT initialize AetherCore
+- **AND** does NOT initialize AlephCore
 - **AND** waits for user to grant permissions
 
 #### Scenario: Clean shutdown
@@ -175,7 +175,7 @@ The macOS client SHALL provide testable components with dependency injection.
 #### Scenario: Integration test E2E flow
 - **WHEN** writing integration tests
 - **THEN** can simulate hotkey → clipboard → AI → typewriter flow
-- **AND** uses mock AetherCore (no real AI calls)
+- **AND** uses mock AlephCore (no real AI calls)
 - **AND** verifies complete workflow
 
 ---

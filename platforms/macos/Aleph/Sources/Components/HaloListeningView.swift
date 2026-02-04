@@ -1,6 +1,6 @@
 //
 //  HaloListeningView.swift
-//  Aether
+//  Aleph
 //
 //  Listening state view for Halo overlay.
 //  Shows a pulsing indicator when waiting for input.

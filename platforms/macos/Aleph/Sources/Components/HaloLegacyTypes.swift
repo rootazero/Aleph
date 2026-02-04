@@ -1,6 +1,6 @@
 //
 //  HaloLegacyTypes.swift
-//  Aether
+//  Aleph
 //
 //  Legacy types for backwards compatibility with old Halo components.
 //  These types are used by PlanProgressView, PlanConfirmationView, AgentPlanView,

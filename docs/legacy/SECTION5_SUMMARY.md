@@ -11,7 +11,7 @@ This document summarizes the implementation of **Section 5: Performance Optimiza
 
 ### 1. PerformanceMonitor (Task 5.1)
 
-**File**: `Aether/Sources/Performance/PerformanceMonitor.swift`
+**File**: `Aleph/Sources/Performance/PerformanceMonitor.swift`
 
 #### Architecture:
 ```swift
@@ -59,7 +59,7 @@ NotificationCenter.default.addObserver(
 
 ### 2. PerformanceManager (Task 5.2)
 
-**File**: `Aether/Sources/Performance/PerformanceManager.swift`
+**File**: `Aleph/Sources/Performance/PerformanceManager.swift`
 
 #### Quality Level System:
 ```swift
@@ -109,15 +109,15 @@ if device.supportsFamily(.apple7) || device.supportsFamily(.apple8) {
 #### UserDefaults Persistence:
 ```swift
 // Manual quality override persists across launches
-UserDefaults.standard.set(quality.rawValue, forKey: "AetherEffectsQuality")
-UserDefaults.standard.set(true, forKey: "AetherManualQualityOverride")
+UserDefaults.standard.set(quality.rawValue, forKey: "AlephEffectsQuality")
+UserDefaults.standard.set(true, forKey: "AlephManualQualityOverride")
 ```
 
 ---
 
 ### 3. Theme Optimizations (Task 5.3)
 
-**File**: `Aether/Sources/Performance/ThemeOptimizations.swift`
+**File**: `Aleph/Sources/Performance/ThemeOptimizations.swift`
 
 #### OptimizedGradient:
 Quality-adaptive gradients that degrade gracefully:

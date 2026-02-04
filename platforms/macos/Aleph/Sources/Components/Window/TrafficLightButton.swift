@@ -1,6 +1,6 @@
 //
 //  TrafficLightButton.swift
-//  Aether
+//  Aleph
 //
 //  Custom traffic light button (red/yellow/green) for macOS 26 window design.
 //  Mimics native macOS traffic lights with hover state and gradient fill.

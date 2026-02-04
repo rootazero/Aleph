@@ -102,7 +102,7 @@ enum HaloState: Equatable {
 
 **Minimal Thinking Spinner:**
 - Tiny (16x16 px) rotating arc
-- Uses purple color (Aether brand color)
+- Uses purple color (Aleph brand color)
 - No text, no progress bar
 - Click-through (ignoresMouseEvents = true)
 
@@ -123,26 +123,26 @@ enum HaloState: Equatable {
 ## Impact Assessment
 
 ### Files to Delete
-- `Aether/Sources/Themes/ZenTheme.swift`
-- `Aether/Sources/Themes/CyberpunkTheme.swift`
-- `Aether/Sources/Themes/JarvisTheme.swift`
-- `Aether/Sources/Themes/Effects/GlitchOverlay.swift`
-- `Aether/Sources/Themes/Shapes/HexSegment.swift`
-- `Aether/Sources/Themes/ThemeEngine.swift`
+- `Aleph/Sources/Themes/ZenTheme.swift`
+- `Aleph/Sources/Themes/CyberpunkTheme.swift`
+- `Aleph/Sources/Themes/JarvisTheme.swift`
+- `Aleph/Sources/Themes/Effects/GlitchOverlay.swift`
+- `Aleph/Sources/Themes/Shapes/HexSegment.swift`
+- `Aleph/Sources/Themes/ThemeEngine.swift`
 
 ### Files to Evaluate for Deletion
-- `Aether/Sources/HaloWindow.swift` - Evaluate if HaloWindow is still needed after simplification
-- `Aether/Sources/HaloView.swift` - May be merged into a simpler component
-- `Aether/Sources/Controllers/HaloWindowController.swift` - Delete if HaloWindow is removed
+- `Aleph/Sources/HaloWindow.swift` - Evaluate if HaloWindow is still needed after simplification
+- `Aleph/Sources/HaloView.swift` - May be merged into a simpler component
+- `Aleph/Sources/Controllers/HaloWindowController.swift` - Delete if HaloWindow is removed
 
 ### Files to Modify Significantly
-- `Aether/Sources/Themes/Theme.swift` - Remove protocol, add unified views (or delete entirely)
-- `Aether/Sources/HaloState.swift` - Remove success case
+- `Aleph/Sources/Themes/Theme.swift` - Remove protocol, add unified views (or delete entirely)
+- `Aleph/Sources/HaloState.swift` - Remove success case
 
 ### Files to Modify Minor
-- `Aether/Sources/SettingsView.swift` - Remove theme selector
-- `Aether/Sources/DI/DependencyContainer.swift` - Remove ThemeEngine if unused
-- `Aether/Sources/AppDelegate.swift` - Update ThemeEngine references
+- `Aleph/Sources/SettingsView.swift` - Remove theme selector
+- `Aleph/Sources/DI/DependencyContainer.swift` - Remove ThemeEngine if unused
+- `Aleph/Sources/AppDelegate.swift` - Update ThemeEngine references
 
 ### Risk Level
 **Medium** - Removes significant code but changes are primarily deletions. Careful testing needed for state transitions.

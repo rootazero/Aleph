@@ -154,7 +154,7 @@ impl MemoryLock {
             ))
         })?;
 
-        Ok(home.join(".aether").join("memory.lock"))
+        Ok(home.join(".aleph").join("memory.lock"))
     }
 
     /// Get the lock mode

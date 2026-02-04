@@ -202,7 +202,7 @@ ProviderDetailPanel.swift: ~430 行
 ## 文件清单
 
 ```
-Aether/Sources/
+Aleph/Sources/
 └── Components/
     └── Molecules/
         ├── ProviderCard.swift           ✅ 新增 (~360 行)

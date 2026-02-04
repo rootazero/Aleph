@@ -74,7 +74,7 @@ pub struct ReadSkillOutput {
 /// - The agent can request additional resources as needed
 ///
 /// Supports multi-location discovery:
-/// - Project level: .aether/skills/, .claude/skills/
+/// - Project level: .aleph/skills/, .claude/skills/
 /// - Global level: ~/.aleph/skills, ~/.claude/skills
 pub struct ReadSkillTool {
     /// All skills directories (for multi-location discovery)
@@ -98,7 +98,7 @@ After reading a skill, you MUST follow its instructions exactly.
 Skill instructions are task directives, not suggestions.
 
 Skills are discovered from multiple locations:
-- Project level: .aether/skills/, .claude/skills/ (traverse up to git root)
+- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
 - Global level: ~/.aleph/skills, ~/.claude/skills
 
 Examples:
@@ -407,7 +407,7 @@ pub struct ListSkillsOutput {
 /// Useful for discovering what skills are installed.
 ///
 /// Supports multi-location discovery:
-/// - Project level: .aether/skills/, .claude/skills/
+/// - Project level: .aleph/skills/, .claude/skills/
 /// - Global level: ~/.aleph/skills, ~/.claude/skills
 pub struct ListSkillsTool {
     /// All skills directories (for multi-location discovery)
@@ -425,7 +425,7 @@ Use this tool to discover what skills are available before using read_skill.
 Each skill has an ID, name, description, and optional trigger keywords.
 
 Skills are discovered from multiple locations:
-- Project level: .aether/skills/, .claude/skills/ (traverse up to git root)
+- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
 - Global level: ~/.aleph/skills, ~/.claude/skills
 
 After finding a relevant skill, use read_skill(skill_id) to load its full instructions.

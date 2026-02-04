@@ -11,7 +11,7 @@
 
 ### 2.1 ✅ ProviderConfigView.swift Modal Dialog
 
-**文件:** `Aether/Sources/ProviderConfigView.swift` (468 行)
+**文件:** `Aleph/Sources/ProviderConfigView.swift` (468 行)
 
 **实现内容:**
 - ✅ **表单字段：**
@@ -46,7 +46,7 @@
 ```swift
 struct ProviderConfigView: View {
     @Binding var providers: [ProviderConfigEntry]
-    let core: AetherCore
+    let core: AlephCore
     let keychainManager: KeychainManagerImpl
     let editingProvider: String?
 
@@ -80,7 +80,7 @@ struct ProviderConfigView: View {
 
 ### 2.2 ✅ ProvidersView.swift Integration
 
-**文件:** `Aether/Sources/ProvidersView.swift` (327 行)
+**文件:** `Aleph/Sources/ProvidersView.swift` (327 行)
 
 **实现内容:**
 - ✅ **动态加载 Providers：**
@@ -154,7 +154,7 @@ struct ProvidersView: View {
 
 ### 2.3 ✅ Keychain API Key Storage
 
-**文件:** `Aether/Sources/KeychainManager.swift`
+**文件:** `Aleph/Sources/KeychainManager.swift`
 
 **实现内容:**
 - ✅ **KeychainManagerImpl 类：**
@@ -168,7 +168,7 @@ struct ProvidersView: View {
   - `hasApiKey(provider)` - 检查 key 是否存在
 
 - ✅ **安全特性：**
-  - Service: `com.aether.api-keys`
+  - Service: `com.aleph.api-keys`
   - Account: provider name
   - `kSecAttrSynchronizable: false`（不同步到 iCloud）
   - 自动处理重复项（delete-then-add 策略）
@@ -183,7 +183,7 @@ class KeychainManagerImpl: KeychainManager {
         // Add new key
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "com.aether.api-keys",
+            kSecAttrService as String: "com.aleph.api-keys",
             kSecAttrAccount as String: provider,
             kSecValueData as String: keyData,
             kSecAttrSynchronizable as String: false
@@ -191,14 +191,14 @@ class KeychainManagerImpl: KeychainManager {
 
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
-            throw AetherException.Error(message: "Failed to save API key")
+            throw AlephException.Error(message: "Failed to save API key")
         }
     }
 
     func getApiKey(provider: String) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "com.aether.api-keys",
+            kSecAttrService as String: "com.aleph.api-keys",
             kSecAttrAccount as String: provider,
             kSecReturnData as String: true
         ]
@@ -391,14 +391,14 @@ ProviderConfigView (Modal)
 ## 文件清单
 
 ### 已验证的文件
-1. `Aether/Sources/ProviderConfigView.swift` - Provider 配置模态对话框
-2. `Aether/Sources/ProvidersView.swift` - Provider 列表视图
-3. `Aether/Sources/KeychainManager.swift` - Keychain 管理实现
+1. `Aleph/Sources/ProviderConfigView.swift` - Provider 配置模态对话框
+2. `Aleph/Sources/ProvidersView.swift` - Provider 列表视图
+3. `Aleph/Sources/KeychainManager.swift` - Keychain 管理实现
 
 ### 相关的 Rust 文件
-1. `Aether/core/src/config/keychain.rs` - Keychain trait 定义
-2. `Aether/core/src/core.rs` - update_provider, test_provider_connection 实现
-3. `Aether/core/src/aether.udl` - UniFFI 接口定义
+1. `Aleph/core/src/config/keychain.rs` - Keychain trait 定义
+2. `Aleph/core/src/core.rs` - update_provider, test_provider_connection 实现
+3. `Aleph/core/src/aleph.udl` - UniFFI 接口定义
 
 ## 测试场景
 
@@ -437,7 +437,7 @@ ProviderConfigView (Modal)
 5. **Keychain 集成:**
    - [ ] 添加 provider 并保存
    - [ ] 打开 macOS Keychain Access
-   - [ ] 搜索 "com.aether.api-keys"
+   - [ ] 搜索 "com.aleph.api-keys"
    - [ ] 验证 API key 存在且正确
 
 ## 已知限制

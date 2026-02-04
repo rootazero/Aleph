@@ -98,7 +98,7 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 - [ ] Click "Delete"
 - [ ] Verify provider is removed from list
 - [ ] Verify API key is removed from Keychain
-  - Check: Open Keychain Access app → Search for "Aether" → Verify key deleted
+  - Check: Open Keychain Access app → Search for "Aleph" → Verify key deleted
 
 ## 2. Routing Rules Editor
 
@@ -326,12 +326,12 @@ This checklist covers the most critical end-to-end tests for the modernized Sett
 ### 5.2 Verify Keychain Persistence
 
 - [ ] Check Keychain Access app
-- [ ] Search for "Aether"
+- [ ] Search for "Aleph"
 - [ ] Verify API keys are stored with correct provider names:
   - `Aleph:openai` → `sk-test-key-12345`
   - `Aleph:claude` → `sk-ant-test-key`
 - [ ] Verify keys are marked as "Application Password"
-- [ ] Verify "Where" field shows: "Aether"
+- [ ] Verify "Where" field shows: "Aleph"
 
 ## 6. Config Hot-Reload
 

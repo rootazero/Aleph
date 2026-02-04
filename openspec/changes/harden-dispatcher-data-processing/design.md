@@ -314,7 +314,7 @@ pub enum ConfidenceAction {
 ```rust
 let response = tokio::time::timeout(self.timeout, ...)
     .await
-    .map_err(|_| AetherError::Timeout { ... })?;  // Returns error!
+    .map_err(|_| AlephError::Timeout { ... })?;  // Returns error!
 ```
 
 ### Proposed Solution

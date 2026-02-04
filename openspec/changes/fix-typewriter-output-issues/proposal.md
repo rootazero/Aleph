@@ -59,8 +59,8 @@ After analyzing `KeyboardSimulator.swift`, the likely causes are:
 ## Impact Assessment
 
 ### Files to Modify
-- `Aether/Sources/Utils/KeyboardSimulator.swift` - Core fix location
-- `Aether/Sources/Coordinator/OutputCoordinator.swift` - May need fallback handling
+- `Aleph/Sources/Utils/KeyboardSimulator.swift` - Core fix location
+- `Aleph/Sources/Coordinator/OutputCoordinator.swift` - May need fallback handling
 
 ### Risk Level
 **Medium** - Changes to keyboard simulation affect core output functionality

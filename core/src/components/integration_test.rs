@@ -7,7 +7,7 @@
 mod tests {
     use crate::components::*;
     use crate::event::{
-        AetherEvent, ErrorKind, EventBus, EventContext, EventHandler, InputEvent, PlanRequest,
+        AlephEvent, ErrorKind, EventBus, EventContext, EventHandler, InputEvent, PlanRequest,
         PlanStep, StepStatus, StopReason, TaskPlan, TokenUsage, ToolCallError, ToolCallRequest,
         ToolCallResult,
     };
@@ -106,7 +106,7 @@ mod tests {
 
         // Create a simple input (no multi-step keywords, no step markers)
         let input = create_test_input("Hello, how are you?");
-        let event = AetherEvent::InputReceived(input);
+        let event = AlephEvent::InputReceived(input);
 
         // Handle the event
         let result = analyzer.handle(&event, &ctx).await;
@@ -117,11 +117,11 @@ mod tests {
 
         assert_eq!(events.len(), 1, "Should produce exactly one event");
         assert!(
-            matches!(events[0], AetherEvent::ToolCallRequested(_)),
+            matches!(events[0], AlephEvent::ToolCallRequested(_)),
             "Should produce ToolCallRequested for simple input"
         );
 
-        if let AetherEvent::ToolCallRequested(request) = &events[0] {
+        if let AlephEvent::ToolCallRequested(request) = &events[0] {
             // Simple conversational input should default to general_chat
             assert_eq!(
                 request.tool, "general_chat",
@@ -144,7 +144,7 @@ mod tests {
         let input = create_test_input(
             "First search for the file, then open it and finally edit the content",
         );
-        let event = AetherEvent::InputReceived(input);
+        let event = AlephEvent::InputReceived(input);
 
         // Handle the event
         let result = analyzer.handle(&event, &ctx).await;
@@ -155,11 +155,11 @@ mod tests {
 
         assert_eq!(events.len(), 1, "Should produce exactly one event");
         assert!(
-            matches!(events[0], AetherEvent::PlanRequested(_)),
+            matches!(events[0], AlephEvent::PlanRequested(_)),
             "Should produce PlanRequested for complex input with multi-step keywords"
         );
 
-        if let AetherEvent::PlanRequested(plan_request) = &events[0] {
+        if let AlephEvent::PlanRequested(plan_request) = &events[0] {
             assert!(
                 !plan_request.detected_steps.is_empty(),
                 "Should detect steps from the input"
@@ -175,7 +175,7 @@ mod tests {
 
         // Create a complex input with Chinese multi-step keywords
         let input = create_test_input("打开文件然后复制内容接着保存到新位置");
-        let event = AetherEvent::InputReceived(input);
+        let event = AlephEvent::InputReceived(input);
 
         // Handle the event
         let result = analyzer.handle(&event, &ctx).await;
@@ -185,7 +185,7 @@ mod tests {
         let events = result.unwrap();
 
         assert!(
-            matches!(events[0], AetherEvent::PlanRequested(_)),
+            matches!(events[0], AlephEvent::PlanRequested(_)),
             "Should produce PlanRequested for Chinese complex input"
         );
     }
@@ -198,7 +198,7 @@ mod tests {
 
         // Create an input with numbered list (step markers)
         let input = create_test_input("1. Create a folder\n2. Copy files\n3. Delete old files");
-        let event = AetherEvent::InputReceived(input);
+        let event = AlephEvent::InputReceived(input);
 
         // Handle the event
         let result = analyzer.handle(&event, &ctx).await;
@@ -208,7 +208,7 @@ mod tests {
         let events = result.unwrap();
 
         assert!(
-            matches!(events[0], AetherEvent::PlanRequested(_)),
+            matches!(events[0], AlephEvent::PlanRequested(_)),
             "Should produce PlanRequested for numbered list input"
         );
     }
@@ -228,7 +228,7 @@ mod tests {
             "打开文件然后复制内容接着保存",
             vec!["打开文件", "复制内容", "保存"],
         );
-        let event = AetherEvent::PlanRequested(plan_request);
+        let event = AlephEvent::PlanRequested(plan_request);
 
         // Handle the event
         let result = planner.handle(&event, &ctx).await;
@@ -239,11 +239,11 @@ mod tests {
 
         assert_eq!(events.len(), 1, "Should produce exactly one event");
         assert!(
-            matches!(events[0], AetherEvent::PlanCreated(_)),
+            matches!(events[0], AlephEvent::PlanCreated(_)),
             "Should produce PlanCreated event"
         );
 
-        if let AetherEvent::PlanCreated(plan) = &events[0] {
+        if let AlephEvent::PlanCreated(plan) = &events[0] {
             assert_eq!(plan.steps.len(), 3, "Plan should have 3 steps");
 
             // Verify step dependencies (sequential)
@@ -283,7 +283,7 @@ mod tests {
 
         // Create a PlanRequest with no detected steps
         let plan_request = create_plan_request("搜索文件", vec![]);
-        let event = AetherEvent::PlanRequested(plan_request);
+        let event = AlephEvent::PlanRequested(plan_request);
 
         // Handle the event
         let result = planner.handle(&event, &ctx).await;
@@ -292,7 +292,7 @@ mod tests {
         assert!(result.is_ok(), "Handler should succeed");
         let events = result.unwrap();
 
-        if let AetherEvent::PlanCreated(plan) = &events[0] {
+        if let AlephEvent::PlanCreated(plan) = &events[0] {
             assert_eq!(
                 plan.steps.len(),
                 1,
@@ -314,7 +314,7 @@ mod tests {
 
         // Create a ToolCallRequest
         let request = create_tool_call_request("search", "find rust documentation");
-        let event = AetherEvent::ToolCallRequested(request);
+        let event = AlephEvent::ToolCallRequested(request);
 
         // Handle the event
         let result = executor.handle(&event, &ctx).await;
@@ -325,11 +325,11 @@ mod tests {
 
         assert_eq!(events.len(), 1, "Should produce exactly one event");
         assert!(
-            matches!(events[0], AetherEvent::ToolCallCompleted(_)),
+            matches!(events[0], AlephEvent::ToolCallCompleted(_)),
             "Should produce ToolCallCompleted event"
         );
 
-        if let AetherEvent::ToolCallCompleted(completed) = &events[0] {
+        if let AlephEvent::ToolCallCompleted(completed) = &events[0] {
             assert_eq!(completed.tool, "search", "Tool name should match");
             assert!(
                 completed.completed_at >= completed.started_at,
@@ -354,7 +354,7 @@ mod tests {
 
         // Create a ToolCallRequest
         let request = create_tool_call_request("search", "find something");
-        let event = AetherEvent::ToolCallRequested(request);
+        let event = AlephEvent::ToolCallRequested(request);
 
         // Handle the event
         let result = executor.handle(&event, &ctx).await;
@@ -368,11 +368,11 @@ mod tests {
 
         assert_eq!(events.len(), 1, "Should produce exactly one event");
         assert!(
-            matches!(events[0], AetherEvent::ToolCallFailed(_)),
+            matches!(events[0], AlephEvent::ToolCallFailed(_)),
             "Should produce ToolCallFailed when aborted"
         );
 
-        if let AetherEvent::ToolCallFailed(error) = &events[0] {
+        if let AlephEvent::ToolCallFailed(error) = &events[0] {
             assert_eq!(
                 error.error_kind,
                 ErrorKind::Aborted,
@@ -401,7 +401,7 @@ mod tests {
             ("read", "Read file content"),
             ("write", "Write results"),
         ]);
-        let event = AetherEvent::PlanCreated(plan);
+        let event = AlephEvent::PlanCreated(plan);
 
         // Handle the event
         let result = controller.handle(&event, &ctx).await;
@@ -413,11 +413,11 @@ mod tests {
         // Should produce ToolCallRequested for the first step
         assert!(!events.is_empty(), "Should produce at least one event");
         assert!(
-            matches!(events[0], AetherEvent::ToolCallRequested(_)),
+            matches!(events[0], AlephEvent::ToolCallRequested(_)),
             "Should produce ToolCallRequested to start first step"
         );
 
-        if let AetherEvent::ToolCallRequested(request) = &events[0] {
+        if let AlephEvent::ToolCallRequested(request) = &events[0] {
             assert_eq!(
                 request.tool, "search",
                 "Should start with first step's tool"
@@ -443,7 +443,7 @@ mod tests {
             parallel_groups: vec![],
             current_step_index: 0,
         };
-        let event = AetherEvent::PlanCreated(plan);
+        let event = AlephEvent::PlanCreated(plan);
 
         // Handle the event
         let result = controller.handle(&event, &ctx).await;
@@ -454,7 +454,7 @@ mod tests {
 
         assert_eq!(events.len(), 1, "Should produce exactly one event");
         assert!(
-            matches!(events[0], AetherEvent::LoopStop(StopReason::EmptyPlan)),
+            matches!(events[0], AlephEvent::LoopStop(StopReason::EmptyPlan)),
             "Should stop with EmptyPlan reason for empty plan"
         );
     }
@@ -479,7 +479,7 @@ mod tests {
             attempts: 3,
             session_id: None,
         };
-        let event = AetherEvent::ToolCallFailed(error);
+        let event = AlephEvent::ToolCallFailed(error);
 
         // Handle the event
         let result = controller.handle(&event, &ctx).await;
@@ -490,7 +490,7 @@ mod tests {
 
         assert_eq!(events.len(), 1, "Should produce exactly one event");
         assert!(
-            matches!(events[0], AetherEvent::LoopStop(StopReason::Error(_))),
+            matches!(events[0], AlephEvent::LoopStop(StopReason::Error(_))),
             "Should stop with Error reason on tool failure"
         );
     }
@@ -514,7 +514,7 @@ mod tests {
 
         // Create an InputReceived event
         let input = create_test_input("Hello, this is a test input");
-        let event = AetherEvent::InputReceived(input.clone());
+        let event = AlephEvent::InputReceived(input.clone());
 
         // Handle the event
         let result = recorder.handle(&event, &ctx).await;
@@ -558,11 +558,11 @@ mod tests {
         ctx.set_session_id(session_id.to_string()).await;
 
         // Handle multiple events
-        let input_event = AetherEvent::InputReceived(create_test_input("User query"));
+        let input_event = AlephEvent::InputReceived(create_test_input("User query"));
         recorder.handle(&input_event, &ctx).await.unwrap();
 
         let tool_result =
-            AetherEvent::ToolCallCompleted(create_tool_call_result("search", "Found results"));
+            AlephEvent::ToolCallCompleted(create_tool_call_result("search", "Found results"));
         recorder.handle(&tool_result, &ctx).await.unwrap();
 
         // Verify all events were persisted
@@ -598,7 +598,7 @@ mod tests {
 
         // Step 1: Start with complex input
         let input = create_test_input("First search for docs then read the results");
-        let input_event = AetherEvent::InputReceived(input);
+        let input_event = AlephEvent::InputReceived(input);
 
         // Record the input
         recorder.handle(&input_event, &ctx).await.unwrap();
@@ -607,7 +607,7 @@ mod tests {
         let analyzer_result = analyzer.handle(&input_event, &ctx).await.unwrap();
         assert_eq!(analyzer_result.len(), 1);
         assert!(
-            matches!(analyzer_result[0], AetherEvent::PlanRequested(_)),
+            matches!(analyzer_result[0], AlephEvent::PlanRequested(_)),
             "Complex input should produce PlanRequested"
         );
 
@@ -615,7 +615,7 @@ mod tests {
         let planner_result = planner.handle(&analyzer_result[0], &ctx).await.unwrap();
         assert_eq!(planner_result.len(), 1);
         assert!(
-            matches!(planner_result[0], AetherEvent::PlanCreated(_)),
+            matches!(planner_result[0], AlephEvent::PlanCreated(_)),
             "PlanRequested should produce PlanCreated"
         );
 
@@ -626,7 +626,7 @@ mod tests {
         let controller_result = controller.handle(&planner_result[0], &ctx).await.unwrap();
         assert!(!controller_result.is_empty());
         assert!(
-            matches!(controller_result[0], AetherEvent::ToolCallRequested(_)),
+            matches!(controller_result[0], AlephEvent::ToolCallRequested(_)),
             "PlanCreated should produce ToolCallRequested"
         );
 
@@ -634,7 +634,7 @@ mod tests {
         let executor_result = executor.handle(&controller_result[0], &ctx).await.unwrap();
         assert_eq!(executor_result.len(), 1);
         assert!(
-            matches!(executor_result[0], AetherEvent::ToolCallCompleted(_)),
+            matches!(executor_result[0], AlephEvent::ToolCallCompleted(_)),
             "ToolCallRequested should produce ToolCallCompleted"
         );
 
@@ -671,13 +671,13 @@ mod tests {
 
         // Simple input (no multi-step keywords)
         let input = create_test_input("What is the weather today?");
-        let input_event = AetherEvent::InputReceived(input);
+        let input_event = AlephEvent::InputReceived(input);
 
         // IntentAnalyzer should produce ToolCallRequested directly
         let analyzer_result = analyzer.handle(&input_event, &ctx).await.unwrap();
         assert_eq!(analyzer_result.len(), 1);
         assert!(
-            matches!(analyzer_result[0], AetherEvent::ToolCallRequested(_)),
+            matches!(analyzer_result[0], AlephEvent::ToolCallRequested(_)),
             "Simple input should skip planning and produce ToolCallRequested"
         );
 
@@ -685,7 +685,7 @@ mod tests {
         let executor_result = executor.handle(&analyzer_result[0], &ctx).await.unwrap();
         assert_eq!(executor_result.len(), 1);
         assert!(
-            matches!(executor_result[0], AetherEvent::ToolCallCompleted(_)),
+            matches!(executor_result[0], AlephEvent::ToolCallCompleted(_)),
             "ToolCallRequested should produce ToolCallCompleted"
         );
     }
@@ -703,14 +703,14 @@ mod tests {
             ("read", "Read file content"),
             ("write", "Write results"),
         ]);
-        let plan_event = AetherEvent::PlanCreated(plan);
+        let plan_event = AlephEvent::PlanCreated(plan);
 
         // Handle PlanCreated -> should start first step
         let result1 = controller.handle(&plan_event, &ctx).await.unwrap();
-        assert!(matches!(result1[0], AetherEvent::ToolCallRequested(_)));
+        assert!(matches!(result1[0], AlephEvent::ToolCallRequested(_)));
 
         // Simulate first step completion
-        let completion1 = AetherEvent::ToolCallCompleted(ToolCallResult {
+        let completion1 = AlephEvent::ToolCallCompleted(ToolCallResult {
             call_id: "call-1".to_string(),
             tool: "search".to_string(),
             input: serde_json::json!({}),
@@ -731,10 +731,10 @@ mod tests {
         // Should either continue with next step or complete the plan
         let has_tool_request = result2
             .iter()
-            .any(|e| matches!(e, AetherEvent::ToolCallRequested(_)));
+            .any(|e| matches!(e, AlephEvent::ToolCallRequested(_)));
         let has_loop_stop = result2
             .iter()
-            .any(|e| matches!(e, AetherEvent::LoopStop(_)));
+            .any(|e| matches!(e, AlephEvent::LoopStop(_)));
 
         assert!(
             has_tool_request || has_loop_stop,
@@ -753,7 +753,7 @@ mod tests {
         let ctx = create_test_context();
 
         // Create an event that none should handle (LoopStop)
-        let stop_event = AetherEvent::LoopStop(StopReason::Completed);
+        let stop_event = AlephEvent::LoopStop(StopReason::Completed);
 
         // Each component should return empty when given non-subscribed event
         let analyzer_result = analyzer.handle(&stop_event, &ctx).await.unwrap();
@@ -799,11 +799,11 @@ mod tests {
 
         // ToolExecutor should fail on abort
         let request = create_tool_call_request("search", "test");
-        let event = AetherEvent::ToolCallRequested(request);
+        let event = AlephEvent::ToolCallRequested(request);
         let result = executor.handle(&event, &ctx).await.unwrap();
 
         assert!(
-            matches!(result[0], AetherEvent::ToolCallFailed(ref e) if e.error_kind == ErrorKind::Aborted),
+            matches!(result[0], AlephEvent::ToolCallFailed(ref e) if e.error_kind == ErrorKind::Aborted),
             "ToolExecutor should fail with Aborted on abort signal"
         );
 

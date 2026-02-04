@@ -36,7 +36,7 @@ fn test_routing_rule_with_triggers() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_routing_rule_with_triggers -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_routing_rule_with_triggers -- --nocapture`
 Expected: FAIL with "unknown field `triggers`"
 
 **Step 3: Add triggers field to RoutingRuleConfig**
@@ -54,7 +54,7 @@ In `core/src/config/types/routing.rs`, after line 128 (after `hint` field), add:
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_routing_rule_with_triggers -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_routing_rule_with_triggers -- --nocapture`
 Expected: PASS
 
 **Step 5: Add triggers field to McpServerConfig**
@@ -80,7 +80,7 @@ In `core/src/skills/mod.rs`, after line 48 (after `allowed_tools` field), add:
 
 **Step 7: Run full test suite for affected modules**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test config:: && cargo test skills::`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test config:: && cargo test skills::`
 Expected: All PASS
 
 **Step 8: Commit**
@@ -124,7 +124,7 @@ fn test_command_triggers_empty() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_command_triggers -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_command_triggers -- --nocapture`
 Expected: FAIL with "cannot find type `CommandTriggers`"
 
 **Step 3: Implement CommandTriggers**
@@ -176,7 +176,7 @@ impl CommandTriggers {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_command_triggers -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_command_triggers -- --nocapture`
 Expected: PASS
 
 **Step 5: Export CommandTriggers from mod.rs**
@@ -243,7 +243,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test unified_index -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test unified_index -- --nocapture`
 Expected: FAIL (module not found or types undefined)
 
 **Step 3: Implement basic types**
@@ -300,7 +300,7 @@ impl UnifiedCommandIndex {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test unified_index::tests -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test unified_index::tests -- --nocapture`
 Expected: PASS
 
 **Step 5: Update mod.rs to include new module**
@@ -349,7 +349,7 @@ fn test_add_command_with_triggers() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_add_command_with_triggers -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_add_command_with_triggers -- --nocapture`
 Expected: FAIL with "no method named `add_command`"
 
 **Step 3: Implement add_command**
@@ -386,7 +386,7 @@ Add to `UnifiedCommandIndex` impl:
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_add_command_with_triggers -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_add_command_with_triggers -- --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
@@ -435,7 +435,7 @@ fn test_extract_keywords_chinese() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_extract_keywords -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_extract_keywords -- --nocapture`
 Expected: FAIL with "cannot find function `extract_keywords_from_description`"
 
 **Step 3: Implement extract_keywords_from_description**
@@ -478,7 +478,7 @@ pub fn extract_keywords_from_description(description: &str) -> Vec<String> {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_extract_keywords -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_extract_keywords -- --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
@@ -548,7 +548,7 @@ fn test_find_matches_priority_sorting() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_find_matches -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_find_matches -- --nocapture`
 Expected: FAIL with "no method named `find_matches`"
 
 **Step 3: Implement ScoredMatch and find_matches**
@@ -620,7 +620,7 @@ Add to `UnifiedCommandIndex` impl:
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_find_matches -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_find_matches -- --nocapture`
 Expected: PASS
 
 **Step 5: Export ScoredMatch**
@@ -698,7 +698,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test nl_detector::tests -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test nl_detector::tests -- --nocapture`
 Expected: FAIL with "cannot find function `extract_explicit_command`"
 
 **Step 3: Implement explicit patterns and extraction**
@@ -753,7 +753,7 @@ pub fn extract_explicit_command(input: &str) -> Option<(String, Option<String>)>
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test nl_detector::tests -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test nl_detector::tests -- --nocapture`
 Expected: PASS
 
 **Step 5: Update mod.rs**
@@ -831,7 +831,7 @@ fn test_nl_detector_no_match() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_nl_detector -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_nl_detector -- --nocapture`
 Expected: FAIL with "cannot find type `NaturalLanguageCommandDetector`"
 
 **Step 3: Implement NaturalLanguageCommandDetector**
@@ -955,7 +955,7 @@ impl NaturalLanguageCommandDetector {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_nl_detector -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_nl_detector -- --nocapture`
 Expected: PASS
 
 **Step 5: Export types from mod.rs**
@@ -1022,7 +1022,7 @@ fn test_parser_slash_command_takes_precedence() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test parser::tests::test_parser_with_nl -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test parser::tests::test_parser_with_nl -- --nocapture`
 Expected: FAIL with "no method named `with_nl_detector`"
 
 **Step 3: Add nl_detector field and with_nl_detector method**
@@ -1184,7 +1184,7 @@ fn create_command_from_detection(&self, detection: NLDetection, original_input: 
 
 **Step 5: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test parser::tests -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test parser::tests -- --nocapture`
 Expected: PASS
 
 **Step 6: Commit**
@@ -1246,7 +1246,7 @@ Instructions here.
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_build_from_skills -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_build_from_skills -- --nocapture`
 Expected: FAIL with "no function `build_from_skills`"
 
 **Step 3: Implement build_from_skills**
@@ -1277,7 +1277,7 @@ impl UnifiedCommandIndex {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_build_from_skills -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_build_from_skills -- --nocapture`
 Expected: PASS
 
 **Step 5: Add build methods for MCP and Custom**
@@ -1378,22 +1378,22 @@ git commit -m "feat(command): add UnifiedCommandIndex build methods for all sour
 
 **Step 1: Run all command module tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test command:: -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test command:: -- --nocapture`
 Expected: All PASS
 
 **Step 2: Run all affected module tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test skills:: && cargo test config::`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test skills:: && cargo test config::`
 Expected: All PASS
 
 **Step 3: Run cargo check for any compile errors**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check`
 Expected: No errors
 
 **Step 4: Run cargo clippy for any warnings**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo clippy -- -D warnings`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo clippy -- -D warnings`
 Expected: No warnings (fix any that appear)
 
 **Step 5: Final commit**

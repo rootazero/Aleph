@@ -1,4 +1,4 @@
-/// AI Provider abstraction for Aether
+/// AI Provider abstraction for Aleph
 ///
 /// This module provides a unified interface for different AI backends.
 ///

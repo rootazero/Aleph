@@ -16,19 +16,19 @@
 **Steps**:
 1. 创建时间戳备份
    ```bash
-   cd /Users/zouguojun/Workspace/Aether
-   tar -czf ~/aether_openspec_backup_$(date +%Y%m%d_%H%M%S).tar.gz \
+   cd /Users/zouguojun/Workspace/Aleph
+   tar -czf ~/aleph_openspec_backup_$(date +%Y%m%d_%H%M%S).tar.gz \
      openspec/ \
-     Aether/openspec/ \
+     Aleph/openspec/ \
      .claude/commands/openspec/
    ```
 2. 验证备份完整性
    ```bash
-   tar -tzf ~/aether_openspec_backup_*.tar.gz | head -20
+   tar -tzf ~/aleph_openspec_backup_*.tar.gz | head -20
    ```
 3. 记录备份位置和大小
    ```bash
-   ls -lh ~/aether_openspec_backup_*.tar.gz
+   ls -lh ~/aleph_openspec_backup_*.tar.gz
    ```
 
 **Success criteria**:
@@ -55,17 +55,17 @@
 2. 生成目录结构报告
    ```bash
    tree -L 4 openspec/ > /tmp/main_openspec_structure.txt
-   tree -L 4 Aether/openspec/ > /tmp/aether_openspec_structure.txt 2>/dev/null || echo "None"
+   tree -L 4 Aleph/openspec/ > /tmp/aleph_openspec_structure.txt 2>/dev/null || echo "None"
    ```
 
 3. 列出所有 Markdown 文件
    ```bash
-   find openspec/ Aether/openspec/ -name "*.md" | sort > /tmp/all_md_files.txt
+   find openspec/ Aleph/openspec/ -name "*.md" | sort > /tmp/all_md_files.txt
    ```
 
 4. 识别重复文件
    ```bash
-   find openspec/ Aether/openspec/ -name "*.md" -exec basename {} \; \
+   find openspec/ Aleph/openspec/ -name "*.md" -exec basename {} \; \
      | sort | uniq -d > /tmp/duplicate_basenames.txt
    ```
 
@@ -77,7 +77,7 @@
 
 **Deliverables**:
 - `/tmp/main_openspec_structure.txt`
-- `/tmp/aether_openspec_structure.txt`
+- `/tmp/aleph_openspec_structure.txt`
 - `/tmp/all_md_files.txt`
 - `/tmp/duplicate_basenames.txt`
 
@@ -94,21 +94,21 @@
    # 主目录归档版本
    ls -la openspec/changes/archive/2025-12-23-complete-phase2-testing-and-polish/
 
-   # Aether 子目录版本
-   ls -la Aether/openspec/changes/complete-phase2-testing-and-polish/
+   # Aleph 子目录版本
+   ls -la Aleph/openspec/changes/complete-phase2-testing-and-polish/
    ```
 
 2. 比较文件内容
    ```bash
    # 如果两个版本都有 proposal.md，比较它们
    diff openspec/changes/archive/2025-12-23-complete-phase2-testing-and-polish/proposal.md \
-        Aether/openspec/changes/complete-phase2-testing-and-polish/openspec/changes/complete-phase2-testing-and-polish/proposal.md \
+        Aleph/openspec/changes/complete-phase2-testing-and-polish/openspec/changes/complete-phase2-testing-and-polish/proposal.md \
         2>/dev/null || echo "Files differ or don't exist at both locations"
    ```
 
 3. 检查嵌套 openspec 的内容
    ```bash
-   find Aether/openspec/changes/complete-phase2-testing-and-polish/openspec/ \
+   find Aleph/openspec/changes/complete-phase2-testing-and-polish/openspec/ \
      -name "*.md" -exec echo "=== {} ===" \; -exec head -10 {} \;
    ```
 
@@ -118,8 +118,8 @@
 
    ### complete-phase2-testing-and-polish
    - 主目录位置: openspec/changes/archive/2025-12-23-complete-phase2-testing-and-polish/
-   - Aether 位置: Aether/openspec/changes/complete-phase2-testing-and-polish/
-   - 嵌套位置: Aether/openspec/.../openspec/changes/complete-phase2-testing-and-polish/
+   - Aleph 位置: Aleph/openspec/changes/complete-phase2-testing-and-polish/
+   - 嵌套位置: Aleph/openspec/.../openspec/changes/complete-phase2-testing-and-polish/
    - 结论: [重复/独特/部分重叠]
 
    ### 其他发现
@@ -147,7 +147,7 @@
 
 **Steps**:
 1. 根据 Task 3 的分析，提取任何独特内容
-2. 如果 Aether/openspec 有新的或更完整的文件，复制到主 openspec
+2. 如果 Aleph/openspec 有新的或更完整的文件，复制到主 openspec
 3. 如果有新的 specs，合并到 openspec/specs/
 4. 如果有新的 scripts，评估是否需要保留
 
@@ -161,7 +161,7 @@
 
 ---
 
-#### Task 5: 删除 Aether/openspec 目录
+#### Task 5: 删除 Aleph/openspec 目录
 **Estimated effort**: 5 minutes
 **Dependencies**: Task 4
 **Validation**: 目录已删除，主 openspec 包含所有内容
@@ -170,31 +170,31 @@
 1. 最后确认无独特内容
    ```bash
    # 再次检查
-   find Aether/openspec/ -name "*.md" | wc -l
+   find Aleph/openspec/ -name "*.md" | wc -l
    ```
 
-2. 删除整个 Aether/openspec 目录
+2. 删除整个 Aleph/openspec 目录
    ```bash
-   rm -rf Aether/openspec/
+   rm -rf Aleph/openspec/
    ```
 
 3. 验证删除
    ```bash
-   ls Aether/openspec/  # 应返回错误
+   ls Aleph/openspec/  # 应返回错误
    ```
 
 4. 提交删除到 Git
    ```bash
    git status
    git add -u
-   git commit -m "chore: remove duplicate Aether/openspec directory
+   git commit -m "chore: remove duplicate Aleph/openspec directory
 
    Consolidate all OpenSpec content to the main /openspec directory.
    See openspec/changes/consolidate-openspec-architecture for details."
    ```
 
 **Success criteria**:
-- [x] Aether/openspec/ 不存在
+- [x] Aleph/openspec/ 不存在
 - [x] Git 已记录删除
 - [x] 主 openspec/ 包含所有必要内容
 
@@ -248,10 +248,10 @@
    *.tmp
    ```
 
-2. 如果 Aether/ 下可能重新生成 openspec，添加忽略规则
+2. 如果 Aleph/ 下可能重新生成 openspec，添加忽略规则
    ```gitignore
    # Prevent duplicate openspec directories
-   Aether/openspec/
+   Aleph/openspec/
    ```
 
 3. 提交更新
@@ -374,12 +374,12 @@
    ## Changes Made
 
    ### Deleted
-   - `/Aether/openspec/` - 完整删除（重复内容）
+   - `/Aleph/openspec/` - 完整删除（重复内容）
    - 所有 `.DS_Store` 文件
    - 嵌套的 openspec 目录
 
    ### Moved
-   - (如有) 列出从 Aether/openspec 移动到主 openspec 的文件
+   - (如有) 列出从 Aleph/openspec 移动到主 openspec 的文件
 
    ### Preserved
    - `/openspec/` - 唯一的规范目录
@@ -391,13 +391,13 @@
    - [x] 目录结构清晰无嵌套
 
    ## Backup Location
-   `~/aether_openspec_backup_20251224_*.tar.gz`
+   `~/aleph_openspec_backup_20251224_*.tar.gz`
 
    ## Rollback Procedure
    如需回滚：
    ```bash
-   cd /Users/zouguojun/Workspace/Aether
-   tar -xzf ~/aether_openspec_backup_*.tar.gz
+   cd /Users/zouguojun/Workspace/Aleph
+   tar -xzf ~/aleph_openspec_backup_*.tar.gz
    ```
    ```
 
@@ -424,7 +424,7 @@
 **Steps**:
 1. 搜索可能引用旧路径的文件
    ```bash
-   grep -r "Aether/openspec" . --include="*.md" --include="*.swift" --include="*.rs"
+   grep -r "Aleph/openspec" . --include="*.md" --include="*.swift" --include="*.rs"
    ```
 
 2. 检查 CLAUDE.md
@@ -446,7 +446,7 @@
    ```
 
 **Success criteria**:
-- [x] 无引用 Aether/openspec 的文档
+- [x] 无引用 Aleph/openspec 的文档
 - [x] 所有路径指向 /openspec
 - [x] README 和 CLAUDE.md 保持最新
 
@@ -464,7 +464,7 @@
    openspec validate --all
 
    # 构建验证
-   cd Aether/core
+   cd Aleph/core
    cargo build --release
 
    # 测试验证
@@ -482,7 +482,7 @@
    git add .
    git commit -m "refactor: consolidate OpenSpec architecture
 
-   - Remove duplicate Aether/openspec directory
+   - Remove duplicate Aleph/openspec directory
    - Establish single /openspec root directory
    - Clean up nested and orphaned structures
    - Update documentation references
@@ -510,7 +510,7 @@ Task 1 (备份)
   └─→ Task 2 (审计)
         └─→ Task 3 (比较分析)
               └─→ Task 4 (提取独特内容)
-                    └─→ Task 5 (删除 Aether/openspec)
+                    └─→ Task 5 (删除 Aleph/openspec)
                           ├─→ Task 6 (清理临时文件)
                           │     └─→ Task 7 (更新 .gitignore)
                           │           └─→ Task 8 (OpenSpec 验证)
@@ -558,15 +558,15 @@ Task 1 (备份)
 
 ```bash
 # 1. 恢复备份
-cd /Users/zouguojun/Workspace/Aether
-tar -xzf ~/aether_openspec_backup_*.tar.gz
+cd /Users/zouguojun/Workspace/Aleph
+tar -xzf ~/aleph_openspec_backup_*.tar.gz
 
 # 2. 丢弃 Git 变更（如未推送）
 git reset --hard HEAD~1  # 或者具体的 commit hash
 
 # 3. 验证恢复
 openspec list
-ls Aether/openspec/
+ls Aleph/openspec/
 
 # 4. 重新评估问题
 ```
@@ -574,6 +574,6 @@ ls Aether/openspec/
 ## Notes
 
 - 保留备份至少 7 天
-- 如果发现 Aether/openspec 有重要独特内容，暂停 Task 5，先完整提取
+- 如果发现 Aleph/openspec 有重要独特内容，暂停 Task 5，先完整提取
 - 整合不改变 .claude/commands/openspec/ CLI 工具
 - 本变更是纯组织性质，不影响功能代码

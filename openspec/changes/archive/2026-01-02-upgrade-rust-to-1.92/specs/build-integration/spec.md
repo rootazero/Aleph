@@ -57,11 +57,11 @@ The build system SHALL regenerate UniFFI Swift bindings if the UDL schema or Uni
 - **WHEN** UniFFI version or UDL schema changes are detected
 - **THEN** the build script runs:
   ```
-  cargo run --bin uniffi-bindgen generate src/aether.udl \
+  cargo run --bin uniffi-bindgen generate src/aleph.udl \
     --language swift \
     --out-dir ../Sources/Generated/
   ```
-- **AND** verifies the generated `aether.swift` file is valid
+- **AND** verifies the generated `aleph.swift` file is valid
 - **AND** fails build if binding generation fails
 
 #### Scenario: Skip regeneration if bindings are up-to-date

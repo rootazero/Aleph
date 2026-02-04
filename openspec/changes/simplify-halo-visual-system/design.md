@@ -365,7 +365,7 @@ No new automated tests required. Existing UI tests should pass after changes.
 If issues arise, revert commits and restore deleted files from git history:
 
 ```bash
-git checkout HEAD~1 -- Aether/Sources/Themes/
+git checkout HEAD~1 -- Aleph/Sources/Themes/
 ```
 
 Since all changes are deletions or simplifications, rollback is straightforward.

@@ -1,21 +1,21 @@
-//! Aether Skill Specification
+//! Aleph Skill Specification
 //!
 //! Data structures for parsing and representing Markdown-based CLI skills.
-//! Compatible with OpenClaw SKILL.md format while adding Aether-specific extensions.
+//! Compatible with OpenClaw SKILL.md format while adding Aleph-specific extensions.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Aether Skill Specification (parsed from SKILL.md frontmatter)
+/// Aleph Skill Specification (parsed from SKILL.md frontmatter)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AetherSkillSpec {
+pub struct AlephSkillSpec {
     /// Tool name (e.g., "github-pr")
     pub name: String,
 
     /// Short description for LLM
     pub description: String,
 
-    /// OpenClaw + Aether metadata
+    /// OpenClaw + Aleph metadata
     pub metadata: SkillMetadata,
 
     /// Markdown content (injected as context)
@@ -23,16 +23,16 @@ pub struct AetherSkillSpec {
     pub markdown_content: String,
 }
 
-/// Skill metadata (OpenClaw compatible + Aether extensions)
+/// Skill metadata (OpenClaw compatible + Aleph extensions)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillMetadata {
     /// OpenClaw compatibility: required binaries
     #[serde(default)]
     pub requires: RequiresSpec,
 
-    /// Aether extensions (optional)
+    /// Aleph extensions (optional)
     #[serde(default)]
-    pub aether: Option<AetherExtensions>,
+    pub aleph: Option<AlephExtensions>,
 }
 
 /// Required binaries specification
@@ -43,9 +43,9 @@ pub struct RequiresSpec {
     pub bins: Vec<String>,
 }
 
-/// Aether-specific extensions
+/// Aleph-specific extensions
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AetherExtensions {
+pub struct AlephExtensions {
     /// Security controls
     #[serde(default)]
     pub security: SecuritySpec,
@@ -201,11 +201,11 @@ metadata:
     bins: ["echo"]
 "#;
 
-        let spec: AetherSkillSpec = serde_yaml::from_str(yaml).unwrap();
+        let spec: AlephSkillSpec = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(spec.name, "test-tool");
         assert_eq!(spec.description, "A test tool");
         assert_eq!(spec.metadata.requires.bins, vec!["echo"]);
-        assert!(spec.metadata.aether.is_none());
+        assert!(spec.metadata.aleph.is_none());
     }
 
     #[test]
@@ -231,8 +231,8 @@ metadata:
         optional: false
 "#;
 
-        let spec: AetherSkillSpec = serde_yaml::from_str(yaml).unwrap();
-        let aether = spec.metadata.aether.unwrap();
+        let spec: AlephSkillSpec = serde_yaml::from_str(yaml).unwrap();
+        let aether = spec.metadata.aleph.unwrap();
 
         assert!(matches!(aether.security.sandbox, SandboxMode::Docker));
         assert!(matches!(

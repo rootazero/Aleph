@@ -1,6 +1,6 @@
 //! Extension System - Plugin and Component Management
 //!
-//! This module provides a complete extension system for Aether, compatible with
+//! This module provides a complete extension system for Aleph, compatible with
 //! Claude Code plugins while supporting enhanced features like TypeScript plugins
 //! and npm package installation.
 //!
@@ -15,7 +15,7 @@
 //!          ┌───────────────────┼───────────────────┐
 //!          ▼                   ▼                   ▼
 //!     ConfigManager      ComponentLoader      ComponentRegistry
-//!     (aether.jsonc)     (skills, agents)    (state management)
+//!     (aleph.jsonc)     (skills, agents)    (state management)
 //!          │                   │                   │
 //!          └───────────────────┼───────────────────┘
 //!                              │
@@ -77,7 +77,7 @@ pub use template::SkillTemplate;
 pub use types::*;
 
 // Re-export config types
-pub use config::{AetherConfig, ConfigManager};
+pub use config::{AlephConfig, ConfigManager};
 
 // Re-export sync API
 pub use sync_api::SyncExtensionManager;
@@ -141,7 +141,7 @@ pub struct ExtensionManager {
     /// Discovery manager
     discovery: DiscoveryManager,
 
-    /// Config manager (aether.jsonc)
+    /// Config manager (aleph.jsonc)
     config_manager: ConfigManager,
 
     /// Component registry
@@ -402,7 +402,7 @@ impl ExtensionManager {
     }
 
     /// Get the merged configuration
-    pub fn get_config(&self) -> &AetherConfig {
+    pub fn get_config(&self) -> &AlephConfig {
         self.config_manager.get_config()
     }
 
@@ -411,9 +411,9 @@ impl ExtensionManager {
         &self.discovery
     }
 
-    /// Get the Aether home directory
-    pub fn aether_home(&self) -> ExtensionResult<PathBuf> {
-        Ok(self.discovery.aether_home()?)
+    /// Get the Aleph home directory
+    pub fn aleph_home(&self) -> ExtensionResult<PathBuf> {
+        Ok(self.discovery.aleph_home()?)
     }
 
     // =========================================================================
@@ -886,7 +886,7 @@ impl ExtensionManager {
     pub async fn get_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
         let mut servers = HashMap::new();
 
-        // Get from aether.jsonc config
+        // Get from aleph.jsonc config
         if let Some(mcp) = self.config_manager.get_mcp_servers() {
             for (name, config) in mcp {
                 // Convert McpConfig to McpServerConfig
@@ -1070,7 +1070,7 @@ pub fn is_valid_plugin_dir(path: &std::path::Path) -> bool {
 ///
 /// Returns `~/.aleph/plugins/`
 pub fn default_plugins_dir() -> std::path::PathBuf {
-    crate::discovery::aether_plugins_dir()
+    crate::discovery::aleph_plugins_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("~/.aleph/plugins"))
 }
 

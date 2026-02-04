@@ -241,7 +241,7 @@ Add to `mod tests`:
 **Step 4: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test jsonrpc::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test jsonrpc::tests
 ```
 
 **Step 5: Commit**
@@ -598,7 +598,7 @@ base64 = "0.22"
 **Step 9: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 10: Commit**
@@ -717,7 +717,7 @@ Add after `list_prompts`:
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 4: Commit**
@@ -792,7 +792,7 @@ Replace the stub with:
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test mcp::manager
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test mcp::manager
 ```
 
 **Step 4: Commit**
@@ -964,7 +964,7 @@ pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResour
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test mcp_resource
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test mcp_resource
 ```
 
 **Step 4: Commit**
@@ -1161,7 +1161,7 @@ pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, Pro
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test mcp_prompt
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test mcp_prompt
 ```
 
 **Step 4: Commit**
@@ -1251,7 +1251,7 @@ Replace the stub implementations in `prompts.rs`:
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test resources && cargo test prompts
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test resources && cargo test prompts
 ```
 
 **Step 4: Commit**

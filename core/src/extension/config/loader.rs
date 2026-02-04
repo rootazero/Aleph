@@ -6,16 +6,16 @@
 
 use std::path::{Path, PathBuf};
 
-use super::types::AetherConfig;
+use super::types::AlephConfig;
 use crate::extension::ExtensionError;
 
 /// Config file priority order (TOML preferred over JSONC).
-const CONFIG_FILES: &[&str] = &["aether.toml", "aether.jsonc", "aether.json"];
+const CONFIG_FILES: &[&str] = &["aether.toml", "aleph.jsonc", "aleph.json"];
 
 /// Find the config file in a directory.
 ///
 /// Returns the path to the first existing config file found,
-/// in priority order: `aether.toml` > `aether.jsonc` > `aether.json`.
+/// in priority order: `aether.toml` > `aleph.jsonc` > `aleph.json`.
 ///
 /// # Arguments
 ///
@@ -48,7 +48,7 @@ pub fn find_config_file(dir: &Path) -> Option<PathBuf> {
 /// * `Ok(Some(config))` - Config loaded successfully
 /// * `Ok(None)` - No config file found in directory
 /// * `Err(...)` - Error parsing config file
-pub fn load_extension_config(dir: &Path) -> Result<Option<AetherConfig>, ExtensionError> {
+pub fn load_extension_config(dir: &Path) -> Result<Option<AlephConfig>, ExtensionError> {
     let Some(path) = find_config_file(dir) else {
         return Ok(None);
     };
@@ -69,7 +69,7 @@ pub fn load_extension_config(dir: &Path) -> Result<Option<AetherConfig>, Extensi
 /// * `.toml` - TOML format
 /// * `.jsonc` - JSON with comments
 /// * `.json` - Standard JSON
-pub fn load_config_file(path: &Path) -> Result<AetherConfig, ExtensionError> {
+pub fn load_config_file(path: &Path) -> Result<AlephConfig, ExtensionError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         ExtensionError::config_parse(path, format!("Failed to read file: {}", e))
     })?;
@@ -86,15 +86,15 @@ pub fn load_config_file(path: &Path) -> Result<AetherConfig, ExtensionError> {
     }
 }
 
-/// Parse TOML content into AetherConfig.
-fn parse_toml(content: &str, path: &Path) -> Result<AetherConfig, ExtensionError> {
+/// Parse TOML content into AlephConfig.
+fn parse_toml(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError> {
     toml::from_str(content).map_err(|e| {
         ExtensionError::config_parse(path, format!("TOML parse error: {}", e))
     })
 }
 
-/// Parse JSONC (JSON with comments) content into AetherConfig.
-fn parse_jsonc(content: &str, path: &Path) -> Result<AetherConfig, ExtensionError> {
+/// Parse JSONC (JSON with comments) content into AlephConfig.
+fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError> {
     let stripped = strip_json_comments(content);
     // Handle trailing commas (common in JSONC)
     let trailing_comma_re = regex::Regex::new(r",(\s*[\]}])").unwrap();
@@ -222,7 +222,7 @@ mod tests {
 
         // Create both files
         std::fs::write(dir.join("aether.toml"), "").unwrap();
-        std::fs::write(dir.join("aether.jsonc"), "").unwrap();
+        std::fs::write(dir.join("aleph.jsonc"), "").unwrap();
 
         let found = find_config_file(dir);
         assert!(found.is_some());
@@ -235,11 +235,11 @@ mod tests {
         let dir = temp_dir.path();
 
         // Create only jsonc
-        std::fs::write(dir.join("aether.jsonc"), "").unwrap();
+        std::fs::write(dir.join("aleph.jsonc"), "").unwrap();
 
         let found = find_config_file(dir);
         assert!(found.is_some());
-        assert!(found.unwrap().ends_with("aether.jsonc"));
+        assert!(found.unwrap().ends_with("aleph.jsonc"));
     }
 
     #[test]
@@ -268,7 +268,7 @@ plugin = ["my-plugin"]
     #[test]
     fn test_load_jsonc_config() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("aether.jsonc");
+        let path = temp_dir.path().join("aleph.jsonc");
 
         let jsonc_content = r#"{
   // This is a comment
@@ -285,7 +285,7 @@ plugin = ["my-plugin"]
     #[test]
     fn test_load_jsonc_with_trailing_comma() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("aether.jsonc");
+        let path = temp_dir.path().join("aleph.jsonc");
 
         let jsonc_content = r#"{
   "plugin": [

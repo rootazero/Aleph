@@ -160,7 +160,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     if !args.daemon {
         println!("╔═══════════════════════════════════════════════╗");
-        println!("║         Aether Gateway v{}           ║", env!("CARGO_PKG_VERSION"));
+        println!("║         Aleph Gateway v{}           ║", env!("CARGO_PKG_VERSION"));
         println!("╠═══════════════════════════════════════════════╣");
         println!("║  WebSocket: ws://{}          ║", addr);
         println!("║  Protocol:  JSON-RPC 2.0                      ║");
@@ -457,7 +457,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Initialize authentication context
     let device_store_path = dirs::home_dir()
-        .map(|h| h.join(".aether/devices.db"))
+        .map(|h| h.join(".aleph/devices.db"))
         .unwrap_or_else(|| PathBuf::from("/tmp/aether_devices.db"));
 
     // Ensure parent directory exists
@@ -554,7 +554,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Initialize PairingStore for InboundMessageRouter
     let pairing_store_path = dirs::home_dir()
-        .map(|h| h.join(".aether/pairing.db"))
+        .map(|h| h.join(".aleph/pairing.db"))
         .unwrap_or_else(|| PathBuf::from("/tmp/aether_pairing.db"));
 
     // Ensure parent directory exists
@@ -592,7 +592,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let config_path = args.config.clone()
         .map(|p| expand_path(&p.to_string_lossy()))
         .or_else(|| {
-            dirs::home_dir().map(|h| h.join(".aether/config.toml"))
+            dirs::home_dir().map(|h| h.join(".aleph/config.toml"))
         });
 
     let _config_watcher = setup_config_watcher(&mut server, config_path, &event_bus, args.daemon).await;
@@ -899,7 +899,7 @@ async fn start_webchat_server(args: &Args, final_bind: &str, final_port: u16) {
             PathBuf::from("../ui/webchat/dist"),
         ];
         if let Some(home) = dirs::home_dir() {
-            candidates.push(home.join(".aether/webchat"));
+            candidates.push(home.join(".aleph/webchat"));
         }
         candidates.into_iter().find(|p| p.exists())
     });

@@ -6,7 +6,7 @@
 The `GeneralConfig` struct SHALL support storing and validating a user's preferred language override.
 
 #### Scenario: Language field in GeneralConfig
-- **GIVEN** the `GeneralConfig` struct in `Aether/core/src/config/mod.rs`
+- **GIVEN** the `GeneralConfig` struct in `Aleph/core/src/config/mod.rs`
 - **WHEN** the struct is serialized or deserialized
 - **THEN** the struct SHALL have an optional `language: Option<String>` field
 - **AND** the field SHALL be annotated with `#[serde(default, skip_serializing_if = "Option::is_none")]`
@@ -59,7 +59,7 @@ The config loading logic SHALL validate language preferences to prevent errors f
 
 #### Scenario: Missing .lproj directory for configured language
 - **GIVEN** `config.toml` contains `language = "ja"` (Japanese)
-- **AND** the `Aether/Resources/ja.lproj` directory does not exist
+- **AND** the `Aleph/Resources/ja.lproj` directory does not exist
 - **WHEN** the config is loaded
 - **THEN** the system SHALL log a warning: "Localization files for 'ja' not found, falling back to system language"
 - **AND** the system SHALL treat the language as `None`

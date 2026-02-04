@@ -18,8 +18,8 @@
 ## Task 1: Add KeywordIndex Module
 
 **Files:**
-- Create: `Aether/core/src/intent/keyword.rs`
-- Modify: `Aether/core/src/intent/mod.rs`
+- Create: `Aleph/core/src/intent/keyword.rs`
+- Modify: `Aleph/core/src/intent/mod.rs`
 
 **Step 1: Create keyword.rs with KeywordIndex implementation**
 
@@ -328,7 +328,7 @@ mod tests {
 
 **Step 2: Update mod.rs to export KeywordIndex**
 
-Add to `Aether/core/src/intent/mod.rs`:
+Add to `Aleph/core/src/intent/mod.rs`:
 ```rust
 pub mod keyword;
 pub use keyword::{KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule};
@@ -351,8 +351,8 @@ git commit -m "feat(intent): add KeywordIndex module with weighted scoring and C
 ## Task 2: Add KeywordPolicy Configuration
 
 **Files:**
-- Create: `Aether/core/src/config/types/policies/keyword.rs`
-- Modify: `Aether/core/src/config/types/policies/mod.rs`
+- Create: `Aleph/core/src/config/types/policies/keyword.rs`
+- Modify: `Aleph/core/src/config/types/policies/mod.rs`
 
 **Step 1: Create keyword.rs policy**
 
@@ -518,7 +518,7 @@ mod tests {
 
 **Step 2: Update policies/mod.rs**
 
-Add to `Aether/core/src/config/types/policies/mod.rs`:
+Add to `Aleph/core/src/config/types/policies/mod.rs`:
 ```rust
 pub mod keyword;
 pub use keyword::{KeywordPolicy, KeywordRuleConfig, WeightedKeyword};
@@ -541,7 +541,7 @@ git commit -m "feat(config): add KeywordPolicy for configurable keyword matching
 ## Task 3: Integrate KeywordIndex into IntentClassifier
 
 **Files:**
-- Modify: `Aether/core/src/intent/classifier.rs`
+- Modify: `Aleph/core/src/intent/classifier.rs`
 
 **Step 1: Add KeywordIndex integration**
 
@@ -716,7 +716,7 @@ git commit -m "feat(intent): integrate KeywordIndex for enhanced L2 matching"
 ## Task 4: Connect AiIntentDetector as L3
 
 **Files:**
-- Modify: `Aether/core/src/intent/classifier.rs`
+- Modify: `Aleph/core/src/intent/classifier.rs`
 
 **Step 1: Add AiIntentDetector field**
 
@@ -842,12 +842,12 @@ git commit -m "feat(intent): connect AiIntentDetector as L3 fallback"
 ## Task 5: Integration and Export
 
 **Files:**
-- Modify: `Aether/core/src/config/mod.rs`
-- Modify: `Aether/core/src/lib.rs`
+- Modify: `Aleph/core/src/config/mod.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Export KeywordPolicy from config**
 
-Add to `Aether/core/src/config/mod.rs` or appropriate location:
+Add to `Aleph/core/src/config/mod.rs` or appropriate location:
 ```rust
 pub use types::policies::keyword::{KeywordPolicy, KeywordRuleConfig, WeightedKeyword};
 ```
@@ -874,7 +874,7 @@ git commit -m "feat(intent): complete intent routing enhancement with KeywordInd
 ## Task 6: Documentation and Cleanup
 
 **Files:**
-- Modify: `Aether/core/src/intent/mod.rs` (update docs)
+- Modify: `Aleph/core/src/intent/mod.rs` (update docs)
 
 **Step 1: Update module documentation**
 

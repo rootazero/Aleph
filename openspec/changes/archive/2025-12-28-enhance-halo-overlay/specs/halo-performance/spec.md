@@ -60,7 +60,7 @@ Quality degradation SHALL be user-overrideable via hidden Settings preference.
 #### Scenario: Manual quality override
 
 **Given** PerformanceManager auto-detected .medium quality
-**When** user runs terminal command: `defaults write com.aether.app forceQualityHigh -bool YES`
+**When** user runs terminal command: `defaults write com.aleph.app forceQualityHigh -bool YES`
 **And** relaunches app
 **Then** effectsQuality sets to .high
 **And** auto-degradation disabled
@@ -75,7 +75,7 @@ Halo rendering SHALL use minimal CPU (< 5%) and memory (< 10MB delta) during act
 
 **Given** Halo is animating (processing state with spinner)
 **When** monitoring CPU usage with Activity Monitor
-**Then** Aether process CPU < 5%
+**Then** Aleph process CPU < 5%
 **And** memory footprint delta < 10MB (vs idle state)
 **And** no memory leaks after 1000 animation cycles
 

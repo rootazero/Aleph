@@ -1,6 +1,6 @@
 //
 //  ClarificationFlowHandler.swift
-//  Aether
+//  Aleph
 //
 //  Handles keyboard-driven clarification (Phantom Flow) UI.
 //  Extracted from HaloWindow for better separation of concerns.

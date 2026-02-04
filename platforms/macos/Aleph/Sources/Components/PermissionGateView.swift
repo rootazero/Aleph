@@ -1,6 +1,6 @@
 //
 //  PermissionGateView.swift
-//  Aether
+//  Aleph
 //
 //  Mandatory permission gate that blocks app usage until required permissions are granted.
 //  Displays a two-step flow: Accessibility → Input Monitoring
@@ -325,13 +325,13 @@ struct PermissionGateView: View {
                 .contentShape(Rectangle())
             }
 
-            // "Enter Aether" button - shown when ALL THREE permissions are granted
+            // "Enter Aleph" button - shown when ALL THREE permissions are granted
             // User manually clicks this button to restart the app (not automatic)
             if manager.accessibilityGranted && manager.screenRecordingGranted && manager.inputMonitoringGranted {
                 Button(action: restartApp) {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill")
-                        Text(L("permission.gate.button.enter_aether"))
+                        Text(L("permission.gate.button.enter_aleph"))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
@@ -419,13 +419,13 @@ struct PermissionGateView: View {
             }
             .store(in: &cancellables)
 
-        // When all three permissions are granted, the user will see "Enter Aether" button
+        // When all three permissions are granted, the user will see "Enter Aleph" button
         // User manually clicks the button to restart (NO automatic restart)
     }
 
     /// Restart the application (user-triggered only, not automatic)
     private func restartApp() {
-        print("[PermissionGateView] User clicked 'Enter Aether' - restarting application")
+        print("[PermissionGateView] User clicked 'Enter Aleph' - restarting application")
 
         let url = URL(fileURLWithPath: Bundle.main.bundlePath)
         let config = NSWorkspace.OpenConfiguration()

@@ -1,6 +1,6 @@
 //
-//  AetherApp.swift
-//  Aether
+//  AlephApp.swift
+//  Aleph
 //
 //  Legacy SwiftUI App structure - NO LONGER USED as entry point.
 //
@@ -19,7 +19,7 @@
 import SwiftUI
 
 // NOTE: @main attribute REMOVED - see main.swift for entry point
-struct AetherApp: App {
+struct AlephApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {

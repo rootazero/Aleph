@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The embedding-inference capability enables Aether to convert text into dense vector representations (embeddings) using a locally-running machine learning model, enabling semantic similarity search for memory retrieval.
+The embedding-inference capability enables Aleph to convert text into dense vector representations (embeddings) using a locally-running machine learning model, enabling semantic similarity search for memory retrieval.
 
 ## ADDED Requirements
 
@@ -13,15 +13,15 @@ The system SHALL load a pre-trained sentence embedding model (`all-MiniLM-L6-v2`
 - **GIVEN** memory feature is enabled
 - **AND** no embedding model is currently loaded in memory
 - **WHEN** the first text embedding is requested
-- **THEN** the system loads the tokenizer from `~/.aether/models/all-MiniLM-L6-v2/tokenizer.json`
-- **AND** loads the ONNX model from `~/.aether/models/all-MiniLM-L6-v2/model.onnx`
+- **THEN** the system loads the tokenizer from `~/.aleph/models/all-MiniLM-L6-v2/tokenizer.json`
+- **AND** loads the ONNX model from `~/.aleph/models/all-MiniLM-L6-v2/model.onnx`
 - **AND** initializes an ONNX Runtime session
 - **AND** caches the session in memory for subsequent requests
 - **AND** completes model loading within 2 seconds
 
 #### Scenario: Model files missing
 - **WHEN** model files do not exist at expected paths
-- **THEN** the system returns an error: `AetherError::EmbeddingModelNotFound`
+- **THEN** the system returns an error: `AlephError::EmbeddingModelNotFound`
 - **AND** logs detailed path information for debugging
 - **AND** provides user-friendly error message: "Embedding model not found. Please download model files."
 - **AND** disables memory functionality for the session
@@ -29,7 +29,7 @@ The system SHALL load a pre-trained sentence embedding model (`all-MiniLM-L6-v2`
 #### Scenario: Model load failure (corrupt files)
 - **WHEN** model files exist but are corrupted or incompatible
 - **THEN** ONNX Runtime throws an error during session initialization
-- **AND** the system catches the error and returns `AetherError::EmbeddingModelLoadFailed`
+- **AND** the system catches the error and returns `AlephError::EmbeddingModelLoadFailed`
 - **AND** logs the underlying ONNX error details
 - **AND** disables memory functionality
 
@@ -60,7 +60,7 @@ The system SHALL generate 384-dimensional float32 vector embeddings for input te
 - **GIVEN** input text: ""
 - **WHEN** `embed_text("")` is called
 - **THEN** the system returns a zero vector (384 zeros)
-- **OR** returns an error: `AetherError::EmptyInput`
+- **OR** returns an error: `AlephError::EmptyInput`
 - **DECISION**: Return zero vector for simplicity (less error handling)
 
 #### Scenario: Embed very long text
@@ -92,7 +92,7 @@ The system SHALL support configurable embedding model selection (future-proofing
 #### Scenario: Use custom model path
 - **GIVEN** config specifies: `embedding_model = "custom-model"`
 - **WHEN** EmbeddingModel is initialized
-- **THEN** the system looks for model at `~/.aether/models/custom-model/`
+- **THEN** the system looks for model at `~/.aleph/models/custom-model/`
 - **AND** loads `model.onnx` and `tokenizer.json` from that directory
 - **AND** verifies output dimensions match expected (384)
 
@@ -197,7 +197,7 @@ tokenizers = "0.15"
 
 ### Memory Management
 - Model session: ~200MB resident memory
-- Keep loaded for lifetime of AetherCore (no unloading)
+- Keep loaded for lifetime of AlephCore (no unloading)
 - Consider unloading if inactive for >1 hour (future optimization)
 
 ### Error Types

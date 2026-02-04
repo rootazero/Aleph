@@ -14,7 +14,7 @@ Successfully completed Task 13 (Prompt Augmentation) and Task 14 (AI Pipeline In
 
 #### Core Module: augmentation.rs (425 lines)
 
-**Location**: `Aether/core/src/memory/augmentation.rs`
+**Location**: `Aleph/core/src/memory/augmentation.rs`
 
 ##### PromptAugmenter Struct
 
@@ -152,7 +152,7 @@ test result: ok. 16 passed; 0 failed; 0 ignored
 
 #### Core Method: retrieve_and_augment_prompt()
 
-**Location**: `Aether/core/src/core.rs:555-649`
+**Location**: `Aleph/core/src/core.rs:555-649`
 
 **Signature**:
 ```rust
@@ -308,7 +308,7 @@ The method logs detailed timing information at each step:
 
 #### UniFFI Integration
 
-**Exposed in aether.udl:110**:
+**Exposed in aleph.udl:110**:
 ```idl
 interface AlephCore {
   [Throws=AlephError]
@@ -578,12 +578,12 @@ User: What were the key milestones we discussed?
 ## Files Modified/Created
 
 ### Created
-- ✅ `Aether/core/src/memory/augmentation.rs` (425 lines) - Prompt augmentation module
-- ✅ `Aether/core/TASK_13-14_MEMORY_AUGMENTATION.md` (this file)
+- ✅ `Aleph/core/src/memory/augmentation.rs` (425 lines) - Prompt augmentation module
+- ✅ `Aleph/core/TASK_13-14_MEMORY_AUGMENTATION.md` (this file)
 
 ### Modified
-- ✅ `Aether/core/src/core.rs` - Added `retrieve_and_augment_prompt()` method
-- ✅ `Aether/core/src/aether.udl` - Exposed method via UniFFI (already done)
+- ✅ `Aleph/core/src/core.rs` - Added `retrieve_and_augment_prompt()` method
+- ✅ `Aleph/core/src/aleph.udl` - Exposed method via UniFFI (already done)
 - ✅ `openspec/changes/add-contextual-memory-rag/tasks.md` - Updated task status
 
 ### Verified

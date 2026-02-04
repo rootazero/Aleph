@@ -1,5 +1,5 @@
-# Aether Configuration Example
-# Copy this file to ~/.aether/config.toml and customize
+# Aleph Configuration Example
+# Copy this file to ~/.aleph/config.toml and customize
 
 # Legacy hotkey field (deprecated - use [trigger] section below)
 # Kept for backward compatibility with old config files
@@ -66,12 +66,12 @@ ocr_capture = "Command+Option+O"
 # Behavior Configuration (Phase 6)
 # ============================================================================
 [behavior]
-# Input mode: How Aether captures text
+# Input mode: How Aleph captures text
 # - "cut"  : Text is removed from source (Cmd+X) - default
 # - "copy" : Text remains in source (Cmd+C)
 input_mode = "cut"
 
-# Output mode: How Aether pastes AI response
+# Output mode: How Aleph pastes AI response
 # - "typewriter" : Types character-by-character with animation (default)
 # - "instant"    : Pastes entire response immediately
 output_mode = "typewriter"
@@ -85,7 +85,7 @@ output_mode = "typewriter"
 typing_speed = 50
 
 # PII (Personally Identifiable Information) scrubbing
-# When enabled, Aether automatically removes sensitive information
+# When enabled, Aleph automatically removes sensitive information
 # before sending to AI providers
 pii_scrubbing_enabled = false
 
@@ -350,7 +350,7 @@ excluded_apps = [
 #
 # Example 5: Custom hotkey (Phase 6)
 # - Set summon = "Command+Shift+A" in [shortcuts]
-# - Press Cmd+Shift+A to trigger Aether
+# - Press Cmd+Shift+A to trigger Aleph
 # - Useful to avoid conflicts with other apps
 #
 # Example 6: Typewriter effect (Phase 6)
@@ -379,7 +379,7 @@ excluded_apps = [
 #
 # Example 10: Performance profiling (Phase 7)
 # - Set enable_performance_logging = true
-# - Check logs at ~/.aether/logs/aether-YYYY-MM-DD.log
+# - Check logs at ~/.aleph/logs/aleph-YYYY-MM-DD.log
 # - Logs show timing for: clipboard, memory, AI, paste stages
 # - Useful for debugging slow operations or API latency issues
 #
@@ -427,7 +427,7 @@ excluded_apps = [
 #
 # 9. Hotkey Customization (Phase 6):
 #    - Avoid conflicts with system shortcuts
-#    - Aether warns about common conflicts in UI
+#    - Aleph warns about common conflicts in UI
 #    - Use Cmd+Shift combinations for safety
 #    - Cancel hotkey must be different from summon
 #
@@ -446,7 +446,7 @@ excluded_apps = [
 #
 # 12. Config Hot-Reload (Phase 6):
 #     - Changes to this file take effect within 1 second
-#     - No need to restart Aether
+#     - No need to restart Aleph
 #     - Invalid changes are ignored (app continues with old config)
 #     - UI shows notification when config reloads
 #
@@ -458,7 +458,7 @@ excluded_apps = [
 #     - Supported formats: PNG, JPEG, GIF
 #
 # 14. Logging & Privacy (Phase 7):
-#     - Logs stored in ~/.aether/logs/
+#     - Logs stored in ~/.aleph/logs/
 #     - Automatic daily rotation
 #     - Old logs deleted after log_retention_days
 #     - PII automatically scrubbed (emails, phones, API keys)
@@ -510,7 +510,7 @@ excluded_apps = [
 #
 # "Config not saving" (Phase 6):
 # - File permissions are automatically set to 600 on save
-# - Verify config directory exists: mkdir -p ~/.aether
+# - Verify config directory exists: mkdir -p ~/.aleph
 # - Check for TOML syntax errors (use Settings UI validation)
 #
 # "Hot-reload not working" (Phase 6):
@@ -534,7 +534,7 @@ excluded_apps = [
 # - Verify output_mode = "typewriter" in config
 #
 # "Logs not appearing" (Phase 7):
-# - Check ~/.aether/logs/ directory exists
+# - Check ~/.aleph/logs/ directory exists
 # - Verify log_retention_days > 0 (0 = logs disabled)
 # - Check disk space (logs auto-delete when full)
 #
@@ -543,4 +543,4 @@ excluded_apps = [
 # - Check logs: PII should show as [EMAIL_REDACTED], [PHONE_REDACTED]
 # - Some formats may not be detected (false negatives)
 #
-# For more help, see: https://github.com/your-repo/aether/docs
+# For more help, see: https://github.com/your-repo/aleph/docs

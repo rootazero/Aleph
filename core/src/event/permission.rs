@@ -1,4 +1,4 @@
-// Aether/core/src/event/permission.rs
+// Aleph/core/src/event/permission.rs
 //! Permission-related event types for the unified permission system.
 //!
 //! These events enable async permission requests between the agent loop

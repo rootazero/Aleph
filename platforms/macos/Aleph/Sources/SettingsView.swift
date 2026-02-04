@@ -1,6 +1,6 @@
 //
 //  SettingsView.swift
-//  Aether
+//  Aleph
 //
 //  Shared settings types and views used by RootContentView.
 //
@@ -37,7 +37,7 @@ extension UTType {
 // MARK: - General Settings View
 
 struct GeneralSettingsView: View {
-    let core: AetherCore?
+    let core: AlephCore?
 
     @State private var soundEnabled = false
     @State private var showingLogViewer = false
@@ -138,7 +138,7 @@ struct GeneralSettingsView: View {
         Current Version: \(appVersion)
 
         To check for updates, please visit:
-        https://github.com/yourusername/aether/releases
+        https://github.com/yourusername/aleph/releases
 
         Automatic updates will be available in a future release.
         """
@@ -148,7 +148,7 @@ struct GeneralSettingsView: View {
 
         let response = alert.runModal()
         if response == .alertSecondButtonReturn {
-            if let url = URL(string: "https://github.com/yourusername/aether/releases") {
+            if let url = URL(string: "https://github.com/yourusername/aleph/releases") {
                 NSWorkspace.shared.open(url)
             }
         }

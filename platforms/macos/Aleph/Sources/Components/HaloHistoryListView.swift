@@ -1,6 +1,6 @@
 //
 //  HaloHistoryListView.swift
-//  Aether
+//  Aleph
 //
 //  History list panel view for the // command.
 //  Displays conversation history grouped by time periods.

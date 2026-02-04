@@ -81,7 +81,7 @@ tools = '["read_files", "swift_compile", "xcodebuild_test"]'
 
 ### 2.1 Intent::Skills 枚举变体
 
-**文件**: `Aether/core/src/payload/intent.rs`
+**文件**: `Aleph/core/src/payload/intent.rs`
 
 **定义**:
 
@@ -151,7 +151,7 @@ impl Intent {
 
 ### 2.2 WorkflowState（工作流状态）
 
-**文件**: `Aether/core/src/payload/workflow.rs`（新建）
+**文件**: `Aleph/core/src/payload/workflow.rs`（新建）
 
 **定义**:
 
@@ -206,9 +206,9 @@ pub struct AgentContext {
 
 ### 2.3 RoutingRuleConfig 扩展字段
 
-**文件**: `Aether/core/src/config/mod.rs` + `aether.udl`
+**文件**: `Aleph/core/src/config/mod.rs` + `aleph.udl`
 
-**UniFFI 定义** (`aether.udl`):
+**UniFFI 定义** (`aleph.udl`):
 
 ```rust
 dictionary RoutingRuleConfig {
@@ -302,7 +302,7 @@ impl RoutingRuleConfig {
 
 ### 3.1 CapabilityExecutor::execute_skills_workflow()
 
-**文件**: `Aether/core/src/capability/mod.rs`
+**文件**: `Aleph/core/src/capability/mod.rs`
 
 **方法签名**:
 
@@ -633,7 +633,7 @@ impl McpClient {
 
 ### 6.1 Swift UI 扩展（方案 C）
 
-**文件**: `Aether/Sources/Components/RoutingView.swift`
+**文件**: `Aleph/Sources/Components/RoutingView.swift`
 
 **新增字段**:
 

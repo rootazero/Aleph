@@ -8,13 +8,13 @@
 - [ ] 1.5 Set up `.gitignore` for Rust artifacts (target/, Cargo.lock)
 
 ## 2. Error Handling Infrastructure
-- [ ] 2.1 Create `src/error.rs` with `AetherError` enum
+- [ ] 2.1 Create `src/error.rs` with `AlephError` enum
 - [ ] 2.2 Implement error variants: HotkeyError, ClipboardError, CallbackError
 - [ ] 2.3 Add `thiserror` derive macros for error messages
 - [ ] 2.4 Write unit tests for error creation and Display impl
 
 ## 3. Event Handler Trait
-- [ ] 3.1 Create `src/event_handler.rs` with `AetherEventHandler` trait
+- [ ] 3.1 Create `src/event_handler.rs` with `AlephEventHandler` trait
 - [ ] 3.2 Define trait methods: on_state_changed, on_hotkey_detected, on_error
 - [ ] 3.3 Create mock implementation for testing
 - [ ] 3.4 Write unit tests for mock handler
@@ -23,7 +23,7 @@
 - [ ] 4.1 Create `src/clipboard/mod.rs` with `ClipboardManager` trait
 - [ ] 4.2 Define trait methods: read_text, write_text
 - [ ] 4.3 Create `src/clipboard/arboard_manager.rs` implementing the trait
-- [ ] 4.4 Handle arboard errors and convert to AetherError
+- [ ] 4.4 Handle arboard errors and convert to AlephError
 - [ ] 4.5 Write unit tests: read/write text, error cases
 - [ ] 4.6 Add integration test: write then read clipboard content
 
@@ -32,13 +32,13 @@
 - [ ] 5.2 Define trait methods: start_listening, stop_listening
 - [ ] 5.3 Create `src/hotkey/rdev_listener.rs` implementing the trait
 - [ ] 5.4 Implement hardcoded Cmd+~ detection (Key::Grave + Cmd modifier)
-- [ ] 5.5 Handle rdev callback and forward to AetherCore
+- [ ] 5.5 Handle rdev callback and forward to AlephCore
 - [ ] 5.6 Add thread-safe state management for listener lifecycle
 - [ ] 5.7 Write unit tests: hotkey pattern matching
 - [ ] 5.8 Add manual test instructions (requires Accessibility permissions)
 
 ## 6. Core Library Entry Point
-- [ ] 6.1 Create `src/core.rs` with `AetherCore` struct
+- [ ] 6.1 Create `src/core.rs` with `AlephCore` struct
 - [ ] 6.2 Implement constructor: `new(event_handler)`
 - [ ] 6.3 Implement `start_listening()` → spawns rdev thread
 - [ ] 6.4 Implement `stop_listening()` → stops rdev thread
@@ -48,17 +48,17 @@
 - [ ] 6.8 Write unit tests with mock dependencies
 
 ## 7. UniFFI Interface Definition
-- [ ] 7.1 Create `src/aether.udl` interface file
+- [ ] 7.1 Create `src/aleph.udl` interface file
 - [ ] 7.2 Define `ProcessingState` enum (Idle, Listening, Processing, Success, Error)
-- [ ] 7.3 Define `AetherCore` interface with methods
-- [ ] 7.4 Define `AetherEventHandler` callback interface
+- [ ] 7.3 Define `AlephCore` interface with methods
+- [ ] 7.4 Define `AlephEventHandler` callback interface
 - [ ] 7.5 Define `Config` dictionary (stub for future use)
 - [ ] 7.6 Add namespace and init function
 
 ## 8. Library Exports (lib.rs)
 - [ ] 8.1 Create `src/lib.rs` with UniFFI exports
 - [ ] 8.2 Add `uniffi::include_scaffolding!` macro
-- [ ] 8.3 Re-export public types (AetherCore, ProcessingState, etc.)
+- [ ] 8.3 Re-export public types (AlephCore, ProcessingState, etc.)
 - [ ] 8.4 Add module declarations (mod core, mod hotkey, etc.)
 - [ ] 8.5 Verify all public APIs are documented
 
@@ -78,7 +78,7 @@
 - [ ] 11.1 Add build script if needed (uniffi-bindgen integration)
 - [ ] 11.2 Test build: `cargo build --release`
 - [ ] 11.3 Verify .dylib output in target/release/
-- [ ] 11.4 Generate Swift bindings: `cargo run --bin uniffi-bindgen generate src/aether.udl --language swift`
+- [ ] 11.4 Generate Swift bindings: `cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift`
 - [ ] 11.5 Verify Swift bindings compile without errors
 
 ## 12. Testing and Validation

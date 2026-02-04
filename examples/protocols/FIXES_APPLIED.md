@@ -118,21 +118,21 @@ fn test_parse_exotic_ai_example() {
 
 ## Files Modified
 
-1. `/Volumes/TBU4/Workspace/Aether/examples/protocols/exotic-ai.yaml`
+1. `/Volumes/TBU4/Workspace/Aleph/examples/protocols/exotic-ai.yaml`
    - Fixed structure from `protocol_type: custom` to `custom:` nested object
    - Commented out all unsupported fields with explanatory headers
    - Added "Not yet implemented" notes to optional features
 
-2. `/Volumes/TBU4/Workspace/Aether/examples/protocols/groq-custom.yaml`
+2. `/Volumes/TBU4/Workspace/Aleph/examples/protocols/groq-custom.yaml`
    - Commented out unsupported `model_aliases` field
 
-3. `/Volumes/TBU4/Workspace/Aether/examples/protocols/README.md`
+3. `/Volumes/TBU4/Workspace/Aleph/examples/protocols/README.md`
    - Fixed custom protocol structure example
    - Added "Future Features (Not Yet Implemented)" section
    - Clarified supported vs. planned features
    - Updated documentation references
 
-4. `/Volumes/TBU4/Workspace/Aether/core/src/providers/protocols/definition.rs`
+4. `/Volumes/TBU4/Workspace/Aleph/core/src/providers/protocols/definition.rs`
    - Added `test_parse_groq_custom_example()` test
    - Added `test_parse_exotic_ai_example()` test
 

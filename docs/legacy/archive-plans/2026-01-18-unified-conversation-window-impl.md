@@ -15,7 +15,7 @@
 ### Task 1.1: Create PendingAttachment Model
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/Models/PendingAttachment.swift`
+- Create: `Aleph/Sources/MultiTurn/Models/PendingAttachment.swift`
 
 **Step 1: Create the model file**
 
@@ -159,7 +159,7 @@ git commit -m "feat(multi-turn): add PendingAttachment model for manual file att
 ### Task 1.2: Create ContentDisplayState Enum
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/Models/ContentDisplayState.swift`
+- Create: `Aleph/Sources/MultiTurn/Models/ContentDisplayState.swift`
 
 **Step 1: Create the state enum**
 
@@ -230,7 +230,7 @@ git commit -m "feat(multi-turn): add ContentDisplayState enum for display state 
 ### Task 2.1: Create UnifiedConversationViewModel
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/UnifiedConversationViewModel.swift`
+- Create: `Aleph/Sources/MultiTurn/UnifiedConversationViewModel.swift`
 
 **Step 1: Create the view model**
 
@@ -697,7 +697,7 @@ git commit -m "feat(multi-turn): add UnifiedConversationViewModel with attachmen
 ### Task 3.1: Create AttachmentPreviewView
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/Views/AttachmentPreviewView.swift`
+- Create: `Aleph/Sources/MultiTurn/Views/AttachmentPreviewView.swift`
 
 **Step 1: Create the attachment preview component**
 
@@ -818,7 +818,7 @@ git commit -m "feat(multi-turn): add AttachmentPreviewView component"
 ### Task 3.2: Create InputAreaView
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/Views/InputAreaView.swift`
+- Create: `Aleph/Sources/MultiTurn/Views/InputAreaView.swift`
 
 **Step 1: Create the input area component**
 
@@ -978,7 +978,7 @@ git commit -m "feat(multi-turn): add InputAreaView with attachment button"
 ### Task 3.3: Create ConversationAreaView
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/Views/ConversationAreaView.swift`
+- Create: `Aleph/Sources/MultiTurn/Views/ConversationAreaView.swift`
 
 **Step 1: Create the conversation area component**
 
@@ -1155,7 +1155,7 @@ git commit -m "feat(multi-turn): add ConversationAreaView component"
 ### Task 3.4: Create CommandListView
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/Views/CommandListView.swift`
+- Create: `Aleph/Sources/MultiTurn/Views/CommandListView.swift`
 
 **Step 1: Create the command list component**
 
@@ -1271,7 +1271,7 @@ git commit -m "feat(multi-turn): add CommandListView and TopicListView component
 ### Task 4.1: Create UnifiedConversationView
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/UnifiedConversationView.swift`
+- Create: `Aleph/Sources/MultiTurn/UnifiedConversationView.swift`
 
 **Step 1: Create the main unified view**
 
@@ -1419,7 +1419,7 @@ git commit -m "feat(multi-turn): add UnifiedConversationView main view"
 ### Task 4.2: Create UnifiedConversationWindow
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/UnifiedConversationWindow.swift`
+- Create: `Aleph/Sources/MultiTurn/UnifiedConversationWindow.swift`
 
 **Step 1: Create the unified window**
 
@@ -1671,7 +1671,7 @@ git commit -m "feat(multi-turn): add UnifiedConversationWindow"
 ### Task 5.1: Refactor MultiTurnCoordinator
 
 **Files:**
-- Modify: `Aether/Sources/MultiTurn/MultiTurnCoordinator.swift`
+- Modify: `Aleph/Sources/MultiTurn/MultiTurnCoordinator.swift`
 
 **Step 1: Replace window references and update input handling**
 
@@ -1731,8 +1731,8 @@ git commit -m "refactor(multi-turn): update coordinator to use UnifiedConversati
 ### Task 6.1: Add Localization Strings
 
 **Files:**
-- Modify: `Aether/Resources/en.lproj/Localizable.strings`
-- Modify: `Aether/Resources/zh-Hans.lproj/Localizable.strings`
+- Modify: `Aleph/Resources/en.lproj/Localizable.strings`
+- Modify: `Aleph/Resources/zh-Hans.lproj/Localizable.strings`
 
 **Step 1: Add English strings**
 
@@ -1772,9 +1772,9 @@ git commit -m "i18n: add localization strings for unified conversation window"
 ### Task 7.1: Mark Deprecated Files
 
 **Files:**
-- Modify: `Aether/Sources/MultiTurn/MultiTurnInputWindow.swift`
-- Modify: `Aether/Sources/MultiTurn/ConversationDisplayWindow.swift`
-- Modify: `Aether/Sources/MultiTurn/ConversationDisplayView.swift`
+- Modify: `Aleph/Sources/MultiTurn/MultiTurnInputWindow.swift`
+- Modify: `Aleph/Sources/MultiTurn/ConversationDisplayWindow.swift`
+- Modify: `Aleph/Sources/MultiTurn/ConversationDisplayView.swift`
 
 **Step 1: Add deprecation notices**
 
@@ -1864,22 +1864,22 @@ git commit -m "chore: update project.yml for unified conversation window"
 ## Summary
 
 **Files Created:**
-- `Aether/Sources/MultiTurn/Models/PendingAttachment.swift`
-- `Aether/Sources/MultiTurn/Models/ContentDisplayState.swift`
-- `Aether/Sources/MultiTurn/UnifiedConversationViewModel.swift`
-- `Aether/Sources/MultiTurn/UnifiedConversationView.swift`
-- `Aether/Sources/MultiTurn/UnifiedConversationWindow.swift`
-- `Aether/Sources/MultiTurn/Views/AttachmentPreviewView.swift`
-- `Aether/Sources/MultiTurn/Views/InputAreaView.swift`
-- `Aether/Sources/MultiTurn/Views/ConversationAreaView.swift`
-- `Aether/Sources/MultiTurn/Views/CommandListView.swift`
+- `Aleph/Sources/MultiTurn/Models/PendingAttachment.swift`
+- `Aleph/Sources/MultiTurn/Models/ContentDisplayState.swift`
+- `Aleph/Sources/MultiTurn/UnifiedConversationViewModel.swift`
+- `Aleph/Sources/MultiTurn/UnifiedConversationView.swift`
+- `Aleph/Sources/MultiTurn/UnifiedConversationWindow.swift`
+- `Aleph/Sources/MultiTurn/Views/AttachmentPreviewView.swift`
+- `Aleph/Sources/MultiTurn/Views/InputAreaView.swift`
+- `Aleph/Sources/MultiTurn/Views/ConversationAreaView.swift`
+- `Aleph/Sources/MultiTurn/Views/CommandListView.swift`
 
 **Files Modified:**
-- `Aether/Sources/MultiTurn/MultiTurnCoordinator.swift`
-- `Aether/Resources/en.lproj/Localizable.strings`
-- `Aether/Resources/zh-Hans.lproj/Localizable.strings`
+- `Aleph/Sources/MultiTurn/MultiTurnCoordinator.swift`
+- `Aleph/Resources/en.lproj/Localizable.strings`
+- `Aleph/Resources/zh-Hans.lproj/Localizable.strings`
 
 **Files Deprecated:**
-- `Aether/Sources/MultiTurn/MultiTurnInputWindow.swift`
-- `Aether/Sources/MultiTurn/ConversationDisplayWindow.swift`
-- `Aether/Sources/MultiTurn/ConversationDisplayView.swift`
+- `Aleph/Sources/MultiTurn/MultiTurnInputWindow.swift`
+- `Aleph/Sources/MultiTurn/ConversationDisplayWindow.swift`
+- `Aleph/Sources/MultiTurn/ConversationDisplayView.swift`

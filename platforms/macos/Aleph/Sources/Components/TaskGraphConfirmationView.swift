@@ -1,6 +1,6 @@
 //
 //  AgentConfirmationView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI component for confirming Task graph execution.
 //  Displays task DAG structure, dependencies, and safety information.

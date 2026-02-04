@@ -1,6 +1,6 @@
 //
 //  HotkeyService.swift
-//  Aether
+//  Aleph
 //
 //  Unified hotkey management service that coordinates hotkey systems:
 //  - Conversation hotkey: Command prompt hotkey (Option+Space)
@@ -31,7 +31,7 @@ final class HotkeyService {
     private var conversationKeyCode: UInt16 = 49 // Space key
 
     /// Reference to core for loading config
-    private weak var core: AetherCore?
+    private weak var core: AlephCore?
 
     // MARK: - Initialization
 
@@ -41,8 +41,8 @@ final class HotkeyService {
 
     /// Configure the hotkey service with core reference
     ///
-    /// - Parameter core: AetherCore instance for loading configuration
-    func configure(core: AetherCore?) {
+    /// - Parameter core: AlephCore instance for loading configuration
+    func configure(core: AlephCore?) {
         self.core = core
         print("[HotkeyService] Configured with core: \(core != nil ? "available" : "nil")")
     }

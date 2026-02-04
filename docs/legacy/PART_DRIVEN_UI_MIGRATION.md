@@ -58,12 +58,12 @@ pub struct PlanStep {
 ## Swift UI组件
 
 ### ReasoningPartView（可折叠）
-- **文件**: `platforms/macos/Aether/Sources/MultiTurn/Views/ReasoningPartView.swift`
+- **文件**: `platforms/macos/Aleph/Sources/MultiTurn/Views/ReasoningPartView.swift`
 - **功能**: 显示AI推理过程，支持展开/折叠
 - **特性**: 自动截断长内容，提供完整查看
 
 ### PlanPartView（步骤列表）
-- **文件**: `platforms/macos/Aether/Sources/MultiTurn/Views/PlanPartView.swift`
+- **文件**: `platforms/macos/Aleph/Sources/MultiTurn/Views/PlanPartView.swift`
 - **功能**: 可视化任务计划，显示步骤状态
 - **特性**: 状态图标（pending/running/completed/failed）
 

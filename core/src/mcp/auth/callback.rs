@@ -237,7 +237,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<Callback
     // Send success response
     send_success_response(
         &mut stream,
-        "Authorization successful! You can close this window and return to Aether.",
+        "Authorization successful! You can close this window and return to Aleph.",
     )
     .await;
 

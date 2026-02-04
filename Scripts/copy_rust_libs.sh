@@ -17,7 +17,7 @@ ARCH=$(uname -m)
 echo "📦 Architecture: $ARCH"
 
 # Source and destination paths
-RUST_LIB_PATH="${SRCROOT}/Aether/core/target/release/libaethecore.dylib"
+RUST_LIB_PATH="${SRCROOT}/Aleph/core/target/release/libaethecore.dylib"
 FRAMEWORKS_PATH="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}"
 DEST_LIB_PATH="${FRAMEWORKS_PATH}/libaethecore.dylib"
 
@@ -25,7 +25,7 @@ DEST_LIB_PATH="${FRAMEWORKS_PATH}/libaethecore.dylib"
 if [ ! -f "$RUST_LIB_PATH" ]; then
     echo -e "${RED}❌ Error: Rust library not found at $RUST_LIB_PATH${NC}"
     echo -e "${YELLOW}💡 Please build the Rust core first:${NC}"
-    echo -e "   cd Aether/core && cargo build --release"
+    echo -e "   cd Aleph/core && cargo build --release"
     exit 1
 fi
 

@@ -2,7 +2,7 @@
 
 ## Context
 
-The Aether Model Router currently routes tasks to AI models based on static configuration:
+The Aleph Model Router currently routes tasks to AI models based on static configuration:
 - `CostTier`: Free, Low, Medium, High
 - `LatencyTier`: Fast, Medium, Slow
 - `Capability`: CodeGeneration, Reasoning, etc.
@@ -447,7 +447,7 @@ enabled = true
 buffer_size = 10000
 aggregation_interval_secs = 60
 flush_interval_secs = 300
-db_path = "~/.aether/metrics.db"
+db_path = "~/.aleph/metrics.db"
 exploration_rate = 0.05
 
 [cowork.model_router.metrics.windows]

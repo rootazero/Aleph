@@ -2,13 +2,13 @@
 
 ## Why
 
-Aether currently has placeholder Settings UI components (SettingsView, ProvidersView, RoutingView, ShortcutsView) that display hardcoded data with "Coming Soon" alerts. Users cannot configure AI providers, routing rules, shortcuts, or behavior settings. To make Aether production-ready, we need a fully functional settings interface that:
+Aleph currently has placeholder Settings UI components (SettingsView, ProvidersView, RoutingView, ShortcutsView) that display hardcoded data with "Coming Soon" alerts. Users cannot configure AI providers, routing rules, shortcuts, or behavior settings. To make Aleph production-ready, we need a fully functional settings interface that:
 
 1. Allows users to add/edit/delete AI provider credentials (stored securely in macOS Keychain)
 2. Enables users to create and manage routing rules with drag-to-reorder functionality
 3. Supports global hotkey customization with visual key recorder
 4. Provides behavior configuration (input/output modes, typing speed, PII scrubbing)
-5. Persists all changes to `~/.aether/config.toml` with hot-reload support
+5. Persists all changes to `~/.aleph/config.toml` with hot-reload support
 
 This change directly implements Phase 6 from CLAUDE.md and unblocks user customization, which is critical for production deployment.
 
@@ -73,20 +73,20 @@ None. This is purely additive - existing placeholder UI is replaced with functio
 ### Affected Code
 
 **New Files:**
-- `Aether/Sources/Settings/ProviderConfigView.swift` - Provider add/edit modal
-- `Aether/Sources/Settings/RuleEditorView.swift` - Routing rule editor modal
-- `Aether/Sources/Settings/HotkeyRecorderView.swift` - Key recorder component
-- `Aether/Sources/Settings/ConfigManager.swift` - Swift wrapper for Rust config API
-- `Aether/core/src/config/watcher.rs` - File watcher for hot-reload
-- `Aether/core/src/config/keychain.rs` - macOS Keychain integration
+- `Aleph/Sources/Settings/ProviderConfigView.swift` - Provider add/edit modal
+- `Aleph/Sources/Settings/RuleEditorView.swift` - Routing rule editor modal
+- `Aleph/Sources/Settings/HotkeyRecorderView.swift` - Key recorder component
+- `Aleph/Sources/Settings/ConfigManager.swift` - Swift wrapper for Rust config API
+- `Aleph/core/src/config/watcher.rs` - File watcher for hot-reload
+- `Aleph/core/src/config/keychain.rs` - macOS Keychain integration
 
 **Modified Files:**
-- `Aether/Sources/SettingsView.swift` - Remove "Coming Soon" alerts
-- `Aether/Sources/ProvidersView.swift` - Connect to real config API
-- `Aether/Sources/RoutingView.swift` - Connect to real config API
-- `Aether/Sources/ShortcutsView.swift` - Add key recorder
-- `Aether/Sources/AppDelegate.swift` - Subscribe to config change notifications
-- `Aether/core/src/config.rs` - Add hot-reload support
+- `Aleph/Sources/SettingsView.swift` - Remove "Coming Soon" alerts
+- `Aleph/Sources/ProvidersView.swift` - Connect to real config API
+- `Aleph/Sources/RoutingView.swift` - Connect to real config API
+- `Aleph/Sources/ShortcutsView.swift` - Add key recorder
+- `Aleph/Sources/AppDelegate.swift` - Subscribe to config change notifications
+- `Aleph/core/src/config.rs` - Add hot-reload support
 
 ### Dependencies
 
@@ -98,7 +98,7 @@ None. This is purely additive - existing placeholder UI is replaced with functio
 
 **Before:** Users see placeholder settings with "Coming Soon" alerts. No customization possible.
 
-**After:** Users can fully configure Aether through native macOS UI:
+**After:** Users can fully configure Aleph through native macOS UI:
 - Add API keys for multiple providers
 - Create custom routing rules for different use cases
 - Customize global hotkey to avoid conflicts
@@ -113,7 +113,7 @@ No migration needed - config.toml is created with defaults on first launch. Exis
 
 1. **Provider Management**: User can add OpenAI API key, test connection, and successfully invoke GPT-4o
 2. **Routing Rules**: User can create rule "^/draw → OpenAI", test clipboard content "/draw a cat", and confirm routing
-3. **Hotkey Customization**: User can change hotkey to Cmd+Shift+A, press new hotkey, and Aether responds
+3. **Hotkey Customization**: User can change hotkey to Cmd+Shift+A, press new hotkey, and Aleph responds
 4. **Config Persistence**: User closes settings, quits app, relaunches - all settings persist
 5. **Hot-Reload**: User edits config.toml externally, settings UI updates within 1 second
 6. **Validation**: User enters invalid regex pattern, UI shows error before saving

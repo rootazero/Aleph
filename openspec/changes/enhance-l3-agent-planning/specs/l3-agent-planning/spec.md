@@ -150,7 +150,7 @@ Each tool MUST have a safety level classification that determines confirmation r
 
 ### Requirement: Plan Event Notifications
 
-The system MUST notify the UI of plan lifecycle events through the AetherEventHandler interface.
+The system MUST notify the UI of plan lifecycle events through the AlephEventHandler interface.
 
 #### Scenario: Notify on plan start
 

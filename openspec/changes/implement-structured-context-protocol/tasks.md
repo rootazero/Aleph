@@ -175,7 +175,7 @@
 
 ### Task 5.2: UniFFI 数据结构导出 (如果需要)
 
-- [ ] 在 `aether.udl` 添加:
+- [ ] 在 `aleph.udl` 添加:
   - `enum Intent { ... }`
   - `enum Capability { ... }`
   - `dictionary AgentPayload { ... }` (如果需要)
@@ -185,10 +185,10 @@
 
 ### Task 5.3: UniFFI 方法添加 (如果需要)
 
-- [ ] 在 `AetherCore` 添加方法(如果需要):
+- [ ] 在 `AlephCore` 添加方法(如果需要):
   - `get_last_payload() -> AgentPayload`
   - `set_capabilities(capabilities: Vec<String>)`
-- [ ] 更新 `aether.udl` 接口定义
+- [ ] 更新 `aleph.udl` 接口定义
 
 **Validation**: Swift 能调用新方法,类型正确
 
@@ -220,7 +220,7 @@
 ### Task 6.3: Manual Testing
 
 - [ ] 修改本地 config.toml 添加 capabilities 字段
-- [ ] 运行 Aether,触发包含 Memory 的对话
+- [ ] 运行 Aleph,触发包含 Memory 的对话
 - [ ] 验证日志:Memory 检索记录
 - [ ] 验证效果:AI 回复引用了历史对话
 - [ ] 测试不同 Intent:Custom / BuiltinSearch

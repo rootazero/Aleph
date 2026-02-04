@@ -31,11 +31,11 @@
 ## Phase 2: Add UniFFI APIs
 
 ### 2.1 Define Types in UDL
-- [x] 2.1.1 Add `ToolSourceType` enum to `aether.udl`
-- [x] 2.1.2 Add `UnifiedToolInfo` dictionary to `aether.udl`
+- [x] 2.1.1 Add `ToolSourceType` enum to `aleph.udl`
+- [x] 2.1.2 Add `UnifiedToolInfo` dictionary to `aleph.udl`
 - [x] 2.1.3 Add `CommandNodeInfo` dictionary (if not exists)
 
-### 2.2 Add Tool Registry APIs to AetherCore
+### 2.2 Add Tool Registry APIs to AlephCore
 - [x] 2.2.1 Add `list_builtin_tools()` async method
 - [x] 2.2.2 Add `list_all_tools()` async method
 - [x] 2.2.3 Add `list_tools_by_source(source_type)` async method
@@ -73,7 +73,7 @@
 - [x] 3.3.3 Use localization keys instead of hardcoded hints
 - [ ] 3.3.4 Update tests to use registry-based approach
 
-### 3.4 Wire Up in AetherCore
+### 3.4 Wire Up in AlephCore
 - [x] 3.4.1 Pass ToolRegistry to CommandRegistry in `core.rs` (via new methods)
 - [ ] 3.4.2 Ensure CommandRegistry refreshes on tools_changed
 - [ ] 3.4.3 Add integration tests

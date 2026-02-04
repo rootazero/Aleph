@@ -17,7 +17,7 @@ use crate::agents::sub_agents::{
 };
 use crate::agents::{AgentDef, AgentRegistry};
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError, SubAgentRequest,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, SubAgentRequest,
     SubAgentResult, ToolCallError, ToolCallResult, ToolCallStarted,
 };
 
@@ -142,7 +142,7 @@ impl SubAgentHandler {
         &self,
         request: &SubAgentRequest,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Get the agent definition
         let agent_def = self.registry.get(&request.agent_id).ok_or_else(|| {
             HandlerError::Internal(format!("Agent not found: {}", request.agent_id))
@@ -197,7 +197,7 @@ impl SubAgentHandler {
         &self,
         result: &SubAgentResult,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Get the request ID before removing the session
         let request_id = self.get_request_for_session(&result.child_session_id).await;
 
@@ -266,7 +266,7 @@ impl SubAgentHandler {
         &self,
         event: &ToolCallStarted,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Get request ID from session if available
         let request_id = if let Some(ref session_id) = event.session_id {
             self.get_request_for_session(session_id).await
@@ -313,7 +313,7 @@ impl SubAgentHandler {
         &self,
         event: &ToolCallResult,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Get request ID from session if available
         let request_id = if let Some(ref session_id) = event.session_id {
             self.get_request_for_session(session_id).await
@@ -371,7 +371,7 @@ impl SubAgentHandler {
         &self,
         event: &ToolCallError,
         _ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         // Get request ID from session if available
         let request_id = if let Some(ref session_id) = event.session_id {
             self.get_request_for_session(session_id).await
@@ -443,15 +443,15 @@ impl EventHandler for SubAgentHandler {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         match event {
-            AetherEvent::SubAgentStarted(request) => self.handle_started(request, ctx).await,
-            AetherEvent::SubAgentCompleted(result) => self.handle_completed(result, ctx).await,
-            AetherEvent::ToolCallStarted(event) => self.handle_tool_started(event, ctx).await,
-            AetherEvent::ToolCallCompleted(event) => self.handle_tool_completed(event, ctx).await,
-            AetherEvent::ToolCallFailed(event) => self.handle_tool_failed(event, ctx).await,
+            AlephEvent::SubAgentStarted(request) => self.handle_started(request, ctx).await,
+            AlephEvent::SubAgentCompleted(result) => self.handle_completed(result, ctx).await,
+            AlephEvent::ToolCallStarted(event) => self.handle_tool_started(event, ctx).await,
+            AlephEvent::ToolCallCompleted(event) => self.handle_tool_completed(event, ctx).await,
+            AlephEvent::ToolCallFailed(event) => self.handle_tool_failed(event, ctx).await,
             _ => Ok(vec![]),
         }
     }
@@ -515,7 +515,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
 
-        let event = AetherEvent::SubAgentStarted(request);
+        let event = AlephEvent::SubAgentStarted(request);
         handler.handle(&event, &ctx).await.unwrap();
 
         assert!(handler.is_session_active("child-1").await);
@@ -540,7 +540,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
 
-        let event = AetherEvent::SubAgentStarted(request);
+        let event = AlephEvent::SubAgentStarted(request);
         let result = handler.handle(&event, &ctx).await;
 
         assert!(result.is_err());
@@ -560,7 +560,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
         handler
-            .handle(&AetherEvent::SubAgentStarted(start_request), &ctx)
+            .handle(&AlephEvent::SubAgentStarted(start_request), &ctx)
             .await
             .unwrap();
 
@@ -578,7 +578,7 @@ mod tests {
             execution_duration_ms: None,
         };
         handler
-            .handle(&AetherEvent::SubAgentCompleted(result), &ctx)
+            .handle(&AlephEvent::SubAgentCompleted(result), &ctx)
             .await
             .unwrap();
 
@@ -599,7 +599,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
         handler
-            .handle(&AetherEvent::SubAgentStarted(request), &ctx)
+            .handle(&AlephEvent::SubAgentStarted(request), &ctx)
             .await
             .unwrap();
 
@@ -626,7 +626,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
         handler
-            .handle(&AetherEvent::SubAgentStarted(request), &ctx)
+            .handle(&AlephEvent::SubAgentStarted(request), &ctx)
             .await
             .unwrap();
 
@@ -665,7 +665,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
         handler
-            .handle(&AetherEvent::SubAgentStarted(request), &ctx)
+            .handle(&AlephEvent::SubAgentStarted(request), &ctx)
             .await
             .unwrap();
 
@@ -696,7 +696,7 @@ mod tests {
             child_session_id: "child-1".into(),
         };
         handler
-            .handle(&AetherEvent::SubAgentStarted(request), &ctx)
+            .handle(&AlephEvent::SubAgentStarted(request), &ctx)
             .await
             .unwrap();
 
@@ -711,7 +711,7 @@ mod tests {
             session_id: Some("child-1".into()),
         };
         handler
-            .handle(&AetherEvent::ToolCallStarted(tool_started), &ctx)
+            .handle(&AlephEvent::ToolCallStarted(tool_started), &ctx)
             .await
             .unwrap();
 
@@ -731,7 +731,7 @@ mod tests {
             session_id: Some("child-1".into()),
         };
         handler
-            .handle(&AetherEvent::ToolCallCompleted(tool_completed), &ctx)
+            .handle(&AlephEvent::ToolCallCompleted(tool_completed), &ctx)
             .await
             .unwrap();
 

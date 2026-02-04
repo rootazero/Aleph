@@ -1,7 +1,7 @@
-//! Path utilities for Aether configuration and data files
+//! Path utilities for Aleph configuration and data files
 //!
 //! This module provides helper functions for getting paths to various
-//! Aether configuration and data directories.
+//! Aleph configuration and data directories.
 //!
 //! Cross-platform support:
 //! - All platforms: Uses ~/.aleph/ (unified path)
@@ -49,7 +49,7 @@ pub fn get_home_dir() -> Result<PathBuf> {
     ))
 }
 
-/// Get the Aether configuration directory in a cross-platform way
+/// Get the Aleph configuration directory in a cross-platform way
 ///
 /// Uses a unified path across all platforms for consistency:
 /// - All platforms: ~/.aleph/
@@ -65,7 +65,7 @@ pub fn get_home_dir() -> Result<PathBuf> {
 pub fn get_config_dir() -> Result<PathBuf> {
     // Use unified path ~/.aleph/ across all platforms
     let home_dir = get_home_dir()?;
-    Ok(home_dir.join(".aether"))
+    Ok(home_dir.join(".aleph"))
 }
 
 /// Get the path for the config.toml file
@@ -80,7 +80,7 @@ pub fn get_config_file_path() -> Result<PathBuf> {
 /// Uses a unified path across all platforms for consistency:
 /// - All platforms: ~/.aleph/cache/
 ///
-/// This keeps all Aether data under the same root directory.
+/// This keeps all Aleph data under the same root directory.
 pub fn get_cache_dir() -> Result<PathBuf> {
     // Use unified path ~/.aleph/cache/ across all platforms
     Ok(get_config_dir()?.join("cache"))
@@ -163,7 +163,7 @@ pub fn get_output_dir_string() -> Result<String> {
 
 /// Get the data directory for application data
 ///
-/// This is an alias for get_config_dir() as all Aether data is stored
+/// This is an alias for get_config_dir() as all Aleph data is stored
 /// under the unified config directory.
 ///
 /// Returns: `<config_dir>/` (same as get_config_dir)
@@ -209,11 +209,11 @@ pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
 /// Implements multi-location skill discovery following OpenCode's pattern:
 ///
 /// 1. **Project level** (traverse up from current directory to git root):
-///    - `.aether/skills/` - Aether native
+///    - `.aleph/skills/` - Aleph native
 ///    - `.claude/skills/` - Claude Code compatibility
 ///
 /// 2. **User level** (global):
-///    - `~/.aleph/skills` - Aether native
+///    - `~/.aleph/skills` - Aleph native
 ///    - `~/.claude/skills` - Claude Code compatibility
 ///
 /// # Arguments
@@ -255,10 +255,10 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     // 1. Project level: traverse up from start to git root
     let mut current = start_dir.clone();
     loop {
-        // Check .aether/skills/
-        let aether_skills = current.join(".aether").join("skills");
+        // Check .aleph/skills/
+        let aether_skills = current.join(".aleph").join("skills");
         if aether_skills.is_dir() && !dirs.contains(&aether_skills) {
-            info!(path = %aether_skills.display(), "Found project-level .aether/skills");
+            info!(path = %aether_skills.display(), "Found project-level .aleph/skills");
             dirs.push(aether_skills);
         }
 
@@ -286,7 +286,7 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
         info!(home = %home.display(), "Checking global directories");
 
         // ~/.aleph/skills
-        let global_aether = home.join(".aether").join("skills");
+        let global_aether = home.join(".aleph").join("skills");
         if global_aether.is_dir() && !dirs.contains(&global_aether) {
             info!(path = %global_aether.display(), "Found global ~/.aleph/skills");
             dirs.push(global_aether);
@@ -373,7 +373,7 @@ mod tests {
         std::fs::create_dir(project.join(".git")).unwrap();
 
         // Create project-level skills
-        let aether_skills = project.join(".aether").join("skills");
+        let aether_skills = project.join(".aleph").join("skills");
         std::fs::create_dir_all(&aether_skills).unwrap();
 
         let claude_skills = project.join(".claude").join("skills");
@@ -386,7 +386,7 @@ mod tests {
         assert!(dirs.iter().any(|d| d == &aether_skills));
         assert!(dirs.iter().any(|d| d == &claude_skills));
 
-        // .aether should come before .claude (priority order)
+        // .aleph should come before .claude (priority order)
         let aether_idx = dirs.iter().position(|d| d == &aether_skills);
         let claude_idx = dirs.iter().position(|d| d == &claude_skills);
         assert!(aether_idx < claude_idx);
@@ -403,7 +403,7 @@ mod tests {
         std::fs::create_dir(project.join(".git")).unwrap();
 
         // Create skills dir at project root
-        let aether_skills = project.join(".aether").join("skills");
+        let aether_skills = project.join(".aleph").join("skills");
         std::fs::create_dir_all(&aether_skills).unwrap();
 
         // Search from subdirectory

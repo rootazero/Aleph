@@ -317,7 +317,7 @@ The plugin system uses a layered architecture with separate discovery and extens
 │  │  │ scanner.rs  │  │  paths.rs   │  │  types.rs   │   │  │
 │  │  │             │  │             │  │             │   │  │
 │  │  │ Discover:   │  │ Path utils: │  │ Component   │   │  │
-│  │  │ - ~/.claude/│  │ - aether_   │  │ types and   │   │  │
+│  │  │ - ~/.claude/│  │ - aleph_   │  │ types and   │   │  │
 │  │  │ - ~/.aleph/│  │   home()    │  │ discovery   │   │  │
 │  │  │ - .claude/  │  │ - git_root()│  │ sources     │   │  │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘   │  │
@@ -328,7 +328,7 @@ The plugin system uses a layered architecture with separate discovery and extens
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │  │
 │  │  │ loader.rs   │  │ registry.rs │  │ config/     │   │  │
 │  │  │             │  │             │  │             │   │  │
-│  │  │ Load:       │  │ Store:      │  │ aether.jsonc│   │  │
+│  │  │ Load:       │  │ Store:      │  │ aleph.jsonc│   │  │
 │  │  │ - skills    │  │ - plugins   │  │ config      │   │  │
 │  │  │ - commands  │  │ - skills    │  │ merging     │   │  │
 │  │  │ - agents    │  │ - commands  │  │             │   │  │
@@ -384,7 +384,7 @@ core/src/
 │   ├── loader.rs       # ComponentLoader
 │   ├── registry.rs     # ComponentRegistry
 │   ├── types.rs        # ExtensionSkill, ExtensionAgent, etc.
-│   ├── config/         # aether.jsonc configuration
+│   ├── config/         # aleph.jsonc configuration
 │   ├── hooks/          # HookExecutor
 │   ├── runtime/        # Node.js plugin runtime
 │   └── sync_api.rs     # SyncExtensionManager (legacy sync wrapper)

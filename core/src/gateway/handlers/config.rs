@@ -255,7 +255,7 @@ pub struct ConfigSchemaResponse {
 
 /// Handle config.schema RPC request
 ///
-/// Returns the JSON Schema for the Aether configuration along with
+/// Returns the JSON Schema for the Aleph configuration along with
 /// UI hints for rendering configuration forms.
 ///
 /// # Request

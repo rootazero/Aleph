@@ -29,7 +29,7 @@ final class GatewayManager: ObservableObject {
 
     // MARK: - Private Properties
 
-    private let logger = Logger(subsystem: "com.aether", category: "GatewayManager")
+    private let logger = Logger(subsystem: "com.aleph", category: "GatewayManager")
     private let config: GatewayClientConfig
     private var gatewayProcess: Process?
     private var healthCheckTask: Task<Void, Never>?
@@ -184,9 +184,9 @@ final class GatewayManager: ObservableObject {
             // Development build
             Bundle.main.bundlePath + "/Contents/MacOS/aleph-gateway",
             // Cargo target directory (debug)
-            FileManager.default.homeDirectoryForCurrentUser.path + "/Workspace/Aether/target/debug/aleph-gateway",
+            FileManager.default.homeDirectoryForCurrentUser.path + "/Workspace/Aleph/target/debug/aleph-gateway",
             // Cargo target directory (release)
-            FileManager.default.homeDirectoryForCurrentUser.path + "/Workspace/Aether/target/release/aleph-gateway",
+            FileManager.default.homeDirectoryForCurrentUser.path + "/Workspace/Aleph/target/release/aleph-gateway",
             // System path
             "/usr/local/bin/aleph-gateway",
             "/opt/homebrew/bin/aleph-gateway"

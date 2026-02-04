@@ -87,7 +87,7 @@ The system SHALL use CGEventTap API for global hotkey detection on macOS, provid
 - **WHEN** ` key is detected by event tap
 - **THEN** callback returns `nil` (swallow event)
 - **AND** the ` character does NOT appear in the active application
-- **AND** Aether processing begins immediately
+- **AND** Aleph processing begins immediately
 
 #### Scenario: Preserve focus on active application
 - **WHEN** hotkey is detected

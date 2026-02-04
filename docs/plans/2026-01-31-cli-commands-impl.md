@@ -70,7 +70,7 @@ pub mod cli;
 
 **Step 4: Verify compilation**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo check`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo check`
 
 **Step 5: Commit**
 
@@ -572,7 +572,7 @@ pub async fn handle_schema(
 /// Handle config edit command
 pub async fn handle_edit() -> Result<(), CliError> {
     let config_path = dirs::home_dir()
-        .map(|h| h.join(".aether").join("config.toml"))
+        .map(|h| h.join(".aleph").join("config.toml"))
         .ok_or_else(|| CliError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "Cannot find home directory",
@@ -1227,7 +1227,7 @@ git commit -m "feat(gateway): add channels and cron RPC handlers"
 **Step 1: Build the binary**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core
+cd /Volumes/TBU4/Workspace/Aleph/core
 cargo build --features gateway --bin aleph-gateway
 ```
 

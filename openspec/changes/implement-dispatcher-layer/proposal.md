@@ -1,4 +1,4 @@
-# Change: Implement Intelligent Dispatcher Layer (Aether Cortex)
+# Change: Implement Intelligent Dispatcher Layer (Aleph Cortex)
 
 ## Status
 - **Stage**: Deployed
@@ -7,7 +7,7 @@
 
 ## Why
 
-The current tool invocation system in Aether is too simplistic:
+The current tool invocation system in Aleph is too simplistic:
 
 1. **No unified tool discovery**: Native tools, MCP tools, Skills, and custom commands are scattered across different registries with no unified interface
 2. **Missing intelligent routing**: The system lacks LLM-based intent detection for ambiguous user inputs
@@ -58,7 +58,7 @@ This proposal introduces a **Dispatcher Layer** that sits between user input and
 **Modified Files:**
 - `core/src/router/mod.rs` - Integrate L2/L3 routing
 - `core/src/core.rs` - Wire up Dispatcher in process flow
-- `core/src/aether.udl` - Add confirmation-related types
+- `core/src/aleph.udl` - Add confirmation-related types
 - `core/src/config/mod.rs` - Add dispatcher configuration
 
 ## Impact

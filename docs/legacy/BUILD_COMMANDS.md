@@ -30,7 +30,7 @@ cargo build --release
 cargo run --bin uniffi-bindgen generate \
   --library target/release/libalephcore.dylib \
   --language swift \
-  --out-dir ../platforms/macos/Aether/Sources/Generated/
+  --out-dir ../platforms/macos/Aleph/Sources/Generated/
 ```
 
 ## Building macOS Client (Native)

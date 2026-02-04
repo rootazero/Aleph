@@ -7,8 +7,8 @@ import Foundation
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
-#if canImport(aetherFFI)
-import aetherFFI
+#if canImport(alephFFI)
+import alephFFI
 #endif
 
 fileprivate extension RustBuffer {
@@ -618,7 +618,7 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 
-public protocol AetherCoreProtocol: AnyObject, Sendable {
+public protocol AlephCoreProtocol: AnyObject, Sendable {
     
     func addMcpServer(config: McpServerConfig) throws 
     
@@ -875,7 +875,7 @@ public protocol AetherCoreProtocol: AnyObject, Sendable {
     func validateRegex(pattern: String) throws  -> Bool
     
 }
-open class AetherCore: AetherCoreProtocol, @unchecked Sendable {
+open class AlephCore: AlephCoreProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
 
     /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
@@ -912,7 +912,7 @@ open class AetherCore: AetherCoreProtocol, @unchecked Sendable {
     @_documentation(visibility: private)
 #endif
     public func uniffiCloneHandle() -> UInt64 {
-        return try! rustCall { uniffi_alephcore_fn_clone_aethercore(self.handle, $0) }
+        return try! rustCall { uniffi_alephcore_fn_clone_alephcore(self.handle, $0) }
     }
     // No primary constructor declared for this class.
 
@@ -922,14 +922,14 @@ open class AetherCore: AetherCoreProtocol, @unchecked Sendable {
             return
         }
 
-        try! rustCall { uniffi_alephcore_fn_free_aethercore(handle, $0) }
+        try! rustCall { uniffi_alephcore_fn_free_alephcore(handle, $0) }
     }
 
     
 
     
-open func addMcpServer(config: McpServerConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_add_mcp_server(
+open func addMcpServer(config: McpServerConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_add_mcp_server(
             self.uniffiCloneHandle(),
         FfiConverterTypeMcpServerConfig_lower(config),$0
     )
@@ -937,22 +937,22 @@ open func addMcpServer(config: McpServerConfig)throws   {try rustCallWithError(F
 }
     
 open func agentCancel()  {try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_cancel(
+    uniffi_alephcore_fn_method_alephcore_agent_cancel(
             self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func agentDeleteModelProfile(profileId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_delete_model_profile(
+open func agentDeleteModelProfile(profileId: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_delete_model_profile(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(profileId),$0
     )
 }
 }
     
-open func agentDeleteRoutingRule(taskType: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_delete_routing_rule(
+open func agentDeleteRoutingRule(taskType: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_delete_routing_rule(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(taskType),$0
     )
@@ -960,8 +960,8 @@ open func agentDeleteRoutingRule(taskType: String)throws   {try rustCallWithErro
 }
     
 open func agentExecute(graph: AgentTaskGraphFfi)throws  -> AgentExecutionSummaryFfi  {
-    return try  FfiConverterTypeAgentExecutionSummaryFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_execute(
+    return try  FfiConverterTypeAgentExecutionSummaryFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_execute(
             self.uniffiCloneHandle(),
         FfiConverterTypeAgentTaskGraphFFI_lower(graph),$0
     )
@@ -970,7 +970,7 @@ open func agentExecute(graph: AgentTaskGraphFfi)throws  -> AgentExecutionSummary
     
 open func agentGetBudgetLimit(limitId: String) -> BudgetLimitStatusFfi?  {
     return try!  FfiConverterOptionTypeBudgetLimitStatusFFI.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_budget_limit(
+    uniffi_alephcore_fn_method_alephcore_agent_get_budget_limit(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(limitId),$0
     )
@@ -979,7 +979,7 @@ open func agentGetBudgetLimit(limitId: String) -> BudgetLimitStatusFfi?  {
     
 open func agentGetBudgetStatus() -> BudgetStatusFfi  {
     return try!  FfiConverterTypeBudgetStatusFFI_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_budget_status(
+    uniffi_alephcore_fn_method_alephcore_agent_get_budget_status(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -987,7 +987,7 @@ open func agentGetBudgetStatus() -> BudgetStatusFfi  {
     
 open func agentGetBudgetStatusForScope(scopeType: String, scopeId: String?) -> BudgetStatusFfi  {
     return try!  FfiConverterTypeBudgetStatusFFI_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_budget_status_for_scope(
+    uniffi_alephcore_fn_method_alephcore_agent_get_budget_status_for_scope(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(scopeType),
         FfiConverterOptionString.lower(scopeId),$0
@@ -997,7 +997,7 @@ open func agentGetBudgetStatusForScope(scopeType: String, scopeId: String?) -> B
     
 open func agentGetCodeExecConfig() -> CodeExecConfigFfi  {
     return try!  FfiConverterTypeCodeExecConfigFFI_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_code_exec_config(
+    uniffi_alephcore_fn_method_alephcore_agent_get_code_exec_config(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1005,7 +1005,7 @@ open func agentGetCodeExecConfig() -> CodeExecConfigFfi  {
     
 open func agentGetFileOpsConfig() -> FileOpsConfigFfi  {
     return try!  FfiConverterTypeFileOpsConfigFFI_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_file_ops_config(
+    uniffi_alephcore_fn_method_alephcore_agent_get_file_ops_config(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1013,7 +1013,7 @@ open func agentGetFileOpsConfig() -> FileOpsConfigFfi  {
     
 open func agentGetHealthStatistics() -> HealthStatisticsFfi  {
     return try!  FfiConverterTypeHealthStatisticsFFI_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_health_statistics(
+    uniffi_alephcore_fn_method_alephcore_agent_get_health_statistics(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1021,7 +1021,7 @@ open func agentGetHealthStatistics() -> HealthStatisticsFfi  {
     
 open func agentGetModelHealth(modelId: String) -> ModelHealthSummaryFfi?  {
     return try!  FfiConverterOptionTypeModelHealthSummaryFFI.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_model_health(
+    uniffi_alephcore_fn_method_alephcore_agent_get_model_health(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(modelId),$0
     )
@@ -1030,7 +1030,7 @@ open func agentGetModelHealth(modelId: String) -> ModelHealthSummaryFfi?  {
     
 open func agentGetModelHealthSummaries() -> [ModelHealthSummaryFfi]  {
     return try!  FfiConverterSequenceTypeModelHealthSummaryFFI.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_model_health_summaries(
+    uniffi_alephcore_fn_method_alephcore_agent_get_model_health_summaries(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1038,7 +1038,7 @@ open func agentGetModelHealthSummaries() -> [ModelHealthSummaryFfi]  {
     
 open func agentGetModelProfiles() -> [ModelProfileFfi]  {
     return try!  FfiConverterSequenceTypeModelProfileFFI.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_model_profiles(
+    uniffi_alephcore_fn_method_alephcore_agent_get_model_profiles(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1046,7 +1046,7 @@ open func agentGetModelProfiles() -> [ModelProfileFfi]  {
     
 open func agentGetRoutingRules() -> ModelRoutingRulesFfi  {
     return try!  FfiConverterTypeModelRoutingRulesFFI_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_routing_rules(
+    uniffi_alephcore_fn_method_alephcore_agent_get_routing_rules(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1054,7 +1054,7 @@ open func agentGetRoutingRules() -> ModelRoutingRulesFfi  {
     
 open func agentGetState() -> AgentExecutionState  {
     return try!  FfiConverterTypeAgentExecutionState_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_get_state(
+    uniffi_alephcore_fn_method_alephcore_agent_get_state(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1062,7 +1062,7 @@ open func agentGetState() -> AgentExecutionState  {
     
 open func agentIsCancelled() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_is_cancelled(
+    uniffi_alephcore_fn_method_alephcore_agent_is_cancelled(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1070,22 +1070,22 @@ open func agentIsCancelled() -> Bool  {
     
 open func agentIsPaused() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_is_paused(
+    uniffi_alephcore_fn_method_alephcore_agent_is_paused(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func agentPause()  {try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_pause(
+    uniffi_alephcore_fn_method_alephcore_agent_pause(
             self.uniffiCloneHandle(),$0
     )
 }
 }
     
 open func agentPlan(request: String)throws  -> AgentTaskGraphFfi  {
-    return try  FfiConverterTypeAgentTaskGraphFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_plan(
+    return try  FfiConverterTypeAgentTaskGraphFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_plan(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(request),$0
     )
@@ -1093,62 +1093,62 @@ open func agentPlan(request: String)throws  -> AgentTaskGraphFfi  {
 }
     
 open func agentResume()  {try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_resume(
+    uniffi_alephcore_fn_method_alephcore_agent_resume(
             self.uniffiCloneHandle(),$0
     )
 }
 }
     
 open func agentSubscribe(handler: AgentProgressHandler)  {try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_agent_subscribe(
+    uniffi_alephcore_fn_method_alephcore_agent_subscribe(
             self.uniffiCloneHandle(),
         FfiConverterCallbackInterfaceAgentProgressHandler_lower(handler),$0
     )
 }
 }
     
-open func agentUpdateCodeExecConfig(config: CodeExecConfigFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_update_code_exec_config(
+open func agentUpdateCodeExecConfig(config: CodeExecConfigFfi)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_update_code_exec_config(
             self.uniffiCloneHandle(),
         FfiConverterTypeCodeExecConfigFFI_lower(config),$0
     )
 }
 }
     
-open func agentUpdateCostStrategy(strategy: ModelCostStrategyFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_update_cost_strategy(
+open func agentUpdateCostStrategy(strategy: ModelCostStrategyFfi)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_update_cost_strategy(
             self.uniffiCloneHandle(),
         FfiConverterTypeModelCostStrategyFFI_lower(strategy),$0
     )
 }
 }
     
-open func agentUpdateDefaultModel(modelId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_update_default_model(
+open func agentUpdateDefaultModel(modelId: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_update_default_model(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(modelId),$0
     )
 }
 }
     
-open func agentUpdateFileOpsConfig(config: FileOpsConfigFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_update_file_ops_config(
+open func agentUpdateFileOpsConfig(config: FileOpsConfigFfi)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_update_file_ops_config(
             self.uniffiCloneHandle(),
         FfiConverterTypeFileOpsConfigFFI_lower(config),$0
     )
 }
 }
     
-open func agentUpdateModelProfile(profile: ModelProfileFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_update_model_profile(
+open func agentUpdateModelProfile(profile: ModelProfileFfi)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_update_model_profile(
             self.uniffiCloneHandle(),
         FfiConverterTypeModelProfileFFI_lower(profile),$0
     )
 }
 }
     
-open func agentUpdateRoutingRule(taskType: String, modelId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_agent_update_routing_rule(
+open func agentUpdateRoutingRule(taskType: String, modelId: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_agent_update_routing_rule(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(taskType),
         FfiConverterString.lower(modelId),$0
@@ -1157,14 +1157,14 @@ open func agentUpdateRoutingRule(taskType: String, modelId: String)throws   {try
 }
     
 open func cancel()  {try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_cancel(
+    uniffi_alephcore_fn_method_alephcore_cancel(
             self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func cancelGeneration(providerName: String, jobId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_cancel_generation(
+open func cancelGeneration(providerName: String, jobId: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_cancel_generation(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(jobId),$0
@@ -1173,16 +1173,16 @@ open func cancelGeneration(providerName: String, jobId: String)throws   {try rus
 }
     
 open func cancelSession()throws  -> Bool  {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_cancel_session(
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_cancel_session(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func checkGenerationProgress(providerName: String, jobId: String)throws  -> GenerationProgressFfi  {
-    return try  FfiConverterTypeGenerationProgressFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_check_generation_progress(
+    return try  FfiConverterTypeGenerationProgressFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_check_generation_progress(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(jobId),$0
@@ -1191,24 +1191,24 @@ open func checkGenerationProgress(providerName: String, jobId: String)throws  ->
 }
     
 open func checkRuntimeUpdates()throws  -> [RuntimeUpdateInfo]  {
-    return try  FfiConverterSequenceTypeRuntimeUpdateInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_check_runtime_updates(
+    return try  FfiConverterSequenceTypeRuntimeUpdateInfo.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_check_runtime_updates(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func clearFacts()throws  -> UInt64  {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_clear_facts(
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_clear_facts(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func clearMemories(appBundleId: String?, windowTitle: String?)throws  -> UInt64  {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_clear_memories(
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_clear_memories(
             self.uniffiCloneHandle(),
         FfiConverterOptionString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),$0
@@ -1216,8 +1216,8 @@ open func clearMemories(appBundleId: String?, windowTitle: String?)throws  -> UI
 })
 }
     
-open func clearMemory()throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_clear_memory(
+open func clearMemory()throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_clear_memory(
             self.uniffiCloneHandle(),$0
     )
 }
@@ -1225,7 +1225,7 @@ open func clearMemory()throws   {try rustCallWithError(FfiConverterTypeAetherFfi
     
 open func confirmTaskPlan(planId: String, confirmed: Bool) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_confirm_task_plan(
+    uniffi_alephcore_fn_method_alephcore_confirm_task_plan(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(planId),
         FfiConverterBool.lower(confirmed),$0
@@ -1233,16 +1233,16 @@ open func confirmTaskPlan(planId: String, confirmed: Bool) -> Bool  {
 })
 }
     
-open func deleteGenerationProvider(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_delete_generation_provider(
+open func deleteGenerationProvider(name: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_delete_generation_provider(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
 }
 }
     
-open func deleteMcpServer(id: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_delete_mcp_server(
+open func deleteMcpServer(id: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_delete_mcp_server(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(id),$0
     )
@@ -1250,40 +1250,40 @@ open func deleteMcpServer(id: String)throws   {try rustCallWithError(FfiConverte
 }
     
 open func deleteMemoriesByTopicId(topicId: String)throws  -> UInt64  {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_delete_memories_by_topic_id(
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_delete_memories_by_topic_id(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(topicId),$0
     )
 })
 }
     
-open func deleteMemory(id: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_delete_memory(
+open func deleteMemory(id: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_delete_memory(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(id),$0
     )
 }
 }
     
-open func deleteProvider(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_delete_provider(
+open func deleteProvider(name: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_delete_provider(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
 }
 }
     
-open func deleteSkill(skillId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_delete_skill(
+open func deleteSkill(skillId: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_delete_skill(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(skillId),$0
     )
 }
 }
     
-open func disablePlugin(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_disable_plugin(
+open func disablePlugin(name: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_disable_plugin(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
@@ -1291,8 +1291,8 @@ open func disablePlugin(name: String)throws   {try rustCallWithError(FfiConverte
 }
     
 open func editImage(providerName: String, prompt: String, params: GenerationParamsFfi)throws  -> GenerationOutputFfi  {
-    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_edit_image(
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_edit_image(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(prompt),
@@ -1301,8 +1301,8 @@ open func editImage(providerName: String, prompt: String, params: GenerationPara
 })
 }
     
-open func enablePlugin(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_enable_plugin(
+open func enablePlugin(name: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_enable_plugin(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
@@ -1310,8 +1310,8 @@ open func enablePlugin(name: String)throws   {try rustCallWithError(FfiConverter
 }
     
 open func executePluginSkill(pluginName: String, skillName: String, arguments: String)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_execute_plugin_skill(
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_execute_plugin_skill(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(pluginName),
         FfiConverterString.lower(skillName),
@@ -1322,15 +1322,15 @@ open func executePluginSkill(pluginName: String, skillName: String, arguments: S
     
 open func exportMcpConfigJson() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_export_mcp_config_json(
+    uniffi_alephcore_fn_method_alephcore_export_mcp_config_json(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func extractText(imageData: [UInt8])throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_extract_text(
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_extract_text(
             self.uniffiCloneHandle(),
         FfiConverterSequenceUInt8.lower(imageData),$0
     )
@@ -1338,8 +1338,8 @@ open func extractText(imageData: [UInt8])throws  -> String  {
 }
     
 open func generate(providerName: String, generationType: GenerationTypeFfi, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
-    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_generate(
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_generate(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterTypeGenerationTypeFFI_lower(generationType),
@@ -1350,8 +1350,8 @@ open func generate(providerName: String, generationType: GenerationTypeFfi, prom
 }
     
 open func generateAudio(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
-    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_generate_audio(
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_generate_audio(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(prompt),
@@ -1361,8 +1361,8 @@ open func generateAudio(providerName: String, prompt: String, params: Generation
 }
     
 open func generateImage(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
-    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_generate_image(
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_generate_image(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(prompt),
@@ -1372,8 +1372,8 @@ open func generateImage(providerName: String, prompt: String, params: Generation
 }
     
 open func generateSpeech(providerName: String, text: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
-    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_generate_speech(
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_generate_speech(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(text),
@@ -1383,8 +1383,8 @@ open func generateSpeech(providerName: String, text: String, params: GenerationP
 }
     
 open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_generate_topic_title(
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_generate_topic_title(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(userInput),
         FfiConverterString.lower(aiResponse),$0
@@ -1393,8 +1393,8 @@ open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> St
 }
     
 open func generateVideo(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi  {
-    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_generate_video(
+    return try  FfiConverterTypeGenerationOutputFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_generate_video(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(prompt),
@@ -1404,8 +1404,8 @@ open func generateVideo(providerName: String, prompt: String, params: Generation
 }
     
 open func getCompressionStats()throws  -> CompressionStats  {
-    return try  FfiConverterTypeCompressionStats_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_get_compression_stats(
+    return try  FfiConverterTypeCompressionStats_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_get_compression_stats(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1413,7 +1413,7 @@ open func getCompressionStats()throws  -> CompressionStats  {
     
 open func getCurrentSessionId() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_current_session_id(
+    uniffi_alephcore_fn_method_alephcore_get_current_session_id(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1421,7 +1421,7 @@ open func getCurrentSessionId() -> String?  {
     
 open func getDefaultProvider() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_default_provider(
+    uniffi_alephcore_fn_method_alephcore_get_default_provider(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1429,7 +1429,7 @@ open func getDefaultProvider() -> String?  {
     
 open func getEnabledProviders() -> [String]  {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_enabled_providers(
+    uniffi_alephcore_fn_method_alephcore_get_enabled_providers(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1437,7 +1437,7 @@ open func getEnabledProviders() -> [String]  {
     
 open func getGenerationProviderConfig(name: String) -> GenerationProviderConfigFfi?  {
     return try!  FfiConverterOptionTypeGenerationProviderConfigFFI.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_generation_provider_config(
+    uniffi_alephcore_fn_method_alephcore_get_generation_provider_config(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
@@ -1445,8 +1445,8 @@ open func getGenerationProviderConfig(name: String) -> GenerationProviderConfigF
 }
     
 open func getLogDirectory()throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_get_log_directory(
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_get_log_directory(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1454,7 +1454,7 @@ open func getLogDirectory()throws  -> String  {
     
 open func getLogLevel() -> LogLevel  {
     return try!  FfiConverterTypeLogLevel_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_log_level(
+    uniffi_alephcore_fn_method_alephcore_get_log_level(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1462,7 +1462,7 @@ open func getLogLevel() -> LogLevel  {
     
 open func getMcpConfig() -> McpSettingsConfig  {
     return try!  FfiConverterTypeMcpSettingsConfig_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_mcp_config(
+    uniffi_alephcore_fn_method_alephcore_get_mcp_config(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1470,7 +1470,7 @@ open func getMcpConfig() -> McpSettingsConfig  {
     
 open func getMcpServer(id: String) -> McpServerConfig?  {
     return try!  FfiConverterOptionTypeMcpServerConfig.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_mcp_server(
+    uniffi_alephcore_fn_method_alephcore_get_mcp_server(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(id),$0
     )
@@ -1479,7 +1479,7 @@ open func getMcpServer(id: String) -> McpServerConfig?  {
     
 open func getMcpServerLogs(id: String, maxLines: UInt32) -> [String]  {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_mcp_server_logs(
+    uniffi_alephcore_fn_method_alephcore_get_mcp_server_logs(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(id),
         FfiConverterUInt32.lower(maxLines),$0
@@ -1489,7 +1489,7 @@ open func getMcpServerLogs(id: String, maxLines: UInt32) -> [String]  {
     
 open func getMcpServerStatus(id: String) -> McpServerStatusInfo  {
     return try!  FfiConverterTypeMcpServerStatusInfo_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_mcp_server_status(
+    uniffi_alephcore_fn_method_alephcore_get_mcp_server_status(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(id),$0
     )
@@ -1497,8 +1497,8 @@ open func getMcpServerStatus(id: String) -> McpServerStatusInfo  {
 }
     
 open func getMemoryAppList()throws  -> [AppMemoryInfo]  {
-    return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_get_memory_app_list(
+    return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_get_memory_app_list(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1506,15 +1506,15 @@ open func getMemoryAppList()throws  -> [AppMemoryInfo]  {
     
 open func getMemoryConfig() -> MemoryConfig  {
     return try!  FfiConverterTypeMemoryConfig_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_memory_config(
+    uniffi_alephcore_fn_method_alephcore_get_memory_config(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func getMemoryStats()throws  -> MemoryStats  {
-    return try  FfiConverterTypeMemoryStats_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_get_memory_stats(
+    return try  FfiConverterTypeMemoryStats_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_get_memory_stats(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1522,7 +1522,7 @@ open func getMemoryStats()throws  -> MemoryStats  {
     
 open func getNodePath() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_node_path(
+    uniffi_alephcore_fn_method_alephcore_get_node_path(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1530,15 +1530,15 @@ open func getNodePath() -> String?  {
     
 open func getNpmPath() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_npm_path(
+    uniffi_alephcore_fn_method_alephcore_get_npm_path(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func getPluginSkillInstructions()throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_get_plugin_skill_instructions(
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_get_plugin_skill_instructions(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1546,7 +1546,7 @@ open func getPluginSkillInstructions()throws  -> String  {
     
 open func getPluginsDir() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_plugins_dir(
+    uniffi_alephcore_fn_method_alephcore_get_plugins_dir(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1554,7 +1554,7 @@ open func getPluginsDir() -> String  {
     
 open func getProvidersForType(generationType: GenerationTypeFfi) -> [GenerationProviderInfoFfi]  {
     return try!  FfiConverterSequenceTypeGenerationProviderInfoFFI.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_providers_for_type(
+    uniffi_alephcore_fn_method_alephcore_get_providers_for_type(
             self.uniffiCloneHandle(),
         FfiConverterTypeGenerationTypeFFI_lower(generationType),$0
     )
@@ -1563,7 +1563,7 @@ open func getProvidersForType(generationType: GenerationTypeFfi) -> [GenerationP
     
 open func getPythonPath() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_python_path(
+    uniffi_alephcore_fn_method_alephcore_get_python_path(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1571,15 +1571,15 @@ open func getPythonPath() -> String?  {
     
 open func getRootCommandsFromRegistry() -> [CommandNode]  {
     return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_root_commands_from_registry(
+    uniffi_alephcore_fn_method_alephcore_get_root_commands_from_registry(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func getSkillsDir()throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_get_skills_dir(
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_get_skills_dir(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1587,14 +1587,14 @@ open func getSkillsDir()throws  -> String  {
     
 open func getYtdlpPath() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_get_ytdlp_path(
+    uniffi_alephcore_fn_method_alephcore_get_ytdlp_path(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func importMcpConfigJson(json: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_import_mcp_config_json(
+open func importMcpConfigJson(json: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_import_mcp_config_json(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(json),$0
     )
@@ -1602,8 +1602,8 @@ open func importMcpConfigJson(json: String)throws   {try rustCallWithError(FfiCo
 }
     
 open func installPluginFromGit(url: String)throws  -> PluginInfoFfi  {
-    return try  FfiConverterTypePluginInfoFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_install_plugin_from_git(
+    return try  FfiConverterTypePluginInfoFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_install_plugin_from_git(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(url),$0
     )
@@ -1611,16 +1611,16 @@ open func installPluginFromGit(url: String)throws  -> PluginInfoFfi  {
 }
     
 open func installPluginsFromZip(zipPath: String)throws  -> [String]  {
-    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_install_plugins_from_zip(
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_install_plugins_from_zip(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(zipPath),$0
     )
 })
 }
     
-open func installRuntime(runtimeId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_install_runtime(
+open func installRuntime(runtimeId: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_install_runtime(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(runtimeId),$0
     )
@@ -1628,8 +1628,8 @@ open func installRuntime(runtimeId: String)throws   {try rustCallWithError(FfiCo
 }
     
 open func installSkill(url: String)throws  -> SkillInfo  {
-    return try  FfiConverterTypeSkillInfo_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_install_skill(
+    return try  FfiConverterTypeSkillInfo_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_install_skill(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(url),$0
     )
@@ -1637,8 +1637,8 @@ open func installSkill(url: String)throws  -> SkillInfo  {
 }
     
 open func installSkillsFromZip(zipPath: String)throws  -> [String]  {
-    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_install_skills_from_zip(
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_install_skills_from_zip(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(zipPath),$0
     )
@@ -1647,7 +1647,7 @@ open func installSkillsFromZip(zipPath: String)throws  -> [String]  {
     
 open func isCancelled() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_is_cancelled(
+    uniffi_alephcore_fn_method_alephcore_is_cancelled(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1655,7 +1655,7 @@ open func isCancelled() -> Bool  {
     
 open func isRuntimeInstalled(runtimeId: String) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_is_runtime_installed(
+    uniffi_alephcore_fn_method_alephcore_is_runtime_installed(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(runtimeId),$0
     )
@@ -1664,7 +1664,7 @@ open func isRuntimeInstalled(runtimeId: String) -> Bool  {
     
 open func listBuiltinTools() -> [UnifiedToolInfo]  {
     return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_list_builtin_tools(
+    uniffi_alephcore_fn_method_alephcore_list_builtin_tools(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1672,7 +1672,7 @@ open func listBuiltinTools() -> [UnifiedToolInfo]  {
     
 open func listGenerationProviders() -> [GenerationProviderInfoFfi]  {
     return try!  FfiConverterSequenceTypeGenerationProviderInfoFFI.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_list_generation_providers(
+    uniffi_alephcore_fn_method_alephcore_list_generation_providers(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1680,23 +1680,23 @@ open func listGenerationProviders() -> [GenerationProviderInfoFfi]  {
     
 open func listMcpServers() -> [McpServerConfig]  {
     return try!  FfiConverterSequenceTypeMcpServerConfig.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_list_mcp_servers(
+    uniffi_alephcore_fn_method_alephcore_list_mcp_servers(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func listPluginSkills()throws  -> [PluginSkillFfi]  {
-    return try  FfiConverterSequenceTypePluginSkillFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_list_plugin_skills(
+    return try  FfiConverterSequenceTypePluginSkillFFI.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_list_plugin_skills(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func listPlugins()throws  -> [PluginInfoFfi]  {
-    return try  FfiConverterSequenceTypePluginInfoFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_list_plugins(
+    return try  FfiConverterSequenceTypePluginInfoFFI.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_list_plugins(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1704,7 +1704,7 @@ open func listPlugins()throws  -> [PluginInfoFfi]  {
     
 open func listRecentSessions(limit: UInt32) -> [SessionSummary]  {
     return try!  FfiConverterSequenceTypeSessionSummary.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_list_recent_sessions(
+    uniffi_alephcore_fn_method_alephcore_list_recent_sessions(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(limit),$0
     )
@@ -1713,15 +1713,15 @@ open func listRecentSessions(limit: UInt32) -> [SessionSummary]  {
     
 open func listRuntimes() -> [RuntimeInfo]  {
     return try!  FfiConverterSequenceTypeRuntimeInfo.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_list_runtimes(
+    uniffi_alephcore_fn_method_alephcore_list_runtimes(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func listSkills()throws  -> [SkillInfo]  {
-    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_list_skills(
+    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_list_skills(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1729,31 +1729,31 @@ open func listSkills()throws  -> [SkillInfo]  {
     
 open func listTools() -> [ToolInfoFfi]  {
     return try!  FfiConverterSequenceTypeToolInfoFFI.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_list_tools(
+    uniffi_alephcore_fn_method_alephcore_list_tools(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func loadConfig()throws  -> FullConfig  {
-    return try  FfiConverterTypeFullConfig_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_load_config(
+    return try  FfiConverterTypeFullConfig_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_load_config(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func loadPluginFromPath(path: String)throws  -> PluginInfoFfi  {
-    return try  FfiConverterTypePluginInfoFFI_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_load_plugin_from_path(
+    return try  FfiConverterTypePluginInfoFFI_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_load_plugin_from_path(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(path),$0
     )
 })
 }
     
-open func process(input: String, options: ProcessOptions?)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_process(
+open func process(input: String, options: ProcessOptions?)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_process(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(input),
         FfiConverterOptionTypeProcessOptions.lower(options),$0
@@ -1763,7 +1763,7 @@ open func process(input: String, options: ProcessOptions?)throws   {try rustCall
     
 open func providerSupportsImageEditing(providerName: String) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_provider_supports_image_editing(
+    uniffi_alephcore_fn_method_alephcore_provider_supports_image_editing(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),$0
     )
@@ -1771,22 +1771,22 @@ open func providerSupportsImageEditing(providerName: String) -> Bool  {
 }
     
 open func refreshPlugins()throws  -> UInt32  {
-    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_refresh_plugins(
+    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_refresh_plugins(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func refreshSkills()  {try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_refresh_skills(
+    uniffi_alephcore_fn_method_alephcore_refresh_skills(
             self.uniffiCloneHandle(),$0
     )
 }
 }
     
-open func reloadConfig()throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_reload_config(
+open func reloadConfig()throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_reload_config(
             self.uniffiCloneHandle(),$0
     )
 }
@@ -1794,7 +1794,7 @@ open func reloadConfig()throws   {try rustCallWithError(FfiConverterTypeAetherFf
     
 open func respondToUserInput(requestId: String, response: String) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_respond_to_user_input(
+    uniffi_alephcore_fn_method_alephcore_respond_to_user_input(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(requestId),
         FfiConverterString.lower(response),$0
@@ -1802,8 +1802,8 @@ open func respondToUserInput(requestId: String, response: String) -> Bool  {
 })
 }
     
-open func resumeSession(sessionId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_resume_session(
+open func resumeSession(sessionId: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_resume_session(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(sessionId),$0
     )
@@ -1811,8 +1811,8 @@ open func resumeSession(sessionId: String)throws   {try rustCallWithError(FfiCon
 }
     
 open func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt32)throws  -> [MemoryEntry]  {
-    return try  FfiConverterSequenceTypeMemoryEntry.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_search_memories(
+    return try  FfiConverterSequenceTypeMemoryEntry.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_search_memories(
             self.uniffiCloneHandle(),
         FfiConverterOptionString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),
@@ -1822,8 +1822,8 @@ open func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt
 }
     
 open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItem]  {
-    return try  FfiConverterSequenceTypeMemoryItem.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_search_memory(
+    return try  FfiConverterSequenceTypeMemoryItem.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_search_memory(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(query),
         FfiConverterUInt32.lower(limit),$0
@@ -1831,16 +1831,16 @@ open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItem]  {
 })
 }
     
-open func setDefaultProvider(providerName: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_set_default_provider(
+open func setDefaultProvider(providerName: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_set_default_provider(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),$0
     )
 }
 }
     
-open func setLogLevel(level: LogLevel)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_set_log_level(
+open func setLogLevel(level: LogLevel)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_set_log_level(
             self.uniffiCloneHandle(),
         FfiConverterTypeLogLevel_lower(level),$0
     )
@@ -1849,7 +1849,7 @@ open func setLogLevel(level: LogLevel)throws   {try rustCallWithError(FfiConvert
     
 open func testGenerationProviderConnection(providerType: String, apiKey: String, baseUrl: String?, model: String?) -> TestConnectionResult  {
     return try!  FfiConverterTypeTestConnectionResult_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_test_generation_provider_connection(
+    uniffi_alephcore_fn_method_alephcore_test_generation_provider_connection(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerType),
         FfiConverterString.lower(apiKey),
@@ -1861,7 +1861,7 @@ open func testGenerationProviderConnection(providerType: String, apiKey: String,
     
 open func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig) -> TestConnectionResult  {
     return try!  FfiConverterTypeTestConnectionResult_lift(try! rustCall() {
-    uniffi_alephcore_fn_method_aethercore_test_provider_connection_with_config(
+    uniffi_alephcore_fn_method_alephcore_test_provider_connection_with_config(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(providerName),
         FfiConverterTypeProviderConfig_lower(providerConfig),$0
@@ -1870,8 +1870,8 @@ open func testProviderConnectionWithConfig(providerName: String, providerConfig:
 }
     
 open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  -> ProviderTestResult  {
-    return try  FfiConverterTypeProviderTestResult_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_test_search_provider_with_config(
+    return try  FfiConverterTypeProviderTestResult_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_test_search_provider_with_config(
             self.uniffiCloneHandle(),
         FfiConverterTypeSearchProviderTestConfig_lower(config),$0
     )
@@ -1879,39 +1879,39 @@ open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  
 }
     
 open func triggerCompression()throws  -> CompressionResult  {
-    return try  FfiConverterTypeCompressionResult_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_trigger_compression(
+    return try  FfiConverterTypeCompressionResult_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_trigger_compression(
             self.uniffiCloneHandle(),$0
     )
 })
 }
     
-open func uninstallPlugin(name: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_uninstall_plugin(
+open func uninstallPlugin(name: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_uninstall_plugin(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(name),$0
     )
 }
 }
     
-open func updateBehavior(behavior: BehaviorConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_behavior(
+open func updateBehavior(behavior: BehaviorConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_behavior(
             self.uniffiCloneHandle(),
         FfiConverterTypeBehaviorConfig_lower(behavior),$0
     )
 }
 }
     
-open func updateGeneralConfig(config: GeneralConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_general_config(
+open func updateGeneralConfig(config: GeneralConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_general_config(
             self.uniffiCloneHandle(),
         FfiConverterTypeGeneralConfig_lower(config),$0
     )
 }
 }
     
-open func updateGenerationProvider(name: String, provider: GenerationProviderConfigFfi)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_generation_provider(
+open func updateGenerationProvider(name: String, provider: GenerationProviderConfigFfi)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_generation_provider(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(name),
         FfiConverterTypeGenerationProviderConfigFFI_lower(provider),$0
@@ -1919,40 +1919,40 @@ open func updateGenerationProvider(name: String, provider: GenerationProviderCon
 }
 }
     
-open func updateMcpConfig(config: McpSettingsConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_mcp_config(
+open func updateMcpConfig(config: McpSettingsConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_mcp_config(
             self.uniffiCloneHandle(),
         FfiConverterTypeMcpSettingsConfig_lower(config),$0
     )
 }
 }
     
-open func updateMcpServer(config: McpServerConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_mcp_server(
+open func updateMcpServer(config: McpServerConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_mcp_server(
             self.uniffiCloneHandle(),
         FfiConverterTypeMcpServerConfig_lower(config),$0
     )
 }
 }
     
-open func updateMemoryConfig(config: MemoryConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_memory_config(
+open func updateMemoryConfig(config: MemoryConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_memory_config(
             self.uniffiCloneHandle(),
         FfiConverterTypeMemoryConfig_lower(config),$0
     )
 }
 }
     
-open func updatePolicies(policies: PoliciesConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_policies(
+open func updatePolicies(policies: PoliciesConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_policies(
             self.uniffiCloneHandle(),
         FfiConverterTypePoliciesConfig_lower(policies),$0
     )
 }
 }
     
-open func updateProvider(name: String, provider: ProviderConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_provider(
+open func updateProvider(name: String, provider: ProviderConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_provider(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(name),
         FfiConverterTypeProviderConfig_lower(provider),$0
@@ -1960,40 +1960,40 @@ open func updateProvider(name: String, provider: ProviderConfig)throws   {try ru
 }
 }
     
-open func updateRoutingRules(rules: [RoutingRuleConfig])throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_routing_rules(
+open func updateRoutingRules(rules: [RoutingRuleConfig])throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_routing_rules(
             self.uniffiCloneHandle(),
         FfiConverterSequenceTypeRoutingRuleConfig.lower(rules),$0
     )
 }
 }
     
-open func updateRuntime(runtimeId: String)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_runtime(
+open func updateRuntime(runtimeId: String)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_runtime(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(runtimeId),$0
     )
 }
 }
     
-open func updateSearchConfig(search: SearchConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_search_config(
+open func updateSearchConfig(search: SearchConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_search_config(
             self.uniffiCloneHandle(),
         FfiConverterTypeSearchConfig_lower(search),$0
     )
 }
 }
     
-open func updateShortcuts(shortcuts: ShortcutsConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_shortcuts(
+open func updateShortcuts(shortcuts: ShortcutsConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_shortcuts(
             self.uniffiCloneHandle(),
         FfiConverterTypeShortcutsConfig_lower(shortcuts),$0
     )
 }
 }
     
-open func updateTriggerConfig(trigger: TriggerConfig)throws   {try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_update_trigger_config(
+open func updateTriggerConfig(trigger: TriggerConfig)throws   {try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_update_trigger_config(
             self.uniffiCloneHandle(),
         FfiConverterTypeTriggerConfig_lower(trigger),$0
     )
@@ -2001,8 +2001,8 @@ open func updateTriggerConfig(trigger: TriggerConfig)throws   {try rustCallWithE
 }
     
 open func validateRegex(pattern: String)throws  -> Bool  {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
-    uniffi_alephcore_fn_method_aethercore_validate_regex(
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
+    uniffi_alephcore_fn_method_alephcore_validate_regex(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(pattern),$0
     )
@@ -2017,24 +2017,24 @@ open func validateRegex(pattern: String)throws  -> Bool  {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeAetherCore: FfiConverter {
+public struct FfiConverterTypeAlephCore: FfiConverter {
     typealias FfiType = UInt64
-    typealias SwiftType = AetherCore
+    typealias SwiftType = AlephCore
 
-    public static func lift(_ handle: UInt64) throws -> AetherCore {
-        return AetherCore(unsafeFromHandle: handle)
+    public static func lift(_ handle: UInt64) throws -> AlephCore {
+        return AlephCore(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: AetherCore) -> UInt64 {
+    public static func lower(_ value: AlephCore) -> UInt64 {
         return value.uniffiCloneHandle()
     }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherCore {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AlephCore {
         let handle: UInt64 = try readInt(&buf)
         return try lift(handle)
     }
 
-    public static func write(_ value: AetherCore, into buf: inout [UInt8]) {
+    public static func write(_ value: AlephCore, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
@@ -2043,15 +2043,15 @@ public struct FfiConverterTypeAetherCore: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAetherCore_lift(_ handle: UInt64) throws -> AetherCore {
-    return try FfiConverterTypeAetherCore.lift(handle)
+public func FfiConverterTypeAlephCore_lift(_ handle: UInt64) throws -> AlephCore {
+    return try FfiConverterTypeAlephCore.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UInt64 {
-    return FfiConverterTypeAetherCore.lower(value)
+public func FfiConverterTypeAlephCore_lower(_ value: AlephCore) -> UInt64 {
+    return FfiConverterTypeAlephCore.lower(value)
 }
 
 
@@ -8804,7 +8804,7 @@ public func FfiConverterTypeAlephException_lower(_ value: AlephException) -> Rus
 }
 
 
-public enum AetherFfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public enum AlephFfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -8834,10 +8834,10 @@ public enum AetherFfiError: Swift.Error, Equatable, Hashable, Foundation.Localiz
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeAetherFfiError: FfiConverterRustBuffer {
-    typealias SwiftType = AetherFfiError
+public struct FfiConverterTypeAlephFfiError: FfiConverterRustBuffer {
+    typealias SwiftType = AlephFfiError
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherFfiError {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AlephFfiError {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
@@ -8869,7 +8869,7 @@ public struct FfiConverterTypeAetherFfiError: FfiConverterRustBuffer {
         }
     }
 
-    public static func write(_ value: AetherFfiError, into buf: inout [UInt8]) {
+    public static func write(_ value: AlephFfiError, into buf: inout [UInt8]) {
         switch value {
 
         
@@ -8895,15 +8895,15 @@ public struct FfiConverterTypeAetherFfiError: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAetherFfiError_lift(_ buf: RustBuffer) throws -> AetherFfiError {
-    return try FfiConverterTypeAetherFfiError.lift(buf)
+public func FfiConverterTypeAlephFfiError_lift(_ buf: RustBuffer) throws -> AlephFfiError {
+    return try FfiConverterTypeAlephFfiError.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAetherFfiError_lower(_ value: AetherFfiError) -> RustBuffer {
-    return FfiConverterTypeAetherFfiError.lower(value)
+public func FfiConverterTypeAlephFfiError_lower(_ value: AlephFfiError) -> RustBuffer {
+    return FfiConverterTypeAlephFfiError.lower(value)
 }
 
 // Note that we don't yet support `indirect` for enums.
@@ -12530,7 +12530,7 @@ fileprivate struct UniffiCallbackInterfaceAlephEventHandler {
 }
 
 private func uniffiCallbackInitAlephEventHandler() {
-    uniffi_alephcore_fn_init_callback_vtable_aethereventhandler(UniffiCallbackInterfaceAlephEventHandler.vtable)
+    uniffi_alephcore_fn_init_callback_vtable_alepheventhandler(UniffiCallbackInterfaceAlephEventHandler.vtable)
 }
 
 // FfiConverter protocol for callback interfaces
@@ -14823,8 +14823,8 @@ public func getSkillsDirString()throws  -> String  {
     )
 })
 }
-public func initCore(configPath: String, handler: AlephEventHandler)throws  -> AetherCore  {
-    return try  FfiConverterTypeAetherCore_lift(try rustCallWithError(FfiConverterTypeAetherFfiError_lift) {
+public func initCore(configPath: String, handler: AlephEventHandler)throws  -> AlephCore  {
+    return try  FfiConverterTypeAlephCore_lift(try rustCallWithError(FfiConverterTypeAlephFfiError_lift) {
     uniffi_alephcore_fn_func_init_core(
         FfiConverterString.lower(configPath),
         FfiConverterCallbackInterfaceAlephEventHandler_lower(handler),$0
@@ -15060,7 +15060,7 @@ public func checkEmbeddingModelExists() -> Bool  {
  * Check if first-time initialization is needed
  *
  * Returns true if any of the following conditions are met:
- * - Config directory (~/.aether) doesn't exist
+ * - Config directory (~/.aleph) doesn't exist
  * - config.toml doesn't exist
  * - runtimes/manifest.json doesn't exist
  *
@@ -15236,454 +15236,454 @@ private let initializationResult: InitializationResult = {
     if (uniffi_alephcore_checksum_func_unsubscribe_events() != 22015) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_add_mcp_server() != 2224) {
+    if (uniffi_alephcore_checksum_method_alephcore_add_mcp_server() != 2224) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_cancel() != 18531) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_cancel() != 18531) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_delete_model_profile() != 3007) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_delete_model_profile() != 3007) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_delete_routing_rule() != 25136) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_delete_routing_rule() != 25136) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_execute() != 8143) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_execute() != 8143) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_budget_limit() != 34773) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_budget_limit() != 34773) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_budget_status() != 58797) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_budget_status() != 58797) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_budget_status_for_scope() != 30601) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_budget_status_for_scope() != 30601) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_code_exec_config() != 3974) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_code_exec_config() != 3974) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_file_ops_config() != 1621) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_file_ops_config() != 1621) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_health_statistics() != 21617) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_health_statistics() != 21617) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_model_health() != 26594) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_model_health() != 26594) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_model_health_summaries() != 41426) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_model_health_summaries() != 41426) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_model_profiles() != 1427) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_model_profiles() != 1427) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_routing_rules() != 56708) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_routing_rules() != 56708) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_get_state() != 14858) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_get_state() != 14858) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_is_cancelled() != 42067) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_is_cancelled() != 42067) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_is_paused() != 29768) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_is_paused() != 29768) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_pause() != 15772) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_pause() != 15772) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_plan() != 4762) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_plan() != 4762) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_resume() != 28012) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_resume() != 28012) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_subscribe() != 36720) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_subscribe() != 36720) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_update_code_exec_config() != 32458) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_update_code_exec_config() != 32458) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_update_cost_strategy() != 51041) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_update_cost_strategy() != 51041) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_update_default_model() != 58053) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_update_default_model() != 58053) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_update_file_ops_config() != 20190) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_update_file_ops_config() != 20190) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_update_model_profile() != 61244) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_update_model_profile() != 61244) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_agent_update_routing_rule() != 37159) {
+    if (uniffi_alephcore_checksum_method_alephcore_agent_update_routing_rule() != 37159) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_cancel() != 20911) {
+    if (uniffi_alephcore_checksum_method_alephcore_cancel() != 20911) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_cancel_generation() != 49690) {
+    if (uniffi_alephcore_checksum_method_alephcore_cancel_generation() != 49690) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_cancel_session() != 6554) {
+    if (uniffi_alephcore_checksum_method_alephcore_cancel_session() != 6554) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_check_generation_progress() != 6370) {
+    if (uniffi_alephcore_checksum_method_alephcore_check_generation_progress() != 6370) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_check_runtime_updates() != 64276) {
+    if (uniffi_alephcore_checksum_method_alephcore_check_runtime_updates() != 64276) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_clear_facts() != 27645) {
+    if (uniffi_alephcore_checksum_method_alephcore_clear_facts() != 27645) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_clear_memories() != 34465) {
+    if (uniffi_alephcore_checksum_method_alephcore_clear_memories() != 34465) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_clear_memory() != 40490) {
+    if (uniffi_alephcore_checksum_method_alephcore_clear_memory() != 40490) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_confirm_task_plan() != 10053) {
+    if (uniffi_alephcore_checksum_method_alephcore_confirm_task_plan() != 10053) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_delete_generation_provider() != 12851) {
+    if (uniffi_alephcore_checksum_method_alephcore_delete_generation_provider() != 12851) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_delete_mcp_server() != 35149) {
+    if (uniffi_alephcore_checksum_method_alephcore_delete_mcp_server() != 35149) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_delete_memories_by_topic_id() != 40221) {
+    if (uniffi_alephcore_checksum_method_alephcore_delete_memories_by_topic_id() != 40221) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_delete_memory() != 59377) {
+    if (uniffi_alephcore_checksum_method_alephcore_delete_memory() != 59377) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_delete_provider() != 43572) {
+    if (uniffi_alephcore_checksum_method_alephcore_delete_provider() != 43572) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_delete_skill() != 48558) {
+    if (uniffi_alephcore_checksum_method_alephcore_delete_skill() != 48558) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_disable_plugin() != 34216) {
+    if (uniffi_alephcore_checksum_method_alephcore_disable_plugin() != 34216) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_edit_image() != 8842) {
+    if (uniffi_alephcore_checksum_method_alephcore_edit_image() != 8842) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_enable_plugin() != 29219) {
+    if (uniffi_alephcore_checksum_method_alephcore_enable_plugin() != 29219) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_execute_plugin_skill() != 63416) {
+    if (uniffi_alephcore_checksum_method_alephcore_execute_plugin_skill() != 63416) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_export_mcp_config_json() != 21505) {
+    if (uniffi_alephcore_checksum_method_alephcore_export_mcp_config_json() != 21505) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_extract_text() != 48555) {
+    if (uniffi_alephcore_checksum_method_alephcore_extract_text() != 48555) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_generate() != 48057) {
+    if (uniffi_alephcore_checksum_method_alephcore_generate() != 48057) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_generate_audio() != 23467) {
+    if (uniffi_alephcore_checksum_method_alephcore_generate_audio() != 23467) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_generate_image() != 62378) {
+    if (uniffi_alephcore_checksum_method_alephcore_generate_image() != 62378) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_generate_speech() != 9974) {
+    if (uniffi_alephcore_checksum_method_alephcore_generate_speech() != 9974) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_generate_topic_title() != 32707) {
+    if (uniffi_alephcore_checksum_method_alephcore_generate_topic_title() != 32707) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_generate_video() != 62325) {
+    if (uniffi_alephcore_checksum_method_alephcore_generate_video() != 62325) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_compression_stats() != 544) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_compression_stats() != 544) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_current_session_id() != 4039) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_current_session_id() != 4039) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_default_provider() != 23427) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_default_provider() != 23427) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_enabled_providers() != 62114) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_enabled_providers() != 62114) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_generation_provider_config() != 46599) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_generation_provider_config() != 46599) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_log_directory() != 3872) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_log_directory() != 3872) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_log_level() != 29584) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_log_level() != 29584) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_mcp_config() != 42937) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_mcp_config() != 42937) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_mcp_server() != 55115) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_mcp_server() != 55115) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_mcp_server_logs() != 36956) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_mcp_server_logs() != 36956) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_mcp_server_status() != 57934) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_mcp_server_status() != 57934) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_memory_app_list() != 8730) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_memory_app_list() != 8730) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_memory_config() != 17371) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_memory_config() != 17371) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_memory_stats() != 10292) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_memory_stats() != 10292) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_node_path() != 60830) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_node_path() != 60830) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_npm_path() != 55245) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_npm_path() != 55245) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_plugin_skill_instructions() != 21241) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_plugin_skill_instructions() != 21241) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_plugins_dir() != 37463) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_plugins_dir() != 37463) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_providers_for_type() != 59319) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_providers_for_type() != 59319) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_python_path() != 34458) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_python_path() != 34458) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_root_commands_from_registry() != 62565) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_root_commands_from_registry() != 62565) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_skills_dir() != 22359) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_skills_dir() != 22359) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_get_ytdlp_path() != 551) {
+    if (uniffi_alephcore_checksum_method_alephcore_get_ytdlp_path() != 551) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_import_mcp_config_json() != 12845) {
+    if (uniffi_alephcore_checksum_method_alephcore_import_mcp_config_json() != 12845) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_install_plugin_from_git() != 4557) {
+    if (uniffi_alephcore_checksum_method_alephcore_install_plugin_from_git() != 4557) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_install_plugins_from_zip() != 42073) {
+    if (uniffi_alephcore_checksum_method_alephcore_install_plugins_from_zip() != 42073) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_install_runtime() != 4896) {
+    if (uniffi_alephcore_checksum_method_alephcore_install_runtime() != 4896) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_install_skill() != 7568) {
+    if (uniffi_alephcore_checksum_method_alephcore_install_skill() != 7568) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_install_skills_from_zip() != 171) {
+    if (uniffi_alephcore_checksum_method_alephcore_install_skills_from_zip() != 171) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_is_cancelled() != 21470) {
+    if (uniffi_alephcore_checksum_method_alephcore_is_cancelled() != 21470) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_is_runtime_installed() != 57714) {
+    if (uniffi_alephcore_checksum_method_alephcore_is_runtime_installed() != 57714) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_list_builtin_tools() != 57766) {
+    if (uniffi_alephcore_checksum_method_alephcore_list_builtin_tools() != 57766) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_list_generation_providers() != 26015) {
+    if (uniffi_alephcore_checksum_method_alephcore_list_generation_providers() != 26015) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_list_mcp_servers() != 6594) {
+    if (uniffi_alephcore_checksum_method_alephcore_list_mcp_servers() != 6594) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_list_plugin_skills() != 3407) {
+    if (uniffi_alephcore_checksum_method_alephcore_list_plugin_skills() != 3407) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_list_plugins() != 52725) {
+    if (uniffi_alephcore_checksum_method_alephcore_list_plugins() != 52725) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_list_recent_sessions() != 36474) {
+    if (uniffi_alephcore_checksum_method_alephcore_list_recent_sessions() != 36474) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_list_runtimes() != 13336) {
+    if (uniffi_alephcore_checksum_method_alephcore_list_runtimes() != 13336) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_list_skills() != 65426) {
+    if (uniffi_alephcore_checksum_method_alephcore_list_skills() != 65426) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_list_tools() != 53045) {
+    if (uniffi_alephcore_checksum_method_alephcore_list_tools() != 53045) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_load_config() != 8086) {
+    if (uniffi_alephcore_checksum_method_alephcore_load_config() != 8086) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_load_plugin_from_path() != 3495) {
+    if (uniffi_alephcore_checksum_method_alephcore_load_plugin_from_path() != 3495) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_process() != 52834) {
+    if (uniffi_alephcore_checksum_method_alephcore_process() != 52834) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_provider_supports_image_editing() != 43351) {
+    if (uniffi_alephcore_checksum_method_alephcore_provider_supports_image_editing() != 43351) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_refresh_plugins() != 52993) {
+    if (uniffi_alephcore_checksum_method_alephcore_refresh_plugins() != 52993) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_refresh_skills() != 65047) {
+    if (uniffi_alephcore_checksum_method_alephcore_refresh_skills() != 65047) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_reload_config() != 57029) {
+    if (uniffi_alephcore_checksum_method_alephcore_reload_config() != 57029) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_respond_to_user_input() != 36364) {
+    if (uniffi_alephcore_checksum_method_alephcore_respond_to_user_input() != 36364) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_resume_session() != 3568) {
+    if (uniffi_alephcore_checksum_method_alephcore_resume_session() != 3568) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_search_memories() != 60803) {
+    if (uniffi_alephcore_checksum_method_alephcore_search_memories() != 60803) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_search_memory() != 25662) {
+    if (uniffi_alephcore_checksum_method_alephcore_search_memory() != 25662) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_set_default_provider() != 54604) {
+    if (uniffi_alephcore_checksum_method_alephcore_set_default_provider() != 54604) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_set_log_level() != 50522) {
+    if (uniffi_alephcore_checksum_method_alephcore_set_log_level() != 50522) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_test_generation_provider_connection() != 5400) {
+    if (uniffi_alephcore_checksum_method_alephcore_test_generation_provider_connection() != 5400) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_test_provider_connection_with_config() != 33012) {
+    if (uniffi_alephcore_checksum_method_alephcore_test_provider_connection_with_config() != 33012) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_test_search_provider_with_config() != 61165) {
+    if (uniffi_alephcore_checksum_method_alephcore_test_search_provider_with_config() != 61165) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_trigger_compression() != 58553) {
+    if (uniffi_alephcore_checksum_method_alephcore_trigger_compression() != 58553) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_uninstall_plugin() != 39679) {
+    if (uniffi_alephcore_checksum_method_alephcore_uninstall_plugin() != 39679) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_behavior() != 40863) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_behavior() != 40863) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_general_config() != 39351) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_general_config() != 39351) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_generation_provider() != 64577) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_generation_provider() != 64577) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_mcp_config() != 16658) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_mcp_config() != 16658) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_mcp_server() != 18192) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_mcp_server() != 18192) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_memory_config() != 6008) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_memory_config() != 6008) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_policies() != 64617) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_policies() != 64617) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_provider() != 7861) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_provider() != 7861) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_routing_rules() != 14834) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_routing_rules() != 14834) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_runtime() != 36307) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_runtime() != 36307) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_search_config() != 29101) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_search_config() != 29101) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_shortcuts() != 28167) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_shortcuts() != 28167) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_update_trigger_config() != 40092) {
+    if (uniffi_alephcore_checksum_method_alephcore_update_trigger_config() != 40092) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethercore_validate_regex() != 52126) {
+    if (uniffi_alephcore_checksum_method_alephcore_validate_regex() != 52126) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_thinking() != 64952) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_thinking() != 64952) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_tool_start() != 40858) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_tool_start() != 40858) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_tool_result() != 53145) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_tool_result() != 53145) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_stream_chunk() != 31857) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_stream_chunk() != 31857) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_complete() != 27104) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_complete() != 27104) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_error() != 17013) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_error() != 17013) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_memory_stored() != 37386) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_memory_stored() != 37386) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_agent_mode_detected() != 34135) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_agent_mode_detected() != 34135) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_tools_changed() != 4643) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_tools_changed() != 4643) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_mcp_startup_complete() != 2538) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_mcp_startup_complete() != 2538) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_runtime_updates_available() != 24283) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_runtime_updates_available() != 24283) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_session_started() != 21788) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_session_started() != 21788) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_tool_call_started() != 13892) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_tool_call_started() != 13892) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_tool_call_completed() != 41481) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_tool_call_completed() != 41481) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_tool_call_failed() != 45080) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_tool_call_failed() != 45080) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_loop_progress() != 43381) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_loop_progress() != 43381) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_plan_created() != 39748) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_plan_created() != 39748) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_session_completed() != 34939) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_session_completed() != 34939) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_subagent_started() != 26618) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_subagent_started() != 26618) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_subagent_completed() != 16015) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_subagent_completed() != 16015) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_plan_confirmation_required() != 41332) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_plan_confirmation_required() != 41332) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_user_input_request() != 38504) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_user_input_request() != 38504) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_alephcore_checksum_method_aethereventhandler_on_part_update() != 474) {
+    if (uniffi_alephcore_checksum_method_alepheventhandler_on_part_update() != 474) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_alephcore_checksum_method_agentprogresshandler_on_progress_event() != 19787) {

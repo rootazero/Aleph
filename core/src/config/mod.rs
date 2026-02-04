@@ -1,6 +1,6 @@
-//! Configuration module for Aether
+//! Configuration module for Aleph
 //!
-//! This module provides the configuration system for Aether, including:
+//! This module provides the configuration system for Aleph, including:
 //! - `Config`: The main configuration struct with load/save/validate methods
 //! - `FullConfig`: Complete configuration for serialization
 //! - Type definitions in the `types` submodule

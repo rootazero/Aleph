@@ -23,7 +23,7 @@ pub struct WebFetchPolicy {
     pub min_content_length: u64,
 
     /// User-Agent header value for HTTP requests
-    /// Default: "Aether/1.0"
+    /// Default: "Aleph/1.0"
     #[serde(default = "default_user_agent")]
     pub user_agent: String,
 
@@ -71,7 +71,7 @@ fn default_min_content_length() -> u64 {
 }
 
 fn default_user_agent() -> String {
-    "Aether/1.0".to_string()
+    "Aleph/1.0".to_string()
 }
 
 fn default_timeout_seconds() -> u64 {
@@ -119,7 +119,7 @@ mod tests {
         let policy = WebFetchPolicy::default();
         assert_eq!(policy.max_content_length, 10000);
         assert_eq!(policy.min_content_length, 100);
-        assert_eq!(policy.user_agent, "Aether/1.0");
+        assert_eq!(policy.user_agent, "Aleph/1.0");
         assert_eq!(policy.timeout_seconds, 30);
         assert!(policy.follow_redirects);
     }

@@ -1,6 +1,6 @@
 //
 //  HaloToastView.swift
-//  Aether
+//  Aleph
 //
 //  Toast notification view for Halo overlay.
 //  Replaces system NSAlert with a native, non-intrusive toast.
@@ -169,7 +169,7 @@ struct HaloToastView: View {
         HaloToastView(
             type: .error,
             title: "Initialization Failed",
-            message: "Failed to initialize Aether core.",
+            message: "Failed to initialize Aleph core.",
             actionTitle: nil,
             onAction: nil,
             onDismiss: { print("Dismissed") }

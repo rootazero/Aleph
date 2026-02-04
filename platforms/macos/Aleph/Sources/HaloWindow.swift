@@ -1,6 +1,6 @@
 //
 //  HaloWindow.swift
-//  Aether
+//  Aleph
 //
 //  Simplified Halo overlay window without theme support.
 //  Uses unified visual style with 16x16 purple spinner.

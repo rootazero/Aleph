@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 #[derive(Debug, Parser)]
 #[command(name = "daemon")]
-#[command(about = "Manage Aether daemon service")]
+#[command(about = "Manage Aleph daemon service")]
 pub struct DaemonCli {
     #[command(subcommand)]
     pub command: DaemonCommand,
@@ -49,7 +49,7 @@ impl DaemonCli {
     }
 
     async fn install(&self) -> Result<()> {
-        info!("Installing Aether daemon service...");
+        info!("Installing Aleph daemon service...");
 
         let service = create_service_manager()?;
         let config = DaemonConfig::default();
@@ -63,7 +63,7 @@ impl DaemonCli {
     }
 
     async fn uninstall(&self) -> Result<()> {
-        info!("Uninstalling Aether daemon service...");
+        info!("Uninstalling Aleph daemon service...");
 
         let service = create_service_manager()?;
         service.uninstall().await?;
@@ -74,7 +74,7 @@ impl DaemonCli {
     }
 
     async fn start(&self) -> Result<()> {
-        info!("Starting Aether daemon service...");
+        info!("Starting Aleph daemon service...");
 
         let service = create_service_manager()?;
         service.start().await?;
@@ -85,7 +85,7 @@ impl DaemonCli {
     }
 
     async fn stop(&self) -> Result<()> {
-        info!("Stopping Aether daemon service...");
+        info!("Stopping Aleph daemon service...");
 
         let service = create_service_manager()?;
         service.stop().await?;
@@ -101,7 +101,7 @@ impl DaemonCli {
         let service_status = service.service_status().await?;
         let daemon_status = service.status().await?;
 
-        info!("Aether Daemon Status:");
+        info!("Aleph Daemon Status:");
         info!("  Service: {:?}", service_status);
         info!("  Daemon:  {:?}", daemon_status);
 
@@ -113,7 +113,7 @@ impl DaemonCli {
         use crate::daemon::dispatcher::{Dispatcher, DispatcherConfig};
         use crate::daemon::worldmodel::{WorldModel, WorldModelConfig};
 
-        info!("Starting Aether daemon with Perception Layer, WorldModel, and Dispatcher...");
+        info!("Starting Aleph daemon with Perception Layer, WorldModel, and Dispatcher...");
 
         // 1. Load configurations
         let config = DaemonConfig::default();

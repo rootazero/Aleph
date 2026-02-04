@@ -11,7 +11,7 @@
 ### Phase 5: 底部右侧按钮布局 ✅
 
 #### 5.1 重构按钮定位
-**文件**: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+**文件**: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 
 **关键改动**:
 1. **重构 body 结构**为两层架构:
@@ -116,8 +116,8 @@
 
 #### 7.2 长文本截断
 **文件**:
-- `Aether/Sources/Components/Molecules/ProviderCard.swift`
-- `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+- `Aleph/Sources/Components/Molecules/ProviderCard.swift`
+- `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 
 **改动**:
 1. **ProviderCard.swift**:
@@ -172,13 +172,13 @@
 ## 文件变更清单
 
 ### 修改的文件
-1. **Aether/Sources/Components/Organisms/ProviderEditPanel.swift**
+1. **Aleph/Sources/Components/Organisms/ProviderEditPanel.swift**
    - 重构 `body` 为 VStack(ScrollView + Footer) 结构
    - 拆分 `editModeContent` 为 `editModeFormContent` + `editModeFooter`
    - 删除 `editModeActionButtons` 方法
    - 在 view mode 的 provider name 添加文本截断
 
-2. **Aether/Sources/Components/Molecules/ProviderCard.swift**
+2. **Aleph/Sources/Components/Molecules/ProviderCard.swift**
    - 为 provider name 添加 `.lineLimit(1)` + `.truncationMode(.tail)`
    - 为 model name 添加 `.lineLimit(2)` + `.truncationMode(.tail)`
 
@@ -202,20 +202,20 @@
 ### 语法检查 ✅
 ```bash
 $HOME/.python3/bin/python verify_swift_syntax.py \
-  Aether/Sources/Components/Organisms/ProviderEditPanel.swift \
-  Aether/Sources/Components/Molecules/ProviderCard.swift
+  Aleph/Sources/Components/Organisms/ProviderEditPanel.swift \
+  Aleph/Sources/Components/Molecules/ProviderCard.swift
 ```
 **结果**: ✓ All syntax checks passed!
 
 ### 构建验证 ✅
 ```bash
 # Rust Core
-cargo build --manifest-path Aether/core/Cargo.toml
+cargo build --manifest-path Aleph/core/Cargo.toml
 # 结果: Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.35s
 
 # Xcode Project Generation
 xcodegen generate
-# 结果: Created project at /Users/zouguojun/Workspace/Aether/Aether.xcodeproj
+# 结果: Created project at /Users/zouguojun/Workspace/Aleph/Aleph.xcodeproj
 ```
 
 ---
@@ -273,8 +273,8 @@ xcodegen generate
 ### 2. 创建 Commit
 测试通过后,创建 Git commit:
 ```bash
-git add Aether/Sources/Components/Organisms/ProviderEditPanel.swift \
-        Aether/Sources/Components/Molecules/ProviderCard.swift \
+git add Aleph/Sources/Components/Organisms/ProviderEditPanel.swift \
+        Aleph/Sources/Components/Molecules/ProviderCard.swift \
         openspec/changes/redesign-providers-ui/
 
 git commit -m "feat: Redesign Providers UI - Phase 5-7 implementation

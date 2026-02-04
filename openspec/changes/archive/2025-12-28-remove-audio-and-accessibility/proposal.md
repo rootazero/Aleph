@@ -9,14 +9,14 @@ These features increase maintenance burden and deviate from the "Ghost" aestheti
 
 ## What Changes
 - **REMOVED**: Audio feedback system
-  - Delete `Aether/Sources/Audio/AudioManager.swift`
-  - Delete `Aether/Resources/Sounds/` directory and all sound files
+  - Delete `Aleph/Sources/Audio/AudioManager.swift`
+  - Delete `Aleph/Resources/Sounds/` directory and all sound files
   - Remove `sound_enabled` configuration option from config schema
   - Remove audio-related dependencies from `project.yml`
   - Remove AVFoundation imports from relevant files
 
 - **REMOVED**: Accessibility permission manager
-  - Delete `Aether/Sources/PermissionManager.swift`
+  - Delete `Aleph/Sources/PermissionManager.swift`
   - Remove custom permission checking and prompting logic
   - Remove Accessibility-related code from `AppDelegate.swift` and other files
   - Simplify entitlements to remove unnecessary Accessibility permissions
@@ -33,9 +33,9 @@ These features increase maintenance burden and deviate from the "Ghost" aestheti
 ## Impact
 - **Affected specs**: `macos-client`, `event-handler` (indirectly)
 - **Affected code**:
-  - `Aether/Sources/AppDelegate.swift` (remove permission checks)
-  - `Aether/Sources/EventHandler.swift` (remove audio playback calls)
-  - `Aether/Sources/SettingsView.swift` (remove sound toggle if present)
+  - `Aleph/Sources/AppDelegate.swift` (remove permission checks)
+  - `Aleph/Sources/EventHandler.swift` (remove audio playback calls)
+  - `Aleph/Sources/SettingsView.swift` (remove sound toggle if present)
   - `project.yml` (remove deleted files from targets)
   - `CLAUDE.md` (remove documentation sections)
   - Configuration examples in docs

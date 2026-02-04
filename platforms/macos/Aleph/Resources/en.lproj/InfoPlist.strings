@@ -1,16 +1,16 @@
 /*
   InfoPlist.strings (English)
-  Aether
+  Aleph
 
   Localized permission descriptions for macOS system prompts.
 */
 
 /* Apple Events / Automation Permission */
-"NSAppleEventsUsageDescription" = "Aether needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration.";
+"NSAppleEventsUsageDescription" = "Aleph needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration.";
 
 /* Input Monitoring Permission */
-"NSInputMonitoringUsageDescription" = "Aether needs to monitor keyboard input to detect global hotkeys and capture selected text.";
+"NSInputMonitoringUsageDescription" = "Aleph needs to monitor keyboard input to detect global hotkeys and capture selected text.";
 
 /* App Metadata */
-"CFBundleName" = "Aether";
-"NSHumanReadableCopyright" = "Copyright © 2025 Aether. All rights reserved.";
+"CFBundleName" = "Aleph";
+"NSHumanReadableCopyright" = "Copyright © 2025 Aleph. All rights reserved.";

@@ -10,7 +10,7 @@ use crate::error::Result;
 use crate::skill_evolution::types::SolidificationSuggestion;
 
 use super::spec::{
-    AetherExtensions, AetherSkillSpec, ConfirmationMode, EvolutionMeta,
+    AlephExtensions, AlephSkillSpec, ConfirmationMode, EvolutionMeta,
     InputHint, NetworkMode, RequiresSpec, SandboxMode, SecuritySpec, SkillMetadata,
 };
 
@@ -34,7 +34,7 @@ impl Default for MarkdownSkillGeneratorConfig {
     fn default() -> Self {
         let output_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aether")
+            .join(".aleph")
             .join("skills")
             .join("generated");
 
@@ -98,8 +98,8 @@ impl MarkdownSkillGenerator {
         Ok(skill_path)
     }
 
-    /// Generate AetherSkillSpec from suggestion
-    fn generate_spec(&self, suggestion: &SolidificationSuggestion) -> AetherSkillSpec {
+    /// Generate AlephSkillSpec from suggestion
+    fn generate_spec(&self, suggestion: &SolidificationSuggestion) -> AlephSkillSpec {
         let skill_name = to_skill_name(&suggestion.suggested_name);
 
         // Extract binary requirements from instructions
@@ -115,7 +115,7 @@ impl MarkdownSkillGenerator {
         // Build metadata
         let metadata = SkillMetadata {
             requires: RequiresSpec { bins },
-            aether: Some(AetherExtensions {
+            aleph: Some(AlephExtensions {
                 security: SecuritySpec {
                     sandbox: self.config.default_sandbox.clone(),
                     confirmation: self.config.default_confirmation.clone(),
@@ -131,7 +131,7 @@ impl MarkdownSkillGenerator {
             }),
         };
 
-        AetherSkillSpec {
+        AlephSkillSpec {
             name: skill_name,
             description: suggestion.suggested_description.clone(),
             metadata,
@@ -186,7 +186,7 @@ impl MarkdownSkillGenerator {
     }
 
     /// Generate complete SKILL.md file
-    fn generate_skill_md(&self, spec: &AetherSkillSpec, content: &str) -> Result<String> {
+    fn generate_skill_md(&self, spec: &AlephSkillSpec, content: &str) -> Result<String> {
         let mut result = String::new();
 
         // Frontmatter
@@ -206,8 +206,8 @@ impl MarkdownSkillGenerator {
             }
         }
 
-        // Aether extensions
-        if let Some(aether) = &spec.metadata.aether {
+        // Aleph extensions
+        if let Some(aether) = &spec.metadata.aleph {
             result.push_str("  aether:\n");
 
             // Security

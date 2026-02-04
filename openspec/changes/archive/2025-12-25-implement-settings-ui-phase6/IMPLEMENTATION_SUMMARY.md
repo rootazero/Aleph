@@ -11,13 +11,13 @@
 
 ### 1. Rust 核心集成 ConfigWatcher
 
-**文件:** `Aether/core/src/core.rs`
+**文件:** `Aleph/core/src/core.rs`
 
 **修改内容:**
 - 添加 `ConfigWatcher` 导入
-- 在 `AetherCore` 结构体中添加 `config_watcher: Option<ConfigWatcher>` 字段
+- 在 `AlephCore` 结构体中添加 `config_watcher: Option<ConfigWatcher>` 字段
 - 在构造函数中初始化 ConfigWatcher:
-  - 监听 `~/.aether/config.toml` 文件
+  - 监听 `~/.aleph/config.toml` 文件
   - 使用 500ms 防抖延迟
   - 配置变更时更新内部 config 并调用 `on_config_changed()` 回调
 
@@ -56,11 +56,11 @@ let config_watcher = {
 
 ### 2. Swift 事件处理器实现回调
 
-**文件:** `Aether/Sources/EventHandler.swift`
+**文件:** `Aleph/Sources/EventHandler.swift`
 
 **修改内容:**
 - 实现 `onConfigChanged()` 协议方法
-- 发送 `NSNotification.Name("AetherConfigDidChange")` 通知
+- 发送 `NSNotification.Name("AlephConfigDidChange")` 通知
 - 添加 `showConfigReloadedToast()` 方法显示用户友好的通知
 
 **关键代码:**
@@ -72,7 +72,7 @@ func onConfigChanged() {
     DispatchQueue.main.async {
         // Post notification to notify all observers
         NotificationCenter.default.post(
-            name: NSNotification.Name("AetherConfigDidChange"),
+            name: NSNotification.Name("AlephConfigDidChange"),
             object: nil
         )
 
@@ -83,7 +83,7 @@ func onConfigChanged() {
 
 private func showConfigReloadedToast() {
     let notification = NSUserNotification()
-    notification.title = "Aether"
+    notification.title = "Aleph"
     notification.informativeText = "Settings updated from file"
     notification.soundName = nil // Silent notification
 
@@ -93,7 +93,7 @@ private func showConfigReloadedToast() {
 
 ### 3. Settings UI 观察配置变更
 
-**文件:** `Aether/Sources/SettingsView.swift`
+**文件:** `Aleph/Sources/SettingsView.swift`
 
 **修改内容:**
 - 添加 `@State private var configReloadTrigger: Int = 0` 用于强制 UI 刷新
@@ -125,7 +125,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AetherConfigDidChange"))) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AlephConfigDidChange"))) { _ in
             handleConfigChange()
         }
     }
@@ -151,7 +151,7 @@ notify crate (Rust)
     ↓
 ConfigWatcher (500ms 防抖)
     ↓
-AetherCore 回调
+AlephCore 回调
     ↓
 Config::load_from_file()
     ↓
@@ -161,7 +161,7 @@ event_handler.on_config_changed() (UniFFI 回调)
     ↓
 EventHandler.onConfigChanged() (Swift)
     ↓
-NotificationCenter.post("AetherConfigDidChange")
+NotificationCenter.post("AlephConfigDidChange")
     ↓
 SettingsView.onReceive()
     ↓
@@ -230,7 +230,7 @@ UI 刷新
 
 ### Rust 构建
 ```bash
-cd Aether/core
+cd Aleph/core
 cargo build
 ```
 
@@ -238,7 +238,7 @@ cargo build
 
 ### Swift 项目生成
 ```bash
-cd Aether
+cd Aleph
 xcodegen generate
 ```
 
@@ -247,9 +247,9 @@ xcodegen generate
 ## 文件清单
 
 ### 修改的文件
-1. `Aether/core/src/core.rs` - 添加 ConfigWatcher 集成
-2. `Aether/Sources/EventHandler.swift` - 实现 onConfigChanged 回调
-3. `Aether/Sources/SettingsView.swift` - 添加配置变更观察
+1. `Aleph/core/src/core.rs` - 添加 ConfigWatcher 集成
+2. `Aleph/Sources/EventHandler.swift` - 实现 onConfigChanged 回调
+3. `Aleph/Sources/SettingsView.swift` - 添加配置变更观察
 
 ### 文档文件
 1. `openspec/changes/implement-settings-ui-phase6/tasks.md` - 更新任务状态
@@ -257,8 +257,8 @@ xcodegen generate
 3. `openspec/changes/implement-settings-ui-phase6/IMPLEMENTATION_SUMMARY.md` - 本文档
 
 ### 依赖文件 (已存在)
-1. `Aether/core/src/config/watcher.rs` - ConfigWatcher 实现
-2. `Aether/core/src/aether.udl` - UniFFI 接口定义
+1. `Aleph/core/src/config/watcher.rs` - ConfigWatcher 实现
+2. `Aleph/core/src/aleph.udl` - UniFFI 接口定义
 
 ## 下一步
 
@@ -294,7 +294,7 @@ Section 6 已完成，建议下一步工作:
 ## 成功标准
 
 ✅ 所有 Section 6 任务已完成:
-- [x] 6.1 添加 onConfigChanged 回调到 AetherEventHandler
+- [x] 6.1 添加 onConfigChanged 回调到 AlephEventHandler
 - [x] 6.2 在 EventHandler.swift 实现回调处理器
 - [x] 6.3 更新 SettingsView 观察配置变更
 

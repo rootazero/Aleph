@@ -1,6 +1,6 @@
 //
 //  ProcessingIndicatorWindow.swift
-//  Aether
+//  Aleph
 //
 //  Minimal processing indicator - 16x16 rotating arc.
 //  Replaces the complex HaloWindow system with a simple spinner.

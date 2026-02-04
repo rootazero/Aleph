@@ -127,8 +127,8 @@ Consider implementing:
 
 ## 🔗 Related Files
 
-- Implementation: `Aether/Sources/BehaviorSettingsView.swift`
-- Component: `Aether/Sources/Components/Molecules/UnifiedSaveBar.swift`
+- Implementation: `Aleph/Sources/BehaviorSettingsView.swift`
+- Component: `Aleph/Sources/Components/Molecules/UnifiedSaveBar.swift`
 - Documentation: `docs/UNIFIED_SAVE_BAR_PATTERN.md`
 - Test Guide: `test_save_bar.md`
 

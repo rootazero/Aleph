@@ -122,10 +122,10 @@ git commit -m "fix(core): suppress warnings for intentionally unused code"
 ## Task 3: 修复 Swift SwiftLint 格式警告（4个）
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/MultiTurn/Views/InputAreaView.swift:118` (移除尾随空格)
-- Modify: `platforms/macos/Aether/Sources/MultiTurn/Views/InputAreaView.swift:144` (修复缩进)
-- Modify: `platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationViewModel.swift:923` (移除未使用变量)
-- Modify: `platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationViewModel.swift:1041` (添加尾随换行)
+- Modify: `platforms/macos/Aleph/Sources/MultiTurn/Views/InputAreaView.swift:118` (移除尾随空格)
+- Modify: `platforms/macos/Aleph/Sources/MultiTurn/Views/InputAreaView.swift:144` (修复缩进)
+- Modify: `platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationViewModel.swift:923` (移除未使用变量)
+- Modify: `platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationViewModel.swift:1041` (添加尾随换行)
 
 **Step 1: 修复 InputAreaView.swift 第 118 行尾随空格**
 
@@ -138,7 +138,7 @@ git commit -m "fix(core): suppress warnings for intentionally unused code"
 **Step 3: 读取 UnifiedConversationViewModel.swift 第 923 行上下文**
 
 ```bash
-sed -n '920,930p' platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationViewModel.swift
+sed -n '920,930p' platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationViewModel.swift
 ```
 
 **Step 4: 修复未使用的 eventType 变量**
@@ -160,7 +160,7 @@ Expected: 不再有 SwiftLint 警告
 **Step 7: 提交更改**
 
 ```bash
-git add platforms/macos/Aether/Sources/MultiTurn/Views/InputAreaView.swift platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationViewModel.swift
+git add platforms/macos/Aleph/Sources/MultiTurn/Views/InputAreaView.swift platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationViewModel.swift
 git commit -m "fix(macos): fix SwiftLint violations in MultiTurn module"
 ```
 
@@ -169,12 +169,12 @@ git commit -m "fix(macos): fix SwiftLint violations in MultiTurn module"
 ## Task 4: 处理 UniFFI 生成代码的 Sendable 警告（12个）
 
 **Files:**
-- Review: `platforms/macos/Aether/Sources/Generated/aether.swift`
+- Review: `platforms/macos/Aleph/Sources/Generated/aleph.swift`
 
 **Step 1: 分析警告来源**
 
 ```bash
-head -n 20 platforms/macos/Aether/Sources/Generated/aether.swift
+head -n 20 platforms/macos/Aleph/Sources/Generated/aleph.swift
 ```
 
 Expected: 确认这是 UniFFI 自动生成的代码
@@ -208,7 +208,7 @@ Expected: 0（如果添加了 swiftlint:disable）
 **Step 6: 提交更改（如果修改了配置）**
 
 ```bash
-git add platforms/macos/Aether/Sources/Generated/aether.swift
+git add platforms/macos/Aleph/Sources/Generated/aleph.swift
 git commit -m "fix(macos): suppress Sendable warnings in UniFFI generated code"
 ```
 

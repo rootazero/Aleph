@@ -1,6 +1,6 @@
 //
 //  HaloStreamingView.swift
-//  Aether
+//  Aleph
 //
 //  UI component for streaming state in Halo V2.
 //  Handles thinking, responding, and tool execution phases.

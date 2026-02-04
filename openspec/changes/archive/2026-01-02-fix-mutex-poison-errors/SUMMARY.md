@@ -1,4 +1,4 @@
-# Aether Bug 修复提案 - Mutex Poison Errors
+# Aleph Bug 修复提案 - Mutex Poison Errors
 
 **日期**: 2025-12-31
 **状态**: 准备实施
@@ -29,7 +29,7 @@
 
 ### 已发现的问题代码
 
-在 `Aether/core/src/core.rs` 中有 **11 处不安全的 Mutex 调用**：
+在 `Aleph/core/src/core.rs` 中有 **11 处不安全的 Mutex 调用**：
 
 ```rust
 // ❌ 不安全 - 会导致 panic
@@ -105,7 +105,7 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 
 4. **重新构建 Rust Core**
    ```bash
-   cd Aether/core
+   cd Aleph/core
    cargo clean
    cargo build --release
    cargo run --bin uniffi-bindgen -- generate --library target/release/libaethecore.dylib --language swift --out-dir ../Sources/Generated/
@@ -114,7 +114,7 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 
 5. **在 Xcode 中重新构建并测试**
    ```bash
-   open Aether.xcodeproj
+   open Aleph.xcodeproj
    # Cmd+Shift+K (Clean)
    # Cmd+B (Build)
    # Cmd+R (Run)
@@ -158,7 +158,7 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 7. ✅ 验证：AI 正常处理和响应
 
 ### 场景 3: Settings 菜单（之前崩溃）
-1. 启动 Aether
+1. 启动 Aleph
 2. 点击菜单栏图标
 3. 点击 "Settings"
 4. ✅ 验证：设置窗口正常打开
@@ -189,14 +189,14 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 - `openspec/changes/fix-mutex-poison-errors/tasks.md` - 详细任务清单
 
 ### 需要修改的代码
-- `Aether/core/src/core.rs` - Rust Core（11 处修改）
-- `Aether/core/src/aether.udl` - UniFFI 接口（Phase 2）
-- `Aether/Sources/AppDelegate.swift` - Swift 层（Phase 2-3）
+- `Aleph/core/src/core.rs` - Rust Core（11 处修改）
+- `Aleph/core/src/aleph.udl` - UniFFI 接口（Phase 2）
+- `Aleph/Sources/AppDelegate.swift` - Swift 层（Phase 2-3）
 
 ### 参考文档
 - `docs/MUTEX_POISON_FIX.md` - 之前的部分修复记录
 - `docs/CURRENT_ISSUE_DEBUG.md` - 调试日志
-- Crash logs: `~/Library/Logs/DiagnosticReports/Aether-2025-12-31-*.ips`
+- Crash logs: `~/Library/Logs/DiagnosticReports/Aleph-2025-12-31-*.ips`
 
 ---
 

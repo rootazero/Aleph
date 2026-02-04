@@ -152,7 +152,7 @@ impl McpServerConnection {
 
     /// Perform MCP initialize handshake
     async fn initialize(&self) -> Result<()> {
-        let params = mcp_types::InitializeParams::aether_default();
+        let params = mcp_types::InitializeParams::aleph_default();
         let request = JsonRpcRequest::with_params(
             self.id_gen.next(),
             "initialize",

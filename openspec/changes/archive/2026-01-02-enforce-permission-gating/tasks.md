@@ -9,7 +9,7 @@
 - [x] 1.6 Test permission detection on macOS 13+
 
 ## 2. Permission Status Monitor
-- [x] 2.1 Create `Aether/Sources/Utils/PermissionStatusMonitor.swift`
+- [x] 2.1 Create `Aleph/Sources/Utils/PermissionStatusMonitor.swift`
 - [x] 2.2 Implement timer-based polling (1 second interval)
 - [x] 2.3 Add methods: `startMonitoring()`, `stopMonitoring()`
 - [x] 2.4 Implement callback for permission status changes
@@ -18,7 +18,7 @@
 - [x] 2.7 Test memory management (no retain cycles)
 
 ## 3. Permission Gate View Component
-- [x] 3.1 Create `Aether/Sources/Components/PermissionGateView.swift`
+- [x] 3.1 Create `Aleph/Sources/Components/PermissionGateView.swift`
 - [x] 3.2 Design two-step UI layout (Accessibility → Input Monitoring)
 - [x] 3.3 Implement step indicator (Step 1 of 2, Step 2 of 2)
 - [x] 3.4 Add visual status indicators (pending vs granted)
@@ -33,7 +33,7 @@
 - [x] 4.1 Update `applicationDidFinishLaunching` to check both permissions
 - [x] 4.2 Add logic to show PermissionGateView if ANY permission missing
 - [x] 4.3 Disable settings menu item when permission gate is active
-- [x] 4.4 Delay AetherCore initialization until permissions granted
+- [x] 4.4 Delay AlephCore initialization until permissions granted
 - [x] 4.5 Add PermissionStatusMonitor integration
 - [x] 4.6 Implement callback for permission gate dismissal
 - [x] 4.7 Initialize core features only after gate dismissal
@@ -63,8 +63,8 @@
 - [x] 7.4 Test integration with PermissionGateView
 - [x] 7.5 Verify deep linking to System Settings works correctly
 
-## 8. AetherApp Entry Point Update
-- [x] 8.1 Review if AetherApp.swift needs changes for window management
+## 8. AlephApp Entry Point Update
+- [x] 8.1 Review if AlephApp.swift needs changes for window management
 - [x] 8.2 Ensure WindowGroup or Settings scene doesn't conflict with permission gate
 - [x] 8.3 Test app launch flow with and without permissions
 - [x] 8.4 Verify no duplicate windows appear

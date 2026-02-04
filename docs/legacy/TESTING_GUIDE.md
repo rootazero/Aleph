@@ -15,7 +15,7 @@ This document provides step-by-step instructions for completing the remaining ma
    - Select Aleph target → Build Phases
    - Add "Run Script" phase before "Compile Sources"
    - Script: `${SRCROOT}/Scripts/copy_rust_libs.sh`
-   - Input Files: `${SRCROOT}/Aether/core/target/release/libalephcore.dylib`
+   - Input Files: `${SRCROOT}/Aleph/core/target/release/libalephcore.dylib`
    - Output Files: `${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libalephcore.dylib`
 
 3. **Build and Run App**:
@@ -92,11 +92,11 @@ This document provides step-by-step instructions for completing the remaining ma
 
 **Steps:**
 1. Open Console.app
-2. Filter by "Aether"
+2. Filter by "Aleph"
 3. Launch the app
 4. Check for log messages:
-   - `[Aether] AlephCore initialized`
-   - `[Aether] Hotkey listening started (⌘~)`
+   - `[Aleph] AlephCore initialized`
+   - `[Aleph] Hotkey listening started (⌘~)`
 
 **Expected Result:**
 - No error messages in console
@@ -127,7 +127,7 @@ This document provides step-by-step instructions for completing the remaining ma
 
 #### ✅ Task 7.5: Write unit tests for state transitions
 
-**Status:** Optional - Create `AetherTests/HaloStateTests.swift` if needed
+**Status:** Optional - Create `AlephTests/HaloStateTests.swift` if needed
 
 **Sample Test:**
 ```swift
@@ -314,7 +314,7 @@ class HaloStateTests: XCTestCase {
 2. Trigger Halo a few times
 3. Quit via menu bar → Quit Aleph
 4. Check Console.app for:
-   - `[Aether] Core stopped successfully`
+   - `[Aleph] Core stopped successfully`
 5. Verify no error messages or crashes
 
 **Expected Result:**

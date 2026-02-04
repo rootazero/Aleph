@@ -42,7 +42,7 @@ impl EmbeddingModel {
     ///
     /// Cross-platform support:
     /// - Unix: ~/.aleph/models/fastembed
-    /// - Windows: %USERPROFILE%\.aether\models\fastembed
+    /// - Windows: %USERPROFILE%\.aleph\models\fastembed
     pub fn get_default_model_path() -> Result<PathBuf, AlephError> {
         Ok(crate::utils::paths::get_models_dir()?.join("fastembed"))
     }
@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn test_get_default_model_path() {
         let path = EmbeddingModel::get_default_model_path().unwrap();
-        assert!(path.to_string_lossy().contains(".aether"));
+        assert!(path.to_string_lossy().contains(".aleph"));
         assert!(path.to_string_lossy().contains("models"));
         assert!(path.to_string_lossy().contains("fastembed"));
     }

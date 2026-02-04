@@ -1,8 +1,8 @@
 //
 //  main.swift
-//  Aether
+//  Aleph
 //
-//  Main entry point for Aether macOS application.
+//  Main entry point for Aleph macOS application.
 //
 //  IMPORTANT: We use traditional AppKit launch instead of SwiftUI App lifecycle
 //  to avoid a macOS 26 (Tahoe) crash. The SwiftUI Settings/WindowGroup scenes

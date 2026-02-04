@@ -142,13 +142,13 @@ Duration:  7.02s
 ## 文件清单
 
 **新增文件**:
-1. `Aether/core/src/providers/openai.rs` (437 行)
-2. `Aether/core/src/providers/claude.rs` (442 行)
-3. `Aether/core/src/providers/ollama.rs` (318 行)
+1. `Aleph/core/src/providers/openai.rs` (437 行)
+2. `Aleph/core/src/providers/claude.rs` (442 行)
+3. `Aleph/core/src/providers/ollama.rs` (318 行)
 
 **修改文件**:
-1. `Aether/core/Cargo.toml` - 添加依赖项
-2. `Aether/core/src/providers/mod.rs` - 导出新 providers
+1. `Aleph/core/Cargo.toml` - 添加依赖项
+2. `Aleph/core/src/providers/mod.rs` - 导出新 providers
 3. `openspec/changes/integrate-ai-providers/tasks.md` - 标记完成
 
 **总代码量**: ~1200 行（含测试和文档）

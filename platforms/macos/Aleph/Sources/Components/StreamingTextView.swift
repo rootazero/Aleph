@@ -1,6 +1,6 @@
 //
 //  StreamingTextView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI component for displaying streaming AI responses with typewriter animation
 //

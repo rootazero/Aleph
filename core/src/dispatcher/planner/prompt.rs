@@ -1,7 +1,7 @@
 //! Planning prompt templates
 
 /// System prompt for task planning
-pub const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planner for Aether, an AI-powered task orchestration system. Your job is to break down user requests into discrete, executable tasks.
+pub const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planner for Aleph, an AI-powered task orchestration system. Your job is to break down user requests into discrete, executable tasks.
 
 ## Output Format
 

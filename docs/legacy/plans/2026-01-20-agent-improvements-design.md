@@ -56,7 +56,7 @@ guard !slf.isInMultiTurnMode else { return }
 ### Part 1: Batch Typewriter Updates
 
 **Files to modify**:
-- `platforms/macos/Aether/Sources/MultiTurn/MultiTurnCoordinator.swift`
+- `platforms/macos/Aleph/Sources/MultiTurn/MultiTurnCoordinator.swift`
 
 **Changes**:
 
@@ -213,9 +213,9 @@ Key additions to prompt:
 ### Part 4: Multi-turn Progress Display
 
 **Files to modify**:
-- `platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationViewModel.swift`
-- `platforms/macos/Aether/Sources/MultiTurn/UnifiedConversationWindow.swift`
-- `platforms/macos/Aether/Sources/MultiTurn/Views/ConversationContentView.swift`
+- `platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationViewModel.swift`
+- `platforms/macos/Aleph/Sources/MultiTurn/UnifiedConversationWindow.swift`
+- `platforms/macos/Aleph/Sources/MultiTurn/Views/ConversationContentView.swift`
 
 **Changes in UnifiedConversationViewModel.swift**:
 

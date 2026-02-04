@@ -10,9 +10,9 @@ The Settings UI **SHALL** provide a fully functional interface for managing AI p
 - **THEN** a modal dialog opens with form fields: Provider name, API key (masked input), Model, Base URL, Color picker
 - **AND** user enters API key "sk-test123"
 - **WHEN** user clicks "Save"
-- **THEN** API key is stored in macOS Keychain under service "com.aether.openai"
+- **THEN** API key is stored in macOS Keychain under service "com.aleph.openai"
 - **AND** config.toml is updated with provider metadata (model, base_url, color)
-- **AND** API key field in config.toml shows reference: `api_key = "keychain:com.aether.openai"`
+- **AND** API key field in config.toml shows reference: `api_key = "keychain:com.aleph.openai"`
 - **AND** provider list updates to show "✓ Configured" status
 
 #### Scenario: Test provider connection
@@ -196,23 +196,23 @@ The Settings UI **SHALL** store API keys securely in macOS Keychain, not in plai
 #### Scenario: Save API key to Keychain
 - **WHEN** user saves OpenAI API key "sk-test123" via ProviderConfigView
 - **THEN** Swift calls `Security.SecAddGenericPassword()` with:
-  - Service: "com.aether.openai"
+  - Service: "com.aleph.openai"
   - Account: "api_key"
   - Password: "sk-test123"
 - **AND** Keychain stores encrypted key
-- **AND** config.toml stores reference: `api_key = "keychain:com.aether.openai"`
+- **AND** config.toml stores reference: `api_key = "keychain:com.aleph.openai"`
 - **NOT** plain text key in config.toml
 
 #### Scenario: Load API key from Keychain
 - **WHEN** Rust provider needs API key for OpenAI
-- **AND** config.toml has `api_key = "keychain:com.aether.openai"`
+- **AND** config.toml has `api_key = "keychain:com.aleph.openai"`
 - **THEN** Rust calls Swift FFI: `loadAPIKey("openai")`
 - **AND** Swift calls `Security.SecCopyItemMatching()` to retrieve key
 - **AND** returns decrypted key "sk-test123" to Rust
 
 #### Scenario: Delete API key from Keychain
 - **WHEN** user deletes OpenAI provider configuration
-- **THEN** Swift calls `Security.SecDeleteItemMatching()` for service "com.aether.openai"
+- **THEN** Swift calls `Security.SecDeleteItemMatching()` for service "com.aleph.openai"
 - **AND** Keychain entry is removed
 - **AND** config.toml entry is removed
 

@@ -1,6 +1,6 @@
 ## 1. Remove Audio Feedback System
-- [x] 1.1 Delete `Aether/Sources/Audio/AudioManager.swift`
-- [x] 1.2 Delete `Aether/Resources/Sounds/` directory
+- [x] 1.1 Delete `Aleph/Sources/Audio/AudioManager.swift`
+- [x] 1.2 Delete `Aleph/Resources/Sounds/` directory
 - [x] 1.3 Remove AudioManager references from `EventHandler.swift`
 - [x] 1.4 Remove audio playback calls from `EventHandler.swift`
 - [x] 1.5 Remove AVFoundation imports from files that used AudioManager
@@ -8,12 +8,12 @@
 - [x] 1.7 Update `project.yml` to remove Audio directory from sources
 
 ## 2. Remove Accessibility Permission Manager
-- [x] 2.1 Delete `Aether/Sources/PermissionManager.swift`
+- [x] 2.1 Delete `Aleph/Sources/PermissionManager.swift`
 - [x] 2.2 Remove PermissionManager initialization from `AppDelegate.swift`
 - [x] 2.3 Remove permission check calls from `AppDelegate.swift`
 - [x] 2.4 Remove permission-related UI components if any
 - [x] 2.5 Update `project.yml` to remove PermissionManager from sources
-- [x] 2.6 Simplify `Aether.entitlements` if over-specified
+- [x] 2.6 Simplify `Aleph.entitlements` if over-specified
 
 ## 3. Update Documentation
 - [x] 3.1 Remove `sound_enabled` from configuration schema in `CLAUDE.md`

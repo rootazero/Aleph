@@ -120,7 +120,7 @@ impl IpcServer {
     pub fn default_socket_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aether")
+            .join(".aleph")
             .join("exec-approvals.sock")
     }
 

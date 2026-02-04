@@ -73,7 +73,7 @@
 ### 2. 自动化测试用例（2个文件）
 
 #### 2.1 功能测试（XCTest）
-- **文件**: `AetherTests/UI/ModernSettingsUITests.swift`
+- **文件**: `AlephTests/UI/ModernSettingsUITests.swift`
 - **内容**: 27个测试用例，覆盖核心功能逻辑
 - **测试用例**:
   1. `testGeneralTabVersionDisplay` - 版本号显示
@@ -104,7 +104,7 @@
   26. `testThemeSwitchingPerformance` - 主题切换性能基准
 
 #### 2.2 UI交互测试（XCUITest）
-- **文件**: `AetherUITests/ModernSettingsUITestsXCUI.swift`
+- **文件**: `AlephUITests/ModernSettingsUITestsXCUI.swift`
 - **内容**: UI自动化测试和无障碍验证
 - **测试用例**:
   - **主题切换器**:
@@ -143,8 +143,8 @@
 ### 3. 代码验证
 
 #### 3.1 Swift语法验证
-- ✅ `AetherTests/UI/ModernSettingsUITests.swift` - 语法验证通过
-- ✅ `AetherUITests/ModernSettingsUITestsXCUI.swift` - 语法验证通过
+- ✅ `AlephTests/UI/ModernSettingsUITests.swift` - 语法验证通过
+- ✅ `AlephUITests/ModernSettingsUITestsXCUI.swift` - 语法验证通过
 - 使用工具: `$HOME/.python3/bin/python verify_swift_syntax.py`
 
 #### 3.2 Xcode项目生成
@@ -290,8 +290,8 @@ Phase 6 完全通过的标准：
 4. `docs/accessibility-testing-checklist.md` (800行)
 
 ### 新增测试代码（2个）
-5. `AetherTests/UI/ModernSettingsUITests.swift` (350行，27个测试用例)
-6. `AetherUITests/ModernSettingsUITestsXCUI.swift` (600行，30+个测试用例)
+5. `AlephTests/UI/ModernSettingsUITests.swift` (350行，27个测试用例)
+6. `AlephUITests/ModernSettingsUITestsXCUI.swift` (600行，30+个测试用例)
 
 ### 更新的文档（1个）
 7. `openspec/changes/modernize-settings-ui/tasks.md` (Phase 6状态更新)

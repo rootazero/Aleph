@@ -57,7 +57,7 @@ Implement native screen understanding capabilities in Aleph using xcap + image c
 ## UDL Interface Definition
 
 ```udl
-// aether.udl additions
+// aleph.udl additions
 
 enum CaptureMode {
     "Region",
@@ -410,7 +410,7 @@ Aleph/
 │   │   ├── config.rs           # VisionConfig
 │   │   └── prompt.rs           # OCR prompt templates
 │   ├── lib.rs                  # Add process_vision, extract_text exports
-│   └── aether.udl              # Add Vision type definitions
+│   └── aleph.udl              # Add Vision type definitions
 │
 ├── Sources/
 │   ├── Vision/

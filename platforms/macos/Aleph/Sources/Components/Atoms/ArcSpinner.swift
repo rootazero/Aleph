@@ -1,6 +1,6 @@
 //
 //  ArcSpinner.swift
-//  Aether
+//  Aleph
 //
 //  Elegant spinning arc indicator with gradient fade effect.
 //  Uses transparent background for overlay usage.

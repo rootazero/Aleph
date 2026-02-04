@@ -4,7 +4,7 @@
 **Scan Date**: 2026-01-06
 **Scope**: Second round of "spaghetti code" cleanup
 
-This document catalogs all potential Occam's Razor violations identified in the Aether codebase. Each candidate will be evaluated in Phase 2 (The Judge) for risk assessment.
+This document catalogs all potential Occam's Razor violations identified in the Aleph codebase. Each candidate will be evaluated in Phase 2 (The Judge) for risk assessment.
 
 ---
 
@@ -26,7 +26,7 @@ This second round focuses on **new issues introduced since then** and **missed o
 # Rust Core Violations (8 candidates)
 
 ## R1: Heavily Nested Provider Test Configuration
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 **Lines**: 2364-2527
 **Type**: Deeply Nested Logic
 **Description**: The `test_search_provider_with_config()` method contains 7 nested match statements with repeated error handling pattern. Each provider type (tavily, brave, searxng, google, bing, exa) repeats the same validation and error result pattern:
@@ -42,7 +42,7 @@ This pattern repeats 6 times (for 6 providers) with 160+ lines of nearly identic
 ---
 
 ## R2: Repeated Empty-Check + Clone Pattern in Search Provider Creation
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 **Lines**: 2366-2376, 2390-2400, 2414-2424, 2438-2458, 2473-2483, 2497-2507
 **Type**: Duplicated Code Pattern
 **Description**: Six identical empty-check + clone patterns repeated:
@@ -58,7 +58,7 @@ This pattern appears for `api_key` (4x), `base_url` (1x), and `engine_id` (1x).
 ---
 
 ## R3: Nested Conditional Logic in OpenAI Provider's `build_request()`
-**File**: `Aether/core/src/providers/openai.rs`
+**File**: `Aleph/core/src/providers/openai.rs`
 **Lines**: 304-320 and 381-397
 **Type**: Deeply Nested Logic (4 levels)
 **Description**: The text content determination logic appears TWICE with identical nesting:
@@ -77,7 +77,7 @@ This 4-level nested structure repeats in both `build_image_request()` (lines 304
 ---
 
 ## R4: Repeated Mutex Lock Pattern (48 occurrences)
-**File**: `Aether/core/src/core.rs` (and others)
+**File**: `Aleph/core/src/core.rs` (and others)
 **Lines**: Multiple locations
 **Type**: Redundant Code Pattern
 **Description**: Pattern `lock().unwrap_or_else(|e| e.into_inner())` appears 48 times throughout the codebase. This should be extracted into a single inline helper method.
@@ -89,7 +89,7 @@ This 4-level nested structure repeats in both `build_image_request()` (lines 304
 ---
 
 ## R5: Repeated Is-Empty Check Pattern in Provider Message Building
-**File**: `Aether/core/src/providers/openai.rs`
+**File**: `Aleph/core/src/providers/openai.rs`
 **Lines**: 306-311, 316-320 (and similar in claude.rs, gemini.rs)
 **Type**: Duplicated Logic Pattern
 **Description**: The conditional "describe image if empty" pattern repeats across multiple providers:
@@ -108,7 +108,7 @@ This pattern appears 3+ times in openai.rs alone, and similar patterns exist in 
 ---
 
 ## R6: Redundant Configuration Getter Methods
-**File**: `Aether/core/src/config/mod.rs`
+**File**: `Aleph/core/src/config/mod.rs`
 **Lines**: 356-406
 **Type**: Over-Abstraction
 **Description**: Five separate getter methods in `RoutingRuleConfig` with nearly identical patterns:
@@ -138,7 +138,7 @@ The boolean check methods are single-line wrappers.
 ---
 
 ## R8: Deeply Nested Configuration Hot-Reload Logic
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 **Lines**: 136-177 and 237-299
 **Type**: Nested Logic (4+ levels with repetition)
 **Description**: The router/search registry initialization logic repeats twice (initial setup and hot-reload) with identical 4-level nesting:
@@ -159,7 +159,7 @@ if !cfg.providers.is_empty() {
 # Swift UI Violations (10 candidates)
 
 ## S1: Redundant Permission Checking Wrappers
-**File**: `Aether/Sources/Utils/PermissionChecker.swift`
+**File**: `Aleph/Sources/Utils/PermissionChecker.swift`
 **Lines**: 18-107
 **Type**: Redundant Wrapper
 **Description**: `PermissionChecker` is a pure static utility that wraps single calls to Apple's framework functions (e.g., `AXIsProcessTrusted()`, `IOHIDManagerOpen()`). The wrapper adds no value—it's essentially pass-through code. The same methods are independently replicated in `PermissionManager.swift` (lines 113-171), creating two implementations of identical logic.
@@ -170,7 +170,7 @@ if !cfg.providers.is_empty() {
 ---
 
 ## S2: Duplicated IOHIDManager Permission Checking Logic
-**File**: `Aether/Sources/Utils/PermissionManager.swift`
+**File**: `Aleph/Sources/Utils/PermissionManager.swift`
 **Lines**: 123-171
 **Type**: Duplicated Logic
 **Description**: The `checkInputMonitoringViaHID()` method is nearly identical to `PermissionChecker.hasInputMonitoringViaHID()`. Both create an `IOHIDManager`, set device matching to keyboard, open it, and check for `kIOReturnNotPermitted`. The only difference is caching logic in `PermissionManager`.
@@ -181,7 +181,7 @@ if !cfg.providers.is_empty() {
 ---
 
 ## S3: Pyramid of Doom in PermissionGateView
-**File**: `Aether/Sources/Components/PermissionGateView.swift`
+**File**: `Aleph/Sources/Components/PermissionGateView.swift`
 **Lines**: 225-241
 **Type**: Pyramid of Doom
 **Description**: The action buttons section uses nested `if` statements that could be flattened:
@@ -198,7 +198,7 @@ if (currentStep == .accessibility && !manager.accessibilityGranted) ||
 ---
 
 ## S4: Multiple NSAlert Creation Patterns
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 **Lines**: 301-306, 321-326, 523-528, 615-620, 768-774, 886-889
 **Type**: Code Duplication
 **Description**: AppDelegate creates NSAlert manually 6+ times with nearly identical boilerplate code. `AlertHelper.swift` exists with `showInfoAlert()` function but is rarely used. The duplicated pattern should consistently use the helper.
@@ -209,7 +209,7 @@ if (currentStep == .accessibility && !manager.accessibilityGranted) ||
 ---
 
 ## S5: Redundant Permission Status Methods in ContextCapture
-**File**: `Aether/Sources/ContextCapture.swift`
+**File**: `Aleph/Sources/ContextCapture.swift`
 **Lines**: 87-100
 **Type**: Redundant Wrapper
 **Description**: `ContextCapture` has `hasAccessibilityPermission()` and `requestAccessibilityPermission()` (lines 89-100) that are simple pass-throughs to Apple APIs. These are duplicated by `PermissionChecker`. Also, `showPermissionAlert()` (lines 104-127) is marked DEPRECATED—dead code that should be removed.
@@ -220,7 +220,7 @@ if (currentStep == .accessibility && !manager.accessibilityGranted) ||
 ---
 
 ## S6: Over-Parameterized Generic Menu Builder
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 **Lines**: 418-476
 **Type**: Over-Engineered Abstraction
 **Description**: The `rebuildMenu()` generic method was created to consolidate `rebuildProvidersMenu()` and `rebuildInputModeMenu()`. However, it's only called twice and adds 58 lines of generic infrastructure for 2 use cases. The "generic" benefit is marginal—both callers have different semantics.
@@ -231,7 +231,7 @@ if (currentStep == .accessibility && !manager.accessibilityGranted) ||
 ---
 
 ## S7: Redundant Accessibility Text Reader Strategies
-**File**: `Aether/Sources/Utils/AccessibilityTextReader.swift`
+**File**: `Aleph/Sources/Utils/AccessibilityTextReader.swift`
 **Lines**: 109-190
 **Type**: Dead Code
 **Description**: `AccessibilityTextReader` implements 4 reading strategies but only the first strategy (`readEntireContents`) is used. The remaining 3 strategies (`readValue`, `readTextWithContext`, `readFromParent`) are never called due to early returns.
@@ -242,7 +242,7 @@ if (currentStep == .accessibility && !manager.accessibilityGranted) ||
 ---
 
 ## S8: State Duplication in PermissionManager
-**File**: `Aether/Sources/Utils/PermissionManager.swift`
+**File**: `Aleph/Sources/Utils/PermissionManager.swift`
 **Lines**: 25-30
 **Type**: Redundant State
 **Description**: `PermissionManager` maintains `lastInputMonitoringCheck: (result: Bool, timestamp: Date)?` to cache HID check results. This caching couples the public `@Published` properties to internal timing logic, creating unnecessary complexity for a passive monitor.
@@ -253,7 +253,7 @@ if (currentStep == .accessibility && !manager.accessibilityGranted) ||
 ---
 
 ## S9: Multiple Error Alert Patterns Without Consolidation
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 **Lines**: 523-528, 615-620
 **Type**: Code Duplication
 **Description**: Two identical error alert patterns for provider/input mode selection failures both create NSAlert with the same structure. These should share a helper method.
@@ -264,7 +264,7 @@ if (currentStep == .accessibility && !manager.accessibilityGranted) ||
 ---
 
 ## S10: Verbose Codable Extension for RoutingRuleConfig
-**File**: `Aether/Sources/RoutingRuleConfigExtension.swift`
+**File**: `Aleph/Sources/RoutingRuleConfigExtension.swift`
 **Lines**: 31-64, 66-106
 **Type**: Over-Engineered Codable
 **Description**: The `init(from:)` and `encode(to:)` methods are verbose manual implementations of Codable (75 lines) that could be auto-derived if the property names matched JSON keys or with `CodingKeys` enum.
@@ -313,7 +313,7 @@ if (currentStep == .accessibility && !manager.accessibilityGranted) ||
 # Test Code Violations (1 category, ~60 tests)
 
 ## T1: Low-Value Test Code Cleanup
-**Files**: Multiple files across `Aether/core/src/`
+**Files**: Multiple files across `Aleph/core/src/`
 **Total Tests**: 414 → Target: 360-370 tests
 **Type**: Test Code Bloat
 **Description**: The test suite contains several categories of low-value tests that violate Occam's Razor by multiplying test entities beyond necessity:

@@ -1,6 +1,6 @@
 //
 //  FlowLayout.swift
-//  Aether
+//  Aleph
 //
 //  A SwiftUI layout that arranges items in a flow pattern (wrapping to next line).
 //

@@ -10,7 +10,7 @@ This document details the architectural design for P3 Model Router enhancements:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────┐
-│                          Aether Model Router Evolution                          │
+│                          Aleph Model Router Evolution                          │
 ├────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │  P0 (Foundation)          P1 (Resilience)         P2 (Intelligence)            │

@@ -6,7 +6,7 @@
 //! ## Multi-location Discovery
 //!
 //! Skills are discovered from multiple locations in priority order:
-//! 1. Project level: `.aether/skills/`, `.claude/skills/` (traverse up to git root)
+//! 1. Project level: `.aleph/skills/`, `.claude/skills/` (traverse up to git root)
 //! 2. User level: `~/.aleph/skills`, `~/.claude/skills`
 //!
 //! ## Progressive Disclosure
@@ -57,7 +57,7 @@ pub struct SkillMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillSource {
-    /// Project-level skill (.aether/skills or .claude/skills)
+    /// Project-level skill (.aleph/skills or .claude/skills)
     Project,
     /// Global user-level skill (~/.aleph/skills or ~/.claude/skills)
     Global,
@@ -111,7 +111,7 @@ impl SkillsRegistry {
     /// Create a skills registry with multi-location discovery
     ///
     /// Automatically discovers skills from:
-    /// - Project level: .aether/skills/, .claude/skills/
+    /// - Project level: .aleph/skills/, .claude/skills/
     /// - Global level: ~/.aleph/skills, ~/.claude/skills
     ///
     /// # Arguments

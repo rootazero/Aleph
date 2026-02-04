@@ -76,7 +76,7 @@ impl BuiltinToolRegistry {
 
     /// Create a new registry with custom configuration
     ///
-    /// Aether is designed as a powerful AI Agent that needs to perform complex
+    /// Aleph is designed as a powerful AI Agent that needs to perform complex
     /// multi-step tasks including file operations and code execution.
     ///
     /// # Safety Notes

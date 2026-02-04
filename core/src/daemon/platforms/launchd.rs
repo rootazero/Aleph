@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::process::Command;
 
-const LAUNCHD_LABEL: &str = "com.aether.daemon";
+const LAUNCHD_LABEL: &str = "com.aleph.daemon";
 
 pub struct LaunchdService {
     plist_path: PathBuf,

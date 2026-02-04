@@ -391,7 +391,7 @@ pub struct PluginInfo {
 pub enum PluginOrigin {
     /// From explicit config (highest priority)
     Config,
-    /// From workspace .aether/ directory
+    /// From workspace .aleph/ directory
     Workspace,
     /// From global ~/.aleph/ directory
     Global,
@@ -1161,7 +1161,7 @@ mod tests {
             scope: PromptScope::System,
             bound_tool: None,
             source_path: PathBuf::from("/test"),
-            source: DiscoverySource::AetherGlobal,
+            source: DiscoverySource::AlephGlobal,
         };
 
         assert_eq!(skill.qualified_name(), "my-plugin:hello");
@@ -1179,7 +1179,7 @@ mod tests {
             scope: PromptScope::System,
             bound_tool: None,
             source_path: PathBuf::from("/test"),
-            source: DiscoverySource::AetherGlobal,
+            source: DiscoverySource::AlephGlobal,
         };
 
         assert_eq!(skill.with_arguments("World"), "Hello, World!");
@@ -1203,7 +1203,7 @@ mod tests {
             options: HashMap::new(),
             system_prompt: "Test".to_string(),
             source_path: PathBuf::from("/test"),
-            source: DiscoverySource::AetherGlobal,
+            source: DiscoverySource::AlephGlobal,
         };
 
         assert!(!agent.is_primary());
@@ -1542,7 +1542,7 @@ mod tests {
             channel_id: "telegram".to_string(),
             conversation_id: "chat-12345".to_string(),
             sender_id: "user-67890".to_string(),
-            content: "Hello, Aether!".to_string(),
+            content: "Hello, Aleph!".to_string(),
             timestamp: chrono::Utc::now(),
             metadata: Some(serde_json::json!({"message_id": 42})),
         };
@@ -1553,7 +1553,7 @@ mod tests {
         assert_eq!(parsed.channel_id, "telegram");
         assert_eq!(parsed.conversation_id, "chat-12345");
         assert_eq!(parsed.sender_id, "user-67890");
-        assert_eq!(parsed.content, "Hello, Aether!");
+        assert_eq!(parsed.content, "Hello, Aleph!");
         assert!(parsed.metadata.is_some());
     }
 

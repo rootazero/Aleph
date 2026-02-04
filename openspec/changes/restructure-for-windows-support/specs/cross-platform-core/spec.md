@@ -71,7 +71,7 @@ Now: UniFFI scaffolding is conditional on the `uniffi` feature.
 
 #### Scenario: UniFFI macro with feature flag
 
-**Given** the `lib.rs` contains `uniffi::include_scaffolding!("aether")`
+**Given** the `lib.rs` contains `uniffi::include_scaffolding!("aleph")`
 **When** the code is compiled without `uniffi` feature
 **Then** the macro should not be invoked
 **And** no UniFFI types should be generated

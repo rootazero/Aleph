@@ -2,7 +2,7 @@
 //!
 //! Phase 3: WorldModel - Cognitive State Management
 //!
-//! WorldModel is the "cognitive center" of Aether, responsible for:
+//! WorldModel is the "cognitive center" of Aleph, responsible for:
 //! - Subscribing to Raw Events from DaemonEventBus
 //! - Inferring user activities, task contexts, and environmental constraints
 //! - Publishing Derived Events to the Bus
@@ -59,7 +59,7 @@ impl WorldModel {
         // Determine state path
         let state_path = config.state_path.clone().unwrap_or_else(|| {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            PathBuf::from(home).join(".aether/worldmodel_state.json")
+            PathBuf::from(home).join(".aleph/worldmodel_state.json")
         });
 
         let persistence = Arc::new(StatePersistence::new(state_path));

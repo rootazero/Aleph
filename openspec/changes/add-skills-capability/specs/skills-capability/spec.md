@@ -1,6 +1,6 @@
 # Skills Capability Specification
 
-This specification defines the Skills system for Aether, implementing the Claude Agent Skills open standard for dynamic instruction injection. Skills integrate with the existing CapabilityStrategy pattern.
+This specification defines the Skills system for Aleph, implementing the Claude Agent Skills open standard for dynamic instruction injection. Skills integrate with the existing CapabilityStrategy pattern.
 
 ## ADDED Requirements
 
@@ -44,8 +44,8 @@ The system SHALL maintain a registry of available Skills loaded from the skills 
 
 #### Scenario: Scan skills directory on startup
 
-- **GIVEN** the Aether application starts
-- **WHEN** the skills directory `~/.aether/skills/` exists
+- **GIVEN** the Aleph application starts
+- **WHEN** the skills directory `~/.aleph/skills/` exists
 - **THEN** the system SHALL scan all subdirectories for SKILL.md files
 - **AND** load valid skills into the registry
 
@@ -213,7 +213,7 @@ The system SHALL support Skills configuration in config.toml.
 - **GIVEN** no `[skills]` section in config.toml
 - **WHEN** Config is loaded
 - **THEN** `skills.enabled = true`
-- **AND** `skills.skills_dir = "~/.aether/skills"`
+- **AND** `skills.skills_dir = "~/.aleph/skills"`
 - **AND** `skills.auto_match_enabled = false`
 
 #### Scenario: Custom skills directory
@@ -263,15 +263,15 @@ The system SHALL provide built-in Skills bundled with the application.
 
 #### Scenario: First-launch initialization
 
-- **GIVEN** `~/.aether/skills/` does not exist or is empty
-- **WHEN** AetherCore initializes
+- **GIVEN** `~/.aleph/skills/` does not exist or is empty
+- **WHEN** AlephCore initializes
 - **THEN** directory SHALL be created
 - **AND** built-in skills SHALL be copied (refine-text, translate, summarize)
 
 #### Scenario: Preserve user modifications
 
 - **GIVEN** user has modified a built-in skill's SKILL.md
-- **WHEN** AetherCore initializes
+- **WHEN** AlephCore initializes
 - **THEN** user's SKILL.md SHALL NOT be overwritten
 
 #### Scenario: refine-text skill content
@@ -291,7 +291,7 @@ The system SHALL register SkillsStrategy with CompositeCapabilityExecutor.
 
 #### Scenario: Strategy registration
 
-- **GIVEN** AetherCore initializes
+- **GIVEN** AlephCore initializes
 - **WHEN** capability executor is built
 - **THEN** SkillsStrategy SHALL be registered
 - **AND** appear after VideoStrategy in priority order
@@ -372,8 +372,8 @@ The system SHALL expose skills operations through UniFFI.
 
 ## Cross-References
 
-- **core-library**: AetherCore initialization and capability executor setup
+- **core-library**: AlephCore initialization and capability executor setup
 - **ai-routing**: Router /skill command detection
 - **skills-settings-ui**: Skills management UI specification
-- Existing Strategies: `Aether/core/src/capability/strategies/` (memory.rs, search.rs, video.rs)
-- CapabilityStrategy trait: `Aether/core/src/capability/strategy.rs`
+- Existing Strategies: `Aleph/core/src/capability/strategies/` (memory.rs, search.rs, video.rs)
+- CapabilityStrategy trait: `Aleph/core/src/capability/strategy.rs`

@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 use crate::components::types::{ExecutionSession, ToolCallRecord};
 use crate::event::{
-    AetherEvent, EventContext, EventHandler, EventType, HandlerError, LoopState, PlanStep,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, LoopState, PlanStep,
     StepStatus, StopReason, TaskPlan, ToolCallRequest,
 };
 
@@ -284,20 +284,20 @@ impl EventHandler for LoopController {
 
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError> {
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
         match event {
             // ================================================================
             // PlanCreated: Store plan and start first step
             // ================================================================
-            AetherEvent::PlanCreated(plan) => {
+            AlephEvent::PlanCreated(plan) => {
                 // Store the plan
                 self.set_plan(plan.clone()).await;
 
                 // Check if plan has any steps
                 if plan.steps.is_empty() {
-                    return Ok(vec![AetherEvent::LoopStop(StopReason::EmptyPlan)]);
+                    return Ok(vec![AlephEvent::LoopStop(StopReason::EmptyPlan)]);
                 }
 
                 // Get the first executable step
@@ -308,17 +308,17 @@ impl EventHandler for LoopController {
                     // Convert to tool call request
                     let tool_request = self.step_to_tool_call(&step);
 
-                    Ok(vec![AetherEvent::ToolCallRequested(tool_request)])
+                    Ok(vec![AlephEvent::ToolCallRequested(tool_request)])
                 } else {
                     // No executable step found (all blocked or complete)
-                    Ok(vec![AetherEvent::LoopStop(StopReason::Completed)])
+                    Ok(vec![AlephEvent::LoopStop(StopReason::Completed)])
                 }
             }
 
             // ================================================================
             // ToolCallCompleted: Update step, check guards, continue or stop
             // ================================================================
-            AetherEvent::ToolCallCompleted(result) => {
+            AlephEvent::ToolCallCompleted(result) => {
                 // Update step status if this was a plan step
                 if let Some(step_id) = &result.input.get("plan_step_id").and_then(|v| v.as_str()) {
                     self.update_step_status(step_id, StepStatus::Completed)
@@ -345,12 +345,12 @@ impl EventHandler for LoopController {
 
                 // Check guards
                 if let Some(stop_reason) = self.check_guards(&session, ctx) {
-                    return Ok(vec![AetherEvent::LoopStop(stop_reason)]);
+                    return Ok(vec![AlephEvent::LoopStop(stop_reason)]);
                 }
 
                 // Check if plan is complete
                 if self.is_plan_complete().await {
-                    return Ok(vec![AetherEvent::LoopStop(StopReason::Completed)]);
+                    return Ok(vec![AlephEvent::LoopStop(StopReason::Completed)]);
                 }
 
                 // Get next step
@@ -373,19 +373,19 @@ impl EventHandler for LoopController {
                     let tool_request = self.step_to_tool_call(&step);
 
                     Ok(vec![
-                        AetherEvent::LoopContinue(loop_state),
-                        AetherEvent::ToolCallRequested(tool_request),
+                        AlephEvent::LoopContinue(loop_state),
+                        AlephEvent::ToolCallRequested(tool_request),
                     ])
                 } else {
                     // No more executable steps
-                    Ok(vec![AetherEvent::LoopStop(StopReason::Completed)])
+                    Ok(vec![AlephEvent::LoopStop(StopReason::Completed)])
                 }
             }
 
             // ================================================================
             // ToolCallFailed: Stop with error
             // ================================================================
-            AetherEvent::ToolCallFailed(error) => {
+            AlephEvent::ToolCallFailed(error) => {
                 // Mark step as failed if this was a plan step
                 let step_id = {
                     let plan = self.current_plan.read().await;
@@ -402,7 +402,7 @@ impl EventHandler for LoopController {
                 }
 
                 // Stop the loop with error
-                Ok(vec![AetherEvent::LoopStop(StopReason::Error(format!(
+                Ok(vec![AlephEvent::LoopStop(StopReason::Error(format!(
                     "Tool '{}' failed: {}",
                     error.tool, error.error
                 )))])
@@ -836,7 +836,7 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         // InputReceived event should be ignored
-        let event = AetherEvent::InputReceived(crate::event::InputEvent {
+        let event = AlephEvent::InputReceived(crate::event::InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -854,15 +854,15 @@ mod tests {
         let ctx = EventContext::new(bus);
 
         let plan = create_test_plan();
-        let event = AetherEvent::PlanCreated(plan);
+        let event = AlephEvent::PlanCreated(plan);
 
         let result = controller.handle(&event, &ctx).await.unwrap();
 
         // Should return a ToolCallRequested event
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AetherEvent::ToolCallRequested(_)));
+        assert!(matches!(result[0], AlephEvent::ToolCallRequested(_)));
 
-        if let AetherEvent::ToolCallRequested(request) = &result[0] {
+        if let AlephEvent::ToolCallRequested(request) = &result[0] {
             assert_eq!(request.tool, "search");
             assert_eq!(request.plan_step_id, Some("step_1".to_string()));
         }
@@ -880,7 +880,7 @@ mod tests {
             parallel_groups: vec![],
             current_step_index: 0,
         };
-        let event = AetherEvent::PlanCreated(plan);
+        let event = AlephEvent::PlanCreated(plan);
 
         let result = controller.handle(&event, &ctx).await.unwrap();
 
@@ -888,7 +888,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert!(matches!(
             result[0],
-            AetherEvent::LoopStop(StopReason::EmptyPlan)
+            AlephEvent::LoopStop(StopReason::EmptyPlan)
         ));
     }
 
@@ -907,7 +907,7 @@ mod tests {
             attempts: 3,
             session_id: None,
         };
-        let event = AetherEvent::ToolCallFailed(error);
+        let event = AlephEvent::ToolCallFailed(error);
 
         let result = controller.handle(&event, &ctx).await.unwrap();
 
@@ -915,7 +915,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert!(matches!(
             result[0],
-            AetherEvent::LoopStop(StopReason::Error(_))
+            AlephEvent::LoopStop(StopReason::Error(_))
         ));
     }
 

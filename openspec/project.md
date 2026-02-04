@@ -2,7 +2,7 @@
 
 ## Purpose
 
-**Aether** is a system-level AI middleware for macOS (with future Windows/Linux support) that acts as an invisible "ether" connecting user intent with AI models through a frictionless, native interface. The project embodies a "Ghost" aesthetic - no permanent windows, no dock icon, only ephemeral UI that appears at the cursor when summoned.
+**Aleph** is a system-level AI middleware for macOS (with future Windows/Linux support) that acts as an invisible "ether" connecting user intent with AI models through a frictionless, native interface. The project embodies a "Ghost" aesthetic - no permanent windows, no dock icon, only ephemeral UI that appears at the cursor when summoned.
 
 **Core Value Proposition:**
 - Brings AI intelligence directly to the cursor in ANY application
@@ -72,9 +72,9 @@
 
 **Communication Pattern:**
 - Rust → UniFFI → Swift (callback-based)
-- Rust defines `AetherEventHandler` trait
+- Rust defines `AlephEventHandler` trait
 - Swift implements the trait to receive state updates
-- Use `Arc<dyn AetherEventHandler>` in Rust for thread-safe callbacks
+- Use `Arc<dyn AlephEventHandler>` in Rust for thread-safe callbacks
 
 **Modularity:**
 - All core components use traits: `ClipboardManager`, `InputSimulator`, `AiProvider`, `Router`
@@ -135,7 +135,7 @@
 ### User Interaction Flow ("Transmutation")
 1. User selects text/image in ANY app (WeChat, Notes, VSCode, etc.)
 2. Presses global hotkey (Cmd+~ on macOS)
-3. Aether simulates Cut (Cmd+X) - content "disappears" for physical feedback
+3. Aleph simulates Cut (Cmd+X) - content "disappears" for physical feedback
 4. Halo spinner appears at cursor location (transparent, click-through overlay)
 5. Rust routes clipboard content to appropriate AI provider based on rules
 6. AI responds, Rust writes result to clipboard
@@ -180,7 +180,7 @@
 
 ### Security Constraints
 - **PII scrubbing**: Regex-based removal of phone/email before cloud API calls
-- **Local-first**: Config stored in `~/.aether/config.toml`
+- **Local-first**: Config stored in `~/.aleph/config.toml`
 - **No telemetry**: Zero tracking, no analytics
 - **API key storage**: Use macOS Keychain (via `Security` framework in Swift)
 
@@ -226,7 +226,7 @@
 
 ## Configuration Storage
 
-**Location**: `~/.aether/config.toml`
+**Location**: `~/.aleph/config.toml`
 
 **Schema**: TOML format with sections:
 - `[general]` - Theme, sound, default provider

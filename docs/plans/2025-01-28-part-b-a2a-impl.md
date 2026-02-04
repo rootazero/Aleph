@@ -232,11 +232,11 @@ pub mod sessions;
 
 **Step 4: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check 2>&1 | head -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check 2>&1 | head -30`
 
 **Step 5: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib tools::sessions::policy::tests 2>&1 | tail -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib tools::sessions::policy::tests 2>&1 | tail -20`
 
 **Step 6: Commit**
 
@@ -443,7 +443,7 @@ pub use visibility::{SessionToolsVisibility, VisibilityContext};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib tools::sessions 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib tools::sessions 2>&1 | tail -30`
 
 **Step 4: Commit**
 
@@ -612,7 +612,7 @@ pub use visibility::{SessionToolsVisibility, VisibilityContext};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib tools::sessions 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib tools::sessions 2>&1 | tail -30`
 
 **Step 4: Commit**
 
@@ -804,7 +804,7 @@ pub use visibility::{SessionToolsVisibility, VisibilityContext};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib tools::sessions 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib tools::sessions 2>&1 | tail -30`
 
 **Step 4: Commit**
 
@@ -960,7 +960,7 @@ pub use visibility::{SessionToolsVisibility, VisibilityContext};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib tools::sessions 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib tools::sessions 2>&1 | tail -30`
 
 **Step 4: Commit**
 
@@ -1223,7 +1223,7 @@ pub use visibility::{SessionToolsVisibility, VisibilityContext};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib tools::sessions 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib tools::sessions 2>&1 | tail -30`
 
 **Step 4: Commit**
 
@@ -1513,7 +1513,7 @@ pub use visibility::{SessionToolsVisibility, VisibilityContext};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib tools::sessions 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib tools::sessions 2>&1 | tail -30`
 
 **Step 4: Commit**
 
@@ -1531,7 +1531,7 @@ git commit -m "tools/sessions: add sessions_spawn params and result types"
 
 **Step 1: Run full test suite for sessions module**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib tools::sessions 2>&1 | tail -40`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib tools::sessions 2>&1 | tail -40`
 Expected: All tests PASS
 
 **Step 2: Add exports to lib.rs**
@@ -1559,7 +1559,7 @@ pub use crate::tools::sessions::{
 
 **Step 3: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check 2>&1 | tail -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check 2>&1 | tail -20`
 
 **Step 4: Final commit**
 

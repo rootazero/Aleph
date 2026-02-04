@@ -1,6 +1,6 @@
 //
 //  ClipboardMonitorProtocol.swift
-//  Aether
+//  Aleph
 //
 //  Protocol for clipboard change monitoring, enabling dependency injection and testability.
 //

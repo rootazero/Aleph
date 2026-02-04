@@ -34,7 +34,7 @@ The system SHALL match input against rules using regex with confidence scoring.
 - **WHEN** no rule matches the input
 - **AND** no default provider is configured
 - **THEN** `route()` returns `None`
-- **AND** caller receives `AetherError::NoProviderAvailable`
+- **AND** caller receives `AlephError::NoProviderAvailable`
 
 #### Scenario: L1 match with confidence
 - **WHEN** a slash command pattern matches

@@ -2,7 +2,7 @@
 
 ## Why
 
-Aether requires a headless Rust core library that handles all business logic (hotkey detection, clipboard management, AI routing) and exposes APIs to native UIs via UniFFI. This is the foundational infrastructure for the entire project.
+Aleph requires a headless Rust core library that handles all business logic (hotkey detection, clipboard management, AI routing) and exposes APIs to native UIs via UniFFI. This is the foundational infrastructure for the entire project.
 
 Without this core, we cannot:
 - Detect global hotkeys across the system
@@ -10,16 +10,16 @@ Without this core, we cannot:
 - Define a clean FFI boundary for Swift/C#/GTK clients
 - Build the AI routing and provider integration layer
 
-This change establishes the "brain" of Aether as a library-first architecture.
+This change establishes the "brain" of Aleph as a library-first architecture.
 
 ## What Changes
 
 - Create Rust workspace with `core/` crate configured as `cdylib` + `staticlib`
 - Implement **working** global hotkey listener using `rdev` crate
 - Implement **working** clipboard reader using `arboard` crate
-- Define `AetherCore` struct as the main entry point with lifecycle management
-- Define `AetherEventHandler` trait for callback-based UI communication
-- Create UniFFI interface definition file (`aether.udl`) for FFI boundary
+- Define `AlephCore` struct as the main entry point with lifecycle management
+- Define `AlephEventHandler` trait for callback-based UI communication
+- Create UniFFI interface definition file (`aleph.udl`) for FFI boundary
 - Set up `tokio` async runtime for non-blocking operations
 - Implement basic error handling with custom error types
 - Add configuration structure for future TOML config integration
@@ -28,7 +28,7 @@ This change establishes the "brain" of Aether as a library-first architecture.
 **Deliverables:**
 - `core/Cargo.toml` with dependencies (uniffi, rdev, arboard, tokio, serde)
 - `core/src/lib.rs` with UniFFI exports
-- `core/src/aether.udl` defining the FFI interface
+- `core/src/aleph.udl` defining the FFI interface
 - Working hotkey detection (can detect Cmd+~ press)
 - Working clipboard read capability
 - Unit tests for core components

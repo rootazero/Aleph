@@ -1,4 +1,4 @@
-//! Daemon process management for Aether Gateway
+//! Daemon process management for Aleph Gateway
 //!
 //! This module handles PID file management, process lifecycle,
 //! and Unix daemonization.

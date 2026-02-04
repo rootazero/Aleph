@@ -1,6 +1,6 @@
 //
 //  InitializationProgressView.swift
-//  Aether
+//  Aleph
 //
 //  First-run initialization progress window.
 //  Displays progress for all 6 initialization phases:
@@ -166,7 +166,7 @@ struct InitializationProgressView: View {
                 .foregroundColor(.accentColor)
 
             // Title
-            Text("正在初始化 Aether")
+            Text("正在初始化 Aleph")
                 .font(.largeTitle)
                 .fontWeight(.bold)
 

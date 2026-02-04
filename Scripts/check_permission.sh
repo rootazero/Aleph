@@ -1,20 +1,20 @@
 #!/bin/bash
-# Check Aether Accessibility permission status
+# Check Aleph Accessibility permission status
 
-echo "=== Aether Accessibility 权限检查 ==="
+echo "=== Aleph Accessibility 权限检查 ==="
 echo ""
 
-# Get running Aether path
-AETHER_PID=$(pgrep -x "Aether" 2>/dev/null | head -1)
+# Get running Aleph path
+AETHER_PID=$(pgrep -x "Aleph" 2>/dev/null | head -1)
 
 if [ -z "$AETHER_PID" ]; then
-    echo "❌ Aether 未运行"
+    echo "❌ Aleph 未运行"
     echo ""
-    echo "请先在 Xcode 中运行 Aether"
+    echo "请先在 Xcode 中运行 Aleph"
     exit 1
 fi
 
-echo "✅ Aether 正在运行 (PID: $AETHER_PID)"
+echo "✅ Aleph 正在运行 (PID: $AETHER_PID)"
 
 AETHER_PATH=$(ps -p $AETHER_PID -o command= | awk '{print $1}')
 APP_PATH=$(dirname $(dirname "$AETHER_PATH"))
@@ -30,7 +30,7 @@ if [ -f "$USER_TCC_DB" ]; then
 
     # Query Accessibility permission
     RESULT=$(sqlite3 "$USER_TCC_DB" \
-        "SELECT allowed FROM access WHERE service='kTCCServiceAccessibility' AND client LIKE '%Aether%';" \
+        "SELECT allowed FROM access WHERE service='kTCCServiceAccessibility' AND client LIKE '%Aleph%';" \
         2>/dev/null | tail -1)
 
     if [ "$RESULT" = "1" ]; then
@@ -44,9 +44,9 @@ if [ -f "$USER_TCC_DB" ]; then
         echo "❌ Accessibility 权限已拒绝"
         echo ""
         echo "请前往: 系统设置 → 隐私与安全性 → 辅助功能"
-        echo "勾选 Aether 的复选框"
+        echo "勾选 Aleph 的复选框"
     else
-        echo "⚠️  未找到 Aether 的权限记录"
+        echo "⚠️  未找到 Aleph 的权限记录"
         echo ""
         echo "请手动检查:"
         echo "系统设置 → 隐私与安全性 → 辅助功能"

@@ -185,7 +185,7 @@ use aethecore::search::providers::TavilyProvider;
 let result = TavilyProvider::new("".to_string());
 
 assert!(result.is_err());
-assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
+assert!(matches!(result, Err(AlephError::InvalidConfig { .. })));
 ```
 
 **Validation**: Provider validates API key requirement.
@@ -557,7 +557,7 @@ async fn test_invalid_api_key() {
     let result = provider.search("test", &options).await;
 
     assert!(result.is_err());
-    assert!(matches!(result, Err(AetherError::ProviderError { .. })));
+    assert!(matches!(result, Err(AlephError::ProviderError { .. })));
 }
 ```
 

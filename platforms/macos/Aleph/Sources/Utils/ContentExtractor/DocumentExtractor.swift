@@ -33,7 +33,7 @@ final class DocumentExtractor: ContentExtractor {
         NSPasteboard.PasteboardType("public.file-url")
     ]
 
-    private let logger = Logger(subsystem: "com.aether", category: "DocumentExtractor")
+    private let logger = Logger(subsystem: "com.aleph", category: "DocumentExtractor")
 
     // MARK: - Extraction
 

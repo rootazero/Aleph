@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime};
 /// use std::path::Path;
 /// use alephcore::logging::retention::cleanup_old_logs;
 ///
-/// let log_dir = Path::new("/Users/user/.aether/logs");
+/// let log_dir = Path::new("/Users/user/.aleph/logs");
 /// let deleted = cleanup_old_logs(log_dir, 7).unwrap();
 /// println!("Deleted {} old log files", deleted);
 /// ```

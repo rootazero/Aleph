@@ -50,7 +50,7 @@ Successfully implemented Task 20 (Memory Management API) and Task 21 (Settings U
    - Logs configuration changes
    - Location: `core.rs:424-445`
 
-#### UniFFI Interface (aether.udl:76-111)
+#### UniFFI Interface (aleph.udl:76-111)
 
 All memory management methods are properly exposed via UniFFI:
 
@@ -356,18 +356,18 @@ All Rust core memory APIs have comprehensive unit tests:
 ## Files Modified/Created
 
 ### Created Files
-- `Aether/Sources/MemoryView.swift` (503 lines)
-- `Aether/core/TASK_20-21_MEMORY_UI_IMPLEMENTATION.md` (this file)
+- `Aleph/Sources/MemoryView.swift` (503 lines)
+- `Aleph/core/TASK_20-21_MEMORY_UI_IMPLEMENTATION.md` (this file)
 
 ### Modified Files
-- `Aether/Sources/SettingsView.swift` (added Memory tab)
-- `Aether/Sources/AppDelegate.swift` (pass core to settings)
-- `Aether/core/src/core.rs` (memory management APIs)
-- `Aether/core/src/aether.udl` (UniFFI interface definitions)
+- `Aleph/Sources/SettingsView.swift` (added Memory tab)
+- `Aleph/Sources/AppDelegate.swift` (pass core to settings)
+- `Aleph/core/src/core.rs` (memory management APIs)
+- `Aleph/core/src/aleph.udl` (UniFFI interface definitions)
 - `openspec/changes/add-contextual-memory-rag/tasks.md` (status updates)
 
 ### Build Artifacts
-- `Aether/Sources/Generated/aether.swift` (regenerated with new APIs)
+- `Aleph/Sources/Generated/aleph.swift` (regenerated with new APIs)
 - `Aleph.xcodeproj/` (regenerated with xcodegen)
 
 ## Next Steps
@@ -401,7 +401,7 @@ cargo build --release
 cargo test memory::
 
 # Regenerate Swift bindings
-cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/
+cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/
 
 # Regenerate Xcode project
 cd ../..

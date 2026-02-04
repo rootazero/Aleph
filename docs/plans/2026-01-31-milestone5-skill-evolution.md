@@ -37,7 +37,7 @@
 
 **Step 1: 创建 types.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/skill_evolution/types.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/skill_evolution/types.rs`：
 
 ```rust
 //! Core types for skill evolution system.
@@ -316,7 +316,7 @@ mod tests {
 
 **Step 2: 创建 mod.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/skill_evolution/mod.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/skill_evolution/mod.rs`：
 
 ```rust
 //! Skill evolution system.
@@ -349,12 +349,12 @@ pub use types::{
 
 **Step 3: 更新 lib.rs**
 
-在 `/Volumes/TBU4/Workspace/Aether/core/src/lib.rs` 添加模块声明和导出。
+在 `/Volumes/TBU4/Workspace/Aleph/core/src/lib.rs` 添加模块声明和导出。
 
 **Step 4: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test skill_evolution::types::tests
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test skill_evolution::types::tests
 ```
 
 **Step 5: Commit**
@@ -374,7 +374,7 @@ git commit -m "feat(skill_evolution): add core types for skill evolution system"
 
 **Step 1: 创建 tracker.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/skill_evolution/tracker.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/skill_evolution/tracker.rs`：
 
 ```rust
 //! EvolutionTracker - logs skill executions and maintains metrics.
@@ -825,7 +825,7 @@ git commit -m "feat(skill_evolution): implement EvolutionTracker for execution l
 
 **Step 1: 创建 detector.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/skill_evolution/detector.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/skill_evolution/detector.rs`：
 
 ```rust
 //! SolidificationDetector - detects patterns ready for solidification.
@@ -1045,7 +1045,7 @@ git commit -m "feat(skill_evolution): implement SolidificationDetector for patte
 
 **Step 1: 创建 generator.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/skill_evolution/generator.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/skill_evolution/generator.rs`：
 
 ```rust
 //! SkillGenerator - generates SKILL.md files from suggestions.
@@ -1099,7 +1099,7 @@ impl SkillGenerator {
             message: "Could not determine home directory".to_string(),
             suggestion: None,
         })?;
-        let skills_dir = home.join(".aether").join("skills");
+        let skills_dir = home.join(".aleph").join("skills");
         Ok(Self::new(skills_dir))
     }
 
@@ -1288,7 +1288,7 @@ git commit -m "feat(skill_evolution): implement SkillGenerator for SKILL.md crea
 
 **Step 1: 创建 git.rs**
 
-创建 `/Volumes/TBU4/Workspace/Aether/core/src/skill_evolution/git.rs`：
+创建 `/Volumes/TBU4/Workspace/Aleph/core/src/skill_evolution/git.rs`：
 
 ```rust
 //! GitCommitter - auto-commits generated skills to git.
@@ -1597,18 +1597,18 @@ git commit -m "feat(skill_evolution): implement GitCommitter for auto-commit"
 **Step 1: 运行所有测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test skill_evolution::
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test skill_evolution::
 ```
 
 **Step 2: 编译验证**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 3: 更新设计文档**
 
-修改 `/Volumes/TBU4/Workspace/Aether/docs/plans/2026-01-31-aether-beyond-openclaw-design.md`：
+修改 `/Volumes/TBU4/Workspace/Aleph/docs/plans/2026-01-31-aleph-beyond-openclaw-design.md`：
 
 ```markdown
 ### Milestone 5: Skill 进化系统

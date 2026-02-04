@@ -52,7 +52,7 @@
 @MainActor
 final class UnifiedInputCoordinator {
     // Dependencies
-    private weak var core: AetherCore?
+    private weak var core: AlephCore?
     private weak var haloWindowController: HaloWindowController?
     private let focusDetector = FocusDetector()
 

@@ -2,7 +2,7 @@
 
 ## Why
 
-Comparing Aether with OpenCode (Claude Code's open-source implementation) reveals critical gaps in sub-agent task execution. OpenCode achieves high efficiency through synchronous result collection and real-time progress tracking, while Aether's fire-and-forget event model means parent agents cannot reliably wait for or collect sub-agent results. This blocks proper multi-agent task orchestration—a core Agent capability.
+Comparing Aleph with OpenCode (Claude Code's open-source implementation) reveals critical gaps in sub-agent task execution. OpenCode achieves high efficiency through synchronous result collection and real-time progress tracking, while Aleph's fire-and-forget event model means parent agents cannot reliably wait for or collect sub-agent results. This blocks proper multi-agent task orchestration—a core Agent capability.
 
 ## What Changes
 
@@ -29,9 +29,9 @@ Comparing Aether with OpenCode (Claude Code's open-source implementation) reveal
 
 ### Current State Analysis
 
-Comparing Aether with OpenCode (Claude Code's open-source implementation) reveals critical gaps:
+Comparing Aleph with OpenCode (Claude Code's open-source implementation) reveals critical gaps:
 
-| Feature | OpenCode | Aether | Gap Severity |
+| Feature | OpenCode | Aleph | Gap Severity |
 |---------|----------|--------|--------------|
 | **Result Aggregation** | `SessionPrompt.prompt()` synchronously waits and collects all tool executions | SubAgentHandler only tracks sessions, doesn't collect results | 🔴 Critical |
 | **Synchronous Wait** | Parent blocks until child session completes | No wait mechanism; events are fire-and-forget | 🔴 Critical |

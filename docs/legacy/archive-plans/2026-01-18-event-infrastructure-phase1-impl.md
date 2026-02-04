@@ -13,11 +13,11 @@
 ## Task 1: Create Event Module Structure
 
 **Files:**
-- Create: `Aether/core/src/event/mod.rs`
-- Create: `Aether/core/src/event/types.rs`
-- Create: `Aether/core/src/event/bus.rs`
-- Create: `Aether/core/src/event/handler.rs`
-- Modify: `Aether/core/src/lib.rs` (add module declaration)
+- Create: `Aleph/core/src/event/mod.rs`
+- Create: `Aleph/core/src/event/types.rs`
+- Create: `Aleph/core/src/event/bus.rs`
+- Create: `Aleph/core/src/event/handler.rs`
+- Modify: `Aleph/core/src/lib.rs` (add module declaration)
 
 **Step 1: Create event module directory and mod.rs**
 
@@ -27,7 +27,7 @@
 //!
 //! This module provides:
 //! - `EventBus`: Type-safe broadcast channel for component communication
-//! - `AetherEvent`: Unified event enum for all system events
+//! - `AlephEvent`: Unified event enum for all system events
 //! - `EventHandler`: Trait for components to subscribe and handle events
 
 mod bus;
@@ -61,7 +61,7 @@ pub use types::{
 
 **Step 2: Run syntax check**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check 2>&1 | head -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check 2>&1 | head -20`
 Expected: Error about missing files (bus.rs, handler.rs, types.rs)
 
 **Step 3: Commit module structure placeholder**
@@ -76,7 +76,7 @@ git commit -m "feat(event): add event module structure placeholder"
 ## Task 2: Define Core Event Types
 
 **Files:**
-- Create: `Aether/core/src/event/types.rs`
+- Create: `Aleph/core/src/event/types.rs`
 
 **Step 1: Write event type definitions**
 
@@ -531,8 +531,8 @@ mod tests {
 
     #[test]
     fn test_timestamped_event_sequence() {
-        let e1 = TimestampedEvent::new(AetherEvent::LoopStop(StopReason::Completed));
-        let e2 = TimestampedEvent::new(AetherEvent::LoopStop(StopReason::Completed));
+        let e1 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed));
+        let e2 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed));
 
         assert!(e2.sequence > e1.sequence);
     }
@@ -559,12 +559,12 @@ mod tests {
 
 **Step 2: Run cargo check**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check 2>&1 | head -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check 2>&1 | head -30`
 Expected: Still errors about missing bus.rs and handler.rs
 
 **Step 3: Run tests for types module**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test event::types --no-fail-fast 2>&1 | tail -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test event::types --no-fail-fast 2>&1 | tail -20`
 Expected: Tests should pass once all files are created
 
 **Step 4: Commit types module**
@@ -585,7 +585,7 @@ git commit -m "feat(event): add event type definitions
 ## Task 3: Implement EventBus
 
 **Files:**
-- Create: `Aether/core/src/event/bus.rs`
+- Create: `Aleph/core/src/event/bus.rs`
 
 **Step 1: Write EventBus implementation**
 
@@ -593,7 +593,7 @@ git commit -m "feat(event): add event type definitions
 // Aleph/core/src/event/bus.rs
 //! Event bus implementation using tokio broadcast channels.
 
-use crate::event::types::{AetherEvent, EventType, TimestampedEvent};
+use crate::event::types::{AlephEvent, EventType, TimestampedEvent};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, trace, warn};
@@ -867,7 +867,7 @@ mod tests {
         let mut subscriber = bus.subscribe_filtered(vec![EventType::LoopStop]);
 
         // Publish non-matching event first
-        bus.publish(AetherEvent::InputReceived(InputEvent {
+        bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -875,7 +875,7 @@ mod tests {
         })).await;
 
         // Publish matching event
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
 
         // Should only receive LoopStop
         let received = subscriber.try_recv().unwrap();
@@ -891,7 +891,7 @@ mod tests {
 
         assert_eq!(bus.subscriber_count(), 2);
 
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
 
         // Both should receive
         let r1 = sub1.try_recv().unwrap();
@@ -905,8 +905,8 @@ mod tests {
     async fn test_event_history() {
         let bus = EventBus::new();
 
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
-        bus.publish(AetherEvent::LoopStop(StopReason::UserAborted)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::UserAborted)).await;
 
         let history = bus.history().await;
         assert_eq!(history.len(), 2);
@@ -924,7 +924,7 @@ mod tests {
         });
 
         for _ in 0..10 {
-            bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+            bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
         }
 
         let history = bus.history().await;
@@ -935,12 +935,12 @@ mod tests {
 
 **Step 2: Run cargo check**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check 2>&1 | head -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check 2>&1 | head -30`
 Expected: Still error about missing handler.rs
 
 **Step 3: Run bus tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test event::bus --no-fail-fast 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test event::bus --no-fail-fast 2>&1 | tail -30`
 Expected: Tests should pass once handler.rs is created
 
 **Step 4: Commit bus module**
@@ -960,7 +960,7 @@ git commit -m "feat(event): implement EventBus with broadcast channels
 ## Task 4: Implement EventHandler Trait
 
 **Files:**
-- Create: `Aether/core/src/event/handler.rs`
+- Create: `Aleph/core/src/event/handler.rs`
 
 **Step 1: Write EventHandler trait and registry**
 
@@ -969,7 +969,7 @@ git commit -m "feat(event): implement EventBus with broadcast channels
 //! Event handler trait and registry for component subscriptions.
 
 use crate::event::bus::EventBus;
-use crate::event::types::{AetherEvent, EventType};
+use crate::event::types::{AlephEvent, EventType};
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -1041,9 +1041,9 @@ pub trait EventHandler: Send + Sync {
     /// Errors are logged but don't stop the event loop.
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError>;
+    ) -> Result<Vec<AlephEvent>, HandlerError>;
 }
 
 /// Error type for event handlers
@@ -1229,9 +1229,9 @@ mod tests {
 
         async fn handle(
             &self,
-            _event: &AetherEvent,
+            _event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
             self.count.fetch_add(1, Ordering::SeqCst);
             Ok(vec![])
         }
@@ -1252,11 +1252,11 @@ mod tests {
 
         async fn handle(
             &self,
-            _event: &AetherEvent,
+            _event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
             // Produce a LoopStop event for each input
-            Ok(vec![AetherEvent::LoopStop(StopReason::Completed)])
+            Ok(vec![AlephEvent::LoopStop(StopReason::Completed)])
         }
     }
 
@@ -1286,7 +1286,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Publish event
-        bus.publish(AetherEvent::InputReceived(InputEvent {
+        bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -1325,7 +1325,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Publish input event
-        bus.publish(AetherEvent::InputReceived(InputEvent {
+        bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -1379,12 +1379,12 @@ mod tests {
 
 **Step 2: Run cargo check**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check 2>&1 | head -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check 2>&1 | head -30`
 Expected: Should compile (may have warnings)
 
 **Step 3: Run all event module tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test event:: --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test event:: --no-fail-fast 2>&1`
 Expected: All tests pass
 
 **Step 4: Commit handler module**
@@ -1405,7 +1405,7 @@ git commit -m "feat(event): implement EventHandler trait and registry
 ## Task 5: Integrate Event Module into lib.rs
 
 **Files:**
-- Modify: `Aether/core/src/lib.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Add event module declaration**
 
@@ -1435,12 +1435,12 @@ pub use crate::event::{
 
 **Step 3: Run cargo check**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check 2>&1 | head -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check 2>&1 | head -20`
 Expected: Clean compile
 
 **Step 4: Run all tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test event:: 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test event:: 2>&1`
 Expected: All tests pass
 
 **Step 5: Commit integration**
@@ -1459,8 +1459,8 @@ git commit -m "feat(event): integrate event module into library
 ## Task 6: Add Integration Test
 
 **Files:**
-- Create: `Aether/core/src/event/integration_test.rs`
-- Modify: `Aether/core/src/event/mod.rs`
+- Create: `Aleph/core/src/event/integration_test.rs`
+- Modify: `Aleph/core/src/event/mod.rs`
 
 **Step 1: Create integration test file**
 
@@ -1488,12 +1488,12 @@ mod tests {
 
         async fn handle(
             &self,
-            event: &AetherEvent,
+            event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
             if let AlephEvent::InputReceived(input) = event {
                 // Simulate: detect intent and request tool call
-                Ok(vec![AetherEvent::ToolCallRequested(ToolCallRequest {
+                Ok(vec![AlephEvent::ToolCallRequested(ToolCallRequest {
                     tool: "search".to_string(),
                     parameters: serde_json::json!({"query": input.text}),
                     plan_step_id: None,
@@ -1517,11 +1517,11 @@ mod tests {
 
         async fn handle(
             &self,
-            event: &AetherEvent,
+            event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
             if let AlephEvent::ToolCallRequested(req) = event {
-                Ok(vec![AetherEvent::ToolCallCompleted(ToolCallResult {
+                Ok(vec![AlephEvent::ToolCallCompleted(ToolCallResult {
                     call_id: uuid::Uuid::new_v4().to_string(),
                     tool: req.tool.clone(),
                     input: req.parameters.clone(),
@@ -1551,16 +1551,16 @@ mod tests {
 
         async fn handle(
             &self,
-            _event: &AetherEvent,
+            _event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
             let count = self.iterations.fetch_add(1, Ordering::SeqCst);
 
             // Stop after first iteration
             if count >= 1 {
-                Ok(vec![AetherEvent::LoopStop(StopReason::Completed)])
+                Ok(vec![AlephEvent::LoopStop(StopReason::Completed)])
             } else {
-                Ok(vec![AetherEvent::LoopContinue(LoopState {
+                Ok(vec![AlephEvent::LoopContinue(LoopState {
                     session_id: "test-session".to_string(),
                     iteration: count as u32,
                     total_tokens: 0,
@@ -1595,7 +1595,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
 
         // Trigger the flow with an input event
-        bus.publish(AetherEvent::InputReceived(InputEvent {
+        bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "search for rust async".to_string(),
             topic_id: None,
             context: None,
@@ -1660,9 +1660,9 @@ mod tests {
 
             async fn handle(
                 &self,
-                _event: &AetherEvent,
+                _event: &AlephEvent,
                 ctx: &EventContext,
-            ) -> Result<Vec<AetherEvent>, HandlerError> {
+            ) -> Result<Vec<AlephEvent>, HandlerError> {
                 if ctx.is_aborted() {
                     return Err(HandlerError::Aborted);
                 }
@@ -1679,7 +1679,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Publish one event
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -1713,12 +1713,12 @@ mod integration_test;
 
 **Step 3: Run integration tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test event::integration_test --no-fail-fast 2>&1`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test event::integration_test --no-fail-fast 2>&1`
 Expected: All tests pass
 
 **Step 4: Run all tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test 2>&1 | tail -30`
 Expected: All tests pass
 
 **Step 5: Commit integration test**
@@ -1739,22 +1739,22 @@ git commit -m "test(event): add integration tests for event flow
 
 **Step 1: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test 2>&1 | tail -50`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test 2>&1 | tail -50`
 Expected: All tests pass
 
 **Step 2: Run clippy**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo clippy --all-targets 2>&1 | grep -E "(warning|error)" | head -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo clippy --all-targets 2>&1 | grep -E "(warning|error)" | head -20`
 Expected: No new warnings in event module
 
 **Step 3: Build release to verify**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo build --release 2>&1 | tail -10`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo build --release 2>&1 | tail -10`
 Expected: Build succeeds
 
 **Step 4: Verify library exports**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo doc --no-deps 2>&1 | tail -10`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo doc --no-deps 2>&1 | tail -10`
 Expected: Documentation builds
 
 **Step 5: Final commit**

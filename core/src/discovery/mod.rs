@@ -8,9 +8,9 @@
 //! **Read Paths (by priority, later overrides earlier):**
 //! - `~/.claude/skills/` - Claude Code compatible (read-only)
 //! - `~/.claude/commands/` - Claude Code compatible (read-only)
-//! - `~/.aleph/skills/` - Aether native
-//! - `~/.aleph/commands/` - Aether native
-//! - `~/.aleph/plugins/` - Aether native
+//! - `~/.aleph/skills/` - Aleph native
+//! - `~/.aleph/commands/` - Aleph native
+//! - `~/.aleph/plugins/` - Aleph native
 //! - `./.claude/skills/` - Project-level Claude Code (read-only)
 //! - `./.claude/commands/` - Project-level Claude Code (read-only)
 //!
@@ -29,7 +29,7 @@
 //! let skills = manager.discover_skills()?;
 //!
 //! // Find config files with upward traversal
-//! let configs = manager.find_config_files("aether.jsonc")?;
+//! let configs = manager.find_config_files("aleph.jsonc")?;
 //! ```
 
 mod paths;
@@ -130,9 +130,9 @@ impl DiscoveryManager {
         Self::new(DiscoveryConfig::default())
     }
 
-    /// Get the Aether home directory (~/.aleph/)
-    pub fn aether_home(&self) -> DiscoveryResult<PathBuf> {
-        aether_home_dir()
+    /// Get the Aleph home directory (~/.aleph/)
+    pub fn aleph_home(&self) -> DiscoveryResult<PathBuf> {
+        aleph_home_dir()
     }
 
     /// Get all directories to scan for components

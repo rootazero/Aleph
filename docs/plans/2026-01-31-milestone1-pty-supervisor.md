@@ -28,7 +28,7 @@ strip-ansi-escapes = "0.2"
 
 **Step 2: 验证依赖可以解析**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo check`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo check`
 
 Expected: 编译通过，无依赖冲突
 
@@ -172,7 +172,7 @@ pub use crate::supervisor::{PtySize, SupervisorConfig, SupervisorError, Supervis
 
 **Step 4: 验证模块结构**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo check`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo check`
 
 Expected: 编译通过
 
@@ -212,7 +212,7 @@ mod tests {
 
 **Step 2: 运行测试验证失败**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test supervisor::pty::tests::test_supervisor_creation`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test supervisor::pty::tests::test_supervisor_creation`
 
 Expected: FAIL with "cannot find struct `ClaudeSupervisor`"
 
@@ -482,7 +482,7 @@ pub use crate::supervisor::{
 
 **Step 6: 运行测试验证通过**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test supervisor::`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test supervisor::`
 
 Expected: All tests PASS
 
@@ -636,7 +636,7 @@ pub use types::{PtySize, SupervisorConfig, SupervisorError, SupervisorEvent};
 
 **Step 3: 运行集成测试**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test supervisor::tests::`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test supervisor::tests::`
 
 Expected: All tests PASS
 
@@ -742,7 +742,7 @@ pub mod supervisor;
 
 **Step 3: 验证编译**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo check --features gateway`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo check --features gateway`
 
 Expected: 编译通过
 
@@ -759,19 +759,19 @@ git commit -m "feat(gateway): add supervisor RPC handler skeleton"
 
 **Step 1: 运行所有 supervisor 测试**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test supervisor:: --all-features`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test supervisor:: --all-features`
 
 Expected: All tests PASS
 
 **Step 2: 运行完整测试套件确保无回归**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test`
 
 Expected: All existing tests still pass
 
 **Step 3: 更新设计文档状态**
 
-在 `docs/plans/2026-01-31-aether-beyond-openclaw-design.md` 的 Milestone 1 部分标记完成：
+在 `docs/plans/2026-01-31-aleph-beyond-openclaw-design.md` 的 Milestone 1 部分标记完成：
 
 ```markdown
 ### Milestone 1: PtySupervisor 基础

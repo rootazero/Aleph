@@ -8,7 +8,7 @@
 
 ### 1. 窗口关闭拦截 (Window Close Interception)
 
-**实现位置**: `Aether/Sources/Components/Window/RootContentView.swift`
+**实现位置**: `Aleph/Sources/Components/Window/RootContentView.swift`
 
 **核心组件**:
 - `SettingsWindowDelegate`: NSWindowDelegate 实现类
@@ -44,7 +44,7 @@ func windowShouldClose(_ sender: NSWindow) -> Bool {
 
 ### 2. 菜单切换拦截 (Tab Switch Interception)
 
-**实现位置**: `Aether/Sources/Components/Window/RootContentView.swift`
+**实现位置**: `Aleph/Sources/Components/Window/RootContentView.swift`
 
 **核心逻辑**:
 - 在 `onChange(of: selectedTab)` 中检查未保存状态
@@ -182,22 +182,22 @@ private var hasUnsavedChanges: Bool {
 ## 相关文件
 
 ### 修改的文件:
-1. `Aether/Sources/Components/Window/RootContentView.swift`
+1. `Aleph/Sources/Components/Window/RootContentView.swift`
    - 添加 `SettingsWindowDelegate` 类
    - 添加窗口委托设置逻辑
    - 添加标签页切换拦截逻辑
    - 添加 `showUnsavedChangesDialog` 辅助方法
 
-2. `Aether/Resources/en.lproj/Localizable.strings`
+2. `Aleph/Resources/en.lproj/Localizable.strings`
    - 添加 `settings.unsaved_changes.discard` 键
 
-3. `Aether/Resources/zh-Hans.lproj/Localizable.strings`
+3. `Aleph/Resources/zh-Hans.lproj/Localizable.strings`
    - 添加 `settings.unsaved_changes.discard` 键
 
 ### 依赖的现有文件:
-1. `Aether/Sources/Utils/SettingsViewProtocol.swift` - `SettingsSaveBarState` 类
-2. `Aether/Sources/Components/Molecules/UnifiedSaveBar.swift` - 保存栏 UI 组件
-3. `Aether/Sources/BehaviorSettingsView.swift` - 保存逻辑参考实现
+1. `Aleph/Sources/Utils/SettingsViewProtocol.swift` - `SettingsSaveBarState` 类
+2. `Aleph/Sources/Components/Molecules/UnifiedSaveBar.swift` - 保存栏 UI 组件
+3. `Aleph/Sources/BehaviorSettingsView.swift` - 保存逻辑参考实现
 
 ## 实施状态
 

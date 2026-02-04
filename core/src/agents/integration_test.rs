@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::agents::{AgentRegistry, TaskTool};
 use crate::components::SubAgentHandler;
 use crate::event::{
-    AetherEvent, EventBus, EventContext, EventHandler, SubAgentRequest, SubAgentResult,
+    AlephEvent, EventBus, EventContext, EventHandler, SubAgentRequest, SubAgentResult,
 };
 
 fn create_test_setup() -> (Arc<AgentRegistry>, Arc<EventBus>, SubAgentHandler, TaskTool) {
@@ -37,7 +37,7 @@ async fn test_full_subagent_lifecycle() {
     // 2. Receive the SubAgentStarted event
     let event = subscriber.recv().await.unwrap();
     let request = match &event.event {
-        AetherEvent::SubAgentStarted(req) => req.clone(),
+        AlephEvent::SubAgentStarted(req) => req.clone(),
         _ => panic!("Expected SubAgentStarted"),
     };
 
@@ -63,7 +63,7 @@ async fn test_full_subagent_lifecycle() {
         execution_duration_ms: None,
     };
 
-    bus.publish(AetherEvent::SubAgentCompleted(completion.clone()))
+    bus.publish(AlephEvent::SubAgentCompleted(completion.clone()))
         .await;
 
     // 6. Handler processes completion
@@ -111,7 +111,7 @@ async fn test_max_iterations_enforcement() {
         child_session_id: "test-child".into(),
     };
     handler
-        .handle(&AetherEvent::SubAgentStarted(request.clone()), &ctx)
+        .handle(&AlephEvent::SubAgentStarted(request.clone()), &ctx)
         .await
         .unwrap();
 
@@ -142,7 +142,7 @@ async fn test_nested_subagent_tracking() {
         child_session_id: "child-1".into(),
     };
     handler
-        .handle(&AetherEvent::SubAgentStarted(request1), &ctx)
+        .handle(&AlephEvent::SubAgentStarted(request1), &ctx)
         .await
         .unwrap();
 
@@ -154,7 +154,7 @@ async fn test_nested_subagent_tracking() {
         child_session_id: "child-2".into(),
     };
     handler
-        .handle(&AetherEvent::SubAgentStarted(request2), &ctx)
+        .handle(&AlephEvent::SubAgentStarted(request2), &ctx)
         .await
         .unwrap();
 
@@ -184,7 +184,7 @@ async fn test_nested_subagent_tracking() {
         execution_duration_ms: None,
     };
     handler
-        .handle(&AetherEvent::SubAgentCompleted(result2), &ctx)
+        .handle(&AlephEvent::SubAgentCompleted(result2), &ctx)
         .await
         .unwrap();
 
@@ -203,7 +203,7 @@ async fn test_nested_subagent_tracking() {
         execution_duration_ms: None,
     };
     handler
-        .handle(&AetherEvent::SubAgentCompleted(result1), &ctx)
+        .handle(&AlephEvent::SubAgentCompleted(result1), &ctx)
         .await
         .unwrap();
 
@@ -222,7 +222,7 @@ async fn test_subagent_failure_tracking() {
         child_session_id: "child".into(),
     };
     handler
-        .handle(&AetherEvent::SubAgentStarted(request), &ctx)
+        .handle(&AlephEvent::SubAgentStarted(request), &ctx)
         .await
         .unwrap();
 
@@ -238,7 +238,7 @@ async fn test_subagent_failure_tracking() {
         execution_duration_ms: None,
     };
     handler
-        .handle(&AetherEvent::SubAgentCompleted(result), &ctx)
+        .handle(&AlephEvent::SubAgentCompleted(result), &ctx)
         .await
         .unwrap();
 
@@ -310,7 +310,7 @@ async fn test_concurrent_subagent_sessions() {
 
     for request in &requests {
         handler
-            .handle(&AetherEvent::SubAgentStarted(request.clone()), &ctx)
+            .handle(&AlephEvent::SubAgentStarted(request.clone()), &ctx)
             .await
             .unwrap();
     }
@@ -333,7 +333,7 @@ async fn test_concurrent_subagent_sessions() {
             execution_duration_ms: None,
         };
         handler
-            .handle(&AetherEvent::SubAgentCompleted(result), &ctx)
+            .handle(&AlephEvent::SubAgentCompleted(result), &ctx)
             .await
             .unwrap();
     }

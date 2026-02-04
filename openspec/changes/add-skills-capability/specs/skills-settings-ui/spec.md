@@ -1,6 +1,6 @@
 # Skills Settings UI Specification
 
-This specification defines the Skills management interface in Aether's Settings UI. The UI focuses on installation and deletion only - no editing functionality to keep the interface lightweight.
+This specification defines the Skills management interface in Aleph's Settings UI. The UI focuses on installation and deletion only - no editing functionality to keep the interface lightweight.
 
 ## ADDED Requirements
 
@@ -29,7 +29,7 @@ The system SHALL display all installed Skills in a list format.
 
 #### Scenario: Display installed skills
 
-- **GIVEN** skills exist in `~/.aether/skills/`
+- **GIVEN** skills exist in `~/.aleph/skills/`
 - **WHEN** the Skills tab is viewed
 - **THEN** each skill SHALL be displayed as a SkillCard
 - **AND** show the skill name and description
@@ -208,4 +208,4 @@ The system SHALL display user-friendly error messages.
 
 - **skills-capability**: Core skills functionality (registry, installer)
 - **settings-ui-layout**: Settings UI architecture
-- Existing UI components: `Aether/Sources/Components/`
+- Existing UI components: `Aleph/Sources/Components/`

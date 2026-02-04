@@ -147,7 +147,7 @@ impl UnifiedToolExecutor {
         }
 
         // 4. Fallback to general chat (no tool found)
-        Err(AetherError::tool_not_found(tool_name))
+        Err(AlephError::tool_not_found(tool_name))
     }
 }
 ```

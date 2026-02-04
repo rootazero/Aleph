@@ -109,7 +109,7 @@ JSON
   "query": "帮我解释这段代码",
   "host_app": "VS Code",
   "selected_text": "func applicationDidFinishLaunching...",
-  "working_directory": "/Users/ziv/Projects/Aether" // 尝试通过 AppleScript 或 AX 获取路径
+  "working_directory": "/Users/ziv/Projects/Aleph" // 尝试通过 AppleScript 或 AX 获取路径
 }
 B. 智能路由 (The Router)
 
@@ -133,7 +133,7 @@ Rust 通过 Callback 回调 Swift。
 
 Swift 在当前光标位置附近渲染一个微型 Popover（原生 UI）：
 
-🤖 Aether 想要读取文件: /etc/hosts [拒绝] [允许] [始终允许]
+🤖 Aleph 想要读取文件: /etc/hosts [拒绝] [允许] [始终允许]
 
 用户点击允许后，Swift 通知 Rust 继续执行。
 

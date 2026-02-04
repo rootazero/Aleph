@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-本设计文档详细说明如何将 Apple Liquid Glass 设计系统应用到 Aether Settings 窗口，同时保持向后兼容性。
+本设计文档详细说明如何将 Apple Liquid Glass 设计系统应用到 Aleph Settings 窗口，同时保持向后兼容性。
 
 ## Design Goals
 

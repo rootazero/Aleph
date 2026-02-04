@@ -87,7 +87,7 @@ const NPM_TIMEOUT_SECS: u64 = 300;
 /// Default timeout for IPC operations (300 seconds)
 const IPC_TIMEOUT_SECS: u64 = 300;
 
-/// npm package installer using Aether's fnm/Node.js runtime
+/// npm package installer using Aleph's fnm/Node.js runtime
 pub struct NpmInstaller {
     /// fnm runtime
     fnm: FnmRuntime,

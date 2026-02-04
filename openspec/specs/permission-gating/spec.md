@@ -47,7 +47,7 @@ The system SHALL monitor permission status in real-time and automatically progre
 - **WHEN** user grants Input Monitoring permission in System Settings
 - **THEN** the system detects the change within 1 second
 - **AND** automatically updates UI to show Input Monitoring as granted
-- **AND** displays "进入 Aether" button for user to manually restart
+- **AND** displays "进入 Aleph" button for user to manually restart
 - **AND** the app does NOT restart automatically until user clicks the button
 - **AND** macOS system may show its own "app needs restart" prompt (do not interfere)
 
@@ -113,7 +113,7 @@ The system SHALL detect macOS Input Monitoring permission status using IOHIDMana
 - **WHEN** Input Monitoring permission is not granted
 - **THEN** the system cannot detect global hotkeys
 - **AND** blocks initialization of rdev hotkey listener in Rust core
-- **AND** shows permission gate UI instead of initializing AetherCore
+- **AND** shows permission gate UI instead of initializing AlephCore
 
 ### Requirement: Settings Window Access Blocking
 The system SHALL prevent access to settings window and all app features until permission requirements are met.
@@ -132,7 +132,7 @@ The system SHALL prevent access to settings window and all app features until pe
 
 #### Scenario: Block core functionality
 - **WHEN** permission gate is active
-- **THEN** the system does not initialize AetherCore
+- **THEN** the system does not initialize AlephCore
 - **AND** global hotkeys are not registered
 - **AND** clipboard monitoring is disabled
 - **AND** menu bar shows "waiting for permissions" state
@@ -163,18 +163,18 @@ The system SHALL provide a manual restart mechanism that users can trigger after
 
 #### Scenario: Display restart button after all permissions granted
 - **WHEN** both Accessibility and Input Monitoring permissions are granted
-- **THEN** the system displays "进入 Aether" button in PermissionGateView
+- **THEN** the system displays "进入 Aleph" button in PermissionGateView
 - **AND** the button is enabled and clickable
 - **AND** no automatic restart occurs
 
 #### Scenario: User clicks restart button
-- **WHEN** user clicks "进入 Aether" button
+- **WHEN** user clicks "进入 Aleph" button
 - **THEN** the system launches a new instance of the app via NSWorkspace
 - **AND** terminates the current instance after new instance starts
 - **AND** the new instance proceeds with normal operation (permissions already granted)
 
 #### Scenario: User ignores restart button
-- **WHEN** user does NOT click "进入 Aether" button
+- **WHEN** user does NOT click "进入 Aleph" button
 - **THEN** the system keeps the button visible
 - **AND** does not force restart
 - **AND** allows macOS system to show its own restart prompt (if applicable)

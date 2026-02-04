@@ -44,7 +44,7 @@ This new code has introduced fresh complexity and duplicated patterns. A second 
 
 ### Problem Statement
 
-The Aether codebase has accumulated **19 identified violations** of Occam's Razor:
+The Aleph codebase has accumulated **19 identified violations** of Occam's Razor:
 
 | Layer | Violations | Est. Savings |
 |-------|------------|--------------|

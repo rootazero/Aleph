@@ -41,18 +41,18 @@ Users typing `/mcp/fs/read` feels unnatural - reading files is a **system capabi
 
 ```
 / (Root)
-├── /fs           [Tier 1: System] → aether-fs
+├── /fs           [Tier 1: System] → aleph-fs
 │   ├── read
 │   ├── write
 │   └── list
-├── /git          [Tier 1: System] → aether-git
+├── /git          [Tier 1: System] → aleph-git
 │   ├── status
 │   ├── commit
 │   └── diff
-├── /sys          [Tier 1: System] → aether-sys
+├── /sys          [Tier 1: System] → aleph-sys
 │   ├── info
 │   └── processes
-├── /shell        [Tier 1: System] → aether-shell
+├── /shell        [Tier 1: System] → aleph-shell
 │   └── run
 ├── /mcp          [Tier 2: Extensions] → User-installed external servers
 │   ├── linear

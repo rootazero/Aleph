@@ -1,6 +1,6 @@
 //
 //  LocalizationManager.swift
-//  Aether
+//  Aleph
 //
 //  Centralized localization manager that properly handles runtime language switching.
 //  This solves the issue where Bundle.main caches its localization at load time.
@@ -8,7 +8,7 @@
 
 import Foundation
 
-/// Centralized localization manager for Aether
+/// Centralized localization manager for Aleph
 ///
 /// This manager solves the critical issue where `NSLocalizedString` uses `Bundle.main`,
 /// which determines its localization at bundle load time, not at runtime.
@@ -142,7 +142,7 @@ final class LocalizationManager: @unchecked Sendable {
 
     /// Load language preference from config file
     private func loadLanguageFromConfig() -> String? {
-        let configPath = NSHomeDirectory() + "/.aether/config.toml"
+        let configPath = NSHomeDirectory() + "/.aleph/config.toml"
 
         guard FileManager.default.fileExists(atPath: configPath),
               let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {

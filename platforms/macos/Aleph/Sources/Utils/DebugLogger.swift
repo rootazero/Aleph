@@ -1,6 +1,6 @@
 //
 //  DebugLogger.swift
-//  Aether
+//  Aleph
 //
 //  Simple file-based debug logger for tracking execution flow
 //
@@ -8,11 +8,11 @@
 import Foundation
 
 /// Simple file-based debug logger
-/// Writes logs to ~/Library/Logs/Aether/debug.log
+/// Writes logs to ~/Library/Logs/Aleph/debug.log
 enum DebugLogger {
     private static let logFile: URL = {
         let logsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/Aether")
+            .appendingPathComponent("Library/Logs/Aleph")
         try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
         return logsDir.appendingPathComponent("debug.log")
     }()

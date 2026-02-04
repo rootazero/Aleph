@@ -1,6 +1,6 @@
 //
 //  SearchProviderPreset.swift
-//  Aether
+//  Aleph
 //
 //  Search provider preset templates for Search Settings UI.
 //  Phase 3 of add-search-settings-ui proposal.

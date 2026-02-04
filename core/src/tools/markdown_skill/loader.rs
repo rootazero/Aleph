@@ -9,7 +9,7 @@ use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
 use super::parser::parse_skill_file;
-use super::spec::{AetherSkillSpec, SandboxMode};
+use super::spec::{AlephSkillSpec, SandboxMode};
 use super::tool_adapter::MarkdownCliTool;
 
 /// Skill loader for scanning and loading Markdown skills
@@ -153,11 +153,11 @@ impl SkillLoader {
     }
 
     /// Check if required binaries are available (only for host mode)
-    fn check_binary_availability(&self, spec: &AetherSkillSpec) {
+    fn check_binary_availability(&self, spec: &AlephSkillSpec) {
         // Only check when running on host
         let is_host_mode = spec
             .metadata
-            .aether
+            .aleph
             .as_ref()
             .map(|a| matches!(a.security.sandbox, SandboxMode::Host))
             .unwrap_or(true); // Default: OpenClaw style (host execution)

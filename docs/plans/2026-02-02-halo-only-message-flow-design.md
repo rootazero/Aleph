@@ -344,7 +344,7 @@ impl GatewayEventEmitter {
 ### 6.1 待删除文件
 
 ```
-platforms/macos/Aether/Sources/
+platforms/macos/Aleph/Sources/
 ├── UnifiedConversationWindow.swift     (删除)
 ├── UnifiedConversationView.swift       (删除)
 ├── UnifiedConversationViewModel.swift  (删除)

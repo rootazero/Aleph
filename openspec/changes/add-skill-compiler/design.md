@@ -14,7 +14,7 @@ Phase 10 (The Hands) formalizes the Skill Compiler: a pipeline that converts rep
 
 ## Decisions
 - Use existing `skill_evolution` components (EvolutionTracker, SolidificationDetector, SkillGenerator) as the backbone.
-- Store generated skills under `~/.aether/skills/<skill-id>/SKILL.md` and reload registry on success.
+- Store generated skills under `~/.aleph/skills/<skill-id>/SKILL.md` and reload registry on success.
 - Tool-backed skills are generated as a local package containing:
   - `tool_definition.json` (name, description, input schema)
   - `entrypoint` script (initially Python)
@@ -32,5 +32,5 @@ Phase 10 (The Hands) formalizes the Skill Compiler: a pipeline that converts rep
 
 ## Open Questions
 - Should tool-backed generation support Rust compilation in Phase 10 or be deferred?
-- Where should compiled tool packages be stored (`~/.aether/tools/compiled/` vs a registry directory)?
+- Where should compiled tool packages be stored (`~/.aleph/tools/compiled/` vs a registry directory)?
 - Should compiler suggestions be exposed in Settings UI or via conversational prompts only?

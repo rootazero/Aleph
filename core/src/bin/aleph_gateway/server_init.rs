@@ -1,4 +1,4 @@
-//! Server initialization helpers for Aether Gateway
+//! Server initialization helpers for Aleph Gateway
 //!
 //! This module contains helper functions for server initialization,
 //! including WebChat serving and agent run handling.

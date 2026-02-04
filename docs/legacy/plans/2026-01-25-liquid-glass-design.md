@@ -391,7 +391,7 @@ struct ScrollPhysics {
 ## 文件结构
 
 ```
-platforms/macos/Aether/Sources/
+platforms/macos/Aleph/Sources/
 ├── UI/
 │   ├── LiquidGlass/                          # 新增：液态玻璃系统
 │   │   ├── Metal/

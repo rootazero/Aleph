@@ -129,7 +129,7 @@ impl OAuthProvider {
         })?;
 
         let request_body = serde_json::json!({
-            "client_name": format!("Aether MCP Client ({})", self.server_name),
+            "client_name": format!("Aleph MCP Client ({})", self.server_name),
             "redirect_uris": [&self.callback_url],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],

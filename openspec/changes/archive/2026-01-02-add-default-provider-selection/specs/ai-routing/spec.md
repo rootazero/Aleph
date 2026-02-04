@@ -50,7 +50,7 @@ The router SHALL return the default provider when no rule matches, or provide a 
 - **THEN** `route()` SHALL return the default provider with `None` system prompt
 - **AND** if no enabled default provider exists
 - **THEN** `route()` SHALL return `None`
-- **AND** caller SHALL receive `AetherError::NoProviderAvailable`
+- **AND** caller SHALL receive `AlephError::NoProviderAvailable`
 - **AND** error message SHALL suggest enabling a provider in Settings
 
 #### Scenario: Improved error message when no providers enabled
@@ -59,7 +59,7 @@ The router SHALL return the default provider when no rule matches, or provide a 
 - **AND** no rule matches
 - **AND** no enabled default provider exists
 - **THEN** the system SHALL:
-  - Return `AetherError::NoProviderAvailable`
+  - Return `AlephError::NoProviderAvailable`
   - Error message: "No active providers available. Please enable at least one provider in Settings."
   - NOT attempt to route to disabled providers
   - Display error to user via Halo or notification

@@ -29,8 +29,8 @@
 Rust Core (已有)          C ABI 导出 (新增)           C# 端 (新增)
 ─────────────────────────────────────────────────────────────────
 init_unified/             ffi_cabi.rs                 AlephCore.cs
-├─ coordinator.rs    →    aether_needs_init()    →    NeedsFirstTimeInit()
-├─ phases (6个)      →    aether_run_init()      →    RunFirstTimeInit()
+├─ coordinator.rs    →    aleph_needs_init()    →    NeedsFirstTimeInit()
+├─ phases (6个)      →    aleph_run_init()      →    RunFirstTimeInit()
 └─ progress handler  →    callback functions     →    IInitProgressHandler
 ```
 
@@ -46,16 +46,16 @@ init_unified/             ffi_cabi.rs                 AlephCore.cs
 /// 检查是否需要首次初始化
 /// 返回：1 = 需要, 0 = 不需要
 #[no_mangle]
-pub extern "C" fn aether_needs_first_time_init() -> c_int
+pub extern "C" fn aleph_needs_first_time_init() -> c_int
 
 /// 检查嵌入模型是否存在
 /// 返回：1 = 存在, 0 = 不存在
 #[no_mangle]
-pub extern "C" fn aether_check_embedding_model_exists() -> c_int
+pub extern "C" fn aleph_check_embedding_model_exists() -> c_int
 
 /// 注册初始化进度回调
 #[no_mangle]
-pub unsafe extern "C" fn aether_register_init_callbacks(
+pub unsafe extern "C" fn aleph_register_init_callbacks(
     on_phase_started: InitPhaseStartedCallback,
     on_phase_progress: InitPhaseProgressCallback,
     on_phase_completed: InitPhaseCompletedCallback,
@@ -66,11 +66,11 @@ pub unsafe extern "C" fn aether_register_init_callbacks(
 /// 运行首次初始化（阻塞，通过回调报告进度）
 /// 返回：0 = 成功, 负数 = 错误码
 #[no_mangle]
-pub extern "C" fn aether_run_first_time_init() -> c_int
+pub extern "C" fn aleph_run_first_time_init() -> c_int
 
 /// 清除初始化回调
 #[no_mangle]
-pub extern "C" fn aether_clear_init_callbacks()
+pub extern "C" fn aleph_clear_init_callbacks()
 ```
 
 回调函数类型：
@@ -111,16 +111,16 @@ pub type InitErrorCallback = extern "C" fn(
 
 ```csharp
 [DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
-public static extern int aether_needs_first_time_init();
+public static extern int aleph_needs_first_time_init();
 
 [DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
-public static extern int aether_check_embedding_model_exists();
+public static extern int aleph_check_embedding_model_exists();
 
 [DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
-public static extern int aether_run_first_time_init();
+public static extern int aleph_run_first_time_init();
 
 [DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
-public static extern unsafe int aether_register_init_callbacks(
+public static extern unsafe int aleph_register_init_callbacks(
     delegate* unmanaged[Cdecl]<byte*, uint, uint, void> onPhaseStarted,
     delegate* unmanaged[Cdecl]<byte*, double, byte*, void> onPhaseProgress,
     delegate* unmanaged[Cdecl]<byte*, void> onPhaseCompleted,
@@ -129,7 +129,7 @@ public static extern unsafe int aether_register_init_callbacks(
 );
 
 [DllImport("alephcore", CallingConvention = CallingConvention.Cdecl)]
-public static extern void aether_clear_init_callbacks();
+public static extern void aleph_clear_init_callbacks();
 ```
 
 #### AlephCore.cs 新增
@@ -150,12 +150,12 @@ public interface IInitProgressHandler
 // AlephCore 类新增方法
 public bool NeedsFirstTimeInit()
 {
-    return NativeMethods.aether_needs_first_time_init() == 1;
+    return NativeMethods.aleph_needs_first_time_init() == 1;
 }
 
 public bool CheckEmbeddingModelExists()
 {
-    return NativeMethods.aether_check_embedding_model_exists() == 1;
+    return NativeMethods.aleph_check_embedding_model_exists() == 1;
 }
 
 public void RunFirstTimeInit(IInitProgressHandler handler)
@@ -227,9 +227,9 @@ OnLaunched()
     │
     ├─ CheckAndRunFirstTimeInit()     // 首次运行检查
     │   │
-    │   ├─ if aether_needs_first_time_init() == true
+    │   ├─ if aleph_needs_first_time_init() == true
     │   │   └─ ShowInitializationDialog()
-    │   │       ├─ aether_run_first_time_init()
+    │   │       ├─ aleph_run_first_time_init()
     │   │       ├─ 成功 → ContinueStartup()
     │   │       └─ 失败 → 显示重试/退出选项
     │   │
@@ -248,10 +248,10 @@ OnLaunched()
 
 #### core/src/ffi_cabi.rs
 
-- 重构 `aether_init`：仅加载配置，不创建目录/文件
-- 首次初始化逻辑移至 `aether_run_first_time_init`
+- 重构 `aleph_init`：仅加载配置，不创建目录/文件
+- 首次初始化逻辑移至 `aleph_run_first_time_init`
 
-#### platforms/windows/Aether/Interop/AetherCore.cs
+#### platforms/windows/Aleph/Interop/AlephCore.cs
 
 删除：
 - `Initialize(string? configPath)` 的 configPath 参数
@@ -265,13 +265,13 @@ public bool Initialize()
     if (_isInitialized) return true;
 
     RegisterCallbacks();
-    var result = NativeMethods.aether_init(null);
+    var result = NativeMethods.aleph_init(null);
     _isInitialized = (result == 0);
     return _isInitialized;
 }
 ```
 
-#### platforms/windows/Aether/App.xaml.cs
+#### platforms/windows/Aleph/App.xaml.cs
 
 删除：
 - `GetConfigPath()` 中的 `Directory.CreateDirectory()`
@@ -286,10 +286,10 @@ public bool Initialize()
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `core/src/ffi_cabi.rs` | 修改 | 添加 5 个新函数，重构 aether_init |
+| `core/src/ffi_cabi.rs` | 修改 | 添加 5 个新函数，重构 aleph_init |
 | `core/build.rs` | 无变化 | csbindgen 自动处理新函数 |
 | `NativeMethods.g.cs` | 重新生成 | 运行构建后自动更新 |
-| `AetherCore.cs` | 修改 | 添加接口，简化 Initialize |
+| `AlephCore.cs` | 修改 | 添加接口，简化 Initialize |
 | `App.xaml.cs` | 修改 | 重构启动流程 |
 | `InitializationDialog.xaml` | **新增** | 进度对话框 UI |
 | `InitializationDialog.xaml.cs` | **新增** | 进度对话框逻辑 |
@@ -297,7 +297,7 @@ public bool Initialize()
 ## 目录结构（初始化完成后）
 
 ```
-~/.aleph/                    # Windows: %USERPROFILE%\.config\aether
+~/.aleph/                    # Windows: %USERPROFILE%\.config\aleph
 ├── config.toml                      # 配置文件
 ├── memory.db                        # 向量数据库
 ├── logs/                            # 日志目录
@@ -319,7 +319,7 @@ public bool Initialize()
 
 ## 测试计划
 
-1. **首次启动测试**：删除 ~/.aether，启动应用，验证初始化流程
+1. **首次启动测试**：删除 ~/.aleph，启动应用，验证初始化流程
 2. **已初始化启动测试**：保留配置，启动应用，验证跳过初始化
 3. **网络错误测试**：断网启动，验证重试按钮功能
 4. **部分初始化测试**：中断初始化，重启验证恢复逻辑

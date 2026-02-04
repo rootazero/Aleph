@@ -608,7 +608,7 @@ WORKDIR /workspace
 use bollard::container::{Config, CreateContainerOptions};
 
 let config = Config {
-    image: Some("aether-sandbox:latest"),
+    image: Some("aleph-sandbox:latest"),
     network_disabled: Some(false),  // 允许网络但限制出站
     host_config: Some(HostConfig {
         memory: Some(512 * 1024 * 1024),  // 512MB
@@ -740,7 +740,7 @@ token = "${DISCORD_BOT_TOKEN}"
 
 [sandbox]
 enabled = true
-docker_image = "aether-sandbox:latest"
+docker_image = "aleph-sandbox:latest"
 memory_limit_mb = 512
 cpu_quota_percent = 50
 
@@ -954,10 +954,10 @@ executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 1. **创建新 Crate 结构**:
    ```bash
    cargo new aleph_gateway --lib
-   cargo new aether_agent --lib
-   cargo new aether_channels --lib
-   cargo new aether_sandbox --lib
-   cargo new aether_tools --lib
+   cargo new aleph_agent --lib
+   cargo new aleph_channels --lib
+   cargo new aleph_sandbox --lib
+   cargo new aleph_tools --lib
    ```
 
 2. **技术验证**:

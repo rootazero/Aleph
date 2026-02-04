@@ -4,7 +4,7 @@ import AppKit
 private func debugLog(_ message: String) {
     let timestamp = ISO8601DateFormatter().string(from: Date())
     let logMessage = "[\(timestamp)] [OverlayView] \(message)\n"
-    let logPath = NSHomeDirectory() + "/Desktop/aether_debug.log"
+    let logPath = NSHomeDirectory() + "/Desktop/aleph_debug.log"
 
     if let data = logMessage.data(using: .utf8) {
         if FileManager.default.fileExists(atPath: logPath) {

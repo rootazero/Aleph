@@ -9,7 +9,7 @@
 
 ## Problem Statement
 
-当前 Aether 的 Settings 窗口设计虽然功能完整，但未完全遵循 Apple 最新的 Liquid Glass 设计系统（WWDC 2025）。具体问题包括：
+当前 Aleph 的 Settings 窗口设计虽然功能完整，但未完全遵循 Apple 最新的 Liquid Glass 设计系统（WWDC 2025）。具体问题包括：
 
 1. **布局层次不符合同心几何原则**：
    - 当前使用 ZStack 实现浮动侧边栏，但未遵循同心形状的数学计算

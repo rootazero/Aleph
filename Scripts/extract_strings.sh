@@ -5,8 +5,8 @@
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCES_DIR="$PROJECT_DIR/Aether/Sources"
-BASE_STRINGS="$PROJECT_DIR/Aether/Resources/en.lproj/Localizable.strings"
+SOURCES_DIR="$PROJECT_DIR/Aleph/Sources"
+BASE_STRINGS="$PROJECT_DIR/Aleph/Resources/en.lproj/Localizable.strings"
 
 echo "🔍 Extracting localization strings from Swift files..."
 echo "📁 Scanning directory: $SOURCES_DIR"

@@ -3,7 +3,7 @@
 ## Phase 1: Foundation Components (不影响现有功能)
 
 ### 1.1 Create TrafficLightButton Component
-- [ ] 1.1.1 Create `Aether/Sources/Components/Window/TrafficLightButton.swift`
+- [ ] 1.1.1 Create `Aleph/Sources/Components/Window/TrafficLightButton.swift`
 - [ ] 1.1.2 Implement circular button view with 13pt diameter
 - [ ] 1.1.3 Add gradient fill support (`.fill(color.gradient)`)
 - [ ] 1.1.4 Implement hover state management (`@State private var isHovering`)
@@ -15,7 +15,7 @@
 **Validation:** Preview shows correct button appearance in both normal and hover states.
 
 ### 1.2 Create WindowController Bridge
-- [ ] 1.2.1 Create `Aether/Sources/Components/Window/WindowController.swift`
+- [ ] 1.2.1 Create `Aleph/Sources/Components/Window/WindowController.swift`
 - [ ] 1.2.2 Implement singleton pattern (`static let shared = WindowController()`)
 - [ ] 1.2.3 Add `private func keyWindow() -> NSWindow?` helper using `NSApp.keyWindow`
 - [ ] 1.2.4 Implement `func close()` using `window.performClose(nil)`
@@ -27,7 +27,7 @@
 **Validation:** Unit test or manual verification that methods call correct NSWindow APIs.
 
 ### 1.3 Create SidebarWithTrafficLights Component
-- [ ] 1.3.1 Create `Aether/Sources/Components/Window/SidebarWithTrafficLights.swift`
+- [ ] 1.3.1 Create `Aleph/Sources/Components/Window/SidebarWithTrafficLights.swift`
 - [ ] 1.3.2 Implement ZStack layout with `alignment: .topLeading`
 - [ ] 1.3.3 Add RoundedRectangle background (cornerRadius: 18, style: .continuous)
 - [ ] 1.3.4 Configure padding (.leading: 8, .vertical: 8)
@@ -42,7 +42,7 @@
 **Validation:** Preview shows rounded sidebar with traffic lights correctly positioned.
 
 ### 1.4 Create RootContentView Component
-- [ ] 1.4.1 Create `Aether/Sources/Components/Window/RootContentView.swift`
+- [ ] 1.4.1 Create `Aleph/Sources/Components/Window/RootContentView.swift`
 - [ ] 1.4.2 Implement HStack(spacing: 0) layout
 - [ ] 1.4.3 Add SidebarWithTrafficLights() as left panel
 - [ ] 1.4.4 Add Divider() as separator
@@ -56,7 +56,7 @@
 
 ## Phase 2: Window Scene Migration (Feature Flag Controlled)
 
-### 2.1 Update AetherApp.swift
+### 2.1 Update AlephApp.swift
 - [ ] 2.1.1 Add conditional compilation flag (`#if DEBUG` or custom flag)
 - [ ] 2.1.2 Create new WindowGroup scene alongside existing Settings scene
 - [ ] 2.1.3 Configure WindowGroup with RootContentView()
@@ -166,7 +166,7 @@
 
 ### 4.3 Cleanup & Release Preparation
 - [ ] 4.3.1 Remove feature flag (#if DEBUG) after all tests pass
-- [ ] 4.3.2 Delete old Settings scene code from AetherApp.swift
+- [ ] 4.3.2 Delete old Settings scene code from AlephApp.swift
 - [ ] 4.3.3 Remove any unused imports or dead code
 - [ ] 4.3.4 Run `swiftc` syntax validation on all changed files
 - [ ] 4.3.5 Run Xcode "Clean Build Folder" and rebuild Release configuration

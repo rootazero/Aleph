@@ -11,7 +11,7 @@ The codebase MUST reduce cognitive load and improve maintainability by eliminati
 
 #### Scenario: Mutex Lock Helper Methods
 
-**Given**: Multiple methods in `AetherCore` need to acquire mutex locks
+**Given**: Multiple methods in `AlephCore` need to acquire mutex locks
 **When**: The same lock acquisition pattern appears 20+ times
 **Then**: Extract to private helper methods following naming convention `lock_{field_name}()`
 
@@ -53,7 +53,7 @@ let config = self.lock_config(); // Instead of: self.config.lock().unwrap_or_els
 #[inline(always)]
 fn require_memory_db(&self) -> Result<&Arc<VectorDatabase>> {
     self.memory_db.as_ref()
-        .ok_or_else(|| AetherError::config("Memory database not initialized"))
+        .ok_or_else(|| AlephError::config("Memory database not initialized"))
 }
 
 // Usage

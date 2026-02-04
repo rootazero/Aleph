@@ -144,7 +144,7 @@ Aleph 设计为**多后端兼容架构**，支持以下搜索引擎：
 
 ### 2.1 SearchResult 结构体
 
-**文件**: `Aether/core/src/payload/search.rs`（新建）
+**文件**: `Aleph/core/src/payload/search.rs`（新建）
 
 **定义**:
 
@@ -225,7 +225,7 @@ pub struct AgentContext {
 
 ### 2.2 SearchProvider trait（抽象层）
 
-**文件**: `Aether/core/src/search/provider.rs`（新建）
+**文件**: `Aleph/core/src/search/provider.rs`（新建）
 
 **定义**:
 
@@ -307,7 +307,7 @@ impl QuotaInfo {
 
 ### 2.3 SearchConfig 配置
 
-**文件**: `Aether/core/src/config/mod.rs`（扩展）
+**文件**: `Aleph/core/src/config/mod.rs`（扩展）
 
 **扩展 Config 结构**:
 
@@ -385,7 +385,7 @@ pub enum SearchBackendConfig {
 
 ### 2.4 Intent::BuiltinSearch 增强
 
-**文件**: `Aether/core/src/payload/intent.rs`（已存在）
+**文件**: `Aleph/core/src/payload/intent.rs`（已存在）
 
 **当前定义**:
 
@@ -425,7 +425,7 @@ pub enum Intent {
 
 ### 3.1 CapabilityExecutor::execute_search()
 
-**文件**: `Aether/core/src/capability/mod.rs`（已存在）
+**文件**: `Aleph/core/src/capability/mod.rs`（已存在）
 
 **当前实现**（空）:
 
@@ -483,7 +483,7 @@ impl CapabilityExecutor {
 
 ### 3.2 SearchClient 架构设计
 
-**文件**: `Aether/core/src/search/client.rs`（新建）
+**文件**: `Aleph/core/src/search/client.rs`（新建）
 
 **职责**:
 - 管理多个 SearchProvider 实例
@@ -629,7 +629,7 @@ impl SearchClient {
 
 **实现示例**: Tavily Provider
 
-**文件**: `Aether/core/src/search/providers/tavily.rs`（新建）
+**文件**: `Aleph/core/src/search/providers/tavily.rs`（新建）
 
 ```rust
 use async_trait::async_trait;
@@ -1069,7 +1069,7 @@ cost_per_search = 0.0
 
 ### 6.1 搜索后端选择器
 
-**文件**: `Aether/Sources/Components/Settings/SearchSettingsView.swift`（新建）
+**文件**: `Aleph/Sources/Components/Settings/SearchSettingsView.swift`（新建）
 
 **UI 设计草图**:
 

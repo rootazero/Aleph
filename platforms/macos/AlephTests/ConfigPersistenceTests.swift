@@ -1,5 +1,5 @@
 import XCTest
-@testable import Aether
+@testable import Aleph
 
 /// Integration tests for config persistence (Phase 6 - Task 8.2)
 ///
@@ -9,7 +9,7 @@ import XCTest
 final class ConfigPersistenceTests: XCTestCase {
 
     var tempConfigPath: String!
-    var core: AetherCore!
+    var core: AlephCore!
 
     override func setUp() {
         super.setUp()
@@ -23,8 +23,8 @@ final class ConfigPersistenceTests: XCTestCase {
         // Create event handler stub for testing
         let eventHandler = TestEventHandler()
 
-        // Initialize AetherCore
-        core = try! AetherCore(handler: eventHandler)
+        // Initialize AlephCore
+        core = try! AlephCore(handler: eventHandler)
     }
 
     override func tearDown() {
@@ -94,9 +94,9 @@ final class ConfigPersistenceTests: XCTestCase {
         // Verify API key is stored in Keychain (not in config file)
         XCTAssertFalse(tomlContent.contains("sk-test-key"))
 
-        // Simulate app restart by creating new AetherCore instance
+        // Simulate app restart by creating new AlephCore instance
         let newEventHandler = TestEventHandler()
-        let newCore = try AetherCore(handler: newEventHandler, keychainManager: keychainManager)
+        let newCore = try AlephCore(handler: newEventHandler, keychainManager: keychainManager)
 
         // Load config from file
         let loadedConfig = newCore.getConfig()
@@ -119,7 +119,7 @@ final class ConfigPersistenceTests: XCTestCase {
         }
 
         // Create new core with hot-reload enabled
-        let testCore = try AetherCore(handler: eventHandler, keychainManager: keychainManager)
+        let testCore = try AlephCore(handler: eventHandler, keychainManager: keychainManager)
 
         // Start watching config file
         try testCore.startWatchingConfig(path: tempConfigPath)

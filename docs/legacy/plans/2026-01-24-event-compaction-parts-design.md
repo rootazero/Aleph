@@ -150,7 +150,7 @@ class AlephEventSubscription {
     static func subscribe(
         sessionId: String? = nil,       // nil = all sessions
         eventTypes: [EventType],        // Required
-        handler: @escaping (AetherEvent) -> Void
+        handler: @escaping (AlephEvent) -> Void
     ) -> AlephEventSubscription
 
     func unsubscribe()

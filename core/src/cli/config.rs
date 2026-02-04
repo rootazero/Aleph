@@ -95,7 +95,7 @@ pub async fn handle_schema(
 /// Handle config edit command
 pub async fn handle_edit() -> Result<(), CliError> {
     let config_path = dirs::home_dir()
-        .map(|h| h.join(".aether").join("config.toml"))
+        .map(|h| h.join(".aleph").join("config.toml"))
         .ok_or_else(|| CliError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "Cannot find home directory",

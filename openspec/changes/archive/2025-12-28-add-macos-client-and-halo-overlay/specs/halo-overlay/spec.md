@@ -77,7 +77,7 @@ The Halo **SHALL** appear at the exact mouse cursor location when summoned.
 
 The Halo **SHALL** animate through distinct states reflecting processing status.
 
-**Why:** Users need clear visual feedback on what Aether is doing.
+**Why:** Users need clear visual feedback on what Aleph is doing.
 
 **Acceptance criteria:**
 - States: idle, listening, processing, success, error

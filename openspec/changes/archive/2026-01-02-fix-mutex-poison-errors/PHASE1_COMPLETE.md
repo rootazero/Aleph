@@ -21,7 +21,7 @@
 
 3. **修复 current_context Mutex** (4处)
    - Line 650: `set_current_context()` 方法
-   - Line 702: `AetherCore::store_interaction_memory()` 方法
+   - Line 702: `AlephCore::store_interaction_memory()` 方法
    - Line 786: `retrieve_and_augment_prompt()` 方法
    - Line 1468: `StorageHelper::store_interaction_memory()` 方法
 
@@ -37,7 +37,7 @@
    - 生成时间: 18.41 秒
 
 6. **更新 dylib 到 Frameworks**
-   - 复制 `libaethecore.dylib` → `Aether/Frameworks/`
+   - 复制 `libaethecore.dylib` → `Aleph/Frameworks/`
    - 文件大小: 9.5 MB
    - 更新时间: 2025-12-31 21:48:09
 
@@ -66,7 +66,7 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 
 1. **在 Xcode 中 Clean Build**
    ```
-   1. 打开 Aether.xcodeproj
+   1. 打开 Aleph.xcodeproj
    2. 按 Cmd+Shift+K (Clean Build Folder)
    3. 按 Cmd+B (Build)
    4. 按 Cmd+R (Run)
@@ -97,7 +97,7 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 
 ### 文件修改清单
 
-- **修改的文件**: `Aether/core/src/core.rs`
+- **修改的文件**: `Aleph/core/src/core.rs`
 - **修改行数**: 11 处
 - **添加的代码**: 44 行（包含 warn! 日志）
 - **修复类型**: Mutex poison recovery
@@ -106,8 +106,8 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 
 | 文件 | 大小 | 路径 |
 |------|------|------|
-| libaethecore.dylib | 9.5 MB | `Aether/Frameworks/` |
-| aether.swift | ~200 KB | `Aether/Sources/Generated/` |
+| libaethecore.dylib | 9.5 MB | `Aleph/Frameworks/` |
+| aleph.swift | ~200 KB | `Aleph/Sources/Generated/` |
 
 ### 日志增强
 
@@ -159,13 +159,13 @@ warn!("Mutex poisoned in <location>, recovering");
 **旧 dylib 备份**（如需回滚）:
 - 时间戳: 2025-12-31 21:06
 - 大小: 9.5 MB
-- 位置: `Aether/Frameworks/libaethecore.dylib` (被覆盖前)
+- 位置: `Aleph/Frameworks/libaethecore.dylib` (被覆盖前)
 
 **如何回滚**:
 ```bash
 # 如果修复有问题，可以通过 git 恢复
-git checkout HEAD -- Aether/core/src/core.rs
-cd Aether/core
+git checkout HEAD -- Aleph/core/src/core.rs
+cd Aleph/core
 cargo build --release
 cargo run --bin uniffi-bindgen -- generate --library target/release/libaethecore.dylib --language swift --out-dir ../Sources/Generated/
 cp target/release/libaethecore.dylib ../Frameworks/

@@ -5,19 +5,19 @@ The system SHALL define a `.udl` (UniFFI Definition Language) file that specifie
 
 #### Scenario: Define namespace
 - **WHEN** creating the UniFFI interface
-- **THEN** `namespace aether` is declared at the top
-- **AND** all types are scoped under the aether namespace
-- **AND** Swift bindings use "Aether" prefix for types
+- **THEN** `namespace aleph` is declared at the top
+- **AND** all types are scoped under the aleph namespace
+- **AND** Swift bindings use "Aleph" prefix for types
 
-#### Scenario: Define AetherCore interface
+#### Scenario: Define AlephCore interface
 - **WHEN** defining the main entry point
-- **THEN** `interface AetherCore` includes all public methods
-- **AND** constructor accepts `AetherEventHandler` parameter
+- **THEN** `interface AlephCore` includes all public methods
+- **AND** constructor accepts `AlephEventHandler` parameter
 - **AND** methods map to Rust implementation
 
 #### Scenario: Define callback interface
 - **WHEN** defining callbacks from Rust → Swift
-- **THEN** `callback interface AetherEventHandler` is declared
+- **THEN** `callback interface AlephEventHandler` is declared
 - **AND** callback methods are defined (on_state_changed, on_hotkey_detected, on_error)
 - **AND** Swift client implements this protocol
 
@@ -37,21 +37,21 @@ The system SHALL define a `.udl` (UniFFI Definition Language) file that specifie
 The system SHALL generate Swift bindings automatically from the `.udl` file using uniffi-bindgen.
 
 #### Scenario: Generate Swift bindings
-- **WHEN** developer runs `uniffi-bindgen generate src/aether.udl --language swift`
+- **WHEN** developer runs `uniffi-bindgen generate src/aleph.udl --language swift`
 - **THEN** Swift source files are generated
 - **AND** files include protocol definitions for interfaces
 - **AND** files include type conversions (Rust ↔ Swift)
 - **AND** generated code compiles without errors
 
 #### Scenario: Swift protocol for callback
-- **WHEN** AetherEventHandler is defined in .udl
-- **THEN** Swift binding generates a protocol `AetherEventHandler`
+- **WHEN** AlephEventHandler is defined in .udl
+- **THEN** Swift binding generates a protocol `AlephEventHandler`
 - **AND** Swift client can implement the protocol
 - **AND** protocol methods match .udl callback definitions
 
-#### Scenario: Swift class for AetherCore
-- **WHEN** AetherCore interface is defined in .udl
-- **THEN** Swift binding generates a class `AetherCore`
+#### Scenario: Swift class for AlephCore
+- **WHEN** AlephCore interface is defined in .udl
+- **THEN** Swift binding generates a class `AlephCore`
 - **AND** class has initializer accepting event handler
 - **AND** class has methods matching Rust implementation
 
@@ -71,7 +71,7 @@ The system SHALL ensure type-safe conversions between Rust and Swift types witho
 - **AND** new enum variants require Swift code update
 
 #### Scenario: Handle Result<T, E> conversion
-- **WHEN** Rust method returns `Result<(), AetherError>`
+- **WHEN** Rust method returns `Result<(), AlephError>`
 - **THEN** Swift method throws an error on Err variant
 - **AND** Swift uses do-try-catch for error handling
 - **AND** error message is preserved
@@ -80,14 +80,14 @@ The system SHALL ensure type-safe conversions between Rust and Swift types witho
 The system SHALL manage memory correctly across FFI boundary using UniFFI's Arc-based ownership.
 
 #### Scenario: Rust object passed to Swift
-- **WHEN** AetherCore is created in Rust
+- **WHEN** AlephCore is created in Rust
 - **THEN** UniFFI wraps it in Arc<> for reference counting
 - **AND** Swift holds a reference to the Arc
 - **AND** object is deallocated when all references drop
 
 #### Scenario: Swift callback retained by Rust
-- **WHEN** Swift implements AetherEventHandler
-- **THEN** Rust stores Arc<dyn AetherEventHandler>
+- **WHEN** Swift implements AlephEventHandler
+- **THEN** Rust stores Arc<dyn AlephEventHandler>
 - **AND** Swift object is retained while Rust holds reference
 - **AND** no use-after-free or double-free occurs
 
@@ -116,7 +116,7 @@ The system SHALL support bidirectional communication: Rust → Swift callbacks a
 The system SHALL integrate UniFFI into the Cargo build process for seamless binding generation.
 
 #### Scenario: Include scaffolding in lib.rs
-- **WHEN** `uniffi::include_scaffolding!("aether")` is added to lib.rs
+- **WHEN** `uniffi::include_scaffolding!("aleph")` is added to lib.rs
 - **THEN** UniFFI scaffolding code is generated at compile time
 - **AND** FFI exports are created automatically
 - **AND** no manual extern "C" functions required

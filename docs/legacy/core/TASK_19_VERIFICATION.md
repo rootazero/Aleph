@@ -28,7 +28,7 @@ Key tests for Task 19:
 
 ### 1. Configuration ✅
 
-**File**: `Aether/core/src/config.rs`
+**File**: `Aleph/core/src/config.rs`
 
 - [x] `excluded_apps` field exists in `MemoryConfig` (line 39-41)
 - [x] Default exclusions defined (lines 77-82):
@@ -41,7 +41,7 @@ Key tests for Task 19:
 
 ### 2. Enforcement Logic ✅
 
-**File**: `Aether/core/src/memory/ingestion.rs`
+**File**: `Aleph/core/src/memory/ingestion.rs`
 
 - [x] Exclusion check at storage entry point (lines 63-69)
 - [x] Check happens **before** PII scrubbing
@@ -52,7 +52,7 @@ Key tests for Task 19:
 
 ### 3. Integration ✅
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 
 - [x] Config passed to `MemoryIngestion` (lines 521-525)
 - [x] `store_interaction_memory()` uses config (line 524)
@@ -60,7 +60,7 @@ Key tests for Task 19:
 
 ### 4. Test Coverage ✅
 
-**Test File**: `Aether/core/src/memory/ingestion.rs`
+**Test File**: `Aleph/core/src/memory/ingestion.rs`
 
 - [x] Unit test for exclusion logic (lines 258-275)
 - [x] Test uses default-excluded app (`com.apple.keychainaccess`)

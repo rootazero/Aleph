@@ -1,4 +1,4 @@
-//! Command handlers for Aether Gateway CLI
+//! Command handlers for Aleph Gateway CLI
 //!
 //! This module organizes all subcommand implementations.
 

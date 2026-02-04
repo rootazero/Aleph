@@ -1,6 +1,6 @@
 //
 //  SendableTypes.swift
-//  Aether
+//  Aleph
 //
 //  Provides Sendable-compatible wrappers and utilities for Swift 6 concurrency.
 //  These types help bridge legacy code with structured concurrency.
@@ -135,7 +135,7 @@ extension McpServerErrorFfi: @unchecked Sendable {}
 // Runtime types
 extension RuntimeUpdateInfo: @unchecked Sendable {}
 
-// Note: AetherCore already has @unchecked Sendable in UniFFI generated code (aether.swift:882)
+// Note: AlephCore already has @unchecked Sendable in UniFFI generated code (aleph.swift:882)
 // No need to add it again here
 
 // Generation types

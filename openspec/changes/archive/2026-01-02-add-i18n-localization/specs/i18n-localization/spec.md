@@ -107,7 +107,7 @@ The Xcode project SHALL be configured to support multiple localizations through 
 - **WHEN** localizing app metadata (name, copyright)
 - **THEN** each `.lproj` directory SHALL contain `InfoPlist.strings`
 - **AND** keys include:
-  - `CFBundleName` → "Aether" (no translation needed, but can be localized)
+  - `CFBundleName` → "Aleph" (no translation needed, but can be localized)
   - `NSHumanReadableCopyright` → Localized copyright notice
   - `NSAppleEventsUsageDescription` → Localized permission description
 
@@ -171,7 +171,7 @@ macOS permission prompt descriptions SHALL be localized for each supported langu
 - **WHEN** user is prompted for Accessibility permission
 - **AND** system language is English
 - **THEN** the prompt SHALL display:
-  "Aether needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration."
+  "Aleph needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration."
 
 #### Scenario: Accessibility permission description in Simplified Chinese
 - **WHEN** user is prompted for Accessibility permission
@@ -191,7 +191,7 @@ The localization system SHALL be designed to support runtime language switching 
 
 #### Scenario: Language change detection (Phase 1 - Current Implementation)
 - **WHEN** user changes macOS system language
-- **AND** restarts Aether app
+- **AND** restarts Aleph app
 - **THEN** the app SHALL load new language strings on next launch
 - **AND** all UI updates to new language immediately
 

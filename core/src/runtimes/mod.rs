@@ -1,6 +1,6 @@
 //! Runtime Manager Module
 //!
-//! Unified management of external runtimes (uv, fnm, yt-dlp, etc.) for Aether.
+//! Unified management of external runtimes (uv, fnm, yt-dlp, etc.) for Aleph.
 //! All runtimes are stored under `~/.aleph/runtimes/` with lazy installation.
 //!
 //! # Architecture
@@ -58,19 +58,19 @@ use std::path::PathBuf;
 ///
 /// Returns platform-specific path:
 /// - Unix: `~/.aleph/runtimes/`
-/// - Windows: `%USERPROFILE%\.aether\runtimes\`
+/// - Windows: `%USERPROFILE%\.aleph\runtimes\`
 pub fn get_runtimes_dir() -> Result<PathBuf> {
     crate::utils::paths::get_runtimes_dir()
 }
 
-/// Build Aether-prioritized PATH environment variable
+/// Build Aleph-prioritized PATH environment variable
 ///
-/// Constructs a PATH string where Aether runtimes take priority over
-/// system PATH, allowing both Aether-managed tools and system tools
+/// Constructs a PATH string where Aleph runtimes take priority over
+/// system PATH, allowing both Aleph-managed tools and system tools
 /// to be accessible.
 ///
 /// # Returns
-/// A PATH string with Aether runtime bin directories prepended to system PATH.
+/// A PATH string with Aleph runtime bin directories prepended to system PATH.
 ///
 /// # Example
 /// ```ignore
@@ -81,7 +81,7 @@ pub fn get_runtimes_dir() -> Result<PathBuf> {
 pub fn build_aether_path(registry: &RuntimeRegistry) -> String {
     let mut paths: Vec<PathBuf> = Vec::new();
 
-    // Add Aether runtime bin directories (installed runtimes only)
+    // Add Aleph runtime bin directories (installed runtimes only)
     if registry.is_installed("uv") {
         if let Some(rt) = registry.get("uv") {
             paths.push(rt.bin_dir());

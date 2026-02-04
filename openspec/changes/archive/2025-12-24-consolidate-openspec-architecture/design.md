@@ -17,7 +17,7 @@
 **实施**:
 ```
 ✓ /openspec/               # 唯一规范目录
-✗ /Aether/openspec/        # 删除重复
+✗ /Aleph/openspec/        # 删除重复
 ✗ /*/openspec/             # 禁止嵌套
 ```
 
@@ -64,13 +64,13 @@ openspec/
 **实施**:
 ```
 /openspec/          # 规范和变更管理
-/Aether/            # 应用源码 (无 openspec)
+/Aleph/            # 应用源码 (无 openspec)
 /.claude/           # 工具和命令
 ```
 
 ## Architecture Decisions
 
-### Decision 1: 删除而非移动 Aether/openspec
+### Decision 1: 删除而非移动 Aleph/openspec
 
 **选项分析**:
 
@@ -83,7 +83,7 @@ openspec/
 **决策**: 选择 C (直接删除)
 
 **理由**:
-1. 审计发现 Aether/openspec 完全是重复内容
+1. 审计发现 Aleph/openspec 完全是重复内容
 2. complete-phase2-testing-and-polish 已在主 openspec/changes/archive/
 3. 嵌套的 openspec 是工具错误导致的垃圾数据
 4. 无独特或更新的内容需要保留
@@ -95,7 +95,7 @@ openspec/
 
 ### Decision 2: 不拆分子项目 OpenSpec
 
-**问题**: 是否为 Aether 子项目保留独立的 openspec？
+**问题**: 是否为 Aleph 子项目保留独立的 openspec？
 
 **选项分析**:
 
@@ -107,7 +107,7 @@ openspec/
 **决策**: 单体 OpenSpec
 
 **理由**:
-1. Aether 是单一代码库（monorepo）
+1. Aleph 是单一代码库（monorepo）
 2. Rust core 和 Swift client 紧密耦合
 3. Changes 通常跨越多个子项目
 4. 无拆分计划
@@ -174,7 +174,7 @@ openspec/
 ```
 输入:
 - /openspec/
-- /Aether/openspec/
+- /Aleph/openspec/
 
 处理:
 1. 生成完整备份
@@ -197,7 +197,7 @@ openspec/
 
 处理:
 1. 提取任何独特内容 (如有)
-2. 删除 /Aether/openspec/
+2. 删除 /Aleph/openspec/
 3. 清理临时文件
 4. 更新 .gitignore
 
@@ -325,11 +325,11 @@ jobs:
 
 ### Alternative 1: 保留两个 OpenSpec 目录
 
-**方案**: 维护 `/openspec/` (全局) 和 `/Aether/openspec/` (本地)
+**方案**: 维护 `/openspec/` (全局) 和 `/Aleph/openspec/` (本地)
 
 **优点**:
 - 符合某些多项目结构
-- Aether 子项目可独立管理
+- Aleph 子项目可独立管理
 
 **缺点**:
 - 需要同步机制
@@ -337,7 +337,7 @@ jobs:
 - 容易出现不一致
 - 认知负担高
 
-**拒绝理由**: Aether 是单体项目，无需分离
+**拒绝理由**: Aleph 是单体项目，无需分离
 
 ### Alternative 2: 移动到 docs/openspec/
 
@@ -373,7 +373,7 @@ jobs:
 
 ### High Risk: 意外丢失内容
 
-**场景**: 删除 Aether/openspec 时丢失未归档的重要文档
+**场景**: 删除 Aleph/openspec 时丢失未归档的重要文档
 
 **概率**: Medium
 **影响**: High
@@ -401,7 +401,7 @@ jobs:
 **概率**: Medium
 **影响**: Low
 **缓解**:
-- 全局搜索 "Aether/openspec"
+- 全局搜索 "Aleph/openspec"
 - 更新所有引用
 - 验证链接有效性
 
@@ -411,7 +411,7 @@ jobs:
 
 ### 结构验证
 - [ ] 只有一个 `/openspec/` 根目录
-- [ ] 无 `/Aether/openspec/` 目录
+- [ ] 无 `/Aleph/openspec/` 目录
 - [ ] 无嵌套的 `openspec/changes/*/openspec/` 结构
 - [ ] 最大目录深度 <= 5 层
 

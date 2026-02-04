@@ -2,7 +2,7 @@
 
 ## Why
 
-Comparative analysis with OpenCode (Claude Code open-source implementation) revealed that Aether's Skill system lacks critical features: Skills cannot be dynamically invoked by LLM as a Tool, there's no instance-level caching, template system is limited, and permission checks are not integrated. These gaps prevent Skills from being a first-class citizen in the agent loop.
+Comparative analysis with OpenCode (Claude Code open-source implementation) revealed that Aleph's Skill system lacks critical features: Skills cannot be dynamically invoked by LLM as a Tool, there's no instance-level caching, template system is limited, and permission checks are not integrated. These gaps prevent Skills from being a first-class citizen in the agent loop.
 
 ## What Changes
 

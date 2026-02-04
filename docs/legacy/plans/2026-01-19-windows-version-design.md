@@ -133,7 +133,7 @@ platforms/windows/
 ┌────────────────────────────────────────────────────┐│
 │                  Rust Core                          ││
 │                                                     ││
-│  aether_process(input, context, callbacks) ────────┘│
+│  aleph_process(input, context, callbacks) ────────┘│
 │       │                                             │
 │       ▼                                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
@@ -448,7 +448,7 @@ platforms/windows/
 ## Error Handling
 
 ```csharp
-// Interop/AetherCore.cs
+// Interop/AlephCore.cs
 public class AlephException : Exception
 {
     public int ErrorCode { get; }
@@ -458,7 +458,7 @@ public class AlephException : Exception
 
 public void Process(string input, string? context)
 {
-    int result = NativeMethods.aether_process(...);
+    int result = NativeMethods.aleph_process(...);
 
     if (result != 0)
     {

@@ -1,8 +1,8 @@
-# Integrate SearchRegistry into AetherCore
+# Integrate SearchRegistry into AlephCore
 
 ## Summary
 
-将 SearchRegistry 集成到 AetherCore 作为持久化字段，并完成相关配置基础设施，为 search-settings-ui 提案的 UI 实现奠定基础。
+将 SearchRegistry 集成到 AlephCore 作为持久化字段，并完成相关配置基础设施，为 search-settings-ui 提案的 UI 实现奠定基础。
 
 此变更解决 `add-search-settings-ui` 提案中标识的三个核心架构缺陷。
 
@@ -11,7 +11,7 @@
 ### Primary: SearchRegistry Integration
 
 **核心变更**：
-1. **AetherCore 字段**：添加 `search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>`
+1. **AlephCore 字段**：添加 `search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>`
 2. **初始化逻辑**：从 `Config::search` 创建 SearchRegistry
 3. **热重载支持**：配置更新时重建 SearchRegistry
 4. **UniFFI 导出**：实现 `test_search_provider()` 异步方法
@@ -47,7 +47,7 @@
 
 **架构改进**：
 1. **持久化 SearchRegistry**：
-   - 在 AetherCore 初始化时创建
+   - 在 AlephCore 初始化时创建
    - 支持配置热重载（通过 RwLock）
    - 提供 test API 访问
 

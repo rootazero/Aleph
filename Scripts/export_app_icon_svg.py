@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Export Aether app icon SVG from Aether.html.
+Export Aleph app icon SVG from Aleph.html.
 Enlarges the small satellite star by 1.5-2x while keeping the main star centered.
 """
 
@@ -8,12 +8,12 @@ from pathlib import Path
 import re
 
 def extract_and_modify_svg():
-    """Extract SVG from Aether.html and enlarge the small star."""
+    """Extract SVG from Aleph.html and enlarge the small star."""
 
     # Read the HTML file
-    html_path = Path.home() / "Workspace" / "Aether.html"
+    html_path = Path.home() / "Workspace" / "Aleph.html"
     if not html_path.exists():
-        print(f"❌ Aether.html not found at {html_path}")
+        print(f"❌ Aleph.html not found at {html_path}")
         return
 
     html_content = html_path.read_text(encoding='utf-8')
@@ -24,7 +24,7 @@ def extract_and_modify_svg():
     match = re.search(svg_pattern, html_content, re.DOTALL)
 
     if not match:
-        print("❌ Could not find SVG in Aether.html")
+        print("❌ Could not find SVG in Aleph.html")
         return
 
     svg_content = match.group(0)
@@ -89,10 +89,10 @@ def extract_and_modify_svg():
 </svg>'''
 
     # Write to output files
-    output_dir = Path(__file__).parent.parent / "Aether" / "Assets.xcassets" / "AppIcon-Source.imageset"
+    output_dir = Path(__file__).parent.parent / "Aleph" / "Assets.xcassets" / "AppIcon-Source.imageset"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    svg_output_path = output_dir / "AetherIcon.svg"
+    svg_output_path = output_dir / "AlephIcon.svg"
     svg_output_path.write_text(final_svg, encoding='utf-8')
 
     print(f"✅ SVG exported to: {svg_output_path}")

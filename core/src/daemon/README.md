@@ -1,6 +1,6 @@
 # Daemon Module
 
-The Daemon module provides system service management for Aether, enabling it to run persistently in the background.
+The Daemon module provides system service management for Aleph, enabling it to run persistently in the background.
 
 ## Architecture
 
@@ -38,7 +38,7 @@ The Perception Layer continuously monitors OS-level events and publishes them to
 cargo run -p aethecore -- daemon run
 
 # Check configuration
-cat ~/.aether/perception.toml
+cat ~/.aleph/perception.toml
 ```
 
 ## Components
@@ -64,7 +64,7 @@ Monitors system resources and throttles operations:
 
 JSON-RPC 2.0 server over Unix Domain Socket:
 
-- Socket path: `~/.aether/daemon.sock`
+- Socket path: `~/.aleph/daemon.sock`
 - Methods:
   - `daemon.status` - Get daemon status
   - `daemon.ping` - Health check
@@ -76,22 +76,22 @@ JSON-RPC 2.0 server over Unix Domain Socket:
 
 ```bash
 # Install daemon as system service
-aether daemon install
+aleph daemon install
 
 # Start daemon
-aether daemon start
+aleph daemon start
 
 # Check status
-aether daemon status
+aleph daemon status
 
 # Stop daemon
-aether daemon stop
+aleph daemon stop
 
 # Uninstall daemon
-aether daemon uninstall
+aleph daemon uninstall
 
 # Run in foreground (development)
-aether daemon run
+aleph daemon run
 ```
 
 ### Programmatic Usage
@@ -120,9 +120,9 @@ Default configuration:
 
 ```rust
 DaemonConfig {
-    socket_path: "~/.aether/daemon.sock",
-    binary_path: "~/.aether/bin/aether-daemon",
-    log_dir: "~/.aether/logs",
+    socket_path: "~/.aleph/daemon.sock",
+    binary_path: "~/.aleph/bin/aleph-daemon",
+    log_dir: "~/.aleph/logs",
     nice_value: 10,
     soft_mem_limit: 512 * 1024 * 1024,  // 512MB
     hard_mem_limit: 1024 * 1024 * 1024, // 1GB

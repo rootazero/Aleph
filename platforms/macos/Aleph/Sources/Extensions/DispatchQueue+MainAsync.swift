@@ -1,6 +1,6 @@
 //
 //  DispatchQueue+MainAsync.swift
-//  Aether
+//  Aleph
 //
 //  Convenience extension to reduce boilerplate for main thread dispatch
 //  with weak self capture pattern.

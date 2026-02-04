@@ -19,13 +19,13 @@ Aleph 是一个 macOS/Windows/Linux 的系统级 AI 中间件（Rust Core + Nati
 - 完整配置支持（RoutingRuleConfig）
 
 **关键文件**:
-- `Aether/core/src/router/mod.rs` (856 行)
-- `Aether/core/src/config.rs` (添加 RoutingRuleConfig)
-- `Aether/config.example.toml` (完整示例配置)
+- `Aleph/core/src/router/mod.rs` (856 行)
+- `Aleph/core/src/config.rs` (添加 RoutingRuleConfig)
+- `Aleph/config.example.toml` (完整示例配置)
 
 **测试**: 20 个测试全部通过 ✅
 
-**详细文档**: `Aether/core/PHASE5_ROUTER_COMPLETION.md`
+**详细文档**: `Aleph/core/PHASE5_ROUTER_COMPLETION.md`
 
 ---
 
@@ -64,13 +64,13 @@ Aleph 是一个 macOS/Windows/Linux 的系统级 AI 中间件（Rust Core + Nati
 ### 关键代码位置
 
 **记忆模块**（已实现）:
-- `Aether/core/src/memory/retrieval.rs` - 检索逻辑
-- `Aether/core/src/memory/ingestion.rs` - 存储逻辑
-- `Aether/core/src/memory/context.rs` - 上下文捕获
+- `Aleph/core/src/memory/retrieval.rs` - 检索逻辑
+- `Aleph/core/src/memory/ingestion.rs` - 存储逻辑
+- `Aleph/core/src/memory/context.rs` - 上下文捕获
 
 **需要修改的文件**:
-- `Aether/core/src/core.rs` - AlephCore 主逻辑
-- `Aether/core/src/memory/augmentation.rs` - 提示词增强（可能需要创建）
+- `Aleph/core/src/core.rs` - AlephCore 主逻辑
+- `Aleph/core/src/memory/augmentation.rs` - 提示词增强（可能需要创建）
 
 ### 预期流程
 
@@ -166,5 +166,5 @@ cargo fmt
 
 **参考文档**:
 - `openspec/changes/integrate-ai-providers/tasks.md` - 详细任务
-- `Aether/core/PHASE5_ROUTER_COMPLETION.md` - Phase 5 完成总结
+- `Aleph/core/PHASE5_ROUTER_COMPLETION.md` - Phase 5 完成总结
 - `SESSION_MEMORY_PROMPT.md` - 完整项目上下文

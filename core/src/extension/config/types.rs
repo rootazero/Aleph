@@ -1,13 +1,13 @@
-//! Configuration types for aether.jsonc
+//! Configuration types for aleph.jsonc
 
 use crate::extension::types::PermissionRule;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Aether configuration (from aether.jsonc)
+/// Aleph configuration (from aleph.jsonc)
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct AetherConfig {
+pub struct AlephConfig {
     /// JSON schema reference
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
@@ -249,7 +249,7 @@ mod tests {
             }
         }"#;
 
-        let config: AetherConfig = serde_json::from_str(json).unwrap();
+        let config: AlephConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.model, Some("anthropic/claude-4".to_string()));
         assert!(config.plugin.unwrap().contains(&"@my/plugin".to_string()));
     }

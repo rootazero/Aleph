@@ -253,8 +253,8 @@ private func extractTextFromImage(pngData: Data) async throws -> String {
     }
 
     guard let core = appDelegate.core else {
-        debugLog("\(logPrefix) ERROR: AetherCore not initialized")
-        throw OCRError.notInitialized("AetherCore not initialized")
+        debugLog("\(logPrefix) ERROR: AlephCore not initialized")
+        throw OCRError.notInitialized("AlephCore not initialized")
     }
 
     do {
@@ -299,7 +299,7 @@ pub async fn extract_text(&self, image_data: Vec<u8>) -> Result<String> {
 
     if default_provider.is_none() {
         tracing::error!("No default provider configured");
-        return Err(AetherError::invalid_config(
+        return Err(AlephError::invalid_config(
             "No default provider configured for OCR"
         ));
     }
@@ -319,7 +319,7 @@ pub async fn extract_text(&self, image_data: Vec<u8>) -> Result<String> {
         }
         Err(e) => {
             tracing::error!(error = %e, "Task join error");
-            Err(AetherError::other(format!("Task join error: {}", e)))
+            Err(AlephError::other(format!("Task join error: {}", e)))
         }
     }
 }
@@ -331,14 +331,14 @@ pub async fn extract_text(&self, image_data: Vec<u8>) -> Result<String> {
 // In VisionService::get_vision_provider()
 fn get_vision_provider(&self, config: &Config) -> Result<Arc<dyn AiProvider>> {
     let provider_name = config.general.default_provider.as_ref()
-        .ok_or_else(|| AetherError::invalid_config(
+        .ok_or_else(|| AlephError::invalid_config(
             "No default provider configured. Set [general] default_provider in config.toml"
         ))?;
 
     tracing::info!(provider = %provider_name, "Creating vision provider");
 
     let provider_config = config.providers.get(provider_name)
-        .ok_or_else(|| AetherError::invalid_config(format!(
+        .ok_or_else(|| AlephError::invalid_config(format!(
             "Provider '{}' not found in [providers] section",
             provider_name
         )))?;
@@ -351,7 +351,7 @@ fn get_vision_provider(&self, config: &Config) -> Result<Arc<dyn AiProvider>> {
             provider = %provider_name,
             "Provider does not support vision"
         );
-        return Err(AetherError::invalid_config(format!(
+        return Err(AlephError::invalid_config(format!(
             "Provider '{}' does not support vision/image input. \
              Use a vision-capable provider: claude, openai (gpt-4o), gemini",
             provider_name

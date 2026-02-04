@@ -28,8 +28,8 @@
 - [x] 1.3.6 Unit tests for query methods
 
 ### 1.4 Core Integration
-- [x] 1.4.1 Add `ToolRegistry` field to `AetherCore`
-- [x] 1.4.2 Initialize registry in `AetherCore::new()`
+- [x] 1.4.1 Add `ToolRegistry` field to `AlephCore`
+- [x] 1.4.2 Initialize registry in `AlephCore::new()`
 - [x] 1.4.3 Refresh registry on config reload
 - [x] 1.4.4 Refresh registry on MCP connection changes
 - [x] 1.4.5 Integration test for registry initialization
@@ -137,7 +137,7 @@
 - [x] 8.1.1 Expose `ToolSource` enum via UniFFI (as `ToolSourceType`)
 - [x] 8.1.2 Expose `UnifiedTool` struct via UniFFI (as `UnifiedToolInfo`)
 - [x] 8.1.3 Expose `list_tools()` method (+ `list_tools_by_source()`, `search_tools()`, `refresh_tools()`)
-- [x] 8.1.4 Update `aether.udl` with new types
+- [x] 8.1.4 Update `aleph.udl` with new types
 - [x] 8.1.5 Regenerate Swift bindings
 
 ## Phase 9: Documentation & Testing ✅

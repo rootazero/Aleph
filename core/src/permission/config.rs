@@ -1,4 +1,4 @@
-// Aether/core/src/permission/config.rs
+// Aleph/core/src/permission/config.rs
 //! Permission configuration parsing.
 
 use super::rule::{PermissionRule, Ruleset};

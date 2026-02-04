@@ -26,7 +26,7 @@ sqlite-vec = "0.1.6"
 
 **Step 2: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check`
 Expected: Compiles without errors
 
 **Step 3: Commit**
@@ -77,7 +77,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_sqlite_vec_extension_loaded -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_sqlite_vec_extension_loaded -- --nocapture`
 Expected: FAIL with "no such function: vec_version"
 
 **Step 3: Implement sqlite-vec initialization**
@@ -121,7 +121,7 @@ impl VectorDatabase {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_sqlite_vec_extension_loaded -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_sqlite_vec_extension_loaded -- --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
@@ -184,7 +184,7 @@ fn test_vec0_tables_created() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_vec0_tables_created -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_vec0_tables_created -- --nocapture`
 Expected: FAIL with "memories_vec table should exist"
 
 **Step 3: Add vec0 virtual table creation to schema**
@@ -282,7 +282,7 @@ In `core/src/memory/database/core.rs`, modify the `execute_batch` SQL to add vec
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_vec0_tables_created -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_vec0_tables_created -- --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
@@ -350,7 +350,7 @@ mod vec_sync_tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_insert_memory_syncs_to_vec_table -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_insert_memory_syncs_to_vec_table -- --nocapture`
 Expected: FAIL with "Should have 1 row in memories_vec"
 
 **Step 3: Modify insert_memory to also insert into vec0 table**
@@ -411,7 +411,7 @@ In `core/src/memory/database/memory_ops.rs`, update `insert_memory`:
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_insert_memory_syncs_to_vec_table -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_insert_memory_syncs_to_vec_table -- --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
@@ -478,7 +478,7 @@ async fn test_search_memories_uses_vec0() {
 
 **Step 2: Run test to verify current implementation passes (baseline)**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_search_memories_uses_vec0 -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_search_memories_uses_vec0 -- --nocapture`
 Expected: PASS (current SIMD implementation should work)
 
 **Step 3: Rewrite search_memories to use vec0 KNN query**
@@ -569,12 +569,12 @@ Replace the `search_memories` function in `core/src/memory/database/memory_ops.r
 
 **Step 4: Run test to verify it still passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_search_memories_uses_vec0 -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_search_memories_uses_vec0 -- --nocapture`
 Expected: PASS
 
 **Step 5: Run all memory tests to ensure no regressions**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test memory:: -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test memory:: -- --nocapture`
 Expected: All tests PASS
 
 **Step 6: Commit**
@@ -642,7 +642,7 @@ async fn test_delete_memory_removes_from_vec_table() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_delete_memory_removes_from_vec_table -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_delete_memory_removes_from_vec_table -- --nocapture`
 Expected: FAIL with "Vec table should be empty after delete"
 
 **Step 3: Update delete_memory to also delete from vec0**
@@ -690,7 +690,7 @@ use rusqlite::OptionalExtension;
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_delete_memory_removes_from_vec_table -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_delete_memory_removes_from_vec_table -- --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
@@ -751,7 +751,7 @@ async fn test_clear_memories_clears_vec_table() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_clear_memories_clears_vec_table -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_clear_memories_clears_vec_table -- --nocapture`
 Expected: FAIL
 
 **Step 3: Update clear_memories to also clear vec0**
@@ -842,7 +842,7 @@ Expected: FAIL
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_clear_memories_clears_vec_table -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_clear_memories_clears_vec_table -- --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
@@ -906,7 +906,7 @@ async fn test_delete_by_topic_clears_vec_table() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_delete_by_topic_clears_vec_table -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_delete_by_topic_clears_vec_table -- --nocapture`
 Expected: FAIL
 
 **Step 3: Update delete_by_topic_id**
@@ -957,7 +957,7 @@ Expected: FAIL
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_delete_by_topic_clears_vec_table -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_delete_by_topic_clears_vec_table -- --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
@@ -1020,7 +1020,7 @@ async fn test_insert_fact_syncs_to_vec_table() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test test_insert_fact_syncs_to_vec_table -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test test_insert_fact_syncs_to_vec_table -- --nocapture`
 Expected: FAIL
 
 **Step 3: Update insert_fact to sync with vec0**
@@ -1178,7 +1178,7 @@ Similarly update `insert_facts` for batch operations.
 
 **Step 5: Run tests to verify**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test facts:: -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test facts:: -- --nocapture`
 Expected: All tests PASS
 
 **Step 6: Commit**
@@ -1226,12 +1226,12 @@ rm core/src/memory/simd.rs
 
 **Step 4: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo build`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo build`
 Expected: Build succeeds (no references to simd module remaining)
 
 **Step 5: Run all memory tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test memory:: -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test memory:: -- --nocapture`
 Expected: All tests PASS
 
 **Step 6: Commit**
@@ -1353,7 +1353,7 @@ EOF
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test find_similar -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test find_similar -- --nocapture`
 Expected: PASS
 
 **Step 3: Commit**
@@ -1466,7 +1466,7 @@ Call this after schema creation in `VectorDatabase::new`:
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test -- --nocapture`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -1493,17 +1493,17 @@ EOF
 
 **Step 1: Run all core tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test`
 Expected: All tests PASS
 
 **Step 2: Run memory-specific tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test memory:: -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test memory:: -- --nocapture`
 Expected: All tests PASS
 
 **Step 3: Run integration tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test integration -- --nocapture`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test integration -- --nocapture`
 Expected: All tests PASS
 
 **Step 4: Fix any failures**

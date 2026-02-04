@@ -1,7 +1,7 @@
 //! Provider adapter for plugin-provided AI models
 //!
 //! This module provides an adapter that wraps plugin-provided AI model providers
-//! to interface with the core Aether systems. It allows plugins to expose
+//! to interface with the core Aleph systems. It allows plugins to expose
 //! custom AI backends (e.g., local LLMs, custom API endpoints) that can be
 //! used by the agent system.
 //!

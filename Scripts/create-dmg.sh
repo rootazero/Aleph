@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Create Aether.dmg with custom background for distribution
+# Create Aleph.dmg with custom background for distribution
 # Usage: ./Scripts/create-dmg.sh
 #
 # Requirements:
@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Configuration
-APP_NAME="Aether"
+APP_NAME="Aleph"
 VOLUME_NAME="${APP_NAME}"
 DMG_FINAL="${PROJECT_DIR}/${APP_NAME}.dmg"
 BACKGROUND_DIR="/tmp/dmg-backgrounds"
@@ -30,7 +30,7 @@ APP_ICON_Y=200
 APPS_ICON_X=410
 APPS_ICON_Y=200
 
-echo "=== Aether DMG Creator ==="
+echo "=== Aleph DMG Creator ==="
 echo ""
 
 # Find built app
@@ -38,16 +38,16 @@ find_app() {
     local app_path
 
     # Try Release first
-    app_path=$(find ~/Library/Developer/Xcode/DerivedData -name "Aether.app" -path "*/Release/*" 2>/dev/null | head -1)
+    app_path=$(find ~/Library/Developer/Xcode/DerivedData -name "Aleph.app" -path "*/Release/*" 2>/dev/null | head -1)
 
     # Fall back to Debug
     if [ -z "$app_path" ]; then
-        app_path=$(find ~/Library/Developer/Xcode/DerivedData -name "Aether.app" -path "*/Debug/*" 2>/dev/null | head -1)
+        app_path=$(find ~/Library/Developer/Xcode/DerivedData -name "Aleph.app" -path "*/Debug/*" 2>/dev/null | head -1)
     fi
 
     # Check project build directory
-    if [ -z "$app_path" ] && [ -d "${PROJECT_DIR}/build/Release/Aether.app" ]; then
-        app_path="${PROJECT_DIR}/build/Release/Aether.app"
+    if [ -z "$app_path" ] && [ -d "${PROJECT_DIR}/build/Release/Aleph.app" ]; then
+        app_path="${PROJECT_DIR}/build/Release/Aleph.app"
     fi
 
     echo "$app_path"
@@ -81,7 +81,7 @@ for y in range(HEIGHT):
     draw.line([(0, y), (WIDTH, y)], fill=(r, g, b, 255))
 
 # Load and place logo
-icon_path = '${PROJECT_DIR}/Aether/Assets.xcassets/AppIcon.appiconset/icon_512x512.png'
+icon_path = '${PROJECT_DIR}/Aleph/Assets.xcassets/AppIcon.appiconset/icon_512x512.png'
 try:
     logo = Image.open(icon_path).convert('RGBA')
     logo = logo.resize((64, 64), Image.Resampling.LANCZOS)
@@ -140,7 +140,7 @@ create_dmg() {
 
     # Create settings file for dmgbuild
     cat > "$SETTINGS_FILE" << SETTINGS
-# DMG build settings for Aether
+# DMG build settings for Aleph
 
 volume_name = '${VOLUME_NAME}'
 format = 'UDZO'
@@ -183,8 +183,8 @@ main() {
     local app_path=$(find_app)
 
     if [ -z "$app_path" ] || [ ! -d "$app_path" ]; then
-        echo "Error: Aether.app not found. Please build the project first:"
-        echo "  xcodegen generate && xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build"
+        echo "Error: Aleph.app not found. Please build the project first:"
+        echo "  xcodegen generate && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Release build"
         exit 1
     fi
 

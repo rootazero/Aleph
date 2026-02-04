@@ -46,7 +46,7 @@ pub enum IncludeContext {
 **Step 2: Run cargo check**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 3: Fix any test compilation errors**
@@ -282,7 +282,7 @@ pub use context_injector::{ContextInjector, InjectedContext, ResourceContext, To
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test context_injector
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test context_injector
 ```
 
 **Step 4: Commit**
@@ -364,7 +364,7 @@ In `client.rs` where `handle_request` is called, pass the server name.
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test sampling
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test sampling
 ```
 
 **Step 4: Commit**
@@ -478,7 +478,7 @@ Add after the `finish_authorization` method:
 **Step 2: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test auth
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test auth
 ```
 
 **Step 3: Commit**
@@ -742,7 +742,7 @@ pub use refresh::{TokenRefreshConfig, TokenRefreshManager};
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test refresh
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test refresh
 ```
 
 **Step 4: Commit**
@@ -827,7 +827,7 @@ pub type StreamingSamplingCallback = Box<
 **Step 4: Run cargo check**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 5: Commit**
@@ -898,7 +898,7 @@ Add in the `mcp` module:
 **Step 2: Run cargo check**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 3: Commit**
@@ -1116,7 +1116,7 @@ pub use jsonrpc::mcp::{ApprovalDecision, ApprovalRequest, ApprovalResponse};
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo test approval
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo test approval
 ```
 
 **Step 4: Commit**
@@ -1184,7 +1184,7 @@ pub async fn handle_respond_approval(
 **Step 3: Run cargo check**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/core && cargo check
+cd /Volumes/TBU4/Workspace/Aleph/core && cargo check
 ```
 
 **Step 4: Commit**

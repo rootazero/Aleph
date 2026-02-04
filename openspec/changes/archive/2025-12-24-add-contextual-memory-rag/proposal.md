@@ -7,16 +7,16 @@
 
 ## Overview
 
-Implement a local RAG (Retrieval-Augmented Generation) memory system that enables Aether to remember past interactions and provide context-aware AI responses based on the active application and window context.
+Implement a local RAG (Retrieval-Augmented Generation) memory system that enables Aleph to remember past interactions and provide context-aware AI responses based on the active application and window context.
 
 ## Problem Statement
 
-Currently, Aether processes each user request in isolation without any memory of past interactions. This limits its ability to:
+Currently, Aleph processes each user request in isolation without any memory of past interactions. This limits its ability to:
 - Provide continuity in conversations within specific contexts (e.g., a particular document or chat window)
 - Build up understanding over time about user preferences or project-specific terminology
 - Offer more relevant and personalized responses based on historical context
 
-Users must manually re-provide context in every interaction, which breaks the "frictionless" philosophy of Aether.
+Users must manually re-provide context in every interaction, which breaks the "frictionless" philosophy of Aleph.
 
 ## Proposed Solution
 
@@ -30,7 +30,7 @@ Add a **Context-Aware Local RAG** system that:
 2. **Stores Memories Locally**: Uses an embedded vector database to store interaction embeddings:
    - User input + AI output pairs embedded using a lightweight local model
    - Zero-knowledge cloud: raw memories never leave the device
-   - Database file stored in `~/.aether/memory.db` or `~/.aether/memory.lance`
+   - Database file stored in `~/.aleph/memory.db` or `~/.aleph/memory.lance`
 
 3. **Retrieves Relevant Context**: When processing a new request:
    - Query vector DB filtered by current `app_bundle_id` + `window_title`
@@ -48,7 +48,7 @@ Add a **Context-Aware Local RAG** system that:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                       AetherCore (Rust)                      │
+│                       AlephCore (Rust)                      │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐   │
 │  │  Context    │  │  Embedding   │  │  Vector Database │   │
@@ -113,7 +113,7 @@ Add a **Context-Aware Local RAG** system that:
    - Format retrieved memories as context
    - Inject into system prompt:
      ```
-     You are Aether AI. Here are relevant past interactions in this context:
+     You are Aleph AI. Here are relevant past interactions in this context:
 
      [Memory 1]
      User: ...
@@ -141,7 +141,7 @@ similarity_threshold = 0.7         # Minimum similarity score to include memory
 
 ### UniFFI Interface Additions
 
-Add to `aether.udl`:
+Add to `aleph.udl`:
 
 ```idl
 // Memory context for a single interaction
@@ -156,7 +156,7 @@ dictionary MemoryEntry {
 };
 
 // Memory module interface
-interface AetherCore {
+interface AlephCore {
   // ... existing methods ...
 
   // Get memory statistics
@@ -166,18 +166,18 @@ interface AetherCore {
   sequence<MemoryEntry> search_memories(string app_bundle_id, string? window_title, u32 limit);
 
   // Delete specific memory by ID
-  [Throws=AetherError]
+  [Throws=AlephError]
   void delete_memory(string id);
 
   // Clear all memories (with optional context filter)
-  [Throws=AetherError]
+  [Throws=AlephError]
   void clear_memories(string? app_bundle_id, string? window_title);
 
   // Get memory configuration
   MemoryConfig get_memory_config();
 
   // Update memory configuration
-  [Throws=AetherError]
+  [Throws=AlephError]
   void update_memory_config(MemoryConfig config);
 };
 
@@ -236,7 +236,7 @@ candle-inference = ["candle-core", "candle-nn", "candle-transformers"]
 - **Model**: `sentence-transformers/all-MiniLM-L6-v2`
 - **Format**: ONNX (for `ort`) or SafeTensors (for `candle`)
 - **Download Source**: Hugging Face Hub
-- **Storage**: `~/.aether/models/all-MiniLM-L6-v2/`
+- **Storage**: `~/.aleph/models/all-MiniLM-L6-v2/`
 - **Size**: ~23MB
 - **License**: Apache 2.0
 
@@ -269,7 +269,7 @@ candle-inference = ["candle-core", "candle-nn", "candle-transformers"]
 - Cloud providers never see the full memory database
 
 ### Local Storage
-- Database file: `~/.aether/memory.db` or `.lance`
+- Database file: `~/.aleph/memory.db` or `.lance`
 - Permissions: 600 (user read/write only)
 - No encryption at rest (relies on OS-level disk encryption like FileVault)
 
@@ -292,18 +292,18 @@ candle-inference = ["candle-core", "candle-nn", "candle-transformers"]
 1. **User works in Notes.app**, document "Project Plan.txt"
 2. **First interaction**:
    - User: "Summarize the key milestones"
-   - Aether: [Summarizes] (no context available yet)
+   - Aleph: [Summarizes] (no context available yet)
    - Memory: Stores interaction tagged with `com.apple.Notes` + "Project Plan.txt"
 
 3. **Second interaction** (same document):
    - User: "What's the timeline for Phase 2?"
    - Memory: Retrieves previous summary from vector DB
-   - Aether: [Responds with context from previous interaction]
+   - Aleph: [Responds with context from previous interaction]
 
 4. **Third interaction** (different document):
    - User switches to "Budget.txt" in Notes.app
    - Memory: No relevant context (different window_title)
-   - Aether: Starts fresh for this document
+   - Aleph: Starts fresh for this document
 
 ### Settings UI (Phase 6)
 
@@ -372,7 +372,7 @@ Add new "Memory" tab in Settings:
 - [ ] Database file has correct permissions (600)
 
 ### UX
-- [ ] Aether provides context-aware responses in same app/window
+- [ ] Aleph provides context-aware responses in same app/window
 - [ ] No cross-contamination between different contexts
 - [ ] Settings UI allows full memory management
 - [ ] Clear feedback when memory is being used (optional indicator)

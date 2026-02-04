@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Settings Window UI
-The settings window SHALL provide a modern, native macOS interface for configuring Aether.
+The settings window SHALL provide a modern, native macOS interface for configuring Aleph.
 
 #### Scenario: Modern visual design
 - **WHEN** the user opens the settings window

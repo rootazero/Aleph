@@ -13,8 +13,8 @@
 ## Task 1: 创建 generation tool 模块结构
 
 **Files:**
-- Create: `Aether/core/src/rig_tools/generation.rs`
-- Modify: `Aether/core/src/rig_tools/mod.rs`
+- Create: `Aleph/core/src/rig_tools/generation.rs`
+- Modify: `Aleph/core/src/rig_tools/mod.rs`
 
 **Step 1: Create the generation tool module**
 
@@ -74,7 +74,7 @@ pub use generation::{ImageGenerateTool, SpeechGenerateTool};
 
 **Step 3: Run cargo check**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo check`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo check`
 Expected: Compile errors (modules not yet created)
 
 **Step 4: Commit (after Task 2-3 are done)**
@@ -84,7 +84,7 @@ Expected: Compile errors (modules not yet created)
 ## Task 2: 实现 ImageGenerateTool
 
 **Files:**
-- Create: `Aether/core/src/rig_tools/generation/image_generate.rs`
+- Create: `Aleph/core/src/rig_tools/generation/image_generate.rs`
 
 **Step 1: Create ImageGenerateTool with args, output, and Tool impl**
 
@@ -444,7 +444,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test rig_tools::generation::image_generate`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test rig_tools::generation::image_generate`
 Expected: All tests PASS
 
 ---
@@ -452,7 +452,7 @@ Expected: All tests PASS
 ## Task 3: 实现 SpeechGenerateTool
 
 **Files:**
-- Create: `Aether/core/src/rig_tools/generation/speech_generate.rs`
+- Create: `Aleph/core/src/rig_tools/generation/speech_generate.rs`
 
 **Step 1: Create SpeechGenerateTool**
 
@@ -841,7 +841,7 @@ mod tests {
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test rig_tools::generation::speech_generate`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test rig_tools::generation::speech_generate`
 Expected: All tests PASS
 
 ---
@@ -849,7 +849,7 @@ Expected: All tests PASS
 ## Task 4: 创建 generation/mod.rs 模块入口
 
 **Files:**
-- Create: `Aether/core/src/rig_tools/generation/mod.rs`
+- Create: `Aleph/core/src/rig_tools/generation/mod.rs`
 
 **Step 1: Create the module file**
 
@@ -949,7 +949,7 @@ pub use youtube::YouTubeTool;
 
 **Step 3: Run all tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test rig_tools::generation`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test rig_tools::generation`
 Expected: All tests PASS
 
 **Step 4: Commit**
@@ -973,7 +973,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 5: 在 ToolRegistry 中注册生成工具为 Builtin
 
 **Files:**
-- Modify: `Aether/core/src/dispatcher/registry.rs`
+- Modify: `Aleph/core/src/dispatcher/registry.rs`
 
 **Step 1: Add builtin tool registration**
 
@@ -1013,7 +1013,7 @@ self.register_with_conflict_resolution(speech_generate).await;
 
 **Step 2: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test dispatcher::registry`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test dispatcher::registry`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -1033,17 +1033,17 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 **Step 1: Run cargo build**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo build`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo build`
 Expected: Build succeeds
 
 **Step 2: Run cargo clippy**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo clippy -- -W clippy::all 2>&1 | grep generation`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo clippy -- -W clippy::all 2>&1 | grep generation`
 Expected: No warnings in generation/rig_tools modules
 
 **Step 3: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/Aether/core && cargo test`
+Run: `cd /Users/zouguojun/Workspace/Aleph/Aleph/core && cargo test`
 Expected: All tests pass
 
 ---

@@ -10,7 +10,7 @@ use super::types::{
     SkillToolResult,
 };
 use crate::event::{
-    AetherEvent, EventFilter, EventType, GlobalBus, PermissionReply, PermissionRequest,
+    AlephEvent, EventFilter, EventType, GlobalBus, PermissionReply, PermissionRequest,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -129,7 +129,7 @@ pub async fn request_skill_permission_async(
 
     let sub_id = bus
         .subscribe_async(filter, move |global_event| {
-            if let AetherEvent::PermissionReplied {
+            if let AlephEvent::PermissionReplied {
                 request_id: ref rid,
                 reply,
                 ..
@@ -161,7 +161,7 @@ pub async fn request_skill_permission_async(
         request_id, "Requesting skill permission via EventBus"
     );
 
-    bus.broadcast(agent_id, session_id, AetherEvent::PermissionAsked(request))
+    bus.broadcast(agent_id, session_id, AlephEvent::PermissionAsked(request))
         .await;
 
     // Wait for response with timeout
@@ -356,7 +356,7 @@ mod tests {
             scope: crate::extension::PromptScope::System,
             bound_tool: None,
             source_path: PathBuf::from("/test/skill/SKILL.md"),
-            source: DiscoverySource::AetherGlobal,
+            source: DiscoverySource::AlephGlobal,
         }
     }
 
@@ -471,7 +471,7 @@ mod tests {
             scope,
             bound_tool: bound_tool.map(|s| s.to_string()),
             source_path: PathBuf::from("/test/skill/SKILL.md"),
-            source: DiscoverySource::AetherGlobal,
+            source: DiscoverySource::AlephGlobal,
         }
     }
 

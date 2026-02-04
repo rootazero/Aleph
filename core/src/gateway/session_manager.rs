@@ -54,7 +54,7 @@ impl Default for SessionManagerConfig {
         Self {
             db_path: dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".aether/sessions.db"),
+                .join(".aleph/sessions.db"),
             max_messages: 100,
             compaction_keep: 50,
             auto_reset_hour: Some(4), // 4 AM

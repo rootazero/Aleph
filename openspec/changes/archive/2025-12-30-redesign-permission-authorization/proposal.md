@@ -74,7 +74,7 @@
 - **重写 `PermissionGateView`**:
   - 瀑布流设计: Step 1 (Accessibility) → Step 2 (Input Monitoring)
   - Step 2 仅在 Step 1 完成后才可点击
-  - 移除 "自动重启" 按钮，改为 "进入 Aether" 按钮（仅在两个权限都授予后显示）
+  - 移除 "自动重启" 按钮，改为 "进入 Aleph" 按钮（仅在两个权限都授予后显示）
   - 添加可选的 "手动重启应用" 按钮（仅在 Input Monitoring 授权后，用户主动点击）
 
 - **重写 `PermissionChecker`**:
@@ -84,31 +84,31 @@
 
 **Rust 层 (核心防护)**:
 
-- **修改 `Aether/core/src/hotkey/rdev_listener.rs`**:
+- **修改 `Aleph/core/src/hotkey/rdev_listener.rs`**:
   - 使用 `std::panic::catch_unwind()` 包裹 `rdev::listen()`
   - 捕获 panic 后记录详细错误日志
   - 返回 `Result<(), HotkeyError>` 而不是让 panic 传播
 
-- **修改 `Aether/core/src/core.rs`**:
+- **修改 `Aleph/core/src/core.rs`**:
   - 在 `start_listening()` 中增加权限预检查
   - 如果 Input Monitoring 权限未授予，**不调用** `rdev::listen()`
   - 通过 UniFFI 回调 `on_error()` 通知 Swift 层权限问题
 
 **配置文件**:
 
-- **修改 `Aether/Sources/AppDelegate.swift`**:
+- **修改 `Aleph/Sources/AppDelegate.swift`**:
   - 启动时调用 `PermissionChecker.hasAllRequiredPermissions()`
   - 如果权限不足，显示新的 `PermissionGateView`
-  - 权限检查通过后才初始化 `AetherCore`
+  - 权限检查通过后才初始化 `AlephCore`
 
 ### Deliverables
 
-- **NEW**: `Aether/Sources/Utils/PermissionManager.swift` - 新的被动监听权限管理器
-- **MODIFIED**: `Aether/Sources/Components/PermissionGateView.swift` - 重写为瀑布流设计
-- **MODIFIED**: `Aether/Sources/Utils/PermissionChecker.swift` - 添加 HID 检测方法
-- **MODIFIED**: `Aether/core/src/hotkey/rdev_listener.rs` - 添加 panic 防护
-- **MODIFIED**: `Aether/core/src/core.rs` - 添加权限预检查
-- **MODIFIED**: `Aether/Sources/AppDelegate.swift` - 优化权限门控逻辑
+- **NEW**: `Aleph/Sources/Utils/PermissionManager.swift` - 新的被动监听权限管理器
+- **MODIFIED**: `Aleph/Sources/Components/PermissionGateView.swift` - 重写为瀑布流设计
+- **MODIFIED**: `Aleph/Sources/Utils/PermissionChecker.swift` - 添加 HID 检测方法
+- **MODIFIED**: `Aleph/core/src/hotkey/rdev_listener.rs` - 添加 panic 防护
+- **MODIFIED**: `Aleph/core/src/core.rs` - 添加权限预检查
+- **MODIFIED**: `Aleph/Sources/AppDelegate.swift` - 优化权限门控逻辑
 - **NEW**: 单元测试 - 覆盖权限状态变化的所有场景
 - **NEW**: 文档 - 权限授权流程说明和故障排查指南
 
@@ -117,7 +117,7 @@
 1. **启动时权限检查** (无闪退):
    - 调用 `PermissionChecker.hasAllRequiredPermissions()`
    - 如果缺失权限，显示 `PermissionGateView`
-   - 如果权限齐全，直接初始化 `AetherCore`
+   - 如果权限齐全，直接初始化 `AlephCore`
 
 2. **Accessibility 权限授予** (无重启):
    - `PermissionManager` 检测到 `AXIsProcessTrusted()` 返回 true
@@ -127,7 +127,7 @@
 
 3. **Input Monitoring 权限授予** (用户控制重启):
    - `PermissionManager` 检测到 `IOHIDRequestAccess()` 返回 true
-   - UI 显示 "进入 Aether" 按钮
+   - UI 显示 "进入 Aleph" 按钮
    - 用户点击按钮后，调用 `restartApp()` 方法（用户主动触发）
    - 或者，用户忽略提示，macOS 系统弹窗会引导重启
 
@@ -156,20 +156,20 @@
 ### Affected Code
 
 **Swift 层**:
-- `Aether/Sources/Utils/PermissionManager.swift` - **重写**
-- `Aether/Sources/Components/PermissionGateView.swift` - **重写**
-- `Aether/Sources/Utils/PermissionChecker.swift` - **修改**（添加 HID 方法）
-- `Aether/Sources/AppDelegate.swift` - **修改**（优化权限门控逻辑）
-- `Aether/Sources/Utils/PermissionStatusMonitor.swift` - **删除**（被 PermissionManager 取代）
+- `Aleph/Sources/Utils/PermissionManager.swift` - **重写**
+- `Aleph/Sources/Components/PermissionGateView.swift` - **重写**
+- `Aleph/Sources/Utils/PermissionChecker.swift` - **修改**（添加 HID 方法）
+- `Aleph/Sources/AppDelegate.swift` - **修改**（优化权限门控逻辑）
+- `Aleph/Sources/Utils/PermissionStatusMonitor.swift` - **删除**（被 PermissionManager 取代）
 
 **Rust 层**:
-- `Aether/core/src/hotkey/rdev_listener.rs` - **修改**（添加 panic 防护）
-- `Aether/core/src/core.rs` - **修改**（添加权限预检查）
-- `Aether/core/src/aether.udl` - **修改**（如需添加权限检查相关 UniFFI 接口）
+- `Aleph/core/src/hotkey/rdev_listener.rs` - **修改**（添加 panic 防护）
+- `Aleph/core/src/core.rs` - **修改**（添加权限预检查）
+- `Aleph/core/src/aleph.udl` - **修改**（如需添加权限检查相关 UniFFI 接口）
 
 **测试**:
-- `AetherTests/PermissionManagerTests.swift` - **新建**
-- `Aether/core/tests/hotkey_tests.rs` - **修改**（添加 panic 防护测试）
+- `AlephTests/PermissionManagerTests.swift` - **新建**
+- `Aleph/core/tests/hotkey_tests.rs` - **修改**（添加 panic 防护测试）
 
 ### Dependencies
 

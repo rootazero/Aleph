@@ -1,6 +1,6 @@
 //
 //  HaloCommandListView.swift
-//  Aether
+//  Aleph
 //
 //  Command list panel view for the / command.
 //  Displays available skills/commands with search filtering.

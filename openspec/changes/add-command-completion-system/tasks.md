@@ -3,7 +3,7 @@
 ## Phase 1: Rust Core - Command Registry
 
 ### 1.1 Data Structures
-- [ ] 1.1.1 Create `Aether/core/src/command/mod.rs` module
+- [ ] 1.1.1 Create `Aleph/core/src/command/mod.rs` module
 - [ ] 1.1.2 Define `CommandType` enum (Action, Prompt, Namespace)
 - [ ] 1.1.3 Define `CommandNode` struct with all fields (including `hint: Option<String>`)
 - [ ] 1.1.4 Define `CommandExecutionResult` for command outcomes
@@ -38,15 +38,15 @@
 ## Phase 2: UniFFI Bridge
 
 ### 2.1 Type Exports
-- [ ] 2.1.1 Add `CommandType` enum to `aether.udl`
-- [ ] 2.1.2 Add `CommandNode` dictionary to `aether.udl`
-- [ ] 2.1.3 Add `CommandExecutionResult` dictionary to `aether.udl`
+- [ ] 2.1.1 Add `CommandType` enum to `aleph.udl`
+- [ ] 2.1.2 Add `CommandNode` dictionary to `aleph.udl`
+- [ ] 2.1.3 Add `CommandExecutionResult` dictionary to `aleph.udl`
 - [ ] 2.1.4 Generate Swift bindings with `uniffi-bindgen`
 
 ### 2.2 API Methods
-- [ ] 2.2.1 Add `get_root_commands()` to AetherCore interface
-- [ ] 2.2.2 Add `get_command_children(parent_key)` to AetherCore interface
-- [ ] 2.2.3 Add `execute_command(path, argument)` to AetherCore interface
+- [ ] 2.2.1 Add `get_root_commands()` to AlephCore interface
+- [ ] 2.2.2 Add `get_command_children(parent_key)` to AlephCore interface
+- [ ] 2.2.3 Add `execute_command(path, argument)` to AlephCore interface
 - [ ] 2.2.4 Add `filter_commands(nodes, prefix)` helper method
 - [ ] 2.2.5 Add `get_show_command_hints()` / `set_show_command_hints()` methods
 - [ ] 2.2.6 Rebuild `libaethecore.dylib` with new exports

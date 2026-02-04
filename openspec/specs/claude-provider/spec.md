@@ -45,7 +45,7 @@ The system SHALL include Claude-specific HTTP headers required by Anthropic API.
 #### Scenario: Set content-type header
 - **WHEN** creating HTTP request
 - **THEN** `Content-Type` header is set to `application/json`
-- **AND** `User-Agent` header includes "Aether/{version}"
+- **AND** `User-Agent` header includes "Aleph/{version}"
 - **AND** headers are sent with every request
 
 ### Requirement: Request Parameters
@@ -74,32 +74,32 @@ The system SHALL handle all Claude API error responses appropriately.
 
 #### Scenario: Handle 401 Unauthorized
 - **WHEN** API returns 401 status
-- **THEN** error type is `AetherError::AuthenticationError`
+- **THEN** error type is `AlephError::AuthenticationError`
 - **AND** error message suggests checking `x-api-key` configuration
 - **AND** no retry is attempted
 
 #### Scenario: Handle 429 Rate Limit
 - **WHEN** API returns 429 status
-- **THEN** error type is `AetherError::RateLimitError`
+- **THEN** error type is `AlephError::RateLimitError`
 - **AND** `retry-after` header is parsed if present
 - **AND** error message includes retry delay
 - **AND** no automatic retry occurs
 
 #### Scenario: Handle 529 Overloaded
 - **WHEN** API returns 529 status (Claude-specific overload error)
-- **THEN** error type is `AetherError::ProviderError`
+- **THEN** error type is `AlephError::ProviderError`
 - **AND** error message indicates "Claude is overloaded"
 - **AND** retry with exponential backoff is recommended
 
 #### Scenario: Handle 400 Bad Request
 - **WHEN** API returns 400 status
-- **THEN** error type is `AetherError::ProviderError`
+- **THEN** error type is `AlephError::ProviderError`
 - **AND** error message includes `error.message` from response body
 - **AND** common issues: invalid model, missing max_tokens, prompt too long
 
 #### Scenario: Handle network failures
 - **WHEN** DNS lookup fails or connection refused
-- **THEN** error type is `AetherError::NetworkError`
+- **THEN** error type is `AlephError::NetworkError`
 - **AND** error message includes underlying cause
 - **AND** user is notified of connectivity issue
 

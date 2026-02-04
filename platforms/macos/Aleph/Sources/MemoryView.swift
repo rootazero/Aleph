@@ -1,6 +1,6 @@
 //
 //  MemoryView.swift
-//  Aether
+//  Aleph
 //
 //  Memory management UI for viewing, configuring, and managing stored memories.
 //  Phase 4E - Task 21: Settings UI (Memory Tab)
@@ -11,7 +11,7 @@ import SwiftUI
 // MARK: - Memory View
 
 struct MemoryView: View {
-    let core: AetherCore
+    let core: AlephCore
     @Binding var hasUnsavedChanges: Bool
 
     @State private var memoryConfig: MemoryConfig
@@ -32,7 +32,7 @@ struct MemoryView: View {
     @State private var isCompressing = false
     @State private var lastCompressionResult: CompressionResult?
 
-    init(core: AetherCore, hasUnsavedChanges: Binding<Bool>) {
+    init(core: AlephCore, hasUnsavedChanges: Binding<Bool>) {
         self.core = core
         self._hasUnsavedChanges = hasUnsavedChanges
         // Load initial config
@@ -807,7 +807,7 @@ struct MemoryEntryCard: View {
 
 struct MemoryView_Previews: PreviewProvider {
     static var previews: some View {
-        // Note: Preview requires AetherCore instance, which needs proper initialization
+        // Note: Preview requires AlephCore instance, which needs proper initialization
         // For now, this is a placeholder
         Text("MemoryView Preview")
     }

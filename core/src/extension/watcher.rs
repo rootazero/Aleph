@@ -7,7 +7,7 @@
 //! - `~/.claude/` (skills/, commands/, agents/, plugins/)
 //! - `~/.aleph/` (skills/, commands/, agents/, plugins/)
 //! - `.claude/` (project-local)
-//! - `.aether/` (project-local)
+//! - `.aleph/` (project-local)
 //!
 //! Uses macOS FSEvents for efficient file system monitoring with debouncing.
 
@@ -92,7 +92,7 @@ impl ExtensionWatcher {
     /// - `~/.claude/` (global)
     /// - `~/.aleph/` (global)
     /// - `.claude/` (project-local, if exists)
-    /// - `.aether/` (project-local, if exists)
+    /// - `.aleph/` (project-local, if exists)
     ///
     /// # Arguments
     /// * `project_root` - Optional project root for watching local directories
@@ -106,7 +106,7 @@ impl ExtensionWatcher {
         // Global directories
         if let Some(home) = dirs::home_dir() {
             let claude_global = home.join(".claude");
-            let aether_global = home.join(".aether");
+            let aether_global = home.join(".aleph");
 
             if claude_global.exists() {
                 watch_dirs.push(claude_global);
@@ -119,7 +119,7 @@ impl ExtensionWatcher {
         // Project-local directories
         if let Some(root) = project_root {
             let claude_local = root.join(".claude");
-            let aether_local = root.join(".aether");
+            let aether_local = root.join(".aleph");
 
             if claude_local.exists() {
                 watch_dirs.push(claude_local);

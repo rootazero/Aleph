@@ -56,8 +56,8 @@ git commit -m "feat: add GRDB.swift dependency for conversation persistence"
 ### Task 2: Create ConversationStore - Database Setup
 
 **Files:**
-- Create: `Aether/Sources/Store/ConversationStore.swift`
-- Create: `Aether/Sources/Store/ConversationModels.swift`
+- Create: `Aleph/Sources/Store/ConversationStore.swift`
+- Create: `Aleph/Sources/Store/ConversationModels.swift`
 
 **Step 1: Create ConversationModels.swift**
 
@@ -169,7 +169,7 @@ final class ConversationStore {
 
     private func getDBPath() -> String {
         let configDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".aether")
+            .appendingPathComponent(".aleph")
 
         // Create directory if needed
         try? FileManager.default.createDirectory(
@@ -225,7 +225,7 @@ git commit -m "feat: add ConversationStore with SQLite database setup"
 ### Task 3: ConversationStore - Topic CRUD
 
 **Files:**
-- Modify: `Aether/Sources/Store/ConversationStore.swift`
+- Modify: `Aleph/Sources/Store/ConversationStore.swift`
 
 **Step 1: Add Topic CRUD methods**
 
@@ -338,7 +338,7 @@ git commit -m "feat: add Topic CRUD operations to ConversationStore"
 ### Task 4: ConversationStore - Message CRUD
 
 **Files:**
-- Modify: `Aether/Sources/Store/ConversationStore.swift`
+- Modify: `Aleph/Sources/Store/ConversationStore.swift`
 
 **Step 1: Add Message CRUD methods**
 
@@ -429,9 +429,9 @@ git commit -m "feat: add Message CRUD operations to ConversationStore"
 ### Task 5: Rust - Add generate_topic_title API
 
 **Files:**
-- Modify: `Aether/core/src/aether.udl`
-- Modify: `Aether/core/src/lib.rs`
-- Create: `Aether/core/src/title_generator.rs`
+- Modify: `Aleph/core/src/aleph.udl`
+- Modify: `Aleph/core/src/lib.rs`
+- Create: `Aleph/core/src/title_generator.rs`
 
 **Step 1: Create title_generator.rs**
 
@@ -517,7 +517,7 @@ mod tests {
 
 **Step 2: Add module to lib.rs**
 
-In `Aether/core/src/lib.rs`, add:
+In `Aleph/core/src/lib.rs`, add:
 
 ```rust
 mod title_generator;
@@ -525,7 +525,7 @@ mod title_generator;
 
 **Step 3: Add UDL interface**
 
-In `Aether/core/src/aether.udl`, add to interface:
+In `Aleph/core/src/aleph.udl`, add to interface:
 
 ```
     /// Generate a title for a conversation topic
@@ -535,7 +535,7 @@ In `Aether/core/src/aether.udl`, add to interface:
 
 **Step 4: Implement in AlephCore**
 
-In `Aether/core/src/lib.rs`, add to `AetherCore` impl:
+In `Aleph/core/src/lib.rs`, add to `AlephCore` impl:
 
 ```rust
     /// Generate a title for a conversation topic
@@ -552,13 +552,13 @@ Expected: All tests pass
 
 **Step 6: Build and generate bindings**
 
-Run: `cd Aleph/core && cargo build --release && cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/`
+Run: `cd Aleph/core && cargo build --release && cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/`
 Expected: Build succeeds, bindings generated
 
 **Step 7: Commit**
 
 ```bash
-git add Aleph/core/src/title_generator.rs Aleph/core/src/lib.rs Aleph/core/src/aether.udl Aleph/Sources/Generated/
+git add Aleph/core/src/title_generator.rs Aleph/core/src/lib.rs Aleph/core/src/aleph.udl Aleph/Sources/Generated/
 git commit -m "feat(core): add generate_topic_title API for conversation topics"
 ```
 
@@ -569,7 +569,7 @@ git commit -m "feat(core): add generate_topic_title API for conversation topics"
 ### Task 6: Create ConversationDisplayWindow
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/ConversationDisplayWindow.swift`
+- Create: `Aleph/Sources/MultiTurn/ConversationDisplayWindow.swift`
 
 **Step 1: Create the window class**
 
@@ -726,7 +726,7 @@ git commit -m "feat: add ConversationDisplayWindow framework (WIP)"
 ### Task 7: Create ConversationDisplayViewModel
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/ConversationDisplayViewModel.swift`
+- Create: `Aleph/Sources/MultiTurn/ConversationDisplayViewModel.swift`
 
 **Step 1: Create the view model**
 
@@ -866,7 +866,7 @@ git commit -m "feat: add ConversationDisplayViewModel"
 ### Task 8: Create ConversationDisplayView
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/ConversationDisplayView.swift`
+- Create: `Aleph/Sources/MultiTurn/ConversationDisplayView.swift`
 
 **Step 1: Create the main view**
 
@@ -1106,8 +1106,8 @@ git commit -m "feat: add ConversationDisplayView with message bubbles"
 ### Task 9: Create MultiTurnInputWindow
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/MultiTurnInputWindow.swift`
-- Create: `Aether/Sources/MultiTurn/MultiTurnInputView.swift`
+- Create: `Aleph/Sources/MultiTurn/MultiTurnInputWindow.swift`
+- Create: `Aleph/Sources/MultiTurn/MultiTurnInputView.swift`
 
 **Step 1: Create MultiTurnInputWindow.swift**
 
@@ -1498,7 +1498,7 @@ git commit -m "feat: add MultiTurnInputWindow with topic list support"
 ### Task 10: Create MultiTurnCoordinator - Framework
 
 **Files:**
-- Create: `Aether/Sources/MultiTurn/MultiTurnCoordinator.swift`
+- Create: `Aleph/Sources/MultiTurn/MultiTurnCoordinator.swift`
 
 **Step 1: Create the coordinator framework**
 
@@ -1660,7 +1660,7 @@ final class MultiTurnCoordinator {
         do {
             // Create context
             let context = CapturedContext(
-                appBundleId: "com.aether.multi-turn",
+                appBundleId: "com.aleph.multi-turn",
                 windowTitle: nil,
                 attachments: nil
             )
@@ -1732,7 +1732,7 @@ git commit -m "feat: add MultiTurnCoordinator framework"
 ### Task 11: Integrate MultiTurnCoordinator into AppDelegate
 
 **Files:**
-- Modify: `Aether/Sources/AppDelegate.swift`
+- Modify: `Aleph/Sources/AppDelegate.swift`
 
 **Step 1: Add MultiTurnCoordinator initialization**
 
@@ -1771,7 +1771,7 @@ git commit -m "feat: integrate MultiTurnCoordinator into AppDelegate"
 ### Task 12: Simplify UnifiedInputCoordinator
 
 **Files:**
-- Modify: `Aether/Sources/Coordinator/UnifiedInputCoordinator.swift`
+- Modify: `Aleph/Sources/Coordinator/UnifiedInputCoordinator.swift`
 
 **Step 1: Remove multi-turn conversation logic**
 
@@ -1804,8 +1804,8 @@ git commit -m "refactor: simplify UnifiedInputCoordinator, remove multi-turn log
 ### Task 13: Mark Deprecated Components
 
 **Files:**
-- Modify: `Aether/Sources/Coordinator/ConversationCoordinator.swift`
-- Modify: `Aether/Sources/Utils/ConversationManager.swift`
+- Modify: `Aleph/Sources/Coordinator/ConversationCoordinator.swift`
+- Modify: `Aleph/Sources/Utils/ConversationManager.swift`
 
 **Step 1: Add deprecation markers**
 
@@ -1868,7 +1868,7 @@ Expected: All tests pass
 
 **Step 2: Generate final bindings**
 
-Run: `cd Aleph/core && cargo build --release && cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/ && cp target/release/libalephcore.dylib ../Frameworks/`
+Run: `cd Aleph/core && cargo build --release && cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/ && cp target/release/libalephcore.dylib ../Frameworks/`
 
 **Step 3: Final build verification**
 

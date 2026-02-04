@@ -54,7 +54,7 @@ Aleph's extension system allows third-party tools via:
 ```
 ~/.aleph/plugins/
 ├── my-plugin/
-│   ├── aether_plugin.toml    # Plugin manifest
+│   ├── aleph_plugin.toml    # Plugin manifest
 │   ├── package.json          # (Node.js) or
 │   ├── plugin.wasm           # (WASM)
 │   └── src/
@@ -63,7 +63,7 @@ Aleph's extension system allows third-party tools via:
     └── ...
 ```
 
-### Manifest (aether_plugin.toml)
+### Manifest (aleph_plugin.toml)
 
 ```toml
 [plugin]
@@ -185,7 +185,7 @@ impl NodejsRuntime {
 
 ```typescript
 // index.ts
-import { createServer } from '@aether/plugin-sdk';
+import { createServer } from '@aleph/plugin-sdk';
 
 const server = createServer({
   name: 'my-plugin',
@@ -202,7 +202,7 @@ server.start();
 ### SDK (TypeScript)
 
 ```typescript
-// @aether/plugin-sdk
+// @aleph/plugin-sdk
 export interface PluginServer {
   name: string;
   tools: Record<string, ToolHandler>;
@@ -232,7 +232,7 @@ impl PluginDiscovery {
 
         for path in &self.search_paths {
             for entry in fs::read_dir(path)? {
-                let manifest_path = entry.path().join("aether_plugin.toml");
+                let manifest_path = entry.path().join("aleph_plugin.toml");
                 if manifest_path.exists() {
                     manifests.push(parse_manifest(&manifest_path)?);
                 }
@@ -247,7 +247,7 @@ impl PluginDiscovery {
 ### Search Paths
 
 1. `~/.aleph/plugins/` (user plugins)
-2. `/usr/local/share/aether/plugins/` (system plugins)
+2. `/usr/local/share/aleph/plugins/` (system plugins)
 3. `./plugins/` (project plugins)
 
 ---
@@ -284,7 +284,7 @@ Plugin Directory Found
     ▼
 ┌─────────────────────────────────────────┐
 │ 1. Parse manifest                        │
-│    aether_plugin.toml or package.json   │
+│    aleph_plugin.toml or package.json   │
 └─────────────────────────────────────────┘
     │
     ▼
@@ -417,13 +417,13 @@ impl AlephToolDyn for SkillTool {
 
 The V2 SDK introduces enhanced manifest format, hook system, and prompt scopes for building powerful extensions.
 
-### Manifest Format (aether_plugin.toml)
+### Manifest Format (aleph_plugin.toml)
 
 V2 plugins use TOML format for better readability and Rust ecosystem alignment. The manifest priority order is:
 
-1. `aether_plugin.toml` (V2 TOML format) - **Preferred**
-2. `aether_plugin.json` (V2 JSON format)
-3. `package.json` with `aetherPlugin` section
+1. `aleph_plugin.toml` (V2 TOML format) - **Preferred**
+2. `aleph_plugin.json` (V2 JSON format)
+3. `package.json` with `alephPlugin` section
 4. Legacy manifest formats
 
 #### Complete Example
@@ -578,7 +578,7 @@ scope = "system"
 
 To migrate from V1 manifest format:
 
-1. Rename `package.json` or `aether_plugin.json` to `aether_plugin.toml`
+1. Rename `package.json` or `aleph_plugin.json` to `aleph_plugin.toml`
 2. Convert JSON structure to TOML
 3. Add `kind` field (`nodejs`, `wasm`, or `static`)
 4. Update `runtime.type` to `kind` and `runtime.entry` to `entry`

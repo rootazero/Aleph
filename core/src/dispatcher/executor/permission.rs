@@ -88,7 +88,7 @@ impl PathPermissionChecker {
             "~/.kube/**".to_string(),
         ];
 
-        // Add Aether config directory dynamically (cross-platform)
+        // Add Aleph config directory dynamically (cross-platform)
         if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
             paths.push(format!("{}/**", config_dir.display()));
         }

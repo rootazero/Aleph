@@ -28,7 +28,7 @@ Successfully executed 7 of 9 approved tasks. 1 task was skipped after re-evaluat
 
 ### A1: Extract Search Provider Validation Helper [COMPLETED]
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 
 **Changes**:
 - Added `config_error()` helper function for creating error results
@@ -42,7 +42,7 @@ Successfully executed 7 of 9 approved tasks. 1 task was skipped after re-evaluat
 
 ### A2: Extract OpenAI Text Content Builder [COMPLETED]
 
-**File**: `Aether/core/src/providers/openai.rs`
+**File**: `Aleph/core/src/providers/openai.rs`
 
 **Changes**:
 - Added `build_text_content()` helper function
@@ -56,7 +56,7 @@ Successfully executed 7 of 9 approved tasks. 1 task was skipped after re-evaluat
 
 ### E1: Remove Deprecated API Tests [COMPLETED]
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 
 **Changes**:
 - Removed `test_start_stop_listening()` test
@@ -70,7 +70,7 @@ Successfully executed 7 of 9 approved tasks. 1 task was skipped after re-evaluat
 
 ### G1: Inline Config Getter Wrappers [COMPLETED - Previous Session]
 
-**File**: `Aether/core/src/config/mod.rs`
+**File**: `Aleph/core/src/config/mod.rs`
 
 **Changes** (already applied):
 - Inlined `is_command_rule()` and `is_keyword_rule()` wrapper methods
@@ -80,8 +80,8 @@ Successfully executed 7 of 9 approved tasks. 1 task was skipped after re-evaluat
 ### B1: Consolidate NSAlert Creation [COMPLETED]
 
 **Files**:
-- `Aether/Sources/Utils/AlertHelper.swift` (enhanced)
-- `Aether/Sources/AppDelegate.swift` (consolidated)
+- `Aleph/Sources/Utils/AlertHelper.swift` (enhanced)
+- `Aleph/Sources/AppDelegate.swift` (consolidated)
 
 **Changes**:
 - Added `showWarningAlert()` helper function
@@ -116,7 +116,7 @@ The original analysis incorrectly stated "only Strategy 1 is used due to early r
 
 ### F2: Remove Deprecated ContextCapture Methods [COMPLETED]
 
-**File**: `Aether/Sources/ContextCapture.swift`
+**File**: `Aleph/Sources/ContextCapture.swift`
 
 **Changes**:
 - Removed `showPermissionAlert()` method (lines 104-127)

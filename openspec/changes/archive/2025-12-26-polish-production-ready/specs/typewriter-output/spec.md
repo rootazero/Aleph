@@ -176,7 +176,7 @@ The system SHALL extend the `InputSimulator` trait with typewriter-specific meth
 - **WHEN** `InputSimulator` implements `type_string_animated(text, speed)`
 - **THEN** method types text character-by-character
 - **AND** simulates inter-character delays based on speed
-- **AND** returns `Result<(), AetherError>` for error handling
+- **AND** returns `Result<(), AlephError>` for error handling
 - **AND** method is cancellable via async/tokio cancellation token
 
 ## MODIFIED Requirements
@@ -195,5 +195,5 @@ The system SHALL add new processing state for typewriter animation to existing `
 ## References
 
 - **Related Spec**: `event-handler` - Extends ProcessingState enum
-- **Related Spec**: `core-library` - Integrates typewriter into AetherCore
+- **Related Spec**: `core-library` - Integrates typewriter into AlephCore
 - **Depends On**: `input/` module and enigo crate for keyboard simulation

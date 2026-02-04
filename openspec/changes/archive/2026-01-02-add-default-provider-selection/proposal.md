@@ -20,13 +20,13 @@ This creates a poor user experience and forces users to interact with config fil
 
 ## What Changes
 
-**Rust Core (`Aether/core`)**:
+**Rust Core (`Aleph/core`)**:
 - Add `set_default_provider()` method to UniFFI interface
 - Add `get_default_provider()` method to query current default
 - Implement validation to ensure only enabled providers can be set as default
 - Update router to use the default provider for fallback routing
 
-**Swift UI (`Aether/Sources`)**:
+**Swift UI (`Aleph/Sources`)**:
 - Add "Default" badge indicator in ProvidersView list
 - Add "Set as Default" button in provider edit panel
 - Implement menu bar quick switch with checkmark for current default
@@ -40,7 +40,7 @@ This creates a poor user experience and forces users to interact with config fil
 ## Overview
 
 ### Problem Statement
-Currently, Aether's routing system uses `general.default_provider` in config.toml for fallback routing, but:
+Currently, Aleph's routing system uses `general.default_provider` in config.toml for fallback routing, but:
 
 1. **No UI control**: Users cannot visually select or change the default provider through Settings UI
 2. **No visual indication**: There's no way to see which provider is currently set as default

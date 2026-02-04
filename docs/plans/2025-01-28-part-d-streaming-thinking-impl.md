@@ -236,7 +236,7 @@ pub mod thinking; // Thinking level and reasoning mode
 
 **Step 4: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check 2>&1 | head -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check 2>&1 | head -30`
 
 **Step 5: Commit**
 
@@ -447,7 +447,7 @@ pub use streaming::{StreamEvent, TokenUsage};
 
 **Step 4: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib thinking 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib thinking 2>&1 | tail -30`
 
 **Step 5: Commit**
 
@@ -622,7 +622,7 @@ pub use inline_code::InlineCodeState;
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib thinking 2>&1 | tail -30`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib thinking 2>&1 | tail -30`
 
 **Step 4: Commit**
 
@@ -912,7 +912,7 @@ pub use inline_code::InlineCodeState;
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib thinking 2>&1 | tail -40`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib thinking 2>&1 | tail -40`
 
 **Step 4: Commit**
 
@@ -1145,7 +1145,7 @@ pub use inline_code::InlineCodeState;
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib thinking 2>&1 | tail -40`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib thinking 2>&1 | tail -40`
 
 **Step 4: Commit**
 
@@ -1493,7 +1493,7 @@ pub use subscriber::{StreamCallbacks, StreamConfig, StreamSubscriber};
 
 **Step 3: Run tests**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib thinking 2>&1 | tail -40`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib thinking 2>&1 | tail -40`
 
 **Step 4: Commit**
 
@@ -1538,7 +1538,7 @@ pub use streaming::{
 
 **Step 2: Run full test suite**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo test --lib thinking 2>&1 | tail -50`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo test --lib thinking 2>&1 | tail -50`
 
 **Step 3: Add exports to lib.rs**
 
@@ -1562,7 +1562,7 @@ pub use crate::thinking::{
 
 **Step 4: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/core && cargo check 2>&1 | tail -20`
+Run: `cd /Users/zouguojun/Workspace/Aleph/core && cargo check 2>&1 | tail -20`
 
 **Step 5: Final commit**
 

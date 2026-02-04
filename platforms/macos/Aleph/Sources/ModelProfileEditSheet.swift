@@ -1,6 +1,6 @@
 //
 //  ModelProfileEditSheet.swift
-//  Aether
+//  Aleph
 //
 //  Edit sheet for adding/editing AI model profiles.
 //
@@ -10,7 +10,7 @@ import SwiftUI
 /// Edit sheet for model profile configuration
 struct ModelProfileEditSheet: View {
     // Dependencies
-    let core: AetherCore?
+    let core: AlephCore?
     let profile: ModelProfileFfi?  // nil for new profile
     @Binding var isPresented: Bool
     let onSave: () -> Void

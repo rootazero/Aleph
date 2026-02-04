@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document explains the architectural decisions for Phase 7: Polish & Optimization. The design balances production quality, user experience, privacy protection, and performance while maintaining Aether's core principles of minimal friction and native-first architecture.
+This document explains the architectural decisions for Phase 7: Polish & Optimization. The design balances production quality, user experience, privacy protection, and performance while maintaining Aleph's core principles of minimal friction and native-first architecture.
 
 ## Architectural Principles
 
@@ -11,8 +11,8 @@ This document explains the architectural decisions for Phase 7: Polish & Optimiz
 **Decision**: All logging and profiling data remains local; PII is scrubbed before any storage.
 
 **Rationale**:
-- Aether's value proposition includes "zero telemetry" and "local-first"
-- Users trust Aether with sensitive clipboard content (passwords, personal info, confidential documents)
+- Aleph's value proposition includes "zero telemetry" and "local-first"
+- Users trust Aleph with sensitive clipboard content (passwords, personal info, confidential documents)
 - Any data leakage violates this trust and project philosophy
 
 **Implementation**:
@@ -88,7 +88,7 @@ supported_formats = ["png", "jpeg", "gif"]  # Extensible
 ```
 
 **Benefits**:
-- Users can adapt Aether to their workflow
+- Users can adapt Aleph to their workflow
 - A/B testing configurations without code changes
 - Settings UI provides discoverability (users learn features exist)
 
@@ -99,7 +99,7 @@ supported_formats = ["png", "jpeg", "gif"]  # Extensible
 **Decision**: Reuse existing crates (`arboard`, `enigo`, `tracing`) rather than adding new dependencies for Phase 7 features.
 
 **Rationale**:
-- Aether's binary size and build time should remain small
+- Aleph's binary size and build time should remain small
 - Fewer dependencies = fewer supply chain risks
 - Existing crates already provide needed functionality
 
@@ -143,27 +143,27 @@ enum ImageFormat {
 };
 
 interface ClipboardManager {
-  [Throws=AetherException]
+  [Throws=AlephException]
   ImageData? read_image();
 
-  [Throws=AetherException]
+  [Throws=AlephException]
   void write_image(ImageData image);
 };
 
 // Typewriter callbacks
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
   // Existing callbacks...
   void on_typewriter_progress(f32 percent);
   void on_typewriter_cancelled();
 };
 
 // Error suggestions
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
   void on_error(string message, string? suggestion);  // Extended signature
 };
 
 // Logging controls
-interface AetherCore {
+interface AlephCore {
   string get_log_level();
   void set_log_level(string level);
   string get_log_directory();
@@ -222,7 +222,7 @@ Clipboard (if image generation) OR Text output
 async fn typewriter_output(
     text: &str,
     chars_per_second: u32,
-    handler: Arc<dyn AetherEventHandler>
+    handler: Arc<dyn AlephEventHandler>
 ) -> Result<()> {
     let delay_per_char = Duration::from_secs(1) / chars_per_second;
     let total_chars = text.chars().count();
@@ -284,7 +284,7 @@ Format layer (timestamp + level + target + message)
     ↓ formatted string
 File Appender (with rotation)
     ↓
-~/.aether/logs/aether-2025-12-25.log
+~/.aleph/logs/aleph-2025-12-25.log
 ```
 
 **PII Scrubbing Layer Implementation**:
@@ -312,7 +312,7 @@ impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
 
 ### Error Feedback Architecture
 
-**Design Choice**: Extend `AetherError` with `suggestion` field, not separate suggestion database.
+**Design Choice**: Extend `AlephError` with `suggestion` field, not separate suggestion database.
 
 **Rationale**:
 - Keeps error and suggestion together (single source of truth)
@@ -323,7 +323,7 @@ impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
 
 ```rust
 #[derive(Debug, thiserror::Error)]
-pub enum AetherError {
+pub enum AlephError {
     #[error("API authentication failed")]
     ApiKeyInvalid {
         provider: String,
@@ -335,7 +335,7 @@ pub enum AetherError {
     // ... other variants
 }
 
-impl AetherError {
+impl AlephError {
     pub fn api_key_invalid(provider: &str) -> Self {
         Self::ApiKeyInvalid {
             provider: provider.to_string(),
@@ -513,7 +513,7 @@ Halo: Success animation → Fade out
 
 ### Risk 4: Performance Profiling Overhead Degrades UX
 
-**Threat**: Profiling slows down Aether, defeating its "sub-100ms" promise.
+**Threat**: Profiling slows down Aleph, defeating its "sub-100ms" promise.
 
 **Mitigations**:
 1. **Opt-in by Default**: Profiling disabled unless explicitly enabled
@@ -567,7 +567,7 @@ Halo: Success animation → Fade out
 
 ### Manual Testing Checklist
 
-- [ ] Copy image in Preview → Trigger Aether → Describe image with GPT-4V
+- [ ] Copy image in Preview → Trigger Aleph → Describe image with GPT-4V
 - [ ] Typewriter animation smooth at 50 cps, skippable with Escape
 - [ ] Error messages show suggestions in Halo overlay (readable font)
 - [ ] View Logs in Settings → Recent events visible and searchable

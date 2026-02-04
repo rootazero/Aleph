@@ -38,7 +38,7 @@ core/src/rig_tools/  →  core/src/builtin_tools/
 同步更新：
 - `core/src/lib.rs` 中的 `mod rig_tools` → `mod builtin_tools`
 - 所有 `use crate::rig_tools::` 引用
-- `aether.udl` 中相关类型声明（如有）
+- `aleph.udl` 中相关类型声明（如有）
 
 ### 1.3 模块注释更新
 
@@ -118,7 +118,7 @@ docs/legacy/rig-core-era/
 |-----------|--------|------|
 | `core/src/ffi/` | 25 | ~50KB |
 | `core/src/ffi_cabi/` | 16 | ~30KB |
-| `core/src/aether.udl` | 1 | 69KB |
+| `core/src/aleph.udl` | 1 | 69KB |
 | `platforms/macos/.../Generated/` | UniFFI 生成 | ~100KB |
 
 #### AlephConnectionManager (Swift)
@@ -178,8 +178,8 @@ class AlephConnectionManager: ObservableObject {
 
 #### 清单
 
-- [ ] 删除 `ffi/`, `ffi_cabi/`, `aether.udl`
-- [ ] 新建 `AetherConnectionManager.swift`
+- [ ] 删除 `ffi/`, `ffi_cabi/`, `aleph.udl`
+- [ ] 新建 `AlephConnectionManager.swift`
 - [ ] 实现 daemon spawn / health check / heartbeat
 - [ ] 添加 Token 认证机制
 - [ ] 更新所有工具使用路径模式

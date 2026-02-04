@@ -14,19 +14,19 @@
 ```bash
 cd Aleph/core
 cargo build --release
-cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/
+cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/
 cp target/release/libalephcore.dylib ../Frameworks/
 ```
 
 **验证结果:**
-- ✅ 生成的 `aether.swift` 包含新的回调接口
+- ✅ 生成的 `aleph.swift` 包含新的回调接口
 - ✅ ProcessingState 枚举包含 `retrievingMemory` 和 `processingWithAi` 状态
 - ✅ AlephEventHandler 协议包含 `onAiProcessingStarted` 和 `onAiResponseReceived` 回调
 - ✅ 动态库已更新到 Frameworks 目录
 
 ### 2. 更新 Swift EventHandler ✅
 
-**修改文件:** `Aether/Sources/EventHandler.swift`
+**修改文件:** `Aleph/Sources/EventHandler.swift`
 
 **新增方法:**
 1. `onAiProcessingStarted(providerName:providerColor:)` - AI 处理开始回调
@@ -42,7 +42,7 @@ cp target/release/libalephcore.dylib ../Frameworks/
 
 ### 3. 更新 Halo 状态机 ✅
 
-**修改文件:** `Aether/Sources/HaloState.swift`
+**修改文件:** `Aleph/Sources/HaloState.swift`
 
 **新增状态:**
 ```swift
@@ -56,7 +56,7 @@ case processingWithAI(providerColor: Color, providerName: String?)  // AI 提供
 
 ### 4. 更新 HaloView 视图 ✅
 
-**修改文件:** `Aether/Sources/HaloView.swift`
+**修改文件:** `Aleph/Sources/HaloView.swift`
 
 **视图更新:**
 - 在 `body` switch 语句中添加 `.retrievingMemory` 和 `.processingWithAI` 分支
@@ -65,7 +65,7 @@ case processingWithAI(providerColor: Color, providerName: String?)  // AI 提供
 
 ### 5. 更新主题协议 ✅
 
-**修改文件:** `Aether/Sources/Themes/Theme.swift`
+**修改文件:** `Aleph/Sources/Themes/Theme.swift`
 
 **新增协议方法:**
 ```swift
@@ -93,15 +93,15 @@ func processingWithAIView(providerColor: Color, providerName: String?) -> AnyVie
 ## 文件变更清单
 
 ### 生成的文件
-1. `Aether/Sources/Generated/aether.swift` - UniFFI 生成的 Swift 绑定
-2. `Aether/Frameworks/libalephcore.dylib` - 更新的 Rust 核心库
+1. `Aleph/Sources/Generated/aleph.swift` - UniFFI 生成的 Swift 绑定
+2. `Aleph/Frameworks/libalephcore.dylib` - 更新的 Rust 核心库
 3. `verify_swift_syntax.py` - 语法验证工具
 
 ### 修改的文件
-1. `Aether/Sources/EventHandler.swift` - 新增 AI 回调处理
-2. `Aether/Sources/HaloState.swift` - 新增状态枚举
-3. `Aether/Sources/HaloView.swift` - 新增状态渲染
-4. `Aether/Sources/Themes/Theme.swift` - 新增主题方法
+1. `Aleph/Sources/EventHandler.swift` - 新增 AI 回调处理
+2. `Aleph/Sources/HaloState.swift` - 新增状态枚举
+3. `Aleph/Sources/HaloView.swift` - 新增状态渲染
+4. `Aleph/Sources/Themes/Theme.swift` - 新增主题方法
 5. `openspec/changes/integrate-ai-providers/tasks.md` - 标记 Phase 9 完成
 
 ## 技术亮点
@@ -159,9 +159,9 @@ UniFFI 确保 Rust 和 Swift 之间的类型安全通信：
 
 ### UniFFI 绑定生成
 ```bash
-# 重新生成绑定（当 aether.udl 修改后）
+# 重新生成绑定（当 aleph.udl 修改后）
 cd Aleph/core
-cargo run --bin uniffi-bindgen generate src/aether.udl \
+cargo run --bin uniffi-bindgen generate src/aleph.udl \
   --language swift \
   --out-dir ../Sources/Generated/
 ```
@@ -169,7 +169,7 @@ cargo run --bin uniffi-bindgen generate src/aether.udl \
 ### Xcode 项目生成
 ```bash
 # 从 project.yml 重新生成 Xcode 项目
-cd /Users/zouguojun/Workspace/Aether
+cd /Users/zouguojun/Workspace/Aleph
 xcodegen generate
 ```
 

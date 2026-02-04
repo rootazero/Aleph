@@ -57,7 +57,7 @@ impl WebFetchTool {
     const DEFAULT_MIN_CONTENT_LENGTH: usize = 100;
 
     /// Default user agent string (used when no policy provided)
-    const DEFAULT_USER_AGENT: &'static str = "Aether/1.0";
+    const DEFAULT_USER_AGENT: &'static str = "Aleph/1.0";
 
     /// Default request timeout in seconds (used when no policy provided)
     const DEFAULT_TIMEOUT_SECS: u64 = 30;

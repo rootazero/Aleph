@@ -63,10 +63,10 @@
 
 ## 7. UniFFI Bindings
 
-- [x] 7.1 Add Task, TaskGraph, TaskStatus to aether.udl
-- [x] 7.2 Add ProgressEvent enum to aether.udl
-- [x] 7.3 Add CoworkEngine interface to aether.udl
-- [x] 7.4 Create callback interface for progress events (AetherCoworkCallback)
+- [x] 7.1 Add Task, TaskGraph, TaskStatus to aleph.udl
+- [x] 7.2 Add ProgressEvent enum to aleph.udl
+- [x] 7.3 Add CoworkEngine interface to aleph.udl
+- [x] 7.4 Create callback interface for progress events (AlephCoworkCallback)
 - [x] 7.5 Generate Swift bindings
 - [x] 7.6 Test bindings with simple Swift call
 
@@ -79,7 +79,7 @@
 - [x] 8.5 Implement progress event subscription via UniFFI callback
 - [x] 8.6 Add pause/cancel button actions
 - [x] 8.7 Integrate with Menu Bar status indicator (HaloState)
-- [x] 8.8 Style according to Aether Ghost aesthetic (ultraThinMaterial, etc.)
+- [x] 8.8 Style according to Aleph Ghost aesthetic (ultraThinMaterial, etc.)
 
 ## 9. Configuration
 

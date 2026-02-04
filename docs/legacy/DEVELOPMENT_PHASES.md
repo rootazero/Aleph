@@ -12,8 +12,8 @@ This document outlines the development phases for Aleph, tracking progress and d
 
 **Tasks:**
 - [x] Initialize Cargo workspace with `crate-type = ["cdylib", "staticlib"]`
-- [x] Create `aether.udl` interface definition
-- [x] Implement `AetherCore` struct with basic lifecycle
+- [x] Create `aleph.udl` interface definition
+- [x] Implement `AlephCore` struct with basic lifecycle
 - [x] Implement `AlephEventHandler` trait for callbacks
 - [x] Set up UniFFI bindings generation
 - [x] Create macOS Xcode project
@@ -128,7 +128,7 @@ This document outlines the development phases for Aleph, tracking progress and d
 - `core/src/tools/` - AlephTool trait and server
 - `core/src/dispatcher/` - Smart routing system
 - `core/src/config/` - Configuration management (10 type modules)
-- `platforms/macos/Aether/config.example.toml` - Comprehensive configuration example
+- `platforms/macos/Aleph/config.example.toml` - Comprehensive configuration example
 
 **Success Criteria**: ✅ All providers implemented with AlephTool system, router correctly routes requests based on rules
 
@@ -160,9 +160,9 @@ This document outlines the development phases for Aleph, tracking progress and d
 
 ### Key Files
 
-- `platforms/macos/Aether/Sources/Settings/` - Settings UI components
-- `platforms/macos/Aether/Sources/Window/SettingsWindow.swift` - NSPanel-based settings window
-- `platforms/macos/Aether/Sources/Services/KeychainManagerImpl.swift` - Keychain integration
+- `platforms/macos/Aleph/Sources/Settings/` - Settings UI components
+- `platforms/macos/Aleph/Sources/Window/SettingsWindow.swift` - NSPanel-based settings window
+- `platforms/macos/Aleph/Sources/Services/KeychainManagerImpl.swift` - Keychain integration
 
 **Success Criteria**: ✅ Full configuration management via native UI
 
@@ -243,7 +243,7 @@ This document outlines the development phases for Aleph, tracking progress and d
 ### Key Files
 
 - `core/src/runtimes/` - Runtime implementations
-- `platforms/macos/Aether/Sources/Settings/RuntimeSettingsView.swift` - Settings UI
+- `platforms/macos/Aleph/Sources/Settings/RuntimeSettingsView.swift` - Settings UI
 
 **Success Criteria**: ✅ Runtimes auto-install and update without user intervention
 

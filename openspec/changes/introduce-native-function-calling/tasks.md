@@ -108,7 +108,7 @@
 
 ### 7.3 Core Module Updates ✅ COMPLETED
 - [x] 7.3.1 Update `core.rs` to initialize new tool registry
-  - Added `NativeToolRegistry` field to `AetherCore`
+  - Added `NativeToolRegistry` field to `AlephCore`
   - Updated `refresh_tool_registry()` to create and register native AgentTools
   - Added `create_native_agent_tools()` helper method
   - Added `group_native_tools_by_service()` for dispatcher registration
@@ -120,7 +120,7 @@
 - [x] 7.3.4 Update UniFFI `.udl` file if needed
   - No changes needed now - existing tool management methods sufficient
   - Native tool execution methods (`execute_native_tool`, etc.) can be exported later
-- [x] 7.3.5 Add native tool execution methods to AetherCore
+- [x] 7.3.5 Add native tool execution methods to AlephCore
   - `execute_native_tool(name, args)` - Execute tool by name
   - `native_tool_requires_confirmation(name)` - Check if confirmation needed
   - `get_native_tool_definitions()` - Get all tool definitions

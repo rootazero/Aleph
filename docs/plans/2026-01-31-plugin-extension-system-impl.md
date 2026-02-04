@@ -32,7 +32,7 @@ plugin-all = ["plugin-wasm", "plugin-nodejs"]
 
 **Step 2: Verify compilation**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo check --features plugin-wasm`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo check --features plugin-wasm`
 Expected: Compiles successfully
 
 **Step 3: Commit**
@@ -76,7 +76,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::types::tests`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::types::tests`
 Expected: FAIL - PluginOrigin and PluginKind not defined
 
 **Step 3: Implement PluginOrigin and PluginKind**
@@ -92,7 +92,7 @@ use std::path::Path;
 pub enum PluginOrigin {
     /// Config-specified paths (priority 4 - highest)
     Config,
-    /// Workspace local .aether/extensions/ (priority 3)
+    /// Workspace local .aleph/extensions/ (priority 3)
     Workspace,
     /// Global ~/.aleph/extensions/ (priority 2)
     Global,
@@ -133,7 +133,7 @@ impl PluginKind {
         match (filename, ext) {
             (_, Some("wasm")) => Some(PluginKind::Wasm),
             ("package.json", _) => Some(PluginKind::NodeJs),
-            ("aether.plugin.json", _) => Some(PluginKind::Wasm), // standalone WASM manifest
+            ("aleph.plugin.json", _) => Some(PluginKind::Wasm), // standalone WASM manifest
             ("SKILL.md" | "COMMAND.md" | "AGENT.md", _) => Some(PluginKind::Static),
             (_, Some("md")) => Some(PluginKind::Static),
             _ => None,
@@ -144,7 +144,7 @@ impl PluginKind {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::types::tests`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::types::tests`
 Expected: PASS
 
 **Step 5: Commit**
@@ -190,7 +190,7 @@ Add to the tests module in `core/src/extension/types.rs`:
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::types::tests::test_plugin_record`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::types::tests::test_plugin_record`
 Expected: FAIL - PluginRecord not defined
 
 **Step 3: Implement PluginStatus and PluginRecord**
@@ -300,7 +300,7 @@ use std::path::PathBuf;
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::types::tests`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::types::tests`
 Expected: PASS
 
 **Step 5: Commit**
@@ -320,7 +320,7 @@ git commit -m "feat(extension): add PluginStatus and PluginRecord types"
 
 **Step 1: Create registry module directory**
 
-Run: `mkdir -p /Volumes/TBU4/Workspace/Aether/core/src/extension/registry`
+Run: `mkdir -p /Volumes/TBU4/Workspace/Aleph/core/src/extension/registry`
 
 **Step 2: Write registration types**
 
@@ -568,7 +568,7 @@ pub use types::*;
 
 **Step 4: Run tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::registry::types::tests`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::registry::types::tests`
 Expected: PASS
 
 **Step 5: Commit**
@@ -654,7 +654,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::registry::tests`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::registry::tests`
 Expected: FAIL - PluginRegistry not defined
 
 **Step 3: Implement PluginRegistry**
@@ -1129,7 +1129,7 @@ mod tests {
 
 **Step 5: Run tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::registry`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::registry`
 Expected: PASS
 
 **Step 6: Commit**
@@ -1147,11 +1147,11 @@ git commit -m "feat(extension): implement PluginRegistry with all registration m
 - Create: `core/src/extension/manifest/mod.rs`
 - Create: `core/src/extension/manifest/types.rs`
 - Create: `core/src/extension/manifest/package_json.rs`
-- Create: `core/src/extension/manifest/aether_plugin.rs`
+- Create: `core/src/extension/manifest/aleph_plugin.rs`
 
 **Step 1: Create manifest module directory**
 
-Run: `mkdir -p /Volumes/TBU4/Workspace/Aether/core/src/extension/manifest`
+Run: `mkdir -p /Volumes/TBU4/Workspace/Aleph/core/src/extension/manifest`
 
 **Step 2: Create manifest types**
 
@@ -1333,7 +1333,7 @@ use super::types::{AuthorInfo, ConfigUiHint, PluginManifest};
 use crate::extension::error::ExtensionError;
 use crate::extension::types::PluginKind;
 
-/// package.json structure with aether extension
+/// package.json structure with aleph extension
 #[derive(Debug, Clone, Deserialize)]
 pub struct PackageJson {
     pub name: String,
@@ -1355,7 +1355,7 @@ pub struct PackageJson {
     pub keywords: Option<Vec<String>>,
     /// Aleph-specific extension configuration
     #[serde(default)]
-    pub aether: Option<AetherPackageConfig>,
+    pub aleph: Option<AlephPackageConfig>,
 }
 
 /// Author field can be string or object
@@ -1431,14 +1431,14 @@ pub fn parse_package_json(path: &Path) -> Result<PluginManifest, ExtensionError>
     let pkg: PackageJson = serde_json::from_str(&content)
         .map_err(|e| ExtensionError::InvalidManifest(format!("Invalid package.json: {}", e)))?;
 
-    // Must have aether config to be a plugin
-    let aether = pkg.aether.ok_or_else(|| {
-        ExtensionError::InvalidManifest("Missing 'aether' field in package.json".to_string())
+    // Must have aleph config to be a plugin
+    let aleph = pkg.aleph.ok_or_else(|| {
+        ExtensionError::InvalidManifest("Missing 'aleph' field in package.json".to_string())
     })?;
 
     // Determine entry point
-    let entry = if !aether.extensions.is_empty() {
-        aether.extensions[0].clone()
+    let entry = if !aleph.extensions.is_empty() {
+        aleph.extensions[0].clone()
     } else if let Some(main) = &pkg.main {
         main.clone()
     } else {
@@ -1460,15 +1460,15 @@ pub fn parse_package_json(path: &Path) -> Result<PluginManifest, ExtensionError>
         kind: PluginKind::NodeJs,
         entry: entry.into(),
         root_dir,
-        config_schema: aether.config_schema,
-        config_ui_hints: aether.config_ui_hints,
+        config_schema: aleph.config_schema,
+        config_ui_hints: aleph.config_ui_hints,
         permissions: Vec::new(), // Node.js plugins don't use WASM permissions
         author: pkg.author.map(|a| a.to_author_info()),
         homepage: pkg.homepage,
         repository: pkg.repository.map(|r| r.url().to_string()),
         license: pkg.license,
         keywords: pkg.keywords.unwrap_or_default(),
-        extensions: aether.extensions,
+        extensions: aleph.extensions,
     })
 }
 
@@ -1489,18 +1489,18 @@ mod tests {
 
     #[test]
     fn test_extract_plugin_id() {
-        assert_eq!(extract_plugin_id("@aether/my-plugin"), "my-plugin");
+        assert_eq!(extract_plugin_id("@aleph/my-plugin"), "my-plugin");
         assert_eq!(extract_plugin_id("simple-plugin"), "simple-plugin");
     }
 }
 ```
 
-**Step 4: Create aether.plugin.json parser**
+**Step 4: Create aleph.plugin.json parser**
 
-Create `core/src/extension/manifest/aether_plugin.rs`:
+Create `core/src/extension/manifest/aleph_plugin.rs`:
 
 ```rust
-//! aether.plugin.json parser for WASM/standalone plugins
+//! aleph.plugin.json parser for WASM/standalone plugins
 
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -1511,7 +1511,7 @@ use super::types::{AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission};
 use crate::extension::error::ExtensionError;
 use crate::extension::types::PluginKind;
 
-/// aether.plugin.json structure
+/// aleph.plugin.json structure
 #[derive(Debug, Clone, Deserialize)]
 pub struct AlephPluginJson {
     /// Unique plugin identifier
@@ -1559,13 +1559,13 @@ fn default_kind() -> String {
     "wasm".to_string()
 }
 
-/// Parse aether.plugin.json and convert to PluginManifest
-pub fn parse_aether_plugin_json(path: &Path) -> Result<PluginManifest, ExtensionError> {
+/// Parse aleph.plugin.json and convert to PluginManifest
+pub fn parse_aleph_plugin_json(path: &Path) -> Result<PluginManifest, ExtensionError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| ExtensionError::Io(e.to_string()))?;
 
     let plugin: AlephPluginJson = serde_json::from_str(&content)
-        .map_err(|e| ExtensionError::InvalidManifest(format!("Invalid aether.plugin.json: {}", e)))?;
+        .map_err(|e| ExtensionError::InvalidManifest(format!("Invalid aleph.plugin.json: {}", e)))?;
 
     // Validate plugin ID
     validate_plugin_id(&plugin.id)?;
@@ -1670,29 +1670,29 @@ Create `core/src/extension/manifest/mod.rs`:
 //! Plugin Manifest Parsing
 //!
 //! Supports multiple manifest formats:
-//! - package.json with "aether" field (Node.js plugins)
-//! - aether.plugin.json (WASM/standalone plugins)
+//! - package.json with "aleph" field (Node.js plugins)
+//! - aleph.plugin.json (WASM/standalone plugins)
 
 mod types;
 mod package_json;
-mod aether_plugin;
+mod aleph_plugin;
 
 pub use types::*;
 pub use package_json::parse_package_json;
-pub use aether_plugin::parse_aether_plugin_json;
+pub use aleph_plugin::parse_aleph_plugin_json;
 
 use std::path::Path;
 use crate::extension::error::ExtensionError;
 
 /// Parse manifest from a directory, auto-detecting format
 pub fn parse_manifest_from_dir(dir: &Path) -> Result<PluginManifest, ExtensionError> {
-    // Try aether.plugin.json first
-    let aether_manifest = dir.join("aether.plugin.json");
-    if aether_manifest.exists() {
-        return parse_aether_plugin_json(&aether_manifest);
+    // Try aleph.plugin.json first
+    let aleph_manifest = dir.join("aleph.plugin.json");
+    if aleph_manifest.exists() {
+        return parse_aleph_plugin_json(&aleph_manifest);
     }
 
-    // Try package.json with aether field
+    // Try package.json with aleph field
     let package_json = dir.join("package.json");
     if package_json.exists() {
         return parse_package_json(&package_json);
@@ -1710,9 +1710,9 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_parse_manifest_aether_plugin_json() {
+    fn test_parse_manifest_aleph_plugin_json() {
         let dir = tempdir().unwrap();
-        let manifest_path = dir.path().join("aether.plugin.json");
+        let manifest_path = dir.path().join("aleph.plugin.json");
         fs::write(&manifest_path, r#"{
             "id": "test-plugin",
             "name": "Test Plugin",
@@ -1730,9 +1730,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let manifest_path = dir.path().join("package.json");
         fs::write(&manifest_path, r#"{
-            "name": "@aether/test-plugin",
+            "name": "@aleph/test-plugin",
             "version": "1.0.0",
-            "aether": {
+            "aleph": {
                 "extensions": ["src/index.ts"]
             }
         }"#).unwrap();
@@ -1746,14 +1746,14 @@ mod tests {
 
 **Step 6: Run tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::manifest`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::manifest`
 Expected: PASS
 
 **Step 7: Commit**
 
 ```bash
 git add core/src/extension/manifest/
-git commit -m "feat(extension): add manifest parsing for package.json and aether.plugin.json"
+git commit -m "feat(extension): add manifest parsing for package.json and aleph.plugin.json"
 ```
 
 ---
@@ -1767,7 +1767,7 @@ git commit -m "feat(extension): add manifest parsing for package.json and aether
 
 **Step 1: Create discovery module directory**
 
-Run: `mkdir -p /Volumes/TBU4/Workspace/Aether/core/src/extension/discovery`
+Run: `mkdir -p /Volumes/TBU4/Workspace/Aleph/core/src/extension/discovery`
 
 **Step 2: Create scanner**
 
@@ -1939,7 +1939,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let plugin_dir = dir.path().join("my-plugin");
         fs::create_dir(&plugin_dir).unwrap();
-        fs::write(plugin_dir.join("aether.plugin.json"), r#"{
+        fs::write(plugin_dir.join("aleph.plugin.json"), r#"{
             "id": "my-plugin",
             "name": "My Plugin",
             "entry": "plugin.wasm"
@@ -2147,7 +2147,7 @@ pub fn discover_all(config: &DiscoveryConfig) -> Result<ResolvedPlugins, Extensi
 
     // Priority 2: Workspace local
     if let Some(workspace) = &config.workspace_dir {
-        for subdir in [".aether/extensions", ".claude/extensions"] {
+        for subdir in [".aleph/extensions", ".claude/extensions"] {
             let path = workspace.join(subdir);
             debug!("Scanning workspace path: {:?}", path);
             let results = scan_directory(&path, PluginOrigin::Workspace);
@@ -2165,7 +2165,7 @@ pub fn discover_all(config: &DiscoveryConfig) -> Result<ResolvedPlugins, Extensi
         .or_else(|| dirs::home_dir())
         .unwrap_or_default();
 
-    for subdir in [".aether/extensions", ".claude/extensions"] {
+    for subdir in [".aleph/extensions", ".claude/extensions"] {
         let path = home.join(subdir);
         debug!("Scanning global path: {:?}", path);
         let results = scan_directory(&path, PluginOrigin::Global);
@@ -2205,12 +2205,12 @@ mod tests {
         let workspace = tempdir().unwrap();
 
         // Create global plugin
-        let global_ext = home.path().join(".aether/extensions/global-plugin");
+        let global_ext = home.path().join(".aleph/extensions/global-plugin");
         fs::create_dir_all(&global_ext).unwrap();
         fs::write(global_ext.join("SKILL.md"), "# Global").unwrap();
 
         // Create workspace plugin
-        let ws_ext = workspace.path().join(".aether/extensions/ws-plugin");
+        let ws_ext = workspace.path().join(".aleph/extensions/ws-plugin");
         fs::create_dir_all(&ws_ext).unwrap();
         fs::write(ws_ext.join("SKILL.md"), "# Workspace").unwrap();
 
@@ -2230,11 +2230,11 @@ mod tests {
         let workspace = tempdir().unwrap();
 
         // Create same-named plugin in both locations
-        let global_ext = home.path().join(".aether/extensions/same-plugin");
+        let global_ext = home.path().join(".aleph/extensions/same-plugin");
         fs::create_dir_all(&global_ext).unwrap();
         fs::write(global_ext.join("SKILL.md"), "# Global").unwrap();
 
-        let ws_ext = workspace.path().join(".aether/extensions/same-plugin");
+        let ws_ext = workspace.path().join(".aleph/extensions/same-plugin");
         fs::create_dir_all(&ws_ext).unwrap();
         fs::write(ws_ext.join("SKILL.md"), "# Workspace").unwrap();
 
@@ -2254,7 +2254,7 @@ mod tests {
 
 **Step 5: Run tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::discovery`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::discovery`
 Expected: PASS
 
 **Step 6: Commit**
@@ -2291,7 +2291,7 @@ pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 
 **Step 2: Verify compilation**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo check`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo check`
 Expected: Compiles successfully (may have warnings)
 
 **Step 3: Commit**
@@ -2309,12 +2309,12 @@ At this point, Phase 1 infrastructure is complete:
 - PluginOrigin, PluginKind, PluginStatus, PluginRecord types
 - 9 registration types (Tools, Hooks, Channels, Providers, etc.)
 - PluginRegistry with full CRUD operations
-- Dual manifest parsing (package.json, aether.plugin.json)
+- Dual manifest parsing (package.json, aleph.plugin.json)
 - 4-layer discovery system with conflict resolution
 
 **Verify all tests pass:**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension`
 Expected: All tests PASS
 
 ---
@@ -2330,7 +2330,7 @@ Expected: All tests PASS
 
 **Step 1: Create wasm directory**
 
-Run: `mkdir -p /Volumes/TBU4/Workspace/Aether/core/src/extension/runtime/wasm`
+Run: `mkdir -p /Volumes/TBU4/Workspace/Aleph/core/src/extension/runtime/wasm`
 
 **Step 2: Create permissions module**
 
@@ -2634,7 +2634,7 @@ pub use wasm::{WasmRuntime, WasmToolInput, WasmToolOutput, PermissionChecker};
 
 **Step 5: Run tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::runtime`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::runtime`
 Expected: PASS
 
 **Step 6: Commit**
@@ -2655,7 +2655,7 @@ git commit -m "feat(extension): add WASM runtime with Extism and permission syst
 
 **Step 1: Create nodejs directory**
 
-Run: `mkdir -p /Volumes/TBU4/Workspace/Aether/core/src/extension/runtime/nodejs`
+Run: `mkdir -p /Volumes/TBU4/Workspace/Aleph/core/src/extension/runtime/nodejs`
 
 **Step 2: Create IPC protocol types**
 
@@ -3199,7 +3199,7 @@ pub use nodejs::{NodeJsRuntime, NodeProcess, JsonRpcRequest, JsonRpcResponse};
 
 **Step 6: Run tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension::runtime`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension::runtime`
 Expected: PASS
 
 **Step 7: Commit**
@@ -3221,7 +3221,7 @@ At this point, Phase 2 is complete:
 
 **Verify all tests pass:**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && cargo test --lib extension`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && cargo test --lib extension`
 Expected: All tests PASS
 
 ---

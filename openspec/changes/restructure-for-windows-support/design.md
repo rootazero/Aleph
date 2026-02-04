@@ -2,12 +2,12 @@
 
 ## Overview
 
-This document describes the architectural decisions for restructuring Aether from a macOS-centric layout to a cross-platform Monorepo. The design prioritizes backward compatibility for macOS while establishing clear patterns for Windows (and future Linux) support.
+This document describes the architectural decisions for restructuring Aleph from a macOS-centric layout to a cross-platform Monorepo. The design prioritizes backward compatibility for macOS while establishing clear patterns for Windows (and future Linux) support.
 
 ## Architecture Diagram
 
 ```
-aether/                              # Repository Root
+aleph/                              # Repository Root
 ├── .github/
 │   └── workflows/
 │       ├── rust-core.yml            # Rust core CI (tests, lints)
@@ -20,7 +20,7 @@ aether/                              # Repository Root
 │   ├── uniffi.toml                  # UniFFI config
 │   ├── src/
 │   │   ├── lib.rs                   # Main entry (unchanged)
-│   │   ├── aether.udl               # UniFFI interface
+│   │   ├── aleph.udl               # UniFFI interface
 │   │   ├── ffi/
 │   │   │   ├── mod.rs
 │   │   │   ├── uniffi_exports.rs    # macOS UniFFI (existing)
@@ -32,26 +32,26 @@ aether/                              # Repository Root
 │   │
 │   ├── macos/                       # 🍎 macOS Application
 │   │   ├── project.yml              # XcodeGen (updated paths)
-│   │   ├── Aether/
+│   │   ├── Aleph/
 │   │   │   ├── Sources/
-│   │   │   │   ├── Generated/       # UniFFI bindings (aether.swift)
+│   │   │   │   ├── Generated/       # UniFFI bindings (aleph.swift)
 │   │   │   │   └── ...              # All existing Swift code
 │   │   │   ├── Frameworks/
 │   │   │   │   └── libaethecore.dylib
 │   │   │   └── Resources/
-│   │   ├── AetherTests/
-│   │   └── AetherUITests/
+│   │   ├── AlephTests/
+│   │   └── AlephUITests/
 │   │
 │   └── windows/                     # 🪟 Windows Application (Placeholder)
-│       ├── Aether.sln               # Visual Studio solution
-│       ├── Aether/
-│       │   ├── Aether.csproj        # C# project
+│       ├── Aleph.sln               # Visual Studio solution
+│       ├── Aleph/
+│       │   ├── Aleph.csproj        # C# project
 │       │   ├── App.xaml             # WinUI 3 entry
 │       │   ├── Interop/
 │       │   │   └── NativeMethods.g.cs  # csbindgen output
 │       │   └── libs/
 │       │       └── aethecore.dll
-│       └── Aether.Tests/
+│       └── Aleph.Tests/
 │
 ├── shared/                          # 📦 Cross-Platform Resources
 │   ├── config/
@@ -87,7 +87,7 @@ aether/                              # Repository Root
 ```rust
 // lib.rs
 #[cfg(feature = "uniffi")]
-uniffi::include_scaffolding!("aether");
+uniffi::include_scaffolding!("aleph");
 ```
 
 **csbindgen (Windows)** - New C ABI exports:
@@ -95,11 +95,11 @@ uniffi::include_scaffolding!("aether");
 // ffi/cabi_exports.rs
 #[cfg(feature = "cabi")]
 #[no_mangle]
-pub extern "C" fn aether_init(config_path: *const c_char) -> i32 { ... }
+pub extern "C" fn aleph_init(config_path: *const c_char) -> i32 { ... }
 
 #[cfg(feature = "cabi")]
 #[no_mangle]
-pub extern "C" fn aether_process(
+pub extern "C" fn aleph_process(
     input: *const c_char,
     callback: extern "C" fn(*const c_char),
 ) -> i32 { ... }
@@ -135,14 +135,14 @@ Both platforms use callbacks for Rust → UI communication. The core defines an 
 pub trait PlatformCallbackBridge: Send + Sync {
     fn on_processing_state_changed(&self, state: ProcessingState);
     fn on_streaming_text(&self, chunk: String);
-    fn on_error(&self, error: AetherError);
+    fn on_error(&self, error: AlephError);
 }
 
 // ffi/uniffi_exports.rs (macOS)
 #[cfg(feature = "uniffi")]
 #[derive(uniffi::Object)]
 pub struct UniffiCallbackBridge {
-    handler: Arc<dyn AetherEventHandler>,
+    handler: Arc<dyn AlephEventHandler>,
 }
 
 // ffi/cabi_exports.rs (Windows)
@@ -167,7 +167,7 @@ members = ["core"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/user/aether"
+repository = "https://github.com/user/aleph"
 rust-version = "1.92"
 
 [workspace.dependencies]
@@ -237,10 +237,10 @@ on:
 
 ### Step 1: Add Workspace (Non-Breaking)
 
-Create `/Cargo.toml` that wraps existing `Aether/core/`:
+Create `/Cargo.toml` that wraps existing `Aleph/core/`:
 ```toml
 [workspace]
-members = ["Aether/core"]
+members = ["Aleph/core"]
 ```
 
 This allows testing workspace build without moving files.
@@ -248,7 +248,7 @@ This allows testing workspace build without moving files.
 ### Step 2: Move Core
 
 ```bash
-git mv Aether/core core
+git mv Aleph/core core
 # Update Cargo.toml members = ["core"]
 ```
 
@@ -256,9 +256,9 @@ git mv Aether/core core
 
 ```bash
 mkdir -p platforms/macos
-git mv Aether platforms/macos/Aether
-git mv AetherTests platforms/macos/AetherTests
-git mv AetherUITests platforms/macos/AetherUITests
+git mv Aleph platforms/macos/Aleph
+git mv AlephTests platforms/macos/AlephTests
+git mv AlephUITests platforms/macos/AlephUITests
 git mv project.yml platforms/macos/project.yml
 ```
 
@@ -267,18 +267,18 @@ git mv project.yml platforms/macos/project.yml
 **project.yml paths**:
 ```yaml
 # Before
-- path: Aether/Sources
-- framework: Aether/Frameworks/libaethecore.dylib
+- path: Aleph/Sources
+- framework: Aleph/Frameworks/libaethecore.dylib
 
 # After
-- path: platforms/macos/Aether/Sources
-- framework: platforms/macos/Aether/Frameworks/libaethecore.dylib
+- path: platforms/macos/Aleph/Sources
+- framework: platforms/macos/Aleph/Frameworks/libaethecore.dylib
 ```
 
 **Build script paths**:
 ```bash
 # Before
-cd "${PROJECT_DIR}/Aether/core"
+cd "${PROJECT_DIR}/Aleph/core"
 
 # After
 cd "${PROJECT_DIR}/../../core"

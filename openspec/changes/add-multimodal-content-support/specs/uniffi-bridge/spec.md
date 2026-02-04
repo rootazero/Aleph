@@ -6,7 +6,7 @@
 The UniFFI interface SHALL define a MediaAttachment dictionary type for cross-FFI media transfer.
 
 #### Scenario: Define MediaAttachment structure
-- **GIVEN** aether.udl interface definition
+- **GIVEN** aleph.udl interface definition
 - **WHEN** MediaAttachment type is defined
 - **THEN** structure includes:
   - media_type: string ("image", "video", "file")
@@ -28,7 +28,7 @@ The UniFFI interface SHALL define a MediaAttachment dictionary type for cross-FF
 The UniFFI interface SHALL define CapturedContext with optional media attachments.
 
 #### Scenario: CapturedContext with attachments
-- **GIVEN** aether.udl interface definition
+- **GIVEN** aleph.udl interface definition
 - **WHEN** CapturedContext dictionary is defined
 - **THEN** structure includes:
   - app_bundle_id: string
@@ -44,7 +44,7 @@ The UniFFI interface SHALL define CapturedContext with optional media attachment
 ---
 
 ### Requirement: process_input Interface
-The AetherCore interface SHALL accept multimodal input through CapturedContext attachments.
+The AlephCore interface SHALL accept multimodal input through CapturedContext attachments.
 
 #### Scenario: Text-only input
 - **GIVEN** CapturedContext with attachments = nil

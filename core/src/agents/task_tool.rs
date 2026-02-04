@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::agents::registry::AgentRegistry;
 use crate::agents::AgentMode;
-use crate::event::{AetherEvent, EventBus, SubAgentRequest};
+use crate::event::{AlephEvent, EventBus, SubAgentRequest};
 
 /// Error type for TaskTool operations
 #[derive(Debug, thiserror::Error)]
@@ -121,7 +121,7 @@ impl TaskTool {
 
         // Publish SubAgentStarted event
         self.bus
-            .publish(AetherEvent::SubAgentStarted(request))
+            .publish(AlephEvent::SubAgentStarted(request))
             .await;
 
         // Note: In a real implementation, we would wait for SubAgentCompleted
@@ -304,7 +304,7 @@ mod tests {
         // Check that event was published
         let event = subscriber.recv().await.unwrap();
         match event.event {
-            AetherEvent::SubAgentStarted(req) => {
+            AlephEvent::SubAgentStarted(req) => {
                 assert_eq!(req.agent_id, "coder");
                 assert_eq!(req.prompt, "Write a test file");
                 assert_eq!(req.parent_session_id, "parent-session");

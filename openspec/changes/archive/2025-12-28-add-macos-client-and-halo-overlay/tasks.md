@@ -12,7 +12,7 @@
 - [x] 1.9 Test project builds without errors
 
 ## 2. Application Entry Point
-- [x] 2.1 Create AetherApp.swift with @main attribute
+- [x] 2.1 Create AlephApp.swift with @main attribute
 - [x] 2.2 Set up NSApplicationDelegate (AppDelegate.swift)
 - [x] 2.3 Configure application to run as agent (no Dock icon)
 - [x] 2.4 Add applicationDidFinishLaunching lifecycle
@@ -27,7 +27,7 @@
 - [ ] 3.6 Test menu bar icon appears and menu responds
 
 ## 4. Event Handler Implementation
-- [x] 4.1 Create EventHandler.swift implementing AetherEventHandler
+- [x] 4.1 Create EventHandler.swift implementing AlephEventHandler
 - [x] 4.2 Implement onStateChanged(state:) with DispatchQueue.main
 - [x] 4.3 Implement onHotkeyDetected(clipboardContent:)
 - [x] 4.4 Implement onError(message:)
@@ -36,12 +36,12 @@
 - [ ] 4.7 Test callbacks execute on main thread
 
 ## 5. Rust Core Integration
-- [x] 5.1 Import AetherFFI Swift bindings
-- [x] 5.2 Create AetherCore instance in AppDelegate
-- [x] 5.3 Pass EventHandler to AetherCore constructor
+- [x] 5.1 Import AlephFFI Swift bindings
+- [x] 5.2 Create AlephCore instance in AppDelegate
+- [x] 5.3 Pass EventHandler to AlephCore constructor
 - [x] 5.4 Call startListening() after permission check
 - [x] 5.5 Call stopListening() on app termination
-- [x] 5.6 Handle AetherError exceptions
+- [x] 5.6 Handle AlephError exceptions
 - [ ] 5.7 Test Rust core initializes successfully
 
 ## 6. Halo Window Setup
@@ -94,7 +94,7 @@
 - [x] 11.1 Create SettingsView.swift with TabView
 - [x] 11.2 Create SettingsTab enum (general, providers, routing, shortcuts)
 - [x] 11.3 Set window size (600x500)
-- [x] 11.4 Add window title: "Aether Settings"
+- [x] 11.4 Add window title: "Aleph Settings"
 - [x] 11.5 Connect to menu bar "Settings" action
 - [ ] 11.6 Test settings window opens correctly
 
@@ -145,8 +145,8 @@
 - [ ] 17.5 Test app quits cleanly
 
 ## 18. Error Handling
-- [x] 18.1 Add error handling for AetherCore initialization
-- [x] 18.2 Handle AetherError exceptions from Rust
+- [x] 18.1 Add error handling for AlephCore initialization
+- [x] 18.2 Handle AlephError exceptions from Rust
 - [x] 18.3 Display user-friendly error messages
 - [x] 18.4 Log errors to console for debugging
 - [x] 18.5 Add error recovery (retry logic with exponential backoff added to AppDelegate)
@@ -180,7 +180,7 @@
 - [ ] 21.10 Test Rust callback error handling
 
 ## 22. Documentation
-- [x] 22.1 Add README.md (created at Aether/README.md in complete-phase2-testing-and-polish)
+- [x] 22.1 Add README.md (created at Aleph/README.md in complete-phase2-testing-and-polish)
 - [x] 22.2 Document build instructions (comprehensive instructions in README.md)
 - [x] 22.3 Document permission requirements (detailed Accessibility permission section)
 - [x] 22.4 Add architecture diagram (ASCII diagram in README.md)

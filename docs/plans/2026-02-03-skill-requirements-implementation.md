@@ -72,7 +72,7 @@ binaries:
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::types --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::types --lib`
 Expected: FAIL with "can't find crate for `types`"
 
 **Step 3: Write the implementation**
@@ -206,13 +206,13 @@ pub use types::{InstallCommand, PackageManager, SkillHealth, SkillRequirements};
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::types --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::types --lib`
 Expected: PASS (4 tests)
 
 **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements
 git add core/src/skills/types.rs core/src/skills/mod.rs
 git commit -m "feat(skills): add types for requirements and health checking"
 ```
@@ -277,7 +277,7 @@ fn test_parse_skill_without_requirements_backwards_compat() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::tests::test_parse_skill_with_requirements --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::tests::test_parse_skill_with_requirements --lib`
 Expected: FAIL with "unknown field `emoji`"
 
 **Step 3: Update SkillFrontmatter**
@@ -326,13 +326,13 @@ pub struct SkillFrontmatter {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::tests --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::tests --lib`
 Expected: PASS (all existing + 2 new tests)
 
 **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements
 git add core/src/skills/mod.rs
 git commit -m "feat(skills): extend SkillFrontmatter with requirements and metadata"
 ```
@@ -439,7 +439,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::health --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::health --lib`
 Expected: FAIL with "can't find crate for `health`"
 
 **Step 3: Write the implementation**
@@ -622,13 +622,13 @@ pub use health::HealthChecker;
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::health --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::health --lib`
 Expected: PASS (6 tests)
 
 **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements
 git add core/src/skills/health.rs core/src/skills/mod.rs
 git commit -m "feat(skills): implement HealthChecker for dependency validation"
 ```
@@ -690,7 +690,7 @@ fn test_suggest_install_command_with_args() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::installer::tests::test_suggest_install --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::installer::tests::test_suggest_install --lib`
 Expected: FAIL with "no function or associated item named `suggest_install_command`"
 
 **Step 3: Add the implementation**
@@ -750,13 +750,13 @@ impl SkillsInstaller {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::installer --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::installer --lib`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements
 git add core/src/skills/installer.rs
 git commit -m "feat(skills): add install suggestion methods to SkillsInstaller"
 ```
@@ -837,7 +837,7 @@ Instructions
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::registry::tests::test_load_all_with_health --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::registry::tests::test_load_all_with_health --lib`
 Expected: FAIL with "no method named `load_all_with_health`"
 
 **Step 3: Add the implementation**
@@ -902,13 +902,13 @@ pub use registry::SkillWithHealth;
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::registry --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::registry --lib`
 Expected: PASS
 
 **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements
 git add core/src/skills/registry.rs core/src/skills/mod.rs
 git commit -m "feat(skills): add health checking methods to SkillsRegistry"
 ```
@@ -999,7 +999,7 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::cli_wrapper --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::cli_wrapper --lib`
 Expected: FAIL
 
 **Step 3: Write the implementation**
@@ -1207,13 +1207,13 @@ pub use cli_wrapper::{CliWrapperError, CliWrapperValidator};
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::cli_wrapper --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::cli_wrapper --lib`
 Expected: PASS (6 tests)
 
 **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements
 git add core/src/skills/cli_wrapper.rs core/src/skills/mod.rs
 git commit -m "feat(skills): implement CLI Wrapper validator"
 ```
@@ -1249,7 +1249,7 @@ fn test_context_with_skill_info() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test exec::decision::tests::test_context_with_skill_info --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test exec::decision::tests::test_context_with_skill_info --lib`
 Expected: FAIL with "no field `skill_id`"
 
 **Step 3: Update ExecContext**
@@ -1291,7 +1291,7 @@ fn context(command: &str) -> ExecContext {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test exec::decision --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test exec::decision --lib`
 Expected: PASS
 
 **Step 5: Update any other code that creates ExecContext**
@@ -1301,7 +1301,7 @@ Search for `ExecContext {` in the codebase and update all usages to include the 
 **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements
 git add core/src/exec/decision.rs
 git commit -m "feat(exec): extend ExecContext with skill origin info"
 ```
@@ -1363,13 +1363,13 @@ skill_allowlist: agent.skill_allowlist.clone().unwrap_or_default(),
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test exec::config --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test exec::config --lib`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements
 git add core/src/exec/config.rs
 git commit -m "feat(exec): add skill_allowlist config option"
 ```
@@ -1456,13 +1456,13 @@ if context.from_skill {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test exec::decision --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test exec::decision --lib`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements
 git add core/src/exec/decision.rs
 git commit -m "feat(exec): check skill_allowlist in approval decision"
 ```
@@ -1475,17 +1475,17 @@ git commit -m "feat(exec): check skill_allowlist in approval decision"
 
 **Step 1: Run all tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test --lib 2>&1 | tail -50`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test --lib 2>&1 | tail -50`
 Expected: All tests pass (except pre-existing fastembed failures)
 
 **Step 2: Run clippy**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo clippy --lib -- -D warnings 2>&1 | head -50`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo clippy --lib -- -D warnings 2>&1 | head -50`
 Expected: No new warnings
 
 **Step 3: Verify backwards compatibility**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/.worktrees/skill-requirements && cargo test skills::tests::test_parse_valid_skill --lib`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-requirements && cargo test skills::tests::test_parse_valid_skill --lib`
 Expected: PASS (existing SKILL.md format still works)
 
 ---

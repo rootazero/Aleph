@@ -432,7 +432,7 @@ View and manage Aleph's long-term memory (context-aware interactions).
    ```
 2. Verify config directory exists:
    ```bash
-   mkdir -p ~/.aether
+   mkdir -p ~/.aleph
    ```
 3. Check for TOML syntax errors (use Settings UI validation)
 
@@ -577,7 +577,7 @@ View and manage Aleph's long-term memory (context-aware interactions).
 - **Configuration Reference**: See `config.example.toml` for detailed config options
 - **Memory Module Guide**: `docs/memory-module-guide.md`
 - **Manual Testing Checklist**: `docs/manual-testing-checklist.md`
-- **GitHub Issues**: [Report bugs](https://github.com/your-repo/aether/issues)
+- **GitHub Issues**: [Report bugs](https://github.com/your-repo/aleph/issues)
 - **Phase 6 Implementation**: `openspec/changes/implement-settings-ui-phase6/`
 
 ---

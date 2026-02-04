@@ -1,6 +1,6 @@
 //
 //  SkillsSettingsView.swift
-//  Aether
+//  Aleph
 //
 //  Skills management UI for viewing, installing, and managing Claude Agent Skills.
 //  Phase 9 of add-skills-capability proposal.
@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 
 struct SkillsSettingsView: View {
     // Dependencies
-    let core: AetherCore
+    let core: AlephCore
     @Binding var hasUnsavedChanges: Bool
 
     // State

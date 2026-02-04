@@ -126,7 +126,7 @@ def extract_all_icons(lobe_icons_path: Path, output_dir: Path):
 def main():
     # Paths
     lobe_icons_path = Path(__file__).parent.parent / "icons"
-    output_dir = Path(__file__).parent.parent / "Aether" / "Assets.xcassets" / "_extracted_icons"
+    output_dir = Path(__file__).parent.parent / "Aleph" / "Assets.xcassets" / "_extracted_icons"
 
     extract_all_icons(lobe_icons_path, output_dir)
 

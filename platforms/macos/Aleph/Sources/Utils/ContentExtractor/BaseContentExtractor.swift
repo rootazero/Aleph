@@ -1,5 +1,5 @@
 // BaseContentExtractor.swift
-// Aether
+// Aleph
 //
 // Base class providing common functionality for content extractors.
 // Reduces code duplication across DirectImageExtractor, RTFDExtractor,

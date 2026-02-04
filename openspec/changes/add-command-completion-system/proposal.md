@@ -6,9 +6,9 @@
 
 ## Why
 
-Current Aether only supports natural language chat mode. Users cannot efficiently invoke structured commands (like `/draw`, `/translate`, MCP tools) without manually typing full command strings. This lacks discoverability and makes the system feel like a simple chat wrapper rather than a powerful AI middleware.
+Current Aleph only supports natural language chat mode. Users cannot efficiently invoke structured commands (like `/draw`, `/translate`, MCP tools) without manually typing full command strings. This lacks discoverability and makes the system feel like a simple chat wrapper rather than a powerful AI middleware.
 
-This proposal transforms Aether into a **Semantic OS Launcher** with:
+This proposal transforms Aleph into a **Semantic OS Launcher** with:
 1. **Chat Mode** (default): Natural language conversation with AI
 2. **Command Mode** (triggered by hotkey): Hierarchical command browsing with auto-completion
 
@@ -52,14 +52,14 @@ This proposal transforms Aether into a **Semantic OS Launcher** with:
   - Will extend existing `ai-routing` spec in future phases
 
 - **Affected code**:
-  - `Aether/core/src/` - New `command/` module
-  - `Aether/core/src/aether.udl` - New UniFFI exports
-  - `Aether/core/src/config/mod.rs` - Add `hint` field to RoutingRuleConfig, `show_command_hints` to GeneralConfig
-  - `Aether/Sources/HaloState.swift` - New command mode state
-  - `Aether/Sources/HaloView.swift` - Command mode UI
-  - `Aether/Sources/Components/` - New command mode components
-  - `Aether/Resources/en.lproj/Localizable.strings` - Builtin hint translations
-  - `Aether/Resources/zh-Hans.lproj/Localizable.strings` - Builtin hint translations
+  - `Aleph/core/src/` - New `command/` module
+  - `Aleph/core/src/aleph.udl` - New UniFFI exports
+  - `Aleph/core/src/config/mod.rs` - Add `hint` field to RoutingRuleConfig, `show_command_hints` to GeneralConfig
+  - `Aleph/Sources/HaloState.swift` - New command mode state
+  - `Aleph/Sources/HaloView.swift` - Command mode UI
+  - `Aleph/Sources/Components/` - New command mode components
+  - `Aleph/Resources/en.lproj/Localizable.strings` - Builtin hint translations
+  - `Aleph/Resources/zh-Hans.lproj/Localizable.strings` - Builtin hint translations
 
 - **Breaking changes**: None (additive feature)
 

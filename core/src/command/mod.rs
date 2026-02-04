@@ -1,6 +1,6 @@
 // Command Completion System
 //
-// This module provides a unified command registry for Aether's command mode.
+// This module provides a unified command registry for Aleph's command mode.
 // It aggregates commands from multiple sources:
 // - Builtin commands (from config.toml rules with ^/ prefix)
 // - MCP tools (dynamic, from connected MCP servers)

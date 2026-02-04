@@ -53,7 +53,7 @@ impl MigrationResult {
 /// ```rust,ignore
 /// use alephcore::extension::config::migrate::migrate_to_toml;
 ///
-/// let result = migrate_to_toml(Path::new("/path/to/aether.jsonc"))?;
+/// let result = migrate_to_toml(Path::new("/path/to/aleph.jsonc"))?;
 /// println!("Migrated {} -> {}", result.source.display(), result.target.display());
 /// if let Some(backup) = result.backup {
 ///     println!("Backed up existing file to: {}", backup.display());
@@ -87,7 +87,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
 
     // Add a header comment
     let toml_with_header = format!(
-        "# Aether Extension Configuration\n# Migrated from {}\n\n{}",
+        "# Aleph Extension Configuration\n# Migrated from {}\n\n{}",
         jsonc_path.file_name().unwrap_or_default().to_string_lossy(),
         toml_content
     );
@@ -123,7 +123,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
 
 /// Check if a directory needs migration.
 ///
-/// A directory needs migration if it contains `aether.jsonc` or `aether.json`
+/// A directory needs migration if it contains `aleph.jsonc` or `aleph.json`
 /// but no `aether.toml`.
 ///
 /// # Arguments
@@ -135,7 +135,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
 /// `true` if the directory has JSONC config but no TOML config.
 pub fn needs_migration(dir: &Path) -> bool {
     let toml_exists = dir.join("aether.toml").exists();
-    let jsonc_exists = dir.join("aether.jsonc").exists() || dir.join("aether.json").exists();
+    let jsonc_exists = dir.join("aleph.jsonc").exists() || dir.join("aleph.json").exists();
     !toml_exists && jsonc_exists
 }
 
@@ -156,12 +156,12 @@ pub fn get_migration_source(dir: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    let jsonc_path = dir.join("aether.jsonc");
+    let jsonc_path = dir.join("aleph.jsonc");
     if jsonc_path.exists() {
         return Some(jsonc_path);
     }
 
-    let json_path = dir.join("aether.json");
+    let json_path = dir.join("aleph.json");
     if json_path.exists() {
         return Some(json_path);
     }
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn test_needs_migration_has_jsonc() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let jsonc_path = temp_dir.path().join("aether.jsonc");
+        let jsonc_path = temp_dir.path().join("aleph.jsonc");
         std::fs::write(&jsonc_path, r#"{"model": "test"}"#).unwrap();
         assert!(needs_migration(temp_dir.path()));
     }
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_needs_migration_has_both() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let jsonc_path = temp_dir.path().join("aether.jsonc");
+        let jsonc_path = temp_dir.path().join("aleph.jsonc");
         let toml_path = temp_dir.path().join("aether.toml");
         std::fs::write(&jsonc_path, r#"{"model": "test"}"#).unwrap();
         std::fs::write(&toml_path, r#"model = "test""#).unwrap();
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn test_migrate_to_toml() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let jsonc_path = temp_dir.path().join("aether.jsonc");
+        let jsonc_path = temp_dir.path().join("aleph.jsonc");
 
         let jsonc_content = r#"{
             "model": "anthropic/claude-4",
@@ -270,13 +270,13 @@ mod tests {
         // Verify TOML content
         let toml_content = std::fs::read_to_string(&result.target).unwrap();
         assert!(toml_content.contains("model = \"anthropic/claude-4\""));
-        assert!(toml_content.contains("Migrated from aether.jsonc"));
+        assert!(toml_content.contains("Migrated from aleph.jsonc"));
     }
 
     #[test]
     fn test_migrate_to_toml_with_backup() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let jsonc_path = temp_dir.path().join("aether.jsonc");
+        let jsonc_path = temp_dir.path().join("aleph.jsonc");
         let toml_path = temp_dir.path().join("aether.toml");
 
         std::fs::write(&jsonc_path, r#"{"model": "new"}"#).unwrap();
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_migrate_nonexistent_source() {
-        let result = migrate_to_toml(Path::new("/nonexistent/aether.jsonc"));
+        let result = migrate_to_toml(Path::new("/nonexistent/aleph.jsonc"));
         assert!(result.is_err());
     }
 
@@ -317,7 +317,7 @@ mod tests {
         assert!(get_migration_source(temp_dir.path()).is_none());
 
         // Has jsonc
-        let jsonc_path = temp_dir.path().join("aether.jsonc");
+        let jsonc_path = temp_dir.path().join("aleph.jsonc");
         std::fs::write(&jsonc_path, "{}").unwrap();
         assert_eq!(get_migration_source(temp_dir.path()), Some(jsonc_path.clone()));
 
@@ -333,8 +333,8 @@ mod tests {
         let sub_dir = temp_dir.path().join("subdir");
         std::fs::create_dir(&sub_dir).unwrap();
 
-        std::fs::write(temp_dir.path().join("aether.jsonc"), "{}").unwrap();
-        std::fs::write(sub_dir.join("aether.json"), "{}").unwrap();
+        std::fs::write(temp_dir.path().join("aleph.jsonc"), "{}").unwrap();
+        std::fs::write(sub_dir.join("aleph.json"), "{}").unwrap();
 
         let results = migrate_directory(temp_dir.path(), true).unwrap();
         assert_eq!(results.len(), 2);

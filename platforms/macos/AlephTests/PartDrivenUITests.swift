@@ -1,5 +1,5 @@
 import XCTest
-@testable import Aether
+@testable import Aleph
 
 /// Unit tests for Part-driven UI system (Phase 7 - Task 3)
 ///

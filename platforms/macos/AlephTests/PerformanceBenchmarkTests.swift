@@ -1,5 +1,5 @@
 import XCTest
-@testable import Aether
+@testable import Aleph
 
 /// Performance benchmark tests for Part-driven UI optimizations (Phase 7 - Task 4)
 ///

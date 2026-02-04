@@ -1,6 +1,6 @@
 //
 //  HaloResultDetailPopover.swift
-//  Aether
+//  Aleph
 //
 //  Detail popover for viewing complete run results with tool summaries.
 //

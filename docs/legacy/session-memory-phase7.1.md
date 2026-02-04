@@ -3,7 +3,7 @@
 ## 已完成工作 (Completed Tasks) ✅
 
 ### Task 1.1: Extend ClipboardManager Trait ✅
-**文件**: `Aether/core/src/clipboard/mod.rs`
+**文件**: `Aleph/core/src/clipboard/mod.rs`
 
 实现内容:
 - 添加 `ImageFormat` 枚举 (Png, Jpeg, Gif)
@@ -20,7 +20,7 @@
 测试: 4个单元测试全部通过 ✓
 
 ### Task 1.2: Image Support in ArboardManager ✅
-**文件**: `Aether/core/src/clipboard/arboard_manager.rs`
+**文件**: `Aleph/core/src/clipboard/arboard_manager.rs`
 
 实现内容:
 - 添加 `detect_format()` 方法通过 magic bytes 检测格式:
@@ -43,7 +43,7 @@
 测试: 5个格式检测测试全部通过 ✓
 
 ### Task 1.3: Base64 Encoding ✅
-**文件**: `Aether/core/src/clipboard/mod.rs`
+**文件**: `Aleph/core/src/clipboard/mod.rs`
 
 实现内容:
 - `ImageData::to_base64()` - 将图片编码为 data URI:
@@ -60,7 +60,7 @@
 测试: 7个 Base64 测试全部通过 ✓ (编码、解码、往返、错误处理)
 
 ### Task 1.4: OpenAI Provider Vision API Support ✅
-**文件**: `Aether/core/src/providers/openai.rs`
+**文件**: `Aleph/core/src/providers/openai.rs`
 
 实现内容:
 - 重构 `Message` 结构:
@@ -80,7 +80,7 @@
 测试: 编译通过 ✓,单元测试修复完成 ✓
 
 ### Task 1.5: Claude Provider Vision API Support ✅
-**文件**: `Aether/core/src/providers/claude.rs`
+**文件**: `Aleph/core/src/providers/claude.rs`
 
 实现内容:
 - 重构 `Message` 结构:
@@ -101,7 +101,7 @@
 测试: 编译通过 ✓,单元测试修复完成 ✓
 
 ### Task 1.6: Router Vision Capability Filtering ✅
-**文件**: `Aether/core/src/providers/mod.rs`
+**文件**: `Aleph/core/src/providers/mod.rs`
 
 实现内容:
 - 在 `AiProvider` trait 添加:
@@ -115,15 +115,15 @@ Router 可以通过调用 `provider.supports_vision()` 来过滤 provider 列表
 
 ### Task 1.7: UniFFI Bindings ✅
 **文件**:
-- `Aether/core/src/aether.udl`
-- `Aether/core/src/core.rs`
-- `Aether/core/src/lib.rs`
+- `Aleph/core/src/aleph.udl`
+- `Aleph/core/src/core.rs`
+- `Aleph/core/src/lib.rs`
 
 实现内容:
-- 在 `aether.udl` 添加:
+- 在 `aleph.udl` 添加:
   - `ImageFormat` enum (Png, Jpeg, Gif)
   - `ImageData` dictionary (data, format)
-  - `AetherCore` 新方法:
+  - `AlephCore` 新方法:
     - `has_clipboard_image() -> bool`
     - `read_clipboard_image() -> ImageData?`
     - `write_clipboard_image(ImageData)`
@@ -159,7 +159,7 @@ Router 可以通过调用 `provider.supports_vision()` 来过滤 provider 列表
    - **解决**: 移除 `assert_eq!(content, "string")` 断言,只测试结构属性
 
 4. **UniFFI Vec<u8> 映射**: UniFFI 0.25 使用 `sequence<u8>` 表示 `Vec<u8>`
-   - **解决**: 在 `aether.udl` 中使用 `sequence<u8> data;`
+   - **解决**: 在 `aleph.udl` 中使用 `sequence<u8> data;`
 
 ## 文件修改清单
 
@@ -167,15 +167,15 @@ Router 可以通过调用 `provider.supports_vision()` 来过滤 provider 列表
 - `docs/session-memory-phase7.1.md` - 会话记忆文档
 
 ### 修改的 Rust 文件
-1. `Aether/core/Cargo.toml` - 添加 `image` 和 `base64` 依赖
-2. `Aether/core/src/clipboard/mod.rs` - ImageFormat, ImageData, trait 扩展
-3. `Aether/core/src/clipboard/arboard_manager.rs` - 图片读写实现
-4. `Aether/core/src/providers/mod.rs` - AiProvider trait 扩展
-5. `Aether/core/src/providers/openai.rs` - Vision API 支持
-6. `Aether/core/src/providers/claude.rs` - Vision API 支持
-7. `Aether/core/src/core.rs` - AlephCore 图片方法
-8. `Aether/core/src/lib.rs` - 导出 ImageData 和 ImageFormat
-9. `Aether/core/src/aether.udl` - UniFFI 绑定定义
+1. `Aleph/core/Cargo.toml` - 添加 `image` 和 `base64` 依赖
+2. `Aleph/core/src/clipboard/mod.rs` - ImageFormat, ImageData, trait 扩展
+3. `Aleph/core/src/clipboard/arboard_manager.rs` - 图片读写实现
+4. `Aleph/core/src/providers/mod.rs` - AiProvider trait 扩展
+5. `Aleph/core/src/providers/openai.rs` - Vision API 支持
+6. `Aleph/core/src/providers/claude.rs` - Vision API 支持
+7. `Aleph/core/src/core.rs` - AlephCore 图片方法
+8. `Aleph/core/src/lib.rs` - 导出 ImageData 和 ImageFormat
+9. `Aleph/core/src/aleph.udl` - UniFFI 绑定定义
 
 ### 测试结果
 - ✅ 所有 clipboard 模块测试通过
@@ -190,7 +190,7 @@ Router 可以通过调用 `provider.supports_vision()` 来过滤 provider 列表
 虽然 Task 1.1-1.7 已完成,但还有一些工作可以在后续迭代中完成:
 
 ### 集成到主流程
-- 在 `AetherCore::process_with_ai()` 中集成图片支持
+- 在 `AlephCore::process_with_ai()` 中集成图片支持
 - 检测剪贴板内容类型(文本 vs 图片)
 - 根据内容类型路由到 text-only 或 vision provider
 

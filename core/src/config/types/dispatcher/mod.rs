@@ -1,6 +1,6 @@
 //! Dispatcher configuration types
 //!
-//! Contains Dispatcher Layer (Aether Cortex) configuration:
+//! Contains Dispatcher Layer (Aleph Cortex) configuration:
 //! - DispatcherConfigToml: Multi-layer routing and confirmation settings
 //! - AgentConfigToml: L3 Agent (multi-step planning) settings
 //! - ModelRouterConfigToml: Model routing with retry/failover/budget settings (P1)

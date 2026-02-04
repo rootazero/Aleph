@@ -1,6 +1,6 @@
 # Specification: Settings UI
 
-SwiftUI-based settings interface for configuring Aether's AI providers, routing rules, and shortcuts.
+SwiftUI-based settings interface for configuring Aleph's AI providers, routing rules, and shortcuts.
 
 ## ADDED Requirements
 
@@ -14,12 +14,12 @@ The settings UI **SHALL** use a tab-based layout for organizing configuration op
 - SwiftUI TabView with 4 tabs
 - Tabs: General, Providers, Routing, Shortcuts
 - Window size: 600x500 (fixed)
-- Window title: "Aether Settings"
+- Window title: "Aleph Settings"
 - Accessible via menu bar "Settings" item
 
 #### Scenario: Opening settings
 
-**Given** Aether is running
+**Given** Aleph is running
 **When** user clicks "Settings" in menu bar
 **Then** settings window opens at 600x500 size
 **And** General tab is selected by default

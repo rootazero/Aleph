@@ -1,4 +1,4 @@
-// Aether/core/src/event/integration_test.rs
+// Aleph/core/src/event/integration_test.rs
 //! Integration tests for the event system.
 
 #[cfg(test)]
@@ -23,12 +23,12 @@ mod tests {
 
         async fn handle(
             &self,
-            event: &AetherEvent,
+            event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
-            if let AetherEvent::InputReceived(input) = event {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
+            if let AlephEvent::InputReceived(input) = event {
                 // Simulate: detect intent and request tool call
-                Ok(vec![AetherEvent::ToolCallRequested(ToolCallRequest {
+                Ok(vec![AlephEvent::ToolCallRequested(ToolCallRequest {
                     tool: "search".to_string(),
                     parameters: serde_json::json!({"query": input.text}),
                     plan_step_id: None,
@@ -54,11 +54,11 @@ mod tests {
 
         async fn handle(
             &self,
-            event: &AetherEvent,
+            event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
-            if let AetherEvent::ToolCallRequested(req) = event {
-                Ok(vec![AetherEvent::ToolCallCompleted(ToolCallResult {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
+            if let AlephEvent::ToolCallRequested(req) = event {
+                Ok(vec![AlephEvent::ToolCallCompleted(ToolCallResult {
                     call_id: uuid::Uuid::new_v4().to_string(),
                     tool: req.tool.clone(),
                     input: req.parameters.clone(),
@@ -91,9 +91,9 @@ mod tests {
 
         async fn handle(
             &self,
-            _event: &AetherEvent,
+            _event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
             let count = self.iterations.fetch_add(1, Ordering::SeqCst);
 
             // First iteration: emit LoopContinue, then LoopStop
@@ -101,17 +101,17 @@ mod tests {
             if count == 0 {
                 // Emit both LoopContinue (to show the loop is running) and LoopStop (to end)
                 Ok(vec![
-                    AetherEvent::LoopContinue(LoopState {
+                    AlephEvent::LoopContinue(LoopState {
                         session_id: "test-session".to_string(),
                         iteration: count as u32,
                         total_tokens: 0,
                         last_tool: Some("search".to_string()),
                         model: "gpt-4-turbo".to_string(),
                     }),
-                    AetherEvent::LoopStop(StopReason::Completed),
+                    AlephEvent::LoopStop(StopReason::Completed),
                 ])
             } else {
-                Ok(vec![AetherEvent::LoopStop(StopReason::Completed)])
+                Ok(vec![AlephEvent::LoopStop(StopReason::Completed)])
             }
         }
     }
@@ -141,7 +141,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
 
         // Trigger the flow with an input event
-        bus.publish(AetherEvent::InputReceived(InputEvent {
+        bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "search for rust async".to_string(),
             topic_id: None,
             context: None,
@@ -205,9 +205,9 @@ mod tests {
 
             async fn handle(
                 &self,
-                _event: &AetherEvent,
+                _event: &AlephEvent,
                 ctx: &EventContext,
-            ) -> Result<Vec<AetherEvent>, HandlerError> {
+            ) -> Result<Vec<AlephEvent>, HandlerError> {
                 if ctx.is_aborted() {
                     return Err(HandlerError::Aborted);
                 }
@@ -226,7 +226,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Publish one event
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;

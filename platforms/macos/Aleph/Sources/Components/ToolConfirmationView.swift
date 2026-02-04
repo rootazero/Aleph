@@ -1,6 +1,6 @@
 //
 //  ToolConfirmationView.swift
-//  Aether
+//  Aleph
 //
 //  Tool confirmation UI for async dispatcher flow (Phase 6).
 //  Displays tool information and confidence level for user confirmation.

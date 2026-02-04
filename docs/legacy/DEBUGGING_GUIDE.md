@@ -16,7 +16,7 @@ RUST_LOG=debug cargo run
 RUST_LOG=info cargo run
 
 # Module-specific logging
-RUST_LOG=aether::router=debug,aether::providers=info cargo run
+RUST_LOG=aleph::router=debug,aleph::providers=info cargo run
 
 # Trace level (extremely verbose, includes tokio internals)
 RUST_LOG=trace cargo run
@@ -32,18 +32,18 @@ Verify UniFFI bindings are generated correctly:
 cd Aleph/core/
 
 # Generate Swift bindings manually
-cargo run --bin uniffi-bindgen generate src/aether.udl --language swift
+cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift
 
-# Output should appear in: ../Sources/Generated/aether.swift
+# Output should appear in: ../Sources/Generated/aleph.swift
 
 # Check for errors
-cargo run --bin uniffi-bindgen generate src/aether.udl --language swift 2>&1 | grep -i error
+cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift 2>&1 | grep -i error
 ```
 
 **Common Issues:**
 - **Missing types in .udl**: Ensure all types used in interface are defined
 - **Mismatched signatures**: Rust implementation must match .udl exactly
-- **Missing namespace**: Every .udl file needs `namespace aether { ... }`
+- **Missing namespace**: Every .udl file needs `namespace aleph { ... }`
 
 ---
 
@@ -93,7 +93,7 @@ RUST_LOG=tokio=trace cargo run
 
 ```bash
 # Run with Valgrind (Linux)
-valgrind --leak-check=full ./target/debug/aether
+valgrind --leak-check=full ./target/debug/aleph
 
 # macOS Instruments
 # Build release binary first
@@ -102,7 +102,7 @@ cargo build --release
 
 # Profile with cargo-flamegraph
 cargo install flamegraph
-cargo flamegraph --bin aether
+cargo flamegraph --bin aleph
 ```
 
 ---
@@ -115,9 +115,9 @@ Add debug prints in `EventHandler.swift`:
 
 ```swift
 func onStateChanged(state: ProcessingState) {
-    print("[Aether] State changed to: \(state)")
-    print("[Aether] Thread: \(Thread.current)")
-    print("[Aether] Timestamp: \(Date())")
+    print("[Aleph] State changed to: \(state)")
+    print("[Aleph] Thread: \(Thread.current)")
+    print("[Aleph] Timestamp: \(Date())")
 
     DispatchQueue.main.async {
         self.haloWindow?.setState(state)
@@ -126,7 +126,7 @@ func onStateChanged(state: ProcessingState) {
 ```
 
 **Best Practices:**
-- Prefix logs with `[Aether]` for easy filtering
+- Prefix logs with `[Aleph]` for easy filtering
 - Include timestamp and thread info for async debugging
 - Use `#function` to print current function name
 
@@ -227,12 +227,12 @@ otool -L Aleph/Frameworks/libalephcore.dylib
 **Error: "Symbol not found"**
 
 ```
-dyld: Symbol not found: _aether_core_new
+dyld: Symbol not found: _aleph_core_new
 ```
 
 **Solution:**
 - Rebuild Rust library: `cd Aleph/core && cargo build`
-- Regenerate UniFFI bindings: `cargo run --bin uniffi-bindgen generate src/aether.udl --language swift`
+- Regenerate UniFFI bindings: `cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift`
 - Clean Xcode build: Cmd+Shift+K, then rebuild
 
 ---
@@ -321,20 +321,20 @@ print("Operation took: \(duration)s")
 **Console.app (macOS):**
 
 1. Open Console.app
-2. Filter by process: `Aether`
-3. Filter by subsystem: `com.aether.app`
+2. Filter by process: `Aleph`
+3. Filter by subsystem: `com.aleph.app`
 
 **Command Line:**
 
 ```bash
 # View Aleph logs in real-time
-log stream --predicate 'process == "Aether"' --level debug
+log stream --predicate 'process == "Aleph"' --level debug
 
 # View crash logs
-ls ~/Library/Logs/DiagnosticReports/Aether*
+ls ~/Library/Logs/DiagnosticReports/Aleph*
 
 # View specific crash log
-cat ~/Library/Logs/DiagnosticReports/Aether_2024-12-30_crash.ips
+cat ~/Library/Logs/DiagnosticReports/Aleph_2024-12-30_crash.ips
 ```
 
 ---
@@ -357,7 +357,7 @@ error!("Failed to initialize core: {}", e);
 ```swift
 import os.log
 
-let logger = Logger(subsystem: "com.aether.app", category: "EventHandler")
+let logger = Logger(subsystem: "com.aleph.app", category: "EventHandler")
 
 logger.debug("State changed to \(state.rawValue)")
 logger.info("Halo window shown at \(position)")
@@ -437,4 +437,4 @@ logger.error("Failed to initialize Rust core: \(error)")
 
 - See `docs/TESTING_GUIDE.md` for automated testing strategies
 - See `docs/PERFORMANCE_GUIDE.md` for performance optimization tips
-- See `Aether/core/src/logging/` for logging implementation
+- See `Aleph/core/src/logging/` for logging implementation

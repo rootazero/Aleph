@@ -2,8 +2,8 @@
 # 变更：全息感知（Phase 8.5 - The Eye）
 
 ## Why
-EN: Aether needs system-level perception to reduce context blindness and strengthen POE (Principle–Operation–Evaluation) by providing richer evidence for Principle definition and Evaluation validation.
-ZH: Aether 需要系统级感知来消除上下文盲区，并强化 POE（Principle–Operation–Evaluation），让 Principle 更精确、Evaluation 更有证据。
+EN: Aleph needs system-level perception to reduce context blindness and strengthen POE (Principle–Operation–Evaluation) by providing richer evidence for Principle definition and Evaluation validation.
+ZH: Aleph 需要系统级感知来消除上下文盲区，并强化 POE（Principle–Operation–Evaluation），让 Principle 更精确、Evaluation 更有证据。
 
 ## What Changes
 - EN: Introduce a SnapshotTool that fuses Accessibility (AX) tree capture with optional visual OCR to build a System Shadow DOM.

@@ -71,7 +71,7 @@ After `cargo build --release`, you'll find:
 
 ## Generating Language Bindings
 
-UniFFI automatically generates language bindings from the `src/aether.udl` interface definition.
+UniFFI automatically generates language bindings from the `src/aleph.udl` interface definition.
 
 ### Swift (macOS)
 
@@ -80,31 +80,31 @@ UniFFI automatically generates language bindings from the `src/aether.udl` inter
 cargo install uniffi-bindgen
 
 # Generate Swift bindings
-uniffi-bindgen generate src/aether.udl --language swift --out-dir ../bindings/swift
+uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../bindings/swift
 ```
 
 This creates:
-- `aether.swift` - Swift interface code
-- `aetherFFI.h` - C header for FFI bridge
-- `aetherFFI.modulemap` - Module map for Swift import
+- `aleph.swift` - Swift interface code
+- `alephFFI.h` - C header for FFI bridge
+- `alephFFI.modulemap` - Module map for Swift import
 
 ### Kotlin (Android/JVM)
 
 ```bash
-uniffi-bindgen generate src/aether.udl --language kotlin --out-dir ../bindings/kotlin
+uniffi-bindgen generate src/aleph.udl --language kotlin --out-dir ../bindings/kotlin
 ```
 
 ### C# (.NET)
 
 ```bash
 # Note: C# support requires additional setup
-uniffi-bindgen generate src/aether.udl --language csharp --out-dir ../bindings/csharp
+uniffi-bindgen generate src/aleph.udl --language csharp --out-dir ../bindings/csharp
 ```
 
 ## Usage Example (Rust)
 
 ```rust
-use alephcore::{AetherCore, AlephEventHandler, ProcessingState};
+use alephcore::{AlephCore, AlephEventHandler, ProcessingState};
 
 // Implement the callback trait
 struct MyHandler;
@@ -138,7 +138,7 @@ core.stop_listening().unwrap();
 ## Usage Example (Swift)
 
 ```swift
-import aether
+import aleph
 
 // Implement the callback protocol
 class SwiftEventHandler: AlephEventHandler {
@@ -213,7 +213,7 @@ cargo test -- --nocapture
 ```
 core/
 ├── src/
-│   ├── aether.udl           # UniFFI interface definition
+│   ├── aleph.udl           # UniFFI interface definition
 │   ├── lib.rs               # Library entry point
 │   ├── core.rs              # AlephCore orchestrator
 │   ├── error.rs             # Error types

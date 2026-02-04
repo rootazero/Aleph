@@ -1,6 +1,6 @@
 //
 //  ShortcutsView.swift
-//  Aether
+//  Aleph
 //
 //  Keyboard shortcuts configuration tab for command completion hotkey.
 //
@@ -10,7 +10,7 @@ import AppKit
 
 struct ShortcutsView: View {
     // Dependencies
-    let core: AetherCore?
+    let core: AlephCore?
     @Binding var hasUnsavedChanges: Bool
 
     // Command completion hotkey (one modifier + character, configurable to two)
@@ -342,7 +342,7 @@ struct ShortcutsView: View {
 
                 // Post notification for other components
                 NotificationCenter.default.post(
-                    name: .aetherConfigSavedInternally,
+                    name: .alephConfigSavedInternally,
                     object: nil
                 )
             }

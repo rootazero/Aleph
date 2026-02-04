@@ -1,6 +1,6 @@
 //
 //  PermissionPromptView.swift
-//  Aether
+//  Aleph
 //
 //  Unified permission prompt component for accessibility and input monitoring.
 //  Replaces system NSAlert with custom SwiftUI interface.

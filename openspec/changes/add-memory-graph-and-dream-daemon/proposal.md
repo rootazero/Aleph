@@ -1,7 +1,7 @@
 # Change: Add Memory Graph and Dream Daemon (Phase 9 - The Brain)
 
 ## Why
-Aether's memory is primarily linear (vector + keyword retrieval) and lacks relational structure. This causes ambiguity in entity references and weak long-term consolidation. A graph layer plus an offline Dream Daemon enables disambiguation, decay, and daily synthesis, strengthening POE (Principle–Operation–Evaluation) by providing clearer context and verifiable memory updates.
+Aleph's memory is primarily linear (vector + keyword retrieval) and lacks relational structure. This causes ambiguity in entity references and weak long-term consolidation. A graph layer plus an offline Dream Daemon enables disambiguation, decay, and daily synthesis, strengthening POE (Principle–Operation–Evaluation) by providing clearer context and verifiable memory updates.
 
 ## What Changes
 - Add an entity-relation memory graph stored alongside the existing memory database.

@@ -229,7 +229,7 @@ mod tests {
             scope: crate::extension::PromptScope::System,
             bound_tool: None,
             source_path: PathBuf::from("/test"),
-            source: DiscoverySource::AetherGlobal,
+            source: DiscoverySource::AlephGlobal,
         }
     }
 

@@ -1,6 +1,6 @@
 //
 //  ErrorType+Extensions.swift
-//  Aether
+//  Aleph
 //
 //  UI extensions for Rust-generated ErrorType enum.
 //

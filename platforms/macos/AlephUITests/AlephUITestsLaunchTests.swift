@@ -1,13 +1,13 @@
 //
-//  AetherUITestsLaunchTests.swift
-//  AetherUITests
+//  AlephUITestsLaunchTests.swift
+//  AlephUITests
 //
 //  Created by 邹国军 on 12/23/25.
 //
 
 import XCTest
 
-final class AetherUITestsLaunchTests: XCTestCase {
+final class AlephUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

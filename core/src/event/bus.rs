@@ -1,8 +1,8 @@
-// Aether/core/src/event/bus.rs
+// Aleph/core/src/event/bus.rs
 //! Event bus implementation using tokio broadcast channels.
 
 use crate::event::global_bus::GlobalBus;
-use crate::event::types::{AetherEvent, EventType, TimestampedEvent};
+use crate::event::types::{AlephEvent, EventType, TimestampedEvent};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, trace, warn};
@@ -162,7 +162,7 @@ impl EventBus {
     /// If this EventBus is connected to a GlobalBus (via `with_global_bus`),
     /// the event will also be automatically broadcast to the GlobalBus with
     /// the configured agent_id and session_id.
-    pub async fn publish(&self, event: AetherEvent) -> usize {
+    pub async fn publish(&self, event: AlephEvent) -> usize {
         let timestamped = TimestampedEvent::new(event.clone());
 
         trace!(
@@ -349,7 +349,7 @@ mod tests {
         let bus = EventBus::new();
         let mut subscriber = bus.subscribe();
 
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "hello".to_string(),
             topic_id: None,
             context: None,
@@ -374,7 +374,7 @@ mod tests {
         let mut subscriber = bus.subscribe_filtered(vec![EventType::LoopStop]);
 
         // Publish non-matching event first
-        bus.publish(AetherEvent::InputReceived(InputEvent {
+        bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -383,7 +383,7 @@ mod tests {
         .await;
 
         // Publish matching event
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
 
         // Should only receive LoopStop
@@ -400,7 +400,7 @@ mod tests {
 
         assert_eq!(bus.subscriber_count(), 2);
 
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
 
         // Both should receive
@@ -415,9 +415,9 @@ mod tests {
     async fn test_event_history() {
         let bus = EventBus::new();
 
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
-        bus.publish(AetherEvent::LoopStop(StopReason::UserAborted))
+        bus.publish(AlephEvent::LoopStop(StopReason::UserAborted))
             .await;
 
         let history = bus.history().await;
@@ -436,7 +436,7 @@ mod tests {
         });
 
         for _ in 0..10 {
-            bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+            bus.publish(AlephEvent::LoopStop(StopReason::Completed))
                 .await;
         }
 
@@ -510,7 +510,7 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Publish an event
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
 
         // Allow async processing
@@ -528,12 +528,12 @@ mod tests {
             .with_session_id("test-session");
 
         // This should not panic or cause any issues
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
 
         // Just verify the local subscriber still works
         let mut subscriber = bus.subscribe();
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
 
         let received = subscriber.try_recv().unwrap();
@@ -565,7 +565,7 @@ mod tests {
         let bus = EventBus::new().with_global_bus(global_bus);
 
         // Publish an event
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
 
         // Allow async processing
@@ -616,9 +616,9 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Publish events from both buses
-        bus1.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus1.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
-        bus2.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus2.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
 
         // Allow async processing
@@ -658,10 +658,10 @@ mod tests {
         assert!(bus_clone.is_connected_to_global());
 
         // Both should broadcast to GlobalBus
-        bus.publish(AetherEvent::LoopStop(StopReason::Completed))
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
         bus_clone
-            .publish(AetherEvent::LoopStop(StopReason::Completed))
+            .publish(AlephEvent::LoopStop(StopReason::Completed))
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;

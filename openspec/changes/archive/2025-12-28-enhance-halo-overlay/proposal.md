@@ -9,13 +9,13 @@
 
 ## Why
 
-Phase 2 delivered a functional Halo overlay foundation, but user feedback and design review identified critical gaps that prevent Aether from achieving its "Ghost" aesthetic vision and production-ready quality standards.
+Phase 2 delivered a functional Halo overlay foundation, but user feedback and design review identified critical gaps that prevent Aleph from achieving its "Ghost" aesthetic vision and production-ready quality standards.
 
 ## Motivation
 
 Phase 2 successfully delivered a working Halo overlay with basic animations and state transitions. However, user testing revealed several areas for improvement:
 
-1. **Limited Visual Feedback**: Current animations are functional but lack the "Ghost" aesthetic polish that defines Aether's brand
+1. **Limited Visual Feedback**: Current animations are functional but lack the "Ghost" aesthetic polish that defines Aleph's brand
 2. **Missing Progress Indicators**: Users can't see streaming AI responses or processing progress
 3. **Inflexible Theming**: Provider colors are hardcoded; no support for custom themes (cyberpunk, zen, jarvis)
 4. **No Audio Feedback**: Silent operation makes it less engaging for users who prefer multi-sensory feedback
@@ -146,7 +146,7 @@ Ensure smooth 60fps animations:
 VoiceOver announcements for state changes:
 
 **Announcements:**
-- Listening: "Aether listening"
+- Listening: "Aleph listening"
 - Processing: "Processing with OpenAI" (provider name)
 - Success: "Complete"
 - Error: "Error: [message]"

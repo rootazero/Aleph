@@ -2,7 +2,7 @@
 
 **Change ID**: `add-contextual-memory-rag`
 
-This document outlines the implementation tasks for adding context-aware local RAG memory to Aether. Tasks are ordered to deliver incremental, verifiable progress.
+This document outlines the implementation tasks for adding context-aware local RAG memory to Aleph. Tasks are ordered to deliver incremental, verifiable progress.
 
 ## Task Breakdown
 
@@ -14,7 +14,7 @@ This document outlines the implementation tasks for adding context-aware local R
 **Validation**: Directory structure created, compiles successfully
 
 **Steps**:
-1. Create `Aether/core/src/memory/` directory
+1. Create `Aleph/core/src/memory/` directory
 2. Create module files:
    - `mod.rs` - Module exports and public API
    - `database.rs` - Vector database wrapper (stub)
@@ -157,7 +157,7 @@ This document outlines the implementation tasks for adding context-aware local R
 **Validation**: Swift bindings generate successfully
 
 **Steps**:
-1. Update `aether.udl` to add memory types:
+1. Update `aleph.udl` to add memory types:
    ```idl
    dictionary MemoryEntry {
      string id;
@@ -186,7 +186,7 @@ This document outlines the implementation tasks for adding context-aware local R
      f32 similarity_threshold;
    };
    ```
-2. Add methods to `AetherCore` interface:
+2. Add methods to `AlephCore` interface:
    - `get_memory_stats()`
    - `search_memories(app_bundle_id, window_title?, limit)`
    - `delete_memory(id)`
@@ -213,7 +213,7 @@ This document outlines the implementation tasks for adding context-aware local R
 **Status**: ✅ **COMPLETED** (2025-12-24)
 
 **Steps**:
-1. ✅ Create directory: `~/.aether/models/all-MiniLM-L6-v2/`
+1. ✅ Create directory: `~/.aleph/models/all-MiniLM-L6-v2/`
 2. ✅ Download ONNX model from Hugging Face:
    ```bash
    wget https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
@@ -283,7 +283,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
    - ✅ Insert into database with embedding
    - ✅ Handle errors gracefully
    - ✅ PII scrubbing before storage
-2. ⏳ Add method to `AetherCore`: `store_interaction_memory()` (deferred to integration phase)
+2. ⏳ Add method to `AlephCore`: `store_interaction_memory()` (deferred to integration phase)
 3. ⏳ Call after successful AI response in request pipeline (deferred to integration phase)
 4. ⏳ Add background task to avoid blocking response (deferred to integration phase)
 5. ✅ Write integration test: store → retrieve → verify
@@ -343,7 +343,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
 **Status**: ✅ **COMPLETED** (2025-12-24)
 
 **Steps**:
-1. ✅ Create `Aether/Sources/ContextCapture.swift`
+1. ✅ Create `Aleph/Sources/ContextCapture.swift`
 2. ✅ Implement functions:
    - ✅ `getActiveAppBundleId() -> String?` using `NSWorkspace`
    - ✅ `getActiveWindowTitle() -> String?` using Accessibility API
@@ -372,14 +372,14 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
 **Status**: ✅ **COMPLETED** (2025-12-24)
 
 **Steps**:
-1. ✅ Update `aether.udl` to add: (Already existed)
+1. ✅ Update `aleph.udl` to add: (Already existed)
    ```idl
    dictionary CapturedContext {
      string app_bundle_id;
      string? window_title;
    };
    ```
-2. ✅ Add method to `AetherCore`: (Already existed)
+2. ✅ Add method to `AlephCore`: (Already existed)
    - `set_current_context(context: CapturedContext)`
 3. ✅ Implement in Rust: store current context in `Arc<Mutex<Option<CapturedContext>>>` (Already existed)
 4. ✅ Update Swift `EventHandler`:
@@ -421,10 +421,10 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
 - [x] Integration test passes
 
 **Implementation Notes**:
-- Added `store_interaction_memory()` method to `AetherCore`
+- Added `store_interaction_memory()` method to `AlephCore`
 - Added `get_embedding_model_dir()` helper method
 - Added `chrono` dependency to `Cargo.toml` for timestamps
-- Exported method via UniFFI interface (`aether.udl`)
+- Exported method via UniFFI interface (`aleph.udl`)
 - Created comprehensive unit tests:
   - `test_context_capture_and_storage` - Happy path test (✓ PASSED)
   - `test_missing_context_error` - Error handling test (✓ PASSED)
@@ -472,7 +472,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
 - [x] Tests pass: `cargo test memory::augmentation::tests` (16/16 passed)
 
 **Implementation Notes**:
-- Module: `Aether/core/src/memory/augmentation.rs` (425 lines)
+- Module: `Aleph/core/src/memory/augmentation.rs` (425 lines)
 - Core struct: `PromptAugmenter` with configurable settings
 - Methods:
   - `augment_prompt()` - Main entry point for prompt augmentation
@@ -527,7 +527,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
 - [x] Integration test passes (17/17 integration tests passing)
 
 **Implementation Notes**:
-- Method: `AetherCore::retrieve_and_augment_prompt()` (core.rs:555-649)
+- Method: `AlephCore::retrieve_and_augment_prompt()` (core.rs:555-649)
 - Pipeline flow:
   1. Check if memory is enabled (early return if disabled)
   2. Get current context (app/window from Swift)
@@ -547,7 +547,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
   - Graceful fallback if database not initialized
   - Error propagation for critical failures
 - UniFFI exposure:
-  - Method exposed in `aether.udl:110`
+  - Method exposed in `aleph.udl:110`
   - Callable from Swift with error handling
   - Returns augmented prompt string
 - Integration with Phase 5 (AI Providers):
@@ -624,7 +624,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
    - ✅ `CleanupService` struct
    - ✅ `cleanup_old_memories(retention_days)` - Delete expired entries
    - ✅ Background task: run cleanup daily
-2. ✅ Add to `AetherCore` initialization
+2. ✅ Add to `AlephCore` initialization
 3. ✅ Respect config: `memory.retention_days` (0 = never delete)
 4. ✅ Log cleanup actions (count of deleted memories)
 5. ✅ Write test: insert old memory → run cleanup → verify deleted
@@ -637,9 +637,9 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
 
 **Implementation Notes**:
 - Created `cleanup.rs` module with `CleanupService` struct
-- Integrated cleanup service into `AetherCore` initialization
+- Integrated cleanup service into `AlephCore` initialization
 - Background cleanup task spawned on startup, runs every 24 hours
-- Added manual trigger method: `AetherCore::cleanup_old_memories()`
+- Added manual trigger method: `AlephCore::cleanup_old_memories()`
 - All 5 unit tests passing:
   - `test_cleanup_service_creation` ✓
   - `test_retention_days_zero_no_deletion` ✓
@@ -670,7 +670,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
 - [x] Tests pass: `cargo test memory::ingestion::tests::test_scrub_pii_*` (6/6 passed)
 
 **Implementation**:
-- File: `Aether/core/src/memory/ingestion.rs` (lines 102-145, scrub_pii method)
+- File: `Aleph/core/src/memory/ingestion.rs` (lines 102-145, scrub_pii method)
 - Tests: 6 unit tests + 1 integration test (all passing)
 - See `TASK_18_PII_SCRUBBING.md` for detailed documentation
 
@@ -742,7 +742,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
   - `clear_memories()` - Bulk delete with optional filters (lines 401-415)
   - `get_memory_config()` - Returns current config (lines 418-421)
   - `update_memory_config()` - Updates config with validation (lines 424-445)
-- All methods properly exposed via UniFFI interface (aether.udl:76-98)
+- All methods properly exposed via UniFFI interface (aleph.udl:76-98)
 - Error handling implemented using Result<T> types
 - Runtime async execution using tokio::runtime
 
@@ -757,7 +757,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
 **Note**: This task is part of Phase 6 but listed here for completeness.
 
 **Steps**:
-1. ✅ Create `Aether/Sources/MemoryView.swift`
+1. ✅ Create `Aleph/Sources/MemoryView.swift`
 2. ✅ Add SwiftUI components:
    - ✅ Enable/disable toggle
    - ✅ Retention policy dropdown (7/30/90/365 days, Never)
@@ -796,17 +796,17 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
      - Expandable memory entry cards with user input/AI output
      - Individual delete buttons
 - Created `MemoryEntryCard` component for displaying individual memories
-- Integrated all Rust Core APIs via AetherCore instance
+- Integrated all Rust Core APIs via AlephCore instance
 - Added confirmation dialogs for delete and clear all operations
 - Error handling with user-friendly error messages
 - Updated `SettingsView.swift` to include Memory tab in sidebar
-- Updated `AppDelegate.swift` to pass AetherCore instance to settings
+- Updated `AppDelegate.swift` to pass AlephCore instance to settings
 - Xcode project regenerated with `xcodegen generate`
 
 **File Changes**:
-- Created: `Aether/Sources/MemoryView.swift` (503 lines)
-- Modified: `Aether/Sources/SettingsView.swift` (added memory tab)
-- Modified: `Aether/Sources/AppDelegate.swift` (pass core to settings)
+- Created: `Aleph/Sources/MemoryView.swift` (503 lines)
+- Modified: `Aleph/Sources/SettingsView.swift` (added memory tab)
+- Modified: `Aleph/Sources/AppDelegate.swift` (pass core to settings)
 
 ---
 
@@ -816,7 +816,7 @@ Current implementation uses deterministic hash-based embedding for Phase 4A-4B i
 **Validation**: Visual feedback when memory is used
 
 **Steps**:
-1. Add new event to `AetherEventHandler`:
+1. Add new event to `AlephEventHandler`:
    ```idl
    void on_memory_used(u32 count);
    ```

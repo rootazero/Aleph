@@ -78,17 +78,17 @@
 这个提案将对以下文件和模块进行修改：
 
 ### Core Changes
-1. **`Aether/core/src/router/mod.rs`**
+1. **`Aleph/core/src/router/mod.rs`**
    - 修改 `Router::route()` 方法，接受完整上下文字符串
    - 实现明确的从上到下首次匹配逻辑
    - 完善系统提示词优先级处理
    - 改进日志输出
 
-2. **`Aether/core/src/core.rs`**
+2. **`Aleph/core/src/core.rs`**
    - 新增 `build_routing_context()` 函数
    - 修改 `process_clipboard()` 方法，构建完整上下文后再路由
 
-3. **`Aether/core/src/config/mod.rs`**
+3. **`Aleph/core/src/config/mod.rs`**
    - 新增 `add_rule_at_top()` 方法
    - 新增 `remove_rule()` 方法
    - 新增 `move_rule()` 方法
@@ -96,7 +96,7 @@
    - 增强 `validate()` 方法，添加缺失配置警告
 
 ### Test Changes
-4. **`Aether/core/src/router/mod.rs` (tests)**
+4. **`Aleph/core/src/router/mod.rs` (tests)**
    - 新增上下文匹配测试
    - 新增首次匹配停止测试
    - 新增系统提示词优先级测试

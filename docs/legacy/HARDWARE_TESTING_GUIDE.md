@@ -23,7 +23,7 @@ This guide provides test procedures for validating Aleph performance across diff
 
 ### 1. Build Configuration
 ```bash
-cd /Users/zouguojun/Workspace/Aether
+cd /Users/zouguojun/Workspace/Aleph
 xcodegen generate
 open Aleph.xcodeproj
 

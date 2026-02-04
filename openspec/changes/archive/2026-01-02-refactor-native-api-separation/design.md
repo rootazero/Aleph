@@ -2,7 +2,7 @@
 
 ## Overview
 
-本文档详细说明了将 Aether 架构从"Rust 统一系统 API"迁移到"原生 API + Rust 纯计算核心"的设计决策和技术细节。
+本文档详细说明了将 Aleph 架构从"Rust 统一系统 API"迁移到"原生 API + Rust 纯计算核心"的设计决策和技术细节。
 
 ## Problem Space
 
@@ -203,7 +203,7 @@ Linux:     Rust → gtk4-rs (GNOME 官方 bindings)
 
 ##### 1.1 GlobalHotkeyMonitor (已有)
 
-**文件**: `Aether/Sources/Utils/GlobalHotkeyMonitor.swift`
+**文件**: `Aleph/Sources/Utils/GlobalHotkeyMonitor.swift`
 
 **技术选型**: `CGEventTap`
 
@@ -239,7 +239,7 @@ class GlobalHotkeyMonitor {
 
     private func handleEvent(...) -> Unmanaged<CGEvent>? {
         if keyCode == graveKeyCode {
-            callback()  // Trigger Aether
+            callback()  // Trigger Aleph
             return nil  // Swallow event (prevent ` from typing)
         }
         return Unmanaged.passRetained(event)  // Propagate
@@ -251,7 +251,7 @@ class GlobalHotkeyMonitor {
 
 ##### 1.2 ClipboardManager (新建)
 
-**文件**: `Aether/Sources/Utils/ClipboardManager.swift`
+**文件**: `Aleph/Sources/Utils/ClipboardManager.swift`
 
 **技术选型**: `NSPasteboard`
 
@@ -317,7 +317,7 @@ class ClipboardManager {
 
 ##### 1.3 KeyboardSimulator (新建)
 
-**文件**: `Aether/Sources/Utils/KeyboardSimulator.swift`
+**文件**: `Aleph/Sources/Utils/KeyboardSimulator.swift`
 
 **技术选型**: `CGEvent`
 
@@ -423,7 +423,7 @@ class KeyboardSimulator {
 
 ##### 1.4 ContextCapture (已有)
 
-**文件**: `Aether/Sources/ContextCapture.swift`
+**文件**: `Aleph/Sources/ContextCapture.swift`
 
 **技术选型**: `NSWorkspace` + Accessibility API
 
@@ -448,11 +448,11 @@ class ContextCapture {
 
 ##### 2.1 简化的 UniFFI 接口
 
-**文件**: `Aether/core/src/aether.udl`
+**文件**: `Aleph/core/src/aleph.udl`
 
 **删除的接口**:
 ```diff
-interface AetherCore {
+interface AlephCore {
 -  void start_listening();
 -  void stop_listening();
 -  boolean is_listening();
@@ -465,35 +465,35 @@ interface AetherCore {
 
 **新增/保留的接口**:
 ```rust
-interface AetherCore {
+interface AlephCore {
     // 核心 AI 处理管线
     // 接收 Swift 预处理的输入（已从剪贴板读取）
-    [Throws=AetherException]
+    [Throws=AlephException]
     string process_input(string user_input, CapturedContext context);
 
     // 记忆增强（可选，UI 可选择是否启用）
-    [Throws=AetherException]
+    [Throws=AlephException]
     string augment_with_memory(string input, CapturedContext context);
 
     // 配置管理（保持不变）
-    [Throws=AetherException]
+    [Throws=AlephException]
     FullConfig load_config();
 
-    [Throws=AetherException]
+    [Throws=AlephException]
     void update_provider(string name, ProviderConfig provider);
 
     // 记忆管理（保持不变）
-    [Throws=AetherException]
+    [Throws=AlephException]
     MemoryStats get_memory_stats();
 
-    [Throws=AetherException]
+    [Throws=AlephException]
     sequence<MemoryEntry> search_memories(...);
 }
 ```
 
 **回调接口简化**:
 ```diff
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
 -  void on_hotkey_detected(string clipboard_content);  // Swift 直接处理
    void on_state_changed(ProcessingState state);
    void on_error(string message, string? suggestion);
@@ -504,7 +504,7 @@ callback interface AetherEventHandler {
 
 ##### 2.2 新的处理流程
 
-**文件**: `Aether/core/src/core.rs`
+**文件**: `Aleph/core/src/core.rs`
 
 **旧流程**（删除）:
 ```rust
@@ -568,7 +568,7 @@ pub fn process_input(
 
 ##### 2.3 依赖清理
 
-**文件**: `Aether/core/Cargo.toml`
+**文件**: `Aleph/core/Cargo.toml`
 
 ```diff
 [dependencies]
@@ -656,9 +656,9 @@ serde = { version = "1.0", features = ["derive"] }
 ```
 Rust 错误
   ↓
-AetherException (UniFFI enum)
+AlephException (UniFFI enum)
   ↓
-Swift: catch AetherException
+Swift: catch AlephException
   ↓
 根据错误类型显示 UI:
   - Network error → "网络错误，请检查连接"
@@ -680,7 +680,7 @@ Swift: catch AetherException
 | **跨平台一致性** | ❌ 各平台可能有差异 | ✅ 行为一致 |
 
 **决策**: 选择原生 API，因为：
-- Aether 优先考虑 macOS 体验（"Ghost" 美学需要原生 API）
+- Aleph 优先考虑 macOS 体验（"Ghost" 美学需要原生 API）
 - 性能是核心竞争力（< 100ms 延迟）
 - 跨平台时可针对各平台优化，而不是妥协于最小公分母
 

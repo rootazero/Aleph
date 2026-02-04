@@ -10,7 +10,7 @@ Claude Agent Skills 是 Anthropic 发布的开放标准，用于教 Claude 如�
 
 - **终端用户**：需要扩展 AI 能力，创建/使用 Skills
 - **开发者**：需要与 Claude Code、GitHub Copilot 兼容的格式
-- **Aether 架构**：需要与现有 Capability Strategy Pattern 集成
+- **Aleph 架构**：需要与现有 Capability Strategy Pattern 集成
 
 ### Constraints
 
@@ -46,7 +46,7 @@ Claude Agent Skills 是 Anthropic 发布的开放标准，用于教 Claude 如�
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                              AetherCore                                  │
+│                              AlephCore                                  │
 │                                                                         │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
 │  │                    CompositeCapabilityExecutor                      │ │
@@ -78,7 +78,7 @@ Claude Agent Skills 是 Anthropic 发布的开放标准，用于教 Claude 如�
 ### Module Structure (Rust)
 
 ```
-Aether/core/src/
+Aleph/core/src/
 ├── skills/                      # Skills module
 │   ├── mod.rs                   # Module exports, Skill struct
 │   ├── registry.rs              # SkillsRegistry implementation
@@ -130,7 +130,7 @@ User Input: "/skill refine-text Fix this text"
 ### SkillsInstaller Implementation
 
 ```rust
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::skills::Skill;
 use std::path::PathBuf;
 use std::io::{Read, Write};
@@ -206,7 +206,7 @@ impl SkillsInstaller {
     pub fn create_skill(&self, name: &str, content: &str) -> Result<()> {
         // Validate name (lowercase, hyphens, alphanumeric)
         if !self.is_valid_skill_name(name) {
-            return Err(AetherError::invalid_config(
+            return Err(AlephError::invalid_config(
                 "Skill name must be lowercase with hyphens only"
             ));
         }
@@ -227,7 +227,7 @@ impl SkillsInstaller {
     pub fn update_skill(&self, name: &str, content: &str) -> Result<()> {
         let skill_dir = self.skills_dir.join(name);
         if !skill_dir.exists() {
-            return Err(AetherError::not_found(format!("Skill '{}' not found", name)));
+            return Err(AlephError::not_found(format!("Skill '{}' not found", name)));
         }
 
         // Validate content format
@@ -243,7 +243,7 @@ impl SkillsInstaller {
     pub fn delete_skill(&self, name: &str) -> Result<()> {
         let skill_dir = self.skills_dir.join(name);
         if !skill_dir.exists() {
-            return Err(AetherError::not_found(format!("Skill '{}' not found", name)));
+            return Err(AlephError::not_found(format!("Skill '{}' not found", name)));
         }
 
         std::fs::remove_dir_all(&skill_dir)?;
@@ -272,7 +272,7 @@ impl SkillsInstaller {
             return Ok(url.to_string());
         }
 
-        Err(AetherError::invalid_config("Invalid GitHub URL format"))
+        Err(AlephError::invalid_config("Invalid GitHub URL format"))
     }
 
     fn extract_skill_dir_name(&self, path: &str) -> Result<String> {
@@ -282,7 +282,7 @@ impl SkillsInstaller {
             let parent = parts[parts.len() - 2];
             return Ok(parent.to_string());
         }
-        Err(AetherError::invalid_config("Cannot extract skill name from path"))
+        Err(AlephError::invalid_config("Cannot extract skill name from path"))
     }
 
     fn is_valid_skill_name(&self, name: &str) -> bool {
@@ -302,7 +302,7 @@ impl SkillsInstaller {
         let bytes = response.bytes().await?;
 
         let temp_dir = std::env::temp_dir();
-        let temp_zip = temp_dir.join(format!("aether-skill-{}.zip", uuid::Uuid::new_v4()));
+        let temp_zip = temp_dir.join(format!("aleph-skill-{}.zip", uuid::Uuid::new_v4()));
         std::fs::write(&temp_zip, &bytes)?;
 
         // Install from the downloaded ZIP
@@ -318,7 +318,7 @@ impl SkillsInstaller {
 
 ### UniFFI Interface Extension
 
-Add to `aether.udl`:
+Add to `aleph.udl`:
 
 ```idl
 // Skill data types
@@ -329,8 +329,8 @@ dictionary SkillInfo {
     sequence<string> allowed_tools;
 };
 
-// Skills management methods on AetherCore
-interface AetherCore {
+// Skills management methods on AlephCore
+interface AlephCore {
     // ... existing methods ...
 
     // Skills Registry
@@ -348,13 +348,13 @@ interface AetherCore {
     [Async]
     sequence<string> install_skill_from_zip(string path);
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     void create_skill(string name, string content);
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     void update_skill(string name, string content);
 
-    [Throws=AetherError]
+    [Throws=AlephError]
     void delete_skill(string id);
 };
 ```
@@ -424,7 +424,7 @@ interface AetherCore {
 ### Component Structure (Swift)
 
 ```
-Aether/Sources/
+Aleph/Sources/
 ├── SettingsView.swift              # ADD: SettingsTab.skills case
 ├── SkillsSettingsView.swift        # NEW: Main skills settings view
 │
@@ -608,7 +608,7 @@ struct SkillsSettingsView: View {
         isLoading = true
         Task {
             do {
-                let core = AetherCore.shared
+                let core = AlephCore.shared
                 skills = try await core.listSkills()
             } catch {
                 errorMessage = error.localizedDescription
@@ -621,7 +621,7 @@ struct SkillsSettingsView: View {
         isLoading = true
         Task {
             do {
-                let core = AetherCore.shared
+                let core = AlephCore.shared
                 let installed = try await core.installOfficialSkills()
                 await MainActor.run {
                     loadSkills()
@@ -649,7 +649,7 @@ struct SkillsSettingsView: View {
         isLoading = true
         Task {
             do {
-                let core = AetherCore.shared
+                let core = AlephCore.shared
                 let installed = try await core.installSkillFromZip(path: url.path)
                 await MainActor.run {
                     loadSkills()
@@ -669,7 +669,7 @@ struct SkillsSettingsView: View {
     private func saveSkill(name: String, content: String) {
         Task {
             do {
-                let core = AetherCore.shared
+                let core = AlephCore.shared
                 if editingSkill != nil {
                     try await core.updateSkill(name: name, content: content)
                 } else {
@@ -691,7 +691,7 @@ struct SkillsSettingsView: View {
     private func deleteSkill(_ skill: SkillInfo) {
         Task {
             do {
-                let core = AetherCore.shared
+                let core = AlephCore.shared
                 try await core.deleteSkill(id: skill.id)
                 await MainActor.run {
                     loadSkills()

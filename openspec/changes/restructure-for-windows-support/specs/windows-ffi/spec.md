@@ -12,8 +12,8 @@ The Rust core MUST expose essential functions through C ABI for Windows consumpt
 
 #### Scenario: Initializing the core
 
-**Given** a Windows application wants to initialize Aether core
-**When** calling `aether_init(config_path)` via P/Invoke
+**Given** a Windows application wants to initialize Aleph core
+**When** calling `aleph_init(config_path)` via P/Invoke
 **Then** the function should return `0` on success
 **And** the function should return non-zero error code on failure
 **And** the config file at the specified path should be loaded
@@ -21,14 +21,14 @@ The Rust core MUST expose essential functions through C ABI for Windows consumpt
 #### Scenario: Getting version string
 
 **Given** a Windows application wants to display version
-**When** calling `aether_version()` via P/Invoke
+**When** calling `aleph_version()` via P/Invoke
 **Then** the function should return a pointer to a null-terminated UTF-8 string
 **And** the string should match the VERSION file content
 
 #### Scenario: Freeing allocated resources
 
 **Given** the application has initialized the core
-**When** calling `aether_free()` via P/Invoke
+**When** calling `aleph_free()` via P/Invoke
 **Then** all Rust-allocated resources should be released
 **And** subsequent calls to other functions should fail gracefully
 
@@ -39,7 +39,7 @@ Windows applications MUST be able to register callbacks for async events.
 #### Scenario: Registering state change callback
 
 **Given** a Windows application implements a callback function
-**When** calling `aether_register_state_callback(callback_ptr)`
+**When** calling `aleph_register_state_callback(callback_ptr)`
 **Then** the callback should be stored in Rust
 **And** when processing state changes, the callback should be invoked
 **And** the callback should receive state enum value as integer
@@ -47,7 +47,7 @@ Windows applications MUST be able to register callbacks for async events.
 #### Scenario: Registering streaming text callback
 
 **Given** a Windows application implements a text callback function
-**When** calling `aether_register_stream_callback(callback_ptr)`
+**When** calling `aleph_register_stream_callback(callback_ptr)`
 **Then** streaming text chunks should be delivered to the callback
 **And** text should be passed as null-terminated UTF-8 strings
 
@@ -62,7 +62,7 @@ C# bindings MUST be auto-generated during build.
 **When** running `cargo build --features cabi`
 **Then** `NativeMethods.g.cs` should be generated
 **And** the file should contain P/Invoke declarations for all exported functions
-**And** the output path should be `platforms/windows/Aether/Interop/`
+**And** the output path should be `platforms/windows/Aleph/Interop/`
 
 #### Scenario: Type mapping in generated bindings
 

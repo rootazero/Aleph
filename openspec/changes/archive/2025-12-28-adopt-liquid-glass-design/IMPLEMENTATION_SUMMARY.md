@@ -11,7 +11,7 @@
 ### Phase 1: Design System Infrastructure（基础设施）✅
 
 #### Task 1.1: ConcentricGeometry 工具类 ✅
-- **文件**: `Aether/Sources/DesignSystem/ConcentricGeometry.swift`
+- **文件**: `Aleph/Sources/DesignSystem/ConcentricGeometry.swift`
 - **实现内容**:
   - `childRadius(parent:padding:minimum:)` 静态计算函数
   - 预定义常量: `windowRadius`, `sidebarRadius`, `contentRadius`, `cardRadius`
@@ -20,7 +20,7 @@
 - **状态**: ✅ 完成,语法验证通过
 
 #### Task 1.2: AdaptiveMaterial 组件 ✅
-- **文件**: `Aether/Sources/Components/Atoms/AdaptiveMaterial.swift`
+- **文件**: `Aleph/Sources/Components/Atoms/AdaptiveMaterial.swift`
 - **实现内容**:
   - `@available` 版本检测 (macOS 13+)
   - Liquid Glass 材质支持: `.ultraThinMaterial`, `.sidebar`, `.titlebar`
@@ -31,7 +31,7 @@
 - **状态**: ✅ 完成,语法验证通过
 
 #### Task 1.3: ScrollEdgeModifier ✅
-- **文件**: `Aether/Sources/DesignSystem/ScrollEdgeModifier.swift`
+- **文件**: `Aleph/Sources/DesignSystem/ScrollEdgeModifier.swift`
 - **实现内容**:
   - `.soft()` 和 `.hard()` 样式 (适用于不同平台)
   - 上下边缘独立控制
@@ -41,7 +41,7 @@
 - **状态**: ✅ 完成,语法验证通过
 
 #### Task 1.4: DesignTokens 更新 ✅
-- **文件**: `Aether/Sources/DesignSystem/DesignTokens.swift`
+- **文件**: `Aleph/Sources/DesignSystem/DesignTokens.swift`
 - **实现内容**:
   - 添加 `Materials` 命名空间,集成 `AdaptiveMaterial`
   - 添加 `ConcentricRadius` 命名空间,引用 `ConcentricGeometry` 常量
@@ -52,7 +52,7 @@
 ### Phase 2: Settings Window Refactoring（窗口重构）✅
 
 #### Task 2.1: SettingsView 重构 ✅
-- **文件**: `Aether/Sources/SettingsView.swift`
+- **文件**: `Aleph/Sources/SettingsView.swift`
 - **实现内容**:
   - 使用 ZStack 三层结构:
     - Layer 0: `DesignTokens.Materials.windowBackground` (Liquid Glass 背景)
@@ -64,7 +64,7 @@
 - **状态**: ✅ 完成,语法验证通过
 
 #### Task 2.2: ModernSidebarView 更新 ✅
-- **文件**: `Aether/Sources/Components/Organisms/ModernSidebarView.swift`
+- **文件**: `Aleph/Sources/Components/Organisms/ModernSidebarView.swift`
 - **实现内容**:
   - 背景使用 `DesignTokens.Materials.sidebar` (Liquid Glass 材质)
   - 移除所有 `Divider()`,使用间距代替
@@ -77,7 +77,7 @@
 ### 构建系统更新 ✅
 
 - **文件**: `project.yml`
-- **状态**: 无需修改 (自动包含 `Aether/Sources` 下所有文件)
+- **状态**: 无需修改 (自动包含 `Aleph/Sources` 下所有文件)
 - **Xcode 项目生成**: ✅ 成功执行 `xcodegen generate`
 
 ## 未完成工作
@@ -154,21 +154,21 @@
 ## 影响范围
 
 ### 修改的文件 (2)
-1. `Aether/Sources/DesignSystem/DesignTokens.swift` - 添加 Materials 和 ConcentricRadius 命名空间
-2. `Aether/Sources/SettingsView.swift` - 重构窗口结构
-3. `Aether/Sources/Components/Organisms/ModernSidebarView.swift` - 应用 Liquid Glass 材质
+1. `Aleph/Sources/DesignSystem/DesignTokens.swift` - 添加 Materials 和 ConcentricRadius 命名空间
+2. `Aleph/Sources/SettingsView.swift` - 重构窗口结构
+3. `Aleph/Sources/Components/Organisms/ModernSidebarView.swift` - 应用 Liquid Glass 材质
 
 ### 新增的文件 (3)
-1. `Aether/Sources/DesignSystem/ConcentricGeometry.swift` - 同心几何工具类
-2. `Aether/Sources/Components/Atoms/AdaptiveMaterial.swift` - 自适应材质组件
-3. `Aether/Sources/DesignSystem/ScrollEdgeModifier.swift` - 滚动边缘效果修饰符
+1. `Aleph/Sources/DesignSystem/ConcentricGeometry.swift` - 同心几何工具类
+2. `Aleph/Sources/Components/Atoms/AdaptiveMaterial.swift` - 自适应材质组件
+3. `Aleph/Sources/DesignSystem/ScrollEdgeModifier.swift` - 滚动边缘效果修饰符
 
 ### 待修改的文件 (建议)
-- `Aether/Sources/ProvidersView.swift` - 移除卡片边框
-- `Aether/Sources/RoutingView.swift` - 移除卡片边框
-- `Aether/Sources/BehaviorSettingsView.swift` - 移除卡片边框
-- `Aether/Sources/MemoryView.swift` - 移除卡片边框,应用滚动边缘效果
-- `Aether/Sources/ShortcutsView.swift` - 移除卡片边框
+- `Aleph/Sources/ProvidersView.swift` - 移除卡片边框
+- `Aleph/Sources/RoutingView.swift` - 移除卡片边框
+- `Aleph/Sources/BehaviorSettingsView.swift` - 移除卡片边框
+- `Aleph/Sources/MemoryView.swift` - 移除卡片边框,应用滚动边缘效果
+- `Aleph/Sources/ShortcutsView.swift` - 移除卡片边框
 
 ## 兼容性说明
 

@@ -34,7 +34,7 @@ This change focuses on the **presentation layer** (SwiftUI components) without m
 
 **Rationale**:
 - Adding a new `enabled: bool` field to `ProviderConfig` (Rust schema) requires:
-  - Updating `Aether/core/src/config.rs`
+  - Updating `Aleph/core/src/config.rs`
   - Regenerating UniFFI bindings
   - Testing serialization/deserialization (TOML)
   - Handling backward compatibility for existing config files
@@ -61,7 +61,7 @@ private func isProviderActive(_ provider: ProviderConfigEntry) -> Bool {
 
 **Future Migration Path**:
 If we add `enabled` field to Rust schema:
-1. Update `ProviderConfig` struct in `Aether/core/src/config.rs`
+1. Update `ProviderConfig` struct in `Aleph/core/src/config.rs`
 2. Add `enabled: Option<bool>` (default `None` for backward compat)
 3. Regenerate UniFFI bindings: `cargo run --bin uniffi-bindgen generate`
 4. Update SwiftUI to use `provider.config.enabled ?? isProviderActive(provider)`
@@ -247,7 +247,7 @@ Data Flow:
 
 ### Unit Tests (Not Required for UI Changes)
 - No new business logic in this change
-- Existing tests in `AetherTests/ConfigPersistenceTests.swift` cover config save/load
+- Existing tests in `AlephTests/ConfigPersistenceTests.swift` cover config save/load
 
 ### Manual Testing Checklist
 See `tasks.md` Phase 8 for comprehensive integration tests
@@ -284,7 +284,7 @@ enabled = true  # NEW FIELD (optional, defaults to true if api_key present)
 
 **Migration Script** (if needed):
 ```rust
-// Aether/core/src/config.rs - Auto-migrate on load
+// Aleph/core/src/config.rs - Auto-migrate on load
 impl ProviderConfig {
     fn migrate_v1_to_v2(mut self) -> Self {
         if self.enabled.is_none() {

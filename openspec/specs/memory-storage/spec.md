@@ -7,8 +7,8 @@ TBD - created by archiving change add-contextual-memory-rag. Update Purpose afte
 The system SHALL initialize an embedded vector database (SQLite + sqlite-vec extension) for storing interaction memories with vector embeddings.
 
 #### Scenario: Initialize database on first use
-- **WHEN** AetherCore starts and memory is enabled
-- **THEN** the system creates `~/.aether/memory.db` if not exists
+- **WHEN** AlephCore starts and memory is enabled
+- **THEN** the system creates `~/.aleph/memory.db` if not exists
 - **AND** loads the sqlite-vec extension
 - **AND** creates the `memories` table with schema:
   - `id` (TEXT, primary key, UUID)
@@ -23,7 +23,7 @@ The system SHALL initialize an embedded vector database (SQLite + sqlite-vec ext
 - **AND** sets file permissions to 600 (owner read/write only)
 
 #### Scenario: Handle database already exists
-- **WHEN** AetherCore starts and `memory.db` already exists
+- **WHEN** AlephCore starts and `memory.db` already exists
 - **THEN** the system opens the existing database
 - **AND** verifies schema matches expected version
 - **AND** applies migrations if needed (future-proofing)

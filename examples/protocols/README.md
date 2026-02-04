@@ -1,10 +1,10 @@
 # Protocol Configuration Examples
 
-This directory contains example YAML protocol configurations for the Aether Protocol Adapter system.
+This directory contains example YAML protocol configurations for the Aleph Protocol Adapter system.
 
 ## Overview
 
-The Protocol Adapter allows you to integrate any LLM provider with Aether by defining custom protocol configurations. There are two modes:
+The Protocol Adapter allows you to integrate any LLM provider with Aleph by defining custom protocol configurations. There are two modes:
 
 ### 1. Minimal Configuration Mode (Protocol Extension)
 
@@ -92,13 +92,13 @@ custom:
 
 ```bash
 # Create the protocols directory if it doesn't exist
-mkdir -p ~/.aether/protocols
+mkdir -p ~/.aleph/protocols
 
 # Copy and rename the example
-cp groq-custom.yaml ~/.aether/protocols/my-provider.yaml
+cp groq-custom.yaml ~/.aleph/protocols/my-provider.yaml
 
 # Or for custom protocols
-cp exotic-ai.yaml ~/.aether/protocols/my-custom-provider.yaml
+cp exotic-ai.yaml ~/.aleph/protocols/my-custom-provider.yaml
 ```
 
 ### Step 3: Edit the Configuration
@@ -107,9 +107,9 @@ Open the file in your text editor and customize:
 
 ```bash
 # Using your preferred editor
-nano ~/.aether/protocols/my-provider.yaml
+nano ~/.aleph/protocols/my-provider.yaml
 # or
-code ~/.aether/protocols/my-provider.yaml
+code ~/.aleph/protocols/my-provider.yaml
 ```
 
 **Key fields to update**:
@@ -126,7 +126,7 @@ code ~/.aether/protocols/my-provider.yaml
 ```toml
 [[providers]]
 name = "my-provider"
-protocol = "my-provider"  # References ~/.aether/protocols/my-provider.yaml
+protocol = "my-provider"  # References ~/.aleph/protocols/my-provider.yaml
 api_key = "your-api-key-here"
 model = "provider-model-name"
 ```
@@ -134,20 +134,20 @@ model = "provider-model-name"
 #### Option B: Using CLI Flags
 
 ```bash
-aether chat --protocol my-provider --model provider-model-name
+aleph chat --protocol my-provider --model provider-model-name
 ```
 
 ### Step 5: Test the Configuration
 
 ```bash
 # Test with a simple prompt
-aether chat --provider my-provider "Hello, world!"
+aleph chat --provider my-provider "Hello, world!"
 
 # Test streaming
-aether chat --provider my-provider --stream "Tell me a story"
+aleph chat --provider my-provider --stream "Tell me a story"
 
 # Enable debug logging to troubleshoot
-RUST_LOG=debug aether chat --provider my-provider "Test"
+RUST_LOG=debug aleph chat --provider my-provider "Test"
 ```
 
 ## Configuration Sections Explained
@@ -211,7 +211,7 @@ Then set the environment variable:
 
 ```bash
 export MY_PROVIDER_API_KEY="your-api-key"
-aether chat --provider my-provider "Hello"
+aleph chat --provider my-provider "Hello"
 ```
 
 ## JSONPath for Response Mapping
@@ -252,9 +252,9 @@ response_mapping:
 **Error**: `Protocol 'my-provider' not found`
 
 **Solution**:
-1. Check file exists: `ls ~/.aether/protocols/my-provider.yaml`
+1. Check file exists: `ls ~/.aleph/protocols/my-provider.yaml`
 2. Verify filename matches protocol name in YAML
-3. Check YAML syntax: `aether protocol validate my-provider`
+3. Check YAML syntax: `aleph protocol validate my-provider`
 
 ### Authentication Errors
 
@@ -271,7 +271,7 @@ response_mapping:
 **Error**: `Failed to extract content from response`
 
 **Solution**:
-1. Enable debug logging: `RUST_LOG=debug aether chat ...`
+1. Enable debug logging: `RUST_LOG=debug aleph chat ...`
 2. Examine actual response structure in logs
 3. Update `response_mapping.content` JSONPath
 4. Add `content_alternatives` for fallbacks

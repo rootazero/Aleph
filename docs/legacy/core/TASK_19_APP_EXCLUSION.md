@@ -55,7 +55,7 @@ Ensuring complete privacy - no data from excluded apps ever enters the memory sy
 
 The config is properly passed through the entire pipeline:
 
-1. `AetherCore` initializes with `Config::default()` (line 85)
+1. `AlephCore` initializes with `Config::default()` (line 85)
 2. `store_interaction_memory()` creates `MemoryIngestion` with config (lines 521-525)
 3. `MemoryIngestion::store_memory()` enforces exclusion (ingestion.rs:63-69)
 
@@ -63,7 +63,7 @@ The config is properly passed through the entire pipeline:
 
 ### Unit Tests
 
-**File**: `Aether/core/src/memory/ingestion.rs`
+**File**: `Aleph/core/src/memory/ingestion.rs`
 
 All 13 ingestion tests pass:
 
@@ -165,8 +165,8 @@ No Memory Stored (no PII processing, no embedding, no DB write)
 
 ## Files Modified
 
-1. ✅ `Aether/core/src/config.rs` - Added `excluded_apps` field with defaults
-2. ✅ `Aether/core/src/memory/ingestion.rs` - Added exclusion check logic + test
+1. ✅ `Aleph/core/src/config.rs` - Added `excluded_apps` field with defaults
+2. ✅ `Aleph/core/src/memory/ingestion.rs` - Added exclusion check logic + test
 3. ✅ `openspec/changes/add-contextual-memory-rag/tasks.md` - Marked Task 19 complete
 4. ✅ `CLAUDE.md` - Config example already includes `excluded_apps`
 

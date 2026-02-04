@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether 作为 AI Agent，需要支持大量动态工具（MCP、Skills、Plugins）。但传统的"全量工具传递"方式存在 token 浪费和延迟问题。
+Aleph 作为 AI Agent，需要支持大量动态工具（MCP、Skills、Plugins）。但传统的"全量工具传递"方式存在 token 浪费和延迟问题。
 
 **约束**:
 - 必须兼容现有 rig-core 工具系统

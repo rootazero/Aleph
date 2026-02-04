@@ -7,10 +7,10 @@ The system SHALL define a trait `AiProvider` that provides a unified interface f
 
 #### Scenario: Define trait with async process method
 - **WHEN** implementing a new AI provider
-- **THEN** it must implement `async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String, AetherError>`
+- **THEN** it must implement `async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String, AlephError>`
 - **AND** the method accepts plain text input and optional system prompt
 - **AND** the method returns AI-generated response as String
-- **AND** errors are wrapped in `AetherError`
+- **AND** errors are wrapped in `AlephError`
 
 #### Scenario: Provide metadata methods
 - **WHEN** accessing provider information
@@ -29,31 +29,31 @@ The system SHALL define error types specific to AI provider operations.
 
 #### Scenario: Network errors
 - **WHEN** HTTP request to AI API fails due to network issues
-- **THEN** error type is `AetherError::NetworkError(String)`
+- **THEN** error type is `AlephError::NetworkError(String)`
 - **AND** error message includes underlying cause
 - **AND** error is propagated to caller
 
 #### Scenario: Authentication errors
 - **WHEN** API key is invalid or missing
-- **THEN** error type is `AetherError::AuthenticationError(String)`
+- **THEN** error type is `AlephError::AuthenticationError(String)`
 - **AND** error message suggests checking API key configuration
 - **AND** no retry is attempted
 
 #### Scenario: Rate limit errors
 - **WHEN** provider returns 429 Too Many Requests
-- **THEN** error type is `AetherError::RateLimitError(String)`
+- **THEN** error type is `AlephError::RateLimitError(String)`
 - **AND** error message includes retry-after information if available
 - **AND** no automatic retry is attempted
 
 #### Scenario: Provider-specific errors
 - **WHEN** AI API returns 5xx server error
-- **THEN** error type is `AetherError::ProviderError(String)`
+- **THEN** error type is `AlephError::ProviderError(String)`
 - **AND** error message includes HTTP status code
 - **AND** caller can decide retry strategy
 
 #### Scenario: Timeout errors
 - **WHEN** API request exceeds configured timeout
-- **THEN** error type is `AetherError::Timeout`
+- **THEN** error type is `AlephError::Timeout`
 - **AND** request is cancelled
 - **AND** no partial response is returned
 
@@ -74,7 +74,7 @@ The system SHALL provide a mock implementation of `AiProvider` for testing purpo
 
 #### Scenario: Simulate errors
 - **WHEN** testing error handling
-- **THEN** mock can simulate specific error types with `with_error(AetherError)`
+- **THEN** mock can simulate specific error types with `with_error(AlephError)`
 - **AND** `process()` returns the configured error
 - **AND** error paths can be tested
 
@@ -107,7 +107,7 @@ The system SHALL support configuring provider-specific settings (API keys, model
 - **WHEN** loading provider config
 - **THEN** API key must not be empty for cloud providers
 - **AND** model must not be empty
-- **AND** missing required fields return `AetherError::InvalidConfig`
+- **AND** missing required fields return `AlephError::InvalidConfig`
 - **AND** error message lists missing fields
 
 #### Scenario: Support optional fields
@@ -121,7 +121,7 @@ The system SHALL support configuring provider-specific settings (API keys, model
 The system SHALL maintain a registry of available providers for router lookup.
 
 #### Scenario: Register provider by name
-- **WHEN** initializing AetherCore
+- **WHEN** initializing AlephCore
 - **THEN** providers are registered with unique names (e.g., "openai", "claude")
 - **AND** names match config section keys
 - **AND** duplicate names are rejected

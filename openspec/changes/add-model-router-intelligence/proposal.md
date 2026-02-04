@@ -41,6 +41,6 @@ The current Model Router uses static configuration (CostTier, LatencyTier) for r
   - `core/src/cowork/model_router/` - New modules: metrics.rs, health.rs, collector.rs, scoring.rs
   - `core/src/cowork_ffi.rs` - New UniFFI exports
   - `core/src/config/types/cowork.rs` - New configuration types
-  - `platforms/macos/Aether/Sources/` - New health/metrics UI views
+  - `platforms/macos/Aleph/Sources/` - New health/metrics UI views
 - Dependencies: None (uses existing tokio, serde, sqlx)
 - **Non-breaking**: All new APIs, existing `route()` unchanged

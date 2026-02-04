@@ -17,7 +17,7 @@
 ### Task 1.1: Update Cargo.toml Dependencies
 
 **Files:**
-- Modify: `Aether/core/Cargo.toml`
+- Modify: `Aleph/core/Cargo.toml`
 
 **Step 1: Add rig dependencies**
 
@@ -31,7 +31,7 @@ rig-sqlite = "0.1"
 
 **Step 2: Verify dependencies resolve**
 
-Run: `cd /Users/zouguojun/Workspace/Aether/.worktrees/rig-core-migration/Aether/core && cargo check`
+Run: `cd /Users/zouguojun/Workspace/Aleph/.worktrees/rig-core-migration/Aleph/core && cargo check`
 
 Expected: Compiling rig-core, rig-sqlite...
 
@@ -47,15 +47,15 @@ git commit -m "deps: add rig-core and rig-sqlite dependencies"
 ### Task 1.2: Create New Module Structure
 
 **Files:**
-- Create: `Aether/core/src/agent/mod.rs`
-- Create: `Aether/core/src/agent/manager.rs`
-- Create: `Aether/core/src/agent/config.rs`
-- Create: `Aether/core/src/store/mod.rs`
-- Create: `Aether/core/src/store/sqlite.rs`
+- Create: `Aleph/core/src/agent/mod.rs`
+- Create: `Aleph/core/src/agent/manager.rs`
+- Create: `Aleph/core/src/agent/config.rs`
+- Create: `Aleph/core/src/store/mod.rs`
+- Create: `Aleph/core/src/store/sqlite.rs`
 
 **Step 1: Create agent module skeleton**
 
-Create `Aether/core/src/agent/mod.rs`:
+Create `Aleph/core/src/agent/mod.rs`:
 
 ```rust
 //! Agent module - RigAgentManager and configuration
@@ -71,7 +71,7 @@ pub use manager::RigAgentManager;
 
 **Step 2: Create agent config skeleton**
 
-Create `Aether/core/src/agent/config.rs`:
+Create `Aleph/core/src/agent/config.rs`:
 
 ```rust
 //! Agent configuration parsing
@@ -114,7 +114,7 @@ impl Default for AgentConfig {
 
 **Step 3: Create agent manager skeleton**
 
-Create `Aether/core/src/agent/manager.rs`:
+Create `Aleph/core/src/agent/manager.rs`:
 
 ```rust
 //! Rig Agent Manager - core entry point
@@ -154,7 +154,7 @@ mod tests {
 
 **Step 4: Create store module skeleton**
 
-Create `Aether/core/src/store/mod.rs`:
+Create `Aleph/core/src/store/mod.rs`:
 
 ```rust
 //! Vector store module using rig-sqlite
@@ -166,7 +166,7 @@ pub use sqlite::MemoryStore;
 
 **Step 5: Create store sqlite skeleton**
 
-Create `Aether/core/src/store/sqlite.rs`:
+Create `Aleph/core/src/store/sqlite.rs`:
 
 ```rust
 //! SQLite vector store implementation using rig-sqlite
@@ -242,14 +242,14 @@ git commit -m "feat: add agent and store module skeletons"
 ### Task 1.3: Create Tools Module Structure
 
 **Files:**
-- Create: `Aether/core/src/rig_tools/mod.rs`
-- Create: `Aether/core/src/rig_tools/search.rs`
-- Create: `Aether/core/src/rig_tools/web_fetch.rs`
-- Create: `Aether/core/src/rig_tools/error.rs`
+- Create: `Aleph/core/src/rig_tools/mod.rs`
+- Create: `Aleph/core/src/rig_tools/search.rs`
+- Create: `Aleph/core/src/rig_tools/web_fetch.rs`
+- Create: `Aleph/core/src/rig_tools/error.rs`
 
 **Step 1: Create tools module**
 
-Create `Aether/core/src/rig_tools/mod.rs`:
+Create `Aleph/core/src/rig_tools/mod.rs`:
 
 ```rust
 //! Rig tool implementations
@@ -267,7 +267,7 @@ pub use web_fetch::WebFetchTool;
 
 **Step 2: Create tool error type**
 
-Create `Aether/core/src/rig_tools/error.rs`:
+Create `Aleph/core/src/rig_tools/error.rs`:
 
 ```rust
 //! Tool error types
@@ -300,7 +300,7 @@ impl std::error::Error for ToolError {}
 
 **Step 3: Create search tool skeleton**
 
-Create `Aether/core/src/rig_tools/search.rs`:
+Create `Aleph/core/src/rig_tools/search.rs`:
 
 ```rust
 //! Web search tool
@@ -358,7 +358,7 @@ mod tests {
 
 **Step 4: Create web_fetch tool skeleton**
 
-Create `Aether/core/src/rig_tools/web_fetch.rs`:
+Create `Aleph/core/src/rig_tools/web_fetch.rs`:
 
 ```rust
 //! Web fetch tool
@@ -437,11 +437,11 @@ git commit -m "feat: add rig_tools module skeletons"
 ### Task 1.4: Register New Modules in lib.rs
 
 **Files:**
-- Modify: `Aether/core/src/lib.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Add module declarations**
 
-Add to `Aether/core/src/lib.rs` (near other module declarations):
+Add to `Aleph/core/src/lib.rs` (near other module declarations):
 
 ```rust
 // New rig-based modules
@@ -476,11 +476,11 @@ git commit -m "feat: register agent, store, rig_tools modules"
 ### Task 2.1: Implement MemoryStore with rig-sqlite
 
 **Files:**
-- Modify: `Aether/core/src/store/sqlite.rs`
+- Modify: `Aleph/core/src/store/sqlite.rs`
 
 **Step 1: Write failing test for store creation**
 
-Add to `Aether/core/src/store/sqlite.rs` tests:
+Add to `Aleph/core/src/store/sqlite.rs` tests:
 
 ```rust
 #[tokio::test]
@@ -500,7 +500,7 @@ Expected: FAIL - function `new` not found
 
 **Step 3: Implement MemoryStore**
 
-Replace `Aether/core/src/store/sqlite.rs`:
+Replace `Aleph/core/src/store/sqlite.rs`:
 
 ```rust
 //! SQLite vector store implementation using rig-sqlite
@@ -829,7 +829,7 @@ git commit -m "feat: implement MemoryStore with SQLite and fastembed"
 ### Task 2.2: Implement RigAgentManager
 
 **Files:**
-- Modify: `Aether/core/src/agent/manager.rs`
+- Modify: `Aleph/core/src/agent/manager.rs`
 
 **Step 1: Write failing test**
 
@@ -853,7 +853,7 @@ Expected: FAIL - method `process` not found
 
 **Step 3: Implement RigAgentManager with rig**
 
-Replace `Aether/core/src/agent/manager.rs`:
+Replace `Aleph/core/src/agent/manager.rs`:
 
 ```rust
 //! Rig Agent Manager - core entry point
@@ -971,7 +971,7 @@ mod tests {
 
 **Step 4: Update mod.rs exports**
 
-Update `Aether/core/src/agent/mod.rs`:
+Update `Aleph/core/src/agent/mod.rs`:
 
 ```rust
 //! Agent module - RigAgentManager and configuration
@@ -1009,7 +1009,7 @@ git commit -m "feat: implement RigAgentManager with process methods"
 ### Task 3.1: Implement SearchTool with rig Tool trait
 
 **Files:**
-- Modify: `Aether/core/src/rig_tools/search.rs`
+- Modify: `Aleph/core/src/rig_tools/search.rs`
 
 **Step 1: Write failing test**
 
@@ -1033,7 +1033,7 @@ Expected: FAIL - method `call` not found
 
 **Step 3: Implement SearchTool with Tool trait**
 
-Replace `Aether/core/src/rig_tools/search.rs`:
+Replace `Aleph/core/src/rig_tools/search.rs`:
 
 ```rust
 //! Web search tool
@@ -1232,7 +1232,7 @@ git commit -m "feat: implement SearchTool with Tavily API"
 ### Task 3.2: Implement WebFetchTool
 
 **Files:**
-- Modify: `Aether/core/src/rig_tools/web_fetch.rs`
+- Modify: `Aleph/core/src/rig_tools/web_fetch.rs`
 
 **Step 1: Write failing test**
 
@@ -1256,7 +1256,7 @@ Expected: FAIL - method `call` not found (or wrong signature)
 
 **Step 3: Implement WebFetchTool**
 
-Replace `Aether/core/src/rig_tools/web_fetch.rs`:
+Replace `Aleph/core/src/rig_tools/web_fetch.rs`:
 
 ```rust
 //! Web fetch tool
@@ -1316,7 +1316,7 @@ impl WebFetchTool {
 
         let response = self.client
             .get(&args.url)
-            .header("User-Agent", "Aether/1.0")
+            .header("User-Agent", "Aleph/1.0")
             .send()
             .await
             .map_err(|e| ToolError::Network(e.to_string()))?;
@@ -1469,15 +1469,15 @@ git commit -m "feat: implement WebFetchTool with HTML extraction"
 ### Task 4.1: Create New Simplified UniFFI Interface
 
 **Files:**
-- Create: `Aether/core/src/aether_v2.udl`
+- Create: `Aleph/core/src/aleph_v2.udl`
 
 **Step 1: Create new UDL file**
 
-Create `Aether/core/src/aether_v2.udl`:
+Create `Aleph/core/src/aleph_v2.udl`:
 
 ```webidl
-namespace aether_v2 {
-    [Throws=AetherV2Error]
+namespace aleph_v2 {
+    [Throws=AlephV2Error]
     AlephV2Core init_v2(string config_path, AlephV2EventHandler handler);
 };
 
@@ -1501,20 +1501,20 @@ callback interface AlephV2EventHandler {
 };
 
 interface AlephV2Core {
-    [Throws=AetherV2Error]
+    [Throws=AlephV2Error]
     void process(string input, ProcessOptionsV2? options);
 
     void cancel();
 
     sequence<ToolInfoV2> list_tools();
 
-    [Throws=AetherV2Error]
+    [Throws=AlephV2Error]
     sequence<MemoryItemV2> search_memory(string query, u32 limit);
 
-    [Throws=AetherV2Error]
+    [Throws=AlephV2Error]
     void clear_memory();
 
-    [Throws=AetherV2Error]
+    [Throws=AlephV2Error]
     void reload_config();
 };
 
@@ -1542,7 +1542,7 @@ dictionary MemoryItemV2 {
 **Step 2: Commit**
 
 ```bash
-git add Aleph/core/src/aether_v2.udl
+git add Aleph/core/src/aleph_v2.udl
 git commit -m "feat: add simplified UniFFI interface (v2)"
 ```
 
@@ -1551,11 +1551,11 @@ git commit -m "feat: add simplified UniFFI interface (v2)"
 ### Task 4.2: Implement UniFFI Bindings
 
 **Files:**
-- Create: `Aether/core/src/uniffi_v2.rs`
+- Create: `Aleph/core/src/uniffi_v2.rs`
 
 **Step 1: Create UniFFI implementation**
 
-Create `Aether/core/src/uniffi_v2.rs`:
+Create `Aleph/core/src/uniffi_v2.rs`:
 
 ```rust
 //! UniFFI v2 bindings for simplified rig-based architecture
@@ -1661,7 +1661,7 @@ pub struct AlephV2Core {
 pub fn init_v2(
     config_path: String,
     handler: Arc<dyn AlephV2EventHandler>,
-) -> Result<Arc<AetherV2Core>, AlephV2Error> {
+) -> Result<Arc<AlephV2Core>, AlephV2Error> {
     info!(config_path = %config_path, "Initializing AlephV2Core");
 
     // Create runtime if not in async context
@@ -1677,7 +1677,7 @@ pub fn init_v2(
     let config = AgentConfig::default();
     let manager = RigAgentManager::new(config);
 
-    Ok(Arc::new(AetherV2Core {
+    Ok(Arc::new(AlephV2Core {
         manager: Arc::new(RwLock::new(manager)),
         memory_store: None,
         handler,
@@ -1752,7 +1752,7 @@ impl AlephV2Core {
 
         match result {
             Ok(entries) => Ok(entries.into_iter().map(|(e, _)| e.into()).collect()),
-            Err(e) => Err(AetherV2Error::Memory { message: e.to_string() }),
+            Err(e) => Err(AlephV2Error::Memory { message: e.to_string() }),
         }
     }
 
@@ -1777,7 +1777,7 @@ impl AlephV2Core {
     }
 }
 
-uniffi::setup_scaffolding!("aether_v2");
+uniffi::setup_scaffolding!("aleph_v2");
 
 #[cfg(test)]
 mod tests {
@@ -1831,7 +1831,7 @@ Verify `thiserror` is in Cargo.toml (should already be there).
 
 **Step 3: Register module in lib.rs**
 
-Add to `Aether/core/src/lib.rs`:
+Add to `Aleph/core/src/lib.rs`:
 
 ```rust
 pub mod uniffi_v2;
@@ -1865,13 +1865,13 @@ git commit -m "feat: implement UniFFI v2 bindings"
 **Note:** Only execute after validating new implementation works.
 
 **Files to delete:**
-- `Aether/core/src/routing/` (entire directory)
-- `Aether/core/src/dispatcher/` (entire directory)
-- `Aether/core/src/capability/` (entire directory)
-- `Aether/core/src/payload/` (entire directory)
-- `Aether/core/src/providers/` (entire directory)
-- `Aether/core/src/semantic/` (entire directory)
-- `Aether/core/src/memory/` (entire directory)
+- `Aleph/core/src/routing/` (entire directory)
+- `Aleph/core/src/dispatcher/` (entire directory)
+- `Aleph/core/src/capability/` (entire directory)
+- `Aleph/core/src/payload/` (entire directory)
+- `Aleph/core/src/providers/` (entire directory)
+- `Aleph/core/src/semantic/` (entire directory)
+- `Aleph/core/src/memory/` (entire directory)
 
 **Steps:**
 1. Comment out old module declarations in lib.rs

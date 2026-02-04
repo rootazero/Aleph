@@ -1,6 +1,6 @@
 # Phantom Flow Interaction Specification
 
-Phantom Flow is Aether's global interaction mode for collecting user input through the Halo overlay. It provides a "Ghost-style" interaction pattern: in-place, ephemeral, and non-intrusive.
+Phantom Flow is Aleph's global interaction mode for collecting user input through the Halo overlay. It provides a "Ghost-style" interaction pattern: in-place, ephemeral, and non-intrusive.
 
 ## ADDED Requirements
 
@@ -31,11 +31,11 @@ The system SHALL support two types of clarification requests: `Select` (option l
 
 ### Requirement: UniFFI Callback Interface
 
-The system SHALL expose clarification through the `AetherEventHandler` callback interface.
+The system SHALL expose clarification through the `AlephEventHandler` callback interface.
 
 #### Scenario: Trigger clarification from Rust
 
-- **GIVEN** any Rust code holds a reference to `AetherEventHandler`
+- **GIVEN** any Rust code holds a reference to `AlephEventHandler`
 - **WHEN** it calls `handler.on_clarification_needed(request)`
 - **THEN** the call SHALL block until user responds
 - **AND** return a `ClarificationResult`

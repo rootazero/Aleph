@@ -69,7 +69,7 @@ Swift UI (via simplified UniFFI interface)
 ```
 Aleph/core/src/
 ├── lib.rs                 # UniFFI export entry
-├── aether.udl             # UniFFI interface (simplified)
+├── aleph.udl             # UniFFI interface (simplified)
 ├── error.rs               # Error types (keep)
 │
 ├── agent/                 # New: Agent management
@@ -327,10 +327,10 @@ impl RigAgentManager {
 
 ## UniFFI Interface
 
-### Simplified `aether.udl`
+### Simplified `aleph.udl`
 
 ```webidl
-namespace aether {
+namespace aleph {
     [Throws=AlephError]
     AlephCore init(string config_path, AlephEventHandler handler);
 };
@@ -428,7 +428,7 @@ Phase 3: Tool Migration
     └── Implement McpToolAdapter
 
 Phase 4: UniFFI Integration
-    ├── Update aether.udl
+    ├── Update aleph.udl
     ├── Implement new AlephCore
     └── Generate Swift bindings
 
@@ -470,7 +470,7 @@ fastembed = "4"
 | Create | `store/sqlite.rs` | MemoryStore implementation |
 | Create | `tools/*.rs` | Tool implementations (~8 files) |
 | Rewrite | `lib.rs` | UniFFI exports |
-| Rewrite | `aether.udl` | Simplified interface |
+| Rewrite | `aleph.udl` | Simplified interface |
 | Rewrite | `config/mod.rs` | New config parsing |
 | Delete | `routing/*` | Entire directory |
 | Delete | `dispatcher/*` | Entire directory |

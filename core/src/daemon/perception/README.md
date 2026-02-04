@@ -1,6 +1,6 @@
 # Perception Layer
 
-The Perception Layer is Aether's "sensory system" - a collection of Watchers that monitor OS-level events and convert them into structured events for higher-level reasoning.
+The Perception Layer is Aleph's "sensory system" - a collection of Watchers that monitor OS-level events and convert them into structured events for higher-level reasoning.
 
 ## Architecture
 
@@ -50,7 +50,7 @@ The Perception Layer is Aether's "sensory system" - a collection of Watchers tha
 
 ## Configuration
 
-**File:** `~/.aether/perception.toml`
+**File:** `~/.aleph/perception.toml`
 
 ```toml
 enabled = true

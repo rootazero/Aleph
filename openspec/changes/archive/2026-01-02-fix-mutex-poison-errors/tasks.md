@@ -13,7 +13,7 @@
 
 #### Task 1.1: Fix is_typewriting Mutex (2 occurrences)
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 
 **Locations**:
 - Line 433: `cancel_typewriter()` method
@@ -49,7 +49,7 @@ let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
 
 #### Task 1.2: Fix last_request Mutex (3 occurrences)
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 
 **Locations**:
 - Line 460: `retry_last_request()` method
@@ -95,7 +95,7 @@ let mut last_request = self.last_request.lock().unwrap_or_else(|e| {
 
 #### Task 1.3: Fix current_context Mutex (4 occurrences)
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 
 **Locations**:
 - Line 635: `set_current_context()` method
@@ -153,7 +153,7 @@ let current_context = self.current_context.lock().unwrap_or_else(|e| {
 
 **Command**:
 ```bash
-cd Aether/core
+cd Aleph/core
 cargo clean
 cargo build --release
 cargo run --bin uniffi-bindgen -- generate --library target/release/libaethecore.dylib --language swift --out-dir ../Sources/Generated/
@@ -175,11 +175,11 @@ cp target/release/libaethecore.dylib ../Frameworks/
 
 #### Task 2.1: Add isInitialized() Method to Rust Core
 
-**File**: `Aether/core/src/core.rs`
+**File**: `Aleph/core/src/core.rs`
 
 **Changes**:
 ```rust
-impl AetherCore {
+impl AlephCore {
     /// Check if core is fully initialized and ready to process requests
     pub fn is_initialized(&self) -> bool {
         // Check all critical components are initialized
@@ -190,11 +190,11 @@ impl AetherCore {
 }
 ```
 
-**File**: `Aether/core/src/aether.udl` (UniFFI interface)
+**File**: `Aleph/core/src/aleph.udl` (UniFFI interface)
 
 **Changes**:
 ```idl
-interface AetherCore {
+interface AlephCore {
     // ... existing methods ...
 
     // NEW: Initialization check
@@ -211,7 +211,7 @@ interface AetherCore {
 
 #### Task 2.2: Add Initialization Check in Swift Hotkey Handler
 
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 
 **Location**: Line ~747 (after showing Halo)
 
@@ -245,7 +245,7 @@ guard let core = core, core.isInitialized() else {
 
 #### Task 3.1: Add Try-Catch Around Core Method Calls
 
-**File**: `Aether/Sources/AppDelegate.swift`
+**File**: `Aleph/Sources/AppDelegate.swift`
 
 **Location**: Line ~792 (`processInput()` call)
 
@@ -257,7 +257,7 @@ do {
         context: capturedContext
     )
     // ... existing code ...
-} catch let error as AetherException {
+} catch let error as AlephException {
     // Handle typed Rust errors
     print("[AppDelegate] ❌ Core error: \(error)")
     DispatchQueue.main.async { [weak self] in
@@ -289,14 +289,14 @@ do {
 
 #### Task 3.2: Add Localized Error Messages
 
-**File**: `Aether/Sources/Localizable.xcstrings`
+**File**: `Aleph/Sources/Localizable.xcstrings`
 
 **New Keys**:
 ```json
 {
   "error.core_initializing": {
-    "en": "Aether is still starting up...",
-    "zh-Hans": "Aether 正在启动中..."
+    "en": "Aleph is still starting up...",
+    "zh-Hans": "Aleph 正在启动中..."
   },
   "error.core_initializing.suggestion": {
     "en": "Please wait a moment and try again",
@@ -307,8 +307,8 @@ do {
     "zh-Hans": "检测到内部状态错误"
   },
   "error.mutex_poisoned.suggestion": {
-    "en": "Aether recovered automatically. If this persists, restart the app.",
-    "zh-Hans": "Aether 已自动恢复。如果持续出现，请重启应用。"
+    "en": "Aleph recovered automatically. If this persists, restart the app.",
+    "zh-Hans": "Aleph 已自动恢复。如果持续出现，请重启应用。"
   }
 }
 ```
@@ -356,14 +356,14 @@ do {
 7. ✅ Verify: AI processes and responds
 
 **Scenario 3: Settings Menu (Previously Crash)**
-1. Launch Aether
+1. Launch Aleph
 2. Click menu bar icon
 3. Click "Settings"
 4. ✅ Verify: Settings window opens
 5. ✅ Verify: No crash
 
 **Scenario 4: Early Hotkey Press**
-1. Launch Aether
+1. Launch Aleph
 2. Immediately press ` key (before core fully initialized)
 3. ✅ Verify: Error message appears
 4. ✅ Verify: Suggested action displayed

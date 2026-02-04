@@ -9,32 +9,32 @@ This task list implements the routing rule system enhancements defined in the pr
 
 - [x] **Task 1.1**: Update `Router::route()` method signature
   - **Goal**: Accept full context string instead of just clipboard content
-  - **Files**: `Aether/core/src/router/mod.rs`
+  - **Files**: `Aleph/core/src/router/mod.rs`
   - **Validation**: Signature changed to `fn route(&self, context: &str) -> Option<(&dyn AiProvider, Option<&str>)>`
   - **Completed**: ✅
 
-- [x] **Task 1.2**: Update `AetherCore::process_clipboard()` to build context string
+- [x] **Task 1.2**: Update `AlephCore::process_clipboard()` to build context string
   - **Goal**: Combine window context + clipboard content before routing
-  - **Files**: `Aether/core/src/core.rs`
+  - **Files**: `Aleph/core/src/core.rs`
   - **Context Format**: `[AppName] WindowTitle\nClipboardContent`
   - **Validation**: Context string logged correctly
   - **Completed**: ✅
 
 - [x] **Task 1.3**: Implement first-match-stops logic
   - **Goal**: Ensure routing stops at first matching rule
-  - **Files**: `Aether/core/src/router/mod.rs`
+  - **Files**: `Aleph/core/src/router/mod.rs`
   - **Validation**: Add debug logs showing which rule matched
   - **Completed**: ✅
 
 - [x] **Task 1.4**: Clarify system prompt priority
   - **Goal**: Rule's `system_prompt` overrides provider default
-  - **Files**: `Aether/core/src/router/mod.rs`
+  - **Files**: `Aleph/core/src/router/mod.rs`
   - **Validation**: Router returns correct system prompt from matched rule
   - **Completed**: ✅
 
 - [x] **Task 1.5**: Implement fallback rule logic
   - **Goal**: Use `default_provider` when no rule matches
-  - **Files**: `Aether/core/src/router/mod.rs`
+  - **Files**: `Aleph/core/src/router/mod.rs`
   - **Validation**: Fallback to default provider when no match
   - **Completed**: ✅
 
@@ -46,21 +46,21 @@ This task list implements the routing rule system enhancements defined in the pr
     - `Config::add_rule_at_top(rule: RoutingRuleConfig)`
     - `Config::remove_rule(index: usize)`
     - `Config::move_rule(from: usize, to: usize)`
-  - **Files**: `Aether/core/src/config/mod.rs`
+  - **Files**: `Aleph/core/src/config/mod.rs`
   - **Validation**: API methods work correctly
   - **Completed**: ✅
 
 - [x] **Task 2.2**: Update configuration validation
   - **Goal**: Warn if `default_provider` is missing
-  - **Files**: `Aether/core/src/config/mod.rs`
+  - **Files**: `Aleph/core/src/config/mod.rs`
   - **Validation**: Warning logged during `Config::validate()`
   - **Completed**: ✅
 
 - [x] **Task 2.3**: Update config documentation
   - **Goal**: Document new routing behavior and context format
   - **Files**:
-    - Updated comments in `Aether/core/src/router/mod.rs`
-    - Updated comments in `Aether/core/src/core.rs`
+    - Updated comments in `Aleph/core/src/router/mod.rs`
+    - Updated comments in `Aleph/core/src/core.rs`
   - **Content**:
     - Context string format
     - Matching order explanation

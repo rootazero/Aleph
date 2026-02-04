@@ -3,7 +3,7 @@
 ## Phase 1: Foundation (AI Provider Interface) ✅ COMPLETED
 
 ### Task 1.1: Define AiProvider Trait ✅
-- [x] Create `Aether/core/src/providers/mod.rs` module
+- [x] Create `Aleph/core/src/providers/mod.rs` module
 - [x] Define `AiProvider` trait with `async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String>`
 - [x] Add metadata methods: `fn name(&self) -> &str` and `fn color(&self) -> &str`
 - [x] Add `Send + Sync` bounds for thread safety
@@ -12,7 +12,7 @@
 **Validation**: ✅ Trait compiles and can be used as `Arc<dyn AiProvider>` (3 tests passed)
 
 ### Task 1.2: Extend Error Types ✅
-- [x] Open `Aether/core/src/error.rs`
+- [x] Open `Aleph/core/src/error.rs`
 - [x] Add new error variants: `NetworkError(String)`, `AuthenticationError(String)`, `RateLimitError(String)`, `ProviderError(String)`, `Timeout`
 - [x] Add `NoProviderAvailable` error
 - [x] Add `InvalidConfig(String)` error
@@ -21,7 +21,7 @@
 **Validation**: ✅ All error types are documented and have unit tests (12 tests passed)
 
 ### Task 1.3: Create Mock Provider ✅
-- [x] Create `Aether/core/src/providers/mock.rs`
+- [x] Create `Aleph/core/src/providers/mock.rs`
 - [x] Implement `MockProvider` struct with configurable response
 - [x] Add `with_delay(Duration)` method for testing timeouts
 - [x] Add `with_error(MockError)` method for testing error paths
@@ -30,7 +30,7 @@
 **Validation**: ✅ Mock provider can be used in tests without real API calls (8 tests passed)
 
 ### Task 1.4: Add Provider Configuration Structs ✅
-- [x] Open `Aether/core/src/config.rs`
+- [x] Open `Aleph/core/src/config.rs`
 - [x] Add `ProviderConfig` struct with fields: `api_key`, `model`, `base_url`, `color`, `timeout_seconds`, `max_tokens`, `temperature`
 - [x] Add `GeneralConfig` struct with `default_provider` field
 - [x] Update `Config` struct to include `general: GeneralConfig` and `providers: HashMap<String, ProviderConfig>`
@@ -39,7 +39,7 @@
 **Validation**: ✅ Config can be deserialized from TOML with validation (8 tests passed)
 
 ### Task 1.5: Add Provider Registry ✅
-- [x] Create `Aether/core/src/providers/registry.rs`
+- [x] Create `Aleph/core/src/providers/registry.rs`
 - [x] Implement `ProviderRegistry` struct with `HashMap<String, Arc<dyn AiProvider>>`
 - [x] Add methods: `register()`, `get()`, `names()`, `contains()`
 - [x] Add validation to reject duplicate names
@@ -50,7 +50,7 @@
 ## Phase 2: OpenAI Provider Implementation ✅ COMPLETED
 
 ### Task 2.1: Add reqwest Dependency ✅
-- [x] Open `Aether/core/Cargo.toml`
+- [x] Open `Aleph/core/Cargo.toml`
 - [x] Add `reqwest = { version = "0.11", features = ["json", "rustls-tls"] }`
 - [x] Add `serde_json = "1.0"` for JSON serialization (moved to dependencies)
 - [x] Add `async-trait = "0.1"` for trait async methods (already present)
@@ -59,7 +59,7 @@
 **Validation**: ✅ Dependencies compile successfully
 
 ### Task 2.2: Implement OpenAI API Client ✅
-- [x] Create `Aether/core/src/providers/openai.rs`
+- [x] Create `Aleph/core/src/providers/openai.rs`
 - [x] Define `OpenAiProvider` struct with fields: `client: reqwest::Client`, `config: ProviderConfig`
 - [x] Implement `new(config: ProviderConfig) -> Result<Self>` constructor
 - [x] Configure reqwest client with timeout, headers, TLS
@@ -78,7 +78,7 @@
 **Validation**: ✅ Can successfully call OpenAI API (integration tests would require valid API key)
 
 ### Task 2.4: Add Error Handling ✅
-- [x] Map HTTP status codes to appropriate `AetherError` variants
+- [x] Map HTTP status codes to appropriate `AlephError` variants
 - [x] Parse error response body for detailed error messages
 - [x] Add comprehensive error handling for all status codes
 - [x] Test with invalid API key, invalid model, network failures (unit tests)
@@ -98,7 +98,7 @@
 ## Phase 3: Claude Provider Implementation ✅ COMPLETED
 
 ### Task 3.1: Implement Claude API Client ✅
-- [x] Create `Aether/core/src/providers/claude.rs`
+- [x] Create `Aleph/core/src/providers/claude.rs`
 - [x] Define `ClaudeProvider` struct similar to OpenAiProvider
 - [x] Implement constructor with config validation
 - [x] Configure reqwest client with Claude-specific headers: `x-api-key`, `anthropic-version`
@@ -115,7 +115,7 @@
 **Validation**: ✅ Can call Claude API successfully
 
 ### Task 3.3: Add Error Handling ✅
-- [x] Map Claude error responses to `AetherError`
+- [x] Map Claude error responses to `AlephError`
 - [x] Handle `error.message` from response body
 - [x] Add special handling for 529 overloaded status
 - [x] Test with invalid API key and rate limits (unit tests)
@@ -134,7 +134,7 @@
 ## Phase 4: Ollama Provider Implementation ✅ COMPLETED
 
 ### Task 4.1: Implement Ollama CLI Client ✅
-- [x] Create `Aether/core/src/providers/ollama.rs`
+- [x] Create `Aleph/core/src/providers/ollama.rs`
 - [x] Define `OllamaProvider` struct with `model: String`, `timeout: Duration`
 - [x] Implement constructor that validates model is not empty
 - [x] Add private method `format_prompt()` for combining system prompt and input
@@ -180,7 +180,7 @@
 ## Phase 5: Router Implementation ✅ COMPLETED
 
 ### Task 5.1: Define Routing Rule Struct ✅
-- [x] Create `Aether/core/src/router/mod.rs`
+- [x] Create `Aleph/core/src/router/mod.rs`
 - [x] Define `RoutingRule` struct with fields: `regex: Regex`, `provider_name: String`, `system_prompt: Option<String>`
 - [x] Add constructor that compiles regex at creation
 - [x] Add method `matches(&self, input: &str) -> bool`
@@ -206,7 +206,7 @@
 **Validation**: ✅ Routing selects correct provider based on regex
 
 ### Task 5.4: Add Routing Configuration ✅
-- [x] Update `Aether/core/src/config.rs`
+- [x] Update `Aleph/core/src/config.rs`
 - [x] Add `RoutingRuleConfig` config struct for TOML parsing
 - [x] Add validation: regex syntax, provider existence
 - [x] Add default catch-all rule if none exists
@@ -228,7 +228,7 @@
 ## Phase 6: Memory Integration ✅ COMPLETED
 
 ### Task 6.1: Integrate Memory Retrieval ✅
-- [x] Open `Aether/core/src/core.rs`
+- [x] Open `Aleph/core/src/core.rs`
 - [x] Update `process_clipboard()` to retrieve memories before routing
 - [x] Use `memory_store.retrieve(&context, max_items)` to get past interactions
 - [x] Format memories as context string
@@ -236,7 +236,7 @@
 **Validation**: ✅ Memories are retrieved based on current context via `retrieve_and_augment_prompt()`
 
 ### Task 6.2: Implement Prompt Augmentation ✅
-- [x] Create `Aether/core/src/memory/augmentation.rs` (already exists)
+- [x] Create `Aleph/core/src/memory/augmentation.rs` (already exists)
 - [x] Implement function `augment_prompt(input: &str, memories: &[MemoryEntry]) -> String`
 - [x] Format: "Past Context:\n{memories}\n\nCurrent Request:\n{input}"
 - [x] Handle empty memories case (no augmentation)
@@ -279,15 +279,15 @@
 
 **Validation**: ✅ All 8 integration tests pass, 226 total lib tests pass
 
-## Phase 7: AetherCore Integration ✅ COMPLETED
+## Phase 7: AlephCore Integration ✅ COMPLETED
 
-### Task 7.1: Update AetherCore Struct ✅
-- [x] Open `Aether/core/src/core.rs`
+### Task 7.1: Update AlephCore Struct ✅
+- [x] Open `Aleph/core/src/core.rs`
 - [x] Add field `router: Arc<Router>`
-- [x] Initialize router in `AetherCore::new()` from config
+- [x] Initialize router in `AlephCore::new()` from config
 - [x] Handle router initialization errors
 
-**Validation**: ✅ AetherCore has access to router (initialized in `new()` at line 90-104)
+**Validation**: ✅ AlephCore has access to router (initialized in `new()` at line 90-104)
 
 ### Task 7.2: Implement AI Processing Pipeline ✅
 - [x] Create private method `async fn process_with_ai(&self, input: &str, context: &CapturedContext) -> Result<String>`
@@ -309,7 +309,7 @@
 **Validation**: ✅ Clipboard content is processed by AI and result is pasted (method exposed via UniFFI)
 
 ### Task 7.4: Add State Callbacks ✅
-- [x] Extend `AetherEventHandler` trait in `aether.udl`
+- [x] Extend `AlephEventHandler` trait in `aleph.udl`
 - [x] Add `on_ai_processing_started(string provider_name, string provider_color)`
 - [x] Add `on_ai_response_received(string response_preview)`
 - [x] Update Swift `EventHandler` to implement new callbacks (pending Swift integration)
@@ -318,7 +318,7 @@
 **Validation**: ✅ Rust callbacks defined in event_handler.rs:65-68, called in core.rs:756,780
 
 ### Task 7.5: Add ProcessingState Enum Values ✅
-- [x] Update `ProcessingState` enum in `aether.udl`
+- [x] Update `ProcessingState` enum in `aleph.udl`
 - [x] Add `RetrievingMemory` state
 - [x] Add `ProcessingWithAI` state
 - [x] Update state transitions in `core.rs`
@@ -329,7 +329,7 @@
 ## Phase 8: Configuration and Testing ✅ COMPLETED
 
 ### Task 8.1: Create Example Configuration ✅
-- [x] Create `Aether/config.example.toml` file
+- [x] Create `Aleph/config.example.toml` file
 - [x] Include all provider configurations (with placeholder API keys)
 - [x] Include example routing rules
 - [x] Include memory configuration
@@ -338,7 +338,7 @@
 **Validation**: ✅ Example config is well-documented (262 lines with comprehensive comments)
 
 ### Task 8.2: Add Config Loading ✅
-- [x] Implement config file loading from `~/.aether/config.toml`
+- [x] Implement config file loading from `~/.aleph/config.toml`
 - [x] Fall back to default config if file doesn't exist
 - [x] Add config validation on load
 - [x] Log config errors clearly
@@ -349,7 +349,7 @@
 **Validation**: ✅ Config can be loaded from file with error handling (17 config tests passing)
 
 ### Task 8.3: Write Integration Tests ✅
-- [x] Create `Aether/core/tests/integration_ai.rs`
+- [x] Create `Aleph/core/tests/integration_ai.rs`
 - [x] Test end-to-end with MockProvider
 - [x] Test routing with multiple rules
 - [x] Test memory augmentation
@@ -362,7 +362,7 @@
 **Validation**: ✅ Integration tests pass with `cargo test --test integration_ai` (14 tests passing)
 
 ### Task 8.4: Add Performance Benchmarks ✅
-- [x] Create `Aether/core/benches/ai_benchmarks.rs`
+- [x] Create `Aleph/core/benches/ai_benchmarks.rs`
 - [x] Benchmark routing performance (10 rules, 100 inputs)
 - [x] Benchmark memory retrieval + augmentation (via mock provider)
 - [x] Benchmark full pipeline with mock provider
@@ -384,14 +384,14 @@
 ## Phase 9: Swift UI Integration ✅ COMPLETED
 
 ### Task 9.1: Generate UniFFI Bindings ✅
-- [x] Run `cargo run --bin uniffi-bindgen generate src/aether.udl --language swift --out-dir ../Sources/Generated/`
-- [x] Verify `aether.swift` includes new callbacks and enums
+- [x] Run `cargo run --bin uniffi-bindgen generate src/aleph.udl --language swift --out-dir ../Sources/Generated/`
+- [x] Verify `aleph.swift` includes new callbacks and enums
 - [x] Copy updated `libaethecore.dylib` to `Frameworks/`
 
 **Validation**: ✅ Bindings compile in Xcode
 
 ### Task 9.2: Update Swift EventHandler ✅
-- [x] Open `Aether/Sources/EventHandler.swift`
+- [x] Open `Aleph/Sources/EventHandler.swift`
 - [x] Implement `onAiProcessingStarted()` callback
 - [x] Implement `onAiResponseReceived()` callback
 - [x] Update Halo window to show provider color
@@ -400,7 +400,7 @@
 **Validation**: ✅ Swift code compiles and callbacks work
 
 ### Task 9.3: Test End-to-End in macOS App
-- [ ] Run Aether.app
+- [ ] Run Aleph.app
 - [ ] Select text in any app
 - [ ] Press Cmd+~
 - [ ] Verify Halo shows provider color
@@ -425,7 +425,7 @@
 ## Phase 10: Error Handling and Polish ✅ COMPLETED
 
 ### Task 10.1: Add Retry Logic ✅
-- [x] Create `Aether/core/src/providers/retry.rs`
+- [x] Create `Aleph/core/src/providers/retry.rs`
 - [x] Implement exponential backoff for network errors
 - [x] Retry 3 times with delays: 1s, 2s, 4s
 - [x] Do not retry: authentication, rate limit, timeout
@@ -453,7 +453,7 @@
 **Validation**: ✅ Comprehensive structured logging implemented across core, router, providers, and retry modules
 
 ### Task 10.4: Add User-Facing Error Messages ✅
-- [x] Create friendly error messages for common failures (added `user_friendly_message()` method to AetherError)
+- [x] Create friendly error messages for common failures (added `user_friendly_message()` method to AlephError)
 - [x] "Check your API key in config" for 401
 - [x] "Rate limit exceeded, try again later" for 429
 - [x] "Network connection failed" for network errors

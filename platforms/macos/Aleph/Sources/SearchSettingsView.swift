@@ -1,6 +1,6 @@
 //
 //  SearchSettingsView.swift
-//  Aether
+//  Aleph
 //
 //  Search provider configuration UI with provider testing and PII settings.
 //  Phase 4 of add-search-settings-ui proposal.
@@ -11,7 +11,7 @@ import SwiftUI
 /// Search settings view with provider configuration and PII scrubbing
 struct SearchSettingsView: View {
     // Dependencies
-    let core: AetherCore?
+    let core: AlephCore?
     @Binding var hasUnsavedChanges: Bool
 
     // Provider field values (provider_id -> [field_key -> value])
@@ -246,7 +246,7 @@ struct SearchSettingsView: View {
                 pii: nil
             )
 
-            // Save to config via AetherCore
+            // Save to config via AlephCore
             try core.updateSearchConfig(search: searchConfig)
 
             print("Search settings saved successfully")

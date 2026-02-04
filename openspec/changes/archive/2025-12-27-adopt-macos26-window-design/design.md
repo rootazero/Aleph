@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether 当前的设置窗口使用 SwiftUI 的 `Settings` Scene API，这是 macOS 13+ 引入的声明式窗口管理方式。虽然 `Settings` 提供了开箱即用的标签页导航和窗口管理，但它严格限制了窗口的视觉定制能力——开发者无法控制标题栏样式、无法移动系统交通灯按钮位置。
+Aleph 当前的设置窗口使用 SwiftUI 的 `Settings` Scene API，这是 macOS 13+ 引入的声明式窗口管理方式。虽然 `Settings` 提供了开箱即用的标签页导航和窗口管理，但它严格限制了窗口的视觉定制能力——开发者无法控制标题栏样式、无法移动系统交通灯按钮位置。
 
 macOS 26 的设计语言强调"内容优先、控制融入"的理念，其核心特征是将窗口控制按钮（红黄绿交通灯）从独立的标题栏中解放出来,集成到应用的侧边栏或工具栏中。这种设计在 Music.app、Podcasts.app 等原生应用中已经广泛应用,但对于第三方开发者来说,需要绕过 SwiftUI 的高层抽象,直接操作 AppKit 的 NSWindow API。
 
@@ -10,12 +10,12 @@ macOS 26 的设计语言强调"内容优先、控制融入"的理念，其核心
 1. **SwiftUI Scene Limitations:** `Settings` Scene 不支持自定义窗口样式（如 `.hiddenTitleBar`）
 2. **Traffic Light Immutability:** macOS 不允许移动系统原生的交通灯按钮，只能通过隐藏 + 自绘实现
 3. **Hybrid SwiftUI + AppKit:** 需要在 SwiftUI 中桥接 AppKit 的窗口控制 API
-4. **Backward Compatibility:** 必须支持 macOS 13+（Aether 的最低版本要求），不能依赖 macOS 26 专属 API
+4. **Backward Compatibility:** 必须支持 macOS 13+（Aleph 的最低版本要求），不能依赖 macOS 26 专属 API
 
 **Stakeholders:**
-- **End Users:** 期望 Aether 的视觉设计与最新 macOS 系统应用保持一致
+- **End Users:** 期望 Aleph 的视觉设计与最新 macOS 系统应用保持一致
 - **Developers:** 需要清晰的架构边界，避免 SwiftUI/AppKit 混合开发中的坑
-- **Brand Team:** 希望通过现代化设计提升 Aether 的市场竞争力
+- **Brand Team:** 希望通过现代化设计提升 Aleph 的市场竞争力
 
 ## Goals / Non-Goals
 
@@ -31,7 +31,7 @@ macOS 26 的设计语言强调"内容优先、控制融入"的理念，其核心
 2. ❌ 不支持可折叠侧边栏（未来功能，本次不涉及）
 3. ❌ 不修改 Halo 窗口（仅针对设置窗口）
 4. ❌ 不重构现有标签页视图的内部逻辑（只调整布局容器）
-5. ❌ 不实现多窗口管理（Aether 当前只有一个设置窗口）
+5. ❌ 不实现多窗口管理（Aleph 当前只有一个设置窗口）
 
 ## Decisions
 
@@ -62,7 +62,7 @@ SwiftUI 提供两种窗口 Scene：
    - ❌ Rejected: 无法实现预期的视觉效果
 2. **使用纯 AppKit NSWindow**
    - 完全放弃 SwiftUI，使用 NSWindowController + NSHostingView
-   - ❌ Rejected: 开发效率低，违背 Aether "SwiftUI-first" 的架构原则
+   - ❌ Rejected: 开发效率低，违背 Aleph "SwiftUI-first" 的架构原则
 
 ### Decision 2: 自绘交通灯 vs. 原生交通灯
 
@@ -304,7 +304,7 @@ private var sidebarBackground: Color {
 - ⚠️ 付出：增加约 200-300 行 Swift 代码（交通灯、窗口控制器、侧边栏重构）
 - ⚠️ 付出：需要额外的跨版本兼容性测试时间
 
-**Justification:** Aether 定位为"高端 AI 中间件"，现代化的视觉设计是提升用户信任和市场竞争力的关键因素。相比获得的品牌价值，额外的开发成本是合理且值得的。
+**Justification:** Aleph 定位为"高端 AI 中间件"，现代化的视觉设计是提升用户信任和市场竞争力的关键因素。相比获得的品牌价值，额外的开发成本是合理且值得的。
 
 ## Migration Plan
 
@@ -319,7 +319,7 @@ private var sidebarBackground: Color {
 
 ### Phase 2: 切换窗口 Scene（Feature Flag 控制）
 
-5. 在 `AetherApp.swift` 中添加 `#if DEBUG` 条件编译，同时保留 `Settings` 和 `WindowGroup` 两种实现
+5. 在 `AlephApp.swift` 中添加 `#if DEBUG` 条件编译，同时保留 `Settings` 和 `WindowGroup` 两种实现
 6. 在 Debug 模式下使用新的 `WindowGroup` 实现
 7. 在 Release 模式下暂时保留旧的 `Settings` 实现
 

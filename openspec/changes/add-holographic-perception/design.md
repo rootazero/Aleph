@@ -1,6 +1,6 @@
 ## Context
-EN: Phase 8.5 (The Eye) adds system-level perception so Aether can build a System Shadow DOM by fusing AX semantics with visual OCR, reducing context blindness and improving POE evaluation.
-ZH: Phase 8.5（The Eye）为 Aether 增加系统级感知，通过 AX 语义与视觉 OCR 融合构建 System Shadow DOM，降低上下文盲区并增强 POE 评估。
+EN: Phase 8.5 (The Eye) adds system-level perception so Aleph can build a System Shadow DOM by fusing AX semantics with visual OCR, reducing context blindness and improving POE evaluation.
+ZH: Phase 8.5（The Eye）为 Aleph 增加系统级感知，通过 AX 语义与视觉 OCR 融合构建 System Shadow DOM，降低上下文盲区并增强 POE 评估。
 
 ## Goals / Non-Goals
 - Goals (EN):

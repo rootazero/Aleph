@@ -580,7 +580,7 @@ impl InboundMessageRouter {
         if created {
             // Send pairing message
             let message = format!(
-                "Hi! I'm Aether, a personal AI assistant.\n\n\
+                "Hi! I'm Aleph, a personal AI assistant.\n\n\
                 To chat with me, please have my owner approve your access.\n\n\
                 Your ID: {}\n\
                 Pairing code: {}\n\n\

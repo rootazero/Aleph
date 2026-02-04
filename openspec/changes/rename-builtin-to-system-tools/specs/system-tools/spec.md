@@ -50,12 +50,12 @@ The system SHALL auto-migrate legacy `[mcp.builtin]` config to `[tools]` section
 
 #### Scenario: Legacy config detection
 - **Given** a config.toml with `[mcp.builtin]` section
-- **When** Aether loads the config
+- **When** Aleph loads the config
 - **Then** it migrates settings to `[tools]` and logs a deprecation warning
 
 #### Scenario: New config format
 - **Given** a config.toml with `[tools]` section
-- **When** Aether loads the config
+- **When** Aleph loads the config
 - **Then** it uses the settings directly without migration
 
 ### Requirement: System Tools UI Labels

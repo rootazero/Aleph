@@ -19,7 +19,7 @@ The Rust core SHALL protect against panics from the rdev library that occur when
 #### Scenario: Graceful degradation after panic
 - **WHEN** hotkey listener fails to start due to panic
 - **THEN** the system does NOT terminate the application
-- **AND** AetherCore remains in a valid state (core.is_listening = false)
+- **AND** AlephCore remains in a valid state (core.is_listening = false)
 - **AND** notifies Swift layer via `event_handler.on_error()` callback
 - **AND** user can retry after granting permission or use other features
 
@@ -29,7 +29,7 @@ The Rust core SHALL verify Input Monitoring permission status before attempting 
 #### Scenario: Check permission before calling rdev::listen()
 - **WHEN** Swift layer calls `core.start_listening()`
 - **THEN** the system checks `self.has_input_monitoring_permission` flag
-- **AND** if permission is NOT granted, returns `Err(AetherError::PermissionDenied)` immediately
+- **AND** if permission is NOT granted, returns `Err(AlephError::PermissionDenied)` immediately
 - **AND** does NOT call `rdev::listen()` at all
 - **AND** logs warning: "Input Monitoring permission not granted. Cannot start hotkey listener."
 
@@ -50,14 +50,14 @@ The Rust core SHALL propagate permission-related errors to Swift layer via UniFF
 
 #### Scenario: Return permission error via Result type
 - **WHEN** `start_listening()` fails due to missing permission
-- **THEN** the function returns `Err(AetherError::PermissionDenied(message))`
+- **THEN** the function returns `Err(AlephError::PermissionDenied(message))`
 - **AND** Swift layer receives the error via UniFFI binding
 - **AND** Swift can display error alert or update UI status
 
 #### Scenario: Notify Swift via event handler callback
 - **WHEN** permission error occurs
 - **THEN** Rust calls `self.event_handler.on_error(error_message)`
-- **AND** Swift's `AetherEventHandler` implementation receives the callback
+- **AND** Swift's `AlephEventHandler` implementation receives the callback
 - **AND** Swift can show real-time error notification or update permission gate UI
 
 #### Scenario: Error message includes actionable guidance
@@ -86,12 +86,12 @@ The hotkey listener thread SHALL be designed to be panic-safe, ensuring that pan
 ## MODIFIED Requirements
 
 ### Requirement: Core Lifecycle Management
-The system SHALL provide an `AetherCore` struct that manages the lifecycle of all core components with robust permission handling and error recovery.
+The system SHALL provide an `AlephCore` struct that manages the lifecycle of all core components with robust permission handling and error recovery.
 
 #### Scenario: Start listening for system events (MODIFIED)
 - **WHEN** client calls `core.start_listening()`
 - **THEN** the system performs permission pre-check (new step)
-- **AND** if permission is NOT granted, returns `Err(AetherError::PermissionDenied)` immediately
+- **AND** if permission is NOT granted, returns `Err(AlephError::PermissionDenied)` immediately
 - **AND** if permission IS granted, wraps `rdev::listen()` in `catch_unwind()` (new protection)
 - **AND** the hotkey listener spawns a background thread
 - **AND** begins monitoring for global hotkey events
@@ -100,7 +100,7 @@ The system SHALL provide an `AetherCore` struct that manages the lifecycle of al
 #### Scenario: Handle initialization error (MODIFIED)
 - **WHEN** core initialization fails (e.g., hotkey listener cannot start or panics)
 - **THEN** the constructor catches any panics via `catch_unwind()`
-- **AND** returns an `AetherError` with descriptive message
+- **AND** returns an `AlephError` with descriptive message
 - **AND** provides actionable guidance (e.g., "Input Monitoring permission required")
 - **AND** does NOT crash the application
 
@@ -110,7 +110,7 @@ The system SHALL provide comprehensive error handling and logging for all permis
 #### Scenario: Hotkey listener error (MODIFIED)
 - **WHEN** hotkey listener fails to start (e.g., permissions denied or rdev panic)
 - **THEN** catches panic via `catch_unwind()` if rdev panics
-- **AND** returns `AetherError::HotkeyError` or `AetherError::PermissionDenied` with descriptive message
+- **AND** returns `AlephError::HotkeyError` or `AlephError::PermissionDenied` with descriptive message
 - **AND** error can be propagated through Result<T, E>
 - **AND** logs detailed error information for debugging
 
@@ -139,7 +139,7 @@ The system SHALL provide comprehensive error handling and logging for all permis
 
 ## UniFFI Interface Changes
 
-### New Methods in AetherCore
+### New Methods in AlephCore
 
 ```rust
 // New method: Set Input Monitoring permission status from Swift
@@ -152,8 +152,8 @@ pub fn set_input_monitoring_permission(&self, granted: bool) {
 ### New Error Types
 
 ```rust
-// Add PermissionDenied variant to AetherError
-pub enum AetherError {
+// Add PermissionDenied variant to AlephError
+pub enum AlephError {
     PermissionDenied(String),
     HotkeyError(HotkeyError),
     // ... other variants
@@ -167,23 +167,23 @@ pub enum HotkeyError {
 }
 ```
 
-### Updated UniFFI Definition (aether.udl)
+### Updated UniFFI Definition (aleph.udl)
 
 ```idl
-interface AetherCore {
+interface AlephCore {
     // ... existing methods
 
     // New method: Update permission status from Swift
     void set_input_monitoring_permission(boolean granted);
 
     // Updated: start_listening() may return PermissionDenied error
-    [Throws=AetherError]
+    [Throws=AlephError]
     void start_listening();
 };
 
 // Updated error enum
 [Error]
-enum AetherError {
+enum AlephError {
     "PermissionDenied",  // New variant
     "HotkeyError",
     // ... other variants
@@ -202,7 +202,7 @@ enum AetherError {
 
 #### Test: Permission pre-check blocks listener start
 - **WHEN** `start_listening()` is called with `has_input_monitoring_permission = false`
-- **THEN** function returns `Err(AetherError::PermissionDenied)` immediately
+- **THEN** function returns `Err(AlephError::PermissionDenied)` immediately
 - **AND** `rdev::listen()` is never called
 - **AND** no threads are created
 
@@ -215,12 +215,12 @@ enum AetherError {
 
 #### Test: Swift receives permission error via UniFFI
 - **WHEN** Swift calls `core.start_listening()` without permission
-- **THEN** Swift receives `AetherError.permissionDenied` error
+- **THEN** Swift receives `AlephError.permissionDenied` error
 - **AND** error message includes actionable guidance
 
 #### Test: Swift receives error callback
 - **WHEN** Rust core encounters permission error
-- **THEN** Swift's `AetherEventHandler.on_error()` is called
+- **THEN** Swift's `AlephEventHandler.on_error()` is called
 - **AND** error message is displayed in UI or logged
 
 #### Test: Permission update flow

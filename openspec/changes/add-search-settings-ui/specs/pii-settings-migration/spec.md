@@ -69,7 +69,7 @@ The system SHALL automatically migrate existing PII settings from `[behavior]` t
 #### Scenario: Existing PII config is migrated
 
 - **GIVEN** user has `pii_scrubbing_enabled = true` in `[behavior]` section
-- **WHEN** Aether loads config for the first time after update
+- **WHEN** Aleph loads config for the first time after update
 - **THEN** config migration logic runs
 - **AND** value is moved to `[search.pii.enabled]`
 - **AND** old `[behavior.pii_scrubbing_enabled]` is removed

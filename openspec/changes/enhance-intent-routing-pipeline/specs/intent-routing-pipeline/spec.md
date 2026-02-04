@@ -11,7 +11,7 @@ Define requirements for a unified intent routing pipeline that improves AI tool 
 The system SHALL implement a multi-layer intent routing pipeline.
 
 #### Scenario: Pipeline initialization
-- **WHEN** AetherCore initializes with `[routing.pipeline].enabled = true`
+- **WHEN** AlephCore initializes with `[routing.pipeline].enabled = true`
 - **THEN** IntentRoutingPipeline is created with all components
 - **AND** IntentCache is initialized with configured capacity
 - **AND** ConfidenceCalibrator loads tool-specific configs

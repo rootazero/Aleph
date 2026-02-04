@@ -1,6 +1,6 @@
 //
 //  CaretPositionHelper.swift
-//  Aether
+//  Aleph
 //
 //  Utility to get text caret (cursor) position via Accessibility API.
 //  Falls back to mouse position if caret position is unavailable.

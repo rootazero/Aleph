@@ -1,4 +1,4 @@
-// Aether/core/src/event/types.rs
+// Aleph/core/src/event/types.rs
 //! Event type definitions for the event-driven architecture.
 
 use serde::{Deserialize, Serialize};
@@ -20,13 +20,13 @@ fn next_sequence() -> u64 {
 /// Timestamped event wrapper for history tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimestampedEvent {
-    pub event: AetherEvent,
+    pub event: AlephEvent,
     pub timestamp: i64,
     pub sequence: u64,
 }
 
 impl TimestampedEvent {
-    pub fn new(event: AetherEvent) -> Self {
+    pub fn new(event: AlephEvent) -> Self {
         Self {
             event,
             timestamp: chrono::Utc::now().timestamp_millis(),
@@ -94,7 +94,7 @@ pub enum EventType {
 /// Unified event enum - all events in the system
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
-pub enum AetherEvent {
+pub enum AlephEvent {
     // Input events
     InputReceived(InputEvent),
 
@@ -156,7 +156,7 @@ pub enum AetherEvent {
     PartRemoved(crate::components::PartUpdateData),
 }
 
-impl AetherEvent {
+impl AlephEvent {
     /// Get the event type discriminant
     pub fn event_type(&self) -> EventType {
         match self {
@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn test_event_type_mapping() {
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -534,15 +534,15 @@ mod tests {
 
     #[test]
     fn test_timestamped_event_sequence() {
-        let e1 = TimestampedEvent::new(AetherEvent::LoopStop(StopReason::Completed));
-        let e2 = TimestampedEvent::new(AetherEvent::LoopStop(StopReason::Completed));
+        let e1 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed));
+        let e2 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed));
 
         assert!(e2.sequence > e1.sequence);
     }
 
     #[test]
     fn test_event_serialization() {
-        let event = AetherEvent::ToolCallCompleted(ToolCallResult {
+        let event = AlephEvent::ToolCallCompleted(ToolCallResult {
             call_id: "123".to_string(),
             tool: "search".to_string(),
             input: serde_json::json!({"query": "test"}),
@@ -554,7 +554,7 @@ mod tests {
         });
 
         let json = serde_json::to_string(&event).unwrap();
-        let parsed: AetherEvent = serde_json::from_str(&json).unwrap();
+        let parsed: AlephEvent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.event_type(), EventType::ToolCallCompleted);
     }
@@ -577,7 +577,7 @@ mod tests {
 
         // Test PartAdded event
         let added_data = PartUpdateData::added("session-1", &tool_call);
-        let event = AetherEvent::PartAdded(added_data.clone());
+        let event = AlephEvent::PartAdded(added_data.clone());
         assert_eq!(event.event_type(), EventType::PartAdded);
         assert_eq!(event.name(), "PartAdded");
         assert_eq!(added_data.event_type, PartEventType::Added);
@@ -586,14 +586,14 @@ mod tests {
 
         // Test PartUpdated event with delta
         let delta_data = PartUpdateData::text_delta("session-1", "response-1", "ai_response", "Hello, ");
-        let event = AetherEvent::PartUpdated(delta_data.clone());
+        let event = AlephEvent::PartUpdated(delta_data.clone());
         assert_eq!(event.event_type(), EventType::PartUpdated);
         assert_eq!(event.name(), "PartUpdated");
         assert_eq!(delta_data.delta, Some("Hello, ".to_string()));
 
         // Test PartRemoved event
         let removed_data = PartUpdateData::removed("session-1", "call-1", "tool_call");
-        let event = AetherEvent::PartRemoved(removed_data.clone());
+        let event = AlephEvent::PartRemoved(removed_data.clone());
         assert_eq!(event.event_type(), EventType::PartRemoved);
         assert_eq!(event.name(), "PartRemoved");
         assert_eq!(removed_data.event_type, PartEventType::Removed);

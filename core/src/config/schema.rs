@@ -1,4 +1,4 @@
-//! JSON Schema generation for Aether configuration.
+//! JSON Schema generation for Aleph configuration.
 
 use crate::config::Config;
 use schemars::{schema::RootSchema, schema_for};

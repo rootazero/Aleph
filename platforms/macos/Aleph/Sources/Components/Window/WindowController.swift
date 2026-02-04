@@ -1,6 +1,6 @@
 //
 //  WindowController.swift
-//  Aether
+//  Aleph
 //
 //  Bridge between SwiftUI and AppKit window control APIs.
 //  Provides methods to control the active window (close, minimize, fullscreen).

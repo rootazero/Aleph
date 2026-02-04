@@ -5,7 +5,7 @@
 
 ## Overview
 
-This capability enables Aether to extract transcripts from YouTube videos and inject them into the AI context for analysis. Users can analyze video content by simply pasting a YouTube URL into their input.
+This capability enables Aleph to extract transcripts from YouTube videos and inject them into the AI context for analysis. Users can analyze video content by simply pasting a YouTube URL into their input.
 
 ---
 

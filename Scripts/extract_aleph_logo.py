@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Extract Aether logo SVG from HTML design file and generate various formats
+Extract Aleph logo SVG from HTML design file and generate various formats
 - Main logo (with gradients)
 - App icon (for macOS .icns)
 - Menu bar icon (template, monochrome)
@@ -11,13 +11,13 @@ import re
 from pathlib import Path
 
 # Paths
-HTML_FILE = os.path.expanduser("~/Workspace/Aether.html")
-OUTPUT_DIR = os.path.expanduser("~/Workspace/Aether/Aether/Resources/AppIcon")
+HTML_FILE = os.path.expanduser("~/Workspace/Aleph.html")
+OUTPUT_DIR = os.path.expanduser("~/Workspace/Aleph/Aleph/Resources/AppIcon")
 
 # SVG Templates
 MAIN_LOGO_SVG = '''<?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Aether Logo</title>
+  <title>Aleph Logo</title>
   <defs>
     <linearGradient id="mainGradient" x1="10" y1="10" x2="90" y2="90" gradientUnits="userSpaceOnUse">
       <stop stop-color="#0A84FF"/>
@@ -41,7 +41,7 @@ MAIN_LOGO_SVG = '''<?xml version="1.0" encoding="UTF-8"?>
 
 APP_ICON_SVG = '''<?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Aether App Icon</title>
+  <title>Aleph App Icon</title>
 
   <!-- Background with gradient -->
   <rect width="1024" height="1024" rx="226.5" fill="url(#bgGradient)"/>
@@ -76,7 +76,7 @@ APP_ICON_SVG = '''<?xml version="1.0" encoding="UTF-8"?>
 
 MENUBAR_ICON_SVG = '''<?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Aether Menu Bar Icon</title>
+  <title>Aleph Menu Bar Icon</title>
 
   <!-- Main Star (monochrome) -->
   <path d="M55 15 C59 40 70 51 95 55 C70 59 59 70 55 95 C51 70 40 59 15 55 C40 51 51 40 55 15Z"
@@ -92,7 +92,7 @@ MENUBAR_ICON_SVG = '''<?xml version="1.0" encoding="UTF-8"?>
 # Simple SVG for smaller sizes (simplified satellite)
 SIMPLE_ICON_SVG = '''<?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Aether Icon (Simplified)</title>
+  <title>Aleph Icon (Simplified)</title>
   <defs>
     <linearGradient id="mainGradient" x1="10" y1="10" x2="90" y2="90" gradientUnits="userSpaceOnUse">
       <stop stop-color="#0A84FF"/>
@@ -116,10 +116,10 @@ def create_output_directory():
 def save_svg_files():
     """Save all SVG variants"""
     files = {
-        "AetherLogo.svg": MAIN_LOGO_SVG,
-        "AetherAppIcon.svg": APP_ICON_SVG,
-        "AetherMenuBar.svg": MENUBAR_ICON_SVG,
-        "AetherSimple.svg": SIMPLE_ICON_SVG,
+        "AlephLogo.svg": MAIN_LOGO_SVG,
+        "AlephAppIcon.svg": APP_ICON_SVG,
+        "AlephMenuBar.svg": MENUBAR_ICON_SVG,
+        "AlephSimple.svg": SIMPLE_ICON_SVG,
     }
 
     for filename, content in files.items():
@@ -132,7 +132,7 @@ def save_svg_files():
 def create_iconset_script():
     """Create a shell script to generate .icns file from SVG"""
     script_content = '''#!/bin/bash
-# Generate macOS .icns file from Aether logo SVG
+# Generate macOS .icns file from Aleph logo SVG
 # Requires: rsvg-convert (install via: brew install librsvg)
 
 set -e
@@ -140,7 +140,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCES_DIR="$SCRIPT_DIR/../Resources/AppIcon"
 ICONSET_DIR="$RESOURCES_DIR/AppIcon.iconset"
-SVG_FILE="$RESOURCES_DIR/AetherAppIcon.svg"
+SVG_FILE="$RESOURCES_DIR/AlephAppIcon.svg"
 
 # Check if rsvg-convert is installed
 if ! command -v rsvg-convert &> /dev/null; then
@@ -190,37 +190,37 @@ echo "   $RESOURCES_DIR/AppIcon.icns"
 
 def create_asset_catalog_entries():
     """Create README for adding icons to Assets.xcassets"""
-    readme_content = '''# Aether App Icon Integration
+    readme_content = '''# Aleph App Icon Integration
 
 ## Files Generated
 
-1. **AetherLogo.svg** - Main logo with gradients (for marketing, web, etc.)
-2. **AetherAppIcon.svg** - App icon with background (1024x1024 base)
-3. **AetherMenuBar.svg** - Menu bar icon (template mode, monochrome)
-4. **AetherSimple.svg** - Simplified version for small sizes
+1. **AlephLogo.svg** - Main logo with gradients (for marketing, web, etc.)
+2. **AlephAppIcon.svg** - App icon with background (1024x1024 base)
+3. **AlephMenuBar.svg** - Menu bar icon (template mode, monochrome)
+4. **AlephSimple.svg** - Simplified version for small sizes
 
 ## Integration Steps
 
 ### 1. Generate .icns file (macOS App Icon)
 
 ```bash
-cd Aether
+cd Aleph
 ./Scripts/generate_app_icon.sh
 ```
 
-This will create `AppIcon.icns` from `AetherAppIcon.svg`.
+This will create `AppIcon.icns` from `AlephAppIcon.svg`.
 
 ### 2. Add to Xcode Project
 
 **Option A: Use .icns directly**
-1. In Xcode, select `Aether/Assets.xcassets`
+1. In Xcode, select `Aleph/Assets.xcassets`
 2. Select `AppIcon` imageset
 3. Drag `AppIcon.icns` into the appropriate slots
 4. Or manually configure in `project.yml`:
 
 ```yaml
 targets:
-  Aether:
+  Aleph:
     settings:
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 ```
@@ -231,11 +231,11 @@ targets:
 
 ### 3. Menu Bar Icon
 
-For the menu bar icon, add `AetherMenuBar.svg` to Assets.xcassets:
+For the menu bar icon, add `AlephMenuBar.svg` to Assets.xcassets:
 
 1. Create new Image Set: `MenuBarIcon`
 2. Set "Render As" to "Template Image"
-3. Add `AetherMenuBar.svg` to "Universal" slot
+3. Add `AlephMenuBar.svg` to "Universal" slot
 4. Set "Preserve Vector Data" to true
 
 Then use in code:
@@ -268,7 +268,7 @@ creating a sense of energy spark rather than two separate objects.
 
 
 def main():
-    print("🎨 Extracting Aether Logo from HTML design file...\n")
+    print("🎨 Extracting Aleph Logo from HTML design file...\n")
 
     create_output_directory()
     save_svg_files()

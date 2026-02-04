@@ -16,7 +16,7 @@
   6. `update_memory_config()` - Update configuration
 
 #### UniFFI Integration
-- ✅ All methods exposed via UniFFI interface (aether.udl)
+- ✅ All methods exposed via UniFFI interface (aleph.udl)
 - ✅ Type definitions for MemoryEntry, MemoryStats, MemoryConfig
 - ✅ Error handling with AlephError enum
 - ✅ Swift bindings regenerated successfully
@@ -144,35 +144,35 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
 ## 📁 Key Files Modified Today
 
 ### Created
-- `Aether/Sources/MemoryView.swift` (503 lines)
+- `Aleph/Sources/MemoryView.swift` (503 lines)
   - Complete memory management UI
   - Configuration controls
   - Statistics display
   - Memory browser with CRUD operations
 
-- `Aether/core/TASK_20-21_MEMORY_UI_IMPLEMENTATION.md` (350+ lines)
+- `Aleph/core/TASK_20-21_MEMORY_UI_IMPLEMENTATION.md` (350+ lines)
   - Comprehensive implementation documentation
   - Testing checklist
   - Architecture verification
   - Next steps guide
 
 ### Modified
-- `Aether/Sources/SettingsView.swift`
+- `Aleph/Sources/SettingsView.swift`
   - Added Memory tab to enum
   - Added sidebar navigation item
   - Added AlephCore parameter
   - Wired up MemoryView
 
-- `Aether/Sources/AppDelegate.swift`
+- `Aleph/Sources/AppDelegate.swift`
   - Pass AlephCore instance to SettingsView
   - Enable memory tab functionality
 
-- `Aether/core/src/core.rs`
+- `Aleph/core/src/core.rs`
   - Added 6 memory management methods
   - Integrated with VectorDatabase
   - Error handling and validation
 
-- `Aether/core/src/aether.udl`
+- `Aleph/core/src/aleph.udl`
   - Exposed all memory management methods
   - Type definitions for Swift
 
@@ -182,7 +182,7 @@ Created comprehensive `MemoryView.swift` (503 lines) with:
   - Updated implementation notes
 
 ### Build Artifacts
-- `Aether/Sources/Generated/aether.swift` (regenerated)
+- `Aleph/Sources/Generated/aleph.swift` (regenerated)
 - `Aleph.xcodeproj/` (regenerated)
 
 ## 🎯 Next Steps (Priority Order)

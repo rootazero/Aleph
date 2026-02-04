@@ -78,7 +78,7 @@ The Swift layer SHALL own all keyboard simulation logic, with Rust core having n
 - **AND** Rust only provides the response string
 
 #### Scenario: No UniFFI keyboard methods
-- **WHEN** defining AetherCore interface
+- **WHEN** defining AlephCore interface
 - **THEN** NO keyboard simulation methods in UniFFI
 - **AND** Rust core does NOT depend on enigo crate
 - **AND** reduces binary size by ~300KB

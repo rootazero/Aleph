@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义 Aether 应用中 Liquid Glass 材质的使用规范，包括同心几何布局、材质选择和向后兼容策略。遵循 Apple WWDC 2025 设计系统指南。
+定义 Aleph 应用中 Liquid Glass 材质的使用规范，包括同心几何布局、材质选择和向后兼容策略。遵循 Apple WWDC 2025 设计系统指南。
 
 ## ADDED Requirements
 

@@ -1,6 +1,6 @@
 //
 //  AppDelegate.swift
-//  Aether
+//  Aleph
 //
 //  Application delegate managing menu bar, Rust core lifecycle, and permissions.
 //
@@ -23,7 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var settingsMenuItem: NSMenuItem? { menuBarManager?.settingsMenuItem }
 
     // interface (rig-core based) - unified AI processing interface
-    @Published internal var core: AetherCore?
+    @Published internal var core: AlephCore?
     internal var eventHandler: EventHandler?
 
     // Halo overlay window
@@ -45,7 +45,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Conversation hotkey monitors (legacy - now managed by HotkeyService)
     // Global monitor for when other apps are active
     private var hotkeyGlobalMonitor: Any?
-    // Local monitor for when Aether is active
+    // Local monitor for when Aleph is active
     private var hotkeyLocalMonitor: Any?
 
     // MARK: - Managers (via DependencyContainer)
@@ -76,7 +76,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // UI Testing mode: Skip permission gate and open settings directly
         if isUITesting {
-            print("[Aether] UI Testing mode detected, skipping permission gate")
+            print("[Aleph] UI Testing mode detected, skipping permission gate")
             Task { @MainActor [weak self] in
                 try? await Task.sleep(seconds: 0.3)
                 self?.initializeRustCore()
@@ -95,24 +95,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             try? await Task.sleep(seconds: 0.5)
             guard let self = self else { return }
 
-            NSLog("[Aether] Checking permissions after startup delay...")
-            print("[Aether] Checking permissions after startup delay...")
+            NSLog("[Aleph] Checking permissions after startup delay...")
+            print("[Aleph] Checking permissions after startup delay...")
 
             // Check all required permissions (Accessibility + Input Monitoring)
             let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
             let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
 
-            NSLog("[Aether] Permission status - Accessibility: %@, InputMonitoring: %@",
+            NSLog("[Aleph] Permission status - Accessibility: %@, InputMonitoring: %@",
                   hasAccessibility ? "YES" : "NO", hasInputMonitoring ? "YES" : "NO")
-            print("[Aether] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
+            print("[Aleph] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
 
             if !hasAccessibility || !hasInputMonitoring {
                 // Show mandatory permission gate if any permission is missing
-                NSLog("[Aether] Missing permissions - showing permission gate")
+                NSLog("[Aleph] Missing permissions - showing permission gate")
                 self.showPermissionGate()
             } else {
-                NSLog("[Aether] ✅ All permissions granted, calling checkAndRunFirstTimeInit()...")
-                print("[Aether] ✅ All permissions granted, checking if first-run initialization needed...")
+                NSLog("[Aleph] ✅ All permissions granted, calling checkAndRunFirstTimeInit()...")
+                print("[Aleph] ✅ All permissions granted, checking if first-run initialization needed...")
 
                 // Check if this is a fresh installation
                 self.checkAndRunFirstTimeInit()
@@ -140,10 +140,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Shutdown Gateway connection
         GatewayManager.shared.shutdown()
-        print("[Aether] Gateway shutdown")
+        print("[Aleph] Gateway shutdown")
 
         // Clean up Rust core (only if initialized)
-        print("[Aether] Application terminating")
+        print("[Aleph] Application terminating")
     }
 
     // MARK: - Main Menu Setup (for Edit shortcuts)
@@ -307,13 +307,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if !isUITesting {
             // Block settings access if permission gate is active
             if isPermissionGateActive {
-                print("[Aether] Settings blocked - permission gate is active")
+                print("[Aleph] Settings blocked - permission gate is active")
                 return
             }
 
             // CRITICAL: Check if core is initialized before opening settings
             guard core != nil else {
-                print("[Aether] ERROR: Core not initialized, cannot open settings")
+                print("[Aleph] ERROR: Core not initialized, cannot open settings")
                 eventHandler?.showToast(
                     type: .warning,
                     title: L("error.core_not_initialized"),
@@ -519,23 +519,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Show Halo animation immediately on startup (better UX feedback)
         haloWindow?.updateState(.streaming(StreamingContext(runId: "startup", phase: .thinking)))
         haloWindow?.showCentered()
-        print("[Aether] Showing Halo startup animation")
+        print("[Aleph] Showing Halo startup animation")
 
         // CRITICAL: Re-verify permissions before initializing trigger system
         // This prevents crashes if permissions were revoked or not fully applied
         let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
         let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
 
-        print("[Aether] Pre-trigger init permission check - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
+        print("[Aleph] Pre-trigger init permission check - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
 
         if !hasAccessibility || !hasInputMonitoring {
-            print("[Aether] ERROR: Permissions not fully granted, BLOCKING trigger system initialization")
-            print("[Aether] Missing permissions:")
+            print("[Aleph] ERROR: Permissions not fully granted, BLOCKING trigger system initialization")
+            print("[Aleph] Missing permissions:")
             if !hasAccessibility {
-                print("[Aether]   - Accessibility: REQUIRED for global hotkey detection")
+                print("[Aleph]   - Accessibility: REQUIRED for global hotkey detection")
             }
             if !hasInputMonitoring {
-                print("[Aether]   - Input Monitoring: REQUIRED for full functionality")
+                print("[Aleph]   - Input Monitoring: REQUIRED for full functionality")
             }
 
             // Show permission gate again
@@ -547,17 +547,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Initialize unified HotkeyService (manages hotkey systems)
         // - Multi-turn conversation hotkey (Option+Space)
-        print("[Aether] Initializing HotkeyService...")
+        print("[Aleph] Initializing HotkeyService...")
 
         hotkeyService = HotkeyService()
         hotkeyService?.configure(core: core)
         hotkeyService?.startAllHotkeys()
 
-        print("[Aether] HotkeyService initialized successfully")
+        print("[Aleph] HotkeyService initialized successfully")
 
         // Hide startup Halo animation (initialization succeeded)
         haloWindow?.hide()
-        print("[Aether] Hiding Halo startup animation (init succeeded)")
+        print("[Aleph] Hiding Halo startup animation (init succeeded)")
 
         // Update menu bar icon to show active state
         updateMenuBarIcon(state: .listening)
@@ -566,28 +566,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Core Initialization (rig-core based)
 
-    /// Initialize AetherCore using the rig-core based interface
-    /// This is the unified AI processing core for all Aether functionality
+    /// Initialize AlephCore using the rig-core based interface
+    /// This is the unified AI processing core for all Aleph functionality
     private func initializeCore() {
         guard let eventHandler = eventHandler else {
-            print("[Aether] Error: EventHandler not initialized")
+            print("[Aleph] Error: EventHandler not initialized")
             return
         }
 
         // Config path for v2 interface (unified path: ~/.aleph/)
-        let configPath = NSHomeDirectory() + "/.aether/config.toml"
+        let configPath = NSHomeDirectory() + "/.aleph/config.toml"
 
         // Check if config file exists
         if !FileManager.default.fileExists(atPath: configPath) {
-            print("[Aether] Warning: Config file not found at \(configPath)")
-            print("[Aether] initialization skipped - create config file first")
+            print("[Aleph] Warning: Config file not found at \(configPath)")
+            print("[Aleph] initialization skipped - create config file first")
             return
         }
 
         do {
             // Initialize core using initCore()
             core = try initCore(configPath: configPath, handler: eventHandler)
-            print("[Aether] AetherCore initialized successfully")
+            print("[Aleph] AlephCore initialized successfully")
 
             // Initialize providers menu with enabled providers
             rebuildProvidersMenu()
@@ -600,21 +600,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Configure HaloInputCoordinator with dependencies
             HaloInputCoordinator.shared.configure(haloWindow: haloWindow, core: core)
 
-            print("[Aether] coordinators configured")
+            print("[Aleph] coordinators configured")
 
             // Log available tools
             if let tools = core?.listTools() {
-                print("[Aether] has \(tools.count) tools available:")
+                print("[Aleph] has \(tools.count) tools available:")
                 for tool in tools.prefix(5) {
-                    print("[Aether]   - \(tool.name): \(tool.description)")
+                    print("[Aleph]   - \(tool.name): \(tool.description)")
                 }
                 if tools.count > 5 {
-                    print("[Aether]   ... and \(tools.count - 5) more")
+                    print("[Aleph]   ... and \(tools.count - 5) more")
                 }
             }
 
         } catch {
-            print("[Aether] Error initializing core: \(error)")
+            print("[Aleph] Error initializing core: \(error)")
             // failure prevents app from functioning - show error to user
             eventHandler.onError(message: "Failed to initialize core: \(error.localizedDescription)")
         }
@@ -630,12 +630,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     ///   - stream: Whether to stream response chunks (default: true)
     func process(input: String, appContext: String? = nil, windowTitle: String? = nil, stream: Bool = true) {
         guard let core = core else {
-            print("[Aether] Error: core not initialized")
+            print("[Aleph] Error: core not initialized")
             eventHandler?.onError(message: "core not initialized")
             return
         }
 
-        print("[Aether] Processing with interface: \(input.prefix(50))...")
+        print("[Aleph] Processing with interface: \(input.prefix(50))...")
 
         do {
             let options = ProcessOptions(
@@ -648,7 +648,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             )
             try core.process(input: input, options: options)
         } catch {
-            print("[Aether] processing error: \(error)")
+            print("[Aleph] processing error: \(error)")
             eventHandler?.onError(message: error.localizedDescription)
         }
     }
@@ -656,7 +656,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Cancel current processing operation
     func cancelProcessing() {
         core?.cancel()
-        print("[Aether] processing cancelled")
+        print("[Aleph] processing cancelled")
     }
 
     /// Check if core is available and initialized
@@ -676,14 +676,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// - Returns: Array of memory items matching the query
     func searchMemory(query: String, limit: UInt32 = 10) -> [MemoryItem] {
         guard let core = core else {
-            print("[Aether] Error: core not initialized for memory search")
+            print("[Aleph] Error: core not initialized for memory search")
             return []
         }
 
         do {
             return try core.searchMemory(query: query, limit: limit)
         } catch {
-            print("[Aether] memory search error: \(error)")
+            print("[Aleph] memory search error: \(error)")
             return []
         }
     }
@@ -695,9 +695,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             Task {
                 do {
                     try await GatewayManager.shared.client.memoryClear()
-                    print("[Aether] memory cleared via Gateway")
+                    print("[Aleph] memory cleared via Gateway")
                 } catch {
-                    print("[Aether] Gateway memory clear failed: \(error)")
+                    print("[Aleph] Gateway memory clear failed: \(error)")
                     // Fallback to FFI
                     self.clearMemoryViaFFI()
                 }
@@ -711,16 +711,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Clear memory via FFI (fallback)
     private func clearMemoryViaFFI() -> Bool {
         guard let core = core else {
-            print("[Aether] Error: core not initialized for memory clear")
+            print("[Aleph] Error: core not initialized for memory clear")
             return false
         }
 
         do {
             try core.clearMemory()
-            print("[Aether] memory cleared via FFI")
+            print("[Aleph] memory cleared via FFI")
             return true
         } catch {
-            print("[Aether] memory clear error: \(error)")
+            print("[Aleph] memory clear error: \(error)")
             return false
         }
     }
@@ -728,16 +728,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Reload configuration
     func reloadConfig() -> Bool {
         guard let core = core else {
-            print("[Aether] Error: core not initialized for config reload")
+            print("[Aleph] Error: core not initialized for config reload")
             return false
         }
 
         do {
             try core.reloadConfig()
-            print("[Aether] config reloaded")
+            print("[Aleph] config reloaded")
             return true
         } catch {
-            print("[Aether] config reload error: \(error)")
+            print("[Aleph] config reload error: \(error)")
             return false
         }
     }
@@ -799,14 +799,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Check if this is a fresh install and run initialization if needed
     private func checkAndRunFirstTimeInit() {
         let needsInit = needsFirstTimeInit()
-        NSLog("[Aether] needsFirstTimeInit=%@", needsInit ? "true" : "false")
+        NSLog("[Aleph] needsFirstTimeInit=%@", needsInit ? "true" : "false")
 
         if needsInit {
-            NSLog("[Aether] 🆕 Fresh install detected - showing initialization window")
+            NSLog("[Aleph] 🆕 Fresh install detected - showing initialization window")
             // Show blocking initialization window
             showInitializationWindow()
         } else {
-            NSLog("[Aether] ✅ Existing installation - proceeding with app startup")
+            NSLog("[Aleph] ✅ Existing installation - proceeding with app startup")
             initializeAppComponents()
         }
     }
@@ -819,14 +819,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let initView = InitializationProgressView(
             onCompletion: { [weak self] in
                 Task { @MainActor in
-                    print("[Aether] ✅ Initialization completed - proceeding with app startup")
+                    print("[Aleph] ✅ Initialization completed - proceeding with app startup")
                     self?.closeInitializationWindow()
                     self?.initializeAppComponents()
                 }
             },
             onFailure: { error in
                 Task { @MainActor in
-                    print("[Aether] ❌ Initialization failed: \(error)")
+                    print("[Aleph] ❌ Initialization failed: \(error)")
                     // The InitializationProgressView handles retry internally
                     // If user can't retry, they can quit from the window
                 }
@@ -843,7 +843,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             defer: false
         )
 
-        panel.title = "正在初始化 Aether"
+        panel.title = "正在初始化 Aleph"
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .hidden
         panel.contentViewController = hostingController
@@ -856,7 +856,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        print("[Aether] Initialization window shown (6 phases)")
+        print("[Aleph] Initialization window shown (6 phases)")
     }
 
     /// Close the initialization window
@@ -869,7 +869,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// This is called either directly on launch (if permissions already granted)
     /// or after permission gate is dismissed
     private func initializeAppComponents() {
-        print("[Aether] Initializing app components")
+        print("[Aleph] Initializing app components")
 
         // Create Halo window directly (simplified, no controller wrapper needed)
         haloWindow = HaloWindow()
@@ -879,7 +879,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Start clipboard monitoring for context tracking
         clipboardMonitor.startMonitoring()
-        print("[Aether] Clipboard monitoring started for context tracking")
+        print("[Aleph] Clipboard monitoring started for context tracking")
 
         // Initialize Gateway connection (non-blocking)
         // Gateway provides WebSocket-based agent communication as alternative to FFI
@@ -895,7 +895,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(onConfigChanged),
-            name: .aetherConfigSavedInternally,
+            name: .alephConfigSavedInternally,
             object: nil
         )
 
@@ -910,9 +910,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         Task {
             do {
                 try await GatewayManager.shared.initialize()
-                print("[Aether] 🌐 Gateway connected - WebSocket mode available")
+                print("[Aleph] 🌐 Gateway connected - WebSocket mode available")
             } catch {
-                print("[Aether] Gateway not available (using FFI): \(error.localizedDescription)")
+                print("[Aleph] Gateway not available (using FFI): \(error.localizedDescription)")
             }
         }
     }

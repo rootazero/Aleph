@@ -108,7 +108,7 @@ The Swift layer SHALL own all clipboard operations, with Rust core having no dir
 - **AND** Rust does NOT call clipboard APIs
 
 #### Scenario: No UniFFI clipboard methods
-- **WHEN** defining AetherCore interface
+- **WHEN** defining AlephCore interface
 - **THEN** `get_clipboard_text()` is REMOVED from UniFFI
 - **AND** `read_clipboard_image()` is REMOVED from UniFFI
 - **AND** `write_clipboard_image()` is REMOVED from UniFFI

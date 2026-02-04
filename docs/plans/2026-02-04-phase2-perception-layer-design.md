@@ -284,7 +284,7 @@ impl PerceptionConfig {
     pub fn load() -> Result<Self> {
         let path = dirs::home_dir()
             .ok_or_else(|| DaemonError::Config("HOME not found".into()))?
-            .join(".aether/perception.toml");
+            .join(".aleph/perception.toml");
 
         if path.exists() {
             let content = std::fs::read_to_string(path)?;

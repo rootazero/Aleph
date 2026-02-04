@@ -7,7 +7,7 @@
 
 ## Why
 
-The current Aether system has multiple hardcoded tool/command lists that are not synchronized:
+The current Aleph system has multiple hardcoded tool/command lists that are not synchronized:
 
 1. **Rust Core `Config::builtin_rules()`** (config/mod.rs:359-459)
    - Hardcodes 5 builtin commands: `/search`, `/mcp`, `/skill`, `/video`, `/chat`
@@ -69,7 +69,7 @@ The current Aether system has multiple hardcoded tool/command lists that are not
 - `core/src/dispatcher/types.rs` - Extend UnifiedTool, add ToolSource::Builtin
 - `core/src/command/registry.rs` - Use ToolRegistry as data source
 - `core/src/config/mod.rs` - Remove `builtin_rules()`, load from ToolRegistry
-- `core/src/aether.udl` - Add UniFFI exports for UI APIs
+- `core/src/aleph.udl` - Add UniFFI exports for UI APIs
 - `core/src/core.rs` - Wire up new APIs
 
 **Modified Files (Swift UI):**
@@ -86,8 +86,8 @@ The current Aether system has multiple hardcoded tool/command lists that are not
 - `core/src/dispatcher/` - Extended registry and types
 - `core/src/command/` - CommandRegistry refactored
 - `core/src/config/` - Builtin rules moved to registry
-- `Aether/Sources/RoutingView.swift` - Dynamic preset rules
-- `Aether/Sources/Utils/CommandCompletionManager.swift` - Dynamic completion
+- `Aleph/Sources/RoutingView.swift` - Dynamic preset rules
+- `Aleph/Sources/Utils/CommandCompletionManager.swift` - Dynamic completion
 
 ### Breaking Changes
 - **None externally** - This is an internal refactoring

@@ -24,7 +24,7 @@ final class PlainTextExtractor: ContentExtractor {
 
     let supportedTypes: [NSPasteboard.PasteboardType] = [.string]
 
-    private let logger = Logger(subsystem: "com.aether", category: "PlainTextExtractor")
+    private let logger = Logger(subsystem: "com.aleph", category: "PlainTextExtractor")
 
     // MARK: - Extraction
 

@@ -18,7 +18,7 @@ The project MUST maintain only one OpenSpec root directory, located at `/openspe
 **Given** 项目根目录结构
 **When** 搜索所有名为 "openspec" 的目录（排除 `.git` 和 `.claude/commands/`）
 **Then** 应该只找到一个目录：`/openspec/`
-**And** 不应存在 `/Aether/openspec/` 或其他子目录中的 openspec
+**And** 不应存在 `/Aleph/openspec/` 或其他子目录中的 openspec
 
 ```bash
 # 验证命令
@@ -136,14 +136,14 @@ find openspec/ -type f \
 
 #### Scenario: 应用代码不包含 openspec 子目录
 
-**Given** 应用源代码目录（如 `/Aether/`, `/core/`）
+**Given** 应用源代码目录（如 `/Aleph/`, `/core/`）
 **When** 在应用代码目录中搜索 openspec 目录
 **Then** 不应找到任何 openspec 子目录
 **And** 应用代码只通过文档引用 openspec 内容
 
 ```bash
 # 验证应用代码目录无 openspec
-find Aether/ -type d -name "openspec" | wc -l
+find Aleph/ -type d -name "openspec" | wc -l
 # 期望输出: 0
 ```
 
@@ -342,7 +342,7 @@ project/
 ├── openspec/
 │   └── changes/
 │       └── feature-a/
-└── Aether/
+└── Aleph/
     └── openspec/          # 重复
         └── changes/
             └── feature-b/
@@ -359,19 +359,19 @@ project/
 │   ├── project.md
 │   ├── changes/
 │   │   ├── feature-a/
-│   │   ├── feature-b/     # 从 Aether 移动
+│   │   ├── feature-b/     # 从 Aleph 移动
 │   │   └── archive/
 │   └── specs/
-└── Aether/                # 无 openspec 子目录
+└── Aleph/                # 无 openspec 子目录
     └── (源代码)
 ```
 
 ### 迁移步骤
 
 1. 备份现有结构
-2. 提取 Aether/openspec 中的独特内容
+2. 提取 Aleph/openspec 中的独特内容
 3. 将独特内容移到主 openspec/changes/
-4. 删除 Aether/openspec 整个目录
+4. 删除 Aleph/openspec 整个目录
 5. 更新 .gitignore
 6. 运行验证测试
 7. 提交变更

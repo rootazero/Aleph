@@ -3,8 +3,8 @@
 ## Phase 1: Foundation Setup (3 tasks)
 
 - [ ] **Task 1.1: Create localization directory structure**
-  - Create `Aether/Resources/en.lproj/` directory for English base
-  - Create `Aether/Resources/zh-Hans.lproj/` directory for Simplified Chinese
+  - Create `Aleph/Resources/en.lproj/` directory for English base
+  - Create `Aleph/Resources/zh-Hans.lproj/` directory for Simplified Chinese
   - Create empty `Localizable.strings` files in both directories
   - Create empty `InfoPlist.strings` files in both directories
   - **Validation**: Verify directories exist and are recognized by Xcode
@@ -121,7 +121,7 @@
   - **Validation**: ✅ Permission descriptions localized for system prompts
 
 - [x] **Task 3.4: Localize menu bar items**
-  - Localize "Settings...", "Quit Aether", and other menu items
+  - Localize "Settings...", "Quit Aleph", and other menu items
   - Update AppDelegate menu creation code
   - **Validation**: ✅ Verify menu bar shows localized text (Already completed in previous session)
 

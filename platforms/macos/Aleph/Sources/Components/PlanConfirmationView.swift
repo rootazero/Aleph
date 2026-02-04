@@ -1,6 +1,6 @@
 //
 //  PlanConfirmationView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI component for confirming multi-step plan execution.
 //  Displays plan description, step list, and safety warnings.

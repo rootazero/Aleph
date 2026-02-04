@@ -44,11 +44,11 @@ Successfully completed **critical crash fix** and finalized **Phase 1 & 2** of t
 ## 📦 Deliverables
 
 ### Modified Files
-1. **Aether/core/Cargo.toml**
+1. **Aleph/core/Cargo.toml**
    - Upgraded rdev dependency to git main branch
    - Added detailed comments explaining the fix
 
-2. **Aether/Frameworks/libalephcore.dylib**
+2. **Aleph/Frameworks/libalephcore.dylib**
    - Rebuilt with rdev 0.6.0
    - Size reduced from 33MB to 10.5MB
 
@@ -56,14 +56,14 @@ Successfully completed **critical crash fix** and finalized **Phase 1 & 2** of t
    - Fixed LIBRARY_SEARCH_PATHS (removed hardcoded debug path)
    - Added `ARCHS: arm64` to prevent universal binary issues
 
-4. **Aether/Sources/AppDelegate.swift**
+4. **Aleph/Sources/AppDelegate.swift**
    - Lowered permission gate window level to `.modalPanel`
 
-5. **Aether/Sources/Components/PermissionGateView.swift**
+5. **Aleph/Sources/Components/PermissionGateView.swift**
    - Added `manager.startMonitoring()` call
    - Removed system permission prompts
 
-6. **Aether/Sources/Utils/PermissionManager.swift**
+6. **Aleph/Sources/Utils/PermissionManager.swift**
    - Added caching for Input Monitoring checks
    - Reduced polling frequency to 2 seconds
 
@@ -194,7 +194,7 @@ Thread 6 (rdev listener):
 ## 🔧 Known Issues
 
 ### Minor Issues (Non-Blocking)
-1. UniFFI-generated code warnings (12 warnings in `aether.swift`)
+1. UniFFI-generated code warnings (12 warnings in `aleph.swift`)
    - "no calls to throwing functions occur within 'try' expression"
    - These are generated code, can be ignored safely
 
@@ -219,8 +219,8 @@ Thread 6 (rdev listener):
 - Focus shifted from defensive programming to fixing root cause
 
 ### Files to Watch
-- `Aether/core/Cargo.lock` - ensure rdev git dependency is locked
-- `Aether/Frameworks/libalephcore.dylib` - must be rebuilt after Rust changes
+- `Aleph/core/Cargo.lock` - ensure rdev git dependency is locked
+- `Aleph/Frameworks/libalephcore.dylib` - must be rebuilt after Rust changes
 - Console.app - monitor for any new TCC or dispatch queue errors
 
 ---

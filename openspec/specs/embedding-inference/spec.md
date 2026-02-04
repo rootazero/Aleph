@@ -13,7 +13,7 @@ The system SHALL load the `bge-small-zh-v1.5` embedding model using fastembed li
 - **AND** no embedding model is currently loaded in memory
 - **WHEN** the first text embedding is requested
 - **THEN** the system initializes fastembed with `BGESmallZHV15` model
-- **AND** fastembed downloads model to `~/.aether/models/fastembed/`
+- **AND** fastembed downloads model to `~/.aleph/models/fastembed/`
 - **AND** caches the model session in memory for subsequent requests
 - **AND** completes model loading within 5 seconds (includes download if needed)
 
@@ -22,7 +22,7 @@ The system SHALL load the `bge-small-zh-v1.5` embedding model using fastembed li
 - **WHEN** first embedding is requested
 - **THEN** fastembed automatically downloads model from HuggingFace Hub
 - **AND** shows download progress if configured
-- **AND** stores model in `~/.aether/models/fastembed/models--BAAI--bge-small-zh-v1.5/`
+- **AND** stores model in `~/.aleph/models/fastembed/models--BAAI--bge-small-zh-v1.5/`
 
 #### Scenario: Reuse loaded model
 - **GIVEN** model successfully loaded in previous request
@@ -54,7 +54,7 @@ The system SHALL generate 512-dimensional float32 vector embeddings for input te
 - **GIVEN** input text: ""
 - **WHEN** `embed_text("")` is called
 - **THEN** the system returns a zero vector (512 zeros)
-- **OR** returns an error: `AetherError::EmptyInput`
+- **OR** returns an error: `AlephError::EmptyInput`
 - **DECISION**: Return zero vector for simplicity (less error handling)
 
 #### Scenario: Embed very long text

@@ -1,6 +1,6 @@
 //
 //  AttachmentStore.swift
-//  Aether
+//  Aleph
 //
 //  SQLite persistence for attachments.
 //  Linked to ConversationStore's database.

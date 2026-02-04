@@ -113,7 +113,7 @@ Aleph/
 │   ├── AppDelegate.swift
 │   ├── HaloWindow.swift
 │   └── Generated/        # UniFFI 生成的绑定
-│       └── aether.swift
+│       └── aleph.swift
 ├── Resources/            # 资源文件
 │   └── Info.plist
 ├── Frameworks/           # 框架和库
@@ -126,7 +126,7 @@ Aleph/
 ### Git 版本控制
 
 `.gitignore` 已配置为：
-- ✅ **提交**: `project.yml`, `Aether/Sources/`, `Aether/Resources/`
+- ✅ **提交**: `project.yml`, `Aleph/Sources/`, `Aleph/Resources/`
 - ❌ **忽略**: `*.xcodeproj`, `DerivedData/`, `xcuserdata/`
 
 ## 常见任务
@@ -210,7 +210,7 @@ xcodegen generate
 ```bash
 # 手动运行绑定生成脚本
 cd Aleph/core
-cargo run --bin uniffi-bindgen generate src/aether.udl \
+cargo run --bin uniffi-bindgen generate src/aleph.udl \
   --language swift \
   --out-dir ../Sources/Generated/
 

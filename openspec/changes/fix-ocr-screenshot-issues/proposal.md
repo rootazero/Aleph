@@ -138,7 +138,7 @@ private func extractTextFromImage(pngData: Data) async throws -> String {
 
     guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
           let core = appDelegate.core else {
-        let error = "AetherCore not initialized"
+        let error = "AlephCore not initialized"
         debugLog("extractTextFromImage: FAILED - \(error)")
         throw NSError(domain: "ScreenCapture", code: -1,
                       userInfo: [NSLocalizedDescriptionKey: error])
@@ -166,7 +166,7 @@ fn get_vision_provider(&self, config: &Config) -> Result<Arc<dyn AiProvider>> {
     let provider = /* ... create provider ... */;
 
     if !provider.supports_vision() {
-        return Err(AetherError::invalid_config(format!(
+        return Err(AlephError::invalid_config(format!(
             "Provider '{}' does not support vision. Vision-capable providers: claude, openai (gpt-4o), gemini",
             provider.name()
         )));
@@ -203,9 +203,9 @@ private func processCapture(_ cgImage: CGImage) {
 
 | File | Changes |
 |------|---------|
-| `Aether/Sources/Vision/ScreenCaptureCoordinator.swift` | 主要修改：窗口生命周期管理、错误处理增强 |
-| `Aether/Sources/Vision/ScreenCaptureOverlayView.swift` | 添加 `reset()` 方法用于视图重用 |
-| `Aether/core/src/vision/service.rs` | 增强 provider 检查和错误消息 |
+| `Aleph/Sources/Vision/ScreenCaptureCoordinator.swift` | 主要修改：窗口生命周期管理、错误处理增强 |
+| `Aleph/Sources/Vision/ScreenCaptureOverlayView.swift` | 添加 `reset()` 方法用于视图重用 |
+| `Aleph/core/src/vision/service.rs` | 增强 provider 检查和错误消息 |
 
 ### 风险评估
 

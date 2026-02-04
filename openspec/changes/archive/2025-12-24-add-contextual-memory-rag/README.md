@@ -5,7 +5,7 @@
 
 ## Quick Overview
 
-This OpenSpec change proposal adds a context-aware local RAG (Retrieval-Augmented Generation) memory system to Aether, enabling it to remember past interactions and provide contextually relevant AI responses.
+This OpenSpec change proposal adds a context-aware local RAG (Retrieval-Augmented Generation) memory system to Aleph, enabling it to remember past interactions and provide contextually relevant AI responses.
 
 ## 📁 Structure
 
@@ -51,7 +51,7 @@ openspec/changes/add-contextual-memory-rag/
 
 ### Privacy Guarantees
 
-- ✅ All data stored locally (`~/.aether/memory.db`)
+- ✅ All data stored locally (`~/.aleph/memory.db`)
 - ✅ PII scrubbed before storage
 - ✅ Only augmented prompts sent to cloud LLMs
 - ✅ User controls: view, delete, configure retention
@@ -127,7 +127,7 @@ tokenizers = "0.15"
 | Embedding Engine | ONNX Runtime | Mature, faster than pure Rust alternatives |
 | Context Capture | Swift-side | Easier access to macOS APIs |
 | Model | all-MiniLM-L6-v2 | Lightweight (23MB), Apache 2.0, fast inference |
-| Storage Location | `~/.aether/` | Standard macOS config directory |
+| Storage Location | `~/.aleph/` | Standard macOS config directory |
 
 ## ⚠️ Risks & Mitigations
 

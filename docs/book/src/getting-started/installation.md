@@ -14,8 +14,8 @@ This guide covers installing Aleph on your system.
 
 ```bash
 # Clone the repository
-git clone https://github.com/anthropics/aether.git
-cd aether
+git clone https://github.com/anthropics/aleph.git
+cd aleph
 
 # Build the core library and CLI
 cargo build --release -p alephcore --features gateway
@@ -27,24 +27,24 @@ cargo install --path core --bin aleph-gateway
 ### Using Cargo
 
 ```bash
-cargo install aether-cli
+cargo install aleph-cli
 ```
 
 ### Homebrew (macOS)
 
 ```bash
 # Coming soon
-brew install aether
+brew install aleph
 ```
 
 ## Verify Installation
 
 ```bash
 # Check version
-aether --version
+aleph --version
 
 # Run health check
-aether health
+aleph health
 ```
 
 ## Directory Structure

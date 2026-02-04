@@ -286,7 +286,7 @@ Skills are discovered from multiple locations in priority order:
 
 ```
 Priority Order:
-1. .aether/skills/     (project level, traverse up to git root)
+1. .aleph/skills/     (project level, traverse up to git root)
 2. .claude/skills/     (project level, Claude Code compatible)
 3. ~/.aleph/skills (global)
 4. ~/.claude/skills    (global, Claude Code compatible)
@@ -473,7 +473,7 @@ The OverflowDetector provides real-time context overflow detection for proactive
 ### OverflowDetector
 
 ```rust
-use aether_core::agent_loop::overflow::{OverflowDetector, OverflowConfig};
+use aleph_core::agent_loop::overflow::{OverflowDetector, OverflowConfig};
 
 let detector = OverflowDetector::new(OverflowConfig::default());
 
@@ -567,7 +567,7 @@ let limit = token_tracker.get_model_limit(&session.model);
 if session.total_tokens >= limit.compaction_threshold() {
     // Trigger compaction
     if let Some(info) = compactor.check_and_compact(&mut session).await {
-        event_bus.publish(AetherEvent::SessionCompacted(info)).await;
+        event_bus.publish(AlephEvent::SessionCompacted(info)).await;
     }
 }
 ```
@@ -623,7 +623,7 @@ Smart Compaction provides intelligent context management using a unified compact
 The main entry point for intelligent compaction:
 
 ```rust
-use aether_core::compressor::{SmartCompactor, SmartCompactionStrategy};
+use aleph_core::compressor::{SmartCompactor, SmartCompactionStrategy};
 
 // Create with default settings
 let compactor = SmartCompactor::new();
@@ -668,7 +668,7 @@ pub enum CompactionAction {
 The TurnProtector ensures recent conversation context is preserved:
 
 ```rust
-use aether_core::compressor::TurnProtector;
+use aleph_core::compressor::TurnProtector;
 
 let protector = TurnProtector::new(2); // Protect last 2 turns
 
@@ -691,7 +691,7 @@ let protected_indices = protector.protected_part_indices(&session.parts);
 The ToolTruncator handles large outputs with summary generation:
 
 ```rust
-use aether_core::compressor::ToolTruncator;
+use aleph_core::compressor::ToolTruncator;
 
 let truncator = ToolTruncator::new(2000)
     .with_summary_template("[Truncated {tool_name}: {original_len} -> {truncated_len}] {preview}...");

@@ -1,4 +1,4 @@
-//! Configuration type definitions for Aether
+//! Configuration type definitions for Aleph
 //!
 //! This module contains all struct definitions used in the configuration system.
 //! Types are organized by domain:

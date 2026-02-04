@@ -2,23 +2,23 @@
 
 ## Why
 
-With the Rust core foundation complete (Phase 1), we need native macOS UI to make Aether usable by end users. This change implements:
+With the Rust core foundation complete (Phase 1), we need native macOS UI to make Aleph usable by end users. This change implements:
 1. **Swift client application** - Menu bar app that integrates with Rust core via UniFFI
 2. **Halo overlay** - Transparent, animated window that provides visual feedback at cursor location
 
 Without this change, users cannot:
-- Launch Aether as a macOS application
+- Launch Aleph as a macOS application
 - See visual feedback when the hotkey is pressed
 - Access settings or control the application
-- Experience the "Ghost" aesthetic that defines Aether's UX
+- Experience the "Ghost" aesthetic that defines Aleph's UX
 
-This is Phase 2 of the Aether roadmap and enables the core user interaction flow.
+This is Phase 2 of the Aleph roadmap and enables the core user interaction flow.
 
 ## What Changes
 
 ### macOS Swift Client
 - Create Xcode project for menu bar application (no Dock icon)
-- Implement `AetherEventHandler` protocol to receive callbacks from Rust
+- Implement `AlephEventHandler` protocol to receive callbacks from Rust
 - Create menu bar icon with status indicator
 - Build Settings UI with SwiftUI (providers, routing rules, shortcuts)
 - Integrate Rust library (`libaethecore.dylib`) and Swift bindings
@@ -38,7 +38,7 @@ This is Phase 2 of the Aether roadmap and enables the core user interaction flow
 - Support provider-specific colors (OpenAI green, Claude orange, etc.)
 
 **Deliverables:**
-- Xcode project at `clients/macos/Aether.xcodeproj`
+- Xcode project at `clients/macos/Aleph.xcodeproj`
 - Swift source files for AppDelegate, HaloWindow, HaloView, SettingsView
 - Info.plist with LSUIElement=YES and permission descriptions
 - Entitlements file for Accessibility permissions

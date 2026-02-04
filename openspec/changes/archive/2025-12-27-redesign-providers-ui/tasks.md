@@ -9,7 +9,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 1.1 Enlarge Settings Window Frame
 **What**: Increase settings window dimensions to match reference design
-**Files**: `Aether/Sources/SettingsView.swift`
+**Files**: `Aleph/Sources/SettingsView.swift`
 **Changes**:
 - Update `.frame()` modifier on SettingsView
 - Change from current 1000x700 to 1200x800 (minimum)
@@ -18,7 +18,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 1.2 Adjust ProvidersView Layout Proportions
 **What**: Rebalance left (provider list) and right (edit panel) split
-**Files**: `Aether/Sources/ProvidersView.swift`
+**Files**: `Aleph/Sources/ProvidersView.swift`
 **Changes**:
 - Line 75: Change `.frame(minWidth: 400, idealWidth: 500, maxWidth: .infinity)` to `minWidth: 450, idealWidth: 550`
 - Line 87: Change `.frame(width: 350)` to `.frame(minWidth: 500, idealWidth: 600, maxWidth: .infinity)`
@@ -31,7 +31,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 2.1 Add Active State to ProviderCard
 **What**: Show active/inactive indicator on provider cards
-**Files**: `Aether/Sources/Components/Molecules/ProviderCard.swift`
+**Files**: `Aleph/Sources/Components/Molecules/ProviderCard.swift`
 **Changes**:
 - Add `isActive: Bool` parameter to ProviderCard init
 - In card body (around line 86), add visual indicator:
@@ -42,7 +42,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 2.2 Wire Active State to ProvidersView
 **What**: Pass active state from ProvidersView to ProviderCard
-**Files**: `Aether/Sources/ProvidersView.swift`
+**Files**: `Aleph/Sources/ProvidersView.swift`
 **Changes**:
 - Determine active state logic: Check if provider has API key AND is reachable
 - Pass `isActive` parameter to ProviderCard (line 236-244)
@@ -55,7 +55,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 3.1 Add Active Toggle to Edit Panel Header
 **What**: Add ON/OFF toggle switch to edit panel
-**Files**: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+**Files**: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 **Changes**:
 - Add `@State private var isProviderActive: Bool = false` (around line 32)
 - In `viewModeContent` header (line 131-156), add HStack with:
@@ -67,8 +67,8 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 ### 3.2 Persist Active State to Config
 **What**: Save active state to provider configuration
 **Files**:
-- `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
-- `Aether/core/src/config.rs` (if schema change needed)
+- `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
+- `Aleph/core/src/config.rs` (if schema change needed)
 **Changes**:
 - Check if ProviderConfig has `enabled` field (may need Rust schema update)
 - If not, use presence of API key as proxy for "active"
@@ -82,7 +82,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 4.1 Redesign Test Result Display
 **What**: Show connection test results as small inline text instead of toast/card
-**Files**: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+**Files**: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 **Changes**:
 - Remove existing `testResultView()` card-style display (lines 423-450)
 - Add small caption text below "Test Connection" button:
@@ -93,7 +93,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 4.2 Add Loading State to Test Button
 **What**: Disable button and show spinner during test
-**Files**: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+**Files**: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 **Changes**:
 - Update ActionButton text to show "Testing..." when `isTesting == true`
 - Add ProgressView (spinner) inside button when testing
@@ -106,7 +106,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 5.1 Reposition Cancel/Save Buttons ✅ COMPLETED
 **What**: Move action buttons to bottom-right corner
-**Files**: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+**Files**: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 **Changes**:
 - ✅ Refactored body to VStack with two layers:
   - ScrollView for form content
@@ -120,7 +120,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 5.2 Adjust Edit Panel ScrollView ✅ COMPLETED
 **What**: Ensure buttons remain visible when scrolling
-**Files**: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+**Files**: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 **Changes**:
 - ✅ Moved buttons OUTSIDE ScrollView into fixed footer
 - ✅ Body structure:
@@ -136,9 +136,9 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 ### 6.1 Match Reference Design Colors/Spacing ✅ COMPLETED
 **What**: Fine-tune visual details to match mockup
 **Files**:
-- `Aether/Sources/ProvidersView.swift`
-- `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
-- `Aether/Sources/Components/Molecules/ProviderCard.swift`
+- `Aleph/Sources/ProvidersView.swift`
+- `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
+- `Aleph/Sources/Components/Molecules/ProviderCard.swift`
 **Changes**:
 - ✅ All spacing uses DesignTokens (xs: 4, sm: 8, md: 16, lg: 24)
 - ✅ Card corner radius and shadows use DesignTokens
@@ -148,7 +148,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 6.2 Add Hover States to Cards ✅ ALREADY IMPLEMENTED
 **What**: Enhance interactive feedback on provider cards
-**Files**: `Aether/Sources/Components/Molecules/ProviderCard.swift`
+**Files**: `Aleph/Sources/Components/Molecules/ProviderCard.swift`
 **Changes**:
 - ✅ Already implemented (lines 130-140)
 - ✅ Hover effect: scale 1.02, shadow radius increase
@@ -156,7 +156,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 6.3 Test Result Auto-Clear on Edit ✅ ALREADY IMPLEMENTED
 **What**: Clear old test results when user modifies form
-**Files**: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+**Files**: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 **Changes**:
 - ✅ Already implemented:
   - Line 309: providerType change → testResult = nil
@@ -171,7 +171,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 7.1 Handle Empty Provider List ✅ ALREADY IMPLEMENTED
 **What**: Ensure empty state is visible in larger window
-**Files**: `Aether/Sources/ProvidersView.swift`
+**Files**: `Aleph/Sources/ProvidersView.swift`
 **Changes**:
 - ✅ emptyStateView already implemented with proper scaling
 - ✅ "Add Provider" button is prominent
@@ -180,8 +180,8 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 ### 7.2 Handle Long Provider Names/Models ✅ COMPLETED
 **What**: Prevent text overflow in cards and edit panel
 **Files**:
-- `Aether/Sources/Components/Molecules/ProviderCard.swift`
-- `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+- `Aleph/Sources/Components/Molecules/ProviderCard.swift`
+- `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 **Changes**:
 - ✅ ProviderCard.swift:
   - Line 69-70: Provider name `.lineLimit(1)` + `.truncationMode(.tail)`
@@ -192,7 +192,7 @@ Tasks are ordered to deliver user-visible progress incrementally, with validatio
 
 ### 7.3 Keyboard Navigation
 **What**: Ensure Tab key cycles through form fields properly
-**Files**: `Aether/Sources/Components/Organisms/ProviderEditPanel.swift`
+**Files**: `Aleph/Sources/Components/Organisms/ProviderEditPanel.swift`
 **Changes**:
 - SwiftUI default tab order should work correctly
 - Tab order: Name → Type → API Key → Model → Base URL → Color → Advanced → Buttons

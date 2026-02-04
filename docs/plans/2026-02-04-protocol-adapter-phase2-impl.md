@@ -150,7 +150,7 @@ pub mod anthropic;
 **Step 5: Run cargo check**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/protocol-adapter-phase2
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/protocol-adapter-phase2
 cargo check -p alephcore 2>&1 | tail -10
 ```
 
@@ -576,7 +576,7 @@ pub use anthropic::AnthropicProtocol;
 **Step 3: Run tests**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aether/.worktrees/protocol-adapter-phase2
+cd /Volumes/TBU4/Workspace/Aleph/.worktrees/protocol-adapter-phase2
 cargo test -p alephcore protocols::anthropic --no-fail-fast
 ```
 

@@ -30,52 +30,52 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     /// Called when AI starts processing (thinking)
     fn on_thinking(&self) {
         debug!("AI thinking started");
-        self.emit_all("aether:thinking", ());
+        self.emit_all("aleph:thinking", ());
     }
 
     /// Called when a tool execution starts
     fn on_tool_start(&self, tool_name: String) {
         debug!(tool = %tool_name, "Tool started");
-        self.emit_all("aether:tool-start", ToolStartPayload { tool_name });
+        self.emit_all("aleph:tool-start", ToolStartPayload { tool_name });
     }
 
     /// Called when a tool execution completes
     fn on_tool_result(&self, tool_name: String, result: String) {
         debug!(tool = %tool_name, "Tool completed");
         self.emit_all(
-            "aether:tool-result",
+            "aleph:tool-result",
             ToolResultPayload { tool_name, result },
         );
     }
 
     /// Called for each streaming chunk of the response
     fn on_stream_chunk(&self, text: String) {
-        self.emit_all("aether:stream-chunk", StreamChunkPayload { text });
+        self.emit_all("aleph:stream-chunk", StreamChunkPayload { text });
     }
 
     /// Called when processing completes with the full response
     fn on_complete(&self, response: String) {
         info!("Processing completed");
-        self.emit_all("aether:complete", CompletePayload { response });
+        self.emit_all("aleph:complete", CompletePayload { response });
     }
 
     /// Called when an error occurs
     fn on_error(&self, message: String) {
         error!(message = %message, "Processing error");
-        self.emit_all("aether:error", ErrorPayload { message });
+        self.emit_all("aleph:error", ErrorPayload { message });
     }
 
     /// Called when a memory entry is stored
     fn on_memory_stored(&self) {
         debug!("Memory stored");
-        self.emit_all("aether:memory-stored", ());
+        self.emit_all("aleph:memory-stored", ());
     }
 
     /// Called when agent execution mode is detected
     fn on_agent_mode_detected(&self, task: aethecore::intent::ExecutableTaskFFI) {
         info!(task_category = ?task.category, "Agent mode detected");
         self.emit_all(
-            "aether:agent-mode-detected",
+            "aleph:agent-mode-detected",
             AgentModePayload {
                 task_category: format!("{:?}", task.category),
                 action: task.action,
@@ -92,7 +92,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     /// Called when tool registry is updated
     fn on_tools_changed(&self, tool_count: u32) {
         info!(tool_count, "Tools changed");
-        self.emit_all("aether:tools-changed", ToolsChangedPayload { tool_count });
+        self.emit_all("aleph:tools-changed", ToolsChangedPayload { tool_count });
     }
 
     /// Called when MCP servers have finished starting
@@ -103,7 +103,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
             "MCP startup complete"
         );
         self.emit_all(
-            "aether:mcp-startup-complete",
+            "aleph:mcp-startup-complete",
             McpStartupPayload {
                 succeeded: report.succeeded_servers,
                 failed: report
@@ -122,7 +122,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     fn on_runtime_updates_available(&self, updates: Vec<aethecore::RuntimeUpdateInfo>) {
         info!(count = updates.len(), "Runtime updates available");
         self.emit_all(
-            "aether:runtime-updates",
+            "aleph:runtime-updates",
             RuntimeUpdatesPayload {
                 updates: updates
                     .into_iter()
@@ -143,14 +143,14 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     /// Called when a new session is created
     fn on_session_started(&self, session_id: String) {
         info!(session_id = %session_id, "Session started");
-        self.emit_all("aether:session-started", SessionPayload { session_id });
+        self.emit_all("aleph:session-started", SessionPayload { session_id });
     }
 
     /// Called when tool execution starts (with call_id for tracking)
     fn on_tool_call_started(&self, call_id: String, tool_name: String) {
         debug!(call_id = %call_id, tool = %tool_name, "Tool call started");
         self.emit_all(
-            "aether:tool-call-started",
+            "aleph:tool-call-started",
             ToolCallStartPayload { call_id, tool_name },
         );
     }
@@ -159,7 +159,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     fn on_tool_call_completed(&self, call_id: String, output: String) {
         debug!(call_id = %call_id, "Tool call completed");
         self.emit_all(
-            "aether:tool-call-completed",
+            "aleph:tool-call-completed",
             ToolCallCompletePayload { call_id, output },
         );
     }
@@ -168,7 +168,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     fn on_tool_call_failed(&self, call_id: String, error: String, is_retryable: bool) {
         error!(call_id = %call_id, error = %error, "Tool call failed");
         self.emit_all(
-            "aether:tool-call-failed",
+            "aleph:tool-call-failed",
             ToolCallFailedPayload {
                 call_id,
                 error,
@@ -181,7 +181,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     fn on_loop_progress(&self, session_id: String, iteration: u32, status: String) {
         debug!(session_id = %session_id, iteration, "Loop progress");
         self.emit_all(
-            "aether:loop-progress",
+            "aleph:loop-progress",
             LoopProgressPayload {
                 session_id,
                 iteration,
@@ -194,7 +194,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     fn on_plan_created(&self, session_id: String, steps: Vec<String>) {
         info!(session_id = %session_id, steps = steps.len(), "Plan created");
         self.emit_all(
-            "aether:plan-created",
+            "aleph:plan-created",
             PlanCreatedPayload { session_id, steps },
         );
     }
@@ -203,7 +203,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     fn on_session_completed(&self, session_id: String, summary: String) {
         info!(session_id = %session_id, "Session completed");
         self.emit_all(
-            "aether:session-completed",
+            "aleph:session-completed",
             SessionCompletedPayload {
                 session_id,
                 summary,
@@ -225,7 +225,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
             "Sub-agent started"
         );
         self.emit_all(
-            "aether:subagent-started",
+            "aleph:subagent-started",
             SubagentStartedPayload {
                 parent_session_id,
                 child_session_id,
@@ -242,7 +242,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
             "Sub-agent completed"
         );
         self.emit_all(
-            "aether:subagent-completed",
+            "aleph:subagent-completed",
             SubagentCompletedPayload {
                 child_session_id,
                 success,
@@ -263,7 +263,7 @@ impl<R: Runtime + 'static> aethecore::ffi::AetherEventHandler for TauriEventHand
     ) {
         info!(plan_id = %plan_id, tasks = plan.tasks.len(), "Plan confirmation required");
         self.emit_all(
-            "aether:plan-confirmation-required",
+            "aleph:plan-confirmation-required",
             PlanConfirmationPayload {
                 plan_id,
                 title: plan.title,

@@ -33,7 +33,7 @@ Phase 1 建立了 Cowork 任务编排框架，但只有 NoopExecutor 用于测�
 [cowork.file_ops]
 enabled = true
 allowed_paths = ["~/Downloads", "~/Documents"]
-denied_paths = ["~/.ssh", "~/.gnupg", "~/.aether"]
+denied_paths = ["~/.ssh", "~/.gnupg", "~/.aleph"]
 max_file_size = "100MB"
 require_confirmation_for_write = true
 require_confirmation_for_delete = true

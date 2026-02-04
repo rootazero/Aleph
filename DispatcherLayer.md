@@ -1,9 +1,9 @@
-Aether 智能工具调度系统设计
+Aleph 智能工具调度系统设计
 在用户输入和具体功能之间，加入一个智能调度层（Dispatcher Layer）。这个层级负责“听懂”用户的意图，并将其转化为结构化的指令，最后通过Halo UI进行人机确认。
 
-基于Rust后端 + Swift前端的架构，我为你设计了一套**“Aether Cortex（中枢）”调度系统**方案。
+基于Rust后端 + Swift前端的架构，我为你设计了一套**“Aleph Cortex（中枢）”调度系统**方案。
 
-1. 核心架构设计：Aether Cortex
+1. 核心架构设计：Aleph Cortex
 
 我们需要构建一个基于 “意图识别 - 参数提取 - 决策确认” 的三段式流水线。
 
@@ -59,7 +59,7 @@ pub struct ActionProposal {
 }
 提示词工程 (Router Prompt)
 
-这是调度的核心。你需要一个专门的 System Prompt，在这个 Prompt 里描述Aether所有的能力。
+这是调度的核心。你需要一个专门的 System Prompt，在这个 Prompt 里描述Aleph所有的能力。
 
 System Prompt 设计思路： "你是一个意图分类和参数提取引擎。不要回答用户的问题，而是分析用户的意图。 你的输出必须是严格的 JSON 格式。
 
@@ -111,7 +111,7 @@ L3: 深度推理	慢速思考模型	复杂的多步任务规划	慢 (>2s)
 
 用户输入："他演过什么电影？"
 
-Aether Rust 后端提取最近对话历史：(User: "我最近在看基努里维斯的片子")。
+Aleph Rust 后端提取最近对话历史：(User: "我最近在看基努里维斯的片子")。
 
 构建 Router Request：
 
@@ -129,7 +129,7 @@ Halo 显示：[🔍 Search] 查找: "Keanu Reeves 电影列表"
 
 6. 下一步行动建议
 
-ZIV，这个功能的加入会让 Aether 的体验产生质变。建议分两步走：
+ZIV，这个功能的加入会让 Aleph 的体验产生质变。建议分两步走：
 
 第一步 (Explicit Mode): 先实现显式意图的自然语言触发。比如正则匹配“搜索 xxx”，并在 Halo 中显示。打通 Rust 到 Swift Halo UI 的数据流。
 
@@ -167,7 +167,7 @@ pub enum ToolSource {
 }
 2. 动态构建 System Prompt (Prompt Injection)
 
-在 Rust 中，你需要写一个 PromptBuilder。每次用户敲下回车时，Aether 会做以下动作：
+在 Rust 中，你需要写一个 PromptBuilder。每次用户敲下回车时，Aleph 会做以下动作：
 
 扫描：遍历 NativeSkillsRegistry。
 
@@ -180,7 +180,7 @@ pub enum ToolSource {
 Rust 实现示例
 
 Rust
-impl AetherCore {
+impl AlephCore {
     // 动态生成 System Prompt 的函数
     pub async fn build_dispatcher_prompt(&self) -> String {
         // 1. 获取本地 Skills
@@ -224,11 +224,11 @@ impl AetherCore {
 
 对于 MCP，最妙的地方在于它本身就是自描述的。
 
-当你在 Aether 设置里添加一个新的 MCP Server（比如 filesystem）时：
+当你在 Aleph 设置里添加一个新的 MCP Server（比如 filesystem）时：
 
-Aether 后端连接该 Server。
+Aleph 后端连接该 Server。
 
-Aether 自动发送 tools/list 请求。
+Aleph 自动发送 tools/list 请求。
 
 MCP Server 返回它支持的所有工具（例如 read_file, write_file）。
 

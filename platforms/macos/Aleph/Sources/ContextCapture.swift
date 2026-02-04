@@ -1,6 +1,6 @@
 //
 //  ContextCapture.swift
-//  Aether
+//  Aleph
 //
 //  Context capture for active application and window information using macOS Accessibility API.
 //

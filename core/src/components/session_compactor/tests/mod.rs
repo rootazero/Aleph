@@ -5,7 +5,7 @@ use crate::components::types::{
     AiResponsePart, ExecutionSession, SessionPart, SummaryPart, ToolCallPart, ToolCallStatus,
     UserInputPart,
 };
-use crate::event::{AetherEvent, EventContext, EventHandler, EventType};
+use crate::event::{AlephEvent, EventContext, EventHandler, EventType};
 use serde_json::json;
 
     // ========================================================================
@@ -552,7 +552,7 @@ use serde_json::json;
         let ctx = EventContext::new(bus);
 
         // InputReceived event should be ignored
-        let event = AetherEvent::InputReceived(InputEvent {
+        let event = AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -582,7 +582,7 @@ use serde_json::json;
             session_id: None,
         };
 
-        let event = AetherEvent::ToolCallCompleted(result_event);
+        let event = AlephEvent::ToolCallCompleted(result_event);
         let result = compactor.handle(&event, &ctx).await.unwrap();
 
         // In the stub implementation, this returns empty
@@ -606,7 +606,7 @@ use serde_json::json;
             model: "gpt-4-turbo".to_string(),
         };
 
-        let event = AetherEvent::LoopContinue(loop_state);
+        let event = AlephEvent::LoopContinue(loop_state);
         let result = compactor.handle(&event, &ctx).await.unwrap();
 
         // Returns empty since tokens are below threshold
@@ -1749,7 +1749,7 @@ use serde_json::json;
             model: "gpt-4-turbo".to_string(),
         };
 
-        let event = AetherEvent::LoopContinue(loop_state);
+        let event = AlephEvent::LoopContinue(loop_state);
         let result = compactor.handle(&event, &ctx).await.unwrap();
 
         // Should return empty when auto_compact is disabled
@@ -1791,7 +1791,7 @@ use serde_json::json;
             model: "gpt-4-turbo".to_string(),
         };
 
-        let event = AetherEvent::LoopContinue(loop_state);
+        let event = AlephEvent::LoopContinue(loop_state);
         let result = compactor.handle(&event, &ctx).await.unwrap();
 
         // Currently returns empty (would return SessionCompacted in full impl)
@@ -1822,7 +1822,7 @@ use serde_json::json;
             session_id: None,
         };
 
-        let event = AetherEvent::ToolCallCompleted(result_event);
+        let event = AlephEvent::ToolCallCompleted(result_event);
         let result = compactor.handle(&event, &ctx).await.unwrap();
 
         // Should return empty (prune is disabled)
@@ -1852,7 +1852,7 @@ use serde_json::json;
             session_id: None,
         };
 
-        let event = AetherEvent::ToolCallCompleted(result_event);
+        let event = AlephEvent::ToolCallCompleted(result_event);
         let result = compactor.handle(&event, &ctx).await.unwrap();
 
         // Should return empty but with debug logging
@@ -1876,7 +1876,7 @@ use serde_json::json;
             model: "claude-3-opus-20240229".to_string(), // Should match "claude-3-opus"
         };
 
-        let event = AetherEvent::LoopContinue(loop_state);
+        let event = AlephEvent::LoopContinue(loop_state);
         let result = compactor.handle(&event, &ctx).await.unwrap();
 
         // Should return empty since below 160K threshold (200K * 0.8)

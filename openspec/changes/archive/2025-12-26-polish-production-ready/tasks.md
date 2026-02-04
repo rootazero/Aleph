@@ -42,8 +42,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] No breaking changes to existing `read_text()`/`write_text()` methods
 
 **Files Changed**:
-- `Aether/core/src/clipboard/mod.rs`
-- `Aether/core/src/clipboard/mock.rs`
+- `Aleph/core/src/clipboard/mod.rs`
+- `Aleph/core/src/clipboard/mock.rs`
 
 ---
 
@@ -59,7 +59,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 
 **Edge Cases**:
 - Clipboard contains text only → return `Ok(None)`
-- Image corrupted → return `Err(AetherError::ClipboardError)`
+- Image corrupted → return `Err(AlephError::ClipboardError)`
 - Unsupported format (BMP, TIFF) → return error with conversion suggestion
 
 **Validation**:
@@ -69,7 +69,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] `write_image()` → Other apps can paste image
 
 **Files Changed**:
-- `Aether/core/src/clipboard/arboard_manager.rs`
+- `Aleph/core/src/clipboard/arboard_manager.rs`
 
 ---
 
@@ -98,8 +98,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Large image (5MB) → Encoding completes in <500ms
 
 **Files Changed**:
-- `Aether/core/Cargo.toml`
-- `Aether/core/src/clipboard/mod.rs`
+- `Aleph/core/Cargo.toml`
+- `Aleph/core/src/clipboard/mod.rs`
 
 ---
 
@@ -145,7 +145,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Response parsing works for vision model output
 
 **Files Changed**:
-- `Aether/core/src/providers/openai.rs`
+- `Aleph/core/src/providers/openai.rs`
 
 ---
 
@@ -181,7 +181,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Model auto-selection works (Opus > Sonnet > error if Haiku configured)
 
 **Files Changed**:
-- `Aether/core/src/providers/claude.rs`
+- `Aleph/core/src/providers/claude.rs`
 
 ---
 
@@ -204,7 +204,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
            .collect();
 
        if vision_providers.is_empty() {
-           return Err(AetherError::no_vision_provider());
+           return Err(AlephError::no_vision_provider());
        }
    }
    ```
@@ -215,8 +215,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Text-only request → No vision filtering applied
 
 **Files Changed**:
-- `Aether/core/src/providers/mod.rs`
-- `Aether/core/src/router/mod.rs`
+- `Aleph/core/src/providers/mod.rs`
+- `Aleph/core/src/router/mod.rs`
 
 ---
 
@@ -225,7 +225,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 **Goal**: Expose image clipboard to Swift UI.
 
 **Implementation**:
-1. Add to `aether.udl`:
+1. Add to `aleph.udl`:
    ```idl
    dictionary ImageData {
      sequence<u8> data;
@@ -238,8 +238,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
      "Gif",
    };
 
-   interface AetherCore {
-     [Throws=AetherException]
+   interface AlephCore {
+     [Throws=AlephException]
      ImageData? read_clipboard_image();
 
      boolean has_clipboard_image();
@@ -253,8 +253,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] `ImageData` struct accessible in Swift
 
 **Files Changed**:
-- `Aether/core/src/aether.udl`
-- `Aether/Sources/Generated/aether.swift` (regenerated)
+- `Aleph/core/src/aleph.udl`
+- `Aleph/Sources/Generated/aleph.swift` (regenerated)
 
 ---
 
@@ -275,7 +275,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Test coverage >80% for image-related code
 
 **Files Changed**:
-- `Aether/core/tests/integration_image.rs`
+- `Aleph/core/tests/integration_image.rs`
 
 ---
 
@@ -302,7 +302,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Mock implementation supports cancellation
 
 **Files Changed**:
-- `Aether/core/src/input/mod.rs`
+- `Aleph/core/src/input/mod.rs`
 
 ---
 
@@ -337,7 +337,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Newlines → Enter key pressed, cursor moves to next line
 
 **Files Changed**:
-- `Aether/core/src/input/enigo_simulator.rs`
+- `Aleph/core/src/input/enigo_simulator.rs`
 
 ---
 
@@ -353,12 +353,12 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
        TypingOutput,  // New state
    }
    ```
-2. Add callbacks to `AetherEventHandler`:
+2. Add callbacks to `AlephEventHandler`:
    ```rust
    fn on_typewriter_progress(percent: f32);
    fn on_typewriter_cancelled();
    ```
-3. Update UniFFI definitions in `aether.udl`
+3. Update UniFFI definitions in `aleph.udl`
 
 **Validation**:
 - [ ] State transitions: ProcessingWithAI → TypingOutput → Success
@@ -366,17 +366,17 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Cancellation callback triggers when Escape pressed
 
 **Files Changed**:
-- `Aether/core/src/event_handler.rs`
-- `Aether/core/src/aether.udl`
+- `Aleph/core/src/event_handler.rs`
+- `Aleph/core/src/aleph.udl`
 
 ---
 
-### Task 2.4: Integrate Typewriter into AetherCore Pipeline
+### Task 2.4: Integrate Typewriter into AlephCore Pipeline
 
 **Goal**: Replace instant paste with typewriter animation.
 
 **Implementation**:
-1. Update `AetherCore::process_with_ai()`:
+1. Update `AlephCore::process_with_ai()`:
    ```rust
    // After AI response received
    let output_mode = self.config.lock().unwrap().behavior.output_mode;
@@ -398,7 +398,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
        }
    }
    ```
-2. Add cancellation token to AetherCore struct
+2. Add cancellation token to AlephCore struct
 3. Trigger cancellation on new hotkey press or Escape key
 
 **Validation**:
@@ -407,7 +407,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Escape during typing → Remaining text pasted instantly
 
 **Files Changed**:
-- `Aether/core/src/core.rs`
+- `Aleph/core/src/core.rs`
 
 ---
 
@@ -438,8 +438,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Settings UI can read/write output_mode and typing_speed
 
 **Files Changed**:
-- `Aether/core/src/config/mod.rs`
-- `Aether/config.example.toml`
+- `Aleph/core/src/config/mod.rs`
+- `Aleph/config.example.toml`
 
 ---
 
@@ -470,7 +470,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Preview button types demo text at selected speed
 
 **Files Changed**:
-- `Aether/Sources/BehaviorSettingsView.swift`
+- `Aleph/Sources/BehaviorSettingsView.swift`
 
 ---
 
@@ -496,8 +496,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Cancellation hides Halo immediately
 
 **Files Changed**:
-- `Aether/Sources/HaloView.swift`
-- `Aether/Sources/EventHandler.swift`
+- `Aleph/Sources/HaloView.swift`
+- `Aleph/Sources/EventHandler.swift`
 
 ---
 
@@ -518,7 +518,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Timing accuracy within ±10% of target
 
 **Files Changed**:
-- `Aether/core/tests/integration_typewriter.rs`
+- `Aleph/core/tests/integration_typewriter.rs`
 
 ---
 
@@ -536,14 +536,14 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 
    let log_dir = dirs::config_dir()
        .unwrap()
-       .join("aether")
+       .join("aleph")
        .join("logs");
    std::fs::create_dir_all(&log_dir)?;
 
    let file_appender = RollingFileAppender::new(
        Rotation::DAILY,
        log_dir,
-       "aether.log"
+       "aleph.log"
    );
 
    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
@@ -557,13 +557,13 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 3. Store `_guard` in static to prevent premature drop
 
 **Validation**:
-- [ ] Logs appear in `~/.aether/logs/aether-YYYY-MM-DD.log`
+- [ ] Logs appear in `~/.aleph/logs/aleph-YYYY-MM-DD.log`
 - [ ] Daily rotation works (new file at midnight)
 - [ ] Console and file both receive log messages
 
 **Files Changed**:
-- `Aether/core/Cargo.toml`
-- `Aether/core/src/lib.rs`
+- `Aleph/core/Cargo.toml`
+- `Aleph/core/src/lib.rs`
 
 ---
 
@@ -598,12 +598,12 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [x] Log "App: com.apple.Notes" → File unchanged (no PII)
 
 **Files Changed**:
-- `Aether/core/src/utils/mod.rs` (created)
-- `Aether/core/src/utils/pii.rs` (created with comprehensive PII scrubbing)
-- `Aether/core/src/logging/mod.rs` (created)
-- `Aether/core/src/logging/pii_filter.rs` (created with PiiScrubbingLayer)
-- `Aether/core/src/memory/ingestion.rs` (updated to use shared scrub_pii)
-- `Aether/core/src/lib.rs` (added utils and logging modules)
+- `Aleph/core/src/utils/mod.rs` (created)
+- `Aleph/core/src/utils/pii.rs` (created with comprehensive PII scrubbing)
+- `Aleph/core/src/logging/mod.rs` (created)
+- `Aleph/core/src/logging/pii_filter.rs` (created with PiiScrubbingLayer)
+- `Aleph/core/src/memory/ingestion.rs` (updated to use shared scrub_pii)
+- `Aleph/core/src/lib.rs` (added utils and logging modules)
 
 ---
 
@@ -635,7 +635,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
        Ok(())
    }
    ```
-3. Call `cleanup_old_logs()` on AetherCore startup
+3. Call `cleanup_old_logs()` on AlephCore startup
 
 **Validation**:
 - [ ] Logs older than 7 days → Deleted on startup
@@ -643,9 +643,9 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Cleanup errors logged but don't crash app
 
 **Files Changed**:
-- `Aether/core/src/config/mod.rs`
-- `Aether/core/src/logging/retention.rs`
-- `Aether/core/src/core.rs` (call cleanup on init)
+- `Aleph/core/src/config/mod.rs`
+- `Aleph/core/src/logging/retention.rs`
+- `Aleph/core/src/core.rs` (call cleanup on init)
 
 ---
 
@@ -685,10 +685,10 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] No API keys in logs (even when errors occur)
 
 **Files Changed**:
-- `Aether/core/src/core.rs`
-- `Aether/core/src/router/mod.rs`
-- `Aether/core/src/providers/*.rs`
-- `Aether/core/src/memory/*.rs`
+- `Aleph/core/src/core.rs`
+- `Aleph/core/src/router/mod.rs`
+- `Aleph/core/src/providers/*.rs`
+- `Aleph/core/src/memory/*.rs`
 
 ---
 
@@ -697,15 +697,15 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 **Goal**: Expose logging configuration to Swift UI.
 
 **Implementation**:
-1. Add to `aether.udl`:
+1. Add to `aleph.udl`:
    ```idl
-   interface AetherCore {
+   interface AlephCore {
        string get_log_level();
        void set_log_level(string level);
        string get_log_directory();
    };
    ```
-2. Implement methods in `AetherCore`:
+2. Implement methods in `AlephCore`:
    ```rust
    pub fn get_log_level(&self) -> String {
        std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string())
@@ -722,11 +722,11 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 **Validation**:
 - [ ] `core.getLogLevel()` returns current level
 - [ ] `core.setLogLevel("debug")` → Debug logs appear immediately
-- [ ] `core.getLogDirectory()` → Returns `~/.aether/logs`
+- [ ] `core.getLogDirectory()` → Returns `~/.aleph/logs`
 
 **Files Changed**:
-- `Aether/core/src/aether.udl`
-- `Aether/core/src/core.rs`
+- `Aleph/core/src/aleph.udl`
+- `Aleph/core/src/core.rs`
 
 ---
 
@@ -769,8 +769,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] "Clear Logs" deletes all files, requires confirmation
 
 **Files Changed**:
-- `Aether/Sources/GeneralSettingsView.swift`
-- `Aether/Sources/LogViewerView.swift`
+- `Aleph/Sources/GeneralSettingsView.swift`
+- `Aleph/Sources/LogViewerView.swift`
 
 ---
 
@@ -791,13 +791,13 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] PII scrubbing covers all patterns
 
 **Files Changed**:
-- `Aether/core/tests/integration_logging.rs`
+- `Aleph/core/tests/integration_logging.rs`
 
 ---
 
 ## Phase 7.4: Error Feedback & Performance Profiling (Week 4)
 
-### Task 4.1: Extend AetherError with Suggestions
+### Task 4.1: Extend AlephError with Suggestions
 
 **Goal**: Add suggestion field to all error types.
 
@@ -805,7 +805,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 1. Update `error.rs`:
    ```rust
    #[derive(Debug, thiserror::Error)]
-   pub enum AetherError {
+   pub enum AlephError {
        #[error("{message}")]
        ApiKeyInvalid {
            message: String,
@@ -815,7 +815,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
        // ... update all variants
    }
 
-   impl AetherError {
+   impl AlephError {
        pub fn api_key_invalid(provider: &str) -> Self {
            Self::ApiKeyInvalid {
                message: "API authentication failed".to_string(),
@@ -842,7 +842,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [x] Backwards compatibility (existing error creation still works)
 
 **Files Changed**:
-- `Aether/core/src/error.rs`
+- `Aleph/core/src/error.rs`
 
 ---
 
@@ -862,7 +862,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
    - Empty clipboard → "Select text/image before pressing Cmd+~"
    - Image too large → "Resize to under 10MB"
 4. Memory errors:
-   - Database locked → "Close other Aether instances"
+   - Database locked → "Close other Aleph instances"
    - Disk full → "Free space or adjust retention policy"
 
 **Validation**:
@@ -871,9 +871,9 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] No generic "Something went wrong" messages
 
 **Files Changed**:
-- `Aether/core/src/error.rs`
-- `Aether/core/src/providers/*.rs`
-- `Aether/core/src/memory/*.rs`
+- `Aleph/core/src/error.rs`
+- `Aleph/core/src/providers/*.rs`
+- `Aleph/core/src/memory/*.rs`
 
 ---
 
@@ -882,9 +882,9 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 **Goal**: Pass suggestions to Swift UI for display in Halo.
 
 **Implementation**:
-1. Update `aether.udl`:
+1. Update `aleph.udl`:
    ```idl
-   callback interface AetherEventHandler {
+   callback interface AlephEventHandler {
        void on_error(string message, string? suggestion);
    };
    ```
@@ -901,8 +901,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [x] Null suggestion handled gracefully (no crash)
 
 **Files Changed**:
-- `Aether/core/src/aether.udl`
-- `Aether/core/src/core.rs` (update error handling)
+- `Aleph/core/src/aleph.udl`
+- `Aleph/core/src/core.rs` (update error handling)
 
 ---
 
@@ -950,8 +950,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Error disappears after 5 seconds (currently manual dismiss via button)
 
 **Files Changed**:
-- `Aether/Sources/HaloView.swift`
-- `Aether/Sources/EventHandler.swift`
+- `Aleph/Sources/HaloView.swift`
+- `Aleph/Sources/EventHandler.swift`
 
 ---
 
@@ -1001,8 +1001,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [x] Zero overhead when profiling disabled
 
 **Files Changed**:
-- `Aether/core/src/metrics/mod.rs`
-- `Aether/core/src/config/mod.rs`
+- `Aleph/core/src/metrics/mod.rs`
+- `Aleph/core/src/config/mod.rs`
 
 ---
 
@@ -1041,9 +1041,9 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [x] No performance degradation when profiling disabled
 
 **Files Changed**:
-- `Aether/core/src/core.rs`
-- `Aether/core/src/memory/*.rs` (not modified - uses existing logging)
-- `Aether/core/src/router/mod.rs` (not modified - uses existing logging)
+- `Aleph/core/src/core.rs`
+- `Aleph/core/src/memory/*.rs` (not modified - uses existing logging)
+- `Aleph/core/src/router/mod.rs` (not modified - uses existing logging)
 
 ---
 
@@ -1084,8 +1084,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [x] Warnings logged even when profiling disabled
 
 **Files Changed**:
-- `Aether/core/src/metrics/mod.rs`
-- `Aether/core/src/core.rs` (use `stop_with_target()`)
+- `Aleph/core/src/metrics/mod.rs`
+- `Aleph/core/src/core.rs` (use `stop_with_target()`)
 
 ---
 
@@ -1114,8 +1114,8 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 - [ ] Manual testing checklist complete (deferred - requires full UI integration)
 
 **Files Changed**:
-- `Aether/core/tests/integration_phase7.rs` (not created - metrics tests in mod.rs)
-- `Aether/core/benches/performance_benchmarks.rs` (created)
+- `Aleph/core/tests/integration_phase7.rs` (not created - metrics tests in mod.rs)
+- `Aleph/core/benches/performance_benchmarks.rs` (created)
 - `docs/manual-testing-checklist.md` (deferred)
 
 ---
@@ -1149,7 +1149,7 @@ This document breaks down Phase 7 implementation into ordered, verifiable tasks.
 **Files Changed**:
 - `README.md`
 - `CLAUDE.md`
-- `Aether/config.example.toml`
+- `Aleph/config.example.toml`
 - `docs/logging-guide.md`
 
 ---
@@ -1242,7 +1242,7 @@ The following tasks can be worked on in parallel once their dependencies are met
 ## Acceptance Criteria (Rollup)
 
 ### Image Clipboard
-- [ ] Copy PNG/JPEG/GIF → Aether detects image
+- [ ] Copy PNG/JPEG/GIF → Aleph detects image
 - [ ] Send to GPT-4V or Claude Opus → Receives Base64 data
 - [ ] Oversized image → Error with resize suggestion
 - [ ] Ollama selected with image → Error with provider switch suggestion
@@ -1254,7 +1254,7 @@ The following tasks can be worked on in parallel once their dependencies are met
 - [ ] Halo shows typing progress bar (0% → 100%)
 
 ### Structured Logging
-- [ ] Logs written to `~/.aether/logs/aether-YYYY-MM-DD.log`
+- [ ] Logs written to `~/.aleph/logs/aleph-YYYY-MM-DD.log`
 - [ ] PII scrubbed (email, phone, API keys → placeholders)
 - [ ] Old logs auto-deleted after retention period (default 7 days)
 - [ ] Settings UI allows viewing, exporting, clearing logs
@@ -1273,4 +1273,4 @@ The following tasks can be worked on in parallel once their dependencies are met
 ---
 
 **Tasks Total**: 35 tasks across 4 weeks
-**Deliverable**: Production-ready Aether with image support, typewriter output, comprehensive logging, helpful errors, and performance insights.
+**Deliverable**: Production-ready Aleph with image support, typewriter output, comprehensive logging, helpful errors, and performance insights.

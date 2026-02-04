@@ -4,7 +4,7 @@ pub mod providers;
 mod registry;
 /// Search capability implementation
 ///
-/// This module provides real-time web search functionality for Aether Agent,
+/// This module provides real-time web search functionality for Aleph Agent,
 /// enabling AI to access up-to-date information beyond training data cutoff.
 ///
 /// # Architecture

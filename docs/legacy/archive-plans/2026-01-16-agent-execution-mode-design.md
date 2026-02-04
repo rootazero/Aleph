@@ -4,7 +4,7 @@
 
 ## 问题背景
 
-当前Aether在处理可执行任务（如文件整理）时，会退化为"询问模式"——返回大量选项让用户选择，而不是直接展示计划并执行。这与AI Agent的期望行为相悖。
+当前Aleph在处理可执行任务（如文件整理）时，会退化为"询问模式"——返回大量选项让用户选择，而不是直接展示计划并执行。这与AI Agent的期望行为相悖。
 
 **期望行为**：
 - AI立即展示任务计划
@@ -473,11 +473,11 @@ core/src/
 | `core/src/lib.rs` | 导出 intent 模块 |
 | `core/src/router/mod.rs` | 集成 IntentClassifier |
 | `core/src/payload/assembler.rs` | 动态注入 Agent Prompt |
-| `core/src/aether.udl` | 新增 UniFFI 类型定义 |
-| `Aether/Sources/HaloState.swift` | 新增 Agent 状态 |
-| `Aether/Sources/Components/AgentPlanView.swift` | 新增计划展示组件 |
-| `Aether/Sources/Components/AgentProgressView.swift` | 新增进度组件 |
-| `Aether/Sources/Components/AgentConflictSheet.swift` | 新增冲突确认组件 |
+| `core/src/aleph.udl` | 新增 UniFFI 类型定义 |
+| `Aleph/Sources/HaloState.swift` | 新增 Agent 状态 |
+| `Aleph/Sources/Components/AgentPlanView.swift` | 新增计划展示组件 |
+| `Aleph/Sources/Components/AgentProgressView.swift` | 新增进度组件 |
+| `Aleph/Sources/Components/AgentConflictSheet.swift` | 新增冲突确认组件 |
 
 ---
 

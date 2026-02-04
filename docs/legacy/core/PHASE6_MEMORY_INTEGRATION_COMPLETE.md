@@ -37,7 +37,7 @@ pub fn process_with_ai(&self, input: &str, context: &CapturedContext) -> Result<
 
 ### 2. Router 集成 (`core.rs`)
 
-- **初始化**: 在 `AetherCore::new()` 中自动创建 Router
+- **初始化**: 在 `AlephCore::new()` 中自动创建 Router
 - **配置驱动**: 从 `Config` 加载 providers 和 rules
 - **智能路由**: 基于 regex 规则选择 provider
 - **Fallback**: 支持默认 provider 作为回退

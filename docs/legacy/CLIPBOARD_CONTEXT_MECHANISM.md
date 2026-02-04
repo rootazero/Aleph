@@ -25,7 +25,7 @@
 
 ### 1. 剪切板监控器 (ClipboardMonitor)
 
-**文件**: `Aether/Sources/Utils/ClipboardMonitor.swift`
+**文件**: `Aleph/Sources/Utils/ClipboardMonitor.swift`
 
 **核心功能**:
 - 每秒检查一次剪切板changeCount
@@ -70,7 +70,7 @@ App启动 → 启动ClipboardMonitor
 
 ### 2. 上下文组合逻辑 (AppDelegate)
 
-**文件**: `Aether/Sources/AppDelegate.swift:653-729`
+**文件**: `Aleph/Sources/AppDelegate.swift:653-729`
 
 **核心逻辑**:
 ```swift
@@ -421,4 +421,4 @@ guard !clipContext.starts(with: "http") else { return nil }
 ✅ **性能优化**（低开销的Timer轮询）
 ✅ **无缝集成**（用户无感知）
 
-现在Aether可以更智能地理解用户意图，结合当前文本和剪切板参考资料，给出更准确的AI回复！
+现在Aleph可以更智能地理解用户意图，结合当前文本和剪切板参考资料，给出更准确的AI回复！

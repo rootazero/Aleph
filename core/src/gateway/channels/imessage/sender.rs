@@ -49,7 +49,7 @@ impl MessageSender {
     /// # Example
     ///
     /// ```ignore
-    /// MessageSender::send_text("+15551234567", "Hello from Aether!").await?;
+    /// MessageSender::send_text("+15551234567", "Hello from Aleph!").await?;
     /// ```
     pub async fn send_text(to: &str, text: &str) -> Result<(), SendError> {
         if to.is_empty() {

@@ -11,7 +11,7 @@
 
 ### 1. Provider 类型推断
 
-**文件**: `Aether/core/src/config.rs`
+**文件**: `Aleph/core/src/config.rs`
 
 添加了 `provider_type` 字段到 `ProviderConfig`：
 
@@ -32,7 +32,7 @@ pub struct ProviderConfig {
 
 ### 2. Provider 工厂函数
 
-**文件**: `Aether/core/src/providers/mod.rs`
+**文件**: `Aleph/core/src/providers/mod.rs`
 
 新增 `create_provider()` 工厂函数：
 
@@ -219,28 +219,28 @@ Provider 模块: 64/64 tests passed (100%)
 
 ### 修改的文件
 
-1. **`Aether/core/src/config.rs`**
+1. **`Aleph/core/src/config.rs`**
    - 添加 `provider_type: Option<String>` 字段
    - 实现 `infer_provider_type()` 方法
    - 更新所有测试的 `ProviderConfig` 初始化
 
-2. **`Aether/core/src/providers/mod.rs`**
+2. **`Aleph/core/src/providers/mod.rs`**
    - 添加 `create_provider()` 工厂函数
    - 添加 9 个新测试
    - 完整的文档注释和使用示例
 
-3. **`Aether/core/src/providers/openai.rs`**
+3. **`Aleph/core/src/providers/openai.rs`**
    - 更新测试配置（添加 `provider_type: None`）
 
-4. **`Aether/core/src/providers/claude.rs`**
+4. **`Aleph/core/src/providers/claude.rs`**
    - 更新测试配置（添加 `provider_type: None`）
 
-5. **`Aether/core/src/providers/ollama.rs`**
+5. **`Aleph/core/src/providers/ollama.rs`**
    - 更新测试配置（添加 `provider_type: None`）
 
 ### 新增文件
 
-6. **`Aether/config.example.toml`** (367 行)
+6. **`Aleph/config.example.toml`** (367 行)
    - 完整的配置示例
    - 包含 OpenAI、Claude、Ollama、DeepSeek、Moonshot、Azure 配置
    - 详细的注释和使用说明

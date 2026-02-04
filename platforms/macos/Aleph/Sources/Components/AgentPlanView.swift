@@ -1,6 +1,6 @@
 //
 //  AgentPlanView.swift
-//  Aether
+//  Aleph
 //
 //  SwiftUI component for Agent plan confirmation (Cursor-style).
 //  Displays plan title, operations list, and summary.

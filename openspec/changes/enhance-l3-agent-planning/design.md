@@ -428,7 +428,7 @@ impl ToolRegistry {
 pub struct AgentLoop {
     provider: Arc<dyn AiProvider>,
     tool_registry: Arc<ToolRegistry>,
-    event_handler: Arc<dyn AetherEventHandler>,
+    event_handler: Arc<dyn AlephEventHandler>,
     config: AgentConfig,
 }
 
@@ -450,7 +450,7 @@ impl AgentLoop {
 
             // Check max turns
             if turn_count > self.config.max_agent_turns {
-                return Err(AetherError::MaxTurnsExceeded {
+                return Err(AlephError::MaxTurnsExceeded {
                     max: self.config.max_agent_turns,
                 });
             }
@@ -513,7 +513,7 @@ impl AgentLoop {
         // Get handler from registry
         let handler = self.tool_registry
             .get_handler(tool_name)
-            .ok_or_else(|| AetherError::ToolNotFound(tool_name.clone()))?;
+            .ok_or_else(|| AlephError::ToolNotFound(tool_name.clone()))?;
 
         // Execute with timeout
         let output = tokio::time::timeout(
@@ -777,7 +777,7 @@ Sequential execution with result passing:
 ```rust
 pub struct PlanExecutor {
     tool_registry: Arc<ToolRegistry>,
-    event_handler: Arc<dyn AetherEventHandler>,
+    event_handler: Arc<dyn AlephEventHandler>,
 }
 
 impl PlanExecutor {
@@ -882,9 +882,9 @@ impl PlanExecutor {
 ### 4. UniFFI Event Handler Extensions
 
 ```idl
-// aether.udl additions
+// aleph.udl additions
 
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
     // ... existing methods ...
 
     /// Plan execution started

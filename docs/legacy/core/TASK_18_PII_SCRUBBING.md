@@ -14,7 +14,7 @@ Task 18 implements PII (Personally Identifiable Information) scrubbing to protec
 
 ### Location
 
-**File**: `Aether/core/src/memory/ingestion.rs`
+**File**: `Aleph/core/src/memory/ingestion.rs`
 
 ### PII Scrubbing Function
 
@@ -268,12 +268,12 @@ All criteria met ✅
 ## Files Modified
 
 ### Implementation
-- `Aether/core/src/memory/ingestion.rs` - Added `scrub_pii()` method (lines 102-145)
-- `Aether/core/src/memory/ingestion.rs` - Integrated into `store_memory()` (lines 72-73)
+- `Aleph/core/src/memory/ingestion.rs` - Added `scrub_pii()` method (lines 102-145)
+- `Aleph/core/src/memory/ingestion.rs` - Integrated into `store_memory()` (lines 72-73)
 
 ### Tests
-- `Aether/core/src/memory/ingestion.rs` - 6 unit tests (lines 278-323)
-- `Aether/core/src/memory/integration_tests.rs` - Integration test (lines 252-297)
+- `Aleph/core/src/memory/ingestion.rs` - 6 unit tests (lines 278-323)
+- `Aleph/core/src/memory/integration_tests.rs` - Integration test (lines 252-297)
 
 ## Dependencies
 

@@ -314,32 +314,32 @@ pub async fn process_request(&self, user_input: &str) -> Result<String> {
 ## Files Created During Implementation
 
 ### Rust Core Files
-- `Aether/core/src/memory/mod.rs`
-- `Aether/core/src/memory/database.rs`
-- `Aether/core/src/memory/embedding.rs`
-- `Aether/core/src/memory/context.rs`
-- `Aether/core/src/memory/ingestion.rs`
-- `Aether/core/src/memory/retrieval.rs`
-- `Aether/core/src/memory/augmentation.rs`
-- `Aether/core/src/memory/cleanup.rs`
-- `Aether/core/src/memory/integration_tests.rs`
+- `Aleph/core/src/memory/mod.rs`
+- `Aleph/core/src/memory/database.rs`
+- `Aleph/core/src/memory/embedding.rs`
+- `Aleph/core/src/memory/context.rs`
+- `Aleph/core/src/memory/ingestion.rs`
+- `Aleph/core/src/memory/retrieval.rs`
+- `Aleph/core/src/memory/augmentation.rs`
+- `Aleph/core/src/memory/cleanup.rs`
+- `Aleph/core/src/memory/integration_tests.rs`
 
 ### Swift UI Files
-- `Aether/Sources/MemoryView.swift`
-- `Aether/Sources/ContextCapture.swift`
+- `Aleph/Sources/MemoryView.swift`
+- `Aleph/Sources/ContextCapture.swift`
 
 ### Documentation Files
-- `Aether/core/TASK_13-14_MEMORY_AUGMENTATION.md`
-- `Aether/core/TASK_20-21_MEMORY_UI_IMPLEMENTATION.md`
-- `Aether/core/CURRENT_STATUS_2025-12-24-FINAL.md`
-- `Aether/core/ARCHIVE_SUMMARY_2025-12-24.md` (this file)
+- `Aleph/core/TASK_13-14_MEMORY_AUGMENTATION.md`
+- `Aleph/core/TASK_20-21_MEMORY_UI_IMPLEMENTATION.md`
+- `Aleph/core/CURRENT_STATUS_2025-12-24-FINAL.md`
+- `Aleph/core/ARCHIVE_SUMMARY_2025-12-24.md` (this file)
 
 ### Modified Files
-- `Aether/core/src/core.rs` (memory management APIs)
-- `Aether/core/src/aether.udl` (UniFFI interfaces)
-- `Aether/core/src/config.rs` (memory configuration)
-- `Aether/Sources/SettingsView.swift` (Memory tab)
-- `Aether/Sources/AppDelegate.swift` (core integration)
+- `Aleph/core/src/core.rs` (memory management APIs)
+- `Aleph/core/src/aleph.udl` (UniFFI interfaces)
+- `Aleph/core/src/config.rs` (memory configuration)
+- `Aleph/Sources/SettingsView.swift` (Memory tab)
+- `Aleph/Sources/AppDelegate.swift` (core integration)
 
 ---
 

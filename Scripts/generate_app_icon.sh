@@ -1,13 +1,13 @@
 #!/bin/bash
-# Generate macOS .icns file from Aether logo SVG
+# Generate macOS .icns file from Aleph logo SVG
 # Requires: rsvg-convert (install via: brew install librsvg)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOURCES_DIR="$SCRIPT_DIR/../Aether/Resources/AppIcon"
+RESOURCES_DIR="$SCRIPT_DIR/../Aleph/Resources/AppIcon"
 ICONSET_DIR="$RESOURCES_DIR/AppIcon.iconset"
-SVG_FILE="$RESOURCES_DIR/AetherAppIcon.svg"
+SVG_FILE="$RESOURCES_DIR/AlephAppIcon.svg"
 
 # Check if rsvg-convert is installed
 if ! command -v rsvg-convert &> /dev/null; then

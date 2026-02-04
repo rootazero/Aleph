@@ -1,6 +1,6 @@
 //! Tool Traits
 //!
-//! Defines the core tool traits for Aether's tool system.
+//! Defines the core tool traits for Aleph's tool system.
 
 use async_trait::async_trait;
 use schemars::{schema_for, JsonSchema};

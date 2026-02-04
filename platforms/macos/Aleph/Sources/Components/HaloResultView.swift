@@ -1,6 +1,6 @@
 //
 //  HaloResultView.swift
-//  Aether
+//  Aleph
 //
 //  Compact toast-style view for displaying run results in Halo V2.
 //  Shows status icon, message, stats, and optional copy button.
@@ -106,7 +106,7 @@ struct HaloResultView: View {
         case .partial:
             return L("halo.partial_complete")
         case .error:
-            return L("error.aether")
+            return L("error.aleph")
         }
     }
 

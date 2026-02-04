@@ -363,7 +363,7 @@ impl AuthProfileManager {
         let config_path = ProfilesConfig::default_path();
         let agents_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aether")
+            .join(".aleph")
             .join("agents");
 
         Self::with_paths(config_path, agents_dir)

@@ -11,7 +11,7 @@ Status: ✅ **COMPLETED**
 
 ### 1.1 Workspace Foundation
 
-- [x] **T1.1.1**: Create `/Cargo.toml` workspace config pointing to `Aether/core`
+- [x] **T1.1.1**: Create `/Cargo.toml` workspace config pointing to `Aleph/core`
 - [x] **T1.1.2**: Create `/VERSION` file with version `0.1.0`
 - [x] **T1.1.3**: Create `scripts/` directory with placeholder build scripts
 - [x] **T1.1.4**: Create `shared/` directory structure
@@ -19,7 +19,7 @@ Status: ✅ **COMPLETED**
 
 ### 1.2 Feature Flags
 
-- [x] **T1.2.1**: Add feature flags to `Aether/core/Cargo.toml`
+- [x] **T1.2.1**: Add feature flags to `Aleph/core/Cargo.toml`
 - [x] **T1.2.2**: Add conditional compilation to `lib.rs`
 - [x] **T1.2.3**: Create `ffi/cabi_exports.rs` placeholder module
 
@@ -35,14 +35,14 @@ Status: ✅ **COMPLETED**
 
 ### 2.1 Move Rust Core
 
-- [x] **T2.1.1**: Move `Aether/core/` to `core/`
+- [x] **T2.1.1**: Move `Aleph/core/` to `core/`
 - [x] **T2.1.2**: Update workspace `Cargo.toml` members
 - [x] **T2.1.3**: Update core `Cargo.toml` to use workspace dependencies (partial - kept local deps for now)
 - [x] **T2.1.4**: Update `.github/workflows/rust-core.yml` paths
 
 ### 2.2 Update Build References
 
-- [x] **T2.2.1**: Update `Aether/core` references in `project.yml`
+- [x] **T2.2.1**: Update `Aleph/core` references in `project.yml`
 - [x] **T2.2.2**: Update library copy paths in XcodeGen pre-build scripts
 - [x] **T2.2.3**: Update UniFFI binding output path in scripts
 - [x] **T2.2.4**: Test full macOS build from root
@@ -53,9 +53,9 @@ Status: ✅ **COMPLETED**
 
 ### 3.1 Move macOS Files
 
-- [x] **T3.1.1**: Move `Aether/` to `platforms/macos/Aether/`
-- [x] **T3.1.2**: Move `AetherTests/` to `platforms/macos/AetherTests/`
-- [x] **T3.1.3**: Move `AetherUITests/` to `platforms/macos/AetherUITests/`
+- [x] **T3.1.1**: Move `Aleph/` to `platforms/macos/Aleph/`
+- [x] **T3.1.2**: Move `AlephTests/` to `platforms/macos/AlephTests/`
+- [x] **T3.1.3**: Move `AlephUITests/` to `platforms/macos/AlephUITests/`
 - [x] **T3.1.4**: Move `project.yml` to `platforms/macos/project.yml`
 
 ### 3.2 Update macOS References
@@ -79,11 +79,11 @@ Status: ✅ **COMPLETED**
 
 ### 4.1 Create Windows Project Structure
 
-- [x] **T4.1.1**: Create `platforms/windows/Aether.sln`
-- [x] **T4.1.2**: Create `platforms/windows/Aether/Aether.csproj`
-- [x] **T4.1.3**: Create `platforms/windows/Aether/App.xaml` and `App.xaml.cs`
-- [x] **T4.1.4**: Create `platforms/windows/Aether/Interop/` directory
-- [x] **T4.1.5**: Create `platforms/windows/Aether/libs/` directory
+- [x] **T4.1.1**: Create `platforms/windows/Aleph.sln`
+- [x] **T4.1.2**: Create `platforms/windows/Aleph/Aleph.csproj`
+- [x] **T4.1.3**: Create `platforms/windows/Aleph/App.xaml` and `App.xaml.cs`
+- [x] **T4.1.4**: Create `platforms/windows/Aleph/Interop/` directory
+- [x] **T4.1.5**: Create `platforms/windows/Aleph/libs/` directory
 
 ### 4.2 Add csbindgen Integration
 
@@ -117,7 +117,7 @@ Status: ✅ **COMPLETED**
 
 ### 5.3 Cleanup
 
-- [x] **T5.3.1**: Remove old `Aether.xcodeproj.backup`
+- [x] **T5.3.1**: Remove old `Aleph.xcodeproj.backup`
 - [x] **T5.3.2**: Update `.gitignore` for new structure
 - [ ] **T5.3.3**: Final verification of all CI workflows (requires CI run)
 

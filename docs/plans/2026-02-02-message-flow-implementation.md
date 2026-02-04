@@ -254,7 +254,7 @@ mod tests {
 
 **Step 2: Run test to verify**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && ~/.cargo/bin/cargo test tool_display --no-default-features --features gateway`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && ~/.cargo/bin/cargo test tool_display --no-default-features --features gateway`
 
 Expected: All tests pass
 
@@ -276,7 +276,7 @@ pub use tool_display::{ToolDisplay, get_tool_display, format_tool_meta, format_t
 
 **Step 4: Run full gateway tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && ~/.cargo/bin/cargo test --no-default-features --features gateway`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && ~/.cargo/bin/cargo test --no-default-features --features gateway`
 
 Expected: All tests pass
 
@@ -484,7 +484,7 @@ mod tests {
 
 **Step 2: Run test to verify**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && ~/.cargo/bin/cargo test stream_buffer --no-default-features --features gateway`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && ~/.cargo/bin/cargo test stream_buffer --no-default-features --features gateway`
 
 Expected: All tests pass
 
@@ -711,7 +711,7 @@ mod tests {
 
 **Step 2: Run test to verify**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && ~/.cargo/bin/cargo test message_dedup --no-default-features --features gateway`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && ~/.cargo/bin/cargo test message_dedup --no-default-features --features gateway`
 
 Expected: All tests pass
 
@@ -943,7 +943,7 @@ dashmap = "5.5"
 
 **Step 6: Run tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && ~/.cargo/bin/cargo test event_emitter --no-default-features --features gateway`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && ~/.cargo/bin/cargo test event_emitter --no-default-features --features gateway`
 
 Expected: All tests pass
 
@@ -968,7 +968,7 @@ EOF
 ## Task 5: Swift Protocol Models Update
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Gateway/ProtocolModels.swift`
+- Modify: `platforms/macos/Aleph/Sources/Gateway/ProtocolModels.swift`
 
 **Step 1: Add EnhancedRunSummary and related types**
 
@@ -1113,14 +1113,14 @@ struct RunCompleteEvent: Codable, Sendable {
 
 **Step 3: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aether/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aether/platforms/macos/Aether/Sources/Gateway/ProtocolModels.swift`
+Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aleph/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aleph/platforms/macos/Aleph/Sources/Gateway/ProtocolModels.swift`
 
 Expected: Syntax valid
 
 **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Gateway/ProtocolModels.swift && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aleph/Sources/Gateway/ProtocolModels.swift && git commit -m "$(cat <<'EOF'
 feat(macos): add EnhancedRunSummary and ToolSummaryItem models
 
 - EnhancedRunSummary with toolSummaries, reasoning, errors
@@ -1138,7 +1138,7 @@ EOF
 ## Task 6: Result Detail Popover View (Swift)
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/Components/HaloResultDetailPopover.swift`
+- Create: `platforms/macos/Aleph/Sources/Components/HaloResultDetailPopover.swift`
 
 **Step 1: Create HaloResultDetailPopover.swift**
 
@@ -1331,7 +1331,7 @@ struct HaloResultDetailPopover: View {
 
 **Step 2: Add localization keys**
 
-Add to `platforms/macos/Aether/Resources/en.lproj/Localizable.strings`:
+Add to `platforms/macos/Aleph/Resources/en.lproj/Localizable.strings`:
 
 ```
 "result.partial" = "Partially Complete";
@@ -1341,7 +1341,7 @@ Add to `platforms/macos/Aether/Resources/en.lproj/Localizable.strings`:
 "result.reasoning" = "Reasoning";
 ```
 
-Add to `platforms/macos/Aether/Resources/zh-Hans.lproj/Localizable.strings`:
+Add to `platforms/macos/Aleph/Resources/zh-Hans.lproj/Localizable.strings`:
 
 ```
 "result.partial" = "部分完成";
@@ -1353,14 +1353,14 @@ Add to `platforms/macos/Aether/Resources/zh-Hans.lproj/Localizable.strings`:
 
 **Step 3: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aether/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aether/platforms/macos/Aether/Sources/Components/HaloResultDetailPopover.swift`
+Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aleph/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aleph/platforms/macos/Aleph/Sources/Components/HaloResultDetailPopover.swift`
 
 Expected: Syntax valid
 
 **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Components/HaloResultDetailPopover.swift platforms/macos/Aether/Resources/*/Localizable.strings && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aleph/Sources/Components/HaloResultDetailPopover.swift platforms/macos/Aleph/Resources/*/Localizable.strings && git commit -m "$(cat <<'EOF'
 feat(macos): add HaloResultDetailPopover for detailed results
 
 - Shows tool summaries with emoji and duration
@@ -1378,7 +1378,7 @@ EOF
 ## Task 7: Update HaloResultView with Popover
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Components/HaloResultView.swift`
+- Modify: `platforms/macos/Aleph/Sources/Components/HaloResultView.swift`
 
 **Step 1: Update HaloResultView to support popover**
 
@@ -1457,14 +1457,14 @@ struct HaloResultViewV2: View {
 
 **Step 3: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aether/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aether/platforms/macos/Aether/Sources/Components/HaloResultView.swift`
+Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aleph/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aleph/platforms/macos/Aleph/Sources/Components/HaloResultView.swift`
 
 Expected: Syntax valid
 
 **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Components/HaloResultView.swift && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aleph/Sources/Components/HaloResultView.swift && git commit -m "$(cat <<'EOF'
 feat(macos): add HaloResultViewV2 with detail popover support
 
 - New HaloResultViewV2 wraps original with popover
@@ -1481,7 +1481,7 @@ EOF
 ## Task 8: Update GatewayStreamAdapter
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Gateway/GatewayStreamAdapter.swift`
+- Modify: `platforms/macos/Aleph/Sources/Gateway/GatewayStreamAdapter.swift`
 
 **Step 1: Add enhanced summary tracking**
 
@@ -1621,14 +1621,14 @@ func reset() {
 
 **Step 5: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aether/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aether/platforms/macos/Aether/Sources/Gateway/GatewayStreamAdapter.swift`
+Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aleph/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aleph/platforms/macos/Aleph/Sources/Gateway/GatewayStreamAdapter.swift`
 
 Expected: Syntax valid
 
 **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Gateway/GatewayStreamAdapter.swift && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aleph/Sources/Gateway/GatewayStreamAdapter.swift && git commit -m "$(cat <<'EOF'
 feat(macos): update GatewayStreamAdapter with enhanced summary
 
 - Add enhancedRunSummary property
@@ -1646,7 +1646,7 @@ EOF
 ## Task 9: Update HaloStreamingView with Tool Formatting
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Components/HaloStreamingView.swift`
+- Modify: `platforms/macos/Aleph/Sources/Components/HaloStreamingView.swift`
 
 **Step 1: Update toolCallRow to show emoji**
 
@@ -1696,14 +1696,14 @@ private func toolEmoji(for toolName: String) -> String {
 
 **Step 2: Verify Swift syntax**
 
-Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aether/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aether/platforms/macos/Aether/Sources/Components/HaloStreamingView.swift`
+Run: `~/.uv/python3/bin/python /Volumes/TBU4/Workspace/Aleph/Scripts/verify_swift_syntax.py /Volumes/TBU4/Workspace/Aleph/platforms/macos/Aleph/Sources/Components/HaloStreamingView.swift`
 
 Expected: Syntax valid
 
 **Step 3: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aether/Sources/Components/HaloStreamingView.swift && git commit -m "$(cat <<'EOF'
+cd /Volumes/TBU4/Workspace/Aleph && git add platforms/macos/Aleph/Sources/Components/HaloStreamingView.swift && git commit -m "$(cat <<'EOF'
 feat(macos): add tool emoji to HaloStreamingView
 
 - Show emoji prefix for each tool in streaming view
@@ -1723,25 +1723,25 @@ EOF
 
 **Step 1: Build Rust core**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && ~/.cargo/bin/cargo build --no-default-features --features gateway`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && ~/.cargo/bin/cargo build --no-default-features --features gateway`
 
 Expected: Build succeeds
 
 **Step 2: Run Rust tests**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/core && ~/.cargo/bin/cargo test --no-default-features --features gateway`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/core && ~/.cargo/bin/cargo test --no-default-features --features gateway`
 
 Expected: All tests pass
 
 **Step 3: Generate Xcode project**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodegen generate`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodegen generate`
 
 Expected: Project generated
 
 **Step 4: Build macOS app**
 
-Run: `cd /Volumes/TBU4/Workspace/Aether/platforms/macos && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build CODE_SIGNING_ALLOWED=NO 2>&1 | tail -20`
+Run: `cd /Volumes/TBU4/Workspace/Aleph/platforms/macos && xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug build CODE_SIGNING_ALLOWED=NO 2>&1 | tail -20`
 
 Expected: Build succeeds
 

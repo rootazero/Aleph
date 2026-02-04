@@ -41,7 +41,7 @@ impl MarkdownCliTool {
             .stdin(Stdio::null());
 
         // Apply network restrictions if specified
-        if let Some(aether) = &self.spec.metadata.aether {
+        if let Some(aether) = &self.spec.metadata.aleph {
             if matches!(aether.security.network, NetworkMode::None) {
                 // Platform-specific network isolation
                 #[cfg(target_os = "linux")]
@@ -97,7 +97,7 @@ impl MarkdownCliTool {
         ];
 
         // Pass environment variables
-        if let Some(aether) = &self.spec.metadata.aether {
+        if let Some(aether) = &self.spec.metadata.aleph {
             if let Some(docker_cfg) = &aether.docker {
                 for env_var in &docker_cfg.env_vars {
                     if let Ok(value) = std::env::var(env_var) {
@@ -142,7 +142,7 @@ impl MarkdownCliTool {
                 126 => anyhow::bail!("Command cannot be executed in container: {}", stderr),
                 127 => anyhow::bail!(
                     "Command '{}' not found in container image '{}'. \
-                    Check metadata.aether.docker.image configuration.",
+                    Check metadata.aleph.docker.image configuration.",
                     bin,
                     self.get_docker_image().unwrap_or_default()
                 ),
@@ -168,7 +168,7 @@ impl MarkdownCliTool {
     /// Get Docker image (STRICT: must be configured or known)
     fn get_docker_image(&self) -> Result<String> {
         // Priority 1: Explicit configuration
-        if let Some(aether) = &self.spec.metadata.aether {
+        if let Some(aether) = &self.spec.metadata.aleph {
             if let Some(docker_cfg) = &aether.docker {
                 return Ok(docker_cfg.image.clone());
             }
@@ -206,7 +206,7 @@ impl MarkdownCliTool {
 
         // Priority 3: FAIL (no blind fallback to alpine)
         anyhow::bail!(
-            "Docker execution for '{}' requires 'metadata.aether.docker.image' configuration. \
+            "Docker execution for '{}' requires 'metadata.aleph.docker.image' configuration. \
             Binary '{}' has no known Docker image mapping.",
             self.spec.name,
             bin
@@ -214,7 +214,7 @@ impl MarkdownCliTool {
     }
 
     fn get_docker_network_mode(&self) -> String {
-        if let Some(aether) = &self.spec.metadata.aether {
+        if let Some(aether) = &self.spec.metadata.aleph {
             match aether.security.network {
                 NetworkMode::None => "none".to_string(),
                 NetworkMode::Local => "bridge".to_string(),
@@ -268,7 +268,7 @@ impl MarkdownCliTool {
         sandbox.apply_env(&mut cmd);
 
         // Apply network restrictions if specified
-        if let Some(aether) = &self.spec.metadata.aether {
+        if let Some(aether) = &self.spec.metadata.aleph {
             if matches!(aether.security.network, NetworkMode::None) {
                 #[cfg(target_os = "linux")]
                 {

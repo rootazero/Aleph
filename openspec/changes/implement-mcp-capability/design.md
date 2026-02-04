@@ -2,21 +2,21 @@
 
 ## Context
 
-Aether 是一个系统级 AI 中间件，当前已实现：
+Aleph 是一个系统级 AI 中间件，当前已实现：
 - **Memory Capability**: 本地 RAG，向量数据库检索历史对话
 - **Search Capability**: 6 种搜索提供商，支持 fallback
 - **Skills Capability**: Claude Agent Skills 标准，SKILL.md 格式
 - **Video Capability**: YouTube 字幕提取
 
-MCP (Model Context Protocol) 是 Anthropic 提出的标准化协议，定义了 AI 应用与外部数据源、工具之间的交互接口。本设计实现 MCP 作为 Aether 的第五个 Capability。
+MCP (Model Context Protocol) 是 Anthropic 提出的标准化协议，定义了 AI 应用与外部数据源、工具之间的交互接口。本设计实现 MCP 作为 Aleph 的第五个 Capability。
 
 ### 核心约束：零外部依赖
 
 **用户永远不应该看到 `Error: npm not found` 这样的错误。**
 
-Aether 是一个面向普通用户的 macOS 桌面应用，要求用户安装 Node.js/Python 会严重破坏用户体验。因此，我们采用**三层服务架构**：
+Aleph 是一个面向普通用户的 macOS 桌面应用，要求用户安装 Node.js/Python 会严重破坏用户体验。因此，我们采用**三层服务架构**：
 
-1. **Layer 1 (Builtin)**: Rust 原生实现，编译进 Aether Core
+1. **Layer 1 (Builtin)**: Rust 原生实现，编译进 Aleph Core
 2. **Layer 2 (Bundled)**: 预编译二进制，随 .app 分发
 3. **Layer 3 (External)**: 用户自行配置，需自行安装运行时
 
@@ -25,7 +25,7 @@ Aether 是一个面向普通用户的 macOS 桌面应用，要求用户安装 No
 为实现**低耦合高内聚**原则，核心能力抽取为独立的**共享基础模块** (`services/`)，供 MCP、Skills 以及未来扩展共同使用：
 
 ```
-Aether/core/src/services/           # 共享基础服务层
+Aleph/core/src/services/           # 共享基础服务层
 ├── mod.rs                          # 模块导出
 ├── fs/                             # 文件系统服务
 │   ├── mod.rs                      # FileOps trait
@@ -77,7 +77,7 @@ Aether/core/src/services/           # 共享基础服务层
 #### 0.1 模块结构
 
 ```
-Aether/core/src/services/
+Aleph/core/src/services/
 ├── mod.rs                      # 模块导出
 ├── fs/
 │   ├── mod.rs                  # FileOps trait + DirEntry
@@ -93,7 +93,7 @@ Aether/core/src/services/
 #### 0.2 FileOps Trait (文件系统操作)
 
 ```rust
-// Aether/core/src/services/fs/mod.rs
+// Aleph/core/src/services/fs/mod.rs
 
 use crate::error::Result;
 use async_trait::async_trait;
@@ -148,10 +148,10 @@ pub trait FileOps: Send + Sync {
 ```
 
 ```rust
-// Aether/core/src/services/fs/local.rs
+// Aleph/core/src/services/fs/local.rs
 
 use super::{DirEntry, FileOps};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use async_trait::async_trait;
 use glob::glob;
 use std::path::Path;
@@ -170,31 +170,31 @@ impl LocalFs {
 impl FileOps for LocalFs {
     async fn read_file(&self, path: &Path) -> Result<String> {
         fs::read_to_string(path).await
-            .map_err(|e| AetherError::io(format!("Failed to read {}: {}", path.display(), e)))
+            .map_err(|e| AlephError::io(format!("Failed to read {}: {}", path.display(), e)))
     }
 
     async fn read_file_bytes(&self, path: &Path) -> Result<Vec<u8>> {
         fs::read(path).await
-            .map_err(|e| AetherError::io(format!("Failed to read {}: {}", path.display(), e)))
+            .map_err(|e| AlephError::io(format!("Failed to read {}: {}", path.display(), e)))
     }
 
     async fn write_file(&self, path: &Path, content: &str) -> Result<()> {
         fs::write(path, content).await
-            .map_err(|e| AetherError::io(format!("Failed to write {}: {}", path.display(), e)))
+            .map_err(|e| AlephError::io(format!("Failed to write {}: {}", path.display(), e)))
     }
 
     async fn write_file_bytes(&self, path: &Path, content: &[u8]) -> Result<()> {
         fs::write(path, content).await
-            .map_err(|e| AetherError::io(format!("Failed to write {}: {}", path.display(), e)))
+            .map_err(|e| AlephError::io(format!("Failed to write {}: {}", path.display(), e)))
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<DirEntry>> {
         let mut entries = Vec::new();
         let mut read_dir = fs::read_dir(path).await
-            .map_err(|e| AetherError::io(format!("Failed to list {}: {}", path.display(), e)))?;
+            .map_err(|e| AlephError::io(format!("Failed to list {}: {}", path.display(), e)))?;
 
         while let Some(entry) = read_dir.next_entry().await
-            .map_err(|e| AetherError::io(format!("Failed to read entry: {}", e)))?
+            .map_err(|e| AlephError::io(format!("Failed to read entry: {}", e)))?
         {
             let metadata = entry.metadata().await.ok();
             entries.push(DirEntry {
@@ -219,7 +219,7 @@ impl FileOps for LocalFs {
 
     async fn create_dir(&self, path: &Path) -> Result<()> {
         fs::create_dir_all(path).await
-            .map_err(|e| AetherError::io(format!("Failed to create dir {}: {}", path.display(), e)))
+            .map_err(|e| AlephError::io(format!("Failed to create dir {}: {}", path.display(), e)))
     }
 
     async fn delete(&self, path: &Path) -> Result<()> {
@@ -228,7 +228,7 @@ impl FileOps for LocalFs {
             fs::remove_dir_all(path).await
         } else {
             fs::remove_file(path).await
-        }.map_err(|e| AetherError::io(format!("Failed to delete {}: {}", path.display(), e)))
+        }.map_err(|e| AlephError::io(format!("Failed to delete {}: {}", path.display(), e)))
     }
 
     async fn search(&self, base: &Path, pattern: &str) -> Result<Vec<DirEntry>> {
@@ -237,7 +237,7 @@ impl FileOps for LocalFs {
 
         tokio::task::spawn_blocking(move || {
             let mut entries = Vec::new();
-            for path in glob(&full_pattern).map_err(|e| AetherError::io(format!("Invalid pattern: {}", e)))? {
+            for path in glob(&full_pattern).map_err(|e| AlephError::io(format!("Invalid pattern: {}", e)))? {
                 if let Ok(path) = path {
                     let metadata = std::fs::metadata(&path).ok();
                     entries.push(DirEntry {
@@ -253,7 +253,7 @@ impl FileOps for LocalFs {
             }
             Ok(entries)
         }).await
-            .map_err(|e| AetherError::io(format!("Task join error: {}", e)))?
+            .map_err(|e| AlephError::io(format!("Task join error: {}", e)))?
     }
 }
 ```
@@ -261,7 +261,7 @@ impl FileOps for LocalFs {
 #### 0.3 GitOps Trait (Git 操作)
 
 ```rust
-// Aether/core/src/services/git/mod.rs
+// Aleph/core/src/services/git/mod.rs
 
 use crate::error::Result;
 use async_trait::async_trait;
@@ -318,10 +318,10 @@ pub trait GitOps: Send + Sync {
 ```
 
 ```rust
-// Aether/core/src/services/git/repository.rs
+// Aleph/core/src/services/git/repository.rs
 
 use super::{GitCommit, GitDiff, GitFileStatus, GitOps};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use async_trait::async_trait;
 use git2::Repository;
 use std::path::{Path, PathBuf};
@@ -342,10 +342,10 @@ impl GitOps for GitRepository {
 
         tokio::task::spawn_blocking(move || {
             let repo = Repository::open(&path)
-                .map_err(|e| AetherError::mcp(format!("Failed to open repo: {}", e)))?;
+                .map_err(|e| AlephError::mcp(format!("Failed to open repo: {}", e)))?;
 
             let statuses = repo.statuses(None)
-                .map_err(|e| AetherError::mcp(format!("Failed to get status: {}", e)))?;
+                .map_err(|e| AlephError::mcp(format!("Failed to get status: {}", e)))?;
 
             let mut files = Vec::new();
             for entry in statuses.iter() {
@@ -374,7 +374,7 @@ impl GitOps for GitRepository {
 
             Ok(files)
         }).await
-            .map_err(|e| AetherError::mcp(format!("Task join error: {}", e)))?
+            .map_err(|e| AlephError::mcp(format!("Task join error: {}", e)))?
     }
 
     async fn log(&self, repo_path: &Path, limit: usize) -> Result<Vec<GitCommit>> {
@@ -382,18 +382,18 @@ impl GitOps for GitRepository {
 
         tokio::task::spawn_blocking(move || {
             let repo = Repository::open(&path)
-                .map_err(|e| AetherError::mcp(format!("Failed to open repo: {}", e)))?;
+                .map_err(|e| AlephError::mcp(format!("Failed to open repo: {}", e)))?;
 
             let mut revwalk = repo.revwalk()
-                .map_err(|e| AetherError::mcp(format!("Failed to create revwalk: {}", e)))?;
+                .map_err(|e| AlephError::mcp(format!("Failed to create revwalk: {}", e)))?;
 
             revwalk.push_head()
-                .map_err(|e| AetherError::mcp(format!("Failed to push HEAD: {}", e)))?;
+                .map_err(|e| AlephError::mcp(format!("Failed to push HEAD: {}", e)))?;
 
             let mut commits = Vec::new();
             for oid in revwalk.take(limit).flatten() {
                 let commit = repo.find_commit(oid)
-                    .map_err(|e| AetherError::mcp(format!("Failed to find commit: {}", e)))?;
+                    .map_err(|e| AlephError::mcp(format!("Failed to find commit: {}", e)))?;
 
                 let author = commit.author();
                 commits.push(GitCommit {
@@ -407,7 +407,7 @@ impl GitOps for GitRepository {
 
             Ok(commits)
         }).await
-            .map_err(|e| AetherError::mcp(format!("Task join error: {}", e)))?
+            .map_err(|e| AlephError::mcp(format!("Task join error: {}", e)))?
     }
 
     async fn diff(&self, repo_path: &Path, staged: bool) -> Result<Vec<GitDiff>> {
@@ -415,7 +415,7 @@ impl GitOps for GitRepository {
 
         tokio::task::spawn_blocking(move || {
             let repo = Repository::open(&path)
-                .map_err(|e| AetherError::mcp(format!("Failed to open repo: {}", e)))?;
+                .map_err(|e| AlephError::mcp(format!("Failed to open repo: {}", e)))?;
 
             let diff = if staged {
                 let head_tree = repo.head().ok()
@@ -423,7 +423,7 @@ impl GitOps for GitRepository {
                 repo.diff_tree_to_index(head_tree.as_ref(), None, None)
             } else {
                 repo.diff_index_to_workdir(None, None)
-            }.map_err(|e| AetherError::mcp(format!("Failed to get diff: {}", e)))?;
+            }.map_err(|e| AlephError::mcp(format!("Failed to get diff: {}", e)))?;
 
             let mut diffs = Vec::new();
             diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
@@ -447,7 +447,7 @@ impl GitOps for GitRepository {
 
             Ok(diffs)
         }).await
-            .map_err(|e| AetherError::mcp(format!("Task join error: {}", e)))?
+            .map_err(|e| AlephError::mcp(format!("Task join error: {}", e)))?
     }
 
     async fn current_branch(&self, repo_path: &Path) -> Result<String> {
@@ -455,14 +455,14 @@ impl GitOps for GitRepository {
 
         tokio::task::spawn_blocking(move || {
             let repo = Repository::open(&path)
-                .map_err(|e| AetherError::mcp(format!("Failed to open repo: {}", e)))?;
+                .map_err(|e| AlephError::mcp(format!("Failed to open repo: {}", e)))?;
 
             let head = repo.head()
-                .map_err(|e| AetherError::mcp(format!("Failed to get HEAD: {}", e)))?;
+                .map_err(|e| AlephError::mcp(format!("Failed to get HEAD: {}", e)))?;
 
             Ok(head.shorthand().unwrap_or("HEAD").to_string())
         }).await
-            .map_err(|e| AetherError::mcp(format!("Task join error: {}", e)))?
+            .map_err(|e| AlephError::mcp(format!("Task join error: {}", e)))?
     }
 
     async fn is_repo(&self, path: &Path) -> Result<bool> {
@@ -471,7 +471,7 @@ impl GitOps for GitRepository {
         tokio::task::spawn_blocking(move || {
             Ok(Repository::open(&path).is_ok())
         }).await
-            .map_err(|e| AetherError::mcp(format!("Task join error: {}", e)))?
+            .map_err(|e| AlephError::mcp(format!("Task join error: {}", e)))?
     }
 }
 ```
@@ -479,7 +479,7 @@ impl GitOps for GitRepository {
 #### 0.4 SystemInfoProvider Trait (系统信息)
 
 ```rust
-// Aether/core/src/services/system_info/mod.rs
+// Aleph/core/src/services/system_info/mod.rs
 
 use crate::error::Result;
 use async_trait::async_trait;
@@ -515,10 +515,10 @@ pub trait SystemInfoProvider: Send + Sync {
 ```
 
 ```rust
-// Aether/core/src/services/system_info/macos.rs
+// Aleph/core/src/services/system_info/macos.rs
 
 use super::{SystemInfo, SystemInfoProvider};
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use async_trait::async_trait;
 
 /// macOS system information provider
@@ -553,7 +553,7 @@ impl SystemInfoProvider for MacOsSystemInfo {
                 memory_available: get_available_memory(),
             })
         }).await
-            .map_err(|e| AetherError::io(format!("Task join error: {}", e)))?
+            .map_err(|e| AlephError::io(format!("Task join error: {}", e)))?
     }
 
     async fn active_application(&self) -> Result<String> {
@@ -571,7 +571,7 @@ fn get_macos_version() -> Result<String> {
     let output = std::process::Command::new("sw_vers")
         .arg("-productVersion")
         .output()
-        .map_err(|e| AetherError::io(format!("Failed to get version: {}", e)))?;
+        .map_err(|e| AlephError::io(format!("Failed to get version: {}", e)))?;
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
@@ -628,7 +628,7 @@ fn get_available_memory() -> u64 {
 │                                                                                   │
 │  ┌─────────────────────────────────────────────────────────────────────────────┐ │
 │  │ Layer 2: Bundled Servers (Future - Phase 4)                                 │ │
-│  │ Pre-compiled binaries in Aether.app/Contents/Resources/mcp-servers/         │ │
+│  │ Pre-compiled binaries in Aleph.app/Contents/Resources/mcp-servers/         │ │
 │  │ ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────────────┐   │ │
 │  │ │ notion-server     │ │ slack-server      │ │ browser-server            │   │ │
 │  │ │ (Bun compiled)    │ │ (Bun compiled)    │ │ (Bun compiled)            │   │ │
@@ -653,7 +653,7 @@ fn get_available_memory() -> u64 {
 #### 2.1 MCP Resource & Tool
 
 ```rust
-// Aether/core/src/mcp/types.rs
+// Aleph/core/src/mcp/types.rs
 
 /// MCP 资源 - 静态或动态数据源
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -702,7 +702,7 @@ pub struct McpToolResult {
 #### 2.2 MCP Context
 
 ```rust
-// 修改 Aether/core/src/payload/mod.rs
+// 修改 Aleph/core/src/payload/mod.rs
 
 /// MCP 上下文数据
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -719,7 +719,7 @@ pub struct McpContext {
 ### 3. 内置服务 Trait
 
 ```rust
-// Aether/core/src/mcp/builtin/mod.rs
+// Aleph/core/src/mcp/builtin/mod.rs
 
 use async_trait::async_trait;
 use crate::error::Result;
@@ -764,10 +764,10 @@ pub trait BuiltinMcpService: Send + Sync {
 #### 4.1 文件系统服务 (FsService) - MCP 适配器
 
 ```rust
-// Aether/core/src/mcp/builtin/fs.rs
+// Aleph/core/src/mcp/builtin/fs.rs
 
 use super::BuiltinMcpService;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::types::{McpResource, McpTool, McpToolResult};
 use crate::services::fs::{FileOps, LocalFs};  // 依赖共享基础模块
 use async_trait::async_trait;
@@ -819,15 +819,15 @@ impl BuiltinMcpService for FsService {
 
     async fn read_resource(&self, uri: &str) -> Result<McpResource> {
         let path = uri.strip_prefix("file://")
-            .ok_or_else(|| AetherError::mcp("Invalid file URI"))?;
+            .ok_or_else(|| AlephError::mcp("Invalid file URI"))?;
 
         let path = std::path::Path::new(path);
         if !self.is_path_allowed(path) {
-            return Err(AetherError::mcp("Path not allowed"));
+            return Err(AlephError::mcp("Path not allowed"));
         }
 
         let contents = fs::read_to_string(path).await
-            .map_err(|e| AetherError::mcp(format!("Read error: {}", e)))?;
+            .map_err(|e| AlephError::mcp(format!("Read error: {}", e)))?;
 
         let name = path.file_name()
             .and_then(|n| n.to_str())
@@ -899,7 +899,7 @@ impl BuiltinMcpService for FsService {
         match tool_name {
             "file_read" => {
                 let path: String = serde_json::from_value(args["path"].clone())
-                    .map_err(|_| AetherError::mcp("Missing path"))?;
+                    .map_err(|_| AlephError::mcp("Missing path"))?;
 
                 let path = std::path::Path::new(&path);
                 if !self.is_path_allowed(path) {
@@ -929,9 +929,9 @@ impl BuiltinMcpService for FsService {
             }
             "file_write" => {
                 let path: String = serde_json::from_value(args["path"].clone())
-                    .map_err(|_| AetherError::mcp("Missing path"))?;
+                    .map_err(|_| AlephError::mcp("Missing path"))?;
                 let content: String = serde_json::from_value(args["content"].clone())
-                    .map_err(|_| AetherError::mcp("Missing content"))?;
+                    .map_err(|_| AlephError::mcp("Missing content"))?;
 
                 let path = std::path::Path::new(&path);
                 if !self.is_path_allowed(path) {
@@ -961,7 +961,7 @@ impl BuiltinMcpService for FsService {
             }
             "file_list" => {
                 let path: String = serde_json::from_value(args["path"].clone())
-                    .map_err(|_| AetherError::mcp("Missing path"))?;
+                    .map_err(|_| AlephError::mcp("Missing path"))?;
 
                 let path = std::path::Path::new(&path);
                 if !self.is_path_allowed(path) {
@@ -1015,10 +1015,10 @@ impl BuiltinMcpService for FsService {
 #### 4.2 Git 服务 (GitService) - MCP 适配器
 
 ```rust
-// Aether/core/src/mcp/builtin/git.rs
+// Aleph/core/src/mcp/builtin/git.rs
 
 use super::BuiltinMcpService;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::types::{McpResource, McpTool, McpToolResult};
 use crate::services::git::{GitOps, GitRepository};  // 依赖共享基础模块
 use async_trait::async_trait;
@@ -1068,7 +1068,7 @@ impl BuiltinMcpService for GitService {
     }
 
     async fn read_resource(&self, _uri: &str) -> Result<McpResource> {
-        Err(AetherError::mcp("Use git tools instead"))
+        Err(AlephError::mcp("Use git tools instead"))
     }
 
     fn list_tools(&self) -> Vec<McpTool> {
@@ -1127,7 +1127,7 @@ impl BuiltinMcpService for GitService {
         match tool_name {
             "git_status" => {
                 let repo_path: String = serde_json::from_value(args["repo_path"].clone())
-                    .map_err(|_| AetherError::mcp("Missing repo_path"))?;
+                    .map_err(|_| AlephError::mcp("Missing repo_path"))?;
 
                 let repo_path = PathBuf::from(&repo_path);
                 if !self.is_repo_allowed(&repo_path) {
@@ -1165,7 +1165,7 @@ impl BuiltinMcpService for GitService {
             }
             "git_log" => {
                 let repo_path: String = serde_json::from_value(args["repo_path"].clone())
-                    .map_err(|_| AetherError::mcp("Missing repo_path"))?;
+                    .map_err(|_| AlephError::mcp("Missing repo_path"))?;
                 let limit: usize = args.get("limit")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(10) as usize;
@@ -1207,7 +1207,7 @@ impl BuiltinMcpService for GitService {
             }
             "git_diff" => {
                 let repo_path: String = serde_json::from_value(args["repo_path"].clone())
-                    .map_err(|_| AetherError::mcp("Missing repo_path"))?;
+                    .map_err(|_| AlephError::mcp("Missing repo_path"))?;
                 let staged: bool = args.get("staged")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
@@ -1265,10 +1265,10 @@ impl BuiltinMcpService for GitService {
 Shell 服务由于安全性要求较高，直接使用 `tokio::process::Command`，不通过共享基础模块。
 
 ```rust
-// Aether/core/src/mcp/builtin/shell.rs
+// Aleph/core/src/mcp/builtin/shell.rs
 
 use super::BuiltinMcpService;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use crate::mcp::types::{McpResource, McpTool, McpToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -1310,7 +1310,7 @@ impl BuiltinMcpService for ShellService {
     }
 
     async fn read_resource(&self, _uri: &str) -> Result<McpResource> {
-        Err(AetherError::mcp("Use shell tools instead"))
+        Err(AlephError::mcp("Use shell tools instead"))
     }
 
     fn list_tools(&self) -> Vec<McpTool> {
@@ -1342,7 +1342,7 @@ impl BuiltinMcpService for ShellService {
         match tool_name {
             "shell_exec" => {
                 let command: String = serde_json::from_value(args["command"].clone())
-                    .map_err(|_| AetherError::mcp("Missing command"))?;
+                    .map_err(|_| AlephError::mcp("Missing command"))?;
 
                 if !self.is_command_allowed(&command) {
                     return Ok(McpToolResult {
@@ -1364,8 +1364,8 @@ impl BuiltinMcpService for ShellService {
                 }
 
                 let output = timeout(self.timeout, cmd.output()).await
-                    .map_err(|_| AetherError::mcp("Command timed out"))?
-                    .map_err(|e| AetherError::mcp(format!("Exec error: {}", e)))?;
+                    .map_err(|_| AlephError::mcp("Command timed out"))?
+                    .map_err(|e| AlephError::mcp(format!("Exec error: {}", e)))?;
 
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1399,12 +1399,12 @@ impl BuiltinMcpService for ShellService {
 ### 5. McpClient (服务注册与路由)
 
 ```rust
-// Aether/core/src/mcp/client.rs
+// Aleph/core/src/mcp/client.rs
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::error::{AetherError, Result};
+use crate::error::{AlephError, Result};
 use super::builtin::BuiltinMcpService;
 use super::external::McpServerConnection;
 use super::types::{McpResource, McpTool, McpToolResult};
@@ -1525,7 +1525,7 @@ impl McpClient {
             }
         }
 
-        Err(AetherError::mcp(format!("Tool not found: {}", tool_name)))
+        Err(AlephError::mcp(format!("Tool not found: {}", tool_name)))
     }
 
     /// 检查工具是否需要确认
@@ -1556,7 +1556,7 @@ impl McpClient {
 ### 6. 配置格式
 
 ```toml
-# ~/.aether/config.toml
+# ~/.aleph/config.toml
 
 [mcp]
 enabled = true
@@ -1595,7 +1595,7 @@ require_confirmation = true
 ```
 
 ```rust
-// Aether/core/src/mcp/config.rs
+// Aleph/core/src/mcp/config.rs
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

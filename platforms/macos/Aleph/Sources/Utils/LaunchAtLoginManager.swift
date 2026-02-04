@@ -1,16 +1,16 @@
 //
 //  LaunchAtLoginManager.swift
-//  Aether
+//  Aleph
 //
 //  Manages the "Launch at Login" functionality using SMAppService (macOS 13+).
-//  This allows Aether to start automatically when the user logs in.
+//  This allows Aleph to start automatically when the user logs in.
 //
 
 import Combine
 import AppKit
 import ServiceManagement
 
-/// Manager for controlling whether Aether launches at user login
+/// Manager for controlling whether Aleph launches at user login
 ///
 /// Uses SMAppService API (macOS 13+) to register/unregister the app
 /// as a Login Item in System Settings > General > Login Items.

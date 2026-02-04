@@ -1,4 +1,4 @@
-//! Aether Tool System
+//! Aleph Tool System
 //!
 //! Self-implemented tool traits replacing rig-core dependency.
 //!

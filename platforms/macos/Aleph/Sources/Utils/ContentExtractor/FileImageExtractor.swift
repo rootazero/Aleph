@@ -30,7 +30,7 @@ final class FileImageExtractor: ContentExtractor {
         NSPasteboard.PasteboardType("public.file-url")
     ]
 
-    private let logger = Logger(subsystem: "com.aether", category: "FileImageExtractor")
+    private let logger = Logger(subsystem: "com.aleph", category: "FileImageExtractor")
 
     // MARK: - Extraction
 

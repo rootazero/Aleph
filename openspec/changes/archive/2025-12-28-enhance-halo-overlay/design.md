@@ -10,9 +10,9 @@ This design document outlines the technical architecture for Phase 3 enhancement
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Rust Core (AetherCore)                   │
+│                     Rust Core (AlephCore)                   │
 │  ┌────────────────────────────────────────────────────────┐ │
-│  │  Event Loop (rdev) → AetherEventHandler callbacks      │ │
+│  │  Event Loop (rdev) → AlephEventHandler callbacks      │ │
 │  │    - on_state_changed(ProcessingState)                 │ │
 │  │    - on_halo_show(HaloPosition, provider_color)        │ │
 │  │    - on_halo_hide()                                    │ │
@@ -36,7 +36,7 @@ This design document outlines the technical architecture for Phase 3 enhancement
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Rust Core (AetherCore)                   │
+│                     Rust Core (AlephCore)                   │
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │  Event Loop + NEW CALLBACKS:                           │ │
 │  │    - on_response_chunk(text: String)         [NEW]    │ │
@@ -296,7 +296,7 @@ struct HaloView: View {
 #### UniFFI Interface Extension
 
 ```rust
-// aether.udl additions
+// aleph.udl additions
 enum ErrorType {
     "Network",
     "Permission",
@@ -305,7 +305,7 @@ enum ErrorType {
     "Unknown"
 }
 
-callback interface AetherEventHandler {
+callback interface AlephEventHandler {
     // ... existing callbacks
 
     void on_error_typed(ErrorType error_type, string message);
@@ -527,11 +527,11 @@ extension HaloWindow {
         // Set accessibility label
         switch state {
         case .idle:
-            self.accessibilityLabel = "Aether idle"
+            self.accessibilityLabel = "Aleph idle"
 
         case .listening:
-            self.accessibilityLabel = "Aether listening"
-            announceToVoiceOver("Aether listening")
+            self.accessibilityLabel = "Aleph listening"
+            announceToVoiceOver("Aleph listening")
 
         case .processing(let color, _):
             let provider = providerName(for: color)
@@ -636,7 +636,7 @@ struct HaloView: View {
 #### EventHandler with Queue
 
 ```swift
-class EventHandlerImpl: AetherEventHandler {
+class EventHandlerImpl: AlephEventHandler {
     private var isProcessing = false
     private var pendingOperations: [HotkeyEvent] = []
     private let maxQueueDepth = 3
@@ -866,7 +866,7 @@ Each component is independently toggleable via feature flags in UserDefaults.
 ## Migration Path from Phase 2
 
 1. **No breaking changes** to existing Phase 2 APIs
-2. Add new callbacks to `AetherEventHandler` (backward compatible via default implementations)
+2. Add new callbacks to `AlephEventHandler` (backward compatible via default implementations)
 3. Extend `HaloState` enum with new associated values (existing cases unchanged)
 4. HaloWindow initialization accepts optional `ThemeEngine` (defaults to Zen theme)
 

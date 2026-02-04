@@ -416,7 +416,7 @@ impl AlephError {
 ## 10. UniFFI 导出
 
 ```
-// aether.udl
+// aleph.udl
 interface RuntimeRegistry {
     constructor();
 
@@ -470,17 +470,17 @@ dictionary UpdateInfo {
 ## 12. 文件变更清单
 
 **新增：**
-- `Aether/core/src/runtimes/mod.rs`
-- `Aether/core/src/runtimes/manager.rs`
-- `Aether/core/src/runtimes/registry.rs`
-- `Aether/core/src/runtimes/manifest.rs`
-- `Aether/core/src/runtimes/download.rs`
-- `Aether/core/src/runtimes/ytdlp.rs`
-- `Aether/core/src/runtimes/uv.rs`
-- `Aether/core/src/runtimes/fnm.rs`
+- `Aleph/core/src/runtimes/mod.rs`
+- `Aleph/core/src/runtimes/manager.rs`
+- `Aleph/core/src/runtimes/registry.rs`
+- `Aleph/core/src/runtimes/manifest.rs`
+- `Aleph/core/src/runtimes/download.rs`
+- `Aleph/core/src/runtimes/ytdlp.rs`
+- `Aleph/core/src/runtimes/uv.rs`
+- `Aleph/core/src/runtimes/fnm.rs`
 
 **修改：**
-- `Aether/core/src/lib.rs` - 添加 `mod runtimes`
-- `Aether/core/src/video/youtube.rs` - 使用新 API
-- `Aether/core/src/aether.udl` - UniFFI 接口
-- `Aether/core/src/error.rs` - 新增 Runtime 错误类型
+- `Aleph/core/src/lib.rs` - 添加 `mod runtimes`
+- `Aleph/core/src/video/youtube.rs` - 使用新 API
+- `Aleph/core/src/aleph.udl` - UniFFI 接口
+- `Aleph/core/src/error.rs` - 新增 Runtime 错误类型

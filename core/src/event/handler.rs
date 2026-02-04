@@ -1,8 +1,8 @@
-// Aether/core/src/event/handler.rs
+// Aleph/core/src/event/handler.rs
 //! Event handler trait and registry for component subscriptions.
 
 use crate::event::bus::EventBus;
-use crate::event::types::{AetherEvent, EventType};
+use crate::event::types::{AlephEvent, EventType};
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -74,9 +74,9 @@ pub trait EventHandler: Send + Sync {
     /// Errors are logged but don't stop the event loop.
     async fn handle(
         &self,
-        event: &AetherEvent,
+        event: &AlephEvent,
         ctx: &EventContext,
-    ) -> Result<Vec<AetherEvent>, HandlerError>;
+    ) -> Result<Vec<AlephEvent>, HandlerError>;
 }
 
 /// Error type for event handlers
@@ -266,9 +266,9 @@ mod tests {
 
         async fn handle(
             &self,
-            _event: &AetherEvent,
+            _event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
             self.count.fetch_add(1, Ordering::SeqCst);
             Ok(vec![])
         }
@@ -289,11 +289,11 @@ mod tests {
 
         async fn handle(
             &self,
-            _event: &AetherEvent,
+            _event: &AlephEvent,
             _ctx: &EventContext,
-        ) -> Result<Vec<AetherEvent>, HandlerError> {
+        ) -> Result<Vec<AlephEvent>, HandlerError> {
             // Produce a LoopStop event for each input
-            Ok(vec![AetherEvent::LoopStop(StopReason::Completed)])
+            Ok(vec![AlephEvent::LoopStop(StopReason::Completed)])
         }
     }
 
@@ -327,7 +327,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Publish event
-        bus.publish(AetherEvent::InputReceived(InputEvent {
+        bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,
@@ -366,7 +366,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Publish input event
-        bus.publish(AetherEvent::InputReceived(InputEvent {
+        bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
             topic_id: None,
             context: None,

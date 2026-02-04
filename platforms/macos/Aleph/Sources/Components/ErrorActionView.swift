@@ -1,6 +1,6 @@
 //
 //  ErrorActionView.swift
-//  Aether
+//  Aleph
 //
 //  Error display component with actionable buttons for different error types
 //

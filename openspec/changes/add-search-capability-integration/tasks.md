@@ -10,13 +10,13 @@
 
 ### Module Structure Setup
 
-- [ ] Create `Aether/core/src/search/` module directory
-- [ ] Create `Aether/core/src/search/mod.rs` with public API
-- [ ] Create `Aether/core/src/search/result.rs` for `SearchResult` struct
-- [ ] Create `Aether/core/src/search/options.rs` for `SearchOptions` struct
-- [ ] Create `Aether/core/src/search/provider.rs` for `SearchProvider` trait
-- [ ] Create `Aether/core/src/search/registry.rs` for `SearchRegistry`
-- [ ] Create `Aether/core/src/search/providers/` directory for implementations
+- [ ] Create `Aleph/core/src/search/` module directory
+- [ ] Create `Aleph/core/src/search/mod.rs` with public API
+- [ ] Create `Aleph/core/src/search/result.rs` for `SearchResult` struct
+- [ ] Create `Aleph/core/src/search/options.rs` for `SearchOptions` struct
+- [ ] Create `Aleph/core/src/search/provider.rs` for `SearchProvider` trait
+- [ ] Create `Aleph/core/src/search/registry.rs` for `SearchRegistry`
+- [ ] Create `Aleph/core/src/search/providers/` directory for implementations
 - [ ] Add `async-trait` dependency to `Cargo.toml`
 
 **Validation**: `cargo build` succeeds, all modules importable.
@@ -59,7 +59,7 @@
 
 ### Tavily Provider
 
-- [ ] Create `Aether/core/src/search/providers/tavily.rs`
+- [ ] Create `Aleph/core/src/search/providers/tavily.rs`
 - [ ] Implement `TavilyProvider` struct with `api_key` and `client` fields
 - [ ] Implement private `TavilyRequest` and `TavilyResponse` structs
 - [ ] Implement `SearchProvider` trait for `TavilyProvider`
@@ -76,7 +76,7 @@
 
 ### SearXNG Provider
 
-- [ ] Create `Aether/core/src/search/providers/searxng.rs`
+- [ ] Create `Aleph/core/src/search/providers/searxng.rs`
 - [ ] Implement `SearxngProvider` struct with `base_url` and `client`
 - [ ] Implement private `SearxngResponse` and `SearxngResult` structs
 - [ ] Implement `SearchProvider` trait for `SearxngProvider`
@@ -93,7 +93,7 @@
 
 ### Brave Provider
 
-- [ ] Create `Aether/core/src/search/providers/brave.rs`
+- [ ] Create `Aleph/core/src/search/providers/brave.rs`
 - [ ] Implement `BraveProvider` struct
 - [ ] Implement private `BraveResponse` and `BraveResult` structs
 - [ ] Implement `SearchProvider` trait
@@ -110,7 +110,7 @@
 
 ### Google CSE Provider
 
-- [ ] Create `Aether/core/src/search/providers/google.rs`
+- [ ] Create `Aleph/core/src/search/providers/google.rs`
 - [ ] Implement `GoogleProvider` struct with `api_key` and `engine_id`
 - [ ] Implement private `GoogleResponse` and `GoogleItem` structs
 - [ ] Implement `SearchProvider` trait
@@ -127,7 +127,7 @@
 
 ### Bing Provider
 
-- [ ] Create `Aether/core/src/search/providers/bing.rs`
+- [ ] Create `Aleph/core/src/search/providers/bing.rs`
 - [ ] Implement `BingProvider` struct
 - [ ] Implement private `BingResponse` and `BingWebPage` structs
 - [ ] Implement `SearchProvider` trait
@@ -144,7 +144,7 @@
 
 ### Exa.ai Provider
 
-- [ ] Create `Aether/core/src/search/providers/exa.rs`
+- [ ] Create `Aleph/core/src/search/providers/exa.rs`
 - [ ] Implement `ExaProvider` struct
 - [ ] Implement private `ExaRequest` and `ExaResponse` structs
 - [ ] Implement `SearchProvider` trait
@@ -177,7 +177,7 @@
 
 ### Config Schema Extension
 
-- [ ] Add `SearchConfig` struct to `Aether/core/src/config/mod.rs`
+- [ ] Add `SearchConfig` struct to `Aleph/core/src/config/mod.rs`
   - [ ] `enabled: bool`
   - [ ] `default_provider: String`
   - [ ] `fallback_providers: Option<Vec<String>>`
@@ -262,7 +262,7 @@
 
 ### PII Scrubbing
 
-- [ ] Add `scrub_search_query()` function to `Aether/core/src/privacy/scrubber.rs`
+- [ ] Add `scrub_search_query()` function to `Aleph/core/src/privacy/scrubber.rs`
 - [ ] Implement regex-based email redaction
 - [ ] Implement regex-based phone number redaction
 - [ ] Implement regex-based credit card redaction
@@ -287,7 +287,7 @@
 
 ### Error Handling
 
-- [ ] Add search-specific error variants to `AetherError` (if needed)
+- [ ] Add search-specific error variants to `AlephError` (if needed)
 - [ ] Implement graceful degradation on search timeout
 - [ ] Implement graceful degradation on all providers failing
 - [ ] Add retry logic with exponential backoff (optional)

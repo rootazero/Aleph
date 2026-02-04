@@ -1641,7 +1641,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ### Task 5.1: Create TaskPlanCard View
 
 **Files:**
-- Create: `platforms/macos/Aether/Sources/Components/Molecules/TaskPlanCard.swift`
+- Create: `platforms/macos/Aleph/Sources/Components/Molecules/TaskPlanCard.swift`
 
 **Step 1: Create the component**
 
@@ -1757,7 +1757,7 @@ struct TaskPlanCard: View {
 **Step 2: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Components/Molecules/TaskPlanCard.swift
+git add platforms/macos/Aleph/Sources/Components/Molecules/TaskPlanCard.swift
 git commit -m "feat(macos): add TaskPlanCard UI component
 
 - Status icons for pending/running/completed/failed/cancelled

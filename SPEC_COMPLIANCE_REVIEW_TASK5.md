@@ -11,9 +11,9 @@
 
 Task 5 (MessageBuilder module) has been **fully implemented and tested** according to specification. All required structs, methods, conversion rules, and test cases have been created and verified.
 
-- **Implementation File:** `/Users/zouguojun/Workspace/Aether/core/src/agent_loop/message_builder.rs`
+- **Implementation File:** `/Users/zouguojun/Workspace/Aleph/core/src/agent_loop/message_builder.rs`
 - **Integration Points:**
-  - `/Users/zouguojun/Workspace/Aether/core/src/agent_loop/mod.rs` (exports)
+  - `/Users/zouguojun/Workspace/Aleph/core/src/agent_loop/mod.rs` (exports)
 - **Test Status:** ✅ **14/14 tests passing**
 - **Code Quality:** ✅ No warnings or violations
 
@@ -30,9 +30,9 @@ Task 5 (MessageBuilder module) has been **fully implemented and tested** accordi
 
 **Evidence:**
 ```
-/Users/zouguojun/Workspace/Aether/core/src/agent_loop/message_builder.rs (773 lines)
-/Users/zouguojun/Workspace/Aether/core/src/agent_loop/mod.rs (line 66: pub mod message_builder)
-/Users/zouguojun/Workspace/Aether/core/src/agent_loop/mod.rs (line 81: pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCall})
+/Users/zouguojun/Workspace/Aleph/core/src/agent_loop/message_builder.rs (773 lines)
+/Users/zouguojun/Workspace/Aleph/core/src/agent_loop/mod.rs (line 66: pub mod message_builder)
+/Users/zouguojun/Workspace/Aleph/core/src/agent_loop/mod.rs (line 81: pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCall})
 ```
 
 ---
@@ -665,7 +665,7 @@ pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCal
 
 The implementation aligns with OpenCode's pattern as specified:
 
-| Feature | OpenCode | Aether | Status |
+| Feature | OpenCode | Aleph | Status |
 |---------|----------|--------|--------|
 | System reminder wrapping | `<system-reminder>` tags | `<system-reminder>` tags | ✅ |
 | Q&A pair for summaries | "What did we do?" | "What did we do so far?" | ✅ |

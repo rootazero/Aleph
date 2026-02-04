@@ -4,7 +4,7 @@
 
 ### The Three-Layer Identity
 
-Every tool in Aether has three distinct identities:
+Every tool in Aleph has three distinct identities:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -58,7 +58,7 @@ Every tool in Aether has three distinct identities:
 | `/video` | `/video` | `yt-dlp` | Built-in capability |
 
 **Key Properties:**
-- Compiled into the Aether binary
+- Compiled into the Aleph binary
 - Zero IPC overhead (direct function call)
 - Top-level command namespace
 - "Feels like shell commands"

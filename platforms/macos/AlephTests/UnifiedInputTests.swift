@@ -1,6 +1,6 @@
 //
 //  UnifiedInputTests.swift
-//  AetherTests
+//  AlephTests
 //
 //  Unit tests for command input parsing.
 //  Part of: refactor-unified-halo-window Phase 7
@@ -8,7 +8,7 @@
 
 import XCTest
 import AppKit
-@testable import Aether
+@testable import Aleph
 
 /// Unit tests for command input parsing
 ///

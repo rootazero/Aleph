@@ -24,7 +24,7 @@
   - [ ] `react` - tapback (associated_message_guid)
 
 ### 1.3 Tool Registration
-- [ ] Create `MessageTool` struct implementing `AetherTool`
+- [ ] Create `MessageTool` struct implementing `AlephTool`
 - [ ] Tool schema with JSON Schema parameters
 - [ ] Register in builtin tool registry
 - [ ] Unit tests for dispatch logic

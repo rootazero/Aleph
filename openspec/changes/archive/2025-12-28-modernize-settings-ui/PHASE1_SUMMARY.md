@@ -124,7 +124,7 @@ Phase 2 将基于这些设计系统和原子组件,实现:
 ## 文件清单
 
 ```
-Aether/Sources/
+Aleph/Sources/
 ├── DesignSystem/
 │   ├── DesignTokens.swift      (189 行)
 │   └── ThemeManager.swift      (134 行)

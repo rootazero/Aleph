@@ -6,7 +6,7 @@ import Foundation
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
 #if canImport(aetherFFI)
-import aetherFFI
+import alephFFI
 #endif
 
 fileprivate extension RustBuffer {

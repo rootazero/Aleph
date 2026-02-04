@@ -236,8 +236,8 @@ cargo bench --bench pipeline_bench
 
 - [Architecture Documentation](./ARCHITECTURE.md#intent-routing-pipeline)
 - [OpenSpec Proposal](../openspec/changes/enhance-intent-routing-pipeline/)
-- [Integration Tests](../Aether/core/src/tests/pipeline_integration.rs)
-- [Benchmarks](../Aether/core/benches/pipeline_bench.rs)
+- [Integration Tests](../Aleph/core/src/tests/pipeline_integration.rs)
+- [Benchmarks](../Aleph/core/benches/pipeline_bench.rs)
 
 ---
 

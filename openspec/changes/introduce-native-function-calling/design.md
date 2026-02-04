@@ -2,7 +2,7 @@
 
 ## Context
 
-Aether currently wraps all native Rust tools (fs, git, shell, sys) in an MCP-like interface via the `SystemTool` trait. This design was inherited from early prototyping when MCP was being evaluated as the universal tool interface. However, this creates unnecessary abstraction for tools that are already native Rust code.
+Aleph currently wraps all native Rust tools (fs, git, shell, sys) in an MCP-like interface via the `SystemTool` trait. This design was inherited from early prototyping when MCP was being evaluated as the universal tool interface. However, this creates unnecessary abstraction for tools that are already native Rust code.
 
 ### Stakeholders
 - **LLM Integration**: Tools need JSON Schema definitions for function calling

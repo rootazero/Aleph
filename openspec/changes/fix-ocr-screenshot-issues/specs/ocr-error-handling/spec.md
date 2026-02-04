@@ -22,7 +22,7 @@
 **Given** 用户配置的 `default_provider` 是 "ollama"（本地模型）
 **And** 该模型不支持 vision
 **When** VisionService 尝试创建 provider
-**Then** 返回 `AetherError::InvalidConfig` 错误
+**Then** 返回 `AlephError::InvalidConfig` 错误
 **And** 错误消息包含 "does not support vision"
 **And** 错误消息列出支持 vision 的 provider 选项
 
@@ -30,7 +30,7 @@
 
 **Given** config.toml 中未设置 `[general] default_provider`
 **When** 用户触发 OCR 截图
-**Then** 返回 `AetherError::InvalidConfig` 错误
+**Then** 返回 `AlephError::InvalidConfig` 错误
 **And** 错误消息为 "No default provider configured"
 
 ### Requirement: OCR-ERR-002 - Error Logging

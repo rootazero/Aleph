@@ -1,6 +1,6 @@
 //! Daemon Manager
 //!
-//! Manages Aether as a persistent system service across platforms.
+//! Manages Aleph as a persistent system service across platforms.
 
 pub mod cli;
 pub mod dispatcher;

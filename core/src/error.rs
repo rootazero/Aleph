@@ -1,6 +1,6 @@
-/// Custom error types for Aether core library.
+/// Custom error types for Aleph core library.
 ///
-/// All errors in the Aether core are represented using this enum,
+/// All errors in the Aleph core are represented using this enum,
 /// which provides clear error messages and integrates with UniFFI
 /// for automatic conversion to Swift/Kotlin exceptions.
 use thiserror::Error;
@@ -107,7 +107,7 @@ pub enum AlephError {
     },
 
     /// Generic error for other cases
-    #[error("Aether error: {message}")]
+    #[error("Aleph error: {message}")]
     Other {
         message: String,
         suggestion: Option<String>,
@@ -216,7 +216,7 @@ impl AlephError {
     pub fn callback<S: Into<String>>(msg: S) -> Self {
         AlephError::CallbackError {
             message: msg.into(),
-            suggestion: Some("This is an internal error. Please restart Aether.".to_string()),
+            suggestion: Some("This is an internal error. Please restart Aleph.".to_string()),
         }
     }
 
@@ -656,7 +656,7 @@ mod tests {
     fn test_error_display() {
         let err = AlephError::other("generic error");
         let display = format!("{}", err);
-        assert_eq!(display, "Aether error: generic error");
+        assert_eq!(display, "Aleph error: generic error");
     }
 
     #[test]

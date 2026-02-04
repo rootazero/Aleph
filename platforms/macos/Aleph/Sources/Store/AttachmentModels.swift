@@ -1,6 +1,6 @@
 //
 //  AttachmentModels.swift
-//  Aether
+//  Aleph
 //
 //  Data models for stored attachments.
 //  Attachments are linked to messages and persisted to SQLite.

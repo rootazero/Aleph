@@ -8,11 +8,11 @@ Enhance error handling by providing actionable recovery suggestions alongside er
 
 ### Requirement: Error Suggestions Framework
 
-The system SHALL extend `AetherError` type with optional `suggestion` field containing actionable recovery guidance.
+The system SHALL extend `AlephError` type with optional `suggestion` field containing actionable recovery guidance.
 
 #### Scenario: Error with suggestion
 
-- **WHEN** `AetherError::ApiKeyInvalid` is created
+- **WHEN** `AlephError::ApiKeyInvalid` is created
 - **THEN** error includes suggestion: "Please check your API key in Settings → Providers"
 - **AND** suggestion is accessible via `error.suggestion()`
 - **AND** suggestion is optional (may be None)
@@ -82,7 +82,7 @@ The system SHALL provide suggestions for configuration-related errors.
 
 - **WHEN** TOML parser fails on malformed config.toml
 - **THEN** error message: "Failed to parse config: unexpected character at line 42"
-- **AND** suggestion: "Restore default config or fix syntax error in ~/.aether/config.toml"
+- **AND** suggestion: "Restore default config or fix syntax error in ~/.aleph/config.toml"
 
 ### Requirement: Memory Module Error Suggestions
 
@@ -92,7 +92,7 @@ The system SHALL provide suggestions for memory-related errors.
 
 - **WHEN** memory database is locked by another process
 - **THEN** error message: "Memory database is locked"
-- **AND** suggestion: "Close other Aether instances or restart the application"
+- **AND** suggestion: "Close other Aleph instances or restart the application"
 
 #### Scenario: Disk space error
 
@@ -104,7 +104,7 @@ The system SHALL provide suggestions for memory-related errors.
 
 - **WHEN** embedding model file is missing
 - **THEN** error message: "Embedding model not found: all-MiniLM-L6-v2.onnx"
-- **AND** suggestion: "Reinstall Aether or download model manually from GitHub releases"
+- **AND** suggestion: "Reinstall Aleph or download model manually from GitHub releases"
 
 ### Requirement: System Permission Error Suggestions
 
@@ -137,7 +137,7 @@ The system SHALL provide suggestions for clipboard operation failures.
 
 - **WHEN** clipboard contains unsupported format (e.g., video)
 - **THEN** error message: "Unsupported clipboard format"
-- **AND** suggestion: "Aether supports text and images only (PNG, JPEG, GIF)"
+- **AND** suggestion: "Aleph supports text and images only (PNG, JPEG, GIF)"
 
 #### Scenario: Image size exceeded
 
@@ -174,20 +174,20 @@ The system SHALL display error messages and suggestions in the Halo overlay with
 
 ## MODIFIED Requirements
 
-### Requirement: AetherError Structure (Extended)
+### Requirement: AlephError Structure (Extended)
 
-The system SHALL extend the existing `AetherError` enum with suggestion support.
+The system SHALL extend the existing `AlephError` enum with suggestion support.
 
 #### Scenario: Error variants with suggestions
 
-- **WHEN** `AetherError` is defined
+- **WHEN** `AlephError` is defined
 - **THEN** each variant can optionally include `suggestion: Option<String>` field
 - **AND** helper methods `with_suggestion()` and `suggestion()` are provided
 - **AND** existing error creation code remains compatible
 
 ### Requirement: UniFFI Error Callback (Extended)
 
-The system SHALL extend the `on_error` callback in `AetherEventHandler` to include suggestion parameter.
+The system SHALL extend the `on_error` callback in `AlephEventHandler` to include suggestion parameter.
 
 #### Scenario: Extended callback signature
 
@@ -199,5 +199,5 @@ The system SHALL extend the `on_error` callback in `AetherEventHandler` to inclu
 ## References
 
 - **Related Spec**: `event-handler` - Extends error callback signature
-- **Related Spec**: `core-library` - Extends AetherError type
+- **Related Spec**: `core-library` - Extends AlephError type
 - **Integration**: HaloView.swift for error display UI

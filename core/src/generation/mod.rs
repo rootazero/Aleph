@@ -1,4 +1,4 @@
-/// Media Generation Provider abstraction for Aether
+/// Media Generation Provider abstraction for Aleph
 ///
 /// This module defines the `GenerationProvider` trait which provides a unified interface
 /// for different media generation backends (DALL-E, Stable Diffusion, Runway, ElevenLabs, etc.).

@@ -1,6 +1,6 @@
 //
 //  HaloStreamingTypes.swift
-//  Aether
+//  Aleph
 //
 //  Type definitions for the simplified Halo state model (V2).
 //  These types support the 6-state Halo: idle, listening, streaming, confirmation, result, error.

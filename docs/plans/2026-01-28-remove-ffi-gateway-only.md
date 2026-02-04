@@ -254,8 +254,8 @@ core/src/gateway/handlers/
 
 | Action | Description |
 |--------|-------------|
-| Delete `AetherCore` type references | Global search/replace |
-| Delete generated binding files | `AetherCoreFFI.swift` etc. |
+| Delete `AlephCore` type references | Global search/replace |
+| Delete generated binding files | `AlephCoreFFI.swift` etc. |
 | Remove `DependencyContainer.core` | No longer needed |
 | Update `initCore()` calls | Change to init Gateway connection |
 | Clean Xcode project config | Remove FFI framework linking |

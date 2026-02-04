@@ -6,8 +6,8 @@
 The Rust core **SHALL** monitor config.toml for external modifications and trigger hot-reload.
 
 #### Scenario: Detect config file change
-- **GIVEN** Aether is running with config watcher initialized
-- **WHEN** user edits `~/.aether/config.toml` in external editor
+- **GIVEN** Aleph is running with config watcher initialized
+- **WHEN** user edits `~/.aleph/config.toml` in external editor
 - **AND** saves file
 - **THEN** FSEvents notifies Rust watcher within 500ms
 - **AND** watcher debounces rapid changes (waits 500ms for more events)
@@ -35,7 +35,7 @@ The Rust core **SHALL** write config.toml atomically to prevent corruption durin
 #### Scenario: Atomic write with temp file
 - **WHEN** Swift calls `core.updateProvider(provider)` to save new provider config
 - **THEN** Rust serializes full config to TOML string
-- **AND** creates temp file: `~/.aether/config.toml.tmp`
+- **AND** creates temp file: `~/.aleph/config.toml.tmp`
 - **AND** writes TOML content to temp file
 - **AND** calls `fsync()` to flush to disk
 - **AND** renames temp file to `config.toml` (atomic operation)
@@ -80,9 +80,9 @@ The Rust core **SHALL** validate all config modifications before persisting to f
 The Rust core **SHALL** support backup and restore of configuration files.
 
 #### Scenario: Automatic backup before write
-- **GIVEN** valid config.toml exists at `~/.aether/config.toml`
+- **GIVEN** valid config.toml exists at `~/.aleph/config.toml`
 - **WHEN** user saves new provider configuration
-- **THEN** Rust copies current config.toml to `~/.aether/backups/config.toml.{timestamp}`
+- **THEN** Rust copies current config.toml to `~/.aleph/backups/config.toml.{timestamp}`
 - **AND** keeps last 5 backups (deletes older backups)
 - **AND** proceeds with atomic write of new config
 
@@ -101,9 +101,9 @@ The Rust core **SHALL** support backup and restore of configuration files.
 The Rust core **SHALL** support automatic migration of config schema across versions.
 
 #### Scenario: Migrate from v1 to v2 config schema
-- **GIVEN** user has config.toml from Aether v0.1.0 (schema v1)
+- **GIVEN** user has config.toml from Aleph v0.1.0 (schema v1)
 - **AND** schema v1 does not have `[memory]` section
-- **WHEN** user upgrades to Aether v0.2.0 (schema v2 requires `[memory]` section)
+- **WHEN** user upgrades to Aleph v0.2.0 (schema v2 requires `[memory]` section)
 - **AND** Rust loads config.toml
 - **THEN** Rust detects missing `[memory]` section
 - **AND** adds default `[memory]` section:
@@ -118,11 +118,11 @@ The Rust core **SHALL** support automatic migration of config schema across vers
 - **AND** logs: "Migrated config from v1 to v2"
 
 #### Scenario: Reject unsupported future config version
-- **GIVEN** user has config.toml from Aether v0.3.0 (schema v3)
-- **WHEN** user downgrades to Aether v0.2.0 (only supports schema v2)
+- **GIVEN** user has config.toml from Aleph v0.3.0 (schema v3)
+- **WHEN** user downgrades to Aleph v0.2.0 (only supports schema v2)
 - **AND** Rust loads config.toml
 - **THEN** Rust detects `config_version = 3` in TOML
-- **AND** returns error: "Config version 3 is not supported by this version of Aether (max: 2)"
+- **AND** returns error: "Config version 3 is not supported by this version of Aleph (max: 2)"
 - **AND** refuses to start until user resolves config incompatibility
 
 ---
@@ -134,16 +134,16 @@ The Rust core **SHALL** integrate with macOS Keychain via FFI for secure API key
 - **WHEN** user saves OpenAI API key "sk-test123" via Settings UI
 - **THEN** Swift calls Rust: `core.updateProvider(provider)` with `api_key = "sk-test123"`
 - **AND** Rust detects API key field
-- **AND** Rust calls Swift FFI: `saveAPIKeyToKeychain(service: "com.aether.openai", key: "sk-test123")`
+- **AND** Rust calls Swift FFI: `saveAPIKeyToKeychain(service: "com.aleph.openai", key: "sk-test123")`
 - **AND** Swift calls `Security.SecAddGenericPassword()` to store in Keychain
-- **AND** Rust writes config.toml with reference: `api_key = "keychain:com.aether.openai"`
+- **AND** Rust writes config.toml with reference: `api_key = "keychain:com.aleph.openai"`
 - **NOT** plain text key in config.toml
 
 #### Scenario: Retrieve API key from Keychain at runtime
-- **GIVEN** config.toml has `api_key = "keychain:com.aether.openai"`
+- **GIVEN** config.toml has `api_key = "keychain:com.aleph.openai"`
 - **WHEN** Rust provider needs API key for OpenAI request
 - **THEN** Rust parses "keychain:" prefix
-- **AND** Rust calls Swift FFI: `loadAPIKeyFromKeychain(service: "com.aether.openai")`
+- **AND** Rust calls Swift FFI: `loadAPIKeyFromKeychain(service: "com.aleph.openai")`
 - **AND** Swift calls `Security.SecCopyItemMatching()` to retrieve key
 - **AND** Swift returns decrypted key "sk-test123" to Rust
 - **AND** Rust uses key for API authentication
@@ -151,7 +151,7 @@ The Rust core **SHALL** integrate with macOS Keychain via FFI for secure API key
 #### Scenario: Delete API key from Keychain
 - **WHEN** user deletes OpenAI provider via Settings UI
 - **THEN** Swift calls Rust: `core.deleteProvider("openai")`
-- **AND** Rust calls Swift FFI: `deleteAPIKeyFromKeychain(service: "com.aether.openai")`
+- **AND** Rust calls Swift FFI: `deleteAPIKeyFromKeychain(service: "com.aleph.openai")`
 - **AND** Swift calls `Security.SecDeleteItemMatching()` to remove from Keychain
 - **AND** Rust removes provider entry from config.toml
 
@@ -161,8 +161,8 @@ The Rust core **SHALL** integrate with macOS Keychain via FFI for secure API key
 The Rust core **SHALL** provide sensible defaults for all config options when not specified.
 
 #### Scenario: Initialize config with defaults on first launch
-- **GIVEN** user launches Aether for first time
-- **AND** no config.toml exists at `~/.aether/config.toml`
+- **GIVEN** user launches Aleph for first time
+- **AND** no config.toml exists at `~/.aleph/config.toml`
 - **WHEN** Rust initializes config system
 - **THEN** Rust creates default config:
   ```toml
@@ -237,7 +237,7 @@ The Rust core **SHALL** provide detailed error messages for config validation fa
 The Rust core **SHALL** expose config operations via UniFFI for Swift integration.
 
 #### Scenario: UniFFI method signatures
-- **GIVEN** aether.udl defines config operations
+- **GIVEN** aleph.udl defines config operations
 - **THEN** following methods are available in Swift:
   ```swift
   // Config CRUD operations

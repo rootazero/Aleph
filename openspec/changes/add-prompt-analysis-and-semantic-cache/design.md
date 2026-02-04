@@ -12,7 +12,7 @@ This document details the architectural design for P2 Model Router improvements:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Aether Core                                     │
+│                              Aleph Core                                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │    User Request                                                              │

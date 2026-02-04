@@ -1,6 +1,6 @@
 //
 //  GenerationProvidersView.swift
-//  Aether
+//  Aleph
 //
 //  Settings view for configuring image/video/audio generation providers.
 //  Organized by category tabs: Image | Video | Audio
@@ -380,7 +380,7 @@ enum GenerationPresetProviders {
 struct GenerationProvidersView: View {
     // MARK: - Dependencies
 
-    let core: AetherCore
+    let core: AlephCore
     @Binding var hasUnsavedChanges: Bool
 
     // MARK: - State
@@ -506,7 +506,7 @@ struct GenerationProvidersView: View {
                 selectProvider(first)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .aetherConfigSavedInternally)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .alephConfigSavedInternally)) { _ in
             // Reload providers after config is saved to reflect changes
             loadProviders()
         }
@@ -850,7 +850,7 @@ struct GenerationProviderCard: View {
 // MARK: - Generation Provider Edit Panel
 
 struct GenerationProviderEditPanel: View {
-    let core: AetherCore
+    let core: AlephCore
     @Binding var hasUnsavedChanges: Bool
     @Binding var isSaving: Bool
     @Binding var errorMessage: String?
@@ -996,7 +996,7 @@ struct GenerationProviderEditPanel: View {
 
                     // Notify that configuration was saved
                     NotificationCenter.default.post(
-                        name: .aetherConfigSavedInternally,
+                        name: .alephConfigSavedInternally,
                         object: finalName
                     )
                 }
@@ -1304,7 +1304,7 @@ struct GenerationProviderEditPanel: View {
 // MARK: - Preview
 
 #Preview {
-    // Preview placeholder - requires AetherCore initialization
+    // Preview placeholder - requires AlephCore initialization
     Text("GenerationProvidersView Preview")
         .frame(width: 800, height: 600)
 }

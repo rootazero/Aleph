@@ -29,7 +29,7 @@ final class DirectImageExtractor: ContentExtractor {
         NSPasteboard.PasteboardType("public.jpeg")
     ]
 
-    private let logger = Logger(subsystem: "com.aether", category: "DirectImageExtractor")
+    private let logger = Logger(subsystem: "com.aleph", category: "DirectImageExtractor")
 
     // MARK: - Extraction
 

@@ -9,7 +9,7 @@
 
 ## 实施摘要
 
-成功将 Apple Liquid Glass 设计系统应用到 Aether Settings 窗口,完成了基础设施搭建、主窗口重构和内容区域优化三个关键阶段。
+成功将 Apple Liquid Glass 设计系统应用到 Aleph Settings 窗口,完成了基础设施搭建、主窗口重构和内容区域优化三个关键阶段。
 
 ---
 
@@ -74,19 +74,19 @@
 ## 文件影响范围
 
 ### 新增文件 (3)
-1. `Aether/Sources/DesignSystem/ConcentricGeometry.swift` - 同心几何系统
-2. `Aether/Sources/Components/Atoms/AdaptiveMaterial.swift` - 自适应材质
-3. `Aether/Sources/DesignSystem/ScrollEdgeModifier.swift` - 滚动边缘效果
+1. `Aleph/Sources/DesignSystem/ConcentricGeometry.swift` - 同心几何系统
+2. `Aleph/Sources/Components/Atoms/AdaptiveMaterial.swift` - 自适应材质
+3. `Aleph/Sources/DesignSystem/ScrollEdgeModifier.swift` - 滚动边缘效果
 
 ### 修改文件 (8)
-1. `Aether/Sources/DesignSystem/DesignTokens.swift` - 添加 Materials & ConcentricRadius
-2. `Aether/Sources/SettingsView.swift` - 窗口结构重构
-3. `Aether/Sources/Components/Organisms/ModernSidebarView.swift` - Liquid Glass 材质
-4. `Aether/Sources/MemoryView.swift` - 移除边框,添加滚动效果
-5. `Aether/Sources/BehaviorSettingsView.swift` - 移除边框,添加滚动效果
-6. `Aether/Sources/ShortcutsView.swift` - 移除边框,优化选中状态
-7. `Aether/Sources/ProvidersView.swift` - 移除容器边框
-8. `Aether/Sources/RoutingView.swift` - 移除边框,优化悬停效果
+1. `Aleph/Sources/DesignSystem/DesignTokens.swift` - 添加 Materials & ConcentricRadius
+2. `Aleph/Sources/SettingsView.swift` - 窗口结构重构
+3. `Aleph/Sources/Components/Organisms/ModernSidebarView.swift` - Liquid Glass 材质
+4. `Aleph/Sources/MemoryView.swift` - 移除边框,添加滚动效果
+5. `Aleph/Sources/BehaviorSettingsView.swift` - 移除边框,添加滚动效果
+6. `Aleph/Sources/ShortcutsView.swift` - 移除边框,优化选中状态
+7. `Aleph/Sources/ProvidersView.swift` - 移除容器边框
+8. `Aleph/Sources/RoutingView.swift` - 移除边框,优化悬停效果
 
 ### 配置文件 (1)
 - `project.yml` - 自动包含新文件(无需修改)
@@ -278,7 +278,7 @@ macOS 12-: 降级方案 (半透明背景 + 模糊)
 
 ## 总结
 
-本次实施成功完成了 Apple Liquid Glass 设计系统在 Aether Settings 窗口的**核心改造**,总体进度达到 **60%** (12/21 tasks):
+本次实施成功完成了 Apple Liquid Glass 设计系统在 Aleph Settings 窗口的**核心改造**,总体进度达到 **60%** (12/21 tasks):
 
 ### 核心成就 🏆
 1. **完整的设计系统基础设施** - 可复用,跨版本兼容

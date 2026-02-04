@@ -11,12 +11,12 @@
 
 ## 2. UniFFI Interface
 
-- [ ] 2.1 Add `ClarificationType` enum to `aether.udl`
-- [ ] 2.2 Add `ClarificationOption` dictionary to `aether.udl`
-- [ ] 2.3 Add `ClarificationRequest` dictionary to `aether.udl`
-- [ ] 2.4 Add `ClarificationResultType` enum to `aether.udl`
-- [ ] 2.5 Add `ClarificationResult` dictionary to `aether.udl`
-- [ ] 2.6 Add `on_clarification_needed()` to `AetherEventHandler` callback
+- [ ] 2.1 Add `ClarificationType` enum to `aleph.udl`
+- [ ] 2.2 Add `ClarificationOption` dictionary to `aleph.udl`
+- [ ] 2.3 Add `ClarificationRequest` dictionary to `aleph.udl`
+- [ ] 2.4 Add `ClarificationResultType` enum to `aleph.udl`
+- [ ] 2.5 Add `ClarificationResult` dictionary to `aleph.udl`
+- [ ] 2.6 Add `on_clarification_needed()` to `AlephEventHandler` callback
 - [ ] 2.7 Regenerate UniFFI bindings
 
 ## 3. Swift: Data Types & Manager

@@ -1,6 +1,6 @@
 //
 //  BehaviorSettingsView.swift
-//  Aether
+//  Aleph
 //
 //  Behavior settings tab for input/output modes and typing speed.
 //
@@ -10,7 +10,7 @@ import SwiftUI
 /// Behavior settings view with embedded UnifiedSaveBar
 struct BehaviorSettingsView: View {
     // Dependencies
-    let core: AetherCore?
+    let core: AlephCore?
     @Binding var hasUnsavedChanges: Bool  // Communicate unsaved state to parent
 
     // Output settings
@@ -404,7 +404,7 @@ struct BehaviorSettingsView: View {
 
                 // Post notification for other components
                 NotificationCenter.default.post(
-                    name: .aetherConfigSavedInternally,
+                    name: .alephConfigSavedInternally,
                     object: nil
                 )
             }

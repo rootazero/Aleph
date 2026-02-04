@@ -1,6 +1,6 @@
 //! Path utilities and constants for the discovery system
 //!
-//! Defines standard paths for Aether and Claude Code compatibility.
+//! Defines standard paths for Aleph and Claude Code compatibility.
 
 use super::{DiscoveryError, DiscoveryResult};
 use std::path::{Path, PathBuf};
@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 // Path Constants
 // =============================================================================
 
-/// Aether home directory name
-pub const AETHER_HOME_DIR: &str = ".aether";
+/// Aleph home directory name
+pub const ALEPH_HOME_DIR: &str = ".aleph";
 
 /// Claude Code home directory name
 pub const CLAUDE_HOME_DIR: &str = ".claude";
@@ -22,8 +22,8 @@ pub const AGENTS_DIR: &str = "agents";
 pub const PLUGINS_DIR: &str = "plugins";
 
 /// Configuration files
-pub const AETHER_CONFIG_FILE: &str = "aether.jsonc";
-pub const AETHER_CONFIG_FILE_ALT: &str = "aether.json";
+pub const ALEPH_CONFIG_FILE: &str = "aleph.jsonc";
+pub const ALEPH_CONFIG_FILE_ALT: &str = "aleph.json";
 pub const PLUGIN_STATE_FILE: &str = "plugins.json";
 pub const PLUGIN_MANIFEST_DIR: &str = ".claude-plugin";
 pub const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
@@ -50,9 +50,9 @@ pub fn home_dir() -> DiscoveryResult<PathBuf> {
     dirs::home_dir().ok_or(DiscoveryError::HomeDirNotFound)
 }
 
-/// Get the Aether home directory (~/.aleph/)
-pub fn aether_home_dir() -> DiscoveryResult<PathBuf> {
-    Ok(home_dir()?.join(AETHER_HOME_DIR))
+/// Get the Aleph home directory (~/.aleph/)
+pub fn aleph_home_dir() -> DiscoveryResult<PathBuf> {
+    Ok(home_dir()?.join(ALEPH_HOME_DIR))
 }
 
 /// Get the Claude Code home directory (~/.claude/)
@@ -60,34 +60,34 @@ pub fn claude_home_dir() -> DiscoveryResult<PathBuf> {
     Ok(home_dir()?.join(CLAUDE_HOME_DIR))
 }
 
-/// Get the Aether skills directory (~/.aleph/skills/)
-pub fn aether_skills_dir() -> DiscoveryResult<PathBuf> {
-    Ok(aether_home_dir()?.join(SKILLS_DIR))
+/// Get the Aleph skills directory (~/.aleph/skills/)
+pub fn aleph_skills_dir() -> DiscoveryResult<PathBuf> {
+    Ok(aleph_home_dir()?.join(SKILLS_DIR))
 }
 
-/// Get the Aether commands directory (~/.aleph/commands/)
-pub fn aether_commands_dir() -> DiscoveryResult<PathBuf> {
-    Ok(aether_home_dir()?.join(COMMANDS_DIR))
+/// Get the Aleph commands directory (~/.aleph/commands/)
+pub fn aleph_commands_dir() -> DiscoveryResult<PathBuf> {
+    Ok(aleph_home_dir()?.join(COMMANDS_DIR))
 }
 
-/// Get the Aether agents directory (~/.aleph/agents/)
-pub fn aether_agents_dir() -> DiscoveryResult<PathBuf> {
-    Ok(aether_home_dir()?.join(AGENTS_DIR))
+/// Get the Aleph agents directory (~/.aleph/agents/)
+pub fn aleph_agents_dir() -> DiscoveryResult<PathBuf> {
+    Ok(aleph_home_dir()?.join(AGENTS_DIR))
 }
 
-/// Get the Aether plugins directory (~/.aleph/plugins/)
-pub fn aether_plugins_dir() -> DiscoveryResult<PathBuf> {
-    Ok(aether_home_dir()?.join(PLUGINS_DIR))
+/// Get the Aleph plugins directory (~/.aleph/plugins/)
+pub fn aleph_plugins_dir() -> DiscoveryResult<PathBuf> {
+    Ok(aleph_home_dir()?.join(PLUGINS_DIR))
 }
 
-/// Get the global config file path (~/.aleph/aether.jsonc)
+/// Get the global config file path (~/.aleph/aleph.jsonc)
 pub fn global_config_path() -> DiscoveryResult<PathBuf> {
-    Ok(aether_home_dir()?.join(AETHER_CONFIG_FILE))
+    Ok(aleph_home_dir()?.join(ALEPH_CONFIG_FILE))
 }
 
 /// Get the plugin state file path (~/.aleph/plugins.json)
 pub fn plugin_state_path() -> DiscoveryResult<PathBuf> {
-    Ok(aether_home_dir()?.join(PLUGIN_STATE_FILE))
+    Ok(aleph_home_dir()?.join(PLUGIN_STATE_FILE))
 }
 
 /// Find the git root directory from a starting path
@@ -198,9 +198,9 @@ pub fn ensure_dir(path: &Path) -> DiscoveryResult<()> {
     Ok(())
 }
 
-/// Ensure the Aether home directory structure exists
-pub fn ensure_aether_home() -> DiscoveryResult<()> {
-    let home = aether_home_dir()?;
+/// Ensure the Aleph home directory structure exists
+pub fn ensure_aleph_home() -> DiscoveryResult<()> {
+    let home = aleph_home_dir()?;
     ensure_dir(&home)?;
     ensure_dir(&home.join(SKILLS_DIR))?;
     ensure_dir(&home.join(COMMANDS_DIR))?;
@@ -242,15 +242,15 @@ mod tests {
         std::fs::create_dir_all(&level3).unwrap();
 
         // Create config files at different levels
-        std::fs::write(temp_path.join("aether.jsonc"), "{}").unwrap();
-        std::fs::write(level2.join("aether.jsonc"), "{}").unwrap();
+        std::fs::write(temp_path.join("aleph.jsonc"), "{}").unwrap();
+        std::fs::write(level2.join("aleph.jsonc"), "{}").unwrap();
 
-        let files = find_file_upward("aether.jsonc", &level3, Some(&temp_path), 10);
+        let files = find_file_upward("aleph.jsonc", &level3, Some(&temp_path), 10);
 
         // Should find both files, project-level first
         assert_eq!(files.len(), 2);
-        assert_eq!(files[0], level2.join("aether.jsonc"));
-        assert_eq!(files[1], temp_path.join("aether.jsonc"));
+        assert_eq!(files[0], level2.join("aleph.jsonc"));
+        assert_eq!(files[1], temp_path.join("aleph.jsonc"));
     }
 
     #[test]

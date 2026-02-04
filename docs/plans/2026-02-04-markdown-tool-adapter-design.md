@@ -104,7 +104,7 @@ metadata:
     bins: ["gh"]
 
   # Aleph-specific extensions
-  aether:
+  aleph:
     # Security controls
     security:
       sandbox: "host"           # 'host' | 'docker' | 'virtual_fs'
@@ -159,7 +159,7 @@ pub struct AlephSkillSpec {
 
 pub struct SkillMetadata {
     pub requires: RequiresSpec,
-    pub aether: Option<AetherExtensions>,
+    pub aleph: Option<AlephExtensions>,
 }
 
 pub struct AlephExtensions {
@@ -431,7 +431,7 @@ description: Kubernetes resource inspector
 metadata:
   requires:
     bins: ["kubectl"]
-  aether:
+  aleph:
     security:
       sandbox: docker
       confirmation: never

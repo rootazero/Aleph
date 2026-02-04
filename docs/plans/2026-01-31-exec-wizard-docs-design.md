@@ -593,7 +593,7 @@ macOS App / Control UI                    Gateway
 // core/src/wizard/onboarding.rs
 
 pub struct OnboardingFlow {
-    config: Arc<RwLock<AetherConfig>>,
+    config: Arc<RwLock<AlephConfig>>,
     collected: OnboardingData,
 }
 
@@ -701,8 +701,8 @@ create-missing = true
 theme = "theme"
 default-theme = "coal"
 preferred-dark-theme = "coal"
-git-repository-url = "https://github.com/user/aether"
-edit-url-template = "https://github.com/user/aether/edit/main/docs/{path}"
+git-repository-url = "https://github.com/user/aleph"
+edit-url-template = "https://github.com/user/aleph/edit/main/docs/{path}"
 
 [output.html.search]
 enable = false  # 禁用内置搜索，使用 fuse
@@ -775,7 +775,7 @@ jobs:
 | `core/src/exec_approvals/ipc_client.rs` | macOS IPC 客户端 |
 | `core/src/gateway/handlers/exec_approvals.rs` | RPC 处理器 |
 | `cli/src/commands/approvals.rs` | CLI 命令 |
-| `platforms/macos/Aether/ExecApprovals/` | Swift UI 集成 |
+| `platforms/macos/Aleph/ExecApprovals/` | Swift UI 集成 |
 
 **wizard.* 配置向导 (12 文件)**
 
@@ -791,7 +791,7 @@ jobs:
 | `core/src/wizard/phases/` | 各阶段实现 (10 文件) |
 | `core/src/gateway/handlers/wizard.rs` | RPC 处理器 |
 | `cli/src/commands/onboard.rs` | CLI 入口 |
-| `platforms/macos/Aether/Wizard/` | Swift UI 集成 |
+| `platforms/macos/Aleph/Wizard/` | Swift UI 集成 |
 
 **文档系统 (5 文件 + 内容)**
 
@@ -853,7 +853,7 @@ Phase 6: 文档系统 (2 天)
 - [ ] Allowlist glob 匹配正确
 - [ ] Chat 转发到 Telegram/Discord 正常工作
 - [ ] macOS IPC 握手和审批流程正常
-- [ ] CLI `aether approvals` 命令可用
+- [ ] CLI `aleph approvals` 命令可用
 
 ### wizard.* 系统
 

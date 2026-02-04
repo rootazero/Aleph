@@ -206,7 +206,7 @@ Verify UI remains responsive with 50+ providers.
 ### Setup: Generate Test Data
 1. Create test configuration:
    ```bash
-   cd ~/.aether
+   cd ~/.aleph
    cp config.toml config.toml.backup
    ```
 
@@ -289,7 +289,7 @@ Verify UI remains responsive with 50+ providers.
 
 ### Cleanup
 ```bash
-cd ~/.aether
+cd ~/.aleph
 mv config.toml.backup config.toml
 ```
 

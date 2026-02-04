@@ -1,6 +1,6 @@
 //
 //  MenuBarManager.swift
-//  Aether
+//  Aleph
 //
 //  Manager for menu bar status item and icon updates.
 //  Extracted from AppDelegate to improve separation of concerns.

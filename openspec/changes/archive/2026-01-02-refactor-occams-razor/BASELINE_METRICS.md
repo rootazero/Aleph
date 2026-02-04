@@ -22,8 +22,8 @@
   - (and others)
 
 ### Affected Files
-- `Aether/core/src/config/mod.rs` (test code, 11 errors)
-- `Aether/core/src/router/mod.rs` (test code, 8+ errors)
+- `Aleph/core/src/config/mod.rs` (test code, 11 errors)
+- `Aleph/core/src/router/mod.rs` (test code, 8+ errors)
 - Other test files with `ProviderConfig` initializations
 
 ---
@@ -47,7 +47,7 @@
 
 ### Test Suite
 ```bash
-$ cd Aether/core && cargo test
+$ cd Aleph/core && cargo test
 Error: 75 compilation errors (cannot proceed)
 ```
 
@@ -57,7 +57,7 @@ Error: 75 compilation errors (cannot proceed)
 
 ### Build Time
 ```bash
-$ cd Aether/core && cargo clean && cargo build --release --timings
+$ cd Aleph/core && cargo clean && cargo build --release --timings
 ```
 
 **Result**: ⏳ Skipped (compilation errors prevent measurement)
@@ -68,7 +68,7 @@ $ cd Aether/core && cargo clean && cargo build --release --timings
 
 ### Binary Size
 ```bash
-$ ls -lh Aether/Frameworks/libaethecore.dylib
+$ ls -lh Aleph/Frameworks/libaethecore.dylib
 ```
 
 **Result**: ⏳ Skipped (no binary available due to compilation errors)
@@ -136,19 +136,19 @@ thiserror = "2.0"
 ## Code Metrics (Estimated)
 
 ### Files to Refactor
-- `Aether/core/src/core.rs` (~2000 lines)
+- `Aleph/core/src/core.rs` (~2000 lines)
   - Mutex lock boilerplate: ~20 occurrences
   - Memory DB null checks: ~10 occurrences
   - Error conversion duplication: 2 methods
   - Async nesting: 1 complex function
 
-- `Aether/Sources/AppDelegate.swift` (~500 lines)
+- `Aleph/Sources/AppDelegate.swift` (~500 lines)
   - Duplicated menu rebuild logic: 2 methods (~100 lines total)
 
-- `Aether/Sources/RoutingView.swift` (~600 lines)
+- `Aleph/Sources/RoutingView.swift` (~600 lines)
   - Duplicated alert creation: 3 occurrences
 
-- `Aether/Sources/EventHandler.swift` (~400 lines)
+- `Aleph/Sources/EventHandler.swift` (~400 lines)
   - Redundant color parsing: 1 method
 
 ---

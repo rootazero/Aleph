@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The memory-augmentation capability enables Aether to inject retrieved past interactions into LLM system prompts, providing context-aware AI responses.
+The memory-augmentation capability enables Aleph to inject retrieved past interactions into LLM system prompts, providing context-aware AI responses.
 
 ## ADDED Requirements
 

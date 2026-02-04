@@ -781,7 +781,7 @@ fn low_battery(ctx: &Context) -> Option<Action> {
 
   metadata:
     tags: ["health", "productivity"]
-    author: "aether-community"
+    author: "aleph-community"
 ```
 
 **执行流程**：
@@ -815,8 +815,8 @@ fn low_battery(ctx: &Context) -> Option<Action> {
 
 **社区分享**：
 ```bash
-aether install rule:pomodoro-timer
-aether install rule:meeting-optimizer
+aleph install rule:pomodoro-timer
+aleph install rule:meeting-optimizer
 ```
 
 ### 10.3 Phase 8: GUI 规则编辑器

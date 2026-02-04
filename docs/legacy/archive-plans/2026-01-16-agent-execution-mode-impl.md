@@ -19,9 +19,9 @@
 ### Task 1.1: Create Intent Module Structure
 
 **Files:**
-- Create: `Aether/core/src/intent/classifier.rs`
-- Create: `Aether/core/src/intent/task_category.rs`
-- Modify: `Aether/core/src/intent/mod.rs`
+- Create: `Aleph/core/src/intent/classifier.rs`
+- Create: `Aleph/core/src/intent/task_category.rs`
+- Modify: `Aleph/core/src/intent/mod.rs`
 
 **Step 1: Write failing test for TaskCategory**
 
@@ -100,7 +100,7 @@ git commit -m "feat(intent): add TaskCategory enum for executable task classific
 ### Task 1.2: Create ExecutionIntent Enum
 
 **Files:**
-- Modify: `Aether/core/src/intent/classifier.rs`
+- Modify: `Aleph/core/src/intent/classifier.rs`
 
 **Step 1: Write failing test**
 
@@ -196,7 +196,7 @@ git commit -m "feat(intent): add ExecutionIntent enum and ExecutableTask struct"
 ### Task 1.3: Implement L1 Regex Pattern Matching
 
 **Files:**
-- Modify: `Aether/core/src/intent/classifier.rs`
+- Modify: `Aleph/core/src/intent/classifier.rs`
 
 **Step 1: Write failing test**
 
@@ -317,7 +317,7 @@ git commit -m "feat(intent): implement L1 regex pattern matching for IntentClass
 ### Task 1.4: Implement L2 Keyword Matching
 
 **Files:**
-- Modify: `Aether/core/src/intent/classifier.rs`
+- Modify: `Aleph/core/src/intent/classifier.rs`
 
 **Step 1: Write failing test**
 
@@ -415,7 +415,7 @@ git commit -m "feat(intent): implement L2 keyword matching for IntentClassifier"
 ### Task 1.5: Implement Async classify() Method
 
 **Files:**
-- Modify: `Aether/core/src/intent/classifier.rs`
+- Modify: `Aleph/core/src/intent/classifier.rs`
 
 **Step 1: Write failing test**
 
@@ -486,8 +486,8 @@ git commit -m "feat(intent): implement async classify() method with L1/L2 fallba
 ### Task 1.6: Update Module Exports
 
 **Files:**
-- Modify: `Aether/core/src/intent/mod.rs`
-- Modify: `Aether/core/src/lib.rs`
+- Modify: `Aleph/core/src/intent/mod.rs`
+- Modify: `Aleph/core/src/lib.rs`
 
 **Step 1: Update intent/mod.rs**
 
@@ -533,7 +533,7 @@ git commit -m "feat(intent): export IntentClassifier and related types"
 ### Task 2.1: Create Task Parameters Type
 
 **Files:**
-- Create: `Aether/core/src/intent/parameters.rs`
+- Create: `Aleph/core/src/intent/parameters.rs`
 
 **Step 1: Write failing test**
 
@@ -646,7 +646,7 @@ git commit -m "feat(intent): add TaskParameters for execution defaults"
 ### Task 2.2: Create Preset Registry
 
 **Files:**
-- Create: `Aether/core/src/intent/presets.rs`
+- Create: `Aleph/core/src/intent/presets.rs`
 
 **Step 1: Write failing test**
 
@@ -738,7 +738,7 @@ git commit -m "feat(intent): add PresetRegistry for default scenarios"
 ### Task 2.3: Create DefaultsResolver
 
 **Files:**
-- Create: `Aether/core/src/intent/defaults.rs`
+- Create: `Aleph/core/src/intent/defaults.rs`
 
 **Step 1: Write failing test**
 
@@ -831,7 +831,7 @@ git commit -m "feat(intent): add DefaultsResolver with 3-tier strategy"
 ### Task 2.4: Export DefaultsResolver
 
 **Files:**
-- Modify: `Aether/core/src/intent/mod.rs`
+- Modify: `Aleph/core/src/intent/mod.rs`
 
 **Step 1: Update module exports**
 
@@ -870,7 +870,7 @@ git commit -m "feat(intent): export DefaultsResolver and parameter types"
 ### Task 3.1: Create Agent Mode Prompt Template
 
 **Files:**
-- Create: `Aether/core/src/intent/agent_prompt.rs`
+- Create: `Aleph/core/src/intent/agent_prompt.rs`
 
 **Step 1: Write failing test**
 
@@ -968,7 +968,7 @@ git commit -m "feat(intent): add AgentModePrompt template"
 ### Task 3.2: Integrate Agent Prompt into PromptAssembler
 
 **Files:**
-- Modify: `Aether/core/src/payload/assembler.rs`
+- Modify: `Aleph/core/src/payload/assembler.rs`
 
 **Step 1: Write failing test**
 
@@ -1033,13 +1033,13 @@ git commit -m "feat(payload): add agent mode prompt injection based on intent"
 ### Task 4.1: Add UniFFI Types for Intent
 
 **Files:**
-- Modify: `Aether/core/src/aether.udl`
-- Create: `Aether/core/src/intent_ffi.rs`
+- Modify: `Aleph/core/src/aleph.udl`
+- Create: `Aleph/core/src/intent_ffi.rs`
 
-**Step 1: Add types to aether.udl**
+**Step 1: Add types to aleph.udl**
 
 ```
-// Add to aether.udl
+// Add to aleph.udl
 
 enum TaskCategoryFfi {
     "FileOrganize",
@@ -1147,7 +1147,7 @@ Expected: BUILD SUCCESS
 **Step 5: Commit**
 
 ```bash
-git add Aleph/core/src/intent_ffi.rs Aleph/core/src/aether.udl Aleph/core/src/lib.rs
+git add Aleph/core/src/intent_ffi.rs Aleph/core/src/aleph.udl Aleph/core/src/lib.rs
 git commit -m "feat(ffi): add UniFFI bindings for intent classification types"
 ```
 
@@ -1158,7 +1158,7 @@ git commit -m "feat(ffi): add UniFFI bindings for intent classification types"
 ### Task 5.1: Add Agent HaloState Cases
 
 **Files:**
-- Modify: `Aether/Sources/HaloState.swift`
+- Modify: `Aleph/Sources/HaloState.swift`
 
 **Step 1: Add new state cases**
 
@@ -1222,7 +1222,7 @@ git commit -m "feat(ui): add agent execution states to HaloState"
 ### Task 5.2: Create AgentPlanView Component
 
 **Files:**
-- Create: `Aether/Sources/Components/AgentPlanView.swift`
+- Create: `Aleph/Sources/Components/AgentPlanView.swift`
 
 **Step 1: Create the view**
 
@@ -1317,7 +1317,7 @@ git commit -m "feat(ui): add AgentPlanView component for plan confirmation"
 ### Task 5.3: Create AgentProgressView Component
 
 **Files:**
-- Create: `Aether/Sources/Components/AgentProgressView.swift`
+- Create: `Aleph/Sources/Components/AgentProgressView.swift`
 
 **Step 1: Create the view**
 
@@ -1373,7 +1373,7 @@ git commit -m "feat(ui): add AgentProgressView component for execution progress"
 ### Task 6.1: Wire IntentClassifier into Processing Flow
 
 **Files:**
-- Modify: `Aether/core/src/ffi/processing.rs` (or equivalent)
+- Modify: `Aleph/core/src/ffi/processing.rs` (or equivalent)
 
 **Step 1: Add intent classification before AI call**
 
@@ -1419,7 +1419,7 @@ git commit -m "feat: integrate IntentClassifier into main processing flow"
 ### Task 6.2: Final Integration Test
 
 **Files:**
-- Create: `Aether/core/src/tests/intent_integration.rs`
+- Create: `Aleph/core/src/tests/intent_integration.rs`
 
 **Step 1: Write integration test**
 

@@ -1,6 +1,6 @@
 //
 //  ClarificationView.swift
-//  Aether
+//  Aleph
 //
 //  Phantom Flow clarification UI component.
 //  Displays in-place options or text input within the Halo overlay.

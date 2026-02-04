@@ -1,6 +1,6 @@
 //
 //  ColorExtensions.swift
-//  Aether
+//  Aleph
 //
 //  Shared Color extensions for the entire project
 //

@@ -1,6 +1,6 @@
 //
 //  IMETextField.swift
-//  Aether
+//  Aleph
 //
 //  NSTextField wrapper for proper IME (Input Method Editor) support.
 //  SwiftUI TextField in floating windows often doesn't properly support

@@ -9,7 +9,7 @@ This refactoring targets **code simplification** across the Rust-UniFFI-Swift ar
 1. **UniFFI Boundary is Sacred**:
    - All `#[uniffi::export]` signatures MUST remain stable
    - `Arc<T>` wrappers at FFI boundaries are non-negotiable (required for thread-safety)
-   - Generated bindings in `Aether/Sources/Generated/` are read-only
+   - Generated bindings in `Aleph/Sources/Generated/` are read-only
 
 2. **Behavioral Preservation**:
    - Input/Output contracts must be identical before and after
@@ -108,7 +108,7 @@ fn lock_config(&self) -> std::sync::MutexGuard<'_, Config> {
 ```rust
 // Before (repeated 10+ times)
 let db = self.memory_db.as_ref()
-    .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+    .ok_or_else(|| AlephError::config("Memory database not initialized"))?;
 
 // After (centralized)
 let db = self.require_memory_db()?;
@@ -119,7 +119,7 @@ let db = self.require_memory_db()?;
 #[inline(always)]
 fn require_memory_db(&self) -> Result<&Arc<VectorDatabase>> {
     self.memory_db.as_ref()
-        .ok_or_else(|| AetherError::config("Memory database not initialized"))
+        .ok_or_else(|| AlephError::config("Memory database not initialized"))
 }
 ```
 
@@ -206,7 +206,7 @@ async fn try_provider_with_fallback(...) -> Result<String> {
 
 ### Decision 7: Error Type Consolidation (Deferred)
 
-**Current State**: 13 error variants in `AetherError` enum
+**Current State**: 13 error variants in `AlephError` enum
 
 **Proposed Consolidation**:
 ```rust
@@ -264,7 +264,7 @@ SystemAPIError {
 ### Regression Testing
 - **Validation**: Compare UniFFI bindings SHA256 hash before/after
   ```bash
-  shasum -a 256 Aether/Sources/Generated/aether.swift
+  shasum -a 256 Aleph/Sources/Generated/aleph.swift
   ```
 - **Acceptance**: Hash must be identical (no UniFFI interface changes)
 

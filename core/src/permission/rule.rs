@@ -1,4 +1,4 @@
-// Aether/core/src/permission/rule.rs
+// Aleph/core/src/permission/rule.rs
 //! Permission rule definitions and evaluation.
 
 use crate::extension::PermissionAction;

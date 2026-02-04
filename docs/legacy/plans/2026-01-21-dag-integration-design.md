@@ -234,7 +234,7 @@ impl DagScheduler {
 
 ### 6. Swift UI 组件
 
-**位置**: `platforms/macos/Aether/Sources/Components/TaskPlanCard.swift`（新建）
+**位置**: `platforms/macos/Aleph/Sources/Components/TaskPlanCard.swift`（新建）
 
 ```swift
 struct TaskPlanCard: View {
@@ -282,7 +282,7 @@ struct TaskPlanCard: View {
 | `core/src/dispatcher/mod.rs` | 导出新模块，整合调度流程 |
 | `core/src/dispatcher/scheduler/dag.rs` | 增加 `execute_graph()` 方法和回调支持 |
 | `core/src/lib.rs` | UniFFI 导出新的回调接口和数据类型 |
-| `platforms/macos/Aether/Sources/Core/AetherBridge.swift` | 实现 ExecutionCallback |
+| `platforms/macos/Aleph/Sources/Core/AlephBridge.swift` | 实现 ExecutionCallback |
 
 ## 集成代码
 

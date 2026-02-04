@@ -208,7 +208,7 @@ This already exists, but we'll update the re-exports later.
 **Step 6: Verify compilation**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/core && cargo check
+cd /Users/zouguojun/Workspace/Aleph/core && cargo check
 ```
 
 **Step 7: Commit**
@@ -481,7 +481,7 @@ use tracing::{info, warn};
 **Step 4: Verify compilation**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/core && cargo check
+cd /Users/zouguojun/Workspace/Aleph/core && cargo check
 ```
 
 **Step 5: Commit**
@@ -731,13 +731,13 @@ Update test assertion at line 221:
 **Step 4: Verify compilation**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/core && cargo check
+cd /Users/zouguojun/Workspace/Aleph/core && cargo check
 ```
 
 **Step 5: Run tests**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/core && cargo test runtimes --lib
+cd /Users/zouguojun/Workspace/Aleph/core && cargo test runtimes --lib
 ```
 
 **Step 6: Commit**
@@ -838,7 +838,7 @@ Check `core/Cargo.toml` for futures crate. It should already be there, but verif
 **Step 3: Verify compilation**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/core && cargo check
+cd /Users/zouguojun/Workspace/Aleph/core && cargo check
 ```
 
 **Step 4: Commit**
@@ -945,7 +945,7 @@ Update the `run_phase` method to handle skills specially:
 **Step 3: Verify compilation**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/core && cargo check
+cd /Users/zouguojun/Workspace/Aleph/core && cargo check
 ```
 
 **Step 4: Commit**
@@ -1080,7 +1080,7 @@ pub use init::{InitProgressHandlerFFI, InitResultFFI, needs_first_time_init, run
 **Step 3: Verify compilation**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/core && cargo check
+cd /Users/zouguojun/Workspace/Aleph/core && cargo check
 ```
 
 **Step 4: Commit**
@@ -1137,13 +1137,13 @@ rm core/src/initialization.rs
 **Step 4: Verify compilation**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/core && cargo check
+cd /Users/zouguojun/Workspace/Aleph/core && cargo check
 ```
 
 **Step 5: Run all tests**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/core && cargo test
+cd /Users/zouguojun/Workspace/Aleph/core && cargo test
 ```
 
 **Step 6: Commit**
@@ -1169,7 +1169,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 8: Update Swift InitializationProgressView
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/Components/InitializationProgressView.swift`
+- Modify: `platforms/macos/Aleph/Sources/Components/InitializationProgressView.swift`
 
 **Step 1: Update ViewModel for new 6-phase flow**
 
@@ -1322,13 +1322,13 @@ private func runInitialization() {
 **Step 4: Verify Swift builds**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build
+cd /Users/zouguojun/Workspace/Aleph/platforms/macos && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build
 ```
 
 **Step 5: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/Components/InitializationProgressView.swift
+git add platforms/macos/Aleph/Sources/Components/InitializationProgressView.swift
 git commit -m "feat(macos): update InitializationProgressView for new 6-phase flow
 
 - Update ViewModel for 6 phases with display names
@@ -1344,7 +1344,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 9: Update AppDelegate initialization flow
 
 **Files:**
-- Modify: `platforms/macos/Aether/Sources/AppDelegate.swift`
+- Modify: `platforms/macos/Aleph/Sources/AppDelegate.swift`
 
 **Step 1: Update checkAndRunFirstTimeInit**
 
@@ -1353,10 +1353,10 @@ Replace the `checkAndRunFirstTimeInit` method:
 ```swift
 private func checkAndRunFirstTimeInit() {
     let needsInit = needsFirstTimeInit()
-    NSLog("[Aether] needsFirstTimeInit=%@", needsInit ? "true" : "false")
+    NSLog("[Aleph] needsFirstTimeInit=%@", needsInit ? "true" : "false")
 
     if needsInit {
-        NSLog("[Aether] 🆕 Fresh install - showing initialization window")
+        NSLog("[Aleph] 🆕 Fresh install - showing initialization window")
         showInitializationWindow()
     } else {
         initializeAppComponents()
@@ -1373,14 +1373,14 @@ private func showInitializationWindow() {
     let initView = InitializationProgressView(
         onCompletion: { [weak self] in
             DispatchQueue.main.async {
-                print("[Aether] Initialization completed - proceeding with app startup")
+                print("[Aleph] Initialization completed - proceeding with app startup")
                 self?.closeInitializationWindow()
                 self?.initializeAppComponents()
             }
         },
         onFailure: { [weak self] error in
             DispatchQueue.main.async {
-                print("[Aether] Initialization failed: \(error)")
+                print("[Aleph] Initialization failed: \(error)")
 
                 let alert = NSAlert()
                 alert.messageText = L("init.error.title")
@@ -1424,7 +1424,7 @@ private func showInitializationWindow() {
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
 
-    print("[Aether] Initialization window shown")
+    print("[Aleph] Initialization window shown")
 }
 ```
 
@@ -1435,13 +1435,13 @@ Search and replace any remaining `isFreshInstall()` calls with `needsFirstTimeIn
 **Step 4: Verify Swift builds**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build
+cd /Users/zouguojun/Workspace/Aleph/platforms/macos && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build
 ```
 
 **Step 5: Commit**
 
 ```bash
-git add platforms/macos/Aether/Sources/AppDelegate.swift
+git add platforms/macos/Aleph/Sources/AppDelegate.swift
 git commit -m "feat(macos): update AppDelegate for blocking initialization
 
 - Use needsFirstTimeInit() instead of isFreshInstall()
@@ -1464,28 +1464,28 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 **Step 2: Generate Xcode project**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodegen generate
+cd /Users/zouguojun/Workspace/Aleph/platforms/macos && xcodegen generate
 ```
 
 **Step 3: Build full app**
 
 ```bash
-cd /Users/zouguojun/Workspace/Aether/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build
+cd /Users/zouguojun/Workspace/Aleph/platforms/macos && xcodebuild -scheme Aleph -configuration Debug build
 ```
 
 **Step 4: Test fresh install scenario**
 
 ```bash
 # Backup existing config
-mv ~/.aether ~/.aether.backup
+mv ~/.aleph ~/.aleph.backup
 
 # Run app and verify initialization window appears
 # Verify all 6 phases complete
 # Verify app starts normally after init
 
 # Restore config
-rm -rf ~/.aether
-mv ~/.aether.backup ~/.aether
+rm -rf ~/.aleph
+mv ~/.aleph.backup ~/.aleph
 ```
 
 **Step 5: Verify existing install skips initialization**
