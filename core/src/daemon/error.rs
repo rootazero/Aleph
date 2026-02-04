@@ -18,4 +18,7 @@ pub enum DaemonError {
 
     #[error("Resource governor error: {0}")]
     ResourceGovernor(String),
+
+    #[error("Event bus error: {0}")]
+    EventBus(String),
 }

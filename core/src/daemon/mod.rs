@@ -4,6 +4,8 @@
 
 pub mod cli;
 pub mod error;
+pub mod event_bus;
+pub mod events;
 pub mod ipc;
 pub mod resource_governor;
 pub mod service_manager;
@@ -17,6 +19,11 @@ mod tests;
 
 pub use cli::{DaemonCli, DaemonCommand};
 pub use error::{DaemonError, Result};
+pub use event_bus::DaemonEventBus;
+pub use events::{
+    DaemonEvent, DerivedEvent, FsEventType, ProcessEventType, RawEvent, SystemEvent,
+    SystemStateType, TimeTrigger,
+};
 pub use ipc::{IpcServer, JsonRpcRequest, JsonRpcResponse};
 pub use resource_governor::{GovernorDecision, ResourceGovernor, ResourceLimits};
 pub use service_manager::{ServiceManager, create_service_manager};
