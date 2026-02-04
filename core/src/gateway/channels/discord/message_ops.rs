@@ -212,13 +212,12 @@ impl MessageOperations for DiscordMessageOps {
             };
 
             let result = if params.remove {
-                http.delete_reaction(
-                    channel_id,
-                    message_id,
-                    None, // Remove own reaction
-                    &reaction_type,
-                )
-                .await
+                // TODO: Implement reaction removal
+                // Requires bot user ID which is not currently available in DiscordMessageOps
+                // Need to refactor to pass bot_user_id from DiscordChannel
+                return Err(crate::error::AetherError::invalid_input(
+                    "Removing reactions is not yet implemented for Discord"
+                ));
             } else {
                 http.create_reaction(channel_id, message_id, &reaction_type)
                     .await
