@@ -70,12 +70,6 @@ pub struct SessionsSendResult {
     pub error: Option<String>,
 }
 
-impl Default for SendStatus {
-    fn default() -> Self {
-        Self::Error
-    }
-}
-
 impl SessionsSendResult {
     /// Create success result with reply
     pub fn ok(run_id: String, session_key: String, reply: Option<String>) -> Self {

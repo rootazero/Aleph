@@ -73,12 +73,6 @@ pub struct SessionsSpawnResult {
     pub error: Option<String>,
 }
 
-impl Default for SpawnStatus {
-    fn default() -> Self {
-        Self::Error
-    }
-}
-
 impl SessionsSpawnResult {
     /// Create accepted result
     pub fn accepted(run_id: String, child_session_key: String) -> Self {

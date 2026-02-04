@@ -364,13 +364,13 @@ impl SafetyGate {
     pub fn can_auto_approve(&self, suggestion: &SolidificationSuggestion) -> bool {
         let report = self.analyze(suggestion);
 
-        match (&report.level, &self.config.max_auto_approve_level) {
-            (SafetyLevel::Safe, _) => true,
-            (SafetyLevel::Caution, SafetyLevel::Caution) => true,
-            (SafetyLevel::Caution, SafetyLevel::Dangerous) => true,
-            (SafetyLevel::Dangerous, SafetyLevel::Dangerous) => true,
-            _ => false,
-        }
+        matches!(
+            (&report.level, &self.config.max_auto_approve_level),
+            (SafetyLevel::Safe, _)
+                | (SafetyLevel::Caution, SafetyLevel::Caution)
+                | (SafetyLevel::Caution, SafetyLevel::Dangerous)
+                | (SafetyLevel::Dangerous, SafetyLevel::Dangerous)
+        )
     }
 
     /// Validate a suggestion and return an error if blocked

@@ -434,11 +434,10 @@ fn merge_shadow_dom(
             }
         }
 
-        let mut sources = Vec::new();
-        sources.push(super::ShadowSource {
+        let mut sources = vec![super::ShadowSource {
             ax_node_id: best_ax.map(|n| n.node_id.clone()),
             vision_block_id: Some(block.block_id.clone()),
-        });
+        }];
 
         if let Some(ax_node) = best_ax {
             if best_iou >= options.iou_threshold {
