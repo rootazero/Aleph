@@ -1,9 +1,7 @@
 //! Markdown CLI Tool Adapter
 //!
-//! Implements AetherTool trait for Markdown-defined CLI tools.
+//! Implements AetherToolDyn for Markdown-defined CLI tools.
 
-use async_trait::async_trait;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -12,7 +10,7 @@ use tracing::{debug, info, warn};
 
 use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
-use crate::tools::AetherTool;
+use crate::tools::AetherToolDyn;
 
 use super::parser::{extract_first_paragraph, extract_markdown_section};
 use super::spec::{AetherSkillSpec, SandboxMode};
@@ -20,7 +18,7 @@ use super::spec::{AetherSkillSpec, SandboxMode};
 /// Dynamic CLI tool loaded from Markdown
 #[derive(Clone)]
 pub struct MarkdownCliTool {
-    pub(crate) spec: AetherSkillSpec,
+    pub spec: AetherSkillSpec,
     /// Whether usage examples have been injected in current session
     context_injected: Arc<AtomicBool>,
 }
@@ -130,15 +128,9 @@ pub struct MarkdownToolOutput {
     pub exit_code: i32,
 }
 
-#[async_trait]
-impl AetherTool for MarkdownCliTool {
-    const NAME: &'static str = "dynamic"; // Overridden by definition()
-    const DESCRIPTION: &'static str = "Dynamic Markdown skill";
-
-    type Args = Value; // Accept any JSON
-    type Output = MarkdownToolOutput;
-
-    fn definition(&self) -> ToolDefinition {
+impl MarkdownCliTool {
+    /// Get tool definition
+    pub fn definition(&self) -> ToolDefinition {
         let schema = self.build_dynamic_schema();
 
         // Extract examples section for LLM context
@@ -163,7 +155,8 @@ impl AetherTool for MarkdownCliTool {
         def
     }
 
-    fn requires_confirmation(&self) -> bool {
+    /// Check if tool requires confirmation
+    pub fn requires_confirmation(&self) -> bool {
         if let Some(aether) = &self.spec.metadata.aether {
             matches!(
                 aether.security.confirmation,
@@ -175,7 +168,8 @@ impl AetherTool for MarkdownCliTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+    /// Execute the tool with JSON arguments
+    pub async fn call(&self, args: Value) -> Result<MarkdownToolOutput> {
         // Build CLI command from args
         let cli_args = self.args_to_cli(&args).map_err(|e| {
             crate::error::AetherError::IoError(
@@ -290,6 +284,24 @@ impl MarkdownCliTool {
         } else {
             cli_args.push(value.to_string());
         }
+    }
+}
+
+// Implementation of AetherToolDyn for runtime tool server integration
+impl AetherToolDyn for MarkdownCliTool {
+    fn name(&self) -> &str {
+        &self.spec.name
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        self.definition()
+    }
+
+    fn call(&self, args: Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
+        Box::pin(async move {
+            let output = self.call(args).await?;
+            Ok(serde_json::to_value(&output)?)
+        })
     }
 }
 

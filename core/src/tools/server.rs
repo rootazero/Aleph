@@ -382,6 +382,53 @@ impl AetherToolServer {
     pub async fn clear(&self) {
         self.tools.write().await.clear();
     }
+
+    /// Create a new tool server with Markdown skills loaded from directories.
+    ///
+    /// This method initializes the server and loads Markdown skills from
+    /// the specified directories.
+    ///
+    /// # Arguments
+    ///
+    /// * `skill_dirs` - Directories to scan for SKILL.md files
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let server = AetherToolServer::new_with_skills(vec![
+    ///     PathBuf::from("skills"),
+    ///     PathBuf::from("~/.aether/skills"),
+    /// ]).await;
+    /// ```
+    pub async fn new_with_skills(skill_dirs: Vec<std::path::PathBuf>) -> Self {
+        use tracing::{error, info};
+
+        let server = Self::new();
+
+        // Load Markdown skills from directories
+        for dir in skill_dirs {
+            info!(dir = %dir.display(), "Loading Markdown skills");
+            let tools = crate::tools::markdown_skill::load_skills_from_dir(dir).await;
+
+            for tool in tools {
+                let name = tool.spec.name.clone();
+                if let Err(e) = server.add_tool_dyn(Box::new(tool)).await {
+                    error!(skill = %name, error = %e, "Failed to register skill");
+                } else {
+                    info!(skill = %name, "Registered Markdown skill");
+                }
+            }
+        }
+
+        server
+    }
+
+    /// Add a pre-boxed dynamic tool (internal helper).
+    async fn add_tool_dyn(&self, tool: Box<dyn AetherToolDyn>) -> Result<()> {
+        let name = tool.name().to_string();
+        self.tools.write().await.insert(name, Arc::from(tool));
+        Ok(())
+    }
 }
 
 impl Default for AetherToolServer {
