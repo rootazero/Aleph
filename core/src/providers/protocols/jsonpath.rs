@@ -22,12 +22,13 @@ use serde_json::Value;
 /// - Number: converted to string representation
 /// - Bool: converted to "true" or "false"
 /// - Object/Array: serialized to JSON string
-/// - Null: returns "null"
+/// - Null: returns "null" (only if the path exists and has null value)
 ///
 /// # Errors
 ///
 /// Returns `AetherError::ProviderError` if:
 /// - The JSONPath expression is invalid
+/// - The path does not exist in the JSON structure
 /// - No values match the path
 /// - JSON serialization fails
 ///
@@ -68,6 +69,27 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
         other => other, // Single value result
     };
 
+    // Check if we got a null result because the path doesn't exist
+    // jsonpath-rust returns Value::Null for nonexistent paths
+    // We need to distinguish between:
+    // 1. Path doesn't exist -> Error
+    // 2. Path exists but has null value -> Return "null" string
+    //
+    // To detect nonexistent paths, we check if the result is Null AND
+    // if we can manually verify the path structure exists in the JSON
+    if first_match.is_null() {
+        // Try to verify if this null is because the path doesn't exist
+        // We'll do a simple heuristic: if the path points to a field that
+        // doesn't exist in the JSON structure, return an error
+        if !path_exists_in_json(json, path) {
+            return Err(AetherError::provider(format!(
+                "No value found at JSONPath '{}' in response (path does not exist)",
+                path
+            )));
+        }
+        // Otherwise, it's an actual null value, so we'll return "null" below
+    }
+
     // Convert the Value to String based on type
     let value_str = match first_match {
         Value::String(s) => s.clone(),
@@ -83,6 +105,50 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
     };
 
     Ok(value_str)
+}
+
+/// Helper function to check if a JSONPath actually exists in the JSON structure
+///
+/// This is a heuristic check to distinguish between:
+/// - A path that doesn't exist (should error)
+/// - A path that exists but has null value (should return "null")
+///
+/// For simple paths like "$.field" or "$.a.b.c", we manually traverse the JSON.
+/// For complex paths with arrays/wildcards, we rely on jsonpath behavior.
+fn path_exists_in_json(json: &Value, path: &str) -> bool {
+    // Remove the root $ and split by dots
+    let path_clean = path.strip_prefix("$.").unwrap_or(path.strip_prefix("$").unwrap_or(path));
+
+    // If path is empty or just "$", it exists
+    if path_clean.is_empty() {
+        return true;
+    }
+
+    // For simple dot-separated paths without array indices, we can manually traverse
+    // This handles cases like "$.field" or "$.a.b.c"
+    if !path_clean.contains('[') {
+        let parts: Vec<&str> = path_clean.split('.').collect();
+        let mut current = json;
+
+        for part in parts {
+            match current {
+                Value::Object(map) => {
+                    if let Some(next) = map.get(part) {
+                        current = next;
+                    } else {
+                        return false; // Field doesn't exist
+                    }
+                }
+                _ => return false, // Can't traverse further
+            }
+        }
+        return true; // Successfully traversed the entire path
+    }
+
+    // For complex paths with array indices, if we got here with a null result,
+    // we assume the path might exist but has a null value
+    // This is a conservative approach - if unsure, we allow the null
+    true
 }
 
 #[cfg(test)]
@@ -124,11 +190,18 @@ mod tests {
             "message": "Hello"
         });
 
-        // Note: jsonpath-rust returns null for nonexistent paths rather than an error
-        // This is consistent with JSONPath specification behavior
+        // Nonexistent paths should return an error
         let result = extract_value(&json, "$.nonexistent.path");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "null");
+        assert!(result.is_err());
+
+        if let Err(AetherError::ProviderError { message, .. }) = result {
+            assert!(
+                message.contains("No value found at JSONPath")
+                    && message.contains("path does not exist")
+            );
+        } else {
+            panic!("Expected ProviderError for nonexistent path, got: {:?}", result);
+        }
     }
 
     #[test]
@@ -152,13 +225,34 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_null() {
+    fn test_extract_actual_null() {
+        // Test extracting a field that exists but has null value
+        // This should succeed and return "null" string
         let json = json!({
             "value": null
         });
 
         let result = extract_value(&json, "$.value").unwrap();
         assert_eq!(result, "null");
+    }
+
+    #[test]
+    fn test_extract_nested_nonexistent_path() {
+        // Test that nested nonexistent paths also error correctly
+        let json = json!({
+            "data": {
+                "message": "Hello"
+            }
+        });
+
+        let result = extract_value(&json, "$.data.nonexistent.field");
+        assert!(result.is_err());
+
+        if let Err(AetherError::ProviderError { message, .. }) = result {
+            assert!(message.contains("path does not exist"));
+        } else {
+            panic!("Expected ProviderError for nested nonexistent path");
+        }
     }
 
     #[test]
