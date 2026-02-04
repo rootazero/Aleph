@@ -16,7 +16,6 @@ pub mod state;
 
 pub use config::WorldModelConfig;
 pub use state::{
-    ActionType, ActivityType, CircularBuffer, ConfidenceScore, CoreState, Counter,
-    EnhancedContext, InferenceCache, MemoryPressure, NotificationPriority, PendingAction,
-    RiskLevel, SystemLoad,
+    ActivityType, CircularBuffer, ConfidenceScore, CoreState, Counter, EnhancedContext,
+    InferenceCache, MemoryPressure, PendingAction, SystemLoad,
 };

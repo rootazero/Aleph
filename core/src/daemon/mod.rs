@@ -3,6 +3,7 @@
 //! Manages Aether as a persistent system service across platforms.
 
 pub mod cli;
+pub mod dispatcher;
 pub mod error;
 pub mod event_bus;
 pub mod events;
@@ -22,9 +23,13 @@ mod tests;
 pub use cli::{DaemonCli, DaemonCommand};
 pub use error::{DaemonError, Result};
 pub use event_bus::DaemonEventBus;
+pub use dispatcher::{
+    ActionType, DispatcherConfig, DispatcherMode, NotificationPriority, Policy, PolicyEngine,
+    ProposedAction, RiskLevel,
+};
 pub use events::{
-    DaemonEvent, DerivedEvent, FsEventType, ProcessEventType, RawEvent, SystemEvent,
-    SystemStateType, TimeTrigger,
+    DaemonEvent, DerivedEvent, FsEventType, PressureLevel, PressureType, ProcessEventType,
+    RawEvent, SystemEvent, SystemStateType, TimeTrigger,
 };
 pub use ipc::{IpcServer, JsonRpcRequest, JsonRpcResponse};
 pub use perception::{PerceptionConfig, WatcherRegistry};
@@ -32,8 +37,7 @@ pub use resource_governor::{GovernorDecision, ResourceGovernor, ResourceLimits};
 pub use service_manager::{ServiceManager, create_service_manager};
 pub use types::{DaemonConfig, DaemonStatus, ServiceStatus};
 pub use worldmodel::{
-    ActionType, ActivityType, CoreState, EnhancedContext, InferenceCache, PendingAction,
-    RiskLevel, WorldModelConfig,
+    ActivityType, CoreState, EnhancedContext, InferenceCache, PendingAction, WorldModelConfig,
 };
 
 /// Initialize daemon subsystem
