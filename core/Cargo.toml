@@ -76,6 +76,8 @@ image = { version = "0.24", default-features = false, features = ["png", "jpeg",
 base64 = "0.21"
 # For async trait methods
 async-trait = "0.1"
+# For convenient error handling in internal functions
+anyhow = "1.0"
 # For async combinators (join_all, etc.)
 futures = "0.3"
 # For local embedding inference (bge-small-zh-v1.5)
@@ -94,6 +96,8 @@ git2 = "0.19"
 glob = "0.3"
 # For directory traversal (file scanning)
 walkdir = "2.5"
+# For binary existence check (Markdown skill loader)
+which = "6.0"
 # For hostname detection (Services)
 hostname = "0.4"
 # For username detection (Services)
