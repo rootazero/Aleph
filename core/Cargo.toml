@@ -68,6 +68,10 @@ tracing-appender = "0.2"
 # For config file watching
 notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-full = "0.3"
+# For user idle detection (Perception Layer)
+user-idle = "0.5"
+# For shell path expansion (Perception Layer)
+shellexpand = "3.1"
 # For protocol template rendering (configurable protocols)
 handlebars = "5.1"
 # For JSON path extraction (configurable protocols)
