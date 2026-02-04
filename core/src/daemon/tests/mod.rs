@@ -5,6 +5,7 @@ mod resource_governor_tests;
 mod ipc_tests;
 mod cli_tests;
 mod event_tests;
+mod perception_integration;
 #[cfg(target_os = "macos")]
 mod integration_tests;
 
