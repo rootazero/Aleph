@@ -9,6 +9,7 @@
 
 # Platform libraries (built from Rust, not committed)
 platforms/macos/Aleph/Frameworks/*.dylib
+platforms/macos/Aleph/Frameworks/*.dylib.*
 platforms/windows/Aleph/libs/*.dll
 
 # Cargo files
