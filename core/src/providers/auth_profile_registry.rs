@@ -164,8 +164,7 @@ impl AuthProfileProviderRegistry {
         }
 
         let provider_config = ProviderConfig {
-            provider_type: Some(self.config.provider_type.clone()),
-            protocol: None,
+            protocol: Some(self.config.provider_type.clone()),
             api_key,
             model: self.config.model.clone(),
             base_url: self.config.base_url.clone(),

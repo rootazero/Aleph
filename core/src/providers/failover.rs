@@ -541,7 +541,7 @@ mod tests {
     async fn test_failover_provider_creation() {
         // Create with mock providers
         let mut test_provider_config = ProviderConfig::test_config("test");
-        test_provider_config.provider_type = Some("mock".to_string());
+        test_provider_config.protocol = Some("mock".to_string());
         test_provider_config.api_key = None;
         test_provider_config.color = "#000000".to_string();
         test_provider_config.timeout_seconds = 30;

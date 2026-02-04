@@ -180,7 +180,7 @@ impl VisionService {
             provider = %default_provider_name,
             enabled = provider_config.enabled,
             model = %provider_config.model,
-            provider_type = ?provider_config.provider_type,
+            protocol = %provider_config.protocol(),
             "[OCR-Vision] Provider config loaded"
         );
 
