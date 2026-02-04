@@ -210,6 +210,36 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // OpenRouter - Multi-model router
+    m.insert(
+        "openrouter",
+        ProviderPreset {
+            base_url: "https://openrouter.ai/api/v1",
+            protocol: "openai",
+            color: "#7c3aed",
+        },
+    );
+
+    // Lepton AI - Model deployment
+    m.insert(
+        "lepton",
+        ProviderPreset {
+            base_url: "https://api.lepton.ai/api/v1",
+            protocol: "openai",
+            color: "#4f46e5",
+        },
+    );
+
+    // Hyperbolic - GPU marketplace
+    m.insert(
+        "hyperbolic",
+        ProviderPreset {
+            base_url: "https://api.hyperbolic.xyz/v1",
+            protocol: "openai",
+            color: "#8b5cf6",
+        },
+    );
+
     m
 });
 
@@ -247,6 +277,11 @@ mod tests {
         assert!(PRESETS.contains_key("fireworks"));
         assert!(PRESETS.contains_key("anyscale"));
         assert!(PRESETS.contains_key("replicate"));
+
+        // Tier 3: Specialized/Regional OpenAI-compatible
+        assert!(PRESETS.contains_key("openrouter"));
+        assert!(PRESETS.contains_key("lepton"));
+        assert!(PRESETS.contains_key("hyperbolic"));
     }
 
     #[test]
