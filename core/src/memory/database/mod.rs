@@ -24,11 +24,13 @@ mod retention;
 pub use core::{MemoryStats, VectorDatabase, CURRENT_EMBEDDING_DIM};
 pub use resilience::{
     AgentEvent, AgentTask, CoordinatorConfig, DivergenceStatus, EmitterConfig, EventClassifier,
-    EventEmitter, EventTier, EventType, GapFillResult, GracefulShutdown, Lane, PulseBuffer,
-    RecoveryDecision, RecoveryManager, RecoverySummary, ReplayResult, RiskLevel, SessionCounts,
-    SessionCoordinator, SessionHandle, SessionStatus, ShadowReplayEngine, ShutdownSignal,
-    SubagentSession, SwapConfig, SwapManager, SwapResult, SwapStats, SwappedContext, TaskObserver,
-    TaskResult, TaskRiskAdapter, TaskStatus, TaskTrace, TraceRole,
+    EventEmitter, EventTier, EventType, GapFillResult, GovernorConfig, GovernorStats,
+    GracefulShutdown, Lane, PulseBuffer, QuotaCheckResult, QuotaConfig, QuotaManager, QuotaUsage,
+    QuotaViolation, RecoveryDecision, RecoveryManager, RecoverySummary, RecursionLimitExceeded,
+    RecursiveSentry, RemainingCapacity, ReplayResult, ResourceGovernor, ResourcePermit, RiskLevel,
+    SessionCounts, SessionCoordinator, SessionHandle, SessionStatus, ShadowReplayEngine,
+    ShutdownSignal, SubagentSession, SwapConfig, SwapManager, SwapResult, SwapStats,
+    SwappedContext, TaskObserver, TaskResult, TaskRiskAdapter, TaskStatus, TaskTrace, TraceRole,
 };
 
 #[cfg(test)]
