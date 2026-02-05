@@ -872,13 +872,70 @@ EOF
 
 ## Completion Checklist
 
-- [ ] TranscriptIndexer module implemented and tested
-- [ ] ContextComptroller module implemented and tested
-- [ ] memory_search tool implemented and tested
-- [ ] Integration tests pass
+- [x] TranscriptIndexer module implemented and tested
+- [x] ContextComptroller module implemented and tested
+- [x] memory_search tool implemented and tested
+- [x] Integration tests pass (5522 passed, 1 pre-existing failure)
 - [ ] Documentation updated
-- [ ] All commits follow conventional commit format
-- [ ] No breaking changes to existing functionality
+- [x] All commits follow conventional commit format
+- [x] No breaking changes to existing functionality
+
+---
+
+## Implementation Summary
+
+**Status:** ✅ Phase 1 MVP Complete (3/4 tasks done, documentation pending)
+
+**Commits:**
+1. `771dc6c0` - memory: implement TranscriptIndexer module
+2. `9c72892e` - memory: implement ContextComptroller module
+3. `01096e6a` - memory: implement memory_search tool
+
+**Test Results:**
+- All new module tests passing
+- Full test suite: 5522 passed, 1 pre-existing failure (unrelated)
+- New tests added:
+  - `transcript_indexer::tests::test_index_turn_basic`
+  - `context_comptroller::tests::test_detect_redundancy_high_similarity`
+  - `context_comptroller::tests::test_no_redundancy`
+  - `memory_search::tests::test_memory_search_args_serialization`
+  - `memory_search::tests::test_default_max_results`
+
+**Key Implementation Details:**
+
+1. **TranscriptIndexer** (`core/src/memory/transcript_indexer/`)
+   - MVP: No-op implementation (memories already have embeddings)
+   - Config: Chunking parameters (max_tokens_per_chunk=400, overlap=80)
+   - Ready for Phase 2 chunking enhancement
+
+2. **ContextComptroller** (`core/src/memory/context_comptroller/`)
+   - Cosine similarity redundancy detection (threshold=0.95)
+   - Token budget management (4 chars/token estimation)
+   - RetentionMode: PreferTranscript, PreferFact, Hybrid (default)
+   - Arbitration removes redundant transcripts when facts exist
+
+3. **memory_search Tool** (`core/src/builtin_tools/memory_search.rs`)
+   - AlephTool trait implementation
+   - Integrates FactRetrieval + ContextComptroller
+   - Returns facts + transcripts + tokens_saved
+   - Registered in builtin_tools/mod.rs
+
+**Architecture Flow:**
+```
+memory_search(query)
+  → FactRetrieval.retrieve(query)
+    → Hybrid search (facts + raw memories fallback)
+  → ContextComptroller.arbitrate(results, budget)
+    → Detect redundancy via cosine similarity
+    → Remove redundant transcripts
+  → Return ArbitratedContext
+```
+
+**Next Steps (Phase 2):**
+- Implement chunking in TranscriptIndexer
+- Add ValueEstimator for importance scoring
+- Implement DreamDaemon for background compression
+- Update documentation in TOOL_SYSTEM.md
 
 ---
 
