@@ -207,6 +207,11 @@ impl LaneScheduler {
 
         stats
     }
+
+    /// Get the scheduler configuration
+    pub fn config(&self) -> &LaneConfig {
+        &self.config
+    }
 }
 
 /// Statistics for the scheduler
