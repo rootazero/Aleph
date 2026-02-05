@@ -1,4 +1,1 @@
-mod time_tests;
-mod process_tests;
-mod system_tests;
-mod filesystem_tests;
+// Watcher tests have been migrated to BDD (core/tests/features/perception/watchers.feature)

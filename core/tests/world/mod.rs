@@ -6,9 +6,11 @@ use rhai::{Engine, AST};
 
 mod config_ctx;
 mod daemon_ctx;
+mod perception_ctx;
 
 pub use config_ctx::ConfigContext;
 pub use daemon_ctx::DaemonContext;
+pub use perception_ctx::PerceptionContext;
 
 /// Scripting engine test context
 #[derive(Debug, Default)]
@@ -34,4 +36,5 @@ pub struct AlephWorld {
     pub scripting: Option<ScriptingContext>,
     pub config: Option<ConfigContext>,
     pub daemon: Option<DaemonContext>,
+    pub perception: Option<PerceptionContext>,
 }
