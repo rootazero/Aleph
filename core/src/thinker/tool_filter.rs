@@ -24,6 +24,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::agent_loop::{Observation, ToolInfo};
+use crate::config::ProfileConfig;
 use crate::dispatcher::{tool_filter as intent_filter, UnifiedTool};
 use crate::intent::TaskCategory;
 
@@ -106,6 +107,8 @@ pub struct ToolFilter {
     config: ToolFilterConfig,
     /// Optional intent-based filter for pre-filtering
     intent_filter: Option<intent_filter::ToolFilter>,
+    /// Optional profile for workspace-based filtering
+    profile: Option<ProfileConfig>,
 }
 
 impl ToolFilter {
@@ -114,14 +117,38 @@ impl ToolFilter {
         Self {
             config,
             intent_filter: None,
+            profile: None,
         }
     }
 
     /// Create a new tool filter with intent-based pre-filtering
-    pub fn with_intent_filter(config: ToolFilterConfig, intent_config: intent_filter::ToolFilterConfig) -> Self {
+    pub fn with_intent_filter(
+        config: ToolFilterConfig,
+        intent_config: intent_filter::ToolFilterConfig,
+    ) -> Self {
         Self {
             config,
             intent_filter: Some(intent_filter::ToolFilter::new(intent_config)),
+            profile: None,
+        }
+    }
+
+    /// Set the profile for workspace-based filtering
+    pub fn with_profile(mut self, profile: Option<ProfileConfig>) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    /// Update the profile at runtime
+    pub fn set_profile(&mut self, profile: Option<ProfileConfig>) {
+        self.profile = profile;
+    }
+
+    /// Check if a tool is allowed by the current profile
+    fn is_tool_allowed_by_profile(&self, tool_name: &str) -> bool {
+        match &self.profile {
+            Some(p) if !p.tools.is_empty() => p.is_tool_allowed(tool_name),
+            _ => true, // No profile or empty whitelist = all tools allowed
         }
     }
 
@@ -147,12 +174,18 @@ impl ToolFilter {
 
     /// Filter tools based on observation context
     pub fn filter(&self, tools: &[UnifiedTool], observation: &Observation) -> Vec<ToolInfo> {
+        // 0. First apply profile whitelist filter (The Lens - Layer 1)
+        let profile_filtered: Vec<&UnifiedTool> = tools
+            .iter()
+            .filter(|tool| self.is_tool_allowed_by_profile(&tool.name))
+            .collect();
+
         let mut selected: HashSet<String> = HashSet::new();
         let mut result: Vec<ToolInfo> = Vec::new();
 
-        // 1. Always include essential tools
+        // 1. Always include essential tools (if allowed by profile)
         for tool_name in &self.config.always_include {
-            if let Some(tool) = tools.iter().find(|t| &t.name == tool_name) {
+            if let Some(tool) = profile_filtered.iter().find(|t| &t.name == tool_name) {
                 if selected.insert(tool.name.clone()) {
                     result.push(self.to_tool_info(tool));
                 }
@@ -163,7 +196,7 @@ impl ToolFilter {
         if self.config.dynamic_filtering {
             for step in &observation.recent_steps {
                 if let Some(tool_name) = extract_tool_name(&step.action_type) {
-                    if let Some(tool) = tools.iter().find(|t| t.name == tool_name) {
+                    if let Some(tool) = profile_filtered.iter().find(|t| t.name == tool_name) {
                         if selected.insert(tool.name.clone()) {
                             result.push(self.to_tool_info(tool));
                         }
@@ -180,7 +213,7 @@ impl ToolFilter {
                     if result.len() >= self.config.max_tools {
                         break;
                     }
-                    if let Some(tool) = tools.iter().find(|t| &t.name == tool_name) {
+                    if let Some(tool) = profile_filtered.iter().find(|t| &t.name == tool_name) {
                         if selected.insert(tool.name.clone()) {
                             result.push(self.to_tool_info(tool));
                         }
@@ -189,8 +222,8 @@ impl ToolFilter {
             }
         }
 
-        // 4. Fill remaining slots with general-purpose tools
-        for tool in tools {
+        // 4. Fill remaining slots with profile-allowed tools
+        for tool in &profile_filtered {
             if result.len() >= self.config.max_tools {
                 break;
             }

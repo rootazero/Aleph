@@ -77,6 +77,7 @@ pub mod risk;
 pub mod tool_filter;
 pub mod smart_filter;
 pub mod content_category;
+pub mod profile_filter;
 
 // === Cortex 2.0: Robust dispatcher internals ===
 pub mod cortex;
@@ -141,9 +142,10 @@ pub use analyzer::{AnalysisResult, TaskAnalyzer};
 pub use risk::{RiskEvaluator, RiskLevel};
 
 // === Re-exports: Tool Filtering ===
-pub use tool_filter::{FilterResult, ToolFilter, ToolFilterConfig};
+pub use content_category::{infer_required_tools, ContentCategory};
+pub use profile_filter::{ProfileFilter, ToolPermission};
 pub use smart_filter::SmartToolFilter;
-pub use content_category::{ContentCategory, infer_required_tools};
+pub use tool_filter::{FilterResult, ToolFilter, ToolFilterConfig};
 
 #[cfg(test)]
 mod tests {

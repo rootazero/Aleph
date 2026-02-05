@@ -35,6 +35,7 @@ use std::time::Instant;
 use tracing::{debug, error, info};
 
 use crate::agent_loop::{Action, ActionExecutor, ActionResult};
+use crate::config::ProfileConfig;
 use crate::dispatcher::UnifiedTool;
 use crate::error::{AlephError, Result};
 
@@ -275,6 +276,58 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
             }
         }
         false
+    }
+
+    /// Validate tool permission against a profile (Layer 2: The Gatekeeper)
+    ///
+    /// This is a defense-in-depth check. Even if the Thinker layer filtered tools,
+    /// the LLM might hallucinate and try to call a tool it shouldn't have access to.
+    ///
+    /// Returns None if the tool is allowed, or Some(ActionResult) if blocked.
+    pub fn validate_tool_permission(
+        &self,
+        tool_name: &str,
+        profile: Option<&ProfileConfig>,
+    ) -> Option<ActionResult> {
+        let Some(profile) = profile else {
+            return None; // No profile = all tools allowed
+        };
+
+        if profile.tools.is_empty() {
+            return None; // Empty whitelist = all tools allowed
+        }
+
+        let normalized_tool_name = normalize_tool_name(tool_name);
+
+        if profile.is_tool_allowed(&normalized_tool_name) {
+            None
+        } else {
+            Some(ActionResult::ToolError {
+                error: format!(
+                    "Tool '{}' is not allowed in current workspace. Allowed patterns: {:?}",
+                    tool_name, profile.tools
+                ),
+                retryable: false,
+            })
+        }
+    }
+
+    /// Execute a tool call with profile validation
+    ///
+    /// This combines profile validation (Layer 2) with normal execution.
+    pub async fn execute_tool_call_with_profile(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+        profile: Option<&ProfileConfig>,
+    ) -> ActionResult {
+        // Layer 2 validation: check profile whitelist
+        if let Some(blocked_result) = self.validate_tool_permission(tool_name, profile) {
+            return blocked_result;
+        }
+
+        // Proceed with normal execution
+        self.execute_tool_call(tool_name, arguments).await
     }
 }
 
