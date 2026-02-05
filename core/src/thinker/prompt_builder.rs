@@ -8,6 +8,7 @@ use crate::core::MediaAttachment;
 
 use super::context::{DisableReason, DisabledTool, EnvironmentContract, ResolvedContext};
 use super::interaction::Capability;
+use super::soul::SoulManifest;
 
 /// System prompt part with optional cache flag
 ///
@@ -352,6 +353,130 @@ impl PromptBuilder {
                 language_name
             ));
         }
+    }
+
+    // ========== Soul/Identity Section Builders ==========
+
+    /// Append soul/identity section at the very top of the prompt
+    ///
+    /// This section has the highest priority and defines core personality.
+    pub fn append_soul_section(&self, prompt: &mut String, soul: &SoulManifest) {
+        if soul.is_empty() {
+            return;
+        }
+
+        prompt.push_str("# Identity\n\n");
+
+        // Core identity statement
+        if !soul.identity.is_empty() {
+            prompt.push_str(&soul.identity);
+            prompt.push_str("\n\n");
+        }
+
+        // Communication style
+        if !soul.voice.tone.is_empty() {
+            prompt.push_str("## Communication Style\n\n");
+            prompt.push_str(&format!("- **Tone**: {}\n", soul.voice.tone));
+            prompt.push_str(&format!("- **Verbosity**: {:?}\n", soul.voice.verbosity));
+            prompt.push_str(&format!(
+                "- **Formatting**: {:?}\n",
+                soul.voice.formatting_style
+            ));
+            if let Some(ref notes) = soul.voice.language_notes {
+                prompt.push_str(&format!("- **Language Notes**: {}\n", notes));
+            }
+            prompt.push('\n');
+        }
+
+        // Relationship mode
+        prompt.push_str("## Relationship with User\n\n");
+        prompt.push_str(soul.relationship.description());
+        prompt.push_str("\n\n");
+
+        // Expertise domains
+        if !soul.expertise.is_empty() {
+            prompt.push_str("## Areas of Expertise\n\n");
+            for domain in &soul.expertise {
+                prompt.push_str(&format!("- {}\n", domain));
+            }
+            prompt.push('\n');
+        }
+
+        // Behavioral directives
+        if !soul.directives.is_empty() {
+            prompt.push_str("## Behavioral Directives\n\n");
+            for directive in &soul.directives {
+                prompt.push_str(&format!("- {}\n", directive));
+            }
+            prompt.push('\n');
+        }
+
+        // Anti-patterns
+        if !soul.anti_patterns.is_empty() {
+            prompt.push_str("## What I Never Do\n\n");
+            for anti in &soul.anti_patterns {
+                prompt.push_str(&format!("- {}\n", anti));
+            }
+            prompt.push('\n');
+        }
+
+        // Custom addendum
+        if let Some(ref addendum) = soul.addendum {
+            prompt.push_str("## Additional Context\n\n");
+            prompt.push_str(addendum);
+            prompt.push_str("\n\n");
+        }
+
+        prompt.push_str("---\n\n");
+    }
+
+    /// Build system prompt with soul section at the top
+    ///
+    /// This is the primary entry point when using the Embodiment Engine.
+    /// Soul content appears at the very top of the prompt for highest priority.
+    pub fn build_system_prompt_with_soul(&self, tools: &[ToolInfo], soul: &SoulManifest) -> String {
+        let mut prompt = String::with_capacity(16384);
+
+        // Soul section at the very top (highest priority)
+        self.append_soul_section(&mut prompt, soul);
+
+        // Role definition
+        prompt.push_str("You are an AI assistant executing tasks step by step.\n\n");
+
+        // Core instructions
+        prompt.push_str("## Your Role\n");
+        prompt.push_str("- Observe the current state and history\n");
+        prompt.push_str("- Decide the SINGLE next action to take\n");
+        prompt.push_str("- Execute until the task is complete or you need user input\n\n");
+
+        // Add runtime capabilities if configured
+        self.append_runtime_capabilities(&mut prompt);
+
+        // Add tools section
+        self.append_tools(&mut prompt, tools);
+
+        // Add generation models if configured
+        self.append_generation_models(&mut prompt);
+
+        // Add special actions
+        self.append_special_actions(&mut prompt);
+
+        // Add response format
+        self.append_response_format(&mut prompt);
+
+        // Add guidelines
+        self.append_guidelines(&mut prompt);
+
+        // Add skill mode instructions if enabled
+        self.append_skill_mode(&mut prompt);
+
+        // Add custom instructions if configured
+        self.append_custom_instructions(&mut prompt);
+
+        // Add language setting
+        self.append_language_setting(&mut prompt);
+
+        prompt
     }
 
     // ========== Environment Contract & Security Section Builders ==========
@@ -813,3 +938,93 @@ fn format_attachment(attachment: &MediaAttachment) -> String {
 }
 
 // Tests migrated to BDD format in core/tests/features/thinker/prompt_builder.feature
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::thinker::soul::{SoulVoice, Verbosity};
+
+    #[test]
+    fn test_append_soul_section_empty() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+        let soul = SoulManifest::default();
+
+        builder.append_soul_section(&mut prompt, &soul);
+
+        // Empty soul should produce no output
+        assert!(prompt.is_empty());
+    }
+
+    #[test]
+    fn test_append_soul_section_basic() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let soul = SoulManifest {
+            identity: "I am a test assistant.".to_string(),
+            voice: SoulVoice {
+                tone: "friendly".to_string(),
+                verbosity: Verbosity::Balanced,
+                ..Default::default()
+            },
+            directives: vec!["Be helpful".to_string()],
+            anti_patterns: vec!["Don't be rude".to_string()],
+            ..Default::default()
+        };
+
+        builder.append_soul_section(&mut prompt, &soul);
+
+        assert!(prompt.contains("# Identity"));
+        assert!(prompt.contains("I am a test assistant"));
+        assert!(prompt.contains("Communication Style"));
+        assert!(prompt.contains("friendly"));
+        assert!(prompt.contains("Behavioral Directives"));
+        assert!(prompt.contains("Be helpful"));
+        assert!(prompt.contains("What I Never Do"));
+        assert!(prompt.contains("Don't be rude"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_soul() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        let soul = SoulManifest {
+            identity: "I am Aleph.".to_string(),
+            directives: vec!["Help users".to_string()],
+            ..Default::default()
+        };
+
+        let prompt = builder.build_system_prompt_with_soul(&[], &soul);
+
+        // Soul should appear first
+        let identity_pos = prompt.find("# Identity").unwrap();
+        let role_pos = prompt.find("Your Role").unwrap();
+        assert!(
+            identity_pos < role_pos,
+            "Identity should appear before Role"
+        );
+
+        // Standard sections should still be present
+        assert!(prompt.contains("Response Format"));
+        assert!(prompt.contains("JSON"));
+    }
+
+    #[test]
+    fn test_soul_section_with_expertise() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let soul = SoulManifest {
+            identity: "Expert assistant.".to_string(),
+            expertise: vec!["Rust".to_string(), "Python".to_string()],
+            ..Default::default()
+        };
+
+        builder.append_soul_section(&mut prompt, &soul);
+
+        assert!(prompt.contains("Areas of Expertise"));
+        assert!(prompt.contains("- Rust"));
+        assert!(prompt.contains("- Python"));
+    }
+}
