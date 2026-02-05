@@ -5,7 +5,9 @@
 mod lane_config;
 mod lane_state;
 mod lane_scheduler;
+mod anti_starvation;
 
 pub use lane_config::{LaneConfig, LaneQuota};
 pub use lane_state::{LaneState, QueuedRun};
 pub use lane_scheduler::{LaneScheduler, SchedulerStats, LaneStats};
+pub use anti_starvation::WaitTimeTracker;
