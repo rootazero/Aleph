@@ -132,6 +132,15 @@ pub enum FactType {
     /// Other facts that don't fit above categories
     #[default]
     Other,
+    // Multi-Agent 2.0 fact types
+    /// Sub-agent run record (task execution metadata)
+    SubagentRun,
+    /// Sub-agent session state
+    SubagentSession,
+    /// Sub-agent checkpoint for resumption
+    SubagentCheckpoint,
+    /// Sub-agent conversation transcript
+    SubagentTranscript,
 }
 
 impl FactType {
@@ -144,6 +153,10 @@ impl FactType {
             FactType::Project => "project",
             FactType::Personal => "personal",
             FactType::Other => "other",
+            FactType::SubagentRun => "subagent_run",
+            FactType::SubagentSession => "subagent_session",
+            FactType::SubagentCheckpoint => "subagent_checkpoint",
+            FactType::SubagentTranscript => "subagent_transcript",
         }
     }
 
@@ -156,6 +169,10 @@ impl FactType {
             "learning" => FactType::Learning,
             "project" => FactType::Project,
             "personal" => FactType::Personal,
+            "subagent_run" => FactType::SubagentRun,
+            "subagent_session" => FactType::SubagentSession,
+            "subagent_checkpoint" => FactType::SubagentCheckpoint,
+            "subagent_transcript" => FactType::SubagentTranscript,
             _ => FactType::Other,
         }
     }
@@ -604,5 +621,17 @@ mod tests {
         assert_eq!(TemporalScope::Permanent.as_str(), "permanent");
         assert_eq!(TemporalScope::Contextual.as_str(), "contextual");
         assert_eq!(TemporalScope::Ephemeral.as_str(), "ephemeral");
+    }
+
+    #[test]
+    fn test_subagent_fact_types() {
+        assert_eq!(FactType::from_str("subagent_run"), FactType::SubagentRun);
+        assert_eq!(FactType::from_str("subagent_session"), FactType::SubagentSession);
+        assert_eq!(FactType::from_str("subagent_checkpoint"), FactType::SubagentCheckpoint);
+        assert_eq!(FactType::from_str("subagent_transcript"), FactType::SubagentTranscript);
+        assert_eq!(FactType::SubagentRun.as_str(), "subagent_run");
+        assert_eq!(FactType::SubagentSession.as_str(), "subagent_session");
+        assert_eq!(FactType::SubagentCheckpoint.as_str(), "subagent_checkpoint");
+        assert_eq!(FactType::SubagentTranscript.as_str(), "subagent_transcript");
     }
 }
