@@ -8,6 +8,7 @@ mod agent_loop_ctx;
 mod config_ctx;
 mod daemon_ctx;
 mod dispatcher_ctx;
+mod extension_ctx;
 mod gateway_ctx;
 mod memory_ctx;
 mod message_builder_ctx;
@@ -20,6 +21,7 @@ pub use agent_loop_ctx::{AgentLoopContext, MockDecision};
 pub use config_ctx::ConfigContext;
 pub use daemon_ctx::DaemonContext;
 pub use dispatcher_ctx::DispatcherContext;
+pub use extension_ctx::ExtensionContext;
 pub use gateway_ctx::{GatewayContext, TrackingExecutionAdapter, TestEmitter, make_test_message};
 pub use memory_ctx::MemoryContext;
 pub use message_builder_ctx::MessageBuilderContext;
@@ -58,6 +60,7 @@ pub struct AlephWorld {
     pub message_builder: Option<MessageBuilderContext>,
     pub perception: Option<PerceptionContext>,
     pub agent_loop: Option<AgentLoopContext>,
+    pub extension: Option<ExtensionContext>,
     pub poe: Option<PoeContext>,
     pub thinker: Option<ThinkerContext>,
     pub tools: Option<ToolsContext>,
