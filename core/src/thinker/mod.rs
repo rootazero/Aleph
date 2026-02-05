@@ -29,6 +29,7 @@
 //!    Thinking { reasoning, decision }
 //! ```
 
+pub mod cache;
 pub mod decision_parser;
 pub mod model_router;
 pub mod prompt_builder;
@@ -37,6 +38,12 @@ pub mod tool_filter;
 
 use std::sync::Arc;
 
+pub use cache::{
+    AnthropicCacheStrategy, CacheContext, CacheControl, CacheStrategy, CacheableContentBlock,
+    GeminiCacheCreateRequest, GeminiCacheCreateResponse, GeminiCacheStrategy, GeminiContent,
+    GeminiPart, ProviderType, SystemPromptCache, TransparentCacheStrategy,
+    get_cache_strategy, GEMINI_CACHE_TTL_SECS, MIN_CACHE_TOKENS,
+};
 pub use decision_parser::DecisionParser;
 pub use model_router::{ModelId, RoutingCondition, RoutingRule, ThinkerModelSelector};
 
