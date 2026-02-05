@@ -1,6 +1,6 @@
 # Tool-as-Resource: 动态工具发现与按需水合
 
-> **状态**: Draft
+> **状态**: In Progress
 > **作者**: Claude & User
 > **日期**: 2026-02-05
 > **关联**: [Memory System](../MEMORY_SYSTEM.md), [Tool System](../TOOL_SYSTEM.md)
