@@ -57,6 +57,10 @@ pub enum Decision {
     Fail {
         reason: String,
     },
+    /// Silent response - nothing to report
+    Silent,
+    /// Heartbeat acknowledgment - background task alive
+    HeartbeatOk,
 }
 
 /// Question group for multi-group clarifications
@@ -70,7 +74,13 @@ pub struct QuestionGroup {
 impl Decision {
     /// Check if this decision is terminal (ends the loop)
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Decision::Complete { .. } | Decision::Fail { .. })
+        matches!(
+            self,
+            Decision::Complete { .. }
+                | Decision::Fail { .. }
+                | Decision::Silent
+                | Decision::HeartbeatOk
+        )
     }
 
     /// Get decision type as string
@@ -82,6 +92,8 @@ impl Decision {
             Decision::AskUserRich { .. } => "ask_user_rich",
             Decision::Complete { .. } => "complete",
             Decision::Fail { .. } => "fail",
+            Decision::Silent => "silent",
+            Decision::HeartbeatOk => "heartbeat_ok",
         }
     }
 }
@@ -206,6 +218,8 @@ impl From<Decision> for Action {
             }
             Decision::Complete { summary } => Action::Completion { summary },
             Decision::Fail { reason } => Action::Failure { reason },
+            Decision::Silent => Action::Completion { summary: "[silent]".to_string() },
+            Decision::HeartbeatOk => Action::Completion { summary: "[heartbeat_ok]".to_string() },
         }
     }
 }
@@ -343,6 +357,10 @@ pub enum LlmAction {
     Fail {
         reason: String,
     },
+    /// Silent - no output needed
+    Silent,
+    /// Heartbeat OK - background task alive
+    HeartbeatOk,
 }
 
 impl From<LlmAction> for Decision {
@@ -364,6 +382,8 @@ impl From<LlmAction> for Decision {
             }
             LlmAction::Complete { summary } => Decision::Complete { summary },
             LlmAction::Fail { reason } => Decision::Fail { reason },
+            LlmAction::Silent => Decision::Silent,
+            LlmAction::HeartbeatOk => Decision::HeartbeatOk,
         }
     }
 }

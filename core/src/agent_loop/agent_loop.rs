@@ -558,6 +558,30 @@ where
                         arguments: arguments.clone(),
                     }
                 }
+                Decision::Silent => {
+                    // Silent response - nothing to report to the user
+                    callback.on_complete("[silent]").await;
+                    self.compaction_trigger
+                        .emit_loop_stop(StopReason::Completed)
+                        .await;
+                    return LoopResult::Completed {
+                        summary: "[silent]".to_string(),
+                        steps: state.step_count,
+                        total_tokens: state.total_tokens,
+                    };
+                }
+                Decision::HeartbeatOk => {
+                    // Heartbeat acknowledgment - background task alive
+                    callback.on_complete("[heartbeat_ok]").await;
+                    self.compaction_trigger
+                        .emit_loop_stop(StopReason::Completed)
+                        .await;
+                    return LoopResult::Completed {
+                        summary: "[heartbeat_ok]".to_string(),
+                        steps: state.step_count,
+                        total_tokens: state.total_tokens,
+                    };
+                }
             };
 
             // ===== Execute =====
