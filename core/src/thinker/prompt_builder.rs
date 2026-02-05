@@ -603,6 +603,4 @@ fn format_attachment(attachment: &MediaAttachment) -> String {
     }
 }
 
-#[cfg(test)]
-#[path = "prompt_builder_tests.rs"]
-mod tests;
+// Tests migrated to BDD format in core/tests/features/thinker/prompt_builder.feature
