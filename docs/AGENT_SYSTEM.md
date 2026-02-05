@@ -128,6 +128,9 @@ The Thinker is responsible for LLM interactions and decision making.
 | `ModelRouter` | `model_router.rs` | Select optimal model |
 | `ToolFilter` | `tool_filter.rs` | Filter available tools |
 | `StreamingHandler` | `streaming/` | Handle streaming responses |
+| `InteractionManifest` | `interaction.rs` | Channel capability awareness |
+| `SecurityContext` | `security_context.rs` | Policy-driven permissions |
+| `ContextAggregator` | `context.rs` | Reconcile interaction and security |
 
 ### Thinking Levels
 
@@ -185,6 +188,113 @@ LLM Response Stream
     ▼
 Event: StreamChunk { content, block_type }
 ```
+
+---
+
+## Channel Capability Awareness
+
+**Location**: `core/src/thinker/` (interaction.rs, security_context.rs, context.rs)
+
+Aleph's Thinker uses a two-layer context system to adapt AI behavior based on the current environment.
+
+### InteractionManifest
+
+Describes what the channel can technically do:
+
+```rust
+InteractionManifest {
+    paradigm: InteractionParadigm::WebRich,
+    capabilities: [MultiGroupUI, Streaming, MermaidCharts, Canvas],
+    constraints: { max_output_chars: None, supports_streaming: true }
+}
+```
+
+**Paradigms**:
+
+| Paradigm | Description | Default Capabilities |
+|----------|-------------|---------------------|
+| `CLI` | Terminal interface | RichText, CodeHighlight, Streaming |
+| `WebRich` | Full web interface | All capabilities including Canvas |
+| `Messaging` | Chat platforms | RichText, ImageInline |
+| `Background` | Scheduled tasks | SilentReply |
+| `Embedded` | Constrained env | None |
+
+**Capabilities**: RichText, InlineButtons, MultiGroupUI, Streaming, ImageInline, MermaidCharts, CodeHighlight, FileUpload, Canvas, SilentReply
+
+### SecurityContext
+
+Orthogonal layer defining what policy allows:
+
+```rust
+SecurityContext {
+    sandbox_level: SandboxLevel::Standard,
+    filesystem_scope: Some("/workspace"),
+    elevated_policy: ElevatedPolicy::Ask,
+}
+```
+
+**Sandbox Levels**:
+
+| Level | Description | Tool Impact |
+|-------|-------------|-------------|
+| `None` | Full access | All tools allowed |
+| `Standard` | Limited filesystem/network | exec requires approval |
+| `Strict` | Read-only operations | file_ops/exec blocked |
+| `Untrusted` | Full isolation | Most tools blocked |
+
+### ContextAggregator
+
+Reconciles the two layers with a two-phase filtering approach:
+
+```
+Phase 1: Interaction Filter (Silent)
+    └── Removes tools unsupported by channel
+        └── AI doesn't know these tools exist
+
+Phase 2: Security Filter (Transparent)
+    └── Blocks/marks tools per policy
+        └── AI knows "this tool requires approval" or "blocked by policy"
+```
+
+```rust
+let resolved = ContextAggregator::resolve(&interaction, &security, &tools);
+// resolved.available_tools    - tools ready to use
+// resolved.disabled_tools     - tools with reasons (BlockedByPolicy, RequiresApproval)
+// resolved.environment_contract - for system prompt generation
+```
+
+### Environment Contract in System Prompt
+
+The resolved context feeds into PromptBuilder, generating an "Environment Contract" section:
+
+```markdown
+## Environment Contract
+
+**Paradigm**: CLI (text-only terminal)
+
+**Active Capabilities**:
+- `rich_text`: You can use markdown formatting
+- `code_highlight`: Code blocks will have syntax highlighting
+- `streaming`: Responses will stream in real-time
+
+**Constraints**:
+- No multi-group UI available
+
+## Security Notes
+
+- Standard Sandbox Mode
+- Filesystem scope: /workspace
+- Shell execution requires user approval
+```
+
+### Terminal Decision Types
+
+For background/scheduled tasks, two additional decision types:
+
+| Decision | Use Case |
+|----------|----------|
+| `Silent` | Background task with nothing to report |
+| `HeartbeatOk` | Confirmation that scheduled task is alive |
 
 ---
 
