@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 
 use super::event_bus::GatewayEventBus;
 use super::protocol::JsonRpcRequest;
+use crate::agent_loop::thinking::{ConfidenceLevel, ReasoningStepType};
 
 /// Streaming event types for real-time agent feedback
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +93,123 @@ pub enum StreamEvent {
         question: String,
         options: Vec<String>,
     },
+
+    /// Structured reasoning block with semantic type
+    ///
+    /// This is the enhanced version of the basic Reasoning event,
+    /// providing semantic structure for better UI rendering.
+    ReasoningBlock {
+        run_id: String,
+        seq: u64,
+        /// Semantic step type (observation, analysis, planning, etc.)
+        step_type: ReasoningStepType,
+        /// Human-readable label for this block
+        label: String,
+        /// Content of this reasoning block
+        content: String,
+        /// Confidence level if determinable
+        #[serde(skip_serializing_if = "Option::is_none")]
+        confidence: Option<ConfidenceLevel>,
+        /// Is this the final block before action?
+        is_final: bool,
+    },
+
+    /// Uncertainty signal from the AI
+    ///
+    /// Emitted when the AI explicitly expresses uncertainty,
+    /// allowing the UI to prompt for user guidance.
+    UncertaintySignal {
+        run_id: String,
+        seq: u64,
+        /// What the AI is uncertain about
+        uncertainty: String,
+        /// Suggested action for handling the uncertainty
+        suggested_action: UncertaintyAction,
+    },
+}
+
+/// Suggested action for handling AI uncertainty
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UncertaintyAction {
+    /// Proceed despite uncertainty
+    ProceedWithCaution,
+    /// Ask user for clarification before proceeding
+    AskForClarification,
+    /// Use a safer/more conservative approach
+    UseSaferApproach,
+    /// Stop and wait for user input
+    WaitForUser,
+}
+
+impl UncertaintyAction {
+    /// Get human-readable description
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::ProceedWithCaution => "Proceeding with caution despite uncertainty",
+            Self::AskForClarification => "Asking user for clarification",
+            Self::UseSaferApproach => "Using a safer, more conservative approach",
+            Self::WaitForUser => "Waiting for user guidance",
+        }
+    }
+}
+
+impl StreamEvent {
+    /// Create a new ReasoningBlock event
+    pub fn reasoning_block(
+        run_id: impl Into<String>,
+        seq: u64,
+        step_type: ReasoningStepType,
+        label: impl Into<String>,
+        content: impl Into<String>,
+        is_final: bool,
+    ) -> Self {
+        Self::ReasoningBlock {
+            run_id: run_id.into(),
+            seq,
+            step_type,
+            label: label.into(),
+            content: content.into(),
+            confidence: None,
+            is_final,
+        }
+    }
+
+    /// Create a new ReasoningBlock event with confidence
+    pub fn reasoning_block_with_confidence(
+        run_id: impl Into<String>,
+        seq: u64,
+        step_type: ReasoningStepType,
+        label: impl Into<String>,
+        content: impl Into<String>,
+        confidence: ConfidenceLevel,
+        is_final: bool,
+    ) -> Self {
+        Self::ReasoningBlock {
+            run_id: run_id.into(),
+            seq,
+            step_type,
+            label: label.into(),
+            content: content.into(),
+            confidence: Some(confidence),
+            is_final,
+        }
+    }
+
+    /// Create a new UncertaintySignal event
+    pub fn uncertainty_signal(
+        run_id: impl Into<String>,
+        seq: u64,
+        uncertainty: impl Into<String>,
+        suggested_action: UncertaintyAction,
+    ) -> Self {
+        Self::UncertaintySignal {
+            run_id: run_id.into(),
+            seq,
+            uncertainty: uncertainty.into(),
+            suggested_action,
+        }
+    }
 }
 
 /// Result of a tool execution
@@ -568,6 +686,8 @@ fn event_method(event: &StreamEvent) -> &'static str {
         StreamEvent::RunComplete { .. } => "stream.run_complete",
         StreamEvent::RunError { .. } => "stream.run_error",
         StreamEvent::AskUser { .. } => "stream.ask_user",
+        StreamEvent::ReasoningBlock { .. } => "stream.reasoning_block",
+        StreamEvent::UncertaintySignal { .. } => "stream.uncertainty_signal",
     }
 }
 
@@ -724,5 +844,73 @@ mod tests {
             150,
             "Throttle interval should be 150ms"
         );
+    }
+
+    #[test]
+    fn test_reasoning_block_serialization() {
+        let event = StreamEvent::reasoning_block(
+            "run-123",
+            1,
+            ReasoningStepType::Analysis,
+            "Analyzing options",
+            "Comparing Redis vs in-memory cache",
+            false,
+        );
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("reasoning_block"));
+        assert!(json.contains("analysis"));
+        assert!(json.contains("Analyzing options"));
+    }
+
+    #[test]
+    fn test_reasoning_block_with_confidence() {
+        let event = StreamEvent::reasoning_block_with_confidence(
+            "run-123",
+            2,
+            ReasoningStepType::Decision,
+            "Final decision",
+            "Will use Redis",
+            ConfidenceLevel::High,
+            true,
+        );
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("decision"));
+        assert!(json.contains("high"));
+        assert!(json.contains("is_final"));
+    }
+
+    #[test]
+    fn test_uncertainty_signal() {
+        let event = StreamEvent::uncertainty_signal(
+            "run-123",
+            3,
+            "Not sure about the caching strategy",
+            UncertaintyAction::AskForClarification,
+        );
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("uncertainty_signal"));
+        assert!(json.contains("ask_for_clarification"));
+    }
+
+    #[test]
+    fn test_uncertainty_action_description() {
+        assert!(UncertaintyAction::ProceedWithCaution.description().contains("caution"));
+        assert!(UncertaintyAction::AskForClarification.description().contains("clarification"));
+    }
+
+    #[test]
+    fn test_deserialize_reasoning_block() {
+        let json = r#"{"type":"reasoning_block","run_id":"r1","seq":1,"step_type":"observation","label":"Look","content":"Seeing the code","confidence":null,"is_final":false}"#;
+        let event: StreamEvent = serde_json::from_str(json).unwrap();
+
+        if let StreamEvent::ReasoningBlock { step_type, label, .. } = event {
+            assert_eq!(step_type, ReasoningStepType::Observation);
+            assert_eq!(label, "Look");
+        } else {
+            panic!("Wrong event type");
+        }
     }
 }

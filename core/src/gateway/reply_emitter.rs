@@ -256,7 +256,9 @@ impl EventEmitter for ReplyEmitter {
             | StreamEvent::Reasoning { .. }
             | StreamEvent::ToolStart { .. }
             | StreamEvent::ToolUpdate { .. }
-            | StreamEvent::ToolEnd { .. } => {
+            | StreamEvent::ToolEnd { .. }
+            | StreamEvent::ReasoningBlock { .. }
+            | StreamEvent::UncertaintySignal { .. } => {
                 // These events are for WebSocket clients, not channel users
                 debug!("Ignoring event for channel routing: {:?}", event);
             }
