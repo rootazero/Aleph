@@ -85,6 +85,7 @@ mod coordinator;
 mod result_collector;
 mod run;
 mod registry;
+mod persistence;
 
 pub use traits::{
     SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult,
@@ -110,3 +111,4 @@ pub use result_collector::{
 // Multi-Agent 2.0 run tracking
 pub use run::{SubAgentRun, RunStatus, RunOutcome, Lane, CleanupPolicy};
 pub use registry::{SubAgentRegistry, LifecycleEvent};
+pub use persistence::SubAgentRunFact;
