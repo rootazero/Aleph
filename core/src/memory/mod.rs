@@ -46,6 +46,9 @@ pub mod evolution;
 pub mod consolidation;
 pub mod performance_monitor;
 
+#[cfg(test)]
+mod integration_tests;
+
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
 pub use audit::{
