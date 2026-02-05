@@ -2,8 +2,12 @@
 
 use crate::world::{AlephWorld, ThinkerContext};
 use alephcore::agent_loop::{Observation, StepSummary, ToolInfo};
-use alephcore::thinker::{MessageRole, PromptConfig};
+use alephcore::thinker::{
+    Capability, ContextAggregator, DisableReason, InteractionManifest, InteractionParadigm,
+    MessageRole, PromptConfig, SecurityContext,
+};
 use cucumber::{gherkin::Step, given, then, when};
+use std::path::PathBuf;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Given Steps
@@ -343,5 +347,209 @@ async fn then_both_prompts_contain(w: &mut AlephWorld, expected: String) {
         combined.contains(&expected),
         "Expected combined cached prompt to contain '{}', but it didn't",
         expected
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Context Aggregation - Given Steps
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[given("a web rich interaction manifest")]
+async fn given_web_manifest(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.interaction = Some(InteractionManifest::new(InteractionParadigm::WebRich));
+}
+
+#[given("a CLI interaction manifest")]
+async fn given_cli_manifest(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.interaction = Some(InteractionManifest::new(InteractionParadigm::CLI));
+}
+
+#[given("a messaging interaction manifest with inline buttons")]
+async fn given_messaging_with_buttons(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    let mut manifest = InteractionManifest::new(InteractionParadigm::Messaging);
+    manifest.add_capability(Capability::InlineButtons);
+    ctx.interaction = Some(manifest);
+}
+
+#[given("a background interaction manifest")]
+async fn given_background_manifest(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.interaction = Some(InteractionManifest::new(InteractionParadigm::Background));
+}
+
+#[given("a standard sandbox security context")]
+async fn given_standard_security(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.security = Some(SecurityContext::standard_sandbox(PathBuf::from("/workspace")));
+}
+
+#[given("a strict readonly security context")]
+async fn given_strict_security(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.security = Some(SecurityContext::strict_readonly(PathBuf::from("/workspace")));
+}
+
+#[given("a permissive security context")]
+async fn given_permissive_security(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.security = Some(SecurityContext::permissive());
+}
+
+#[given(expr = "tools {string}")]
+async fn given_tools_list(w: &mut AlephWorld, tools_str: String) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.tools.clear();
+    for name in tools_str.split(',') {
+        let name = name.trim();
+        ctx.add_tool(name, &format!("{} tool", name), "{}");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Context Aggregation - When Steps
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[when("I aggregate the context")]
+async fn when_aggregate(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    let interaction = ctx.interaction.as_ref().expect("No interaction manifest");
+    let security = ctx.security.as_ref().expect("No security context");
+    let tools = &ctx.tools;
+
+    ctx.resolved = Some(ContextAggregator::resolve(interaction, security, tools));
+}
+
+#[when("I build the system prompt with context")]
+async fn when_build_prompt_with_context(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+
+    // First aggregate context
+    let interaction = ctx.interaction.as_ref().expect("No interaction manifest");
+    let security = ctx.security.as_ref().expect("No security context");
+    let tools = &ctx.tools;
+    let resolved = ContextAggregator::resolve(interaction, security, tools);
+
+    // Build prompt with context
+    ctx.init_builder();
+    if let Some(builder) = &ctx.builder {
+        ctx.system_prompt = Some(builder.build_system_prompt_with_context(&resolved));
+    }
+    ctx.resolved = Some(resolved);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Context Aggregation - Then Steps
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[then(expr = "the environment contract paradigm should be {string}")]
+async fn then_paradigm(w: &mut AlephWorld, expected: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let resolved = ctx.resolved.as_ref().expect("No resolved context");
+    let paradigm = format!("{:?}", resolved.environment_contract.paradigm);
+    assert!(
+        paradigm.contains(&expected),
+        "Expected paradigm to contain '{}', got '{}'",
+        expected,
+        paradigm
+    );
+}
+
+#[then(expr = "{string} should be available")]
+async fn then_tool_available(w: &mut AlephWorld, tool_name: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let resolved = ctx.resolved.as_ref().expect("No resolved context");
+    assert!(
+        resolved
+            .available_tools
+            .iter()
+            .any(|t| t.name == tool_name),
+        "Expected tool '{}' to be available, but it wasn't. Available: {:?}",
+        tool_name,
+        resolved
+            .available_tools
+            .iter()
+            .map(|t| &t.name)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[then(expr = "{string} should require approval")]
+async fn then_requires_approval(w: &mut AlephWorld, tool_name: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let resolved = ctx.resolved.as_ref().expect("No resolved context");
+    assert!(
+        resolved.disabled_tools.iter().any(|d| d.name == tool_name
+            && matches!(d.reason, DisableReason::RequiresApproval { .. })),
+        "Expected tool '{}' to require approval, but it didn't. Disabled tools: {:?}",
+        tool_name,
+        resolved
+            .disabled_tools
+            .iter()
+            .map(|d| (&d.name, &d.reason))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[then(expr = "{string} should be blocked by policy")]
+async fn then_blocked(w: &mut AlephWorld, tool_name: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let resolved = ctx.resolved.as_ref().expect("No resolved context");
+    assert!(
+        resolved.disabled_tools.iter().any(|d| d.name == tool_name
+            && matches!(d.reason, DisableReason::BlockedByPolicy { .. })),
+        "Expected tool '{}' to be blocked by policy, but it wasn't. Disabled tools: {:?}",
+        tool_name,
+        resolved
+            .disabled_tools
+            .iter()
+            .map(|d| (&d.name, &d.reason))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[then(expr = "{string} should be unsupported by channel")]
+async fn then_unsupported_by_channel(w: &mut AlephWorld, tool_name: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let resolved = ctx.resolved.as_ref().expect("No resolved context");
+    assert!(
+        resolved.disabled_tools.iter().any(|d| d.name == tool_name
+            && matches!(d.reason, DisableReason::UnsupportedByChannel)),
+        "Expected tool '{}' to be unsupported by channel, but it wasn't. Disabled tools: {:?}",
+        tool_name,
+        resolved
+            .disabled_tools
+            .iter()
+            .map(|d| (&d.name, &d.reason))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[then(expr = "the environment contract should have {string} capability")]
+async fn then_has_capability(w: &mut AlephWorld, cap_name: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let resolved = ctx.resolved.as_ref().expect("No resolved context");
+
+    let has_cap = resolved
+        .environment_contract
+        .active_capabilities
+        .iter()
+        .any(|c| {
+            let (name, _) = c.prompt_hint();
+            name == cap_name
+        });
+
+    assert!(
+        has_cap,
+        "Expected environment contract to have '{}' capability, but it didn't. Capabilities: {:?}",
+        cap_name,
+        resolved
+            .environment_contract
+            .active_capabilities
+            .iter()
+            .map(|c| c.prompt_hint().0)
+            .collect::<Vec<_>>()
     );
 }
