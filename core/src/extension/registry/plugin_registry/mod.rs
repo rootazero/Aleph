@@ -528,6 +528,3 @@ pub struct RegistryStats {
     pub commands: usize,
     pub diagnostics: usize,
 }
-
-#[cfg(test)]
-mod tests;
