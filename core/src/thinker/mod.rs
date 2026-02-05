@@ -31,6 +31,7 @@
 
 pub mod cache;
 pub mod decision_parser;
+pub mod interaction;
 pub mod model_router;
 pub mod prompt_builder;
 pub mod streaming;
@@ -52,6 +53,7 @@ pub use model_router::{ModelId, RoutingCondition, RoutingRule, ThinkerModelSelec
 pub type ModelRouter = ThinkerModelSelector;
 pub use prompt_builder::{Message, MessageRole, PromptBuilder, PromptConfig};
 pub use tool_filter::{IntentFilterConfig, IntentFilterResult, ToolFilter, ToolFilterConfig};
+pub use interaction::{Capability, InteractionConstraints, InteractionManifest, InteractionParadigm};
 
 use crate::agent_loop::{
     CompressionConfig, LoopState, ModelRoutingConfig, Observation, ThinkerTrait, Thinking, ToolInfo,
