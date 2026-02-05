@@ -9,7 +9,9 @@
 mod config;
 mod coordinator;
 mod inference;
+mod retrieval;
 
 pub use config::ToolRetrievalConfig;
 pub use coordinator::{ToolIndexCoordinator, ToolMeta};
 pub use inference::{InferredPurpose, SemanticPurposeInferrer};
+pub use retrieval::{HydrationLevel, HydratedTool, ToolRetrieval};
