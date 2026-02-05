@@ -131,6 +131,8 @@ The Thinker is responsible for LLM interactions and decision making.
 | `InteractionManifest` | `interaction.rs` | Channel capability awareness |
 | `SecurityContext` | `security_context.rs` | Policy-driven permissions |
 | `ContextAggregator` | `context.rs` | Reconcile interaction and security |
+| `SoulManifest` | `soul.rs` | Identity/personality definition |
+| `IdentityResolver` | `identity.rs` | Layered identity resolution |
 
 ### Thinking Levels
 
@@ -295,6 +297,161 @@ For background/scheduled tasks, two additional decision types:
 |----------|----------|
 | `Silent` | Background task with nothing to report |
 | `HeartbeatOk` | Confirmation that scheduled task is alive |
+
+---
+
+## Embodiment Engine
+
+**Location**: `core/src/thinker/soul.rs`, `core/src/thinker/identity.rs`
+
+The Embodiment Engine gives the AI a consistent identity and personality through layered soul definitions.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    IdentityResolver                              │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ Priority Stack                                           │    │
+│  │   ┌─────────────┐                                        │    │
+│  │   │  Session    │ ← Runtime override (highest)           │    │
+│  │   ├─────────────┤                                        │    │
+│  │   │  Project    │ ← .soul/identity.md                    │    │
+│  │   ├─────────────┤                                        │    │
+│  │   │  Global     │ ← ~/.aleph/soul.md                     │    │
+│  │   ├─────────────┤                                        │    │
+│  │   │  Default    │ ← Empty manifest (lowest)              │    │
+│  │   └─────────────┘                                        │    │
+│  └─────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### SoulManifest
+
+```rust
+pub struct SoulManifest {
+    pub identity: String,           // Core identity statement
+    pub voice: SoulVoice,           // Communication style
+    pub directives: Vec<String>,    // Behavioral guidelines
+    pub anti_patterns: Vec<String>, // What the AI should never do
+    pub relationship: RelationshipMode, // User relationship type
+    pub expertise: Vec<String>,     // Areas of expertise
+    pub addendum: Option<String>,   // Custom additions
+}
+
+pub struct SoulVoice {
+    pub tone: String,               // e.g., "friendly", "professional"
+    pub verbosity: Verbosity,       // Minimal, Concise, Balanced, Verbose
+    pub formatting_style: FormattingStyle, // Compact, Standard, Rich
+    pub language_notes: Option<String>,
+}
+```
+
+### Soul File Format (Markdown)
+
+```markdown
+---
+relationship: mentor
+expertise:
+  - Rust
+  - System design
+---
+
+# Identity
+
+I am Aleph, your AI programming partner.
+
+## Directives
+
+- Be helpful and encouraging
+- Explain concepts clearly
+- Suggest best practices
+
+## Anti-Patterns
+
+- Never be condescending
+- Never make up information
+```
+
+### RPC Methods
+
+| Method | Description |
+|--------|-------------|
+| `identity.get` | Returns effective SoulManifest |
+| `identity.set` | Sets session-level override |
+| `identity.clear` | Clears session override |
+| `identity.list` | Lists available identity sources |
+
+---
+
+## Chain-of-Thought Transparency
+
+**Location**: `core/src/agent_loop/thinking.rs`
+
+CoT Transparency parses LLM reasoning into structured, understandable steps.
+
+### StructuredThinking
+
+```rust
+pub struct StructuredThinking {
+    pub reasoning: String,          // Original raw reasoning
+    pub steps: Vec<ReasoningStep>,  // Parsed semantic steps
+    pub confidence: ConfidenceLevel,// Overall confidence
+    pub alternatives: Vec<String>,  // Considered alternatives
+    pub uncertainties: Vec<String>, // Expressed uncertainties
+}
+
+pub struct ReasoningStep {
+    pub content: String,
+    pub step_type: ReasoningStepType,
+    pub confidence: Option<ConfidenceLevel>,
+}
+```
+
+### Reasoning Step Types
+
+| Type | Description | Indicator |
+|------|-------------|-----------|
+| `Observation` | Observing current state | "Looking at", "I see", "Based on" |
+| `Analysis` | Analyzing options | "Considering", "Comparing", "Trade-off" |
+| `Planning` | Planning approach | "I'll start by", "First...then" |
+| `Decision` | Stating conclusion | "Therefore", "I will", "So I've decided" |
+| `Reflection` | Self-review | "Wait", "Let me reconsider" |
+| `RiskAssessment` | Identifying risks | "Risk", "Might fail", "Careful" |
+
+### Confidence Levels
+
+| Level | Indicators |
+|-------|------------|
+| `High` | "Confident", "Clearly", "Definitely" |
+| `Medium` | "I think", "Should work", "Likely" |
+| `Low` | "Not sure", "Might", "Possibly" |
+| `Exploratory` | "Let's try", "Experiment", "Worth testing" |
+
+### ThinkingParser
+
+The `ThinkingParser` automatically extracts structured thinking from LLM reasoning:
+
+```rust
+// Automatically called by DecisionParser
+let thinking = parser.parse(response)?;
+
+// Access structured reasoning
+if let Some(structured) = &thinking.structured {
+    for step in &structured.steps {
+        println!("{:?}: {}", step.step_type, step.content);
+    }
+}
+```
+
+### Stream Events
+
+For real-time CoT visibility, the Gateway emits:
+
+| Event | Description |
+|-------|-------------|
+| `ReasoningBlock` | Individual reasoning step |
+| `UncertaintySignal` | Detected uncertainty with suggested action |
 
 ---
 
