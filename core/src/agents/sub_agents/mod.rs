@@ -110,5 +110,5 @@ pub use result_collector::{
 
 // Multi-Agent 2.0 run tracking
 pub use run::{SubAgentRun, RunStatus, RunOutcome, Lane, CleanupPolicy};
-pub use registry::{SubAgentRegistry, LifecycleEvent};
+pub use registry::{LifecycleEvent, RegistryStats, SubAgentRegistry};
 pub use persistence::SubAgentRunFact;
