@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::agents::sub_agents::Lane;
-use super::{LaneConfig, LaneState, WaitTimeTracker};
+use super::{LaneConfig, LaneState, WaitTimeTracker, RecursionTracker};
 
 /// Main scheduling engine for multi-lane coordination
 pub struct LaneScheduler {
@@ -23,6 +23,8 @@ pub struct LaneScheduler {
     config: LaneConfig,
     /// Wait time tracker for anti-starvation
     wait_tracker: Arc<WaitTimeTracker>,
+    /// Recursion depth tracker
+    recursion_tracker: Arc<RecursionTracker>,
 }
 
 impl LaneScheduler {
@@ -37,12 +39,14 @@ impl LaneScheduler {
 
         let global_semaphore = Arc::new(Semaphore::new(config.global_max_concurrent));
         let wait_tracker = Arc::new(WaitTimeTracker::new());
+        let recursion_tracker = Arc::new(RecursionTracker::new(config.max_recursion_depth));
 
         Self {
             lanes,
             global_semaphore,
             config,
             wait_tracker,
+            recursion_tracker,
         }
     }
 
@@ -119,6 +123,8 @@ impl LaneScheduler {
         }
         // Also remove from wait tracker in case it's still there
         self.wait_tracker.remove(run_id).await;
+        // Remove from recursion tracking
+        self.recursion_tracker.remove(run_id).await;
     }
 
     /// Sweep for starving runs and apply priority boosts
@@ -157,6 +163,28 @@ impl LaneScheduler {
         }
 
         boosted_count
+    }
+
+    /// Check if a parent run can spawn a child without exceeding recursion depth
+    ///
+    /// Returns Ok(()) if the spawn is allowed, or an error if the depth limit would be exceeded.
+    pub async fn check_recursion_depth(&self, parent_run_id: &str) -> crate::error::Result<()> {
+        self.recursion_tracker.can_spawn(parent_run_id, self.config.max_recursion_depth).await
+    }
+
+    /// Record a parent-child spawn relationship for recursion tracking
+    pub async fn record_spawn(&self, parent_run_id: &str, child_run_id: &str) {
+        self.recursion_tracker.track_spawn(parent_run_id, child_run_id).await;
+    }
+
+    /// Get the current recursion depth for a run
+    pub async fn get_recursion_depth(&self, run_id: &str) -> usize {
+        self.recursion_tracker.get_depth(run_id).await
+    }
+
+    /// Remove a run from recursion tracking (cleanup on completion)
+    pub async fn remove_from_recursion_tracking(&self, run_id: &str) {
+        self.recursion_tracker.remove(run_id).await;
     }
 
     /// Get scheduler statistics
@@ -449,5 +477,112 @@ mod tests {
         // Should be removed from tracker
         let wait_time_after = scheduler.wait_tracker.get_wait_time("run-1", current_time).await;
         assert_eq!(wait_time_after, 0);
+    }
+
+    #[tokio::test]
+    async fn test_recursion_depth_tracking() {
+        let config = LaneConfig::default();
+        let scheduler = LaneScheduler::new(config);
+
+        // Root run has depth 0
+        assert_eq!(scheduler.get_recursion_depth("parent-1").await, 0);
+
+        // Record first spawn
+        scheduler.record_spawn("parent-1", "child-1").await;
+        assert_eq!(scheduler.get_recursion_depth("child-1").await, 1);
+
+        // Record second level spawn
+        scheduler.record_spawn("child-1", "child-2").await;
+        assert_eq!(scheduler.get_recursion_depth("child-2").await, 2);
+    }
+
+    #[tokio::test]
+    async fn test_recursion_depth_limit_enforcement() {
+        let config = LaneConfig::default(); // max_recursion_depth = 5
+        let scheduler = LaneScheduler::new(config);
+
+        // Build a chain to the limit
+        scheduler.record_spawn("p0", "p1").await;
+        scheduler.record_spawn("p1", "p2").await;
+        scheduler.record_spawn("p2", "p3").await;
+        scheduler.record_spawn("p3", "p4").await;
+        scheduler.record_spawn("p4", "p5").await;
+
+        // p5 is at depth 5, which equals the limit
+        assert_eq!(scheduler.get_recursion_depth("p5").await, 5);
+
+        // Should not be able to spawn from p5
+        let result = scheduler.check_recursion_depth("p5").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_recursion_depth_check_allows_below_limit() {
+        let config = LaneConfig::default(); // max_recursion_depth = 5
+        let scheduler = LaneScheduler::new(config);
+
+        // Build a chain below the limit
+        scheduler.record_spawn("p0", "p1").await;
+        scheduler.record_spawn("p1", "p2").await;
+        scheduler.record_spawn("p2", "p3").await;
+
+        // p3 is at depth 3, should be able to spawn more
+        let result = scheduler.check_recursion_depth("p3").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_recursion_cleanup_on_complete() {
+        let config = LaneConfig::default();
+        let scheduler = LaneScheduler::new(config);
+
+        // Record spawn relationship
+        scheduler.record_spawn("parent", "child").await;
+        assert_eq!(scheduler.get_recursion_depth("child").await, 1);
+
+        // Complete the child run
+        scheduler.on_run_complete("child", Lane::Main).await;
+
+        // Should be removed from recursion tracking
+        assert_eq!(scheduler.get_recursion_depth("child").await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_recursion_multiple_children_same_parent() {
+        let config = LaneConfig::default();
+        let scheduler = LaneScheduler::new(config);
+
+        // One parent can spawn multiple children
+        scheduler.record_spawn("parent", "child-1").await;
+        scheduler.record_spawn("parent", "child-2").await;
+        scheduler.record_spawn("parent", "child-3").await;
+
+        // All children should have depth 1
+        assert_eq!(scheduler.get_recursion_depth("child-1").await, 1);
+        assert_eq!(scheduler.get_recursion_depth("child-2").await, 1);
+        assert_eq!(scheduler.get_recursion_depth("child-3").await, 1);
+
+        // Parent should still allow spawning more
+        let result = scheduler.check_recursion_depth("parent").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_recursion_depth_at_boundary() {
+        let mut config = LaneConfig::default();
+        config.max_recursion_depth = 3;
+        let scheduler = LaneScheduler::new(config);
+
+        // Build chain to depth 2
+        scheduler.record_spawn("p0", "p1").await;
+        scheduler.record_spawn("p1", "p2").await;
+
+        // p2 is at depth 2, should be able to spawn one more level
+        assert!(scheduler.check_recursion_depth("p2").await.is_ok());
+
+        scheduler.record_spawn("p2", "p3").await;
+
+        // p3 is at depth 3 (at limit), cannot spawn more
+        assert!(scheduler.check_recursion_depth("p3").await.is_err());
     }
 }
