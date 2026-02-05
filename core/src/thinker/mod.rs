@@ -36,6 +36,7 @@ pub mod interaction;
 pub mod model_router;
 pub mod prompt_builder;
 pub mod security_context;
+pub mod soul;
 pub mod streaming;
 pub mod tool_filter;
 
@@ -62,6 +63,7 @@ pub use security_context::{
 pub use context::{
     ContextAggregator, DisableReason, DisabledTool, EnvironmentContract, ResolvedContext,
 };
+pub use soul::{FormattingStyle, RelationshipMode, SoulManifest, SoulVoice, Verbosity};
 
 use crate::agent_loop::{
     CompressionConfig, LoopState, ModelRoutingConfig, Observation, ThinkerTrait, Thinking, ToolInfo,
