@@ -608,6 +608,4 @@ impl InboundMessageRouter {
     }
 }
 
-#[cfg(test)]
-#[path = "inbound_router_tests.rs"]
-mod tests;
+// Tests migrated to BDD: core/tests/features/gateway/inbound_router.feature
