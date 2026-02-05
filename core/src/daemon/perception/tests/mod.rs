@@ -1,2 +1,1 @@
-mod config_tests;
-mod registry_tests;
+// Perception tests have been migrated to BDD (core/tests/features/perception/)

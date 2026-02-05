@@ -32,7 +32,11 @@ pub use events::{
     RawEvent, SystemEvent, SystemStateType, TimeTrigger,
 };
 pub use ipc::{IpcServer, JsonRpcRequest, JsonRpcResponse};
-pub use perception::{PerceptionConfig, WatcherRegistry};
+pub use perception::{
+    FSEventWatcher, FSWatcherConfig, PerceptionConfig, ProcessWatcher, ProcessWatcherConfig,
+    SystemStateWatcher, SystemWatcherConfig, TimeWatcher, TimeWatcherConfig, Watcher,
+    WatcherControl, WatcherHealth, WatcherRegistry,
+};
 pub use resource_governor::{GovernorDecision, ResourceGovernor, ResourceLimits};
 pub use service_manager::{ServiceManager, create_service_manager};
 pub use types::{DaemonConfig, DaemonStatus, ServiceStatus};

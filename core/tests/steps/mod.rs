@@ -5,9 +5,11 @@
 mod common;
 mod config_steps;
 mod daemon_steps;
+mod perception_steps;
 mod scripting_steps;
 
 pub use common::*;
 pub use config_steps::*;
 pub use daemon_steps::*;
+pub use perception_steps::*;
 pub use scripting_steps::*;
