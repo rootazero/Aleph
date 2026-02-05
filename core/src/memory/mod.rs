@@ -39,6 +39,7 @@ pub mod smart_embedder;
 pub mod cli;
 pub mod transcript_indexer;
 pub mod context_comptroller;
+pub mod value_estimator;
 
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
@@ -78,3 +79,4 @@ pub use transcript_indexer::{TranscriptIndexer, TranscriptIndexerConfig};
 pub use context_comptroller::{
     ContextComptroller, ComptrollerConfig, ArbitratedContext, RetentionMode, TokenBudget,
 };
+pub use value_estimator::{ValueEstimator, Signal};
