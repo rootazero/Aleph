@@ -6,6 +6,9 @@
 use crate::agent_loop::{LoopState, Observation, StepSummary, ToolInfo};
 use crate::core::MediaAttachment;
 
+use super::context::{DisableReason, DisabledTool, EnvironmentContract, ResolvedContext};
+use super::interaction::Capability;
+
 /// System prompt part with optional cache flag
 ///
 /// When using Anthropic's prompt caching, static content can be cached
@@ -349,6 +352,212 @@ impl PromptBuilder {
                 language_name
             ));
         }
+    }
+
+    // ========== Environment Contract & Security Section Builders ==========
+
+    /// Append environment contract section describing the current channel capabilities
+    ///
+    /// This section informs the AI about:
+    /// - The current interaction paradigm (CLI, WebRich, Messaging, etc.)
+    /// - Active capabilities available in this environment
+    /// - Interaction constraints (output limits, streaming support)
+    pub fn append_environment_contract(&self, prompt: &mut String, contract: &EnvironmentContract) {
+        prompt.push_str("## Environment Contract\n\n");
+
+        // Paradigm description
+        prompt.push_str(&format!(
+            "**Paradigm**: {}\n\n",
+            contract.paradigm.description()
+        ));
+
+        // Active capabilities
+        if !contract.active_capabilities.is_empty() {
+            prompt.push_str("**Active Capabilities**:\n");
+            for cap in &contract.active_capabilities {
+                let (name, hint) = cap.prompt_hint();
+                prompt.push_str(&format!("- `{}`: {}\n", name, hint));
+            }
+            prompt.push('\n');
+        }
+
+        // Constraints
+        let mut constraint_notes = Vec::new();
+        if let Some(max_chars) = contract.constraints.max_output_chars {
+            constraint_notes.push(format!("Max output: {} characters", max_chars));
+        }
+        if contract.constraints.prefer_compact {
+            constraint_notes.push("Prefer concise responses".to_string());
+        }
+        if contract.constraints.supports_streaming {
+            constraint_notes.push("Streaming enabled".to_string());
+        }
+
+        if !constraint_notes.is_empty() {
+            prompt.push_str("**Constraints**:\n");
+            for note in constraint_notes {
+                prompt.push_str(&format!("- {}\n", note));
+            }
+            prompt.push('\n');
+        }
+    }
+
+    /// Append security constraints section
+    ///
+    /// This section informs the AI about:
+    /// - General security notes (sandbox level, filesystem scope, etc.)
+    /// - Tools blocked by policy (should not be attempted)
+    /// - Tools requiring user approval (can be used but need confirmation)
+    pub fn append_security_constraints(
+        &self,
+        prompt: &mut String,
+        disabled_tools: &[DisabledTool],
+        security_notes: &[String],
+    ) {
+        // Only add section if there's something to report
+        if security_notes.is_empty() && disabled_tools.is_empty() {
+            return;
+        }
+
+        prompt.push_str("## Security & Constraints\n\n");
+
+        // Security notes
+        for note in security_notes {
+            prompt.push_str(&format!("- {}\n", note));
+        }
+        if !security_notes.is_empty() {
+            prompt.push('\n');
+        }
+
+        // Collect policy-blocked tools
+        let blocked_by_policy: Vec<&DisabledTool> = disabled_tools
+            .iter()
+            .filter(|d| matches!(d.reason, DisableReason::BlockedByPolicy { .. }))
+            .collect();
+
+        if !blocked_by_policy.is_empty() {
+            prompt.push_str("**Disabled by Policy**:\n");
+            for tool in blocked_by_policy {
+                if let DisableReason::BlockedByPolicy { ref reason } = tool.reason {
+                    prompt.push_str(&format!("- `{}` — {}\n", tool.name, reason));
+                }
+            }
+            prompt.push('\n');
+        }
+
+        // Collect approval-required tools
+        let requires_approval: Vec<&DisabledTool> = disabled_tools
+            .iter()
+            .filter(|d| matches!(d.reason, DisableReason::RequiresApproval { .. }))
+            .collect();
+
+        if !requires_approval.is_empty() {
+            prompt.push_str("**Requires User Approval**:\n");
+            for tool in requires_approval {
+                if let DisableReason::RequiresApproval { prompt: ref approval_prompt } = tool.reason
+                {
+                    prompt.push_str(&format!(
+                        "- `{}` — available, but each invocation requires user confirmation ({})\n",
+                        tool.name, approval_prompt
+                    ));
+                }
+            }
+            prompt.push('\n');
+        }
+    }
+
+    /// Append silent behavior section for background/silent channels
+    ///
+    /// This section is only added when the environment supports silent replies
+    /// (e.g., background processing channels). It instructs the AI on proper
+    /// behavior for silent/heartbeat operations.
+    pub fn append_silent_behavior(&self, prompt: &mut String, contract: &EnvironmentContract) {
+        // Only add if SilentReply capability is active
+        if !contract.active_capabilities.contains(&Capability::SilentReply) {
+            return;
+        }
+
+        prompt.push_str("## Silent Behavior\n\n");
+        prompt.push_str("You are running in a **background/silent context** where user notifications should be minimized.\n\n");
+        prompt.push_str("**Guidelines**:\n");
+        prompt.push_str("- Use `heartbeat_ok` for successful silent operations that need no user notification\n");
+        prompt.push_str("- Use `silent_complete` when a background task finishes successfully\n");
+        prompt.push_str("- Only use `ask_user` for critical decisions that cannot be automated\n");
+        prompt.push_str("- Prefer logging results to files rather than generating verbose output\n");
+        prompt.push_str("- Keep reasoning concise as it may not be visible to the user\n\n");
+    }
+
+    /// Build system prompt using ResolvedContext
+    ///
+    /// This is the new entry point that uses the two-phase filtered context
+    /// from the ContextAggregator. It builds the complete system prompt with:
+    /// 1. Role definition
+    /// 2. Core instructions
+    /// 3. Environment contract (paradigm, capabilities, constraints)
+    /// 4. Runtime capabilities
+    /// 5. Tools (using ctx.available_tools)
+    /// 6. Security constraints (blocked tools, approval-required tools)
+    /// 7. Silent behavior (if applicable)
+    /// 8. Generation models
+    /// 9. Special actions
+    /// 10. Response format
+    /// 11. Guidelines
+    /// 12. Skill mode
+    /// 13. Custom instructions
+    /// 14. Language setting
+    pub fn build_system_prompt_with_context(&self, ctx: &ResolvedContext) -> String {
+        let mut prompt = String::new();
+
+        // 1. Role definition
+        prompt.push_str("You are an AI assistant executing tasks step by step.\n\n");
+
+        // 2. Core instructions
+        prompt.push_str("## Your Role\n");
+        prompt.push_str("- Observe the current state and history\n");
+        prompt.push_str("- Decide the SINGLE next action to take\n");
+        prompt.push_str("- Execute until the task is complete or you need user input\n\n");
+
+        // 3. Environment contract (NEW)
+        self.append_environment_contract(&mut prompt, &ctx.environment_contract);
+
+        // 4. Runtime capabilities
+        self.append_runtime_capabilities(&mut prompt);
+
+        // 5. Tools (using available_tools from context)
+        self.append_tools(&mut prompt, &ctx.available_tools);
+
+        // 6. Security constraints (NEW)
+        self.append_security_constraints(
+            &mut prompt,
+            &ctx.disabled_tools,
+            &ctx.environment_contract.security_notes,
+        );
+
+        // 7. Silent behavior (NEW - if applicable)
+        self.append_silent_behavior(&mut prompt, &ctx.environment_contract);
+
+        // 8. Generation models
+        self.append_generation_models(&mut prompt);
+
+        // 9. Special actions
+        self.append_special_actions(&mut prompt);
+
+        // 10. Response format
+        self.append_response_format(&mut prompt);
+
+        // 11. Guidelines
+        self.append_guidelines(&mut prompt);
+
+        // 12. Skill mode
+        self.append_skill_mode(&mut prompt);
+
+        // 13. Custom instructions
+        self.append_custom_instructions(&mut prompt);
+
+        // 14. Language setting
+        self.append_language_setting(&mut prompt);
+
+        prompt
     }
 
     /// Build two-part system prompt for Anthropic cache optimization
