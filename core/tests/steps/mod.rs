@@ -14,6 +14,7 @@ mod perception_steps;
 mod poe_steps;
 mod scripting_steps;
 mod thinker_steps;
+mod tools_steps;
 
 pub use agent_loop_steps::*;
 pub use common::*;
@@ -27,3 +28,4 @@ pub use perception_steps::*;
 pub use poe_steps::*;
 pub use scripting_steps::*;
 pub use thinker_steps::*;
+pub use tools_steps::*;

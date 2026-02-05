@@ -14,6 +14,7 @@ mod message_builder_ctx;
 mod perception_ctx;
 mod poe_ctx;
 mod thinker_ctx;
+mod tools_ctx;
 
 pub use agent_loop_ctx::{AgentLoopContext, MockDecision};
 pub use config_ctx::ConfigContext;
@@ -25,6 +26,7 @@ pub use message_builder_ctx::MessageBuilderContext;
 pub use perception_ctx::PerceptionContext;
 pub use poe_ctx::{PoeContext, PoeConstraint, PoeOutcomeType};
 pub use thinker_ctx::ThinkerContext;
+pub use tools_ctx::ToolsContext;
 
 /// Scripting engine test context
 #[derive(Debug, Default)]
@@ -58,4 +60,5 @@ pub struct AlephWorld {
     pub agent_loop: Option<AgentLoopContext>,
     pub poe: Option<PoeContext>,
     pub thinker: Option<ThinkerContext>,
+    pub tools: Option<ToolsContext>,
 }
