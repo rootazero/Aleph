@@ -79,7 +79,9 @@ pub use retrieval::MemoryRetrieval;
 pub use scratchpad::{ScratchpadManager, ScratchpadConfig, SessionHistory};
 pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};
 pub use cli::{LockError, LockMode, MemoryLock};
-pub use transcript_indexer::{TranscriptIndexer, TranscriptIndexerConfig};
+pub use transcript_indexer::{
+    SemanticChunkConfig, SemanticChunker, TranscriptIndexer, TranscriptIndexerConfig,
+};
 pub use context_comptroller::{
     ContextComptroller, ComptrollerConfig, ArbitratedContext, RetentionMode, TokenBudget,
 };

@@ -4,9 +4,14 @@
 
 pub mod config;
 pub mod indexer;
+pub mod semantic_chunker;
 
 pub use config::TranscriptIndexerConfig;
 pub use indexer::TranscriptIndexer;
+pub use semantic_chunker::{SemanticChunkConfig, SemanticChunker};
+
+#[cfg(test)]
+mod semantic_tests;
 
 #[cfg(test)]
 mod tests {
