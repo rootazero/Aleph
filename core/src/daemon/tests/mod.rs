@@ -1,9 +1,9 @@
-// Core daemon tests (event_tests, cli_tests, service_manager_tests, resource_governor_tests)
-// have been migrated to BDD. See: core/tests/features/daemon/core.feature
+// Core daemon tests have been migrated to BDD:
+// - event_tests, cli_tests, service_manager_tests, resource_governor_tests -> core.feature
+// - ipc_tests -> ipc.feature
+// - launchd_tests -> launchd.feature
+// See: core/tests/features/daemon/
 
-#[cfg(target_os = "macos")]
-mod launchd_tests;
-mod ipc_tests;
 mod perception_integration;
 #[cfg(target_os = "macos")]
 mod integration_tests;
