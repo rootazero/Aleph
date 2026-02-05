@@ -12,8 +12,10 @@ mod extension_ctx;
 mod gateway_ctx;
 mod memory_ctx;
 mod message_builder_ctx;
+mod models_ctx;
 mod perception_ctx;
 mod poe_ctx;
+mod protocol_ctx;
 mod thinker_ctx;
 mod tools_ctx;
 
@@ -25,8 +27,10 @@ pub use extension_ctx::ExtensionContext;
 pub use gateway_ctx::{GatewayContext, TrackingExecutionAdapter, TestEmitter, make_test_message};
 pub use memory_ctx::MemoryContext;
 pub use message_builder_ctx::MessageBuilderContext;
+pub use models_ctx::ModelsContext;
 pub use perception_ctx::PerceptionContext;
 pub use poe_ctx::{PoeContext, PoeConstraint, PoeOutcomeType};
+pub use protocol_ctx::ProtocolContext;
 pub use thinker_ctx::ThinkerContext;
 pub use tools_ctx::ToolsContext;
 
@@ -64,4 +68,6 @@ pub struct AlephWorld {
     pub poe: Option<PoeContext>,
     pub thinker: Option<ThinkerContext>,
     pub tools: Option<ToolsContext>,
+    pub models: Option<ModelsContext>,
+    pub protocol: Option<ProtocolContext>,
 }
