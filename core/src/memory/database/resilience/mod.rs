@@ -8,9 +8,11 @@
 //! - Recovery: Shadow Replay, Graceful Shutdown, Recovery Manager
 //! - Perception: Event classification, emission, and observation
 //! - Collaboration: Session handles, swapping, and coordination
+//! - Governance: Resource governor, quotas, and recursion limiting
 
 pub mod collaboration;
 mod events;
+pub mod governance;
 pub mod perception;
 pub mod recovery;
 mod sessions;
@@ -36,4 +38,10 @@ pub use perception::{
 pub use collaboration::{
     CoordinatorConfig, SessionCounts, SessionCoordinator, SessionHandle, SwapConfig, SwapManager,
     SwapResult, SwapStats, SwappedContext, TaskResult,
+};
+
+pub use governance::{
+    GovernorConfig, GovernorStats, QuotaCheckResult, QuotaConfig, QuotaManager, QuotaUsage,
+    QuotaViolation, RecursionLimitExceeded, RecursiveSentry, RemainingCapacity, ResourceGovernor,
+    ResourcePermit,
 };
