@@ -24,6 +24,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// Response verbosity preference
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -139,6 +140,32 @@ pub struct SoulManifest {
     pub addendum: Option<String>,
 }
 
+/// Error type for soul loading
+#[derive(Debug)]
+pub enum SoulLoadError {
+    /// Soul file not found at path
+    NotFound(PathBuf),
+    /// IO error reading file
+    Io(std::io::Error),
+    /// Parse error in file content
+    Parse(String),
+    /// Unsupported file format
+    UnsupportedFormat(String),
+}
+
+impl std::fmt::Display for SoulLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(p) => write!(f, "Soul file not found: {}", p.display()),
+            Self::Io(e) => write!(f, "IO error: {}", e),
+            Self::Parse(e) => write!(f, "Parse error: {}", e),
+            Self::UnsupportedFormat(ext) => write!(f, "Unsupported format: {}", ext),
+        }
+    }
+}
+
+impl std::error::Error for SoulLoadError {}
+
 impl SoulManifest {
     /// Create a new empty soul manifest
     pub fn new() -> Self {
@@ -148,6 +175,38 @@ impl SoulManifest {
     /// Check if this is an empty/default soul
     pub fn is_empty(&self) -> bool {
         self.identity.is_empty() && self.directives.is_empty()
+    }
+
+    /// Load soul manifest from a file path
+    ///
+    /// Currently supports:
+    /// - JSON files (.json)
+    /// - TOML files (.toml)
+    ///
+    /// Markdown parsing will be added in Phase 1.3
+    pub fn from_file(path: &Path) -> Result<Self, SoulLoadError> {
+        use std::fs;
+
+        if !path.exists() {
+            return Err(SoulLoadError::NotFound(path.to_path_buf()));
+        }
+
+        let content = fs::read_to_string(path).map_err(SoulLoadError::Io)?;
+
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        match ext {
+            "json" => {
+                serde_json::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string()))
+            }
+            "toml" => toml::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string())),
+            "md" | "markdown" => {
+                // Placeholder for markdown parsing (Phase 1.3)
+                // For now, try to parse as JSON
+                serde_json::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string()))
+            }
+            _ => Err(SoulLoadError::UnsupportedFormat(ext.to_string())),
+        }
     }
 
     /// Merge with another soul manifest (self takes priority)
