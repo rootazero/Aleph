@@ -7,6 +7,7 @@ use rhai::{Engine, AST};
 mod agent_loop_ctx;
 mod config_ctx;
 mod daemon_ctx;
+mod message_builder_ctx;
 mod perception_ctx;
 mod poe_ctx;
 mod thinker_ctx;
@@ -14,6 +15,7 @@ mod thinker_ctx;
 pub use agent_loop_ctx::{AgentLoopContext, MockDecision};
 pub use config_ctx::ConfigContext;
 pub use daemon_ctx::DaemonContext;
+pub use message_builder_ctx::MessageBuilderContext;
 pub use perception_ctx::PerceptionContext;
 pub use poe_ctx::{PoeContext, PoeConstraint, PoeOutcomeType};
 pub use thinker_ctx::ThinkerContext;
@@ -42,6 +44,7 @@ pub struct AlephWorld {
     pub scripting: Option<ScriptingContext>,
     pub config: Option<ConfigContext>,
     pub daemon: Option<DaemonContext>,
+    pub message_builder: Option<MessageBuilderContext>,
     pub perception: Option<PerceptionContext>,
     pub agent_loop: Option<AgentLoopContext>,
     pub poe: Option<PoeContext>,
