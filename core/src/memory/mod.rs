@@ -37,6 +37,7 @@ pub mod retrieval;
 pub mod scratchpad;
 pub mod smart_embedder;
 pub mod cli;
+pub mod transcript_indexer;
 
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
@@ -72,3 +73,4 @@ pub use retrieval::MemoryRetrieval;
 pub use scratchpad::{ScratchpadManager, ScratchpadConfig, SessionHistory};
 pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};
 pub use cli::{LockError, LockMode, MemoryLock};
+pub use transcript_indexer::{TranscriptIndexer, TranscriptIndexerConfig};
