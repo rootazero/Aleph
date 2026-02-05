@@ -6,8 +6,10 @@
 //! - Tiered event persistence (Skeleton & Pulse)
 //! - Subagent session management (Session-as-a-Service)
 //! - Recovery: Shadow Replay, Graceful Shutdown, Recovery Manager
+//! - Perception: Event classification, emission, and observation
 
 mod events;
+pub mod perception;
 pub mod recovery;
 mod sessions;
 mod tasks;
@@ -22,4 +24,9 @@ pub use types::{
 pub use recovery::{
     DivergenceStatus, GracefulShutdown, RecoveryDecision, RecoveryManager, RecoverySummary,
     ReplayResult, ShadowReplayEngine, ShutdownSignal, TaskRiskAdapter,
+};
+
+pub use perception::{
+    EmitterConfig, EventClassifier, EventEmitter, EventTier, EventType, GapFillResult,
+    PulseBuffer, TaskObserver,
 };
