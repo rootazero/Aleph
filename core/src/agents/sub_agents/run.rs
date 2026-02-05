@@ -91,7 +91,7 @@ impl RunStatus {
 /// Execution lane for sub-agent runs
 ///
 /// Lanes provide isolation and resource management for different types of runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Lane {
     /// Main agent lane (user-initiated)
