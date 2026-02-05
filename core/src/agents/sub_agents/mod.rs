@@ -83,6 +83,7 @@ mod dispatcher;
 mod result_merger;
 mod coordinator;
 mod result_collector;
+mod run;
 
 pub use traits::{
     SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult,
@@ -104,3 +105,6 @@ pub use result_collector::{
     ResultCollector, CollectedToolCall, CollectedToolStatus, CollectorStats,
     truncate_for_preview,
 };
+
+// Multi-Agent 2.0 run tracking
+pub use run::{SubAgentRun, RunStatus, RunOutcome, Lane, CleanupPolicy};
