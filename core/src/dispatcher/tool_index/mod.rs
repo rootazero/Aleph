@@ -7,7 +7,9 @@
 //! - Dual-threshold retrieval with Pre-flight Hydration
 
 mod config;
+mod coordinator;
 mod inference;
 
 pub use config::ToolRetrievalConfig;
+pub use coordinator::{ToolIndexCoordinator, ToolMeta};
 pub use inference::{InferredPurpose, SemanticPurposeInferrer};
