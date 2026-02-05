@@ -43,6 +43,7 @@ pub mod value_estimator;
 pub mod compression_daemon;
 pub mod ripple;
 pub mod evolution;
+pub mod consolidation;
 
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
@@ -88,4 +89,8 @@ pub use ripple::{RippleTask, RippleConfig, RippleResult};
 pub use evolution::{
     ContradictionDetector, EvolutionChain, EvolutionNode, EvolutionResolver, FactEvolution,
     ResolutionStrategy,
+};
+pub use consolidation::{
+    ConsolidationAnalyzer, ConsolidationConfig, ConsolidatedFact, FrequentFact, ProfileCategory,
+    UserProfile,
 };
