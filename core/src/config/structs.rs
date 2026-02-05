@@ -85,6 +85,10 @@ pub struct Config {
     /// Skill evolution configuration (Skill Compiler - Phase 10)
     #[serde(default)]
     pub evolution: EvolutionConfig,
+    /// Workspace profiles configuration (Anti-Gravity Architecture)
+    /// Profiles define the "Physics" of workspaces: model binding, tool whitelist, system prompt
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub profiles: HashMap<String, ProfileConfig>,
 }
 
 // =============================================================================
@@ -170,6 +174,7 @@ impl Default for Config {
             orchestrator: OrchestratorConfig::default(),
             subagent: SubAgentConfig::default(),
             evolution: EvolutionConfig::default(),
+            profiles: HashMap::new(),
         }
     }
 }
