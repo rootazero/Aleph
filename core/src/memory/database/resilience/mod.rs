@@ -17,8 +17,10 @@ pub mod perception;
 pub mod recovery;
 mod sessions;
 mod tasks;
+#[cfg(test)]
+mod tests;
 mod traces;
-mod types;
+pub mod types;
 
 pub use types::{
     AgentEvent, AgentTask, Lane, RiskLevel, SessionStatus, SubagentSession, TaskStatus, TaskTrace,
