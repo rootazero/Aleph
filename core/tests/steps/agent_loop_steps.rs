@@ -54,6 +54,7 @@ impl ThinkerTrait for MockThinker {
         Ok(Thinking {
             reasoning: Some(format!("Step {}", count)),
             decision,
+            structured: None,
         })
     }
 }
