@@ -114,9 +114,11 @@ pub struct SoulVoice {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SoulManifest {
     /// Core identity declaration (first-person, who I am)
+    #[serde(default)]
     pub identity: String,
 
     /// Voice and communication style
+    #[serde(default)]
     pub voice: SoulVoice,
 
     /// Behavioral directives (positive guidance)

@@ -242,13 +242,13 @@ async fn test_event_sequence_tracking() {
 
     assert_eq!(latest, Some(5));
 
-    // Get events since seq 2
+    // Get events since seq 2 (exclusive, so only seq 5)
     let since = db
         .get_events_since_seq("task_005", 2)
         .await
         .expect("Failed to get since");
 
-    assert_eq!(since.len(), 2); // seq 2 and 5
+    assert_eq!(since.len(), 1); // only seq 5 (seq > 2)
 }
 
 // =============================================================================

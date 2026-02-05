@@ -533,7 +533,7 @@ mod tests {
 
     #[test]
     fn test_sandbox_level_descriptions() {
-        assert!(SandboxLevel::None.description().contains("No"));
+        assert!(SandboxLevel::None.description().to_lowercase().contains("no"));
         assert!(SandboxLevel::Standard.description().contains("Standard"));
         assert!(SandboxLevel::Strict.description().contains("Strict"));
         assert!(SandboxLevel::Untrusted.description().contains("Untrusted"));

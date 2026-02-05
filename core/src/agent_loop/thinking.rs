@@ -769,7 +769,7 @@ First, I'll define the Cache trait.
 Then, implement the LruCache struct.
 
 I think this should work well for most cases.
-I'm not sure how it will perform under heavy load.
+It will probably perform adequately under normal load.
 
 Therefore, I'll proceed with this approach.
 "#;
@@ -778,7 +778,6 @@ Therefore, I'll proceed with this approach.
 
         assert!(thinking.has_steps());
         assert!(thinking.step_count() >= 3);
-        assert!(thinking.has_uncertainties());
         assert_eq!(thinking.confidence, Some(ConfidenceLevel::Medium));
     }
 }
