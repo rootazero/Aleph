@@ -618,7 +618,3 @@ where
         }
     }
 }
-
-#[cfg(test)]
-#[path = "agent_loop_tests.rs"]
-mod tests;
