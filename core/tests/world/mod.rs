@@ -8,14 +8,17 @@ mod agent_loop_ctx;
 mod config_ctx;
 mod daemon_ctx;
 mod dispatcher_ctx;
+mod e2e_ctx;
 mod extension_ctx;
 mod gateway_ctx;
+mod logging_ctx;
 mod memory_ctx;
 mod message_builder_ctx;
 mod models_ctx;
 mod perception_ctx;
 mod poe_ctx;
 mod protocol_ctx;
+mod security_ctx;
 mod skills_ctx;
 mod subagent_ctx;
 mod thinker_ctx;
@@ -25,14 +28,17 @@ pub use agent_loop_ctx::{AgentLoopContext, MockDecision};
 pub use config_ctx::ConfigContext;
 pub use daemon_ctx::DaemonContext;
 pub use dispatcher_ctx::DispatcherContext;
+pub use e2e_ctx::{E2eContext, BatchLoadResult};
 pub use extension_ctx::ExtensionContext;
 pub use gateway_ctx::{GatewayContext, TrackingExecutionAdapter, TestEmitter, make_test_message};
+pub use logging_ctx::LoggingContext;
 pub use memory_ctx::MemoryContext;
 pub use message_builder_ctx::MessageBuilderContext;
 pub use models_ctx::ModelsContext;
 pub use perception_ctx::PerceptionContext;
 pub use poe_ctx::{PoeContext, PoeConstraint, PoeOutcomeType};
 pub use protocol_ctx::ProtocolContext;
+pub use security_ctx::{SecurityContext, SkillExecutionResult};
 pub use skills_ctx::SkillsContext;
 pub use subagent_ctx::SubagentContext;
 pub use thinker_ctx::ThinkerContext;
@@ -63,13 +69,16 @@ pub struct AlephWorld {
     pub config: Option<ConfigContext>,
     pub daemon: Option<DaemonContext>,
     pub dispatcher: Option<DispatcherContext>,
+    pub e2e: Option<E2eContext>,
     pub gateway: Option<GatewayContext>,
+    pub logging: Option<LoggingContext>,
     pub memory: Option<MemoryContext>,
     pub message_builder: Option<MessageBuilderContext>,
     pub perception: Option<PerceptionContext>,
     pub agent_loop: Option<AgentLoopContext>,
     pub extension: Option<ExtensionContext>,
     pub poe: Option<PoeContext>,
+    pub security: Option<SecurityContext>,
     pub thinker: Option<ThinkerContext>,
     pub tools: Option<ToolsContext>,
     pub models: Option<ModelsContext>,
