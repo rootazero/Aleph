@@ -17,6 +17,7 @@ mod perception_ctx;
 mod poe_ctx;
 mod protocol_ctx;
 mod skills_ctx;
+mod subagent_ctx;
 mod thinker_ctx;
 mod tools_ctx;
 
@@ -33,6 +34,7 @@ pub use perception_ctx::PerceptionContext;
 pub use poe_ctx::{PoeContext, PoeConstraint, PoeOutcomeType};
 pub use protocol_ctx::ProtocolContext;
 pub use skills_ctx::SkillsContext;
+pub use subagent_ctx::SubagentContext;
 pub use thinker_ctx::ThinkerContext;
 pub use tools_ctx::ToolsContext;
 
@@ -73,4 +75,5 @@ pub struct AlephWorld {
     pub models: Option<ModelsContext>,
     pub protocol: Option<ProtocolContext>,
     pub skills: Option<SkillsContext>,
+    pub subagent: Option<SubagentContext>,
 }

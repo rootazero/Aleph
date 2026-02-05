@@ -17,6 +17,7 @@ mod poe_steps;
 mod protocol_steps;
 mod scripting_steps;
 mod skills_steps;
+mod subagent_steps;
 mod thinker_steps;
 mod tools_steps;
 
@@ -35,5 +36,6 @@ pub use poe_steps::*;
 pub use protocol_steps::*;
 pub use scripting_steps::*;
 pub use skills_steps::*;
+pub use subagent_steps::*;
 pub use thinker_steps::*;
 pub use tools_steps::*;

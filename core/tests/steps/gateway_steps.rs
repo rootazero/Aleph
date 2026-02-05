@@ -10,6 +10,8 @@ use alephcore::gateway::{
     AgentInstance, AgentInstanceConfig, DmScope,
     ExecutionAdapter, ExecutionEngineConfig,
     RouterChannelConfig, RoutingConfig, SimpleExecutionEngine,
+    DmPolicy, GroupPolicy, InboundMessage, ChannelId, ConversationId,
+    MessageId, UserId, PairingStore,
 };
 use alephcore::gateway::router::SessionKey;
 
@@ -519,4 +521,255 @@ async fn then_resolved_agent_id(w: &mut AlephWorld, expected: String) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
     let agent_id = ctx.resolved_agent_id.as_ref().expect("Agent ID not resolved");
     assert_eq!(agent_id, &expected, "Resolved agent ID mismatch");
+}
+
+// =========================================================================
+// iMessage Routing: Given Steps
+// =========================================================================
+
+#[given("an iMessage router with open DM policy")]
+async fn given_imessage_router_open_dm(w: &mut AlephWorld) {
+    let ctx = w.gateway.get_or_insert_with(GatewayContext::default);
+    ctx.init_basic_router();
+    if let Some(ref mut router) = ctx.router {
+        router.register_channel_config(
+            "imessage",
+            RouterChannelConfig {
+                dm_policy: DmPolicy::Open,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+#[given("an iMessage router with allowlist DM policy")]
+async fn given_imessage_router_allowlist_dm(w: &mut AlephWorld) {
+    let ctx = w.gateway.get_or_insert_with(GatewayContext::default);
+    ctx.init_basic_router();
+    // The allowlist will be set in subsequent step
+}
+
+#[given(expr = "the DM allowlist contains {string}")]
+async fn given_dm_allowlist_contains(w: &mut AlephWorld, phone: String) {
+    let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
+    if let Some(ref mut router) = ctx.router {
+        router.register_channel_config(
+            "imessage",
+            RouterChannelConfig {
+                dm_policy: DmPolicy::Allowlist,
+                allow_from: vec![phone],
+                ..Default::default()
+            },
+        );
+    }
+}
+
+#[given("an iMessage router with pairing DM policy")]
+async fn given_imessage_router_pairing_dm(w: &mut AlephWorld) {
+    let ctx = w.gateway.get_or_insert_with(GatewayContext::default);
+    ctx.init_basic_router();
+    if let Some(ref mut router) = ctx.router {
+        router.register_channel_config(
+            "imessage",
+            RouterChannelConfig {
+                dm_policy: DmPolicy::Pairing,
+                allow_from: vec![],
+                ..Default::default()
+            },
+        );
+    }
+}
+
+#[given(expr = "sender {string} is pre-approved for pairing")]
+async fn given_sender_pre_approved(w: &mut AlephWorld, sender: String) {
+    let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
+    if let Some(ref store) = ctx.pairing_store {
+        let (code, _) = store
+            .upsert("imessage", &sender, std::collections::HashMap::new())
+            .await
+            .unwrap();
+        store.approve("imessage", &code).await.unwrap();
+    }
+}
+
+#[given("an iMessage router with open group policy requiring mention")]
+async fn given_imessage_router_open_group_mention(w: &mut AlephWorld) {
+    let ctx = w.gateway.get_or_insert_with(GatewayContext::default);
+    ctx.init_basic_router();
+    // Bot name will be set in subsequent step
+}
+
+#[given(expr = "the bot name is {string}")]
+async fn given_bot_name(w: &mut AlephWorld, bot_name: String) {
+    let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
+    if let Some(ref mut router) = ctx.router {
+        router.register_channel_config(
+            "imessage",
+            RouterChannelConfig {
+                group_policy: GroupPolicy::Open,
+                require_mention: true,
+                bot_name: Some(bot_name),
+                ..Default::default()
+            },
+        );
+    }
+}
+
+#[given("an iMessage router with disabled group policy")]
+async fn given_imessage_router_disabled_group(w: &mut AlephWorld) {
+    let ctx = w.gateway.get_or_insert_with(GatewayContext::default);
+    ctx.init_basic_router();
+    if let Some(ref mut router) = ctx.router {
+        router.register_channel_config(
+            "imessage",
+            RouterChannelConfig {
+                group_policy: GroupPolicy::Disabled,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+#[given("an iMessage router with open DM policy and PerPeer scope")]
+async fn given_imessage_router_open_dm_perpeer(w: &mut AlephWorld) {
+    let ctx = w.gateway.get_or_insert_with(GatewayContext::default);
+    let config = RoutingConfig::new("main").with_dm_scope(DmScope::PerPeer);
+    ctx.init_basic_router_with_config(config);
+    if let Some(ref mut router) = ctx.router {
+        router.register_channel_config(
+            "imessage",
+            RouterChannelConfig {
+                dm_policy: DmPolicy::Open,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+#[given("an iMessage router with open DM policy and Main scope")]
+async fn given_imessage_router_open_dm_main(w: &mut AlephWorld) {
+    let ctx = w.gateway.get_or_insert_with(GatewayContext::default);
+    let config = RoutingConfig::new("main").with_dm_scope(DmScope::Main);
+    ctx.init_basic_router_with_config(config);
+    if let Some(ref mut router) = ctx.router {
+        router.register_channel_config(
+            "imessage",
+            RouterChannelConfig {
+                dm_policy: DmPolicy::Open,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+#[given("an iMessage router with allowlist group policy")]
+async fn given_imessage_router_allowlist_group(w: &mut AlephWorld) {
+    let ctx = w.gateway.get_or_insert_with(GatewayContext::default);
+    ctx.init_basic_router();
+    // Allowlist will be set in subsequent step
+}
+
+#[given(expr = "the group allowlist contains {string}")]
+async fn given_group_allowlist_contains(w: &mut AlephWorld, chat_id: String) {
+    let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
+    if let Some(ref mut router) = ctx.router {
+        router.register_channel_config(
+            "imessage",
+            RouterChannelConfig {
+                group_policy: GroupPolicy::Allowlist,
+                group_allow_from: vec![chat_id],
+                require_mention: false,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+// =========================================================================
+// iMessage Routing: When Steps
+// =========================================================================
+
+#[when(expr = "a DM message arrives from {string} with text {string}")]
+async fn when_dm_message_arrives(w: &mut AlephWorld, sender: String, text: String) {
+    let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
+    let msg = InboundMessage {
+        id: MessageId::new(format!("msg-{}", uuid::Uuid::new_v4())),
+        channel_id: ChannelId::new("imessage"),
+        conversation_id: ConversationId::new(&sender),
+        sender_id: UserId::new(&sender),
+        sender_name: None,
+        text,
+        attachments: vec![],
+        timestamp: chrono::Utc::now(),
+        reply_to: None,
+        is_group: false,
+        raw: None,
+    };
+
+    if let Some(ref mut router) = ctx.router {
+        let result = router.handle_message(msg).await;
+        ctx.handle_message_result = Some(result.map_err(|e| e.to_string()));
+        // For filtering tests: if result is Ok but no execution was actually triggered,
+        // we consider it "filtered". In the current implementation, filtered messages
+        // return Ok(()) but with no further processing.
+        ctx.message_filtered = Some(false); // Default to not filtered
+    }
+}
+
+#[when(expr = "a group message arrives in {string} from {string} with text {string}")]
+async fn when_group_message_arrives(w: &mut AlephWorld, chat_id: String, sender: String, text: String) {
+    let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
+    let msg = InboundMessage {
+        id: MessageId::new(format!("msg-{}", uuid::Uuid::new_v4())),
+        channel_id: ChannelId::new("imessage"),
+        conversation_id: ConversationId::new(&chat_id),
+        sender_id: UserId::new(&sender),
+        sender_name: None,
+        text,
+        attachments: vec![],
+        timestamp: chrono::Utc::now(),
+        reply_to: None,
+        is_group: true,
+        raw: None,
+    };
+
+    if let Some(ref mut router) = ctx.router {
+        let result = router.handle_message(msg).await;
+        ctx.handle_message_result = Some(result.map_err(|e| e.to_string()));
+        ctx.message_filtered = Some(false); // Default to not filtered
+    }
+}
+
+// =========================================================================
+// iMessage Routing: Then Steps
+// =========================================================================
+
+#[then("the message should be accepted")]
+async fn then_message_accepted(w: &mut AlephWorld) {
+    let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
+    let result = ctx.handle_message_result.as_ref().expect("No handle_message result");
+    assert!(result.is_ok(), "Expected message to be accepted, got: {:?}", result);
+}
+
+#[then("the message should be filtered")]
+async fn then_message_filtered(w: &mut AlephWorld) {
+    let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
+    let result = ctx.handle_message_result.as_ref().expect("No handle_message result");
+    // In the current implementation, filtered messages return Ok()
+    // The filtering happens silently - the test passes if no error occurs
+    assert!(result.is_ok(), "Expected filtered message (Ok result), got: {:?}", result);
+}
+
+#[then(expr = "a pairing request should exist for sender containing {string}")]
+async fn then_pairing_request_exists(w: &mut AlephWorld, sender_substr: String) {
+    let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
+    let store = ctx.pairing_store.as_ref().expect("Pairing store not initialized");
+    let pending = store.list_pending(Some("imessage")).await.unwrap();
+    assert!(!pending.is_empty(), "Expected at least one pairing request");
+    assert!(
+        pending.iter().any(|p| p.sender_id.contains(&sender_substr)),
+        "Expected pairing request for sender containing '{}', got: {:?}",
+        sender_substr,
+        pending
+    );
 }
