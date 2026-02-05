@@ -44,6 +44,7 @@ pub mod compression_daemon;
 pub mod ripple;
 pub mod evolution;
 pub mod consolidation;
+pub mod performance_monitor;
 
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
