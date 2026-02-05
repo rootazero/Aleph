@@ -1,10 +1,13 @@
 //! Thinker test context for BDD scenarios
 
-use alephcore::agent_loop::{Observation, ToolInfo};
+use alephcore::agent_loop::{Observation, StructuredThinking, ThinkingParser, ToolInfo};
 use alephcore::thinker::prompt_builder::SystemPromptPart;
+use alephcore::thinker::soul::SoulManifest;
+use alephcore::thinker::identity::IdentityResolver;
 use alephcore::thinker::{
     InteractionManifest, Message, PromptBuilder, PromptConfig, ResolvedContext, SecurityContext,
 };
+use std::path::PathBuf;
 
 /// Thinker test context
 /// Stores state for PromptBuilder BDD scenarios
@@ -45,6 +48,20 @@ pub struct ThinkerContext {
     pub security: Option<SecurityContext>,
     /// Resolved context after aggregation
     pub resolved: Option<ResolvedContext>,
+
+    // ═══ Embodiment Engine ═══
+    /// Soul manifest for testing
+    pub soul: Option<SoulManifest>,
+    /// Soul file content for parsing tests
+    pub soul_content: Option<String>,
+    /// Identity resolver
+    pub identity_resolver: Option<IdentityResolver>,
+
+    // ═══ CoT Transparency ═══
+    /// Reasoning text for parsing
+    pub reasoning_text: Option<String>,
+    /// Parsed structured thinking
+    pub structured_thinking: Option<StructuredThinking>,
 }
 
 impl std::fmt::Debug for ThinkerContext {
@@ -60,6 +77,8 @@ impl std::fmt::Debug for ThinkerContext {
             .field("has_interaction", &self.interaction.is_some())
             .field("has_security", &self.security.is_some())
             .field("has_resolved", &self.resolved.is_some())
+            .field("has_soul", &self.soul.is_some())
+            .field("has_structured_thinking", &self.structured_thinking.is_some())
             .finish()
     }
 }
@@ -178,5 +197,39 @@ impl ThinkerContext {
     /// Get the first message
     pub fn first_message(&self) -> Option<&Message> {
         self.messages.as_ref().and_then(|v| v.first())
+    }
+
+    // ═══ Embodiment Engine Helpers ═══
+
+    /// Parse soul from stored content
+    pub fn parse_soul_content(&mut self) {
+        if let Some(content) = &self.soul_content {
+            match SoulManifest::from_markdown(content) {
+                Ok(soul) => self.soul = Some(soul),
+                Err(e) => panic!("Failed to parse soul content: {}", e),
+            }
+        }
+    }
+
+    /// Build system prompt with soul
+    pub fn build_system_prompt_with_soul(&mut self) {
+        if let Some(builder) = &self.builder {
+            let soul = self.soul.clone().unwrap_or_default();
+            self.system_prompt = Some(builder.build_system_prompt_with_soul(&self.tools, &soul));
+        }
+    }
+
+    /// Initialize identity resolver with temp global path
+    pub fn init_identity_resolver(&mut self) {
+        self.identity_resolver = Some(IdentityResolver::new(PathBuf::from("/nonexistent")));
+    }
+
+    // ═══ CoT Transparency Helpers ═══
+
+    /// Parse structured thinking from stored reasoning text
+    pub fn parse_structured_thinking(&mut self) {
+        if let Some(reasoning) = &self.reasoning_text {
+            self.structured_thinking = Some(ThinkingParser::parse(reasoning));
+        }
     }
 }
