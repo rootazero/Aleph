@@ -34,6 +34,7 @@ pub mod decision_parser;
 pub mod interaction;
 pub mod model_router;
 pub mod prompt_builder;
+pub mod security_context;
 pub mod streaming;
 pub mod tool_filter;
 
@@ -54,6 +55,9 @@ pub type ModelRouter = ThinkerModelSelector;
 pub use prompt_builder::{Message, MessageRole, PromptBuilder, PromptConfig};
 pub use tool_filter::{IntentFilterConfig, IntentFilterResult, ToolFilter, ToolFilterConfig};
 pub use interaction::{Capability, InteractionConstraints, InteractionManifest, InteractionParadigm};
+pub use security_context::{
+    ElevatedPolicy, SandboxLevel, SecurityContext, ToolPermission, is_network_tool,
+};
 
 use crate::agent_loop::{
     CompressionConfig, LoopState, ModelRoutingConfig, Observation, ThinkerTrait, Thinking, ToolInfo,
