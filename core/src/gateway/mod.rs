@@ -90,6 +90,8 @@ pub mod context;
 pub mod webhooks;
 #[cfg(feature = "gateway")]
 pub mod run_event_bus;
+#[cfg(feature = "gateway")]
+pub mod workspace;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -173,4 +175,9 @@ pub use webhooks::{
 pub use run_event_bus::{
     RunEvent, RunStatus as RunEventStatus, RunEndResult,
     WaitError, QueueError, ActiveRunHandle, wait_for_run_end,
+};
+#[cfg(feature = "gateway")]
+pub use workspace::{
+    Workspace, WorkspaceManager, WorkspaceManagerConfig, WorkspaceError,
+    CacheState, UserActiveWorkspace,
 };
