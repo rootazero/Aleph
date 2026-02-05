@@ -383,6 +383,24 @@ pub struct AgentEvent {
 }
 
 impl AgentEvent {
+    /// Create a new event (is_structural determined by caller)
+    pub fn new(
+        task_id: impl Into<String>,
+        seq: u64,
+        event_type: impl Into<String>,
+        payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: 0,
+            task_id: task_id.into(),
+            seq,
+            event_type: event_type.into(),
+            payload_json: payload_json.into(),
+            is_structural: false,
+            timestamp: chrono::Utc::now().timestamp(),
+        }
+    }
+
     /// Create a structural (skeleton) event
     pub fn structural(
         task_id: impl Into<String>,
