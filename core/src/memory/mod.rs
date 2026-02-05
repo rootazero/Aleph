@@ -37,6 +37,13 @@ pub mod retrieval;
 pub mod scratchpad;
 pub mod smart_embedder;
 pub mod cli;
+pub mod transcript_indexer;
+pub mod context_comptroller;
+pub mod value_estimator;
+pub mod compression_daemon;
+pub mod ripple;
+pub mod evolution;
+pub mod consolidation;
 
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
@@ -72,3 +79,20 @@ pub use retrieval::MemoryRetrieval;
 pub use scratchpad::{ScratchpadManager, ScratchpadConfig, SessionHistory};
 pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};
 pub use cli::{LockError, LockMode, MemoryLock};
+pub use transcript_indexer::{
+    SemanticChunkConfig, SemanticChunker, TranscriptIndexer, TranscriptIndexerConfig,
+};
+pub use context_comptroller::{
+    ContextComptroller, ComptrollerConfig, ArbitratedContext, RetentionMode, TokenBudget,
+};
+pub use value_estimator::{LlmScorer, LlmScorerConfig, Signal, ValueEstimator};
+pub use compression_daemon::{CompressionDaemon, CompressionDaemonConfig};
+pub use ripple::{RippleTask, RippleConfig, RippleResult};
+pub use evolution::{
+    ContradictionDetector, EvolutionChain, EvolutionNode, EvolutionResolver, FactEvolution,
+    ResolutionStrategy,
+};
+pub use consolidation::{
+    ConsolidationAnalyzer, ConsolidationConfig, ConsolidatedFact, FrequentFact, ProfileCategory,
+    UserProfile,
+};
