@@ -4,7 +4,7 @@
 //! for the Multi-Agent Resilience architecture.
 
 use crate::error::AlephError;
-use crate::memory::database::resilience::SessionStatus;
+use super::super::types::SessionStatus;
 use crate::memory::database::VectorDatabase;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
