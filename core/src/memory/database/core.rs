@@ -17,18 +17,8 @@ pub struct VectorDatabase {
 }
 
 impl VectorDatabase {
-    /// Initialize vector database with schema
-    ///
-    /// Includes migration logic for embedding dimension changes.
-    /// When embedding dimension changes (e.g., 512 -> 384), old data is cleared.
-    pub fn new(db_path: PathBuf) -> Result<Self, AlephError> {
-        // Ensure parent directory exists
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                AlephError::config(format!("Failed to create database directory: {}", e))
-            })?;
-        }
-
+    /// Register sqlite-vec extension for all connections
+    fn register_sqlite_vec_extension() {
         // Register sqlite-vec extension before opening any connection
         // SAFETY: sqlite3_vec_init is the C entrypoint for the extension.
         // sqlite3_auto_extension registers it to be loaded for all new connections.
@@ -37,28 +27,17 @@ impl VectorDatabase {
                 sqlite3_vec_init as *const (),
             )));
         }
+    }
 
-        let conn = Connection::open(&db_path)
-            .map_err(|e| AlephError::config(format!("Failed to open database: {}", e)))?;
+    /// Create the database schema
+    fn create_schema(conn: &Connection) -> Result<(), AlephError> {
+        conn.execute_batch(Self::schema_sql())
+            .map_err(|e| AlephError::config(format!("Failed to create schema: {}", e)))
+    }
 
-        // Check if migration is needed (dimension change)
-        let needs_migration = Self::check_needs_migration(&conn)?;
-
-        if needs_migration {
-            // Drop old memories table for dimension migration
-            conn.execute_batch("DROP TABLE IF EXISTS memories;")
-                .map_err(|e| AlephError::config(format!("Failed to drop old table: {}", e)))?;
-
-            tracing::info!(
-                old_dim = 384,
-                new_dim = CURRENT_EMBEDDING_DIM,
-                "Cleared memories table for embedding dimension migration"
-            );
-        }
-
-        // Create schema with version metadata
-        conn.execute_batch(
-            r#"
+    /// SQL for creating the database schema
+    fn schema_sql() -> &'static str {
+        r#"
             -- Metadata table for schema versioning
             CREATE TABLE IF NOT EXISTS schema_info (
                 key TEXT PRIMARY KEY,
@@ -290,9 +269,70 @@ impl VectorDatabase {
                 INSERT INTO facts_fts(facts_fts, rowid, content, fact_type, id)
                 VALUES ('delete', old.rowid, old.content, old.fact_type, old.id);
             END;
-            "#,
+            "#
+    }
+
+    /// Create an in-memory database for testing
+    ///
+    /// This creates a SQLite database in memory (:memory:) without persisting to disk.
+    /// Useful for unit tests that need isolated database instances.
+    #[cfg(test)]
+    pub fn in_memory() -> Result<Self, AlephError> {
+        Self::register_sqlite_vec_extension();
+
+        let conn = Connection::open_in_memory()
+            .map_err(|e| AlephError::config(format!("Failed to open in-memory database: {}", e)))?;
+
+        // Initialize the database schema
+        Self::create_schema(&conn)?;
+
+        // Update embedding dimension in schema_info
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
+            params![CURRENT_EMBEDDING_DIM.to_string()],
         )
-        .map_err(|e| AlephError::config(format!("Failed to create schema: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
+
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            db_path: PathBuf::from(":memory:"),
+        })
+    }
+
+    /// Initialize vector database with schema
+    ///
+    /// Includes migration logic for embedding dimension changes.
+    /// When embedding dimension changes (e.g., 512 -> 384), old data is cleared.
+    pub fn new(db_path: PathBuf) -> Result<Self, AlephError> {
+        // Ensure parent directory exists
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AlephError::config(format!("Failed to create database directory: {}", e))
+            })?;
+        }
+
+        Self::register_sqlite_vec_extension();
+
+        let conn = Connection::open(&db_path)
+            .map_err(|e| AlephError::config(format!("Failed to open database: {}", e)))?;
+
+        // Check if migration is needed (dimension change)
+        let needs_migration = Self::check_needs_migration(&conn)?;
+
+        if needs_migration {
+            // Drop old memories table for dimension migration
+            conn.execute_batch("DROP TABLE IF EXISTS memories;")
+                .map_err(|e| AlephError::config(format!("Failed to drop old table: {}", e)))?;
+
+            tracing::info!(
+                old_dim = 384,
+                new_dim = CURRENT_EMBEDDING_DIM,
+                "Cleared memories table for embedding dimension migration"
+            );
+        }
+
+        // Create schema with version metadata
+        Self::create_schema(&conn)?;
 
         // Migrate existing data to vec0 tables (for upgrades from old schema)
         Self::migrate_to_vec0(&conn)?;
@@ -583,5 +623,66 @@ mod tests {
             )
             .unwrap();
         assert!(facts_trigger, "facts_fts_insert trigger should exist");
+    }
+
+    #[test]
+    fn test_in_memory_database() {
+        // Create an in-memory database
+        let db = VectorDatabase::in_memory().unwrap();
+
+        // Verify db_path is :memory:
+        assert_eq!(db.db_path.to_str().unwrap(), ":memory:");
+
+        let conn = db.conn.lock().unwrap();
+
+        // Verify sqlite-vec extension is loaded
+        let version: String = conn
+            .query_row("SELECT vec_version()", [], |row| row.get(0))
+            .expect("sqlite-vec extension should be loaded in-memory");
+        assert!(
+            version.starts_with("v0."),
+            "Expected version v0.x, got {}",
+            version
+        );
+
+        // Verify memories table exists
+        let memories_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memories'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(memories_exists, "memories table should exist in-memory");
+
+        // Verify memories_vec virtual table exists
+        let vec_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memories_vec'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(vec_exists, "memories_vec table should exist in-memory");
+
+        // Verify memory_facts table exists
+        let facts_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memory_facts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(facts_exists, "memory_facts table should exist in-memory");
+
+        // Verify schema_info has embedding_dimension
+        let dim: String = conn
+            .query_row(
+                "SELECT value FROM schema_info WHERE key = 'embedding_dimension'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(dim, CURRENT_EMBEDDING_DIM.to_string());
     }
 }
