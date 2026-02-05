@@ -11,6 +11,9 @@ mod coordinator;
 mod inference;
 mod retrieval;
 
+#[cfg(test)]
+mod tests;
+
 pub use config::ToolRetrievalConfig;
 pub use coordinator::{ToolIndexCoordinator, ToolMeta};
 pub use inference::{InferredPurpose, SemanticPurposeInferrer};
