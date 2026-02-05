@@ -667,9 +667,356 @@ pub struct LoopConfig {
 
 ---
 
+## Multi-Agent Resilience
+
+**Location**: `core/src/memory/database/resilience/`
+
+The Multi-Agent Resilience architecture provides robust task recovery, event persistence, session management, and resource governance for long-running multi-agent workflows.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Multi-Agent Resilience                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐    │
+│  │   Recovery   │     │  Perception  │     │ Collaboration│    │
+│  │              │     │              │     │              │    │
+│  │ • Shadow     │     │ • Classifier │     │ • Handles    │    │
+│  │   Replay     │     │ • Emitter    │     │ • Swapping   │    │
+│  │ • Graceful   │     │ • Observer   │     │ • Coordinator│    │
+│  │   Shutdown   │     │ • Gap-Fill   │     │              │    │
+│  └──────────────┘     └──────────────┘     └──────────────┘    │
+│                                                                  │
+│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐    │
+│  │  Governance  │     │    Types     │     │   Database   │    │
+│  │              │     │              │     │              │    │
+│  │ • Governor   │     │ • AgentTask  │     │ • Tasks CRUD │    │
+│  │ • Sentry     │     │ • TaskTrace  │     │ • Traces     │    │
+│  │ • Quotas     │     │ • AgentEvent │     │ • Events     │    │
+│  │              │     │ • Session    │     │ • Sessions   │    │
+│  └──────────────┘     └──────────────┘     └──────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Recovery Layer
+
+**Location**: `core/src/memory/database/resilience/recovery/`
+
+Handles task recovery after system restarts or crashes.
+
+#### Shadow Replay Engine
+
+Deterministic task recovery without LLM token consumption:
+
+```rust
+pub struct ShadowReplayEngine {
+    db: Arc<VectorDatabase>,
+}
+
+impl ShadowReplayEngine {
+    /// Replay all traces for a task
+    pub async fn replay_task(&self, task_id: &str) -> Result<ReplayResult, AlephError>;
+
+    /// Replay until a specific step
+    pub async fn replay_until_step(&self, task_id: &str, step: u32) -> Result<ReplayResult, AlephError>;
+
+    /// Check for divergence from recorded trace
+    pub async fn check_divergence(&self, task_id: &str, step: u32, actual: Option<&str>) -> Result<DivergenceStatus, AlephError>;
+}
+```
+
+#### Graceful Shutdown
+
+Handles SIGTERM/SIGINT for clean task checkpointing:
+
+```rust
+pub struct GracefulShutdown {
+    db: Arc<VectorDatabase>,
+    shutdown_tx: broadcast::Sender<ShutdownSignal>,
+}
+
+pub enum ShutdownSignal {
+    Term,       // SIGTERM
+    Interrupt,  // SIGINT (Ctrl+C)
+    Requested,  // Programmatic
+}
+```
+
+#### Recovery Manager
+
+Risk-aware recovery decisions on startup:
+
+```rust
+pub enum RecoveryDecision {
+    /// Low risk: auto-resume with Shadow Replay
+    AutoResume { task: AgentTask, replay_engine: Arc<ShadowReplayEngine> },
+
+    /// High risk: needs user confirmation
+    PendingConfirmation { task: AgentTask },
+
+    /// Cannot recover
+    Skip { task_id: String, reason: String },
+}
+```
+
+### Perception Layer
+
+**Location**: `core/src/memory/database/resilience/perception/`
+
+Event classification and observation with gap-fill support.
+
+#### Skeleton & Pulse Model
+
+Events are classified into tiers for efficient persistence:
+
+| Tier | Description | Persistence | Examples |
+|------|-------------|-------------|----------|
+| **Skeleton** | Structural events | Immediate | task_started, tool_call_completed |
+| **Pulse** | Streaming events | Batched | ai_streaming, progress_update |
+| **Volatile** | Ephemeral events | Memory only | heartbeat, metrics_snapshot |
+
+```rust
+pub enum EventTier {
+    Skeleton,  // Immediate persistence
+    Pulse,     // Batched persistence
+    Volatile,  // No persistence
+}
+
+pub struct EventClassifier;
+
+impl EventClassifier {
+    pub fn classify(event_type: &EventType) -> EventTier;
+}
+```
+
+#### Gap-Fill Protocol
+
+Self-healing event observation with database backfill:
+
+```rust
+pub struct TaskObserver {
+    db: Arc<VectorDatabase>,
+    last_seen_seq: AtomicU64,
+}
+
+impl TaskObserver {
+    /// Check for and fill gaps in event sequence
+    pub async fn gap_fill(&self, task_id: &str) -> Result<GapFillResult, AlephError>;
+}
+```
+
+### Collaboration Layer
+
+**Location**: `core/src/memory/database/resilience/collaboration/`
+
+Session-as-a-Service for persistent subagent sessions.
+
+#### Session Handle
+
+Reusable handle for subagent sessions:
+
+```rust
+pub struct SessionHandle {
+    session_id: String,
+    agent_type: String,
+    db: Arc<VectorDatabase>,
+}
+
+impl SessionHandle {
+    pub fn session_id(&self) -> &str;
+    pub async fn is_idle(&self) -> bool;
+    pub async fn record_usage(&self, tokens: u64, tool_calls: u64) -> Result<(), AlephError>;
+}
+```
+
+#### Session Coordinator
+
+Manages session lifecycle and reuse:
+
+```rust
+pub struct SessionCoordinator {
+    db: Arc<VectorDatabase>,
+    config: CoordinatorConfig,
+}
+
+impl SessionCoordinator {
+    /// Create a new session
+    pub async fn create_session(&self, agent_type: &str, parent_id: &str) -> Result<SessionHandle, AlephError>;
+
+    /// Acquire an existing idle session or create new
+    pub async fn acquire_session(&self, agent_type: &str, parent_id: &str) -> Result<SessionHandle, AlephError>;
+
+    /// Release session back to idle pool
+    pub async fn release_session(&self, session_id: &str) -> Result<(), AlephError>;
+}
+```
+
+#### Agent Swapping
+
+Serialize idle agents to disk for memory optimization:
+
+```rust
+pub struct SwapManager {
+    db: Arc<VectorDatabase>,
+    swap_dir: PathBuf,
+    config: SwapConfig,
+}
+
+impl SwapManager {
+    /// Swap out an idle session to disk
+    pub async fn swap_out(&self, session_id: &str, context: &SwappedContext) -> Result<SwapResult, AlephError>;
+
+    /// Swap in a session from disk
+    pub async fn swap_in(&self, session_id: &str) -> Result<SwappedContext, AlephError>;
+}
+```
+
+### Governance Layer
+
+**Location**: `core/src/memory/database/resilience/governance/`
+
+Resource governance and recursion limiting.
+
+#### Resource Governor
+
+Lane-based priority isolation:
+
+```rust
+pub struct ResourceGovernor {
+    db: Arc<VectorDatabase>,
+    config: GovernorConfig,
+    main_lane: LaneResources,      // High priority (20%)
+    subagent_lane: LaneResources,  // Normal priority (80%)
+}
+
+pub enum Lane {
+    Main,      // User interactions, abort commands
+    Subagent,  // Background work
+}
+
+impl ResourceGovernor {
+    /// Acquire resources for a task
+    pub async fn acquire(&self, lane: Lane) -> Result<ResourcePermit, AlephError>;
+
+    /// Check if lane has capacity
+    pub fn has_capacity(&self, lane: Lane) -> bool;
+
+    /// Track token usage
+    pub async fn record_tokens(&self, session_id: &str, tokens: u64) -> Result<bool, AlephError>;
+}
+```
+
+#### Recursive Sentry
+
+Prevents infinite task spawning:
+
+```rust
+pub struct RecursiveSentry {
+    max_depth: u32,
+}
+
+impl RecursiveSentry {
+    /// Check if spawning is allowed at current depth
+    pub fn check_spawn(&self, current_depth: u32) -> Result<(), RecursionLimitExceeded>;
+}
+```
+
+#### Quota Manager
+
+Concurrency and resource limits:
+
+```rust
+pub struct QuotaManager {
+    db: Arc<VectorDatabase>,
+    config: QuotaConfig,
+}
+
+pub struct QuotaConfig {
+    pub max_running: usize,           // Max concurrent subagents
+    pub max_idle: usize,              // Max idle in memory
+    pub max_depth: u32,               // Max recursion depth
+    pub token_budget: u64,            // Per-session token budget
+    pub max_total: usize,             // Max total subagents
+    pub max_tool_calls_per_task: u64, // Tool call limit
+}
+
+impl QuotaManager {
+    /// Check if action is within quota
+    pub async fn check(&self) -> Result<QuotaCheckResult, AlephError>;
+}
+```
+
+### Database Schema
+
+The resilience module uses four main tables:
+
+```sql
+-- Agent tasks with recovery support
+CREATE TABLE agent_tasks (
+    id TEXT PRIMARY KEY,
+    parent_session_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    task_prompt TEXT NOT NULL,
+    status TEXT NOT NULL,           -- pending, running, completed, failed, interrupted
+    risk_level TEXT NOT NULL,       -- low, high
+    lane TEXT NOT NULL,             -- main, subagent
+    checkpoint_snapshot_path TEXT,
+    last_tool_call_id TEXT,
+    recursion_depth INTEGER DEFAULT 0,
+    parent_task_id TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    started_at INTEGER,
+    completed_at INTEGER,
+    metadata_json TEXT
+);
+
+-- Execution traces for Shadow Replay
+CREATE TABLE task_traces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    role TEXT NOT NULL,             -- assistant, tool
+    content_json TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    UNIQUE(task_id, step_index)
+);
+
+-- Tiered event persistence
+CREATE TABLE agent_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    is_structural INTEGER NOT NULL,
+    timestamp INTEGER NOT NULL,
+    UNIQUE(task_id, seq)
+);
+
+-- Subagent sessions
+CREATE TABLE subagent_sessions (
+    id TEXT PRIMARY KEY,
+    agent_type TEXT NOT NULL,
+    status TEXT NOT NULL,           -- active, idle, swapped
+    context_path TEXT,
+    parent_session_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_active_at INTEGER NOT NULL,
+    total_tokens_used INTEGER DEFAULT 0,
+    total_tool_calls INTEGER DEFAULT 0
+);
+```
+
+---
+
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) - System overview
 - [Tool System](TOOL_SYSTEM.md) - Tool development
 - [Gateway](GATEWAY.md) - RPC interface
 - [Agent Design Philosophy](AGENT_DESIGN_PHILOSOPHY.md) - POE architecture
+- [Memory System](MEMORY_SYSTEM.md) - Facts DB and vector search
