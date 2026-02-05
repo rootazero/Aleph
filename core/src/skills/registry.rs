@@ -17,6 +17,7 @@
 //! - **Level 3 (Resources)**: Additional files - loaded on-demand via file_name parameter
 
 use crate::error::{AlephError, Result};
+use crate::skills::events::SkillRegistryEvent;
 use crate::skills::health::HealthChecker;
 use crate::skills::types::SkillHealth;
 use crate::skills::Skill;
@@ -25,6 +26,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
+use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 // ============================================================================
@@ -78,6 +80,9 @@ pub struct SkillWithHealth {
 // Skills Registry
 // ============================================================================
 
+/// Default capacity for the event broadcast channel
+const EVENT_CHANNEL_CAPACITY: usize = 64;
+
 /// Skills Registry manages loaded skills
 pub struct SkillsRegistry {
     /// Primary skills directory path (for backwards compatibility)
@@ -91,6 +96,9 @@ pub struct SkillsRegistry {
 
     /// Skill metadata indexed by ID (for Progressive Disclosure)
     metadata: RwLock<HashMap<String, SkillMetadata>>,
+
+    /// Event broadcast sender for skill lifecycle events
+    event_tx: broadcast::Sender<SkillRegistryEvent>,
 }
 
 impl SkillsRegistry {
@@ -100,11 +108,13 @@ impl SkillsRegistry {
     ///
     /// * `skills_dir` - Path to the skills directory
     pub fn new(skills_dir: PathBuf) -> Self {
+        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Self {
             skills_dirs: vec![skills_dir.clone()],
             skills_dir,
             skills: RwLock::new(HashMap::new()),
             metadata: RwLock::new(HashMap::new()),
+            event_tx,
         }
     }
 
@@ -125,11 +135,13 @@ impl SkillsRegistry {
             crate::utils::paths::get_skills_dir().unwrap_or_else(|_| PathBuf::from("~/.aleph/skills"))
         });
 
+        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Ok(Self {
             skills_dirs,
             skills_dir,
             skills: RwLock::new(HashMap::new()),
             metadata: RwLock::new(HashMap::new()),
+            event_tx,
         })
     }
 
@@ -140,13 +152,45 @@ impl SkillsRegistry {
     /// * `skills_dirs` - List of skills directories in priority order
     pub fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
         let skills_dir = skills_dirs.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
         Self {
             skills_dirs,
             skills_dir,
             skills: RwLock::new(HashMap::new()),
             metadata: RwLock::new(HashMap::new()),
+            event_tx,
         }
+    }
+
+    /// Subscribe to skill registry events
+    ///
+    /// Returns a receiver that will receive events for skill lifecycle changes.
+    /// Events include SkillLoaded, SkillRemoved, and AllReloaded.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut events = registry.subscribe();
+    /// tokio::spawn(async move {
+    ///     while let Ok(event) = events.recv().await {
+    ///         match event {
+    ///             SkillRegistryEvent::AllReloaded { count, .. } => {
+    ///                 println!("Reloaded {} skills", count);
+    ///             }
+    ///             _ => {}
+    ///         }
+    ///     }
+    /// });
+    /// ```
+    pub fn subscribe(&self) -> broadcast::Receiver<SkillRegistryEvent> {
+        self.event_tx.subscribe()
+    }
+
+    /// Emit an event to all subscribers
+    fn emit_event(&self, event: SkillRegistryEvent) {
+        // Ignore send errors (no subscribers is fine)
+        let _ = self.event_tx.send(event);
     }
 
     /// Load all skills from all configured skills directories
@@ -276,7 +320,18 @@ impl SkillsRegistry {
             }
         }
 
-        info!(count = skills.len(), "Skills registry loaded");
+        let skill_count = skills.len();
+        let skill_ids: Vec<String> = skills.keys().cloned().collect();
+
+        info!(count = skill_count, "Skills registry loaded");
+
+        // Drop locks before emitting event to avoid deadlock
+        drop(skills);
+        drop(metadata);
+
+        // Emit AllReloaded event
+        self.emit_event(SkillRegistryEvent::all_reloaded(skill_count, skill_ids));
+
         Ok(())
     }
 

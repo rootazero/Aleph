@@ -158,6 +158,18 @@ pub use crate::dispatcher::{
     ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
 
+// Tool Index (Tool-as-Resource)
+pub use crate::dispatcher::tool_index::{
+    // Config
+    ToolRetrievalConfig,
+    // Inference
+    InferredPurpose, SemanticPurposeInferrer,
+    // Coordinator
+    ToolIndexCoordinator, ToolMeta,
+    // Retrieval
+    HydrationLevel, HydratedTool, ToolRetrieval,
+};
+
 // =============================================================================
 // Extension System Exports
 // =============================================================================

@@ -82,6 +82,9 @@ pub mod profile_filter;
 // === Cortex 2.0: Robust dispatcher internals ===
 pub mod cortex;
 
+// === Tool Index: Semantic tool retrieval ===
+pub mod tool_index;
+
 // === Re-exports: Tool Management ===
 pub use async_confirmation::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
@@ -146,6 +149,13 @@ pub use content_category::{infer_required_tools, ContentCategory};
 pub use profile_filter::{ProfileFilter, ToolPermission};
 pub use smart_filter::SmartToolFilter;
 pub use tool_filter::{FilterResult, ToolFilter, ToolFilterConfig};
+
+// === Re-exports: Tool Index (Semantic Retrieval) ===
+pub use tool_index::{
+    HydrationLevel, HydrationPipeline, HydrationPipelineConfig, HydrationResult,
+    HydratedTool, InferredPurpose, SemanticPurposeInferrer, ToolIndexCoordinator,
+    ToolMeta, ToolRetrieval, ToolRetrievalConfig,
+};
 
 #[cfg(test)]
 mod tests {
