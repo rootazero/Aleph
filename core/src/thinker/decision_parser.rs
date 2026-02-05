@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use crate::agent_loop::{Decision, LlmResponse, Thinking};
+use crate::agent_loop::{Decision, LlmResponse, Thinking, ThinkingParser};
 use crate::error::{AlephError, Result};
 
 /// Parser for LLM decision responses
@@ -75,9 +75,13 @@ impl DecisionParser {
         // Convert to Thinking
         let decision: Decision = llm_response.action.into();
 
+        // Parse structured thinking if reasoning is present
+        let structured = llm_response.reasoning.as_ref().map(|r| ThinkingParser::parse(r));
+
         Ok(Thinking {
             reasoning: llm_response.reasoning,
             decision,
+            structured,
         })
     }
 
@@ -110,11 +114,14 @@ impl DecisionParser {
                 suggestion: Some("Check the LLM response format".to_string()),
             })
         } else {
+            let reasoning = Some(response.to_string());
+            let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
             Ok(Thinking {
-                reasoning: Some(response.to_string()),
+                reasoning,
                 decision: Decision::Fail {
                     reason: "Could not parse response into valid action".to_string(),
                 },
+                structured,
             })
         }
     }
@@ -213,7 +220,8 @@ impl DecisionParser {
             _ => return None,
         };
 
-        Some(Thinking { reasoning, decision })
+        let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
+        Some(Thinking { reasoning, decision, structured })
     }
 
     /// Extract JSON from response (handles markdown code blocks)
@@ -456,12 +464,15 @@ impl DecisionParser {
 
         for (pattern, tool_name) in tool_patterns {
             if response_lower.contains(pattern) {
+                let reasoning = Some(response.to_string());
+                let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
                 return Some(Thinking {
-                    reasoning: Some(response.to_string()),
+                    reasoning,
                     decision: Decision::UseTool {
                         tool_name: tool_name.to_string(),
                         arguments: Value::Object(serde_json::Map::new()),
                     },
+                    structured,
                 });
             }
         }
@@ -487,11 +498,14 @@ impl DecisionParser {
 
         for pattern in completion_patterns {
             if response_lower.contains(pattern) {
+                let reasoning = Some(response.to_string());
+                let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
                 return Some(Thinking {
-                    reasoning: Some(response.to_string()),
+                    reasoning,
                     decision: Decision::Complete {
                         summary: response.to_string(),
                     },
+                    structured,
                 });
             }
         }
@@ -850,5 +864,62 @@ Now I need to write these to a file:
 
         let thinking = parser.parse(&long_content).unwrap();
         assert!(matches!(thinking.decision, Decision::Complete { .. }));
+    }
+
+    #[test]
+    fn test_parse_produces_structured_thinking() {
+        let parser = DecisionParser::new();
+
+        let response = r#"{
+            "reasoning": "Looking at the request, I see the user wants to search. I'll use the web_search tool. Therefore, I will execute the search.",
+            "action": {
+                "type": "tool",
+                "tool_name": "web_search",
+                "arguments": {"query": "rust tutorials"}
+            }
+        }"#;
+
+        let thinking = parser.parse(response).unwrap();
+
+        // Verify structured thinking was populated
+        assert!(thinking.structured.is_some());
+
+        let structured = thinking.structured.as_ref().unwrap();
+        assert!(!structured.reasoning.is_empty());
+
+        // Should have detected some steps
+        assert!(structured.has_steps());
+    }
+
+    #[test]
+    fn test_parse_with_fallback_produces_structured() {
+        let parser = DecisionParser::new();
+
+        // Response that triggers completion detection
+        let response = "Task complete! I have finished searching for the information.";
+        let thinking = parser.parse_with_fallback(response).unwrap();
+
+        // Verify structured thinking was populated even for fallback path
+        assert!(thinking.structured.is_some());
+    }
+
+    #[test]
+    fn test_parse_no_reasoning_no_structured() {
+        let parser = DecisionParser::new();
+
+        // Response with null reasoning
+        let response = r#"{
+            "reasoning": null,
+            "action": {
+                "type": "complete",
+                "summary": "Done"
+            }
+        }"#;
+
+        let thinking = parser.parse(response).unwrap();
+
+        // No reasoning means no structured thinking
+        assert!(thinking.reasoning.is_none());
+        assert!(thinking.structured.is_none());
     }
 }

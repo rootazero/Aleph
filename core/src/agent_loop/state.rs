@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 use super::decision::{Action, ActionResult, Decision};
+use super::thinking::StructuredThinking;
 use crate::core::MediaAttachment;
 use crate::dispatcher::executor::ExecutionContext;
 
@@ -114,6 +115,10 @@ pub struct Thinking {
     pub reasoning: Option<String>,
     /// Decided next action
     pub decision: Decision,
+    /// Structured analysis of reasoning (CoT Transparency)
+    /// Contains parsed steps, confidence, alternatives, and uncertainties
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured: Option<StructuredThinking>,
 }
 
 /// Request context containing attachments and environment info from UI layer
@@ -295,6 +300,7 @@ mod tests {
                     decision: Decision::Complete {
                         summary: "done".to_string(),
                     },
+                    structured: None,
                 },
                 action: Action::Completion {
                     summary: "done".to_string(),
@@ -326,6 +332,7 @@ mod tests {
                     decision: Decision::Complete {
                         summary: "done".to_string(),
                     },
+                    structured: None,
                 },
                 action: Action::Completion {
                     summary: "done".to_string(),

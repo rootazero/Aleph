@@ -221,6 +221,7 @@ mod tests {
                 decision: Decision::Complete {
                     summary: "done".to_string(),
                 },
+                structured: None,
             },
             action: Action::ToolCall {
                 tool_name: format!("tool_{}", id),
