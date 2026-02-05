@@ -17,10 +17,15 @@ mod core;
 mod dreaming;
 mod facts;
 mod memory_ops;
+pub mod resilience;
 mod retention;
 
 // Re-export main types
 pub use core::{MemoryStats, VectorDatabase, CURRENT_EMBEDDING_DIM};
+pub use resilience::{
+    AgentEvent, AgentTask, Lane, RiskLevel, SessionStatus, SubagentSession, TaskStatus, TaskTrace,
+    TraceRole,
+};
 
 #[cfg(test)]
 mod tests {
