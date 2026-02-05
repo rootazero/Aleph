@@ -571,6 +571,10 @@ impl DecisionParser {
                 }
                 Ok(())
             }
+            Decision::Silent | Decision::HeartbeatOk => {
+                // These are always valid - no parameters to check
+                Ok(())
+            }
         }
     }
 }
