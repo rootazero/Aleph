@@ -145,7 +145,11 @@ impl ConsolidationAnalyzer {
                 FactType::Learning => "learning",
                 FactType::Project => "projects",
                 FactType::Personal => "personal",
-                FactType::Other => "other",
+                FactType::SubagentRun
+                | FactType::SubagentSession
+                | FactType::SubagentCheckpoint
+                | FactType::SubagentTranscript
+                | FactType::Other => "other",
             };
 
             categories
@@ -180,7 +184,11 @@ impl ConsolidationAnalyzer {
                 FactType::Learning => "learning",
                 FactType::Project => "projects",
                 FactType::Personal => "personal",
-                FactType::Other => "other",
+                FactType::SubagentRun
+                | FactType::SubagentSession
+                | FactType::SubagentCheckpoint
+                | FactType::SubagentTranscript
+                | FactType::Other => "other",
             }
         } else {
             "unknown"
