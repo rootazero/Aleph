@@ -496,47 +496,88 @@ Update `docs/TOOL_SYSTEM.md` with:
 - [x] TranscriptIndexer chunking implemented and tested (commit: cb41abd5)
 - [x] ValueEstimator implemented and tested (commit: 69416481)
 - [x] Enhanced token management in ContextComptroller (commit: 68c15206)
-- [ ] DreamDaemon implemented and tested
-- [ ] Documentation updated
-- [x] All tests pass (5582 passed, 1 pre-existing failure)
+- [x] CompressionDaemon implemented and tested (commit: 305cb650)
+- [x] Documentation updated (commit: 7a4fb1fb)
+- [x] All tests pass (5585 passed, 1 pre-existing failure)
 - [x] All commits follow conventional format
 
 ---
 
 ## Implementation Summary
 
-**Status:** ✅ 3/5 tasks complete (Tasks 1-3 done, Tasks 4-5 pending)
+**Status:** ✅ Phase 2 Complete - All 5 tasks done!
 
 **Commits:**
 1. `cb41abd5` - feat: add sliding window chunking to TranscriptIndexer
 2. `69416481` - feat: implement ValueEstimator for memory importance scoring
 3. `68c15206` - feat: enhance ContextComptroller with priority-based token management
+4. `305cb650` - feat: implement CompressionDaemon for background compression scheduling
+5. `7a4fb1fb` - docs: document Phase 2 memory system components in TOOL_SYSTEM.md
 
 **Test Results:**
-- All new tests passing (18 new tests added)
-- Full test suite: 5582 passed, 1 pre-existing failure (unrelated)
+- All new tests passing (21 new tests added)
+- Full test suite: 5585 passed, 1 pre-existing failure (unrelated)
 
 **Key Achievements:**
 
-1. **TranscriptIndexer Chunking**
+1. **TranscriptIndexer Chunking** ✅
    - Sliding window with configurable overlap
    - Sentence-boundary aware splitting
    - 7 tests covering various scenarios
 
-2. **ValueEstimator**
+2. **ValueEstimator** ✅
    - 8 signal types for importance detection
    - Score range 0.0-1.0 with length bonus
    - 7 tests for high/medium/low value content
 
-3. **Enhanced Token Management**
+3. **Enhanced Token Management** ✅
    - Priority-based selection (facts > transcripts)
    - Similarity score sorting
    - Budget enforcement with graceful degradation
    - 4 tests including budget and priority verification
 
-**Remaining Work:**
-- Task 4: DreamDaemon scheduler (deferred to next session)
-- Task 5: Documentation updates
+4. **CompressionDaemon** ✅
+   - Background scheduler with configurable intervals
+   - Idle detection and activity tracking
+   - Generic compression function support
+   - 3 tests for config, creation, and execution
+
+5. **Documentation** ✅
+   - Comprehensive TOOL_SYSTEM.md updates
+   - memory_search tool detailed documentation
+   - All Phase 2 components documented with examples
+   - Integration patterns and usage guides
+
+**Architecture Flow:**
+```
+User Query
+  ↓
+memory_search Tool
+  ↓
+FactRetrieval (hybrid search)
+  ↓
+ContextComptroller (arbitration)
+  ├─ Redundancy detection (cosine similarity)
+  ├─ Priority sorting (similarity scores)
+  └─ Budget enforcement (token limits)
+  ↓
+Deduplicated Results
+
+Background:
+CompressionDaemon (periodic)
+  ↓
+CompressionService
+  ├─ ValueEstimator (importance scoring)
+  ├─ TranscriptIndexer (chunking)
+  └─ Fact extraction & storage
+```
+
+**Next Steps (Phase 3):**
+- Implement RippleTask for局部探索
+- Add Fact Evolution Chain for矛盾调和
+- Implement ConsolidationTask for用户画像蒸馏
+- Advanced chunking strategies
+- LLM-based importance scoring
 
 ---
 
