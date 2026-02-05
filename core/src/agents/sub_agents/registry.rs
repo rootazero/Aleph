@@ -1,0 +1,258 @@
+//! Sub-Agent Registry
+//!
+//! This module provides in-memory indexing and lifecycle event broadcasting
+//! for sub-agent run instances as part of the Multi-Agent 2.0 system.
+//!
+//! # Overview
+//!
+//! The `SubAgentRegistry` manages all sub-agent runs with:
+//! - Primary index by run_id
+//! - Secondary index by session key
+//! - Parent-child relationship tracking
+//! - Lifecycle event broadcasting
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use alephcore::agents::sub_agents::{SubAgentRegistry, SubAgentRun, LifecycleEvent};
+//!
+//! let registry = SubAgentRegistry::new_in_memory();
+//!
+//! // Subscribe to lifecycle events
+//! let mut rx = registry.subscribe();
+//!
+//! // Register a new run
+//! let run = SubAgentRun::new(session_key, parent_key, "Task", "explore");
+//! let run_id = registry.register(run).await?;
+//!
+//! // Query by various indices
+//! let run = registry.get(&run_id).await?;
+//! let run_id = registry.get_by_session(&session_key).await;
+//! let children = registry.get_children(&parent_key).await;
+//! ```
+
+use std::collections::HashMap;
+
+use tokio::sync::{broadcast, RwLock};
+
+use super::run::{RunStatus, SubAgentRun};
+use crate::error::Result;
+use crate::routing::SessionKey;
+
+/// Lifecycle events emitted by the registry
+#[derive(Debug, Clone)]
+pub enum LifecycleEvent {
+    /// A new run was registered
+    Registered { run_id: String },
+    /// A run's status changed
+    StatusChanged {
+        run_id: String,
+        old: RunStatus,
+        new: RunStatus,
+    },
+}
+
+/// Default broadcast channel capacity
+const DEFAULT_CHANNEL_CAPACITY: usize = 256;
+
+/// Sub-Agent Registry for managing run instances
+///
+/// Provides in-memory indexing with multiple access patterns:
+/// - By run_id (primary key)
+/// - By session key (for session-to-run lookup)
+/// - By parent session key (for parent-child relationships)
+pub struct SubAgentRegistry {
+    /// Primary index: run_id -> SubAgentRun
+    runs: RwLock<HashMap<String, SubAgentRun>>,
+    /// Secondary index: session_key -> run_id
+    by_session: RwLock<HashMap<SessionKey, String>>,
+    /// Parent-child index: parent_session_key -> Vec<run_id>
+    by_parent: RwLock<HashMap<SessionKey, Vec<String>>>,
+    /// Broadcast channel for lifecycle events
+    event_tx: broadcast::Sender<LifecycleEvent>,
+}
+
+impl SubAgentRegistry {
+    /// Create a new in-memory registry with default broadcast channel capacity
+    pub fn new_in_memory() -> Self {
+        let (event_tx, _) = broadcast::channel(DEFAULT_CHANNEL_CAPACITY);
+        Self {
+            runs: RwLock::new(HashMap::new()),
+            by_session: RwLock::new(HashMap::new()),
+            by_parent: RwLock::new(HashMap::new()),
+            event_tx,
+        }
+    }
+
+    /// Subscribe to lifecycle events
+    pub fn subscribe(&self) -> broadcast::Receiver<LifecycleEvent> {
+        self.event_tx.subscribe()
+    }
+
+    /// Register a new sub-agent run
+    ///
+    /// Updates all indices and emits a `Registered` lifecycle event.
+    ///
+    /// # Arguments
+    ///
+    /// * `run` - The sub-agent run to register
+    ///
+    /// # Returns
+    ///
+    /// The run_id of the registered run
+    pub async fn register(&self, run: SubAgentRun) -> Result<String> {
+        let run_id = run.run_id.clone();
+        let session_key = run.session_key.clone();
+        let parent_key = run.parent_session_key.clone();
+
+        // Update primary index
+        {
+            let mut runs = self.runs.write().await;
+            runs.insert(run_id.clone(), run);
+        }
+
+        // Update session index
+        {
+            let mut by_session = self.by_session.write().await;
+            by_session.insert(session_key, run_id.clone());
+        }
+
+        // Update parent-child index
+        {
+            let mut by_parent = self.by_parent.write().await;
+            by_parent
+                .entry(parent_key)
+                .or_insert_with(Vec::new)
+                .push(run_id.clone());
+        }
+
+        // Emit lifecycle event (ignore send errors if no receivers)
+        let _ = self.event_tx.send(LifecycleEvent::Registered {
+            run_id: run_id.clone(),
+        });
+
+        Ok(run_id)
+    }
+
+    /// Get a sub-agent run by its run_id
+    ///
+    /// # Arguments
+    ///
+    /// * `run_id` - The unique identifier of the run
+    ///
+    /// # Returns
+    ///
+    /// The run if found, None otherwise
+    pub async fn get(&self, run_id: &str) -> Result<Option<SubAgentRun>> {
+        let runs = self.runs.read().await;
+        Ok(runs.get(run_id).cloned())
+    }
+
+    /// Get a run_id by session key
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The session key to look up
+    ///
+    /// # Returns
+    ///
+    /// The run_id if found, None otherwise
+    pub async fn get_by_session(&self, key: &SessionKey) -> Option<String> {
+        let by_session = self.by_session.read().await;
+        by_session.get(key).cloned()
+    }
+
+    /// Get all child run_ids for a parent session key
+    ///
+    /// # Arguments
+    ///
+    /// * `parent` - The parent session key
+    ///
+    /// # Returns
+    ///
+    /// A vector of run_ids for all children of the parent
+    pub async fn get_children(&self, parent: &SessionKey) -> Vec<String> {
+        let by_parent = self.by_parent.read().await;
+        by_parent.get(parent).cloned().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_session_key(id: &str) -> SessionKey {
+        SessionKey::main(id)
+    }
+
+    fn make_subagent_key(parent_id: &str, subagent_id: &str) -> SessionKey {
+        SessionKey::Subagent {
+            parent_key: Box::new(SessionKey::main(parent_id)),
+            subagent_id: subagent_id.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_register_and_get() {
+        let registry = SubAgentRegistry::new_in_memory();
+        let session_key = make_subagent_key("parent-1", "session-1");
+        let parent_key = make_session_key("parent-1");
+        let run = SubAgentRun::new(session_key, parent_key, "Test task", "explore");
+        let run_id = run.run_id.clone();
+
+        registry.register(run).await.unwrap();
+
+        let retrieved = registry.get(&run_id).await.unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().task, "Test task");
+    }
+
+    #[tokio::test]
+    async fn test_registry_get_by_session() {
+        let registry = SubAgentRegistry::new_in_memory();
+        let session_key = make_subagent_key("parent-1", "session-abc");
+        let parent_key = make_session_key("parent-1");
+        let run = SubAgentRun::new(session_key.clone(), parent_key, "Task", "plan");
+        let run_id = run.run_id.clone();
+
+        registry.register(run).await.unwrap();
+
+        let found = registry.get_by_session(&session_key).await;
+        assert!(found.is_some());
+        assert_eq!(found.unwrap(), run_id);
+    }
+
+    #[tokio::test]
+    async fn test_registry_get_children() {
+        let registry = SubAgentRegistry::new_in_memory();
+
+        let parent_x = make_session_key("parent-x");
+        let parent_y = make_session_key("parent-y");
+
+        let run1 = SubAgentRun::new(
+            make_subagent_key("parent-x", "s1"),
+            parent_x.clone(),
+            "Task 1",
+            "explore",
+        );
+        let run2 = SubAgentRun::new(
+            make_subagent_key("parent-x", "s2"),
+            parent_x.clone(),
+            "Task 2",
+            "plan",
+        );
+        let run3 = SubAgentRun::new(
+            make_subagent_key("parent-y", "s3"),
+            parent_y.clone(),
+            "Task 3",
+            "execute",
+        );
+
+        registry.register(run1).await.unwrap();
+        registry.register(run2).await.unwrap();
+        registry.register(run3).await.unwrap();
+
+        let children = registry.get_children(&parent_x).await;
+        assert_eq!(children.len(), 2);
+    }
+}
