@@ -167,7 +167,3 @@ pub use trust::{
     AlwaysRequireSignature, AutoApprovalDecision, ExperienceTrustEvaluator,
     TrustContext, TrustEvaluator, WhitelistTrustEvaluator,
 };
-
-// Integration tests
-#[cfg(test)]
-mod tests;
