@@ -18,6 +18,7 @@ mod models_ctx;
 mod perception_ctx;
 mod poe_ctx;
 mod protocol_ctx;
+mod scheduler_ctx;
 mod security_ctx;
 mod skills_ctx;
 mod subagent_ctx;
@@ -38,6 +39,7 @@ pub use models_ctx::ModelsContext;
 pub use perception_ctx::PerceptionContext;
 pub use poe_ctx::{PoeContext, PoeConstraint, PoeOutcomeType};
 pub use protocol_ctx::ProtocolContext;
+pub use scheduler_ctx::SchedulerContext;
 pub use security_ctx::{SecurityContext, SkillExecutionResult};
 pub use skills_ctx::SkillsContext;
 pub use subagent_ctx::SubagentContext;
@@ -78,6 +80,7 @@ pub struct AlephWorld {
     pub agent_loop: Option<AgentLoopContext>,
     pub extension: Option<ExtensionContext>,
     pub poe: Option<PoeContext>,
+    pub scheduler: Option<SchedulerContext>,
     pub security: Option<SecurityContext>,
     pub thinker: Option<ThinkerContext>,
     pub tools: Option<ToolsContext>,
