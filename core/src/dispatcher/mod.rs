@@ -82,6 +82,9 @@ pub mod profile_filter;
 // === Cortex 2.0: Robust dispatcher internals ===
 pub mod cortex;
 
+// === Tool Index: Semantic tool retrieval ===
+pub mod tool_index;
+
 // === Re-exports: Tool Management ===
 pub use async_confirmation::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
