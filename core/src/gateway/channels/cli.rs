@@ -22,10 +22,11 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::gateway::channel::{
-    Channel, ChannelCapabilities, ChannelError, ChannelFactory,
+    Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelProvider,
     ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage,
     MessageId, OutboundMessage, SendResult, UserId,
 };
+use crate::thinker::interaction::{InteractionConstraints, InteractionManifest, InteractionParadigm};
 
 /// CLI channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +297,17 @@ impl Channel for CliChannel {
         // This is a bit tricky - we need to return the receiver only once
         // For now, return None as the registry will handle forwarding
         None
+    }
+}
+
+impl ChannelProvider for CliChannel {
+    fn interaction_manifest(&self) -> InteractionManifest {
+        InteractionManifest::new(InteractionParadigm::CLI)
+            .with_constraints(InteractionConstraints {
+                max_output_chars: None,  // CLI has no limit
+                supports_streaming: true,
+                prefer_compact: false,
+            })
     }
 }
 
