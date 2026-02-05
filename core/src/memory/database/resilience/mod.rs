@@ -7,7 +7,9 @@
 //! - Subagent session management (Session-as-a-Service)
 //! - Recovery: Shadow Replay, Graceful Shutdown, Recovery Manager
 //! - Perception: Event classification, emission, and observation
+//! - Collaboration: Session handles, swapping, and coordination
 
+pub mod collaboration;
 mod events;
 pub mod perception;
 pub mod recovery;
@@ -29,4 +31,9 @@ pub use recovery::{
 pub use perception::{
     EmitterConfig, EventClassifier, EventEmitter, EventTier, EventType, GapFillResult,
     PulseBuffer, TaskObserver,
+};
+
+pub use collaboration::{
+    CoordinatorConfig, SessionCounts, SessionCoordinator, SessionHandle, SwapConfig, SwapManager,
+    SwapResult, SwapStats, SwappedContext, TaskResult,
 };
