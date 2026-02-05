@@ -175,6 +175,59 @@ impl SubAgentRegistry {
         let by_parent = self.by_parent.read().await;
         by_parent.get(parent).cloned().unwrap_or_default()
     }
+
+    /// Transition a run to a new status
+    ///
+    /// Validates the transition, updates timestamps, and emits a lifecycle event.
+    ///
+    /// # Arguments
+    ///
+    /// * `run_id` - The unique identifier of the run
+    /// * `new_status` - The target status to transition to
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The run is not found
+    /// - The transition is invalid (e.g., Pending -> Completed)
+    pub async fn transition(&self, run_id: &str, new_status: RunStatus) -> Result<()> {
+        let mut runs = self.runs.write().await;
+        let run = runs.get_mut(run_id).ok_or_else(|| {
+            crate::error::AlephError::config(format!("Run not found: {}", run_id))
+        })?;
+
+        let old_status = run.status;
+        if !old_status.can_transition_to(&new_status) {
+            return Err(crate::error::AlephError::config(format!(
+                "Invalid transition: {:?} -> {:?}",
+                old_status, new_status
+            )));
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        // Update timestamps based on transition
+        match new_status {
+            RunStatus::Running => run.started_at = Some(now),
+            RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled => {
+                run.ended_at = Some(now);
+            }
+            _ => {}
+        }
+
+        run.status = new_status;
+
+        let _ = self.event_tx.send(LifecycleEvent::StatusChanged {
+            run_id: run_id.to_string(),
+            old: old_status,
+            new: new_status,
+        });
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -254,5 +307,47 @@ mod tests {
 
         let children = registry.get_children(&parent_x).await;
         assert_eq!(children.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_registry_transition() {
+        let registry = SubAgentRegistry::new_in_memory();
+        let session_key = make_subagent_key("p1", "s1");
+        let parent_key = make_session_key("p1");
+        let run = SubAgentRun::new(session_key, parent_key, "Task", "explore");
+        let run_id = run.run_id.clone();
+        registry.register(run).await.unwrap();
+
+        // Transition to Running
+        registry
+            .transition(&run_id, RunStatus::Running)
+            .await
+            .unwrap();
+        let run = registry.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Running);
+        assert!(run.started_at.is_some());
+
+        // Transition to Completed
+        registry
+            .transition(&run_id, RunStatus::Completed)
+            .await
+            .unwrap();
+        let run = registry.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+        assert!(run.ended_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_registry_invalid_transition() {
+        let registry = SubAgentRegistry::new_in_memory();
+        let session_key = make_subagent_key("p1", "s1");
+        let parent_key = make_session_key("p1");
+        let run = SubAgentRun::new(session_key, parent_key, "Task", "explore");
+        let run_id = run.run_id.clone();
+        registry.register(run).await.unwrap();
+
+        // Invalid: Pending -> Completed (must go through Running)
+        let result = registry.transition(&run_id, RunStatus::Completed).await;
+        assert!(result.is_err());
     }
 }
