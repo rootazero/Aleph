@@ -50,6 +50,10 @@ pub struct PromptConfig {
     /// The agent MUST complete all steps specified in the skill instructions
     /// and generate all required output files before calling `complete`
     pub skill_mode: bool,
+    /// Enable thinking transparency guidance
+    /// When true, adds guidance for structured reasoning output
+    /// (Observation -> Analysis -> Planning -> Decision)
+    pub thinking_transparency: bool,
 }
 
 impl Default for PromptConfig {
@@ -63,6 +67,7 @@ impl Default for PromptConfig {
             generation_models: None,
             tool_index: None,
             skill_mode: false,
+            thinking_transparency: false,
         }
     }
 }
@@ -98,6 +103,7 @@ impl PromptBuilder {
         self.append_special_actions(&mut prompt);
         self.append_response_format(&mut prompt);
         self.append_guidelines(&mut prompt);
+        self.append_thinking_guidance(&mut prompt);
         self.append_skill_mode(&mut prompt);
         self.append_custom_instructions(&mut prompt);
         self.append_language_setting(&mut prompt);
@@ -291,6 +297,53 @@ impl PromptBuilder {
         prompt.push_str("5. Fail when: impossible to proceed, missing critical resources\n\n");
     }
 
+    /// Append thinking transparency guidance section
+    ///
+    /// Guides the AI on structured reasoning output:
+    /// Observation -> Analysis -> Planning -> Decision
+    fn append_thinking_guidance(&self, prompt: &mut String) {
+        if !self.config.thinking_transparency {
+            return;
+        }
+
+        prompt.push_str("## Thinking Transparency\n\n");
+        prompt.push_str("Structure your reasoning to be transparent and understandable:\n\n");
+
+        prompt.push_str("### Reasoning Flow\n");
+        prompt.push_str("Follow this progression in your `reasoning` field:\n\n");
+        prompt.push_str("1. **Observation** (👁️): Start by observing the current state\n");
+        prompt.push_str("   - \"Looking at the request, I see...\"\n");
+        prompt.push_str("   - \"The user wants to...\"\n");
+        prompt.push_str("   - \"Based on the previous result...\"\n\n");
+        prompt.push_str("2. **Analysis** (🔍): Analyze options and trade-offs\n");
+        prompt.push_str("   - \"Considering the options: A vs B vs C...\"\n");
+        prompt.push_str("   - \"The trade-off here is...\"\n");
+        prompt.push_str("   - \"Comparing approaches...\"\n\n");
+        prompt.push_str("3. **Planning** (📝): Outline your approach\n");
+        prompt.push_str("   - \"I'll start by...\"\n");
+        prompt.push_str("   - \"First, ... then...\"\n");
+        prompt.push_str("   - \"My strategy is to...\"\n\n");
+        prompt.push_str("4. **Decision** (✅): State your conclusion\n");
+        prompt.push_str("   - \"Therefore, I will...\"\n");
+        prompt.push_str("   - \"The best approach is...\"\n");
+        prompt.push_str("   - \"So I've decided to...\"\n\n");
+
+        prompt.push_str("### Expressing Uncertainty\n");
+        prompt.push_str("When uncertain, be explicit rather than hiding it:\n\n");
+        prompt.push_str("- **High confidence**: \"I'm confident that...\" or \"Clearly,...\"\n");
+        prompt.push_str("- **Medium confidence**: \"I think...\" or \"This should work...\"\n");
+        prompt.push_str("- **Low confidence**: \"I'm not sure, but...\" or \"This might...\"\n");
+        prompt.push_str("- **Exploratory**: \"Let's try...\" or \"Worth experimenting with...\"\n\n");
+
+        prompt.push_str("### Acknowledging Alternatives\n");
+        prompt.push_str("When relevant, mention alternatives you considered:\n");
+        prompt.push_str("- \"Alternatively, we could...\"\n");
+        prompt.push_str("- \"Another option would be...\"\n");
+        prompt.push_str("- \"I chose X over Y because...\"\n\n");
+
+        prompt.push_str("This structured thinking helps users understand your reasoning process.\n\n");
+    }
+
     /// Append skill mode section
     fn append_skill_mode(&self, prompt: &mut String) {
         if self.config.skill_mode {
@@ -466,6 +519,9 @@ impl PromptBuilder {
 
         // Add guidelines
         self.append_guidelines(&mut prompt);
+
+        // Add thinking transparency guidance if enabled
+        self.append_thinking_guidance(&mut prompt);
 
         // Add skill mode instructions if enabled
         self.append_skill_mode(&mut prompt);
@@ -1026,5 +1082,63 @@ mod tests {
         assert!(prompt.contains("Areas of Expertise"));
         assert!(prompt.contains("- Rust"));
         assert!(prompt.contains("- Python"));
+    }
+
+    #[test]
+    fn test_thinking_guidance_disabled_by_default() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let prompt = builder.build_system_prompt(&[]);
+
+        // Default is off, so no thinking transparency section
+        assert!(!prompt.contains("Thinking Transparency"));
+        assert!(!prompt.contains("Reasoning Flow"));
+    }
+
+    #[test]
+    fn test_thinking_guidance_enabled() {
+        let config = PromptConfig {
+            thinking_transparency: true,
+            ..Default::default()
+        };
+        let builder = PromptBuilder::new(config);
+        let prompt = builder.build_system_prompt(&[]);
+
+        // Should contain thinking transparency section
+        assert!(prompt.contains("## Thinking Transparency"));
+        assert!(prompt.contains("### Reasoning Flow"));
+
+        // Should contain the four phases
+        assert!(prompt.contains("**Observation**"));
+        assert!(prompt.contains("**Analysis**"));
+        assert!(prompt.contains("**Planning**"));
+        assert!(prompt.contains("**Decision**"));
+
+        // Should contain uncertainty guidance
+        assert!(prompt.contains("Expressing Uncertainty"));
+        assert!(prompt.contains("High confidence"));
+        assert!(prompt.contains("Low confidence"));
+
+        // Should contain alternatives guidance
+        assert!(prompt.contains("Acknowledging Alternatives"));
+    }
+
+    #[test]
+    fn test_thinking_guidance_with_soul() {
+        let config = PromptConfig {
+            thinking_transparency: true,
+            ..Default::default()
+        };
+        let builder = PromptBuilder::new(config);
+
+        let soul = SoulManifest {
+            identity: "Test assistant.".to_string(),
+            ..Default::default()
+        };
+
+        let prompt = builder.build_system_prompt_with_soul(&[], &soul);
+
+        // Both soul and thinking guidance should be present
+        assert!(prompt.contains("# Identity"));
+        assert!(prompt.contains("## Thinking Transparency"));
     }
 }
