@@ -35,6 +35,8 @@ pub struct HydratedTool {
     pub hydration_level: HydrationLevel,
     /// The underlying memory fact
     pub fact: MemoryFact,
+    /// Cached JSON schema for the tool (populated from ToolRegistry)
+    pub cached_schema: Option<String>,
 }
 
 impl HydratedTool {
@@ -55,7 +57,24 @@ impl HydratedTool {
             score,
             hydration_level,
             fact,
+            cached_schema: None,
         }
+    }
+
+    /// Set the cached schema (typically from ToolRegistry lookup)
+    pub fn with_schema(mut self, schema: String) -> Self {
+        self.cached_schema = Some(schema);
+        self
+    }
+
+    /// Get the JSON schema, returning cached value if available
+    pub fn schema_json(&self) -> Option<&str> {
+        self.cached_schema.as_deref()
+    }
+
+    /// Check if schema is cached
+    pub fn has_schema(&self) -> bool {
+        self.cached_schema.is_some()
     }
 
     /// Calculate hydration level based on score and config thresholds
