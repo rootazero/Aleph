@@ -290,6 +290,90 @@ impl VectorDatabase {
                 INSERT INTO facts_fts(facts_fts, rowid, content, fact_type, id)
                 VALUES ('delete', old.rowid, old.content, old.fact_type, old.id);
             END;
+
+            -- ================================================================
+            -- Multi-Agent Resilience Tables (Phase 10)
+            -- ================================================================
+
+            -- Agent task tracking with recovery support
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                id TEXT PRIMARY KEY,
+                parent_session_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                task_prompt TEXT NOT NULL,
+                status TEXT NOT NULL,  -- Pending, Running, Completed, Failed, Interrupted, Idle, Swapped
+                risk_level TEXT NOT NULL,  -- Low, High
+                lane TEXT NOT NULL DEFAULT 'subagent',  -- main, subagent
+
+                -- Recovery data (for Shadow Replay)
+                checkpoint_snapshot_path TEXT,
+                last_tool_call_id TEXT,
+
+                -- Governance
+                recursion_depth INTEGER DEFAULT 0,
+                parent_task_id TEXT,
+
+                -- Audit timestamps
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                started_at INTEGER,
+                completed_at INTEGER,
+
+                -- Extensible metadata
+                metadata_json TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent_session ON agent_tasks(parent_session_id);
+            CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
+            CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent_task ON agent_tasks(parent_task_id);
+
+            -- Task execution traces (for Shadow Replay / deterministic recovery)
+            CREATE TABLE IF NOT EXISTS task_traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                role TEXT NOT NULL,  -- assistant, tool
+                content_json TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES agent_tasks(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_task_traces_task ON task_traces(task_id, step_index);
+
+            -- Agent events (Skeleton & Pulse model)
+            CREATE TABLE IF NOT EXISTS agent_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                is_structural INTEGER DEFAULT 0,  -- 1 for skeleton events, 0 for pulse
+                timestamp INTEGER NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES agent_tasks(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_events_task_seq ON agent_events(task_id, seq);
+            CREATE INDEX IF NOT EXISTS idx_agent_events_structural ON agent_events(task_id, is_structural) WHERE is_structural = 1;
+
+            -- Subagent session management (Session-as-a-Service)
+            CREATE TABLE IF NOT EXISTS subagent_sessions (
+                id TEXT PRIMARY KEY,
+                agent_type TEXT NOT NULL,  -- explorer, coder, researcher, etc.
+                status TEXT NOT NULL,  -- Active, Idle, Swapped
+                context_path TEXT,  -- Path to serialized context (for swapped agents)
+
+                -- Handle metadata
+                parent_session_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_active_at INTEGER NOT NULL,
+
+                -- Resource tracking
+                total_tokens_used INTEGER DEFAULT 0,
+                total_tool_calls INTEGER DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_subagent_sessions_status ON subagent_sessions(status);
+            CREATE INDEX IF NOT EXISTS idx_subagent_sessions_parent ON subagent_sessions(parent_session_id);
             "#,
         )
         .map_err(|e| AlephError::config(format!("Failed to create schema: {}", e)))?;
