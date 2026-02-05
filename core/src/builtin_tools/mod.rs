@@ -41,6 +41,7 @@ pub mod file_ops;
 pub mod generation;
 pub mod invalid;
 pub mod mcp_wrapper;
+pub mod memory_search;
 pub mod message;
 pub mod meta_tools;
 pub mod pdf_generate;
@@ -60,6 +61,7 @@ pub use file_ops::{FileOpsArgs, FileOpsTool};
 pub use invalid::{InvalidTool, InvalidToolArgs, InvalidToolOutput};
 pub use generation::{ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool};
 pub use mcp_wrapper::McpToolWrapper;
+pub use memory_search::{MemorySearchArgs, MemorySearchOutput, MemorySearchTool};
 pub use meta_tools::{
     GetToolSchemaArgs, GetToolSchemaOutput, GetToolSchemaTool, ListToolsArgs, ListToolsOutput,
     ListToolsTool,
