@@ -23,11 +23,12 @@ mod retention;
 // Re-export main types
 pub use core::{MemoryStats, VectorDatabase, CURRENT_EMBEDDING_DIM};
 pub use resilience::{
-    AgentEvent, AgentTask, DivergenceStatus, EmitterConfig, EventClassifier, EventEmitter,
-    EventTier, EventType, GapFillResult, GracefulShutdown, Lane, PulseBuffer, RecoveryDecision,
-    RecoveryManager, RecoverySummary, ReplayResult, RiskLevel, SessionStatus, ShadowReplayEngine,
-    ShutdownSignal, SubagentSession, TaskObserver, TaskRiskAdapter, TaskStatus, TaskTrace,
-    TraceRole,
+    AgentEvent, AgentTask, CoordinatorConfig, DivergenceStatus, EmitterConfig, EventClassifier,
+    EventEmitter, EventTier, EventType, GapFillResult, GracefulShutdown, Lane, PulseBuffer,
+    RecoveryDecision, RecoveryManager, RecoverySummary, ReplayResult, RiskLevel, SessionCounts,
+    SessionCoordinator, SessionHandle, SessionStatus, ShadowReplayEngine, ShutdownSignal,
+    SubagentSession, SwapConfig, SwapManager, SwapResult, SwapStats, SwappedContext, TaskObserver,
+    TaskResult, TaskRiskAdapter, TaskStatus, TaskTrace, TraceRole,
 };
 
 #[cfg(test)]
