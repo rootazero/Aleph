@@ -39,6 +39,18 @@ use super::run::{RunStatus, SubAgentRun};
 use crate::error::Result;
 use crate::routing::SessionKey;
 
+/// Registry statistics
+#[derive(Debug, Clone, Default)]
+pub struct RegistryStats {
+    pub total: usize,
+    pub pending: usize,
+    pub running: usize,
+    pub paused: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+}
+
 /// Lifecycle events emitted by the registry
 #[derive(Debug, Clone)]
 pub enum LifecycleEvent {
@@ -228,6 +240,60 @@ impl SubAgentRegistry {
 
         Ok(())
     }
+
+    /// Get all active (non-terminal) runs
+    ///
+    /// Returns runs that are not in a terminal state (Completed, Failed, Cancelled).
+    pub async fn get_active_runs(&self) -> Vec<SubAgentRun> {
+        self.runs
+            .read()
+            .await
+            .values()
+            .filter(|r| !r.status.is_terminal())
+            .cloned()
+            .collect()
+    }
+
+    /// Get runs by status
+    ///
+    /// # Arguments
+    ///
+    /// * `status` - The status to filter by
+    ///
+    /// # Returns
+    ///
+    /// A vector of runs with the specified status
+    pub async fn get_by_status(&self, status: RunStatus) -> Vec<SubAgentRun> {
+        self.runs
+            .read()
+            .await
+            .values()
+            .filter(|r| r.status == status)
+            .cloned()
+            .collect()
+    }
+
+    /// Get statistics about the registry
+    ///
+    /// Returns counts of runs in each status category.
+    pub async fn stats(&self) -> RegistryStats {
+        let runs = self.runs.read().await;
+        let mut stats = RegistryStats::default();
+
+        for run in runs.values() {
+            stats.total += 1;
+            match run.status {
+                RunStatus::Pending => stats.pending += 1,
+                RunStatus::Running => stats.running += 1,
+                RunStatus::Paused => stats.paused += 1,
+                RunStatus::Completed => stats.completed += 1,
+                RunStatus::Failed => stats.failed += 1,
+                RunStatus::Cancelled => stats.cancelled += 1,
+            }
+        }
+
+        stats
+    }
 }
 
 #[cfg(test)]
@@ -349,5 +415,128 @@ mod tests {
         // Invalid: Pending -> Completed (must go through Running)
         let result = registry.transition(&run_id, RunStatus::Completed).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_active_runs() {
+        let registry = SubAgentRegistry::new_in_memory();
+        let run1 = SubAgentRun::new(
+            make_subagent_key("p1", "s1"),
+            make_session_key("p1"),
+            "Task 1",
+            "explore",
+        );
+        let run2 = SubAgentRun::new(
+            make_subagent_key("p1", "s2"),
+            make_session_key("p1"),
+            "Task 2",
+            "plan",
+        );
+
+        let run1_id = run1.run_id.clone();
+        let run2_id = run2.run_id.clone();
+
+        registry.register(run1).await.unwrap();
+        registry.register(run2).await.unwrap();
+        registry
+            .transition(&run1_id, RunStatus::Running)
+            .await
+            .unwrap();
+        registry
+            .transition(&run2_id, RunStatus::Running)
+            .await
+            .unwrap();
+        registry
+            .transition(&run2_id, RunStatus::Completed)
+            .await
+            .unwrap();
+
+        let active = registry.get_active_runs().await;
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].run_id, run1_id);
+    }
+
+    #[tokio::test]
+    async fn test_registry_stats() {
+        let registry = SubAgentRegistry::new_in_memory();
+
+        let run1 = SubAgentRun::new(
+            make_subagent_key("p1", "s1"),
+            make_session_key("p1"),
+            "Task 1",
+            "explore",
+        );
+        let run2 = SubAgentRun::new(
+            make_subagent_key("p1", "s2"),
+            make_session_key("p1"),
+            "Task 2",
+            "plan",
+        );
+        let run3 = SubAgentRun::new(
+            make_subagent_key("p1", "s3"),
+            make_session_key("p1"),
+            "Task 3",
+            "execute",
+        );
+
+        let run1_id = run1.run_id.clone();
+        let run2_id = run2.run_id.clone();
+
+        registry.register(run1).await.unwrap();
+        registry.register(run2).await.unwrap();
+        registry.register(run3).await.unwrap();
+
+        registry
+            .transition(&run1_id, RunStatus::Running)
+            .await
+            .unwrap();
+        registry
+            .transition(&run2_id, RunStatus::Running)
+            .await
+            .unwrap();
+        registry
+            .transition(&run2_id, RunStatus::Completed)
+            .await
+            .unwrap();
+
+        let stats = registry.stats().await;
+        assert_eq!(stats.total, 3);
+        assert_eq!(stats.pending, 1);
+        assert_eq!(stats.running, 1);
+        assert_eq!(stats.completed, 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_by_status() {
+        let registry = SubAgentRegistry::new_in_memory();
+
+        let run1 = SubAgentRun::new(
+            make_subagent_key("p1", "s1"),
+            make_session_key("p1"),
+            "Task 1",
+            "explore",
+        );
+        let run2 = SubAgentRun::new(
+            make_subagent_key("p1", "s2"),
+            make_session_key("p1"),
+            "Task 2",
+            "plan",
+        );
+
+        let run1_id = run1.run_id.clone();
+
+        registry.register(run1).await.unwrap();
+        registry.register(run2).await.unwrap();
+        registry
+            .transition(&run1_id, RunStatus::Running)
+            .await
+            .unwrap();
+
+        let pending = registry.get_by_status(RunStatus::Pending).await;
+        assert_eq!(pending.len(), 1);
+
+        let running = registry.get_by_status(RunStatus::Running).await;
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].run_id, run1_id);
     }
 }
