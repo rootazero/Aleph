@@ -1,12 +1,17 @@
-//! Memory test context for Facts Vector DB operations
+//! Memory test context for Facts Vector DB and Integration operations
 
 use alephcore::memory::database::VectorDatabase;
-use alephcore::memory::{FactType, FactSpecificity, TemporalScope, MemoryFact, EMBEDDING_DIM};
-use tempfile::TempDir;
+use alephcore::memory::{
+    ContextAnchor, FactSpecificity, FactType, MemoryEntry, MemoryFact, MemoryIngestion,
+    MemoryRetrieval, PromptAugmenter, SmartEmbedder, TemporalScope, EMBEDDING_DIM,
+};
+use alephcore::{MemoryConfig, MemoryStats};
 use std::sync::Arc;
+use tempfile::TempDir;
 
 /// Memory context for BDD tests
 pub struct MemoryContext {
+    // === Facts Vector DB Testing ===
     /// Temporary directory for test database isolation
     pub temp_dir: Option<TempDir>,
     /// Vector database instance (VectorDatabase doesn't impl Debug)
@@ -17,6 +22,32 @@ pub struct MemoryContext {
     pub search_results: Vec<MemoryFact>,
     /// Last FTS query result (for prepare_fts_query tests)
     pub fts_query: Option<String>,
+
+    // === Integration Testing ===
+    /// Smart embedder for embedding generation
+    pub embedder: Option<Arc<SmartEmbedder>>,
+    /// Memory configuration
+    pub config: Option<Arc<MemoryConfig>>,
+    /// Memory ingestion service
+    pub ingestion: Option<MemoryIngestion>,
+    /// Memory retrieval service
+    pub retrieval: Option<MemoryRetrieval>,
+    /// Prompt augmenter
+    pub augmenter: Option<PromptAugmenter>,
+    /// Context anchor for memory operations
+    pub context_anchor: Option<ContextAnchor>,
+    /// Retrieved memories (MemoryEntry, not MemoryFact)
+    pub memories: Vec<MemoryEntry>,
+    /// Last stored memory ID
+    pub last_memory_id: Option<String>,
+    /// Last augmented prompt result
+    pub augmented_prompt: Option<String>,
+    /// Last memory summary
+    pub memory_summary: Option<String>,
+    /// Last operation result
+    pub last_result: Option<Result<(), String>>,
+    /// Database stats for verification
+    pub db_stats: Option<MemoryStats>,
 }
 
 impl std::fmt::Debug for MemoryContext {
@@ -27,6 +58,17 @@ impl std::fmt::Debug for MemoryContext {
             .field("facts", &self.facts.len())
             .field("search_results", &self.search_results.len())
             .field("fts_query", &self.fts_query)
+            .field("embedder", &self.embedder.is_some())
+            .field("config", &self.config.is_some())
+            .field("ingestion", &self.ingestion.is_some())
+            .field("retrieval", &self.retrieval.is_some())
+            .field("augmenter", &self.augmenter.is_some())
+            .field("context_anchor", &self.context_anchor)
+            .field("memories", &self.memories.len())
+            .field("last_memory_id", &self.last_memory_id)
+            .field("augmented_prompt", &self.augmented_prompt.is_some())
+            .field("memory_summary", &self.memory_summary)
+            .field("last_result", &self.last_result)
             .finish()
     }
 }
@@ -39,6 +81,18 @@ impl Default for MemoryContext {
             facts: Vec::new(),
             search_results: Vec::new(),
             fts_query: None,
+            embedder: None,
+            config: None,
+            ingestion: None,
+            retrieval: None,
+            augmenter: None,
+            context_anchor: None,
+            memories: Vec::new(),
+            last_memory_id: None,
+            augmented_prompt: None,
+            memory_summary: None,
+            last_result: None,
+            db_stats: None,
         }
     }
 }
@@ -73,11 +127,91 @@ impl MemoryContext {
             updated_at: 1000,
             confidence: 0.9,
             is_valid,
-            invalidation_reason: if is_valid { None } else { Some("Test invalidation".to_string()) },
+            invalidation_reason: if is_valid {
+                None
+            } else {
+                Some("Test invalidation".to_string())
+            },
             decay_invalidated_at: None,
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
             similarity_score: None,
         }
+    }
+
+    // === Integration Test Helpers ===
+
+    /// Create and store test database, embedder and config
+    pub fn setup_integration(&mut self, temp_dir: TempDir, db_path: std::path::PathBuf) {
+        let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create VectorDatabase"));
+        self.temp_dir = Some(temp_dir);
+        self.db = Some(db);
+    }
+
+    /// Initialize the smart embedder (requires embedding model)
+    pub fn init_embedder(&mut self) {
+        let cache_dir = SmartEmbedder::default_cache_dir().expect("Failed to get cache dir");
+        self.embedder = Some(Arc::new(SmartEmbedder::new(cache_dir, 300)));
+    }
+
+    /// Create default memory config with threshold 0.0 for testing
+    pub fn create_default_config(&mut self) {
+        let mut config = MemoryConfig::default();
+        config.similarity_threshold = 0.0; // Accept all similarities for testing
+        self.config = Some(Arc::new(config));
+    }
+
+    /// Create memory config with custom threshold
+    pub fn create_config_with_threshold(&mut self, threshold: f32) {
+        let mut config = MemoryConfig::default();
+        config.similarity_threshold = threshold;
+        self.config = Some(Arc::new(config));
+    }
+
+    /// Create memory config with custom max_context_items
+    pub fn create_config_with_max_items(&mut self, max_items: u32) {
+        let mut config = MemoryConfig::default();
+        config.max_context_items = max_items;
+        config.similarity_threshold = 0.0;
+        self.config = Some(Arc::new(config));
+    }
+
+    /// Create disabled memory config
+    pub fn create_disabled_config(&mut self) {
+        let mut config = MemoryConfig::default();
+        config.enabled = false;
+        self.config = Some(Arc::new(config));
+    }
+
+    /// Initialize ingestion and retrieval services
+    pub fn init_services(&mut self) {
+        let db = self.db.clone().expect("Database not initialized");
+        let embedder = self.embedder.clone().expect("Embedder not initialized");
+        let config = self.config.clone().expect("Config not initialized");
+
+        self.ingestion = Some(MemoryIngestion::new(
+            db.clone(),
+            embedder.clone(),
+            config.clone(),
+        ));
+        self.retrieval = Some(MemoryRetrieval::new(db, embedder, config));
+    }
+
+    /// Initialize prompt augmenter with default settings
+    pub fn init_augmenter(&mut self) {
+        self.augmenter = Some(PromptAugmenter::new());
+    }
+
+    /// Initialize prompt augmenter with custom settings
+    pub fn init_augmenter_with_config(&mut self, max_memories: usize, show_scores: bool) {
+        self.augmenter = Some(PromptAugmenter::with_config(max_memories, show_scores));
+    }
+
+    /// Set context anchor for memory operations
+    pub fn set_context(&mut self, app_bundle_id: &str, window_title: &str) {
+        self.context_anchor = Some(ContextAnchor::now(
+            app_bundle_id.to_string(),
+            window_title.to_string(),
+        ));
     }
 }

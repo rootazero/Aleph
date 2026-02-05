@@ -38,10 +38,6 @@ pub mod scratchpad;
 pub mod smart_embedder;
 pub mod cli;
 
-// Integration tests (compiled only in test mode)
-#[cfg(test)]
-mod integration_tests;
-
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
 pub use audit::{
