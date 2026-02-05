@@ -36,9 +36,6 @@ mod config;
 mod types;
 mod builder;
 
-#[cfg(test)]
-mod tests;
-
 // Re-export public API
 pub use config::MessageBuilderConfig;
 pub use types::{Message, ToolCall};
