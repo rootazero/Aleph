@@ -12,11 +12,11 @@ impl ContextComptroller {
         Self { config }
     }
 
-    /// Arbitrate retrieval results to eliminate redundancy
+    /// Arbitrate retrieval results to eliminate redundancy and fit budget
     pub fn arbitrate(
         &self,
         results: RetrievalResult,
-        _budget: TokenBudget,
+        budget: TokenBudget,
     ) -> ArbitratedContext {
         let mut tokens_saved = 0;
 
@@ -52,15 +52,63 @@ impl ContextComptroller {
                 }
             }
             RetentionMode::Hybrid => {
-                // TODO: Implement hybrid strategy
+                // Hybrid: Keep facts, remove redundant transcripts
                 kept_facts = results.facts;
-                kept_transcripts = results.raw_memories;
+                for transcript in results.raw_memories {
+                    if !redundant_pairs.iter().any(|(_, t_id)| t_id == &transcript.id) {
+                        kept_transcripts.push(transcript);
+                    } else {
+                        let text = format!("{} {}", transcript.user_input, transcript.ai_output);
+                        tokens_saved += self.estimate_tokens(&text);
+                    }
+                }
+            }
+        }
+
+        // Sort by similarity score (descending) for priority-based selection
+        kept_facts.sort_by(|a, b| {
+            let score_a = a.similarity_score.unwrap_or(0.0);
+            let score_b = b.similarity_score.unwrap_or(0.0);
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        kept_transcripts.sort_by(|a, b| {
+            let score_a = a.similarity_score.unwrap_or(0.0);
+            let score_b = b.similarity_score.unwrap_or(0.0);
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Trim to fit budget (facts have priority)
+        let mut used_tokens = 0;
+        let mut final_facts = Vec::new();
+        let mut final_transcripts = Vec::new();
+
+        // Add facts first (higher priority)
+        for fact in kept_facts {
+            let tokens = self.estimate_tokens(&fact.content);
+            if used_tokens + tokens <= budget.total {
+                used_tokens += tokens;
+                final_facts.push(fact);
+            } else {
+                tokens_saved += tokens;
+            }
+        }
+
+        // Add transcripts if budget allows
+        for transcript in kept_transcripts {
+            let text = format!("{} {}", transcript.user_input, transcript.ai_output);
+            let tokens = self.estimate_tokens(&text);
+            if used_tokens + tokens <= budget.total {
+                used_tokens += tokens;
+                final_transcripts.push(transcript);
+            } else {
+                tokens_saved += tokens;
             }
         }
 
         ArbitratedContext {
-            facts: kept_facts,
-            raw_memories: kept_transcripts,
+            facts: final_facts,
+            raw_memories: final_transcripts,
             tokens_saved,
         }
     }
