@@ -62,6 +62,12 @@ pub struct GatewayContext {
 
     // Temp resources
     pub temp_dir: Option<TempDir>,
+
+    // iMessage routing test state
+    /// Last handle_message result
+    pub handle_message_result: Option<Result<(), String>>,
+    /// Whether the message was filtered (not an error, just filtered)
+    pub message_filtered: Option<bool>,
 }
 
 impl std::fmt::Debug for GatewayContext {
@@ -84,6 +90,8 @@ impl std::fmt::Debug for GatewayContext {
             .field("resolved_agent_id", &self.resolved_agent_id)
             .field("allowlist", &self.allowlist)
             .field("temp_dir", &self.temp_dir.as_ref().map(|_| "TempDir"))
+            .field("handle_message_result", &self.handle_message_result)
+            .field("message_filtered", &self.message_filtered)
             .finish()
     }
 }
