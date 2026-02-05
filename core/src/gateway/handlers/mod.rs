@@ -37,6 +37,7 @@
 //! | supervisor | Process supervision via PTY |
 //! | browser | Browser/CDP (feature-gated) |
 //! | poe | POE (Principle-Operation-Evaluation) task execution |
+//! | identity | Identity/soul management |
 
 pub mod health;
 pub mod echo;
@@ -70,8 +71,10 @@ pub mod wizard;
 pub mod supervisor;
 pub mod approval_bridge;
 pub mod poe;
+pub mod identity;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
+pub use identity::SharedIdentityResolver;
 #[cfg(feature = "browser")]
 pub mod browser;
 
@@ -260,6 +263,36 @@ impl HandlerRegistry {
         registry.register("markdown_skills.reload", markdown_skills::handle_reload);
         registry.register("markdown_skills.list", markdown_skills::handle_list);
         registry.register("markdown_skills.unload", markdown_skills::handle_unload);
+
+        // Identity handlers (placeholders - actual handlers wired with IdentityResolver)
+        registry.register("identity.get", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "identity.get requires IdentityResolver - wire SharedIdentityResolver first".to_string(),
+            )
+        });
+        registry.register("identity.set", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "identity.set requires IdentityResolver - wire SharedIdentityResolver first".to_string(),
+            )
+        });
+        registry.register("identity.clear", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "identity.clear requires IdentityResolver - wire SharedIdentityResolver first".to_string(),
+            )
+        });
+        registry.register("identity.list", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "identity.list requires IdentityResolver - wire SharedIdentityResolver first".to_string(),
+            )
+        });
 
         registry
     }
@@ -486,5 +519,14 @@ mod tests {
         assert!(registry.has_method("markdown_skills.reload"));
         assert!(registry.has_method("markdown_skills.list"));
         assert!(registry.has_method("markdown_skills.unload"));
+    }
+
+    #[test]
+    fn test_identity_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("identity.get"));
+        assert!(registry.has_method("identity.set"));
+        assert!(registry.has_method("identity.clear"));
+        assert!(registry.has_method("identity.list"));
     }
 }
