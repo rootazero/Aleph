@@ -179,11 +179,10 @@ impl SoulManifest {
 
     /// Load soul manifest from a file path
     ///
-    /// Currently supports:
+    /// Supports:
     /// - JSON files (.json)
     /// - TOML files (.toml)
-    ///
-    /// Markdown parsing will be added in Phase 1.3
+    /// - Markdown files (.md, .markdown) with YAML frontmatter
     pub fn from_file(path: &Path) -> Result<Self, SoulLoadError> {
         use std::fs;
 
@@ -200,13 +199,130 @@ impl SoulManifest {
                 serde_json::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string()))
             }
             "toml" => toml::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string())),
-            "md" | "markdown" => {
-                // Placeholder for markdown parsing (Phase 1.3)
-                // For now, try to parse as JSON
-                serde_json::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string()))
-            }
+            "md" | "markdown" => Self::from_markdown(&content),
             _ => Err(SoulLoadError::UnsupportedFormat(ext.to_string())),
         }
+    }
+
+    /// Parse soul from markdown content with YAML frontmatter
+    pub fn from_markdown(content: &str) -> Result<Self, SoulLoadError> {
+        let (frontmatter, body) = Self::split_frontmatter(content)?;
+
+        // Start with frontmatter values
+        let mut manifest: SoulManifest = if !frontmatter.is_empty() {
+            serde_yaml::from_str(&frontmatter)
+                .map_err(|e| SoulLoadError::Parse(format!("YAML frontmatter error: {}", e)))?
+        } else {
+            SoulManifest::default()
+        };
+
+        // Parse markdown body sections
+        Self::parse_markdown_body(&mut manifest, &body)?;
+
+        Ok(manifest)
+    }
+
+    /// Split content into YAML frontmatter and markdown body
+    fn split_frontmatter(content: &str) -> Result<(String, String), SoulLoadError> {
+        let trimmed = content.trim_start();
+
+        if !trimmed.starts_with("---") {
+            // No frontmatter, entire content is body
+            return Ok((String::new(), content.to_string()));
+        }
+
+        // Find the closing ---
+        let after_first = &trimmed[3..];
+        if let Some(end_pos) = after_first.find("\n---") {
+            let frontmatter = after_first[..end_pos].trim().to_string();
+            let body = after_first[end_pos + 4..].trim_start().to_string();
+            Ok((frontmatter, body))
+        } else {
+            Err(SoulLoadError::Parse(
+                "Unclosed YAML frontmatter".to_string(),
+            ))
+        }
+    }
+
+    /// Parse markdown body sections into manifest
+    fn parse_markdown_body(manifest: &mut SoulManifest, body: &str) -> Result<(), SoulLoadError> {
+        let mut current_section: Option<String> = None;
+        let mut current_content = String::new();
+
+        for line in body.lines() {
+            if line.starts_with("## ") {
+                // New section - save previous
+                if let Some(ref section) = current_section {
+                    Self::apply_section(manifest, section, &current_content);
+                }
+                current_section = Some(line[3..].trim().to_lowercase());
+                current_content.clear();
+            } else if line.starts_with("# ") {
+                // Skip title lines like "# Soul: Aleph"
+                continue;
+            } else {
+                current_content.push_str(line);
+                current_content.push('\n');
+            }
+        }
+
+        // Apply final section
+        if let Some(ref section) = current_section {
+            Self::apply_section(manifest, section, &current_content);
+        }
+
+        Ok(())
+    }
+
+    /// Apply parsed section content to manifest
+    fn apply_section(manifest: &mut SoulManifest, section: &str, content: &str) {
+        let content = content.trim();
+
+        match section {
+            "identity" => {
+                if manifest.identity.is_empty() {
+                    manifest.identity = content.to_string();
+                }
+            }
+            "directives" => {
+                if manifest.directives.is_empty() {
+                    manifest.directives = Self::parse_list_items(content);
+                }
+            }
+            "anti-patterns" | "antipatterns" | "anti patterns" => {
+                if manifest.anti_patterns.is_empty() {
+                    manifest.anti_patterns = Self::parse_list_items(content);
+                }
+            }
+            "addendum" | "additional context" | "context" => {
+                if manifest.addendum.is_none() {
+                    manifest.addendum = Some(content.to_string());
+                }
+            }
+            _ => {
+                // Unknown section - ignore
+            }
+        }
+    }
+
+    /// Parse markdown list items (lines starting with - or *)
+    fn parse_list_items(content: &str) -> Vec<String> {
+        content
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.starts_with("- ") {
+                    Some(trimmed[2..].trim().to_string())
+                } else if trimmed.starts_with("* ") {
+                    Some(trimmed[2..].trim().to_string())
+                } else if !trimmed.is_empty() {
+                    // Continuation of previous item or standalone text
+                    Some(trimmed.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Merge with another soul manifest (self takes priority)
@@ -511,5 +627,214 @@ mod tests {
             ..Default::default()
         };
         assert!(with_voice.is_empty());
+    }
+
+    // ========== Markdown Parser Tests ==========
+
+    #[test]
+    fn test_split_frontmatter() {
+        let content = "---\nkey: value\n---\n# Title\n\nBody text";
+        let (fm, body) = SoulManifest::split_frontmatter(content).unwrap();
+        assert_eq!(fm, "key: value");
+        assert!(body.contains("Title"));
+        assert!(body.contains("Body text"));
+    }
+
+    #[test]
+    fn test_split_frontmatter_no_frontmatter() {
+        let content = "# Just markdown\n\nNo frontmatter here";
+        let (fm, body) = SoulManifest::split_frontmatter(content).unwrap();
+        assert!(fm.is_empty());
+        assert!(body.contains("Just markdown"));
+    }
+
+    #[test]
+    fn test_split_frontmatter_unclosed() {
+        let content = "---\nkey: value\nNo closing delimiter";
+        let result = SoulManifest::split_frontmatter(content);
+        assert!(result.is_err());
+        if let Err(SoulLoadError::Parse(msg)) = result {
+            assert!(msg.contains("Unclosed"));
+        }
+    }
+
+    #[test]
+    fn test_parse_list_items() {
+        let content = "- First item\n- Second item\n* Third item";
+        let items = SoulManifest::parse_list_items(content);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0], "First item");
+        assert_eq!(items[1], "Second item");
+        assert_eq!(items[2], "Third item");
+    }
+
+    #[test]
+    fn test_parse_list_items_with_empty_lines() {
+        let content = "- First item\n\n- Second item";
+        let items = SoulManifest::parse_list_items(content);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], "First item");
+        assert_eq!(items[1], "Second item");
+    }
+
+    #[test]
+    fn test_from_markdown_full() {
+        let content = r#"---
+relationship: mentor
+voice:
+  tone: encouraging
+  verbosity: elaborate
+expertise:
+  - rust
+  - systems
+---
+
+# Soul: Test
+
+## Identity
+
+I am a test soul for unit testing purposes.
+
+## Directives
+
+- Be thorough
+- Be accurate
+
+## Anti-Patterns
+
+- Never skip tests
+- Never ignore errors
+
+## Addendum
+
+This is additional context for the soul.
+"#;
+
+        let manifest = SoulManifest::from_markdown(content).unwrap();
+
+        assert_eq!(manifest.relationship, RelationshipMode::Mentor);
+        assert_eq!(manifest.voice.tone, "encouraging");
+        assert_eq!(manifest.voice.verbosity, Verbosity::Elaborate);
+        assert_eq!(manifest.expertise, vec!["rust", "systems"]);
+        assert!(manifest.identity.contains("test soul"));
+        assert_eq!(manifest.directives.len(), 2);
+        assert_eq!(manifest.directives[0], "Be thorough");
+        assert_eq!(manifest.directives[1], "Be accurate");
+        assert_eq!(manifest.anti_patterns.len(), 2);
+        assert_eq!(manifest.anti_patterns[0], "Never skip tests");
+        assert_eq!(manifest.anti_patterns[1], "Never ignore errors");
+        assert!(manifest.addendum.is_some());
+        assert!(manifest
+            .addendum
+            .as_ref()
+            .unwrap()
+            .contains("additional context"));
+    }
+
+    #[test]
+    fn test_from_markdown_no_frontmatter() {
+        let content = r#"# Soul: Simple
+
+## Identity
+
+A simple soul without frontmatter.
+
+## Directives
+
+- Be simple
+"#;
+
+        let manifest = SoulManifest::from_markdown(content).unwrap();
+        assert!(manifest.identity.contains("simple soul"));
+        assert_eq!(manifest.directives.len(), 1);
+        assert_eq!(manifest.directives[0], "Be simple");
+        // Default values for unparsed fields
+        assert_eq!(manifest.relationship, RelationshipMode::default());
+    }
+
+    #[test]
+    fn test_from_markdown_frontmatter_priority() {
+        // Frontmatter values should take priority over body sections
+        let content = r#"---
+identity: I am defined in frontmatter
+directives:
+  - Frontmatter directive
+---
+
+## Identity
+
+I am defined in the body.
+
+## Directives
+
+- Body directive
+"#;
+
+        let manifest = SoulManifest::from_markdown(content).unwrap();
+        // Frontmatter takes priority
+        assert_eq!(manifest.identity, "I am defined in frontmatter");
+        assert_eq!(manifest.directives, vec!["Frontmatter directive"]);
+    }
+
+    #[test]
+    fn test_from_markdown_antipatterns_variations() {
+        // Test different section name variations
+        let content1 = "## Anti-Patterns\n\n- Pattern 1";
+        let content2 = "## antipatterns\n\n- Pattern 2";
+        let content3 = "## anti patterns\n\n- Pattern 3";
+
+        let mut manifest1 = SoulManifest::default();
+        SoulManifest::parse_markdown_body(&mut manifest1, content1).unwrap();
+        assert_eq!(manifest1.anti_patterns, vec!["Pattern 1"]);
+
+        let mut manifest2 = SoulManifest::default();
+        SoulManifest::parse_markdown_body(&mut manifest2, content2).unwrap();
+        assert_eq!(manifest2.anti_patterns, vec!["Pattern 2"]);
+
+        let mut manifest3 = SoulManifest::default();
+        SoulManifest::parse_markdown_body(&mut manifest3, content3).unwrap();
+        assert_eq!(manifest3.anti_patterns, vec!["Pattern 3"]);
+    }
+
+    #[test]
+    fn test_from_markdown_addendum_variations() {
+        // Test different addendum section name variations
+        let content1 = "## Addendum\n\nContext 1";
+        let content2 = "## Additional Context\n\nContext 2";
+        let content3 = "## Context\n\nContext 3";
+
+        let mut manifest1 = SoulManifest::default();
+        SoulManifest::parse_markdown_body(&mut manifest1, content1).unwrap();
+        assert_eq!(manifest1.addendum, Some("Context 1".to_string()));
+
+        let mut manifest2 = SoulManifest::default();
+        SoulManifest::parse_markdown_body(&mut manifest2, content2).unwrap();
+        assert_eq!(manifest2.addendum, Some("Context 2".to_string()));
+
+        let mut manifest3 = SoulManifest::default();
+        SoulManifest::parse_markdown_body(&mut manifest3, content3).unwrap();
+        assert_eq!(manifest3.addendum, Some("Context 3".to_string()));
+    }
+
+    #[test]
+    fn test_from_markdown_empty_content() {
+        let content = "";
+        let manifest = SoulManifest::from_markdown(content).unwrap();
+        assert!(manifest.is_empty());
+    }
+
+    #[test]
+    fn test_from_markdown_only_frontmatter() {
+        let content = r#"---
+relationship: peer
+voice:
+  tone: casual
+---
+"#;
+
+        let manifest = SoulManifest::from_markdown(content).unwrap();
+        assert_eq!(manifest.relationship, RelationshipMode::Peer);
+        assert_eq!(manifest.voice.tone, "casual");
+        assert!(manifest.identity.is_empty());
     }
 }
