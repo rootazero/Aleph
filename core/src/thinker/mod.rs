@@ -32,6 +32,7 @@
 pub mod cache;
 pub mod context;
 pub mod decision_parser;
+pub mod identity;
 pub mod interaction;
 pub mod model_router;
 pub mod prompt_builder;
@@ -63,7 +64,8 @@ pub use security_context::{
 pub use context::{
     ContextAggregator, DisableReason, DisabledTool, EnvironmentContract, ResolvedContext,
 };
-pub use soul::{FormattingStyle, RelationshipMode, SoulManifest, SoulVoice, Verbosity};
+pub use soul::{FormattingStyle, RelationshipMode, SoulLoadError, SoulManifest, SoulVoice, Verbosity};
+pub use identity::{IdentityResolver, IdentitySource, IdentitySourceType};
 
 use crate::agent_loop::{
     CompressionConfig, LoopState, ModelRoutingConfig, Observation, ThinkerTrait, Thinking, ToolInfo,
