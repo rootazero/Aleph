@@ -271,7 +271,7 @@ impl VectorDatabase {
     ///
     /// Tokenizes the input text, removes stop words, and constructs an AND query.
     /// Example: "rust programming" -> "rust" AND "programming"
-    pub(crate) fn prepare_fts_query(text: &str) -> String {
+    pub fn prepare_fts_query(text: &str) -> String {
         const STOP_WORDS: &[&str] = &[
             // English stop words
             "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",

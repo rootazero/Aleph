@@ -5,11 +5,10 @@
 //! - Vector similarity search
 //! - Hybrid search (vector + FTS5)
 //! - Statistics and utilities
+//!
+//! Note: Tests have been migrated to BDD format in `core/tests/features/memory/facts.feature`
 
 mod crud;
 mod hybrid;
 mod search;
 mod stats;
-
-#[cfg(test)]
-mod tests;
