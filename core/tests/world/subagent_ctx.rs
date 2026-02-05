@@ -4,17 +4,20 @@
 //! - RunEventBus lifecycle
 //! - AuthProfileManager
 //! - SessionsSpawnTool
+//! - SubAgentRegistry lifecycle
 
 use std::sync::Arc;
 
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 
+use alephcore::agents::sub_agents::{SubAgentRegistry, SubAgentRun};
 use alephcore::gateway::run_event_bus::{
     ActiveRunHandle, RunEndResult, RunEvent, RunStatus,
 };
 use alephcore::gateway::router::SessionKey;
 use alephcore::providers::profile_manager::AuthProfileManager;
+use alephcore::routing::SessionKey as RoutingSessionKey;
 
 #[cfg(feature = "gateway")]
 use alephcore::builtin_tools::sessions::{
@@ -69,6 +72,14 @@ pub struct SubagentContext {
     pub auth_result: Option<Result<(), String>>,
     /// Session key prefix
     pub session_key_prefix: Option<String>,
+
+    // SubAgentRegistry state
+    /// Registry for sub-agent runs
+    pub registry: Option<SubAgentRegistry>,
+    /// Registered run ID for tracking
+    pub registered_run_id: Option<String>,
+    /// Retrieved run for assertions
+    pub retrieved_run: Option<SubAgentRun>,
 }
 
 impl std::fmt::Debug for SubagentContext {
@@ -80,6 +91,9 @@ impl std::fmt::Debug for SubagentContext {
             .field("profile_manager", &self.profile_manager.as_ref().map(|_| "AuthProfileManager"))
             .field("profile_id", &self.profile_id)
             .field("profile_error", &self.profile_error)
+            .field("registry", &self.registry.as_ref().map(|_| "SubAgentRegistry"))
+            .field("registered_run_id", &self.registered_run_id)
+            .field("retrieved_run", &self.retrieved_run.as_ref().map(|r| &r.run_id))
             .finish()
     }
 }
@@ -164,5 +178,10 @@ tier = "backup"
 
         self.profile_manager = Some(AuthProfileManager::with_paths(config_path, agents_dir).unwrap());
         self.temp_dir = Some(temp_dir);
+    }
+
+    /// Create a fresh SubAgentRegistry
+    pub fn create_registry(&mut self) {
+        self.registry = Some(SubAgentRegistry::new_in_memory());
     }
 }
