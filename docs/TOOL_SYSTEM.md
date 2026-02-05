@@ -127,8 +127,74 @@ impl<T: AlephTool> AlephToolDyn for T { ... }
 | Tool | Description | Args |
 |------|-------------|------|
 | `memory_store` | Store fact | `content`, `tags?` |
-| `memory_search` | Search facts | `query`, `limit?` |
+| `memory_search` | Search memory with hybrid retrieval | `query`, `max_results?` |
 | `memory_forget` | Delete fact | `fact_id` |
+
+#### memory_search Tool
+
+**Purpose**: Search personal memory for relevant facts and conversation history with intelligent redundancy elimination.
+
+**Features**:
+- Hybrid retrieval: Searches both compressed facts and raw transcripts
+- Post-retrieval arbitration: Eliminates redundancy between facts and transcripts
+- Priority-based selection: Higher similarity scores selected first
+- Token budget management: Fits results within context window
+- Importance scoring: Can filter low-value content (when integrated with ValueEstimator)
+
+**Arguments**:
+```rust
+pub struct MemorySearchArgs {
+    /// Search query (natural language)
+    pub query: String,
+    /// Maximum results to return (default: 10)
+    pub max_results: usize,
+}
+```
+
+**Output**:
+```rust
+pub struct MemorySearchOutput {
+    /// Compressed facts (deduplicated)
+    pub facts: Vec<FactResult>,
+    /// Raw conversation transcripts (deduplicated)
+    pub transcripts: Vec<TranscriptResult>,
+    /// Original query
+    pub query: String,
+    /// Tokens saved through deduplication
+    pub tokens_saved: usize,
+}
+```
+
+**Example Usage**:
+```json
+{
+  "tool": "memory_search",
+  "args": {
+    "query": "What are my coding preferences?",
+    "max_results": 10
+  }
+}
+```
+
+**Architecture**:
+```
+memory_search(query)
+  → FactRetrieval.retrieve(query)
+    → Hybrid search (facts + raw memories fallback)
+  → ContextComptroller.arbitrate(results, budget)
+    → Detect redundancy via cosine similarity (threshold: 0.95)
+    → Remove redundant transcripts when facts exist
+    → Sort by similarity score (descending)
+    → Trim to fit token budget
+  → Return deduplicated results
+```
+
+**Configuration**:
+- Similarity threshold: 0.95 (configurable via ComptrollerConfig)
+- Token estimation: 4 chars per token
+- Retention mode: Hybrid (facts prioritized, redundant transcripts removed)
+- Max facts: 10 (configurable via FactRetrievalConfig)
+- Max raw fallback: 10 (configurable via FactRetrievalConfig)
 
 ### Meta Tools
 
@@ -349,9 +415,158 @@ pub struct ToolResult {
 
 ---
 
+## Memory System Components (Phase 2)
+
+### TranscriptIndexer
+
+**Purpose**: Near-realtime indexing of conversation transcripts with chunking support.
+
+**Features**:
+- Sliding window chunking for long conversations
+- Configurable chunk size and overlap
+- Sentence-boundary aware splitting
+- Token estimation (4 chars per token)
+
+**Configuration**:
+```rust
+pub struct TranscriptIndexerConfig {
+    pub max_tokens_per_chunk: usize,  // Default: 400
+    pub overlap_tokens: usize,         // Default: 80
+    pub enable_chunking: bool,         // Default: true
+}
+```
+
+**Usage**:
+```rust
+let indexer = TranscriptIndexer::new(database, embedder);
+let chunks = indexer.chunk_text(&long_conversation);
+```
+
+### ValueEstimator
+
+**Purpose**: Importance scoring for memory entries to filter low-value content.
+
+**Features**:
+- Signal-based detection (8 signal types)
+- Score range: 0.0 (low value) to 1.0 (high value)
+- Length bonus for longer conversations
+- Batch estimation support
+
+**Signals**:
+- **Positive**: UserPreference (+0.25), Decision (+0.20), PersonalInfo (+0.30), FactualInfo (+0.15)
+- **Negative**: Greeting (-0.30), SmallTalk (-0.20)
+- **Neutral**: Question, Answer (combined +0.10)
+
+**Usage**:
+```rust
+let estimator = ValueEstimator::new();
+let score = estimator.estimate(&memory_entry).await?;
+
+if score > 0.7 {
+    // High-value content, prioritize for compression
+}
+```
+
+### ContextComptroller
+
+**Purpose**: Post-retrieval arbitration to eliminate redundancy and manage token budget.
+
+**Features**:
+- Redundancy detection via cosine similarity (threshold: 0.95)
+- Priority-based selection (similarity score descending)
+- Token budget enforcement
+- Three retention modes: PreferTranscript, PreferFact, Hybrid
+
+**Configuration**:
+```rust
+pub struct ComptrollerConfig {
+    pub similarity_threshold: f32,     // Default: 0.95
+    pub retention_mode: RetentionMode, // Default: Hybrid
+}
+```
+
+**Usage**:
+```rust
+let comptroller = ContextComptroller::new(config);
+let budget = TokenBudget::new(10000);
+let arbitrated = comptroller.arbitrate(retrieval_result, budget);
+
+// arbitrated.facts: Deduplicated facts
+// arbitrated.raw_memories: Deduplicated transcripts
+// arbitrated.tokens_saved: Tokens saved through deduplication
+```
+
+### CompressionDaemon
+
+**Purpose**: Background scheduler for periodic memory compression.
+
+**Features**:
+- Configurable check interval (default: 1 hour)
+- Idle detection (default: 5 minutes idle required)
+- Activity tracking
+- Graceful start/stop
+- Error handling and logging
+
+**Configuration**:
+```rust
+pub struct CompressionDaemonConfig {
+    pub check_interval_seconds: u64,   // Default: 3600 (1 hour)
+    pub idle_threshold_seconds: u64,   // Default: 300 (5 minutes)
+    pub enabled: bool,                  // Default: true
+}
+```
+
+**Usage**:
+```rust
+let daemon = Arc::new(CompressionDaemon::new(config, || async {
+    compression_service.compress().await
+        .map_err(|e| e.to_string())
+}));
+
+// Start daemon
+let handle = daemon.start();
+
+// Record activity to reset idle timer
+daemon.record_activity();
+
+// Stop daemon
+daemon.stop();
+```
+
+**Integration Example**:
+```rust
+// Create compression service
+let compression_service = Arc::new(CompressionService::new(
+    database.clone(),
+    provider.clone(),
+    embedder.clone(),
+    CompressionConfig::default(),
+));
+
+// Create daemon with compression callback
+let daemon_config = CompressionDaemonConfig::default();
+let daemon = Arc::new(CompressionDaemon::new(daemon_config, {
+    let service = compression_service.clone();
+    move || {
+        let service = service.clone();
+        async move {
+            service.compress().await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+    }
+}));
+
+// Start background compression
+daemon.start();
+```
+
+---
+
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) - System overview
 - [Agent System](AGENT_SYSTEM.md) - How tools are invoked
 - [Extension System](EXTENSION_SYSTEM.md) - Plugin-based tools
 - [Security](SECURITY.md) - Tool execution safety
+- [Memory System](MEMORY_SYSTEM.md) - Memory architecture and design
