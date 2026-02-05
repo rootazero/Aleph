@@ -61,17 +61,22 @@ async fn when_try_dequeue_run_with_semaphore(w: &mut AlephWorld) {
     let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
 
-    // Try to acquire a permit and dequeue
-    if let Some(_permit) = lane_state.try_acquire_permit() {
+    // Check if a permit is available
+    let permit_available = lane_state.available_permits() > 0;
+
+    if permit_available {
+        // Try to dequeue
         if let Some(run_id) = lane_state.try_dequeue().await {
-            // Mark as running
+            // Mark as running (this simulates holding the permit)
             lane_state.mark_running(run_id.clone()).await;
             ctx.dequeued_run_id = Some(run_id);
             ctx.last_dequeue_result = Some(true);
-            ctx.held_permits_count += 1;
 
-            // Forget the permit so it stays acquired
-            std::mem::forget(_permit);
+            // Consume one permit by acquiring and forgetting it
+            // Note: This is intentional for testing - in production code, permits are properly managed
+            if let Some(permit) = lane_state.try_acquire_permit() {
+                std::mem::forget(permit);
+            }
         } else {
             ctx.last_dequeue_result = Some(false);
         }
@@ -88,13 +93,8 @@ async fn when_complete_run(w: &mut AlephWorld, run_id: String) {
     // Mark as completed (removes from running set)
     lane_state.complete(&run_id).await;
 
-    // Decrement the held permits count
-    if ctx.held_permits_count > 0 {
-        ctx.held_permits_count -= 1;
-    }
-
-    // Add a permit back to the semaphore by acquiring and immediately dropping
-    // This simulates releasing a permit that was forgotten
+    // Release the permit by adding one back to the semaphore
+    // This compensates for the forgotten permit in the dequeue step
     lane_state.semaphore().add_permits(1);
 }
 
@@ -275,10 +275,16 @@ async fn when_complete_run_in_lane(w: &mut AlephWorld, run_id: String, lane_str:
 }
 
 #[when("I wait for anti-starvation conditions")]
-async fn when_wait_for_anti_starvation_conditions(_w: &mut AlephWorld) {
-    // In a real test, we would wait for the threshold time
-    // For BDD tests, we just document the intent
-    // The actual anti-starvation logic is tested in unit tests
+async fn when_wait_for_anti_starvation_conditions(w: &mut AlephWorld) {
+    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
+    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+
+    // Get the anti-starvation threshold from the scheduler config
+    let threshold_ms = scheduler.config().anti_starvation_threshold_ms;
+
+    // Wait for slightly more than the threshold to ensure anti-starvation conditions are met
+    let wait_duration = std::time::Duration::from_millis(threshold_ms + 100);
+    tokio::time::sleep(wait_duration).await;
 }
 
 #[when("I sweep anti-starvation")]
@@ -299,7 +305,18 @@ async fn when_sweep_anti_starvation_immediately(w: &mut AlephWorld) {
 async fn when_spawn_child_from_parent(w: &mut AlephWorld, child_id: String, parent_id: String) {
     let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
     let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
-    scheduler.record_spawn(&parent_id, &child_id).await;
+
+    // First check if spawning is allowed (validates recursion depth)
+    let check_result = scheduler.check_recursion_depth(&parent_id).await;
+
+    if check_result.is_ok() {
+        // Only record the spawn if it's allowed
+        scheduler.record_spawn(&parent_id, &child_id).await;
+        ctx.recursion_check_result = Some(Ok(()));
+    } else {
+        // Store the error for later assertion
+        ctx.recursion_check_result = Some(check_result.map_err(|e| e.to_string()));
+    }
 }
 
 // =============================================================================
