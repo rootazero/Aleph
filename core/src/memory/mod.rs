@@ -85,7 +85,7 @@ pub use transcript_indexer::{
 pub use context_comptroller::{
     ContextComptroller, ComptrollerConfig, ArbitratedContext, RetentionMode, TokenBudget,
 };
-pub use value_estimator::{ValueEstimator, Signal};
+pub use value_estimator::{LlmScorer, LlmScorerConfig, Signal, ValueEstimator};
 pub use compression_daemon::{CompressionDaemon, CompressionDaemonConfig};
 pub use ripple::{RippleTask, RippleConfig, RippleResult};
 pub use evolution::{
