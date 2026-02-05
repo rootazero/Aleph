@@ -59,6 +59,7 @@ pub mod overflow;
 pub mod question;
 pub mod session_sync;
 pub mod state;
+pub mod thinking;
 
 mod compaction_trigger;
 mod loop_result;
@@ -79,6 +80,7 @@ pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCal
 pub use overflow::{ModelLimit, OverflowConfig, OverflowDetector};
 pub use session_sync::SessionSync;
 pub use state::{LoopState, LoopStep, Observation, RequestContext, StepSummary, Thinking, ToolInfo};
+pub use thinking::{ConfidenceLevel, ReasoningStep, ReasoningStepType, StructuredThinking};
 
 // Re-export compaction trigger (useful for custom agent loop implementations)
 pub use compaction_trigger::{CompactionTrigger, OptionalCompactionTrigger};
