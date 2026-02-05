@@ -2,12 +2,14 @@
 //!
 //! Organized by module with shared common steps.
 
+mod agent_loop_steps;
 mod common;
 mod config_steps;
 mod daemon_steps;
 mod perception_steps;
 mod scripting_steps;
 
+pub use agent_loop_steps::*;
 pub use common::*;
 pub use config_steps::*;
 pub use daemon_steps::*;

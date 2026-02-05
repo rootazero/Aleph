@@ -4,10 +4,12 @@ use cucumber::World;
 use tempfile::TempDir;
 use rhai::{Engine, AST};
 
+mod agent_loop_ctx;
 mod config_ctx;
 mod daemon_ctx;
 mod perception_ctx;
 
+pub use agent_loop_ctx::{AgentLoopContext, MockDecision};
 pub use config_ctx::ConfigContext;
 pub use daemon_ctx::DaemonContext;
 pub use perception_ctx::PerceptionContext;
@@ -37,4 +39,5 @@ pub struct AlephWorld {
     pub config: Option<ConfigContext>,
     pub daemon: Option<DaemonContext>,
     pub perception: Option<PerceptionContext>,
+    pub agent_loop: Option<AgentLoopContext>,
 }
