@@ -42,6 +42,7 @@ pub mod context_comptroller;
 pub mod value_estimator;
 pub mod compression_daemon;
 pub mod ripple;
+pub mod evolution;
 
 // Re-export commonly used types
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
@@ -84,3 +85,7 @@ pub use context_comptroller::{
 pub use value_estimator::{ValueEstimator, Signal};
 pub use compression_daemon::{CompressionDaemon, CompressionDaemonConfig};
 pub use ripple::{RippleTask, RippleConfig, RippleResult};
+pub use evolution::{
+    ContradictionDetector, EvolutionChain, EvolutionNode, EvolutionResolver, FactEvolution,
+    ResolutionStrategy,
+};
