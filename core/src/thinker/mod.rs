@@ -30,6 +30,7 @@
 //! ```
 
 pub mod cache;
+pub mod context;
 pub mod decision_parser;
 pub mod interaction;
 pub mod model_router;
@@ -57,6 +58,9 @@ pub use tool_filter::{IntentFilterConfig, IntentFilterResult, ToolFilter, ToolFi
 pub use interaction::{Capability, InteractionConstraints, InteractionManifest, InteractionParadigm};
 pub use security_context::{
     ElevatedPolicy, SandboxLevel, SecurityContext, ToolPermission, is_network_tool,
+};
+pub use context::{
+    ContextAggregator, DisableReason, DisabledTool, EnvironmentContract, ResolvedContext,
 };
 
 use crate::agent_loop::{
