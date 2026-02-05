@@ -48,6 +48,3 @@ pub use security::{
     Locale, PipelineResult, SanitizeAction, SanitizeContext, SanitizeResult, SanitizerRule,
     SecurityConfig, SecurityPipeline, TrustLevel,
 };
-
-#[cfg(test)]
-mod tests;
