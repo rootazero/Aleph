@@ -5,10 +5,12 @@ use std::time::Duration;
 use cucumber::{given, when, then};
 
 use crate::world::{AlephWorld, SubagentContext};
+use alephcore::agents::sub_agents::{SubAgentRun, RunStatus as SubAgentRunStatus};
 use alephcore::gateway::run_event_bus::{
     wait_for_run_end, RunEvent, RunStatus, RunEndResult,
 };
 use alephcore::providers::auth_profiles::AuthProfileFailureReason;
+use alephcore::routing::SessionKey as RoutingSessionKey;
 
 #[cfg(feature = "gateway")]
 use alephcore::builtin_tools::sessions::{
@@ -551,4 +553,136 @@ async fn then_spawn_args_cleanup_ephemeral(w: &mut AlephWorld) {
     let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
     let args = ctx.spawn_args.as_ref().expect("Spawn args not set");
     assert_eq!(args.cleanup, CleanupPolicy::Ephemeral);
+}
+
+// =============================================================================
+// SubAgentRegistry: Given Steps
+// =============================================================================
+
+#[given("a fresh SubAgentRegistry")]
+async fn given_fresh_registry(w: &mut AlephWorld) {
+    let ctx = w.subagent.get_or_insert_with(SubagentContext::default);
+    ctx.create_registry();
+}
+
+#[given("a registered sub-agent run")]
+async fn given_registered_run(w: &mut AlephWorld) {
+    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let registry = ctx.registry.as_ref().expect("Registry not initialized");
+    let session_key = RoutingSessionKey::Subagent {
+        parent_key: Box::new(RoutingSessionKey::main("parent-test")),
+        subagent_id: "session-test".to_string(),
+    };
+    let parent_key = RoutingSessionKey::main("parent-test");
+    let run = SubAgentRun::new(session_key, parent_key, "Test task", "explore");
+    let run_id = registry.register(run).await.unwrap();
+    ctx.registered_run_id = Some(run_id);
+}
+
+// =============================================================================
+// SubAgentRegistry: When Steps
+// =============================================================================
+
+#[when(expr = "I register a sub-agent run with task {string}")]
+async fn when_register_run(w: &mut AlephWorld, task: String) {
+    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let registry = ctx.registry.as_ref().expect("Registry not initialized");
+    let session_key = RoutingSessionKey::Subagent {
+        parent_key: Box::new(RoutingSessionKey::main("parent-1")),
+        subagent_id: format!("session-{}", uuid::Uuid::new_v4()),
+    };
+    let parent_key = RoutingSessionKey::main("parent-1");
+    let run = SubAgentRun::new(session_key, parent_key, &task, "explore");
+    let run_id = registry.register(run).await.unwrap();
+    ctx.registered_run_id = Some(run_id);
+}
+
+#[when(expr = "I register a sub-agent run with parent {string} and task {string}")]
+async fn when_register_run_with_parent(w: &mut AlephWorld, parent: String, task: String) {
+    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let registry = ctx.registry.as_ref().expect("Registry not initialized");
+    let session_key = RoutingSessionKey::Subagent {
+        parent_key: Box::new(RoutingSessionKey::main(&parent)),
+        subagent_id: format!("session-{}", uuid::Uuid::new_v4()),
+    };
+    let parent_key = RoutingSessionKey::main(&parent);
+    let run = SubAgentRun::new(session_key, parent_key, &task, "explore");
+    registry.register(run).await.unwrap();
+}
+
+#[when(expr = "I transition the run to {string}")]
+async fn when_transition_run(w: &mut AlephWorld, status: String) {
+    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let registry = ctx.registry.as_ref().expect("Registry not initialized");
+    let run_id = ctx.registered_run_id.as_ref().expect("No registered run");
+    let new_status = match status.as_str() {
+        "Running" => SubAgentRunStatus::Running,
+        "Completed" => SubAgentRunStatus::Completed,
+        "Failed" => SubAgentRunStatus::Failed,
+        "Cancelled" => SubAgentRunStatus::Cancelled,
+        "Paused" => SubAgentRunStatus::Paused,
+        _ => panic!("Unknown status: {}", status),
+    };
+    registry.transition(run_id, new_status).await.unwrap();
+}
+
+// =============================================================================
+// SubAgentRegistry: Then Steps
+// =============================================================================
+
+#[then(expr = "the run should have status {string}")]
+async fn then_run_status(w: &mut AlephWorld, expected: String) {
+    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let registry = ctx.registry.as_ref().expect("Registry not initialized");
+    let run_id = ctx.registered_run_id.as_ref().expect("No registered run");
+    let run = registry.get(run_id).await.unwrap().expect("Run not found");
+    let expected_status = match expected.as_str() {
+        "Pending" => SubAgentRunStatus::Pending,
+        "Running" => SubAgentRunStatus::Running,
+        "Completed" => SubAgentRunStatus::Completed,
+        "Failed" => SubAgentRunStatus::Failed,
+        "Cancelled" => SubAgentRunStatus::Cancelled,
+        "Paused" => SubAgentRunStatus::Paused,
+        _ => panic!("Unknown status: {}", expected),
+    };
+    assert_eq!(run.status, expected_status);
+    ctx.retrieved_run = Some(run);
+}
+
+#[then("the run should be retrievable by its ID")]
+async fn then_run_retrievable(w: &mut AlephWorld) {
+    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let registry = ctx.registry.as_ref().expect("Registry not initialized");
+    let run_id = ctx.registered_run_id.as_ref().expect("No registered run");
+    let run = registry.get(run_id).await.unwrap();
+    assert!(run.is_some(), "Run should be retrievable");
+}
+
+#[then("the run should have a started_at timestamp")]
+async fn then_run_has_started_at(w: &mut AlephWorld) {
+    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let run = ctx.retrieved_run.as_ref().expect("No retrieved run");
+    assert!(run.started_at.is_some(), "Run should have started_at timestamp");
+}
+
+#[then(expr = "parent {string} should have {int} children")]
+async fn then_parent_children_count(w: &mut AlephWorld, parent: String, count: i64) {
+    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let registry = ctx.registry.as_ref().expect("Registry not initialized");
+    let parent_key = RoutingSessionKey::main(&parent);
+    let children = registry.get_children(&parent_key).await;
+    assert_eq!(children.len(), count as usize, "Parent {} should have {} children", parent, count);
+}
+
+#[then(expr = "parent {string} should have {int} child")]
+async fn then_parent_child_count(w: &mut AlephWorld, parent: String, count: i64) {
+    then_parent_children_count(w, parent, count).await;
+}
+
+#[then(expr = "there should be {int} active runs")]
+async fn then_active_runs_count(w: &mut AlephWorld, count: i64) {
+    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let registry = ctx.registry.as_ref().expect("Registry not initialized");
+    let active = registry.get_active_runs().await;
+    assert_eq!(active.len(), count as usize, "Expected {} active runs", count);
 }
