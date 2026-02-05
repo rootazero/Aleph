@@ -2,7 +2,9 @@
 
 use alephcore::agent_loop::{Observation, ToolInfo};
 use alephcore::thinker::prompt_builder::SystemPromptPart;
-use alephcore::thinker::{Message, PromptBuilder, PromptConfig};
+use alephcore::thinker::{
+    InteractionManifest, Message, PromptBuilder, PromptConfig, ResolvedContext, SecurityContext,
+};
 
 /// Thinker test context
 /// Stores state for PromptBuilder BDD scenarios
@@ -35,6 +37,14 @@ pub struct ThinkerContext {
     pub second_prompt: Option<String>,
     /// Second cached parts for comparison tests
     pub second_cached_parts: Option<Vec<SystemPromptPart>>,
+
+    // ═══ Context Aggregation ═══
+    /// Interaction manifest for context aggregation
+    pub interaction: Option<InteractionManifest>,
+    /// Security context for context aggregation
+    pub security: Option<SecurityContext>,
+    /// Resolved context after aggregation
+    pub resolved: Option<ResolvedContext>,
 }
 
 impl std::fmt::Debug for ThinkerContext {
@@ -47,6 +57,9 @@ impl std::fmt::Debug for ThinkerContext {
             .field("cached_parts_count", &self.cached_parts.as_ref().map(|v| v.len()))
             .field("messages_count", &self.messages.as_ref().map(|v| v.len()))
             .field("has_observation", &self.observation.is_some())
+            .field("has_interaction", &self.interaction.is_some())
+            .field("has_security", &self.security.is_some())
+            .field("has_resolved", &self.resolved.is_some())
             .finish()
     }
 }
