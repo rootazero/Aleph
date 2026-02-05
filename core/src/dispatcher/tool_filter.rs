@@ -31,6 +31,7 @@
 
 use std::collections::HashSet;
 
+use crate::config::ProfileConfig;
 use crate::dispatcher::{ToolIndexCategory, UnifiedTool};
 use crate::intent::types::TaskCategory;
 
@@ -142,6 +143,51 @@ impl ToolFilter {
             indexed_tools,
             category,
         }
+    }
+
+    /// Filter tools by category with profile-based whitelist
+    ///
+    /// This is the primary method for workspace-aware filtering.
+    /// It first applies the profile whitelist, then filters by category.
+    pub fn filter_by_category_with_profile(
+        &self,
+        tools: &[UnifiedTool],
+        category: TaskCategory,
+        profile: Option<&ProfileConfig>,
+    ) -> FilterResult {
+        // First, apply profile whitelist filter
+        let profile_filtered: Vec<UnifiedTool> = match profile {
+            Some(p) if !p.tools.is_empty() => tools
+                .iter()
+                .filter(|tool| p.is_tool_allowed(&tool.name))
+                .cloned()
+                .collect(),
+            _ => tools.to_vec(),
+        };
+
+        // Then apply category-based filtering
+        self.filter_by_category(&profile_filtered, category)
+    }
+
+    /// Filter tools by multiple categories with profile-based whitelist
+    pub fn filter_by_categories_with_profile(
+        &self,
+        tools: &[UnifiedTool],
+        categories: &[TaskCategory],
+        profile: Option<&ProfileConfig>,
+    ) -> FilterResult {
+        // First, apply profile whitelist filter
+        let profile_filtered: Vec<UnifiedTool> = match profile {
+            Some(p) if !p.tools.is_empty() => tools
+                .iter()
+                .filter(|tool| p.is_tool_allowed(&tool.name))
+                .cloned()
+                .collect(),
+            _ => tools.to_vec(),
+        };
+
+        // Then apply category-based filtering
+        self.filter_by_categories(&profile_filtered, categories)
     }
 
     /// Filter tools by multiple categories
