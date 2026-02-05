@@ -29,6 +29,7 @@
 //! - `SkillsInstaller`: Downloads and installs skills from GitHub/ZIP
 //!
 pub mod cli_wrapper;
+pub mod events;
 pub mod health;
 pub mod installer;
 pub mod registry;
@@ -193,6 +194,7 @@ pub struct SkillInfo {
 
 // Re-exports
 pub use cli_wrapper::{CliWrapperError, CliWrapperValidator};
+pub use events::SkillRegistryEvent;
 pub use health::HealthChecker;
 pub use installer::SkillsInstaller;
 pub use registry::{SkillWithHealth, SkillsRegistry};

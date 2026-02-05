@@ -34,6 +34,27 @@ pub trait ThinkerTrait: Send + Sync {
     fn current_think_level(&self) -> ThinkLevel {
         ThinkLevel::default()
     }
+
+    /// Think using semantically retrieved tools via HydrationPipeline
+    ///
+    /// This method uses pre-computed hydration results from semantic tool retrieval
+    /// instead of keyword-based filtering. The HydrationResult contains tools
+    /// classified by confidence level:
+    /// - full_schema_tools: High confidence, include full JSON schema
+    /// - summary_tools: Medium confidence, include description only
+    /// - indexed_tool_names: Low confidence, just names for reference
+    ///
+    /// Default implementation falls back to keyword-based thinking with all tools.
+    async fn think_with_hydration(
+        &self,
+        state: &LoopState,
+        _hydration: &crate::dispatcher::tool_index::HydrationResult,
+        tools: &[crate::dispatcher::UnifiedTool],
+        level: ThinkLevel,
+    ) -> Result<Thinking> {
+        // Default: fall back to standard tool filtering
+        self.think_with_level(state, tools, level).await
+    }
 }
 
 /// Action Executor trait - abstraction for the execution layer

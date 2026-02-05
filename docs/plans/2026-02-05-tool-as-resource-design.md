@@ -1,6 +1,6 @@
 # Tool-as-Resource: 动态工具发现与按需水合
 
-> **状态**: Draft
+> **状态**: In Progress
 > **作者**: Claude & User
 > **日期**: 2026-02-05
 > **关联**: [Memory System](../MEMORY_SYSTEM.md), [Tool System](../TOOL_SYSTEM.md)
@@ -578,9 +578,14 @@ core_tools = ["search", "file_read", "file_write"]  # 强制核心工具
 
 ### Phase 1: 基础设施 (Week 1)
 
-- [ ] 扩展 `FactType::Tool`
-- [ ] 实现 `SemanticPurposeInferrer` (L0 + L1)
-- [ ] 实现 `ToolIndexCoordinator` 基础同步
+- [x] 扩展 `FactType::Tool`
+- [x] 实现 `SemanticPurposeInferrer` (L0 + L1)
+- [x] 实现 `ToolIndexCoordinator` 基础同步
+- [x] 实现 `ToolRetrieval` 双阈值逻辑
+- [x] 实现 `ToolRetrievalConfig` 配置
+- [x] 添加 `VectorDatabase::in_memory()` 用于测试
+- [x] 添加集成测试
+- [x] 从 lib.rs 导出所有类型
 
 ### Phase 2: 检索集成 (Week 2)
 

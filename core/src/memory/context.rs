@@ -129,6 +129,8 @@ pub enum FactType {
     Project,
     /// Personal information (non-sensitive)
     Personal,
+    /// Tool/capability procedural knowledge (for tool-as-resource)
+    Tool,
     /// Other facts that don't fit above categories
     #[default]
     Other,
@@ -152,6 +154,7 @@ impl FactType {
             FactType::Learning => "learning",
             FactType::Project => "project",
             FactType::Personal => "personal",
+            FactType::Tool => "tool",
             FactType::Other => "other",
             FactType::SubagentRun => "subagent_run",
             FactType::SubagentSession => "subagent_session",
@@ -169,6 +172,7 @@ impl FactType {
             "learning" => FactType::Learning,
             "project" => FactType::Project,
             "personal" => FactType::Personal,
+            "tool" => FactType::Tool,
             "subagent_run" => FactType::SubagentRun,
             "subagent_session" => FactType::SubagentSession,
             "subagent_checkpoint" => FactType::SubagentCheckpoint,
@@ -621,6 +625,12 @@ mod tests {
         assert_eq!(TemporalScope::Permanent.as_str(), "permanent");
         assert_eq!(TemporalScope::Contextual.as_str(), "contextual");
         assert_eq!(TemporalScope::Ephemeral.as_str(), "ephemeral");
+    }
+
+    #[test]
+    fn test_fact_type_tool() {
+        assert_eq!(FactType::Tool.as_str(), "tool");
+        assert_eq!(FactType::from_str("tool"), FactType::Tool);
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
 use crate::agent_loop::{LoopState, Observation, StepSummary, ToolInfo};
 use crate::core::MediaAttachment;
+use crate::dispatcher::tool_index::HydrationResult;
 
 use super::context::{DisableReason, DisabledTool, EnvironmentContract, ResolvedContext};
 use super::interaction::Capability;
@@ -170,6 +171,104 @@ impl PromptBuilder {
             prompt.push_str(models);
             prompt.push('\n');
         }
+    }
+
+    /// Append hydrated tools from semantic retrieval
+    ///
+    /// Formats tools by hydration level:
+    /// - Full schema tools: name + description + JSON parameters
+    /// - Summary tools: name + description (use get_tool_schema for params)
+    /// - Indexed tools: names list only
+    ///
+    /// This enables progressive disclosure of tool information based on
+    /// semantic relevance to the user's query.
+    pub fn append_hydrated_tools(&self, prompt: &mut String, result: &HydrationResult) {
+        if result.is_empty() {
+            prompt.push_str("## Available Tools\n");
+            prompt.push_str("No semantically relevant tools found. Use `get_tool_schema` to discover tools.\n\n");
+            return;
+        }
+
+        prompt.push_str("## Available Tools\n\n");
+
+        // Full schema tools - highest relevance, include complete parameter info
+        if !result.full_schema_tools.is_empty() {
+            prompt.push_str("### Tools (full parameters)\n\n");
+            for tool in &result.full_schema_tools {
+                prompt.push_str(&format!("#### {}\n", tool.name));
+                prompt.push_str(&format!("{}\n", tool.description));
+                if let Some(schema) = tool.schema_json() {
+                    prompt.push_str(&format!("Parameters: {}\n", schema));
+                }
+                prompt.push('\n');
+            }
+        }
+
+        // Summary tools - medium relevance, description only
+        if !result.summary_tools.is_empty() {
+            prompt.push_str("### Tools (summary - call `get_tool_schema` for parameters)\n\n");
+            for tool in &result.summary_tools {
+                prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+            }
+            prompt.push('\n');
+        }
+
+        // Indexed tools - low relevance, just names
+        if !result.indexed_tool_names.is_empty() {
+            prompt.push_str("### Additional Tools (call `get_tool_schema` to use)\n\n");
+            prompt.push_str(&result.indexed_tool_names.join(", "));
+            prompt.push_str("\n\n");
+        }
+    }
+
+    /// Build system prompt with hydrated tools from semantic retrieval
+    ///
+    /// This method builds a complete system prompt using HydrationResult
+    /// instead of the traditional ToolInfo array, enabling semantic tool
+    /// selection based on query relevance.
+    pub fn build_system_prompt_with_hydration(&self, hydration: &HydrationResult) -> String {
+        let mut prompt = String::new();
+
+        // Role definition
+        prompt.push_str("You are an AI assistant executing tasks step by step.\n\n");
+
+        // Core instructions
+        prompt.push_str("## Your Role\n");
+        prompt.push_str("- Observe the current state and history\n");
+        prompt.push_str("- Decide the SINGLE next action to take\n");
+        prompt.push_str("- Execute until the task is complete or you need user input\n\n");
+
+        // Runtime capabilities
+        self.append_runtime_capabilities(&mut prompt);
+
+        // Hydrated tools (semantic retrieval)
+        self.append_hydrated_tools(&mut prompt, hydration);
+
+        // Generation models
+        self.append_generation_models(&mut prompt);
+
+        // Special actions
+        self.append_special_actions(&mut prompt);
+
+        // Response format
+        self.append_response_format(&mut prompt);
+
+        // Guidelines
+        self.append_guidelines(&mut prompt);
+
+        // Thinking guidance
+        self.append_thinking_guidance(&mut prompt);
+
+        // Skill mode
+        self.append_skill_mode(&mut prompt);
+
+        // Custom instructions
+        self.append_custom_instructions(&mut prompt);
+
+        // Language setting
+        self.append_language_setting(&mut prompt);
+
+        prompt
     }
 
     /// Append special actions section
