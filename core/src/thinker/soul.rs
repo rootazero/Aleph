@@ -260,8 +260,18 @@ impl SoulManifest {
                 current_section = Some(line[3..].trim().to_lowercase());
                 current_content.clear();
             } else if line.starts_with("# ") {
-                // Skip title lines like "# Soul: Aleph"
-                continue;
+                // Check if this is a section header (e.g., "# Identity")
+                // vs a title line (e.g., "# Soul: Aleph")
+                let header = line[2..].trim().to_lowercase();
+                if Self::is_known_section(&header) {
+                    // Treat as section header
+                    if let Some(ref section) = current_section {
+                        Self::apply_section(manifest, section, &current_content);
+                    }
+                    current_section = Some(header);
+                    current_content.clear();
+                }
+                // Otherwise skip title lines
             } else {
                 current_content.push_str(line);
                 current_content.push('\n');
@@ -274,6 +284,24 @@ impl SoulManifest {
         }
 
         Ok(())
+    }
+
+    /// Check if a header name is a known section
+    fn is_known_section(name: &str) -> bool {
+        matches!(
+            name,
+            "identity"
+                | "directives"
+                | "anti-patterns"
+                | "antipatterns"
+                | "anti patterns"
+                | "addendum"
+                | "additional context"
+                | "context"
+                | "communication style"
+                | "voice"
+                | "expertise"
+        )
     }
 
     /// Apply parsed section content to manifest

@@ -52,6 +52,8 @@ pub struct ThinkerContext {
     // ═══ Embodiment Engine ═══
     /// Soul manifest for testing
     pub soul: Option<SoulManifest>,
+    /// Global soul for fallback (used when clearing session override)
+    pub global_soul: Option<SoulManifest>,
     /// Soul file content for parsing tests
     pub soul_content: Option<String>,
     /// Identity resolver

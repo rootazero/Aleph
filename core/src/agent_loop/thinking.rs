@@ -472,6 +472,9 @@ impl ThinkingParser {
         let markers = [
             "i'm not sure",
             "i am not sure",
+            "i'm uncertain",
+            "i am uncertain",
+            "uncertain about",
             "unclear",
             "don't know",
             "need to verify",

@@ -54,6 +54,10 @@ impl SessionHistory {
             .await
             .map_err(|e| AlephError::other(format!("Failed to write history: {}", e)))?;
 
+        file.flush()
+            .await
+            .map_err(|e| AlephError::other(format!("Failed to flush history: {}", e)))?;
+
         Ok(())
     }
 
