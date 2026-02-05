@@ -88,6 +88,7 @@ pub mod spec_driven;
 pub mod skill_evolution;
 pub mod resilient;
 pub mod daemon;
+pub mod scheduler;
 
 /// Unified initialization module (re-export for backward compatibility)
 pub mod initialization {
