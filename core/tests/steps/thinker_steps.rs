@@ -553,3 +553,396 @@ async fn then_has_capability(w: &mut AlephWorld, cap_name: String) {
             .collect::<Vec<_>>()
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Embodiment Engine - Given Steps
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[given("a soul file with content:")]
+async fn given_soul_file_content(w: &mut AlephWorld, step: &Step) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    if let Some(docstring) = step.docstring.as_ref() {
+        ctx.soul_content = Some(docstring.clone());
+    }
+}
+
+#[given(expr = "a global soul with identity {string}")]
+async fn given_global_soul(w: &mut AlephWorld, identity: String) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.init_identity_resolver();
+    // Create a soul that will be returned by global path
+    ctx.soul = Some(alephcore::thinker::soul::SoulManifest {
+        identity,
+        ..Default::default()
+    });
+}
+
+#[given(expr = "a session override soul with identity {string}")]
+async fn given_session_override(w: &mut AlephWorld, identity: String) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    if ctx.identity_resolver.is_none() {
+        ctx.init_identity_resolver();
+    }
+    let override_soul = alephcore::thinker::soul::SoulManifest {
+        identity,
+        ..Default::default()
+    };
+    if let Some(resolver) = ctx.identity_resolver.as_mut() {
+        resolver.set_session_override(override_soul);
+    }
+}
+
+#[given("no soul files configured")]
+async fn given_no_soul_files(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.init_identity_resolver();
+}
+
+#[given(expr = "a soul with identity {string}")]
+async fn given_soul_with_identity(w: &mut AlephWorld, identity: String) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    let mut soul = ctx.soul.take().unwrap_or_default();
+    soul.identity = identity;
+    ctx.soul = Some(soul);
+}
+
+#[given(expr = "a soul with directive {string}")]
+async fn given_soul_with_directive(w: &mut AlephWorld, directive: String) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    let mut soul = ctx.soul.take().unwrap_or_default();
+    soul.directives.push(directive);
+    ctx.soul = Some(soul);
+}
+
+#[given("an empty soul")]
+async fn given_empty_soul(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.soul = Some(alephcore::thinker::soul::SoulManifest::default());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Embodiment Engine - When Steps
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[when("I parse the soul file")]
+async fn when_parse_soul_file(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.parse_soul_content();
+}
+
+#[when("I resolve identity")]
+async fn when_resolve_identity(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    if let Some(resolver) = &ctx.identity_resolver {
+        // If we have a soul set (simulating global), use it
+        // Otherwise, resolve from resolver
+        if ctx.soul.is_none() {
+            ctx.soul = Some(resolver.resolve());
+        }
+    }
+}
+
+#[when("I clear the session override")]
+async fn when_clear_session_override(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    if let Some(resolver) = ctx.identity_resolver.as_mut() {
+        resolver.clear_session_override();
+    }
+    // Clear the cached soul to force re-resolution
+    ctx.soul = None;
+}
+
+#[when("I build the system prompt with soul")]
+async fn when_build_prompt_with_soul(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.init_builder();
+    ctx.build_system_prompt_with_soul();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Embodiment Engine - Then Steps
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[then(expr = "the soul identity should contain {string}")]
+async fn then_soul_identity_contains(w: &mut AlephWorld, expected: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let soul = ctx.soul.as_ref().expect("No soul parsed");
+    assert!(
+        soul.identity.contains(&expected),
+        "Expected identity to contain '{}', got '{}'",
+        expected,
+        soul.identity
+    );
+}
+
+#[then(expr = "the soul should have {int} directives")]
+async fn then_soul_directives_count(w: &mut AlephWorld, count: i32) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let soul = ctx.soul.as_ref().expect("No soul parsed");
+    assert_eq!(
+        soul.directives.len(),
+        count as usize,
+        "Expected {} directives, got {}",
+        count,
+        soul.directives.len()
+    );
+}
+
+#[then(expr = "the soul relationship should be {string}")]
+async fn then_soul_relationship(w: &mut AlephWorld, expected: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let soul = ctx.soul.as_ref().expect("No soul parsed");
+    let relationship = format!("{:?}", soul.relationship);
+    assert!(
+        relationship.contains(&expected),
+        "Expected relationship to contain '{}', got '{}'",
+        expected,
+        relationship
+    );
+}
+
+#[then(expr = "the soul should have {int} expertise areas")]
+async fn then_soul_expertise_count(w: &mut AlephWorld, count: i32) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let soul = ctx.soul.as_ref().expect("No soul parsed");
+    assert_eq!(
+        soul.expertise.len(),
+        count as usize,
+        "Expected {} expertise areas, got {}",
+        count,
+        soul.expertise.len()
+    );
+}
+
+#[then(expr = "the soul should have expertise {string}")]
+async fn then_soul_has_expertise(w: &mut AlephWorld, expected: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let soul = ctx.soul.as_ref().expect("No soul parsed");
+    assert!(
+        soul.expertise.iter().any(|e| e.contains(&expected)),
+        "Expected soul to have expertise '{}', got {:?}",
+        expected,
+        soul.expertise
+    );
+}
+
+#[then(expr = "the soul should have {int} anti-patterns")]
+async fn then_soul_anti_patterns_count(w: &mut AlephWorld, count: i32) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let soul = ctx.soul.as_ref().expect("No soul parsed");
+    assert_eq!(
+        soul.anti_patterns.len(),
+        count as usize,
+        "Expected {} anti-patterns, got {}",
+        count,
+        soul.anti_patterns.len()
+    );
+}
+
+#[then(expr = "the soul anti-patterns should contain {string}")]
+async fn then_soul_anti_patterns_contain(w: &mut AlephWorld, expected: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let soul = ctx.soul.as_ref().expect("No soul parsed");
+    assert!(
+        soul.anti_patterns.iter().any(|a| a.contains(&expected)),
+        "Expected anti-patterns to contain '{}', got {:?}",
+        expected,
+        soul.anti_patterns
+    );
+}
+
+#[then(expr = "the effective identity should be {string}")]
+async fn then_effective_identity(w: &mut AlephWorld, expected: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    if let Some(resolver) = &ctx.identity_resolver {
+        let resolved = resolver.resolve();
+        assert_eq!(
+            resolved.identity, expected,
+            "Expected identity '{}', got '{}'",
+            expected, resolved.identity
+        );
+    } else {
+        let soul = ctx.soul.as_ref().expect("No soul");
+        assert_eq!(
+            soul.identity, expected,
+            "Expected identity '{}', got '{}'",
+            expected, soul.identity
+        );
+    }
+}
+
+#[then("the soul should be empty")]
+async fn then_soul_empty(w: &mut AlephWorld) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let soul = ctx.soul.as_ref().expect("No soul");
+    assert!(soul.is_empty(), "Expected soul to be empty, but it wasn't");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CoT Transparency - Given Steps
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[given(expr = "reasoning text {string}")]
+async fn given_reasoning_text(w: &mut AlephWorld, text: String) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.reasoning_text = Some(text);
+}
+
+#[given("reasoning text:")]
+async fn given_reasoning_text_docstring(w: &mut AlephWorld, step: &Step) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    if let Some(docstring) = step.docstring.as_ref() {
+        ctx.reasoning_text = Some(docstring.clone());
+    }
+}
+
+#[given(expr = "a valid LLM response with reasoning {string}")]
+async fn given_llm_response_with_reasoning(w: &mut AlephWorld, reasoning: String) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.reasoning_text = Some(reasoning);
+}
+
+#[given("a valid LLM response with no reasoning")]
+async fn given_llm_response_no_reasoning(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.reasoning_text = None;
+}
+
+#[given("a prompt builder with thinking transparency enabled")]
+async fn given_builder_with_thinking_transparency(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.config = PromptConfig::default();
+    ctx.config.thinking_transparency = true;
+    ctx.init_builder();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CoT Transparency - When Steps
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[when("I parse the structured thinking")]
+async fn when_parse_structured_thinking(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    ctx.parse_structured_thinking();
+}
+
+#[when("I parse the decision")]
+async fn when_parse_decision(w: &mut AlephWorld) {
+    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
+    // Parse structured thinking from reasoning text
+    ctx.parse_structured_thinking();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CoT Transparency - Then Steps
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[then(expr = "the first step should be type {string}")]
+async fn then_first_step_type(w: &mut AlephWorld, expected_type: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
+    let first_step = thinking.steps.first().expect("No steps");
+    let actual_type = format!("{:?}", first_step.step_type);
+    assert!(
+        actual_type.contains(&expected_type),
+        "Expected first step type '{}', got '{}'",
+        expected_type,
+        actual_type
+    );
+}
+
+#[then(expr = "step {int} should be type {string}")]
+async fn then_step_n_type(w: &mut AlephWorld, step_num: i32, expected_type: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
+    let step = thinking.steps.get((step_num - 1) as usize)
+        .expect(&format!("No step {}", step_num));
+    let actual_type = format!("{:?}", step.step_type);
+    assert!(
+        actual_type.contains(&expected_type),
+        "Expected step {} type '{}', got '{}'",
+        step_num,
+        expected_type,
+        actual_type
+    );
+}
+
+#[then(expr = "the confidence should be {string}")]
+async fn then_confidence(w: &mut AlephWorld, expected: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
+    let actual = format!("{:?}", thinking.confidence);
+    assert!(
+        actual.contains(&expected),
+        "Expected confidence '{}', got '{}'",
+        expected,
+        actual
+    );
+}
+
+#[then(expr = "the alternatives should contain {string}")]
+async fn then_alternatives_contain(w: &mut AlephWorld, expected: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
+    assert!(
+        thinking.alternatives.iter().any(|a| a.contains(&expected)),
+        "Expected alternatives to contain '{}', got {:?}",
+        expected,
+        thinking.alternatives
+    );
+}
+
+#[then(expr = "the uncertainties should contain {string}")]
+async fn then_uncertainties_contain(w: &mut AlephWorld, expected: String) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
+    assert!(
+        thinking.uncertainties.iter().any(|u| u.contains(&expected)),
+        "Expected uncertainties to contain '{}', got {:?}",
+        expected,
+        thinking.uncertainties
+    );
+}
+
+#[then(expr = "the structured thinking should have {int} steps")]
+async fn then_structured_thinking_step_count(w: &mut AlephWorld, count: i32) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
+    assert_eq!(
+        thinking.steps.len(),
+        count as usize,
+        "Expected {} steps, got {}",
+        count,
+        thinking.steps.len()
+    );
+}
+
+#[then("the decision should have structured thinking")]
+async fn then_decision_has_structured(w: &mut AlephWorld) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    assert!(
+        ctx.structured_thinking.is_some(),
+        "Expected decision to have structured thinking"
+    );
+}
+
+#[then("the decision should not have structured thinking")]
+async fn then_decision_no_structured(w: &mut AlephWorld) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    assert!(
+        ctx.structured_thinking.is_none() || ctx.reasoning_text.is_none(),
+        "Expected decision to not have structured thinking"
+    );
+}
+
+#[then(expr = "the structured thinking should have at least {int} step")]
+async fn then_structured_thinking_at_least_steps(w: &mut AlephWorld, count: i32) {
+    let ctx = w.thinker.as_ref().expect("No thinker context");
+    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
+    assert!(
+        thinking.steps.len() >= count as usize,
+        "Expected at least {} steps, got {}",
+        count,
+        thinking.steps.len()
+    );
+}
